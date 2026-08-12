@@ -1,4 +1,76 @@
-# Phase 1 — Batch 1: hardening the wire core
+# Phase 1 — wire protocol core
+
+> Batches 1–9 · 2026-08-12 · **Closed.** Reproduce with `./spikes/run_checks.sh`
+
+An MIT ORB core written against the published OMG specification, interoperating
+in both directions with two independently implemented peers.
+
+| | |
+|---|---|
+| Code | ~6,800 lines across two crates, one external dependency (`encoding_rs`, [`NOTICE`](../NOTICE)) |
+| Tests | 115 unit tests, 14 harness check groups |
+| Corpus | 21 golden, 10 negative, 20 requirement benchmark |
+| Peers | omniORB 4.3.4, JacORB 3.9 — both directions, GIOP 1.0/1.1/1.2, both byte orders |
+
+## What is verified, and by what
+
+The distinction matters more than the checklist. Three different strengths of
+evidence are in play, and collapsing them would misrepresent the state.
+
+검증의 강도가 셋으로 다르며, 이를 뭉뚱그리면 상태를 잘못 전달하게 된다.
+
+| Strength | Meaning | Covers |
+|---|---|---|
+| **Two peers** | Two independent implementations agree | GIOP 1.0/1.1/1.2 request and reply, both directions; CDR alignment; `any`/`TypeCode`; codeset negotiation; 1.2 `wstring`; our fragment emission; `LocateRequest` handling; system exceptions |
+| **One peer** | One implementation agrees | 1.1 `wstring` (JacORB only — omniORB declines wchar at 1.1 by policy); CosNaming resolution (omniNames) |
+| **Self only** | Our encoder agrees with our decoder | **Fragment reception** — no available peer emits GIOP fragments |
+
+The self-only row is the one to carry forward. `orbweaver-cdr`'s alignment
+model, by contrast, is not self-only: it is exercised by every byte both peers
+have accepted.
+
+## What Phase 1 learned that the plan did not predict
+
+Nine batches produced five findings that changed the code or the plan, none of
+which came from reading the specification alone:
+
+1. **A detached buffer aligning from zero** — the same root cause three times
+   (GIOP 1.0/1.1 request bodies, `TypeCode` encapsulations, `any` values). CDR
+   counts from the start of the enclosing message, and any buffer built
+   separately gets it wrong in a way that only shows up at some offsets. Now
+   codified in the API: `Encoder::continuing_at`, and `encode_any_with` taking
+   a closure so the correct thing is the easy thing.
+2. **Peers do not infer wide-character order from the message byte order.** A
+   big-endian `wstring` came back byte-swapped from *both* peers. Write a BOM.
+3. **`giopMaxMsgSize` is a hard cap, not a split threshold**, and JacORB 3.9 has
+   no GIOP fragmentation at all — which is why fragment reception is
+   unverifiable here.
+4. **A minor code is a vendor id plus a value.** Printing all 32 bits turned
+   "minor 23" into "1330446359" and hid which condition a peer had reported.
+5. **`corbaloc:` defaults to GIOP 1.0**, so the version negotiation from Batch 1
+   is load-bearing for ordinary naming lookups rather than a legacy nicety.
+
+## Still open, carried into later phases
+
+Not defects — scope that Phase 1 did not claim. Listed so nothing is rediscovered.
+
+- **Fragment reception has no independent validation** (above). Revisit when a
+  third peer or a fragmenting configuration is available.
+- **`LocateRequest`/`CancelRequest` send**, `CloseConnection` send. All are
+  served; none are sent.
+- **Request multiplexing and connection pooling.** §9.5.1.2 permits multiple
+  pending requests per connection; we send one at a time.
+- **Multi-profile failover.** Profiles are parsed and only the first is dialled.
+- **`TAG_ALTERNATE_IIOP_ADDRESS`, SSLIOP port extraction.** Components are
+  preserved but not interpreted, so an SSLIOP profile still reads as port 0.
+- **`valuetype`, abstract interfaces, `fixed` on the wire.** Deferred by
+  `PLAN` §4.4 behind a Phase 4 decision gate.
+- **Bidirectional GIOP, transports other than TCP.** Deferred by `PLAN` §1.3.
+- **TLS/SSLIOP.** Phase 6.
+
+---
+
+# Batch 1: hardening the wire core
 
 > 2026-08-12 · Batch 1 of Phase 1 (wire protocol core)
 > Reproduce with `cargo test --workspace && ./spikes/run_checks.sh`
