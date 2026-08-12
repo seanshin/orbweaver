@@ -30,7 +30,7 @@ fn main() -> std::process::ExitCode {
     };
 
     match run(&ior_text) {
-        Ok(failures) if failures == 0 => {
+        Ok(0) => {
             println!("\nassumption A: PASS — GIOP interop with a stock ORB is reachable");
             std::process::ExitCode::SUCCESS
         }
@@ -63,7 +63,11 @@ fn omg_minor(minor: u32) -> Option<u32> {
 fn any_cases() -> Vec<(&'static str, TypeCode, Box<dyn Fn(&mut Encoder)>)> {
     vec![
         ("long", TypeCode::Long, Box::new(|e: &mut Encoder| e.put_i32(-4242))),
-        ("string", TypeCode::String(0), Box::new(|e: &mut Encoder| e.put_str("any-carried string"))),
+        (
+            "string",
+            TypeCode::String(0),
+            Box::new(|e: &mut Encoder| e.put_str("any-carried string")),
+        ),
         (
             "struct",
             TypeCode::Struct {

@@ -118,15 +118,81 @@ impl fmt::Display for LexError {
 /// keyword only in case as a collision, for the same reason two identifiers
 /// differing only in case collide with each other.
 pub const KEYWORDS: &[&str] = &[
-    "abstract", "alias", "any", "attribute", "bitfield", "bitmask", "bitset", "boolean", "case",
-    "char", "component", "connector", "const", "consumes", "context", "custom", "default",
-    "double", "emits", "enum", "eventtype", "exception", "factory", "false", "finder", "fixed",
-    "float", "getraises", "home", "import", "in", "inout", "interface", "local", "long", "manages",
-    "map", "mirrorport", "module", "multiple", "native", "object", "octet", "oneway", "out",
-    "port", "porttype", "primarykey", "private", "provides", "public", "publishes", "raises",
-    "readonly", "setraises", "sequence", "short", "string", "struct", "supports", "switch",
-    "true", "truncatable", "typedef", "typeid", "typename", "typeprefix", "unsigned", "union",
-    "uses", "valuebase", "valuetype", "void", "wchar", "wstring",
+    "abstract",
+    "alias",
+    "any",
+    "attribute",
+    "bitfield",
+    "bitmask",
+    "bitset",
+    "boolean",
+    "case",
+    "char",
+    "component",
+    "connector",
+    "const",
+    "consumes",
+    "context",
+    "custom",
+    "default",
+    "double",
+    "emits",
+    "enum",
+    "eventtype",
+    "exception",
+    "factory",
+    "false",
+    "finder",
+    "fixed",
+    "float",
+    "getraises",
+    "home",
+    "import",
+    "in",
+    "inout",
+    "interface",
+    "local",
+    "long",
+    "manages",
+    "map",
+    "mirrorport",
+    "module",
+    "multiple",
+    "native",
+    "object",
+    "octet",
+    "oneway",
+    "out",
+    "port",
+    "porttype",
+    "primarykey",
+    "private",
+    "provides",
+    "public",
+    "publishes",
+    "raises",
+    "readonly",
+    "setraises",
+    "sequence",
+    "short",
+    "string",
+    "struct",
+    "supports",
+    "switch",
+    "true",
+    "truncatable",
+    "typedef",
+    "typeid",
+    "typename",
+    "typeprefix",
+    "unsigned",
+    "union",
+    "uses",
+    "valuebase",
+    "valuetype",
+    "void",
+    "wchar",
+    "wstring",
 ];
 
 /// Whether `name` is a reserved word, ignoring case.
@@ -271,7 +337,12 @@ impl<'a> Lexer<'a> {
         let (sl, sc, start) = (self.line, self.col, self.pos);
 
         let Some(c) = self.peek() else {
-            return Ok(Token { tok: Tok::Eof, span: self.here(start, sl, sc), annotations, escaped: false });
+            return Ok(Token {
+                tok: Tok::Eof,
+                span: self.here(start, sl, sc),
+                annotations,
+                escaped: false,
+            });
         };
 
         let mut escaped_ident = false;
@@ -297,7 +368,8 @@ impl<'a> Lexer<'a> {
                 });
             }
             Tok::Ident(self.src[from..self.pos].to_owned())
-        } else if c.is_ascii_digit() || (c == '.' && self.peek_at(1).is_some_and(|d| d.is_ascii_digit()))
+        } else if c.is_ascii_digit()
+            || (c == '.' && self.peek_at(1).is_some_and(|d| d.is_ascii_digit()))
         {
             self.number(start, sl, sc)?
         } else if c == '"' {
@@ -411,10 +483,11 @@ impl<'a> Lexer<'a> {
                         self.bump();
                     }
                 }
-                let v = u32::from_str_radix(&self.src[from..self.pos], 16).map_err(|_| LexError {
-                    message: "malformed \\x escape: expected two hex digits".into(),
-                    span: self.here(start, sl, sc),
-                })?;
+                let v =
+                    u32::from_str_radix(&self.src[from..self.pos], 16).map_err(|_| LexError {
+                        message: "malformed \\x escape: expected two hex digits".into(),
+                        span: self.here(start, sl, sc),
+                    })?;
                 char::from_u32(v).unwrap_or('\u{fffd}')
             }
             '0'..='7' => {
@@ -424,10 +497,11 @@ impl<'a> Lexer<'a> {
                         self.bump();
                     }
                 }
-                let v = u32::from_str_radix(&self.src[from..self.pos], 8).map_err(|_| LexError {
-                    message: "malformed octal escape".into(),
-                    span: self.here(start, sl, sc),
-                })?;
+                let v =
+                    u32::from_str_radix(&self.src[from..self.pos], 8).map_err(|_| LexError {
+                        message: "malformed octal escape".into(),
+                        span: self.here(start, sl, sc),
+                    })?;
                 char::from_u32(v).unwrap_or('\u{fffd}')
             }
             other => other,
@@ -509,14 +583,17 @@ mod tests {
     /// `>>` must not be split, or `sequence<sequence<long>>` closes one bracket.
     #[test]
     fn shift_and_scope_operators_are_single_tokens() {
-        assert_eq!(toks("a::b >> c"), vec![
-            Tok::Ident("a".into()),
-            Tok::Punct("::"),
-            Tok::Ident("b".into()),
-            Tok::Punct(">>"),
-            Tok::Ident("c".into()),
-            Tok::Eof
-        ]);
+        assert_eq!(
+            toks("a::b >> c"),
+            vec![
+                Tok::Ident("a".into()),
+                Tok::Punct("::"),
+                Tok::Ident("b".into()),
+                Tok::Punct(">>"),
+                Tok::Ident("c".into()),
+                Tok::Eof
+            ]
+        );
     }
 
     #[test]
@@ -561,11 +638,10 @@ mod tests {
 
     #[test]
     fn ordinary_comments_are_dropped() {
-        assert_eq!(toks("a // trailing\n/* block */ b"), vec![
-            Tok::Ident("a".into()),
-            Tok::Ident("b".into()),
-            Tok::Eof
-        ]);
+        assert_eq!(
+            toks("a // trailing\n/* block */ b"),
+            vec![Tok::Ident("a".into()), Tok::Ident("b".into()), Tok::Eof]
+        );
     }
 
     /// SIDL lives in comments because deployed compilers reject IDL 4
@@ -573,11 +649,10 @@ mod tests {
     /// meaning layer.
     #[test]
     fn sidl_annotations_attach_to_the_next_token() {
-        let out = Lexer::new(
-            "//@ ai_desc: transfers funds\n//@ ai_effect: destructive\nvoid execute();",
-        )
-        .tokenize()
-        .unwrap();
+        let out =
+            Lexer::new("//@ ai_desc: transfers funds\n//@ ai_effect: destructive\nvoid execute();")
+                .tokenize()
+                .unwrap();
         let first = &out[0];
         assert_eq!(first.tok, Tok::Ident("void".into()));
         assert_eq!(first.annotations.len(), 2);

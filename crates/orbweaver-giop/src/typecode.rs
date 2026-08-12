@@ -486,9 +486,8 @@ fn decode_inner(
         )));
     }
 
-    let kind = TcKind::from_u32(raw).ok_or(Error::Cdr(orbweaver_cdr::Error::Malformed(
-        "unknown or unsupported TCKind",
-    )))?;
+    let kind = TcKind::from_u32(raw)
+        .ok_or(Error::Cdr(orbweaver_cdr::Error::Malformed("unknown or unsupported TCKind")))?;
 
     let tc = match kind {
         TcKind::Null => TypeCode::Null,
@@ -543,9 +542,7 @@ fn decode_complex(
 
     let out = (|| -> Result<TypeCode> {
         Ok(match kind {
-            TcKind::ObjRef => {
-                TypeCode::ObjRef { id: get_string(d)?, name: get_string(d)? }
-            }
+            TcKind::ObjRef => TypeCode::ObjRef { id: get_string(d)?, name: get_string(d)? },
             TcKind::Struct | TcKind::Except => {
                 let id = get_string(d)?;
                 let name = get_string(d)?;
@@ -555,7 +552,8 @@ fn decode_complex(
                 let mut members = Vec::with_capacity(n);
                 for _ in 0..n {
                     let mname = get_string(d)?;
-                    members.push(Member { name: mname, tc: decode_inner(d, open, done, depth + 1)? });
+                    members
+                        .push(Member { name: mname, tc: decode_inner(d, open, done, depth + 1)? });
                 }
                 open.remove(&start);
                 if kind == TcKind::Struct {
@@ -614,12 +612,10 @@ fn decode_complex(
                 TypeCode::Alias { id, name, aliased }
             }
             other => {
-                return Err(Error::Cdr(orbweaver_cdr::Error::Malformed(
-                    match other {
-                        TcKind::Struct => "struct",
-                        _ => "unsupported complex TCKind",
-                    },
-                )));
+                return Err(Error::Cdr(orbweaver_cdr::Error::Malformed(match other {
+                    TcKind::Struct => "struct",
+                    _ => "unsupported complex TCKind",
+                })));
             }
         })
     })();
@@ -745,11 +741,23 @@ mod tests {
     #[test]
     fn primitives_round_trip() {
         for tc in [
-            TypeCode::Null, TypeCode::Void, TypeCode::Short, TypeCode::Long,
-            TypeCode::UShort, TypeCode::ULong, TypeCode::Float, TypeCode::Double,
-            TypeCode::Boolean, TypeCode::Char, TypeCode::Octet, TypeCode::Any,
-            TypeCode::TypeCode, TypeCode::LongLong, TypeCode::ULongLong,
-            TypeCode::LongDouble, TypeCode::WChar,
+            TypeCode::Null,
+            TypeCode::Void,
+            TypeCode::Short,
+            TypeCode::Long,
+            TypeCode::UShort,
+            TypeCode::ULong,
+            TypeCode::Float,
+            TypeCode::Double,
+            TypeCode::Boolean,
+            TypeCode::Char,
+            TypeCode::Octet,
+            TypeCode::Any,
+            TypeCode::TypeCode,
+            TypeCode::LongLong,
+            TypeCode::ULongLong,
+            TypeCode::LongDouble,
+            TypeCode::WChar,
         ] {
             round_trip(&tc);
         }
@@ -803,10 +811,7 @@ mod tests {
         round_trip(&TypeCode::Sequence { element: Box::new(inner.clone()), bound: 0 });
         round_trip(&TypeCode::Array { element: Box::new(TypeCode::Long), length: 12 });
         round_trip(&TypeCode::Sequence {
-            element: Box::new(TypeCode::Sequence {
-                element: Box::new(TypeCode::Long),
-                bound: 4,
-            }),
+            element: Box::new(TypeCode::Sequence { element: Box::new(TypeCode::Long), bound: 4 }),
             bound: 0,
         });
         round_trip(&TypeCode::Alias {
@@ -994,20 +999,24 @@ mod tests {
         // padding is computed where it will actually sit.
         let mut e = Encoder::new(Endian::Big);
         e.put_u8(0xFF); // shove the any off a 4-byte boundary
-        encode_any_with(&mut e, &TypeCode::Struct {
-            id: "IDL:t/S:1.0".into(),
-            name: "S".into(),
-            members: vec![
-                Member { name: "a".into(), tc: TypeCode::Octet },
-                Member { name: "d".into(), tc: TypeCode::Double },
-            ],
-        }, |v| {
-            let at = v.position();
-            v.put_octet(1);
-            v.put_f64(2.5);
-            // The double must be 8-aligned in the message, not in a sub-buffer.
-            assert_eq!((at + 1).div_ceil(8) * 8 % 8, 0);
-        })
+        encode_any_with(
+            &mut e,
+            &TypeCode::Struct {
+                id: "IDL:t/S:1.0".into(),
+                name: "S".into(),
+                members: vec![
+                    Member { name: "a".into(), tc: TypeCode::Octet },
+                    Member { name: "d".into(), tc: TypeCode::Double },
+                ],
+            },
+            |v| {
+                let at = v.position();
+                v.put_octet(1);
+                v.put_f64(2.5);
+                // The double must be 8-aligned in the message, not in a sub-buffer.
+                assert_eq!((at + 1).div_ceil(8) * 8 % 8, 0);
+            },
+        )
         .unwrap();
         assert!(e.finish().is_ok());
     }

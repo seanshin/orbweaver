@@ -358,13 +358,6 @@ pub enum ConstExpr {
     Char(char),
     Bool(bool),
     Name(ScopedName),
-    Unary {
-        op: &'static str,
-        operand: Box<ConstExpr>,
-    },
-    Binary {
-        op: &'static str,
-        left: Box<ConstExpr>,
-        right: Box<ConstExpr>,
-    },
+    Unary { op: &'static str, operand: Box<ConstExpr> },
+    Binary { op: &'static str, left: Box<ConstExpr>, right: Box<ConstExpr> },
 }

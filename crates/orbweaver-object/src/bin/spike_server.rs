@@ -43,8 +43,10 @@ impl Dispatch for Echo {
         {
             // Logged so a test can prove the forward was actually emitted,
             // rather than inferring it from a call that succeeded anyway.
-            println!("emitted LOCATION_FORWARD for ping() to {} bytes of key",
-                to.primary().map(|p| p.object_key.len()).unwrap_or(0));
+            println!(
+                "emitted LOCATION_FORWARD for ping() to {} bytes of key",
+                to.primary().map(|p| p.object_key.len()).unwrap_or(0)
+            );
             return Some(to);
         }
         None
@@ -70,8 +72,7 @@ impl Dispatch for Echo {
 
         match req.operation.as_str() {
             "get_self" => {
-                put_reference(out, Some(&self.self_ref))
-                    .map_err(|_| SystemException::marshal())?;
+                put_reference(out, Some(&self.self_ref)).map_err(|_| SystemException::marshal())?;
             }
 
             "same_as" => {
@@ -169,7 +170,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Neither available peer emits GIOP fragments, so the only way to test
     // fragment handling against an independent implementation is to make *us*
     // the fragmenting side and see whether they reassemble.
-    if let Some(t) = std::env::var("ORBWEAVER_FRAGMENT_THRESHOLD").ok().and_then(|v| v.parse().ok()) {
+    if let Some(t) = std::env::var("ORBWEAVER_FRAGMENT_THRESHOLD").ok().and_then(|v| v.parse().ok())
+    {
         server.set_fragment_threshold(t);
         println!("fragmenting outbound messages above {t} bytes");
     }
@@ -180,7 +182,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the failure Phase 0 assumption D reproduced.
     let ior = server.ior(TYPE_ID, &host)?;
     std::fs::write(&out_path, ior.to_stringified()?)?;
-    let _ = (IiopProfile { version: Version::V1_2, host: host.clone(), port: bound.port(), object_key: vec![], components: vec![] },);
+    let _ = (IiopProfile {
+        version: Version::V1_2,
+        host: host.clone(),
+        port: bound.port(),
+        object_key: vec![],
+        components: vec![],
+    },);
 
     println!("listening on {bound}, publishing {host}:{}", bound.port());
     println!("IOR written to {out_path}");
@@ -195,9 +203,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A second reference, on the same server, that `ping` is forwarded to.
     // Both keys reach the same servant, so a client that follows the forward
     // gets an answer and one that ignores it gets nothing.
-    let forward_ping_to = std::env::var("ORBWEAVER_FORWARD_PING")
-        .ok()
-        .map(|_| ior.clone());
+    let forward_ping_to = std::env::var("ORBWEAVER_FORWARD_PING").ok().map(|_| ior.clone());
     if forward_ping_to.is_some() {
         println!("ping() will answer with LOCATION_FORWARD");
     }

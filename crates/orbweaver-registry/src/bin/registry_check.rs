@@ -42,10 +42,7 @@ fn run(ior_path: &str, idl_path: &str, name: &str) -> Result<bool, Box<dyn std::
     reg.load(&spec)?;
 
     let id = reg.id_of(name).ok_or_else(|| format!("{name} is not in the registry"))?.clone();
-    let derived = reg
-        .typecode(&id)
-        .ok_or_else(|| format!("{id} has no TypeCode"))?
-        .clone();
+    let derived = reg.typecode(&id).ok_or_else(|| format!("{id} has no TypeCode"))?.clone();
     println!("derived from IDL   {id}");
 
     let ior = Ior::parse(std::fs::read_to_string(ior_path)?.trim())?;

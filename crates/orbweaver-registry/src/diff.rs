@@ -111,15 +111,13 @@ pub fn diff(old: &Registry, new: &Registry) -> Vec<Change> {
                 diff_interface(id, a, b, &mut out)
             }
             (Some(Entry::Type(a)), Some(Entry::Type(b))) => diff_type(id, a, b, &mut out),
-            (Some(Entry::Const { tc: a }), Some(Entry::Const { tc: b })) => {
-                if a != b {
-                    out.push(Change {
-                        id: id.clone(),
-                        what: "constant changed type".into(),
-                        why: "a constant's type is part of every expression that uses it",
-                        verdict: Verdict::Breaking,
-                    });
-                }
+            (Some(Entry::Const { tc: a }), Some(Entry::Const { tc: b })) if a != b => {
+                out.push(Change {
+                    id: id.clone(),
+                    what: "constant changed type".into(),
+                    why: "a constant's type is part of every expression that uses it",
+                    verdict: Verdict::Breaking,
+                });
             }
             (Some(_), Some(_)) => out.push(Change {
                 id: id.clone(),
@@ -223,8 +221,7 @@ fn diff_interface(
                 verdict: Verdict::Breaking,
             });
         } else if aa.readonly != ab.readonly {
-            let verdict =
-                if aa.readonly { Verdict::ServerFirst } else { Verdict::Breaking };
+            let verdict = if aa.readonly { Verdict::ServerFirst } else { Verdict::Breaking };
             out.push(Change {
                 id: id.clone(),
                 what: format!(
@@ -276,10 +273,7 @@ fn operation_difference(a: &OperationSig, b: &OperationSig) -> Option<String> {
     if a.oneway != b.oneway {
         // A oneway sends no reply at all, so this changes the message exchange
         // rather than only the payload.
-        return Some(format!(
-            "changed to {}",
-            if b.oneway { "oneway" } else { "twoway" }
-        ));
+        return Some(format!("changed to {}", if b.oneway { "oneway" } else { "twoway" }));
     }
     if !same_identity(&a.returns, &b.returns) {
         return Some("changed return type".into());
@@ -399,7 +393,10 @@ fn diff_type(id: &RepositoryId, a: &TypeCode, b: &TypeCode, out: &mut Vec<Change
             if !removed.is_empty() {
                 out.push(Change {
                     id: id.clone(),
-                    what: format!("union case(s) removed: {:?}", removed.iter().map(|c| &c.name).collect::<Vec<_>>()),
+                    what: format!(
+                        "union case(s) removed: {:?}",
+                        removed.iter().map(|c| &c.name).collect::<Vec<_>>()
+                    ),
                     why: "a sender may still select the removed discriminator",
                     verdict: Verdict::Breaking,
                 });
@@ -407,7 +404,10 @@ fn diff_type(id: &RepositoryId, a: &TypeCode, b: &TypeCode, out: &mut Vec<Change
             if !added.is_empty() {
                 out.push(Change {
                     id: id.clone(),
-                    what: format!("union case(s) added: {:?}", added.iter().map(|c| &c.name).collect::<Vec<_>>()),
+                    what: format!(
+                        "union case(s) added: {:?}",
+                        added.iter().map(|c| &c.name).collect::<Vec<_>>()
+                    ),
                     why: "an old receiver has no branch for the new discriminator",
                     verdict: Verdict::ConditionallyBreaking,
                 });
@@ -444,16 +444,11 @@ mod tests {
     }
 
     fn verdicts(before: &str, after: &str) -> Vec<(Verdict, String)> {
-        diff(&reg(before), &reg(after))
-            .into_iter()
-            .map(|c| (c.verdict, c.what))
-            .collect()
+        diff(&reg(before), &reg(after)).into_iter().map(|c| (c.verdict, c.what)).collect()
     }
 
     fn worst(before: &str, after: &str) -> Verdict {
-        diff(&reg(before), &reg(after))
-            .first()
-            .map_or(Verdict::Compatible, |c| c.verdict)
+        diff(&reg(before), &reg(after)).first().map_or(Verdict::Compatible, |c| c.verdict)
     }
 
     #[test]
@@ -490,10 +485,7 @@ mod tests {
     #[test]
     fn retyping_a_member_is_breaking() {
         assert_eq!(
-            worst(
-                "module m { struct S { long a; }; };",
-                "module m { struct S { double a; }; };"
-            ),
+            worst("module m { struct S { long a; }; };", "module m { struct S { double a; }; };"),
             Verdict::Breaking
         );
     }
@@ -553,10 +545,7 @@ mod tests {
     /// arrives intact and means nothing to an old receiver.
     #[test]
     fn appending_an_enumerator_is_conditionally_breaking() {
-        let v = verdicts(
-            "module m { enum E { A, B }; };",
-            "module m { enum E { A, B, C }; };",
-        );
+        let v = verdicts("module m { enum E { A, B }; };", "module m { enum E { A, B, C }; };");
         assert_eq!(v.len(), 1, "{v:?}");
         assert_eq!(v[0].0, Verdict::ConditionallyBreaking);
         assert!(Verdict::ConditionallyBreaking.blocks_release());
@@ -564,10 +553,8 @@ mod tests {
 
     #[test]
     fn reordering_enumerators_is_breaking_because_the_ordinal_travels() {
-        let c = diff(
-            &reg("module m { enum E { A, B }; };"),
-            &reg("module m { enum E { B, A }; };"),
-        );
+        let c =
+            diff(&reg("module m { enum E { A, B }; };"), &reg("module m { enum E { B, A }; };"));
         assert_eq!(c[0].verdict, Verdict::Breaking);
         assert!(c[0].why.contains("ordinal"));
     }
@@ -684,10 +671,8 @@ mod tests {
     fn changes_are_ordered_worst_first() {
         let c = diff(
             &reg("module m { struct S { long a; }; interface I { long f(); }; };"),
-            &reg(
-                "module m { struct S { long a; long b; }; struct New { long x; }; \
-                 interface I { long f(); long g(); }; };",
-            ),
+            &reg("module m { struct S { long a; long b; }; struct New { long x; }; \
+                 interface I { long f(); long g(); }; };"),
         );
         assert_eq!(c[0].verdict, Verdict::Breaking);
         assert_eq!(c.last().unwrap().verdict, Verdict::Compatible);

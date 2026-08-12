@@ -12,10 +12,7 @@ use std::time::Duration;
 
 fn main() -> std::process::ExitCode {
     let path = std::env::args().nth(1).unwrap_or_else(|| "spikes/echo.ior".into());
-    let sizes: Vec<usize> = std::env::args()
-        .skip(2)
-        .filter_map(|s| s.parse().ok())
-        .collect();
+    let sizes: Vec<usize> = std::env::args().skip(2).filter_map(|s| s.parse().ok()).collect();
     let sizes = if sizes.is_empty() { vec![100usize, 8_000, 40_000, 250_000] } else { sizes };
 
     match run(&path, &sizes) {
@@ -45,12 +42,10 @@ fn run(path: &str, sizes: &[usize]) -> Result<u32, Box<dyn std::error::Error>> {
         conn.set_fragment_threshold(4096);
 
         // Inbound: the peer returns a large sequence and must fragment it.
-        let got = conn
-            .invoke("blob", |e| e.put_u32(n as u32))
-            .and_then(|r| {
-                let mut b = r.body()?;
-                Ok(b.get_octet_seq()?.to_vec())
-            })?;
+        let got = conn.invoke("blob", |e| e.put_u32(n as u32)).and_then(|r| {
+            let mut b = r.body()?;
+            Ok(b.get_octet_seq()?.to_vec())
+        })?;
         let expected: Vec<u8> = (0..n).map(|i| (i % 251) as u8).collect();
         if got != expected {
             println!("  FAIL blob({n}) returned {} bytes, content mismatch", got.len());

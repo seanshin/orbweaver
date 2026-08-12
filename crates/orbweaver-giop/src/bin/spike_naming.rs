@@ -11,9 +11,9 @@ use orbweaver_giop::{Connection, Ior};
 use std::time::Duration;
 
 fn main() -> std::process::ExitCode {
-    let url = std::env::args().nth(1).unwrap_or_else(|| {
-        "corbaname::127.0.0.1:2809/NameService#spike/Echo".into()
-    });
+    let url = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "corbaname::127.0.0.1:2809/NameService#spike/Echo".into());
     match run(&url) {
         Ok(()) => {
             println!("\nnaming: PASS — resolved and invoked through CosNaming");

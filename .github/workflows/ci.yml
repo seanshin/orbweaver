@@ -1,0 +1,127 @@
+name: CI
+
+# Licensing: omniORB, TAO and JacORB are LGPL/GPL/DOC. They are installed into
+# the ephemeral runner and used only as (a) external programs whose text output
+# we read and (b) separate-process wire peers over TCP. Nothing here links them
+# into Orbweaver, and no image or artifact containing them is published —
+# publishing would be redistribution. See docs/PLAN.md §10.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Everything that needs no fixture. Fast, and gates the rest. ────────────
+  rust:
+    name: build, lint, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: rustfmt
+        run: cargo fmt --all --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: tests
+        run: cargo test --workspace
+        env:
+          RUSTFLAGS: -D warnings
+
+      # NOTICE promises that --no-default-features drops encoding_rs and the
+      # BSD-3-Clause attribution with it. A promise that is testable is tested.
+      - name: attribution-free build
+        run: cargo test -p orbweaver-giop --lib --no-default-features
+        env:
+          RUSTFLAGS: -D warnings
+
+      # The licensing boundary is the one rule that cannot be renegotiated
+      # later, so it is checked mechanically rather than trusted to review.
+      - name: licence boundary
+        run: |
+          if cargo tree --workspace | grep -qiE "omniorb|jacorb|\btao\b"; then
+            echo "::error::an ORB fixture has become a dependency"; exit 1
+          fi
+          if cargo tree -p orbweaver-giop --no-default-features | grep -q encoding_rs; then
+            echo "::error::--no-default-features still pulls encoding_rs; NOTICE is wrong"; exit 1
+          fi
+          echo "cargo tree is free of ORB fixtures"
+
+  # ── The differential oracle: two independent deployed IDL compilers. ───────
+  differential:
+    name: differential conformance (omniidl + tao_idl)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-diff-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: cargo-diff-${{ runner.os }}-
+
+      - name: install the oracles
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends omniidl tao-idl
+          omniidl -V || true
+          tao_idl -V || true
+
+      # --require makes a missing oracle a failure rather than a skip. On a
+      # laptop one oracle is normal; in CI an unmeasured column is a failure,
+      # because a harness that reports green on something it did not run is
+      # worse than no harness.
+      - name: differential conformance
+        run: ./spikes/differential.sh --require omniidl,tao_idl
+
+  # ── The wire: two independent ORBs, both directions. ──────────────────────
+  interop:
+    name: interop harness (omniORB + JacORB)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-interop-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: cargo-interop-${{ runner.os }}-
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'   # JDK 24 removed java.applet.Applet; JacORB 3.9 needs it
+
+      - name: install the peers
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            omniidl omniorb-nameserver python3-omniorb libomniorb4-dev
+
+      - name: build the JacORB fixture
+        env:
+          JAVA_HOME_21: ${{ env.JAVA_HOME }}
+        run: ./spikes/jacorb/setup.sh
+
+      - name: harness
+        env:
+          JAVA_HOME_21: ${{ env.JAVA_HOME }}
+        run: ./spikes/run_checks.sh

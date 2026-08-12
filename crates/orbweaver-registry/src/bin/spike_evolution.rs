@@ -71,7 +71,6 @@ fn main() -> std::process::ExitCode {
 }
 
 fn verdict(fails: u32) -> std::process::ExitCode {
-
     if fails == 0 {
         println!("\ncontract evolution: PASS — every verdict matched what the wire did");
         std::process::ExitCode::SUCCESS
@@ -101,9 +100,8 @@ fn offline(v1: &str, v2: &str, v1b: &str) -> Result<u32, String> {
     }
 
     // The reordered struct must be caught, and caught as breaking.
-    let caught = risky
-        .iter()
-        .any(|c| c.verdict == Verdict::Breaking && c.what.contains("reordered"));
+    let caught =
+        risky.iter().any(|c| c.verdict == Verdict::Breaking && c.what.contains("reordered"));
     if caught {
         println!("  {OK} the swapped struct members are flagged BREAKING");
     } else {
@@ -138,8 +136,7 @@ fn offline(v1: &str, v2: &str, v1b: &str) -> Result<u32, String> {
 fn on_the_wire(ior_path: &str) -> Result<u32, String> {
     let text = std::fs::read_to_string(ior_path).map_err(|e| format!("{ior_path}: {e}"))?;
     let ior = Ior::parse(text.trim()).map_err(|e| e.to_string())?;
-    let mut conn =
-        Connection::connect(&ior, Duration::from_secs(5)).map_err(|e| e.to_string())?;
+    let mut conn = Connection::connect(&ior, Duration::from_secs(5)).map_err(|e| e.to_string())?;
     let mut fails = 0u32;
 
     println!("\n── the same edit, against an omniORB peer built from v1 ──");
@@ -228,8 +225,7 @@ fn on_the_wire(ior_path: &str) -> Result<u32, String> {
 fn after_the_release(ior_path: &str) -> Result<u32, String> {
     let text = std::fs::read_to_string(ior_path).map_err(|e| format!("{ior_path}: {e}"))?;
     let ior = Ior::parse(text.trim()).map_err(|e| e.to_string())?;
-    let mut conn =
-        Connection::connect(&ior, Duration::from_secs(5)).map_err(|e| e.to_string())?;
+    let mut conn = Connection::connect(&ior, Duration::from_secs(5)).map_err(|e| e.to_string())?;
     let mut fails = 0u32;
 
     println!("\n── after the additive release, against the same peer ──");

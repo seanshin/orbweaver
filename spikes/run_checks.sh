@@ -153,23 +153,17 @@ else
   fail_total=$((fail_total+1))
 fi
 
-# ── Golden corpus ────────────────────────────────────────────────────────────
-hr "golden IDL corpus (must all compile)"
-gp=0; gf=0
-for f in corpus/golden/*.idl; do
-  if [ -z "$(omniidl -b dump "$f" 2>&1 >/dev/null)" ]; then gp=$((gp+1)); else gf=$((gf+1)); echo "  FAIL $(basename "$f")"; fi
-done
-echo "  $gp pass / $gf fail"
-[ "$gf" -eq 0 ] || fail_total=$((fail_total+1))
-
-# ── Negative corpus ──────────────────────────────────────────────────────────
-hr "negative IDL corpus (must all be rejected)"
-np=0; nf=0
-for f in corpus/negative/*.idl; do
-  if [ -n "$(omniidl -b dump "$f" 2>&1 >/dev/null)" ]; then np=$((np+1)); else nf=$((nf+1)); echo "  FAIL $(basename "$f") compiled but should not"; fi
-done
-echo "  $np correctly rejected / $nf wrongly accepted"
-[ "$nf" -eq 0 ] || fail_total=$((fail_total+1))
+# ── Differential conformance ─────────────────────────────────────────────────
+hr "differential conformance — every front end on every corpus file"
+# Was two ad-hoc omniidl loops over golden/ and negative/. They are now one
+# script, because CI runs a second oracle (tao_idl) and the interesting result
+# there is where the *oracles* disagree with each other — a corpus file that is
+# not portable, which agreeing with either one of them cannot reveal.
+dout=$(bash spikes/differential.sh 2>&1); drc=$?
+printf '%s\n' "$dout"
+if [ "$drc" -ne 0 ]; then fail_total=$((fail_total+1)); fi
+# An absent oracle is unmeasured, not passing, and the verdict has to say so.
+if printf '%s' "$dout" | grep -q "SKIPPED"; then skipped=$((skipped+1)); fi
 
 # ── Assumption C ─────────────────────────────────────────────────────────────
 hr "assumption C — IDL 4 @annotation acceptance in a deployed compiler"

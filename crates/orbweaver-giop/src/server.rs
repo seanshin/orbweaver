@@ -546,7 +546,15 @@ impl Server {
 
         // Servants write into a detached buffer, so it too must know where it
         // will land. A 1.0 reply body starts immediately after the header.
-        let reply_header_len = if req.version.is_1_2_layout() { HEADER_LEN + 12 } else { HEADER_LEN + 12 };
+        //
+        // GIOP 1.0/1.1 put the service context list before `request_id` and
+        // `reply_status`; 1.2 puts it after. Both therefore measure
+        // 4 + 4 + 4 = 12 bytes here — but only because the list we emit is
+        // empty. This was written as a version branch with the same value in
+        // both arms, which read as though the difference had been accounted
+        // for; it has not. Emitting any reply service context makes the two
+        // layouts differ and this constant wrong.
+        let reply_header_len = HEADER_LEN + 12;
         let body_start = if req.version.aligns_body() {
             reply_header_len.div_ceil(8) * 8
         } else {
@@ -593,12 +601,11 @@ mod tests {
     fn request_round_trips_in_every_version() {
         for version in [Version::V1_0, Version::V1_1, Version::V1_2] {
             for endian in [Endian::Big, Endian::Little] {
-                let wire =
-                    encode_request(version, endian, 77, b"objkey", "compute", true, |e| {
-                        e.put_i32(-5);
-                        e.put_f64(2.5);
-                    })
-                    .unwrap();
+                let wire = encode_request(version, endian, 77, b"objkey", "compute", true, |e| {
+                    e.put_i32(-5);
+                    e.put_f64(2.5);
+                })
+                .unwrap();
 
                 let mut cursor: &[u8] = &wire;
                 let msg = read_message(&mut cursor, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
@@ -618,7 +625,8 @@ mod tests {
     #[test]
     fn oneway_request_is_recognised_as_such() {
         for version in [Version::V1_0, Version::V1_1, Version::V1_2] {
-            let wire = encode_request(version, Endian::Big, 1, b"k", "fire", false, |_| {}).unwrap();
+            let wire =
+                encode_request(version, Endian::Big, 1, b"k", "fire", false, |_| {}).unwrap();
             let mut cursor: &[u8] = &wire;
             let msg = read_message(&mut cursor, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
             assert!(!decode_request(msg).unwrap().expect_reply, "{version}");
@@ -629,9 +637,10 @@ mod tests {
     fn reply_round_trips_in_every_version() {
         for version in [Version::V1_0, Version::V1_1, Version::V1_2] {
             for endian in [Endian::Big, Endian::Little] {
-                let wire =
-                    encode_reply(version, endian, 88, ReplyStatus::NoException, |e| e.put_f64(1.25))
-                        .unwrap();
+                let wire = encode_reply(version, endian, 88, ReplyStatus::NoException, |e| {
+                    e.put_f64(1.25)
+                })
+                .unwrap();
                 let mut cursor: &[u8] = &wire;
                 let msg = read_message(&mut cursor, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
                 let reply = crate::decode_reply(msg).unwrap();

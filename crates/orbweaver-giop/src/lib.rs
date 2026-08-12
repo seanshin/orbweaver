@@ -498,13 +498,7 @@ fn parse_iiop_profile(body: &[u8]) -> Result<IiopProfile> {
         }
     }
 
-    Ok(IiopProfile {
-        version: Version { major, minor },
-        host,
-        port,
-        object_key,
-        components,
-    })
+    Ok(IiopProfile { version: Version { major, minor }, host, port, object_key, components })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -541,7 +535,14 @@ where
     F: FnOnce(&mut Encoder),
 {
     encode_request_with_contexts(
-        version, endian, request_id, object_key, operation, expect_reply, &[], write_body,
+        version,
+        endian,
+        request_id,
+        object_key,
+        operation,
+        expect_reply,
+        &[],
+        write_body,
     )
 }
 
@@ -930,8 +931,8 @@ pub fn decode_reply(msg: RawMessage) -> Result<Reply> {
         status_raw = d.get_u32()?;
     }
 
-    let status = ReplyStatus::from_u32(status_raw, version)
-        .ok_or(Error::BadReplyStatus(status_raw))?;
+    let status =
+        ReplyStatus::from_u32(status_raw, version).ok_or(Error::BadReplyStatus(status_raw))?;
 
     // §9.4.3.1: no padding after the header when the body is empty. Aligning
     // unconditionally can push the cursor past the end of a short message.
@@ -1011,7 +1012,8 @@ impl Connection {
         for c in &p.components {
             if c.tag == codeset::TAG_CODE_SETS
                 && let Ok(info) = codeset::CodeSetComponentInfo::parse(&c.data)
-                && let Ok(id) = codeset::negotiate(&codeset::client_char_component(), &info.for_char)
+                && let Ok(id) =
+                    codeset::negotiate(&codeset::client_char_component(), &info.for_char)
                 && let Ok(conv) = codeset::Converter::new(id)
             {
                 char_converter = Some(conv);
@@ -1173,38 +1175,41 @@ impl Connection {
         }
         self.stream.flush()?;
 
-        loop {
-            // Any framing failure from here leaves unread bytes behind.
-            let raw = match read_message(&mut self.stream, self.max_message_size) {
-                Ok(m) => m,
-                Err(e) => {
+        // Exactly one message answers one request. This was written as a loop,
+        // which said the opposite — that some messages could be skipped and the
+        // read retried — while every branch in fact returned. Nothing here may
+        // loop until request multiplexing exists: with one outstanding request,
+        // a message that is not our reply means our accounting is wrong, and
+        // reading past it would compound the error rather than recover from it.
+        //
+        // Any framing failure from here leaves unread bytes behind, so every
+        // error path poisons the connection.
+        let raw = match read_message(&mut self.stream, self.max_message_size) {
+            Ok(m) => m,
+            Err(e) => {
+                self.poisoned = true;
+                return Err(e);
+            }
+        };
+        self.max_reply_fragments = self.max_reply_fragments.max(raw.fragments);
+        match raw.msg_type {
+            MsgType::Reply => {
+                let reply = decode_reply(raw).inspect_err(|_| self.poisoned = true)?;
+                if reply.request_id != id {
                     self.poisoned = true;
-                    return Err(e);
+                    return Err(Error::Desynchronized);
                 }
-            };
-            self.max_reply_fragments = self.max_reply_fragments.max(raw.fragments);
-            match raw.msg_type {
-                MsgType::Reply => {
-                    let reply = decode_reply(raw).inspect_err(|_| self.poisoned = true)?;
-                    if reply.request_id != id {
-                        // A reply for a request we are not waiting on means
-                        // our accounting is wrong; keeping the connection
-                        // would compound it.
-                        self.poisoned = true;
-                        return Err(Error::Desynchronized);
-                    }
-                    return self.interpret(reply);
-                }
-                MsgType::CloseConnection => {
-                    // §9.4.7: the request was not processed and is safe to
-                    // re-send on a fresh connection.
-                    self.poisoned = true;
-                    return Err(Error::ConnectionClosed);
-                }
-                other => {
-                    self.poisoned = true;
-                    return Err(Error::UnexpectedMessage(other));
-                }
+                self.interpret(reply)
+            }
+            MsgType::CloseConnection => {
+                // §9.4.7: the request was not processed and is safe to
+                // re-send on a fresh connection.
+                self.poisoned = true;
+                Err(Error::ConnectionClosed)
+            }
+            other => {
+                self.poisoned = true;
+                Err(Error::UnexpectedMessage(other))
             }
         }
     }
@@ -1225,10 +1230,7 @@ impl Connection {
                 // decode the exception's members. Consuming and dropping the
                 // body left callers able to see that a call failed but never
                 // why.
-                let id = reply
-                    .body()?
-                    .get_string()
-                    .unwrap_or_else(|_| "<unreadable>".into());
+                let id = reply.body()?.get_string().unwrap_or_else(|_| "<unreadable>".into());
                 Err(Error::UserException { id, reply: Box::new(reply) })
             }
             ReplyStatus::LocationForward | ReplyStatus::LocationForwardPerm => {
@@ -1263,10 +1265,7 @@ enum Outcome {
 /// silently dropped the timeout for every hostname — and produced
 /// `::1:9999` for IPv6 literals, which resolves to nothing at all.
 fn dial(host: &str, port: u16, timeout: Duration) -> Result<TcpStream> {
-    let addrs = (host, port)
-        .to_socket_addrs()
-        .map_err(Error::Io)?
-        .collect::<Vec<_>>();
+    let addrs = (host, port).to_socket_addrs().map_err(Error::Io)?.collect::<Vec<_>>();
     if addrs.is_empty() {
         return Err(Error::Io(std::io::Error::new(
             std::io::ErrorKind::AddrNotAvailable,
@@ -1394,14 +1393,17 @@ mod tests {
     fn reply_status_is_version_aware() {
         assert_eq!(ReplyStatus::from_u32(3, Version::V1_0), Some(ReplyStatus::LocationForward));
         assert_eq!(ReplyStatus::from_u32(4, Version::V1_1), None);
-        assert_eq!(
-            ReplyStatus::from_u32(4, Version::V1_2),
-            Some(ReplyStatus::LocationForwardPerm)
-        );
+        assert_eq!(ReplyStatus::from_u32(4, Version::V1_2), Some(ReplyStatus::LocationForwardPerm));
         assert_eq!(ReplyStatus::from_u32(9, Version::V1_2), None);
     }
 
-    fn build_reply(version: Version, endian: Endian, id: u32, status: u32, contexts: u32) -> Vec<u8> {
+    fn build_reply(
+        version: Version,
+        endian: Endian,
+        id: u32,
+        status: u32,
+        contexts: u32,
+    ) -> Vec<u8> {
         let mut e = Encoder::new(endian);
         e.put_bytes(MAGIC);
         e.put_u8(version.major);
@@ -1484,9 +1486,7 @@ mod tests {
     /// and an allocation failure aborts the process.
     #[test]
     fn oversized_message_is_refused_before_allocating() {
-        let mut hostile: &[u8] = &[
-            b'G', b'I', b'O', b'P', 1, 2, 1, 1, 0xff, 0xff, 0xff, 0xff,
-        ];
+        let mut hostile: &[u8] = &[b'G', b'I', b'O', b'P', 1, 2, 1, 1, 0xff, 0xff, 0xff, 0xff];
         match read_message(&mut hostile, DEFAULT_MAX_MESSAGE_SIZE) {
             Err(Error::MessageTooLarge { declared, limit }) => {
                 assert_eq!(declared, 0xffff_ffff);
@@ -1550,7 +1550,8 @@ mod tests {
 
     #[test]
     fn small_messages_are_not_fragmented() {
-        let msg = encode_request(Version::V1_2, Endian::Big, 1, b"k", "ping", true, |_| {}).unwrap();
+        let msg =
+            encode_request(Version::V1_2, Endian::Big, 1, b"k", "ping", true, |_| {}).unwrap();
         assert_eq!(fragment_message(msg.clone(), 4096).unwrap(), vec![msg]);
     }
 

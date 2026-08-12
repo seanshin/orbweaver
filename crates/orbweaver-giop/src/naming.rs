@@ -120,10 +120,7 @@ impl ObjectUrl {
             }
             let (addr_part, key_part) = split_key(rest);
             let addresses = parse_addresses(addr_part)?;
-            return Ok(ObjectUrl::Corbaloc {
-                addresses,
-                object_key: unescape(key_part)?,
-            });
+            return Ok(ObjectUrl::Corbaloc { addresses, object_key: unescape(key_part)? });
         }
         if let Some(rest) = strip_ci(url, "corbaname:") {
             // §7.6.10.5: everything after '#' is a stringified name.
@@ -133,7 +130,8 @@ impl ObjectUrl {
             };
             let (addr_part, key_part) = split_key(loc);
             let addresses = parse_addresses(addr_part)?;
-            let key = if key_part.is_empty() { b"NameService".to_vec() } else { unescape(key_part)? };
+            let key =
+                if key_part.is_empty() { b"NameService".to_vec() } else { unescape(key_part)? };
             return Ok(ObjectUrl::Corbaname {
                 addresses,
                 object_key: key,
@@ -217,7 +215,8 @@ fn parse_address(s: &str) -> std::result::Result<IiopAddress, UrlError> {
                 .split_once('.')
                 .ok_or_else(|| UrlError::BadAddress(format!("malformed version {v:?}")))?;
             let parse = |x: &str| {
-                x.parse::<u8>().map_err(|_| UrlError::BadAddress(format!("malformed version {v:?}")))
+                x.parse::<u8>()
+                    .map_err(|_| UrlError::BadAddress(format!("malformed version {v:?}")))
             };
             (Version { major: parse(maj)?, minor: parse(min)? }, r)
         }
@@ -291,7 +290,11 @@ pub fn parse_stringified_name(s: &str) -> std::result::Result<Vec<NameComponent>
 
     for c in s.chars() {
         if escaped {
-            if in_kind { kind.push(c) } else { id.push(c) }
+            if in_kind {
+                kind.push(c)
+            } else {
+                id.push(c)
+            }
             escaped = false;
             continue;
         }
@@ -299,11 +302,18 @@ pub fn parse_stringified_name(s: &str) -> std::result::Result<Vec<NameComponent>
             '\\' => escaped = true,
             '.' if !in_kind => in_kind = true,
             '/' => {
-                out.push(NameComponent { id: std::mem::take(&mut id), kind: std::mem::take(&mut kind) });
+                out.push(NameComponent {
+                    id: std::mem::take(&mut id),
+                    kind: std::mem::take(&mut kind),
+                });
                 in_kind = false;
             }
             _ => {
-                if in_kind { kind.push(c) } else { id.push(c) }
+                if in_kind {
+                    kind.push(c)
+                } else {
+                    id.push(c)
+                }
             }
         }
     }
@@ -385,7 +395,9 @@ pub fn stringify_name(name: &[NameComponent]) -> String {
         out
     }
     name.iter()
-        .map(|c| if c.kind.is_empty() { esc(&c.id) } else { format!("{}.{}", esc(&c.id), esc(&c.kind)) })
+        .map(|c| {
+            if c.kind.is_empty() { esc(&c.id) } else { format!("{}.{}", esc(&c.id), esc(&c.kind)) }
+        })
         .collect::<Vec<_>>()
         .join("/")
 }
@@ -538,7 +550,10 @@ mod tests {
     fn name_kind_is_optional_and_separated_by_a_dot() {
         assert_eq!(
             parse_stringified_name("ctx/obj.kind").unwrap(),
-            vec![NameComponent::new("ctx"), NameComponent { id: "obj".into(), kind: "kind".into() }]
+            vec![
+                NameComponent::new("ctx"),
+                NameComponent { id: "obj".into(), kind: "kind".into() }
+            ]
         );
     }
 
@@ -548,19 +563,23 @@ mod tests {
         assert!(matches!(ObjectUrl::parse("corbaloc:"), Err(UrlError::BadAddress(_))));
         assert!(matches!(ObjectUrl::parse("corbaloc::/K"), Err(UrlError::BadAddress(_))));
         assert!(matches!(ObjectUrl::parse("corbaloc::h:notaport/K"), Err(UrlError::BadAddress(_))));
+        assert!(matches!(ObjectUrl::parse("corbaloc:iiop:9@h/K"), Err(UrlError::BadAddress(_))));
         assert!(matches!(
-            ObjectUrl::parse("corbaloc:iiop:9@h/K"),
-            Err(UrlError::BadAddress(_))
+            ObjectUrl::parse("corbaloc::h/%zz"),
+            Err(UrlError::BadSchemeSpecificPart(_))
         ));
-        assert!(matches!(ObjectUrl::parse("corbaloc::h/%zz"), Err(UrlError::BadSchemeSpecificPart(_))));
-        assert!(matches!(ObjectUrl::parse("corbaloc::h/%4"), Err(UrlError::BadSchemeSpecificPart(_))));
+        assert!(matches!(
+            ObjectUrl::parse("corbaloc::h/%4"),
+            Err(UrlError::BadSchemeSpecificPart(_))
+        ));
         assert_eq!(UrlError::BadSchemeName("x".into()).to_string(), "x (BAD_PARAM minor 7)");
     }
 
     #[test]
     fn url_becomes_a_parsable_ior() {
-        let s = corbaloc_to_ior_string("corbaloc:iiop:1.2@127.0.0.1:4001/Echo", "IDL:spike/Echo:1.0")
-            .unwrap();
+        let s =
+            corbaloc_to_ior_string("corbaloc:iiop:1.2@127.0.0.1:4001/Echo", "IDL:spike/Echo:1.0")
+                .unwrap();
         let back = Ior::parse(&s).unwrap();
         assert_eq!(back.type_id, "IDL:spike/Echo:1.0");
         assert_eq!(back.primary().unwrap().port, 4001);

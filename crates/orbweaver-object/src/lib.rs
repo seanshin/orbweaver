@@ -312,9 +312,7 @@ pub fn get_reference(d: &mut Decoder<'_>) -> Result<Option<Ior>, orbweaver_giop:
 /// this is documented rather than left to intuition.
 pub fn is_equivalent(a: &Ior, b: &Ior) -> bool {
     match (a.profiles.first(), b.profiles.first()) {
-        (Some(x), Some(y)) => {
-            x.object_key == y.object_key && x.host == y.host && x.port == y.port
-        }
+        (Some(x), Some(y)) => x.object_key == y.object_key && x.host == y.host && x.port == y.port,
         (None, None) => a.type_id == b.type_id,
         _ => false,
     }
@@ -364,11 +362,7 @@ impl ObjectOps<'_> {
     }
 
     /// Serves a pseudo-operation, writing the reply body into `out`.
-    pub fn dispatch(
-        &self,
-        request: &Request,
-        out: &mut Encoder,
-    ) -> Result<(), SystemException> {
+    pub fn dispatch(&self, request: &Request, out: &mut Encoder) -> Result<(), SystemException> {
         let mut args = request.body().map_err(|_| SystemException::marshal())?;
         match request.operation.as_str() {
             "_is_a" => {
@@ -449,9 +443,8 @@ mod tests {
     #[test]
     fn every_poa_in_a_process_gets_its_own_incarnation() {
         let id = ObjectId::from_name("x");
-        let keys: std::collections::BTreeSet<Vec<u8>> = (0..64)
-            .map(|_| Poa::new("RootPOA", "IDL:m/I:1.0").object_key(&id))
-            .collect();
+        let keys: std::collections::BTreeSet<Vec<u8>> =
+            (0..64).map(|_| Poa::new("RootPOA", "IDL:m/I:1.0").object_key(&id)).collect();
         assert_eq!(keys.len(), 64, "two POAs minted the same transient key");
     }
 
@@ -500,8 +493,7 @@ mod tests {
     /// never send.
     #[test]
     fn a_locator_can_forward_or_activate() {
-        let mut poa =
-            Poa::new("P", "IDL:m/I:1.0").with_unknown_id(UnknownIdPolicy::AskLocator);
+        let mut poa = Poa::new("P", "IDL:m/I:1.0").with_unknown_id(UnknownIdPolicy::AskLocator);
         let key = poa.object_key(&ObjectId::from_name("absent"));
 
         let mut fwd = Forwarder(ior("elsewhere", 9, b"k"));
@@ -517,8 +509,7 @@ mod tests {
 
     #[test]
     fn without_a_locator_an_inactive_id_is_unknown() {
-        let mut poa =
-            Poa::new("P", "IDL:m/I:1.0").with_unknown_id(UnknownIdPolicy::AskLocator);
+        let mut poa = Poa::new("P", "IDL:m/I:1.0").with_unknown_id(UnknownIdPolicy::AskLocator);
         let key = poa.object_key(&ObjectId::from_name("absent"));
         assert!(matches!(poa.dispatch_target(&key, None), Target::Unknown));
     }

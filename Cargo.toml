@@ -17,3 +17,10 @@ rust-version = "1.85"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+# Warnings are errors in CI, so anything here has to be genuinely worth fixing.
+# `never_loop` and `if_same_then_else` both found real misleading code in
+# Phase 2 Batch 6; neither was a crash, and both said something untrue about
+# the protocol to the next reader.
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

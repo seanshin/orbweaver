@@ -245,13 +245,10 @@ impl Registry {
             if let Some(Entry::Interface(i)) = self.entries.get(&base)
                 && i.operations.contains_key(op)
             {
-                return self
-                    .entries
-                    .get_key_value(&base)
-                    .and_then(|(rid, e)| match e {
-                        Entry::Interface(i) => i.operations.get(op).map(|s| (rid, s)),
-                        _ => None,
-                    });
+                return self.entries.get_key_value(&base).and_then(|(rid, e)| match e {
+                    Entry::Interface(i) => i.operations.get(op).map(|s| (rid, s)),
+                    _ => None,
+                });
             }
         }
         None
@@ -552,12 +549,8 @@ impl Builder<'_> {
                     .iter()
                     .flat_map(|c| {
                         let tc = self.type_of(path, &c.member.ty);
-                        let member_name = c
-                            .member
-                            .names
-                            .first()
-                            .map(|n| n.text.clone())
-                            .unwrap_or_default();
+                        let member_name =
+                            c.member.names.first().map(|n| n.text.clone()).unwrap_or_default();
                         let labels: Vec<Vec<u8>> = if c.labels.is_empty() {
                             vec![Vec::new()]
                         } else {
@@ -573,11 +566,8 @@ impl Builder<'_> {
                             .collect::<Vec<_>>()
                     })
                     .collect();
-                let default_index = u
-                    .cases
-                    .iter()
-                    .position(|c| c.is_default)
-                    .map_or(-1, |i| i as i32);
+                let default_index =
+                    u.cases.iter().position(|c| c.is_default).map_or(-1, |i| i as i32);
                 TypeCode::Union {
                     id: id.clone(),
                     name,
@@ -636,9 +626,7 @@ impl Builder<'_> {
                 id: "IDL:omg.org/CORBA/ValueBase:1.0".into(),
                 name: "ValueBase".into(),
             },
-            TypeSpec::String(b) => {
-                TypeCode::String(b.as_deref().and_then(const_u32).unwrap_or(0))
-            }
+            TypeSpec::String(b) => TypeCode::String(b.as_deref().and_then(const_u32).unwrap_or(0)),
             TypeSpec::WString(b) => {
                 TypeCode::WString(b.as_deref().and_then(const_u32).unwrap_or(0))
             }
@@ -756,9 +744,8 @@ mod tests {
 
     #[test]
     fn struct_typecodes_carry_members_in_order() {
-        let r = load(
-            "module m { struct Ragged { octet a; long b; short c; double d; octet e; }; };",
-        );
+        let r =
+            load("module m { struct Ragged { octet a; long b; short c; double d; octet e; }; };");
         match r.typecode("IDL:m/Ragged:1.0").unwrap() {
             TypeCode::Struct { id, name, members } => {
                 assert_eq!(id, "IDL:m/Ragged:1.0");
@@ -845,9 +832,7 @@ mod tests {
 
     #[test]
     fn enum_labels_resolve_to_their_ordinal() {
-        let r = load(
-            "module m { enum K { A, B, C }; union U switch (K) { case B: long v; }; };",
-        );
+        let r = load("module m { enum K { A, B, C }; union U switch (K) { case B: long v; }; };");
         match r.typecode("IDL:m/U:1.0").unwrap() {
             TypeCode::Union { cases, .. } => assert_eq!(cases[0].label, 1i32.to_be_bytes()),
             other => panic!("{other:?}"),
@@ -925,9 +910,7 @@ mod tests {
     /// declaring interface.
     #[test]
     fn operations_resolve_through_inheritance() {
-        let r = load(
-            "module m { interface A { long f(); }; interface B : A { long g(); }; };",
-        );
+        let r = load("module m { interface A { long f(); }; interface B : A { long g(); }; };");
         let (owner, sig) = r.resolve_operation("IDL:m/B:1.0", "f").expect("inherited");
         assert_eq!(owner, "IDL:m/A:1.0");
         assert_eq!(sig.returns, TypeCode::Long);
@@ -938,7 +921,9 @@ mod tests {
     fn cyclic_inheritance_does_not_hang() {
         // Illegal IDL, which the checker rejects — but a registry loaded from
         // unchecked input must still terminate.
-        let r = load("module m { interface A; interface B : A { long g(); }; interface A : B { long f(); }; };");
+        let r = load(
+            "module m { interface A; interface B : A { long g(); }; interface A : B { long f(); }; };",
+        );
         let _ = r.is_a("IDL:m/A:1.0", "IDL:m/Nope:1.0");
         let _ = r.ancestors("IDL:m/A:1.0");
     }
@@ -968,7 +953,8 @@ mod tests {
 
     #[test]
     fn attributes_are_registered_with_their_mutability() {
-        let r = load("module m { interface I { readonly attribute long n; attribute string s; }; };");
+        let r =
+            load("module m { interface I { readonly attribute long n; attribute string s; }; };");
         let i = r.interface("IDL:m/I:1.0").unwrap();
         assert!(i.attributes["n"].readonly);
         assert!(!i.attributes["s"].readonly);

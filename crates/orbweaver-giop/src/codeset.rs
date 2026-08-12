@@ -66,6 +66,9 @@ impl CodeSetId {
     /// and its BSD-3-Clause attribution for the WHATWG mapping data. Building
     /// without it removes both the support and the obligation, so this is a
     /// build-time question rather than a fixed list.
+    // Written out rather than as `matches!`, because one arm is a build-time
+    // question and folding it in hides that EUC-KR is conditional.
+    #[allow(clippy::match_like_matches_macro)]
     pub fn is_supported(self) -> bool {
         match self {
             CodeSetId::ISO_8859_1 | CodeSetId::UTF_8 | CodeSetId::ASCII | CodeSetId::UTF_16 => true,
@@ -268,9 +271,9 @@ pub fn client_wchar_component() -> CodeSetComponent {
 /// connection setup, before anyone knows what text will actually flow.
 fn repertoire_rank(id: CodeSetId) -> u8 {
     match id {
-        CodeSetId::UTF_8 => 5,   // all of Unicode, and compact for ASCII
-        CodeSetId::UTF_16 => 4,  // all of Unicode
-        CodeSetId::EUC_KR => 3,  // Korean plus ASCII
+        CodeSetId::UTF_8 => 5,  // all of Unicode, and compact for ASCII
+        CodeSetId::UTF_16 => 4, // all of Unicode
+        CodeSetId::EUC_KR => 3, // Korean plus ASCII
         CodeSetId::ISO_8859_1 => 2,
         CodeSetId::ASCII => 1,
         _ => 0,
@@ -300,13 +303,8 @@ pub fn negotiate(
     if server.conversions.contains(&client_native) {
         candidates.push(client_native); // the peer converts to ours
     }
-    candidates.extend(
-        client
-            .conversions
-            .iter()
-            .filter(|c| server.conversions.contains(c))
-            .copied(),
-    );
+    candidates
+        .extend(client.conversions.iter().filter(|c| server.conversions.contains(c)).copied());
 
     // 5. §7.10.2.6 allows a universal fallback when both sides can reach it.
     if client.supports(CodeSetId::UTF_8) && server.supports(CodeSetId::UTF_8) {
@@ -341,10 +339,7 @@ pub fn negotiate(
         return Err(NegotiationError::Unsupported(missing));
     }
 
-    Err(NegotiationError::Incompatible {
-        client_native,
-        server_native: server.native,
-    })
+    Err(NegotiationError::Incompatible { client_native, server_native: server.native })
 }
 
 /// Whether a codeset has an implementation in this crate that the current
@@ -374,7 +369,11 @@ pub struct Converter {
 impl Converter {
     /// A converter for a negotiated codeset.
     pub fn new(id: CodeSetId) -> std::result::Result<Self, NegotiationError> {
-        if id.is_supported() { Ok(Converter { id }) } else { Err(NegotiationError::Unsupported(id)) }
+        if id.is_supported() {
+            Ok(Converter { id })
+        } else {
+            Err(NegotiationError::Unsupported(id))
+        }
     }
 
     /// The codeset being converted to.
@@ -433,9 +432,8 @@ impl Converter {
     /// Decodes transmission bytes into a string.
     pub fn decode(self, bytes: &[u8]) -> std::result::Result<String, NegotiationError> {
         match self.id {
-            CodeSetId::UTF_8 => {
-                String::from_utf8(bytes.to_vec()).map_err(|_| NegotiationError::Unsupported(self.id))
-            }
+            CodeSetId::UTF_8 => String::from_utf8(bytes.to_vec())
+                .map_err(|_| NegotiationError::Unsupported(self.id)),
             CodeSetId::ISO_8859_1 => Ok(bytes.iter().map(|&b| b as char).collect()),
             CodeSetId::ASCII => {
                 if bytes.iter().any(|&b| b > 0x7F) {
@@ -447,10 +445,8 @@ impl Converter {
                 if bytes.len() % 2 != 0 {
                     return Err(NegotiationError::Unsupported(self.id));
                 }
-                let units: Vec<u16> = bytes
-                    .chunks_exact(2)
-                    .map(|c| u16::from_be_bytes([c[0], c[1]]))
-                    .collect();
+                let units: Vec<u16> =
+                    bytes.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
                 String::from_utf16(&units).map_err(|_| NegotiationError::Unsupported(self.id))
             }
             #[cfg(feature = "euc-kr")]
@@ -553,14 +549,8 @@ mod tests {
     /// preference is for repertoire, not for UTF-8 as such.
     #[test]
     fn falls_back_to_the_peers_native_when_it_is_the_only_option() {
-        let server = CodeSetComponent {
-            native: Some(CodeSetId::ISO_8859_1),
-            conversions: vec![],
-        };
-        assert_eq!(
-            negotiate(&client_char_component(), &server).unwrap(),
-            CodeSetId::ISO_8859_1
-        );
+        let server = CodeSetComponent { native: Some(CodeSetId::ISO_8859_1), conversions: vec![] };
+        assert_eq!(negotiate(&client_char_component(), &server).unwrap(), CodeSetId::ISO_8859_1);
     }
 
     #[test]
@@ -604,18 +594,9 @@ mod tests {
 
     #[test]
     fn incompatible_peers_are_reported_not_guessed() {
-        let client = CodeSetComponent {
-            native: Some(CodeSetId(0x0AAA_0000)),
-            conversions: vec![],
-        };
-        let server = CodeSetComponent {
-            native: Some(CodeSetId(0x0BBB_0000)),
-            conversions: vec![],
-        };
-        assert!(matches!(
-            negotiate(&client, &server),
-            Err(NegotiationError::Incompatible { .. })
-        ));
+        let client = CodeSetComponent { native: Some(CodeSetId(0x0AAA_0000)), conversions: vec![] };
+        let server = CodeSetComponent { native: Some(CodeSetId(0x0BBB_0000)), conversions: vec![] };
+        assert!(matches!(negotiate(&client, &server), Err(NegotiationError::Incompatible { .. })));
     }
 
     /// EUC-KR support is a build-time property, so this asserts the right
@@ -704,9 +685,8 @@ mod tests {
     fn euc_kr_matches_an_independent_implementation() {
         let c = Converter::new(CodeSetId::EUC_KR).unwrap();
         let s = "함정 전투체계";
-        let expected = [
-            0xc7, 0xd4, 0xc1, 0xa4, 0x20, 0xc0, 0xfc, 0xc5, 0xf5, 0xc3, 0xbc, 0xb0, 0xe8,
-        ];
+        let expected =
+            [0xc7, 0xd4, 0xc1, 0xa4, 0x20, 0xc0, 0xfc, 0xc5, 0xf5, 0xc3, 0xbc, 0xb0, 0xe8];
         assert_eq!(c.encode(s).unwrap(), expected);
         assert_eq!(c.decode(&expected).unwrap(), s);
         assert_eq!(
@@ -854,7 +834,10 @@ mod tests {
 
         let zero = [0u8, 0, 0, 0];
         let mut d = Decoder::new(&zero, Endian::Big);
-        assert!(wide(Version::V1_1).get_wstring(&mut d).is_err(), "1.1 count includes a terminator");
+        assert!(
+            wide(Version::V1_1).get_wstring(&mut d).is_err(),
+            "1.1 count includes a terminator"
+        );
     }
 
     #[test]
@@ -991,7 +974,11 @@ impl WideCodec {
     /// suggest. Writing an explicit BOM removes the ambiguity instead of
     /// betting on which convention the peer chose, and omniORB emits one
     /// itself.
-    pub fn put_wstring(self, e: &mut Encoder, s: &str) -> std::result::Result<(), NegotiationError> {
+    pub fn put_wstring(
+        self,
+        e: &mut Encoder,
+        s: &str,
+    ) -> std::result::Result<(), NegotiationError> {
         let units = self.units(s);
         let total = units.len() + 1; // the BOM is a unit too
         if self.version.minor >= 2 {
@@ -1017,10 +1004,7 @@ impl WideCodec {
     }
 
     /// Reads a `wstring`.
-    pub fn get_wstring(
-        self,
-        d: &mut Decoder<'_>,
-    ) -> std::result::Result<String, NegotiationError> {
+    pub fn get_wstring(self, d: &mut Decoder<'_>) -> std::result::Result<String, NegotiationError> {
         let len = d.get_u32().map_err(|_| NegotiationError::Malformed { codeset: self.tcs })?;
         let mut units = Vec::new();
         if self.version.minor >= 2 {
@@ -1028,7 +1012,9 @@ impl WideCodec {
                 return Err(NegotiationError::Malformed { codeset: self.tcs });
             }
             for _ in 0..len / 2 {
-                units.push(d.get_u16().map_err(|_| NegotiationError::Malformed { codeset: self.tcs })?);
+                units.push(
+                    d.get_u16().map_err(|_| NegotiationError::Malformed { codeset: self.tcs })?,
+                );
             }
         } else {
             if len == 0 {
@@ -1036,7 +1022,9 @@ impl WideCodec {
                 return Err(NegotiationError::Malformed { codeset: self.tcs });
             }
             for _ in 0..len {
-                units.push(d.get_u16().map_err(|_| NegotiationError::Malformed { codeset: self.tcs })?);
+                units.push(
+                    d.get_u16().map_err(|_| NegotiationError::Malformed { codeset: self.tcs })?,
+                );
             }
             match units.pop() {
                 Some(0) => {}

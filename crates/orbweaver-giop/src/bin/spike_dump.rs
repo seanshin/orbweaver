@@ -26,8 +26,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ior = Ior::parse(std::fs::read_to_string(&path)?.trim())?;
     let p = ior.primary()?;
-    println!("endpoint {}:{}  object_key {} bytes  (IIOP {}.{})\n",
-        p.host, p.port, p.object_key.len(), p.version.major, p.version.minor);
+    println!(
+        "endpoint {}:{}  object_key {} bytes  (IIOP {}.{})\n",
+        p.host,
+        p.port,
+        p.object_key.len(),
+        p.version.major,
+        p.version.minor
+    );
 
     let endian = match std::env::args().nth(3).as_deref() {
         Some("big") => Endian::Big,

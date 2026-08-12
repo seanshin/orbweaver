@@ -141,11 +141,8 @@ impl Analysis {
 
 /// Analyses a parsed specification.
 pub fn analyse(spec: &Spec) -> Analysis {
-    let mut a = Analyser {
-        scopes: vec![Scope::default()],
-        diagnostics: Vec::new(),
-        deferred: Vec::new(),
-    };
+    let mut a =
+        Analyser { scopes: vec![Scope::default()], diagnostics: Vec::new(), deferred: Vec::new() };
     a.install_corba_module();
     a.collect_definitions(0, &spec.definitions);
     a.resolve_deferred();
@@ -173,11 +170,7 @@ struct Analyser {
 impl Analyser {
     fn push_scope(&mut self, parent: usize, name: &str) -> usize {
         let id = self.scopes.len();
-        self.scopes.push(Scope {
-            name: name.to_owned(),
-            parent: Some(parent),
-            ..Scope::default()
-        });
+        self.scopes.push(Scope { name: name.to_owned(), parent: Some(parent), ..Scope::default() });
         id
     }
 
@@ -360,7 +353,13 @@ impl Analyser {
                     // A forward declaration introduces the name only.
                     if !self.scopes[scope].symbols.contains_key(&i.name.text.to_lowercase()) {
                         let inner = self.push_scope(scope, &i.name.text);
-                        self.declare_with(scope, &i.name, SymbolKind::Interface, Some(inner), false);
+                        self.declare_with(
+                            scope,
+                            &i.name,
+                            SymbolKind::Interface,
+                            Some(inner),
+                            false,
+                        );
                     }
                     return;
                 };
@@ -447,7 +446,13 @@ impl Analyser {
                 let Some(members) = &v.members else {
                     if !self.scopes[scope].symbols.contains_key(&v.name.text.to_lowercase()) {
                         let inner = self.push_scope(scope, &v.name.text);
-                        self.declare_with(scope, &v.name, SymbolKind::ValueType, Some(inner), false);
+                        self.declare_with(
+                            scope,
+                            &v.name,
+                            SymbolKind::ValueType,
+                            Some(inner),
+                            false,
+                        );
                     }
                     return;
                 };
@@ -646,11 +651,8 @@ impl Analyser {
     fn lookup(&self, scope: usize, n: &ScopedName) -> Option<Symbol> {
         let start = if n.absolute { 0 } else { scope };
         let first = n.parts.first()?;
-        let mut sym = if n.absolute {
-            self.lookup_in(0, first)?
-        } else {
-            self.lookup_upwards(start, first)?
-        };
+        let mut sym =
+            if n.absolute { self.lookup_in(0, first)? } else { self.lookup_upwards(start, first)? };
         for part in &n.parts[1..] {
             sym = self.lookup_in(sym.scope?, part)?;
         }
@@ -717,7 +719,8 @@ mod tests {
     /// Rule 1, and the single most expensive rule in the project.
     #[test]
     fn member_clashing_with_a_used_type_is_reported() {
-        let d = diags("module m { struct Position { double x; }; struct T { Position position; }; };");
+        let d =
+            diags("module m { struct Position { double x; }; struct T { Position position; }; };");
         assert_eq!(d.len(), 1, "{d:?}");
         assert_eq!(d[0].rule, "identifier-case-clash");
         assert!(d[0].message.contains("ignoring case"));
@@ -732,7 +735,9 @@ mod tests {
 
     #[test]
     fn parameter_clashing_with_a_type_is_reported() {
-        let d = diags("module m { struct Order { long id; }; interface P { void place(in Order order); }; };");
+        let d = diags(
+            "module m { struct Order { long id; }; interface P { void place(in Order order); }; };",
+        );
         assert_eq!(d.len(), 1, "{d:?}");
         assert_eq!(d[0].rule, "identifier-case-clash");
     }
@@ -779,9 +784,7 @@ mod tests {
         assert_eq!(d.len(), 1, "{d:?}");
         assert_eq!(d[0].rule, "duplicate-union-label");
 
-        let d = diags(
-            "module m { union U switch (long) { default: long a; default: long b; }; };",
-        );
+        let d = diags("module m { union U switch (long) { default: long a; default: long b; }; };");
         assert_eq!(d.len(), 1, "{d:?}");
         assert_eq!(d[0].rule, "duplicate-union-default");
     }
@@ -791,7 +794,9 @@ mod tests {
     #[test]
     fn forward_use_within_a_scope_is_allowed() {
         clean("module m { interface I { S get(); }; struct S { long a; }; };");
-        clean("module m { interface Node; typedef sequence<Node> Nodes; interface Node { Nodes kids(); }; };");
+        clean(
+            "module m { interface Node; typedef sequence<Node> Nodes; interface Node { Nodes kids(); }; };",
+        );
     }
 
     #[test]
@@ -842,9 +847,7 @@ mod tests {
 
     #[test]
     fn diagnostics_are_ordered_by_position() {
-        let d = diags(
-            "module m { struct S { long a; long a; }; struct T { Widget w; }; };",
-        );
+        let d = diags("module m { struct S { long a; long a; }; struct T { Widget w; }; };");
         assert!(d.len() >= 2);
         assert!(d[0].span.line <= d[1].span.line);
         assert!(d[0].span.column < d[1].span.column || d[0].span.line < d[1].span.line);

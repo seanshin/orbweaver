@@ -156,7 +156,8 @@ impl Parser {
         }
         if self.at_kw("interface") || self.at_kw("abstract") || self.at_kw("local") {
             // `abstract`/`local` also lead a valuetype, so look one further.
-            if self.at_kw("abstract") && matches!(self.toks.get(self.i + 1).map(|t| &t.tok), Some(Tok::Ident(s)) if s == "valuetype")
+            if self.at_kw("abstract")
+                && matches!(self.toks.get(self.i + 1).map(|t| &t.tok), Some(Tok::Ident(s)) if s == "valuetype")
             {
                 return Ok(Definition::ValueType(self.valuetype(ann)?));
             }
@@ -510,14 +511,7 @@ impl Parser {
             }
         }
         self.expect_punct("}")?;
-        Ok(ValueTypeDef {
-            name,
-            base,
-            supports,
-            members: Some(members),
-            is_abstract,
-            annotations,
-        })
+        Ok(ValueTypeDef { name, base, supports, members: Some(members), is_abstract, annotations })
     }
 
     // ── types ───────────────────────────────────────────────────────────────
