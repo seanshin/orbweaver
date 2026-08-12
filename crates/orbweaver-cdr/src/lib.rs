@@ -215,6 +215,22 @@ impl Encoder {
         self.origin = self.buf.len();
     }
 
+    /// The current alignment origin, for saving across a nested encapsulation.
+    pub fn origin(&self) -> usize {
+        self.origin
+    }
+
+    /// Restores a previously saved alignment origin.
+    ///
+    /// Encapsulations restart alignment at their own first byte, but a
+    /// `TypeCode` indirection offset is measured in the *outermost* stream
+    /// (CORBA 3.4 §9.3.5.1). Both are satisfiable only by writing everything
+    /// into one buffer and moving the origin in and out of each encapsulation,
+    /// rather than building encapsulations in buffers of their own.
+    pub fn set_origin(&mut self, origin: usize) {
+        self.origin = origin;
+    }
+
     /// Pads with zero bytes until the position is a multiple of `align`.
     pub fn align_to(&mut self, align: usize) {
         debug_assert!(align.is_power_of_two());
@@ -445,6 +461,30 @@ impl<'a> Decoder<'a> {
     /// Current offset relative to the alignment origin.
     pub fn position(&self) -> usize {
         self.pos - self.origin
+    }
+
+    /// The current alignment origin, for saving across a nested encapsulation.
+    pub fn origin(&self) -> usize {
+        self.origin
+    }
+
+    /// Restores a previously saved alignment origin.
+    ///
+    /// See [`Encoder::set_origin`]: an encapsulation restarts alignment while a
+    /// `TypeCode` indirection offset stays absolute, so the reader walks one
+    /// buffer and moves the origin rather than slicing sub-decoders out.
+    pub fn set_origin(&mut self, origin: usize) {
+        self.origin = origin;
+    }
+
+    /// Treats the current position as the alignment origin.
+    pub fn reset_origin(&mut self) {
+        self.origin = self.pos;
+    }
+
+    /// The whole underlying buffer, for absolute-offset work.
+    pub fn buffer(&self) -> &'a [u8] {
+        self.buf
     }
 
     /// Bytes not yet consumed.

@@ -534,7 +534,78 @@ says so separately from the pass count:
 
 `spikes/jacorb/setup.sh` fetches and builds the fixture reproducibly.
 
-## Still open after Batch 5
+---
+
+# Batch 6: `any` and `TypeCode`
+
+The piece the AI path rests on. `docs/PLAN.md` §2.1 claims CORBA is "a runtime
+self-describing type system", and `TypeCode` is what makes that true rather
+than aspirational — it is how a value describes itself well enough to be
+decoded by a caller that has never seen its IDL. AnyJSON's `_t` field had
+assumed it existed since v0.2.
+
+Delivered: `TCKind` 0–28, all three parameter forms (empty, inline, complex
+encapsulation), indirection with recursion, and `any`. **20/20 against both
+peers**, including a struct `any` carrying its own `TypeCode`.
+
+## Two alignment rules that contradict each other
+
+Complex parameters live in an encapsulation, so **alignment restarts** at its
+byte-order flag (§9.3.3). Indirection offsets are measured in the **outermost**
+stream (§9.3.5.1), so an offset can point out of the encapsulation it sits in.
+
+Satisfying both means writing everything into one buffer and moving the
+alignment origin in and out of each encapsulation, rather than building
+encapsulations in buffers of their own. That is why `Encoder::set_origin`
+exists.
+
+복합 파라미터는 캡슐화 안에 있어 **정렬이 재시작**하지만, 간접참조 오프셋은
+**최외곽** 스트림 기준이다. 둘을 동시에 만족시키려면 모든 것을 한 버퍼에 쓰고
+캡슐화마다 정렬 원점을 넣고 빼야 한다.
+
+## Recursion
+
+`corpus/golden/15-forward-recursive.idl` has a struct containing a sequence of
+itself. Without indirection its `TypeCode` does not terminate. Rust cannot hold
+the cycle and flattening would not halt, so a self-reference decodes to
+`Recursive(repository_id)` — which is honest, because a recursive type has no
+finite expansion and the consumer is the only thing that can decide what to do
+with that.
+
+## The bug the peer caught that our tests could not
+
+Self-round-trips passed for every type, including nested structs. omniORB
+rejected the struct `any` immediately, with *"Garbage left at end of input
+message"*.
+
+The cause was not in the `TypeCode` encoder. **An `any`'s value is marshalled
+immediately after its `TypeCode`, with alignment continuing from there**, so
+its internal padding depends on where the whole `any` lands in the message. The
+test built the value in a buffer of its own, starting at offset zero — padding
+computed for a position it would never occupy.
+
+It survived `any/long`, which has no internal padding, and `any/string`, which
+happened to land right. A struct of `octet, long, short, double, octet` did
+not. The peer reported garbage at the *end* of the message rather than an error
+at the offending field, which is what a padding error looks like from the
+outside.
+
+This is the third appearance of one root cause — **a detached buffer aligning
+from zero** — after the GIOP 1.0/1.1 body in Batch 3. It is now codified where
+it can be seen: the API is a closure that writes into the live stream
+(`encode_any_with`), and the raw-bytes form is named
+`encode_any_at_same_alignment` so its precondition is in the call.
+
+같은 근본원인의 세 번째 등장이다 — **분리된 버퍼가 0에서부터 정렬하는 것**. API를
+라이브 스트림에 쓰는 클로저로 바꾸고, 원시 바이트 형태는 전제조건이 호출부에
+드러나도록 이름에 담았다.
+
+A real encoder bug was also found and fixed along the way: `encapsulation_end`
+restored the alignment origin to zero instead of the enclosing value, which
+misaligns a struct nested inside a sequence. Our round-trips missed it because
+the decoder saved and restored correctly and the offsets coincided.
+
+## Still open after Batch 6
 - Wiring the negotiated converter through `Connection` and the string paths,
   including the per-connection "send the context once" rule and the
   `MARSHAL` minor 9 case for conflicting contexts on one connection.
@@ -555,9 +626,8 @@ Phase 1 scope from `docs/PLAN.md` §7 and remains open:
   rather than silently truncated, which is the correct interim behaviour but not
   the requirement.
 - **`LocateRequest` send, `CancelRequest` send** — served but not sent.
-- **`wchar`/`wstring`, `any`, `TypeCode`, `long double`, and inline object
-  references in general** — `Ior::read_from` exists now, but the constructed-type
-  surface is still only `sequence<octet>` and `string`.
+- **`wchar`/`wstring` and `long double`** — `any` and `TypeCode` landed in
+  Batch 6; these remain.
 - **`corbaloc:` / `corbaname:` / CosNaming** — no object-reference acquisition
   beyond a stringified IOR.
 - **Multi-profile failover, `TAG_ALTERNATE_IIOP_ADDRESS`, SSLIOP port

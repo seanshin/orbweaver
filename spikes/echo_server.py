@@ -30,6 +30,9 @@ class Echo(spike__POA.Echo):
     def echo_ragged(self, v):
         return v
 
+    def echo_any(self, v):
+        return v
+
 
 def main():
     orb = CORBA.ORB_init(sys.argv, CORBA.ORB_ID)

@@ -18,6 +18,7 @@ public class Server {
         public String echo_string(String msg) { return msg; }
         public double scale(double v, double by) { return v * by; }
         public Ragged echo_ragged(Ragged v) { return v; }
+        public org.omg.CORBA.Any echo_any(org.omg.CORBA.Any v) { return v; }
     }
 
     public static void main(String[] args) throws Exception {

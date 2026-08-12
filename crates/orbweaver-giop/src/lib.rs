@@ -26,6 +26,7 @@
 
 pub mod codeset;
 pub mod server;
+pub mod typecode;
 
 use orbweaver_cdr::{Decoder, Encoder, Endian};
 use std::fmt;

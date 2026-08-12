@@ -7,7 +7,8 @@
 //!
 //! Usage: `spike-interop <ior-file>`
 
-use orbweaver_cdr::Endian;
+use orbweaver_cdr::{Encoder, Endian};
+use orbweaver_giop::typecode::{self, Any, Member, TypeCode};
 use orbweaver_giop::{Connection, Error, Ior};
 use std::time::Duration;
 
@@ -42,6 +43,42 @@ fn main() -> std::process::ExitCode {
             std::process::ExitCode::FAILURE
         }
     }
+}
+
+fn conn_endian(e: Endian) -> Endian {
+    e
+}
+
+/// `any` payloads worth putting on the wire: a primitive, a bounded string and
+/// a constructed type, because a TypeCode encoder can be right about the first
+/// and wrong about the encapsulation the third needs.
+#[allow(clippy::type_complexity)]
+fn any_cases() -> Vec<(&'static str, TypeCode, Box<dyn Fn(&mut Encoder)>)> {
+    vec![
+        ("long", TypeCode::Long, Box::new(|e: &mut Encoder| e.put_i32(-4242))),
+        ("string", TypeCode::String(0), Box::new(|e: &mut Encoder| e.put_str("any-carried string"))),
+        (
+            "struct",
+            TypeCode::Struct {
+                id: "IDL:spike/Ragged:1.0".into(),
+                name: "Ragged".into(),
+                members: vec![
+                    Member { name: "a".into(), tc: TypeCode::Octet },
+                    Member { name: "b".into(), tc: TypeCode::Long },
+                    Member { name: "c".into(), tc: TypeCode::Short },
+                    Member { name: "d".into(), tc: TypeCode::Double },
+                    Member { name: "e".into(), tc: TypeCode::Octet },
+                ],
+            },
+            Box::new(|e: &mut Encoder| {
+                e.put_octet(0xAA);
+                e.put_i32(-7);
+                e.put_i16(9);
+                e.put_f64(2.5);
+                e.put_octet(0xBB);
+            }),
+        ),
+    ]
 }
 
 fn run(ior_text: &str) -> Result<u32, Error> {
@@ -208,7 +245,43 @@ fn run(ior_text: &str) -> Result<u32, Error> {
             }
         }
 
-        // 7. Unknown operation must produce BAD_OPERATION, not a hang or a
+        // 7. `any` across the wire. Self-round-trips only prove our encoder
+        //    agrees with our decoder; this proves a peer's TypeCode reader
+        //    accepts ours and that we can read what it sends back.
+        for (label, tc, write) in any_cases() {
+            asserted += 1;
+            let want_tc = tc.clone();
+            match conn
+                .invoke("echo_any", move |e| {
+                    // Closure form: the value is written into the live stream so
+                    // its padding matches where it lands.
+                    let _ = typecode::encode_any_with(e, &want_tc, |v| write(v));
+                })
+                .and_then(|r| {
+                    let mut b = r.body()?;
+                    let tc = typecode::decode(&mut b)?;
+                    let len = b.remaining();
+                    Ok(Any { tc, value: b.get_bytes(len)?.to_vec(), endian: r.endian })
+                }) {
+                Ok(got) if got.tc == tc => {
+                    println!("  {OK} any/{label} round-tripped with its TypeCode intact")
+                }
+                Ok(got) if got.tc != tc => {
+                    println!("  {NO} any/{label}: TypeCode came back as {:?}", got.tc);
+                    fails += 1;
+                }
+                Ok(_) => {
+                    println!("  {NO} any/{label}: value differed");
+                    fails += 1;
+                }
+                Err(e) => {
+                    println!("  {NO} any/{label}: {e}");
+                    fails += 1;
+                }
+            }
+        }
+
+        // 8. Unknown operation must produce BAD_OPERATION, not a hang or a
         //    mis-parse. Error handling is part of interoperating.
         asserted += 1;
         match conn.invoke_nullary("no_such_operation") {

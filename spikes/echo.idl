@@ -14,5 +14,6 @@ module spike {
     string echo_string(in string msg);
     double scale(in double v, in double by);
     Ragged echo_ragged(in Ragged v);
+    any    echo_any(in any v);
   };
 };

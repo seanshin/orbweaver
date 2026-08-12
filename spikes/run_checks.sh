@@ -262,7 +262,7 @@ else
   if [ "$jup" -eq 1 ]; then
     out=$(cargo run -q --bin spike-interop -- spikes/jacorb.ior 2>&1)
     if printf '%s' "$out" | grep -q "assumption A: PASS"; then
-      echo "  ok   our client -> JacORB server, 14/14 both byte orders"
+      echo "  ok   our client -> JacORB server, 20/20 both byte orders"
       cs=$(printf '%s' "$out" | grep -m1 "negotiated char codeset" | sed 's/.*: //')
       echo "  ok   codeset negotiated with a second peer: $cs"
     else

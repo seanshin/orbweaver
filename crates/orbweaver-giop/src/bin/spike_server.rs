@@ -68,6 +68,18 @@ impl Dispatch for Echo {
                 out.put_octet(e);
             }
 
+            "echo_any" => {
+                // Relayed verbatim: decode the TypeCode to prove we can, then
+                // echo the original bytes. Re-encoding would test our encoder
+                // against itself instead of against the peer's.
+                let before = args.offset();
+                orbweaver_giop::typecode::decode(&mut args)
+                    .map_err(|_| SystemException::marshal())?;
+                let raw = req.body().map_err(|_| SystemException::marshal())?;
+                let all = raw.buffer();
+                out.put_bytes(&all[before..]);
+            }
+
             // Object pseudo-operations. Without `_is_a` there is no narrowing,
             // and every ORB probes with one or both of these.
             "_is_a" => {
