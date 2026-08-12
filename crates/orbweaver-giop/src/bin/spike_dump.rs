@@ -35,6 +35,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         p.version.minor
     );
 
+    // What the target says about security, which for most legacy targets is
+    // nothing at all. §4.8 names that as the common case: where a target cannot
+    // enforce a caller identity, the bridge is the only enforcement point and
+    // the catalogue has to say so. Printed here so the claim is measured on
+    // real IORs rather than assumed.
+    match orbweaver_giop::csiv2::advertised(&p.components) {
+        None => println!("csiv2   the target advertises no mechanism list"),
+        Some(Err(e)) => println!("csiv2   TAG_CSI_SEC_MECH_LIST present but unreadable: {e}"),
+        Some(Ok(list)) => {
+            println!("csiv2   {} mechanism(s), stateful={}", list.mechanisms.len(), list.stateful);
+            match list.identity_assertion() {
+                Some(sas) => println!(
+                    "csiv2   accepts an asserted identity, token types {:#x}",
+                    sas.supported_identity_types
+                ),
+                None => println!("csiv2   no mechanism accepts an asserted identity"),
+            }
+        }
+    }
+    println!();
+
     let endian = match std::env::args().nth(3).as_deref() {
         Some("big") => Endian::Big,
         _ => Endian::Little,

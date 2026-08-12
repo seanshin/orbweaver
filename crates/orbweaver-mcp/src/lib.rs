@@ -30,6 +30,7 @@
 #![deny(missing_docs)]
 
 pub mod handles;
+pub mod identity;
 pub mod policy;
 pub mod rpc;
 pub mod session;

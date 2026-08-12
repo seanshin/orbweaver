@@ -670,6 +670,53 @@ fi
 cleanup
 [ "$stdio_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
+# ── Identity: what the peers actually advertise ──────────────────────────────
+hr "identity propagation — what a real target says about security"
+# §4.8 predicts that many legacy targets have no authentication at all, and that
+# where a target cannot enforce a caller identity the bridge is the only
+# enforcement point. That is a claim about real deployments, so it is measured
+# on real IORs rather than assumed — and the answer belongs in the catalogue.
+id_fail=0
+if start_server; then
+  csi=$(cargo run -q --bin spike-dump -- spikes/echo.ior 2>/dev/null | grep '^csiv2')
+  if printf '%s' "$csi" | grep -q "advertises no mechanism list"; then
+    echo "  ok   omniORB 4.3.4 advertises no CSIv2: the bridge is the only enforcement point"
+  else
+    echo "  note omniORB advertises: $csi"
+  fi
+else
+  id_fail=1
+fi
+cleanup
+if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
+  pkill -f "classes Server" >/dev/null 2>&1 || true
+  rm -f "$ROOT/spikes/jacorb.ior"
+  ( cd "$ROOT/spikes/jacorb" && exec "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Server ../jacorb.ior \
+      >/tmp/orbweaver-jcsi.log 2>&1 & )
+  ji=0
+  for _ in $(seq 1 150); do
+    [ -s "$ROOT/spikes/jacorb.ior" ] && { sleep 0.5; ji=1; break; }
+    sleep 0.1
+  done
+  if [ "$ji" -eq 1 ]; then
+    csi=$(cargo run -q --bin spike-dump -- spikes/jacorb.ior 2>/dev/null | grep '^csiv2')
+    if printf '%s' "$csi" | grep -q "advertises no mechanism list"; then
+      echo "  ok   JacORB 3.9 advertises none either — two peers, same answer"
+    else
+      echo "  note JacORB advertises: $csi"
+    fi
+  else
+    echo "  FAIL JacORB server did not publish an IOR"; id_fail=1
+  fi
+  pkill -f "classes Server" >/dev/null 2>&1 || true
+else
+  echo "  SKIPPED  JacORB half — fixture absent"
+  skipped=$((skipped+1))
+fi
+echo "  note CSIv2 encoding is unit-tested in both byte orders; no peer here enforces it,"
+echo "       so interop remains a per-peer claim and is unmeasured (docs/PLAN.md §4.8)"
+[ "$id_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
 # ── Contract evolution: is the §5.3 rule table true? ─────────────────────────
 hr "contract evolution — §5.3 verdicts against a peer that predates the change"
 # The differ's verdicts are predictions about deployed peers. Asserting them
