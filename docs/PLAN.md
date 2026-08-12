@@ -1,7 +1,9 @@
 # Orbweaver — Development Plan
 
-> Version 0.5 · 2026-08-12 · **Phase 0 complete (GO); Phase 1 batches 1–4 landed** — see [`PHASE0.md`](PHASE0.md), [`PHASE1.md`](PHASE1.md)
+> Version 0.6 · 2026-08-13 · **Phases 0–3.5 complete; Phase 5 half landed** — see [`PHASE0.md`](PHASE0.md) · [`PHASE1.md`](PHASE1.md) · [`PHASE2.md`](PHASE2.md) · [`PHASE3.md`](PHASE3.md) · [`PHASE5.md`](PHASE5.md)
 > 한국어판: [`PLAN.ko.md`](PLAN.ko.md)
+
+**Changes from v0.5** — §7 rewritten from a serial weekly roadmap into **landed work plus parallel streams**. The serial plan was written for one thread of work; execution ran ahead of it (Phases 0–3.5 done, Phase 5 half done, Phase 4 untouched) and the remaining items no longer depend on each other in a line. Each remaining stream now states its own batch unit, its own oracle and its codification target, so it can run as an independent batch → oracle → repair → codify loop (§5.1), and cross-stream integration points are named explicitly. No scope was added or removed; this is a re-ordering of what was already planned, plus honest completion status.
 
 **Changes from v0.4** — Added the object model (§4.7) and identity/credential propagation (§4.8), which turned out to be one subject rather than two: **an IOR is a bearer address**, so making references first-class immediately raises who may hold one. Consequences: AnyJSON gains object-reference and nil rows, and has no raw-IOR encoding by design (§4.5); references crossing the MCP boundary are capability handles, not IORs; three new components (`orbweaver-object`, `orbweaver-capability`, `orbweaver-identity`); five new risks (R13–R17), of which **R13 confused deputy is the default behaviour rather than a failure mode**. Phase 2 extends to 11 weeks, a 2-week Phase 3.5 lands capability handles *with* the MCP bridge rather than after it, and identity propagation becomes its own Phase 5. Timeline 45 → 58 weeks.
 
@@ -553,111 +555,139 @@ Two limits: "released" currently means the file `idl-diff` is pointed at rather 
 
 ## 7. Roadmap
 
-Approximately 58 weeks. Building the ORB core in-house adds roughly 15 weeks
-over an adopt-an-ORB plan, purchased in exchange for full MIT freedom; the
-object model and identity propagation add a further 13 (§4.7, §4.8).
+### 7.1 How to read this section
 
-That second increase is worth naming plainly rather than absorbing quietly. It
-buys two things the earlier plan assumed away: an agent that can hold a
-reference across steps instead of only making one-shot calls, and a target that
-learns *who* is calling instead of always seeing the bridge.
+The serial 58-week plan this section used to hold assumed one thread of work.
+Execution outran it: the work through Phase 3.5, plus half of Phase 5, landed
+ahead of Phase 4 because each batch's oracle was already in place. What remains
+is therefore organised as **parallel streams**, not phases: each stream is
+independently useful, runs its own batch → oracle → repair → codify loop
+(§5.1), and names the oracle it answers to. Streams only meet at the
+integration points in §7.4.
 
-### Phase 0 — Feasibility spike (3 weeks) — gates everything
+Two rules carry over unchanged from the operating model:
 
-Four assumptions are tested before anything else is built. Two can invalidate the architecture.
+- **A stream advances one batch at a time**, whole-set, with the oracle run
+  across the whole batch. No stream item is "in progress" for longer than one
+  batch.
+- **A stream is blocked only by its named dependencies**, never by another
+  stream's schedule. Anything listed in §7.3 can start today.
 
-- **A. GIOP interoperability is reachable.** Hand-encode a GIOP 1.2 `Request` and obtain a correct reply from stock TAO and omniORB servers; hand-decode the reply.
-  *If a minimal implementation cannot interoperate, the in-house path fails and the MIT-only constraint must be renegotiated. Test this first.*
-- **B. LLMs write compilable IDL.** 20 requirements to IDL. Target ≥60% first-pass compile, ≥95% within three self-repair rounds.
-- **C. `@annotation` survives real toolchains.** Measure IDL 4 annotation acceptance across TAO, omniORB and JacORB compilers.
-  *Fallback: structured comments plus sidecar YAML.*
-- **D. IOR addressing works under NAT and containers.** Verify endpoint rewriting under Kubernetes.
+### 7.2 Landed, with measurements
 
-Also in Phase 0: build the **golden IDL corpus v0**, 20–30 cases covering nested structs, unions, sequences, typedefs, inheritance, exceptions, valuetypes, `oneway`, and `any`. Without it, AI quality cannot be measured at all. Deferred wire types (`valuetype`, `fixed`) are covered at parser level only, matching the v1 support matrix (§4.4); a companion **negative corpus** of deliberately broken IDL exercises diagnostic quality — the raw material of the self-repair loop.
+| Was planned as | Landed as | Evidence |
+|---|---|---|
+| Phase 0 — feasibility (3 wk) | Complete, verdict GO; 12/12 asserted interop cases; B: 65% → 100% in one repair round | `PHASE0.md` |
+| Phase 1 — wire core (10 wk) | Complete. Bidirectional interop with omniORB 4.3.4 **and** JacORB 3.9 at GIOP 1.0/1.1/1.2; codeset negotiation incl. EUC-KR; fragmentation; naming | `PHASE1.md` |
+| Phase 2 — IDL, registry, objects (11 wk) | Complete. Front end in full oracle agreement; registry with TypeCode derivation verified against both peers; POA + object model; §5.3 differ with the breaking case **proved on the wire**; differential conformance in CI | `PHASE2.md` |
+| Phase 3 — dynamic + bridge (10 wk) | S4 and everything below S1–S3 complete: dynamic invocation against both peers, AnyJSON with byte-identical round-trips, MCP triad over stdio, S4 gate with measured fix coverage (9/10) | `PHASE3.md` |
+| Phase 3.5 — capability handles (2 wk) | Complete, landed **with** the bridge as required: session-scoped, expiring, entropy-backed; transcript-searched leak test | `PHASE3.md` |
+| Phase 5 — identity (8 wk) | **Half landed.** CSIv2 wire (SAS, GSSUP, mech lists) unit-tested both byte orders; delegation default-deny with recorded reasons; credential hygiene structural; `@ai_authz` scopes enforced. Measured: neither fixture advertises CSIv2 at all | `PHASE5.md` |
 
-**Go/No-Go** — assumption A is the gate. If GIOP interop fails, stop and revisit the licensing constraint before writing further code.
+Not started from the original plan: Phase 4 (static generation, promotion),
+Phase 6 (productionization), and the model-in-the-loop stages S1–S3.
 
-### Phase 1 — Wire protocol core (10 weeks)
+### 7.3 The remaining work, as parallel streams
 
-- `orbweaver-cdr`: CDR encode/decode, both endiannesses, alignment, all primitive and constructed types
-- `orbweaver-giop`: GIOP 1.2 framing (`Request`/`Reply`/`LocateRequest`/`CancelRequest`/`Fragment`), 1.0/1.1 compatibility in both directions, IIOP over TCP
-- Codeset negotiation: UTF-8, UTF-16, ISO-8859-1, EUC-KR — Korean-text round-trips wired into the interop matrix
-- IOR parsing and emission, profile handling, endpoint rewriting, `corbaloc:`/`corbaname:` resolution, CosNaming client
-- **Interop CI**: round-trip against TAO, omniORB and JacORB containers on every commit
+Every stream lists: **what** (unchanged scope from v0.5), **depends on**
+(all satisfied today unless named), **batch unit** (what one loop iteration
+produces), and **oracle** (what verifies the whole batch deterministically).
 
-*Deliverable: an MIT ORB that can call and be called by existing CORBA systems.*
+#### Stream A — AI pipeline: S1–S3 (was Phase 3's model-in-the-loop half)
 
-### Phase 2 — IDL compiler, registry and object model (11 weeks)
+- **What:** `orbweaver-forge` stages S1 ingest, S2 synthesize, S3 annotate;
+  SIDL vocabulary v1 finalized; the self-repair loop driven by S4's
+  `--repair-prompt`.
+- **Depends on:** S4 (landed), the corpus (landed), a model API key at run time.
+- **Batch unit:** one requirements set → N IDL files, generated in one pass
+  with **no oracle peeking mid-pass** (§5.1 rule 1).
+- **Oracle:** S4 (`sidl-validate --json`) over the whole batch, then the
+  differential compilers. First-pass rate and round count reported separately.
+- **Codify into:** prompt constraints and new corpus cases; every confirmed
+  generation failure becomes a negative-corpus file.
 
-- `orbweaver-idl`: IDL 4.2 front end, `@annotation`, AST, pluggable back ends
-- Differential conformance testing against tao_idl and omniidl
-- `orbweaver-registry`: type registry, remote IFR ingestion, versioning, semantic diff, breaking-change detection
-- `orbweaver-poa`: servant lifecycle and dispatch
-- `orbweaver-object`: references as values (inline marshalling), `_is_a`
-  answered locally from the inheritance graph, `_is_equivalent`/`_hash`,
-  object ids and activation policies, servant managers and the
-  `LOCATION_FORWARD` we can currently follow but not emit (§4.7)
+#### Stream B — Static generation and promotion (was Phase 4)
 
-### Phase 3 — Dynamic invocation and the AI pipeline (10 weeks) — the headline demo
+- **What:** `orbweaver-gen` stubs/skeletons from the registry (Rust first,
+  then Python); promotion engine (dynamic → static with regression gating);
+  contract tests generated from annotations; `valuetype`/`fixed` wire decision
+  gate.
+- **Depends on:** registry and dynamic path (landed). Nothing else.
+- **Batch unit:** one backend target across the **whole golden corpus** at
+  once — generate every stub, compile every stub, run every one against the
+  fixtures.
+- **Oracle:** the §8 rule *static result equals dynamic result*, byte-compared
+  per operation over both peers, both byte orders. The dynamic path is the
+  reference implementation the static one must agree with.
+- **Codify into:** generator template fixes; any divergence found becomes a
+  corpus case exercising it.
 
-- `orbweaver-dynamic`: DII/DSI/DynAny equivalents; **AnyJSON v1** (§4.5) with property-tested round-trips
-- `orbweaver-forge`: S1–S5 — ingest, synthesize, annotate, **validation gate with self-repair loop**
-- SIDL vocabulary v1 finalized
-- Semantic catalog: embedding index, natural-language interface search
-- `orbweaver-mcp`: the generic triad projection with **default-deny allowlisting** (§4.6)
-- `orbweaver-guard` v1: `@ai_authz` scope enforcement, client-side dry-run, human approval for `destructive`, correlated audit logging
+#### Stream C — Transport security and token exchange (rest of Phase 5)
 
-*Deliverable: an AI agent invokes an existing CORBA system with no generated code. This is the demo the project is judged on.*
+- **What:** SSLIOP / TLS transport (transport-identity row of §4.8);
+  OAuth2/JWT → `Caller` token exchange at the bridge; mid-connection
+  re-establishment on token expiry (R17); catalogue marking for targets that
+  cannot enforce.
+- **Depends on:** csiv2 module and `Caller` seam (landed). TLS needs a
+  certificate fixture, which is a batch-one deliverable, not a dependency.
+- **Batch unit:** one mechanism at a time across **every fixture peer** — e.g.
+  "TLS to omniORB-with-SSLIOP and JacORB-with-SSL in both directions" is one
+  batch, not two.
+- **Oracle:** the harness, extended per batch; per-peer claims recorded in the
+  catalogue exactly as §4.8 requires ("CSIv2 support" is per-peer, never a
+  feature flag).
+- **Codify into:** per-peer capability records; new harness groups.
 
-### Phase 3.5 — Capability handles (2 weeks)
+#### Stream D — Catalog depth and operability (was Phase 6, minus TLS)
 
-Small, and sequenced deliberately: it must land **with** the MCP bridge, not
-after it. Shipping agent-visible references as raw IORs and tightening later
-would mean a window in which the guard is bypassable, and handles already issued
-would have to be revoked.
+- **What:** embedding index and semantic search behind `search_interfaces`
+  (upgrading today's honest lexical match); OpenTelemetry via interceptors;
+  `orbweaver-console`; governance workflow around `idl-diff --approve`.
+- **Depends on:** MCP bridge (landed). Embeddings need a model at run time;
+  everything else is self-contained.
+- **Batch unit:** one operability surface at a time, across every existing
+  harness group (e.g. "every spike emits trace spans" is one batch).
+- **Oracle:** search quality measured against a frozen query set with known
+  answers; traces asserted present in the harness, not assumed.
+- **Codify into:** the frozen query benchmark, per §8's discipline.
 
-- `orbweaver-capability`: mint, resolve, scope and expire opaque handles
-- AnyJSON object-reference encoding (§4.5), which has no raw-IOR form by design
-- Guard integration: every handle resolution is an authorization point
+#### Stream E — Wire hardening (carried-forward known gaps, now grouped)
 
-### Phase 4 — Static generation and promotion (8 weeks)
+- **What:** the list every phase report has carried forward: fragment
+  *reception* validated independently, `LocateRequest`/`CancelRequest`/
+  `CloseConnection` send paths, request multiplexing, connection pooling,
+  multi-profile failover, `TAG_ALTERNATE_IIOP_ADDRESS`, `#pragma prefix`.
+- **Depends on:** nothing. Pure `orbweaver-giop` work.
+- **Batch unit:** one capability across **both peers and all three GIOP
+  versions** at once.
+- **Oracle:** the interop harness; a capability without an independent peer
+  check is recorded as self-tested only, in the report, every time.
+- **Codify into:** harness groups; the "unmeasured is not passing" rule already
+  covers regressions.
 
-- `orbweaver-gen`: stubs, skeletons, server scaffolds, client SDKs, build files
-- Multi-target back ends: Rust, Python, C++, Java
-- Promotion engine: call-statistics-driven dynamic-to-static transition with regression gating
-- `orbweaver-test`: contract and property tests from annotations; DynAny fuzzing
-- DDS-XTypes target experiment from the same IDL
-- Decision gate: `valuetype`/`fixed` wire support, driven by pilot demand (§4.4)
-- Optional read-only standard IFR facade (`CORBA::Repository`) so foreign DII clients can browse the registry
+### 7.4 Integration points — where streams are required to meet
 
-### Phase 5 — Identity and credential propagation (8 weeks)
+These are the only cross-stream synchronisation points. Everything else is
+independent by construction.
 
-Its own phase rather than a line in productionization, because it is the
-difference between an audited bridge and a confused deputy (R13), and because
-getting delegation wrong is privilege escalation rather than a bug.
+| Point | Streams | What must be true |
+|---|---|---|
+| **I1. Generated stubs are guarded** | B × C | Static stubs go through the same `Exposure`/`Delegation`/audit path as dynamic calls. A stub that bypasses the guard recreates the §4.7 bypass in compiled form. Checked by the transcript-leak test running against a static client. |
+| **I2. Pipeline output is exposed safely** | A × D | S5 registration feeds the catalog with **exposure off by default**; a generated interface becoming agent-visible requires the same explicit allowlist as a hand-written one. |
+| **I3. Search does not launder annotations** | A × D | The embedding index treats `ai_desc` as data (R11); injection cases from the negative corpus are part of the frozen query benchmark. |
+| **I4. Promotion respects identity** | B × C | A promoted static path carries the same `Caller` assertion behaviour as the dynamic path it replaced; "promotion dropped the identity context" is the regression gate's first test. |
 
-- `TAG_CSI_SEC_MECH_LIST` parsing; per-peer capability discovery
-- `SecurityAttributeService` context (ServiceId 15): `EstablishContext`,
-  identity and authorization tokens
-- GSSUP; `ITTPrincipalName` / `ITTX509CertChain` / `ITTAnonymous`
-- OAuth2/JWT ↔ CSIv2 token exchange, with the trust boundary documented and
-  every assertion logged
-- Delegation policy: default-deny, per-interface, recorded as a decision
-- Mid-connection re-establishment on token expiry (R17)
-- Credential hygiene: no logging, no recoverable persistence, diagnostics
-  exclusion by construction (R16)
-- Catalogue marking for targets that cannot enforce, so "the bridge is the only
-  enforcement point" is visible rather than assumed
+### 7.5 Batch discipline for parallel execution
 
-### Phase 6 — Productionization (6 weeks)
+Running streams in parallel does not relax §5.1 — it sharpens two rules:
 
-- TLS transport, certificate management, least-privilege scopes
-- OpenTelemetry via interceptors; dashboards
-- Governance: breaking-change approval workflow, human-in-the-loop for `destructive` calls
-- `orbweaver-console`: catalog browser, contract diff viewer, invocation traces
-- Documentation and one pilot system integration
-
----
+- **One stream, one loop.** A batch never spans streams; an integration point
+  (§7.4) is verified by its own dedicated batch after the contributing batches
+  land, never "along the way".
+- **The harness is the merge gate.** Every stream lands through the same
+  `run_checks.sh` + CI; a stream may add groups but never skip existing ones.
+  Two streams landing the same week interleave at whole-batch granularity, so
+  a red harness always names exactly one batch.
 
 ## 8. Verification strategy
 

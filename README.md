@@ -268,20 +268,22 @@ Everything below is MIT and written in this repository unless marked otherwise.
 
 ## Roadmap / 로드맵
 
-Roughly 58 weeks. Building the ORB core in-house adds about 15 weeks over an adopt-an-ORB plan, bought with full MIT freedom; the object model and identity propagation add a further 13, bought with an agent that can hold a reference across steps and a target that learns *who* is calling instead of always seeing the bridge.
+Phases 0–3.5 are complete and Phase 5 is half landed; the remainder is organised as **five parallel streams** (PLAN §7.3), each with its own batch unit and oracle, meeting only at four named integration points. The table below records what the phases were and where each landed.
 
-약 58주. ORB 코어 자체 구현이 약 15주를 추가하고 그 대가로 완전한 MIT 자유도를 얻습니다. 객체 모델과 신원 전파가 다시 13주를 더하고, 그 대가로 단계를 넘어 참조를 쥘 수 있는 에이전트와, 늘 브릿지만 보는 대신 *누가* 호출하는지 아는 대상을 얻습니다.
+Phase 0–3.5 완료, Phase 5 절반 착지. 남은 작업은 **병행 스트림 다섯 개**(계획서 §7.3)로 조직되며, 각 스트림은 자체 일괄 단위와 오라클을 갖고 네 개의 명명된 통합 지점에서만 만납니다. 아래 표는 각 단계가 무엇이었고 어디에 착지했는지의 기록입니다.
 
 | Phase | Weeks | Focus | 내용 |
 |---|---|---|---|
-| **0** | 3 | Feasibility spike — **gates everything** | 타당성 검증 — 전체의 관문 |
-| **1** | 10 | `orbweaver-cdr` + `orbweaver-giop` + IOR; interop against TAO/omniORB containers | 와이어 프로토콜 코어 및 상호운용 |
-| **2** | 11 | `orbweaver-idl` + `orbweaver-registry` + POA + **object model** (references as values, identity, lifecycle) | IDL 컴파일러·레지스트리·POA·**객체 모델** |
-| **3** | 10 | `orbweaver-dynamic` + `orbweaver-forge` + `orbweaver-mcp` — **the headline demo** | 동적 호출·AI 파이프라인·MCP 브릿지 |
-| **4** | 8 | Static generation, multi-target back ends, promotion engine, contract tests | 정적 생성·다중 타깃·승격 엔진 |
-| **3.5** | 2 | Capability handles — must land *with* the MCP bridge, not after | 능력 핸들 — 브릿지와 동시 |
-| **5** | 8 | Identity and credential propagation: CSIv2 SAS, token exchange, delegation policy | 신원·자격증명 전파 |
-| **6** | 6 | TLS transport, observability, governance, web console, pilot | 보안·관측·거버넌스·파일럿 |
+| **0** | ✅ done | Feasibility spike — verdict **GO** ([PHASE0](docs/PHASE0.md)) | 타당성 검증 — 판정 GO |
+| **1** | ✅ done | Wire core: bidirectional interop, omniORB + JacORB, GIOP 1.0/1.1/1.2 ([PHASE1](docs/PHASE1.md)) | 와이어 코어: 두 피어 양방향 상호운용 |
+| **2** | ✅ done | IDL front end, registry, POA, object model, §5.3 differ proved on the wire ([PHASE2](docs/PHASE2.md)) | IDL·레지스트리·객체 모델·계약 진화 |
+| **3** | ✅ done¹ | Dynamic invocation, AnyJSON, MCP triad over stdio, S4 gate ([PHASE3](docs/PHASE3.md)) | 동적 호출·AnyJSON·MCP·S4 게이트 |
+| **3.5** | ✅ done | Capability handles, landed *with* the bridge | 능력 핸들 — 브릿지와 동시 착지 |
+| **5** | ◐ half | CSIv2 wire + delegation policy + `@ai_authz` scopes; TLS and token exchange remain → **stream C** ([PHASE5](docs/PHASE5.md)) | 신원 전파 — 절반 착지, 나머지는 스트림 C |
+| **4** | → stream B | Static generation and promotion | 정적 생성·승격 → 스트림 B |
+| **6** | → streams C·D | TLS, observability, governance, console, pilot | 운영화 → 스트림 C·D |
+
+¹ minus S1–S3, the model-in-the-loop stages → **stream A** / 모델이 개입하는 S1–S3 제외 → 스트림 A
 
 ### Phase 0 gates the project / Phase 0가 프로젝트의 관문
 
