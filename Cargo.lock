@@ -32,3 +32,12 @@ dependencies = [
 [[package]]
 name = "orbweaver-idl"
 version = "0.0.1"
+
+[[package]]
+name = "orbweaver-registry"
+version = "0.0.1"
+dependencies = [
+ "orbweaver-cdr",
+ "orbweaver-giop",
+ "orbweaver-idl",
+]

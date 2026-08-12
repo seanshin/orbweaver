@@ -285,6 +285,50 @@ else
 fi
 pkill -f spike-server >/dev/null 2>&1 || true
 
+# ── Registry: does IDL-derived type metadata match the wire? ────────────────
+hr "type registry — TypeCode derived from IDL vs the peer's"
+# Deriving a TypeCode and encoding it with our own encoder proves only that two
+# pieces of our code agree. The question is whether a stock ORB produces the
+# same description from the same IDL.
+if start_server_omni_echo 2>/dev/null || start_server; then
+  rc=$(cargo run -q --bin registry-check -- spikes/echo.ior spikes/echo.idl spike::Ragged 2>/dev/null)
+  if printf '%s' "$rc" | grep -q "registry: PASS"; then
+    echo "  ok   omniORB agrees with the TypeCode we derived for spike::Ragged"
+  else
+    echo "  FAIL omniORB disagrees with our derived TypeCode"
+    printf '%s' "$rc" | grep -E "derived|returned" | head -2 | sed 's/^/       /'
+    fail_total=$((fail_total+1))
+  fi
+else
+  fail_total=$((fail_total+1))
+fi
+cleanup
+if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
+  pkill -f "classes Server" >/dev/null 2>&1 || true
+  rm -f "$ROOT/spikes/jacorb.ior"
+  ( cd "$ROOT/spikes/jacorb" && exec "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Server ../jacorb.ior \
+      >/tmp/orbweaver-jreg.log 2>&1 & )
+  jr=0
+  for _ in $(seq 1 150); do
+    [ -s "$ROOT/spikes/jacorb.ior" ] && { sleep 0.5; jr=1; break; }
+    sleep 0.1
+  done
+  if [ "$jr" -eq 1 ]; then
+    rc=$(cargo run -q --bin registry-check -- spikes/jacorb.ior spikes/echo.idl spike::Ragged 2>/dev/null)
+    if printf '%s' "$rc" | grep -q "registry: PASS"; then
+      echo "  ok   JacORB agrees too — two independent derivations of one IDL type"
+    else
+      echo "  FAIL JacORB disagrees with our derived TypeCode"; fail_total=$((fail_total+1))
+    fi
+  else
+    echo "  FAIL JacORB server did not publish an IOR"; fail_total=$((fail_total+1))
+  fi
+  pkill -f "classes Server" >/dev/null 2>&1 || true
+else
+  echo "  SKIPPED  JacORB half — fixture absent"
+  skipped=$((skipped+1))
+fi
+
 # ── Naming: resolve a target the way a deployment does ───────────────────────
 hr "object-reference acquisition — corbaname: through a real naming service"
 pkill -f omniNames >/dev/null 2>&1 || true

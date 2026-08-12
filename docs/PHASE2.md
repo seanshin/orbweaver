@@ -150,3 +150,70 @@ Every diagnostic names the fix. `TypeCode` unqualified reports *write
 `::CORBA::TypeCode`*; a reserved word reports *write `_interface`*; a case
 clash says to rename the member rather than the type, because the type name is
 what callers depend on.
+
+---
+
+# Batch 3: the type registry
+
+`docs/PLAN.md` §2.1 rests on CORBA already being "a runtime self-describing
+type system", and the Interface Repository is the part of that claim this batch
+makes true. Parsed IDL becomes queryable metadata: repository ids, an
+inheritance graph, operation signatures, `TypeCode`s, and the SIDL annotations
+carried through from source.
+
+## Verified against the wire, not against ourselves
+
+Deriving a `TypeCode` from IDL and encoding it with our own encoder proves that
+two pieces of our code agree. The question that matters is whether a stock ORB
+produces the *same* type description from the *same* IDL:
+
+```
+type registry — TypeCode derived from IDL vs the peer's
+  ok   omniORB agrees with the TypeCode we derived for spike::Ragged
+  ok   JacORB agrees too — two independent derivations of one IDL type
+```
+
+`spike::Ragged` is `octet, long, short, double, octet` — the alignment case —
+and both peers return byte-identical type descriptions to the one we built from
+its IDL.
+
+우리 인코더와 우리 유도기가 일치한다는 것은 우리 코드 두 조각의 합의일 뿐이다.
+중요한 질문은 **같은 IDL에서 순정 ORB가 같은 타입 서술을 만드는가**이고, 두 독립
+구현이 그렇다고 답했다.
+
+## `_is_a` without a network call
+
+Phase 1 risk R2 recorded that real deployments frequently run no Interface
+Repository. A registry populated from IDL works either way, and answering
+`_is_a` from our own inheritance graph is faster than asking and available when
+the target is unreachable (§4.7). Multiple inheritance, transitivity and the
+implicit `CORBA::Object` base are all covered — and a cycle, which is illegal
+IDL that the checker rejects, terminates rather than hanging, because a registry
+may be loaded from input nobody checked.
+
+## Details that decide whether a call is even possible
+
+- **Inherited operations resolve.** Stopping at the declaring interface would
+  report a perfectly valid call as unknown.
+- **Union labels take the discriminator's width.** A boolean label is one octet
+  and a long label is four; the wrong width shifts every case that follows.
+- **Enumerator labels resolve to their ordinal**, which the discriminator's own
+  `TypeCode` supplies.
+- **Array dimensions nest outermost-first**: `long M[3][4]` is an array of 3
+  arrays of 4, not the reverse.
+- **A forward declaration must not erase a body** already registered.
+- **SIDL annotations reach the registry** — on interfaces, operations and
+  individual parameters. An annotation that stops at the AST helps nobody, and
+  carrying it is the whole reason for owning the parser.
+
+## Known limits, stated rather than discovered later
+
+- `#pragma prefix` and explicit `typeid` are not honoured, so a repository id is
+  `IDL:` plus the qualified name plus `:1.0`. Every fixture here publishes
+  exactly that, and a peer must agree with it for `_is_a` to mean anything —
+  but a deployment using a prefix will not match until this lands.
+- `valuetype` and `native` register as object references. Neither is marshalled
+  in v1 (§4.4), and inventing a wire form for them would be worse than not
+  having one.
+- The peer cross-check covers one struct. Extending it to unions and enums
+  needs fixture operations that carry them.

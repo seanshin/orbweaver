@@ -1,0 +1,20 @@
+[package]
+name = "orbweaver-registry"
+description = "Type registry: repository ids, inheritance, and TypeCodes derived from IDL"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+orbweaver-idl = { path = "../orbweaver-idl" }
+orbweaver-giop = { path = "../orbweaver-giop", default-features = false }
+orbweaver-cdr = { path = "../orbweaver-cdr" }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "registry-check"
+path = "src/bin/registry_check.rs"
