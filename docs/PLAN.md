@@ -1,9 +1,11 @@
 # Orbweaver — Development Plan
 
-> Version 0.3 · 2026-08-12 · **Draft, pending Phase 0 outcome**
+> Version 0.4 · 2026-08-12 · **Phase 0 complete, verdict GO** — see [`PHASE0.md`](PHASE0.md)
 > 한국어판: [`PLAN.ko.md`](PLAN.ko.md)
 
-**Changes from v0.2** — Detailed review pass. Added: wire-level decisions — GIOP version and codeset strategy, IOR acquisition, the v1 type-support matrix, runtime model (§4.4); the normative AnyJSON mapping (§4.5); the MCP projection triad with default-deny exposure (§4.6); concrete wire-compatibility rules (§5.1); a threat model with two new risks — metadata prompt injection and bridge amplification (§9.0, R11–R12); diagnostics-as-product for the self-repair loop (§3.3); benchmark discipline (§8).
+**Changes from v0.3** — Added the operating model (§5.1): all work runs as a batch → oracle → repair → codify loop rather than item by item, justified by the Phase 0 measurement in which 20 generated files produced 7 failures sharing 1 root cause. Added the automation roster (§5.2) mapping each loop step to a defined agent role in `.claude/agents/`. Working rules extracted to `CLAUDE.md`. Wire-compatibility rules renumbered §5.1 → §5.3.
+
+**Changes from v0.2** — Detailed review pass. Added: wire-level decisions — GIOP version and codeset strategy, IOR acquisition, the v1 type-support matrix, runtime model (§4.4); the normative AnyJSON mapping (§4.5); the MCP projection triad with default-deny exposure (§4.6); concrete wire-compatibility rules (§5.3, then numbered §5.1); a threat model with two new risks — metadata prompt injection and bridge amplification (§9.0, R11–R12); diagnostics-as-product for the self-repair loop (§3.3); benchmark discipline (§8).
 
 **Changes from v0.1** — The licensing policy was tightened to *MIT or MIT-equivalent, otherwise build it ourselves*. Since no CORBA ORB exists under MIT, the ORB core moved from "adopt omniORB/TAO" to "implement in-house against the published OMG wire specification". Existing ORBs are now interoperability test fixtures rather than dependencies. Timeline extended from 30 to 45 weeks.
 
@@ -329,7 +331,58 @@ Curated per-operation tools remain available as an opt-in for small, stable, hig
 
 **S4 is the safety belt of the whole system.** An LLM writes plausible IDL that may be semantically wrong; an IDL compiler rejects syntactically wrong IDL every time without exception. That asymmetry — probabilistic synthesis, deterministic verification — is what makes the trust model work. Everything upstream of S4 is allowed to be uncertain because S4 is not.
 
-### 5.1 What counts as a breaking change
+### 5.1 The operating model: batch → oracle → repair → codify
+
+Every stage above runs as a **batch loop**, not item by item. Work the whole set
+at once, verify the whole set at once, fix by root cause, then make the cause
+impossible.
+
+This is not a preference; Phase 0 measured it. Twenty IDL files generated in one
+pass produced seven failures, and **all seven shared a single root cause**
+(case-insensitive identifier clashes). Processing item by item would have
+produced seven separate patches and never surfaced the rule. Batching made the
+cause visible, and one fix moved the batch from 65% to 100%.
+
+| Step | Rule | Why |
+|---|---|---|
+| **1. Batch** | Produce every item in one pass. **Do not consult the oracle mid-pass.** | Peeking contaminates the first-pass measurement and lets symptoms be patched one at a time, hiding the shared cause |
+| **2. Oracle** | Run every deterministic check across the whole batch, then **cluster diagnostics by root cause, not by item** | The clustering is the deliverable. Seven failures sharing one cause are one finding |
+| **3. Repair** | One fix per cause, applied to every affected item at once. Re-verify the **whole** batch | A fix that helps only one item means the cluster was mis-drawn — report that rather than paper over it |
+| **4. Codify** | Turn each confirmed cause into a lint rule, a prompt constraint, a corpus case, or a project rule | A cause that is only fixed returns; a cause that is codified cannot. This is what makes each round cheaper than the last |
+
+Repeat until a round yields no new causes. **Report the first-pass rate and the
+round count separately** — the first measures the generator, the second measures
+the oracle.
+
+The economics are the point: per-item work has constant cost per batch, while
+codification makes the marginal batch cheaper. The dominant Phase 0 cause is the
+worked example — fixing seven files bought one batch; a lint rule plus a prompt
+constraint plus a negative corpus case buys every future batch.
+
+**Feedback sources.** Deterministic oracles (IDL compilers, `cargo test`, the
+interop harness) catch what is wrong. They cannot catch what is *missing* —
+an unimplemented `Fragment` handler is invisible to every test that never sends
+a large message. A separate adversarial review against the specification supplies
+that second kind of feedback, and the two are not interchangeable.
+
+### 5.2 Automation roster
+
+The loop is executed by defined agent roles (`.claude/agents/`), each with the
+tool access its step requires and no more.
+
+| Role | Step | Tools | Constraint that makes it work |
+|---|---|---|---|
+| `batch-synth` | Produce | no Bash | **Cannot** run the oracle, so first-pass rate stays honest and shared causes stay visible |
+| `oracle-sweep` | Verify | read + Bash | Must return causes with affected items, never a bare failure list |
+| `batch-repair` | Fix | edit + Bash | One fix per cause; challenges the clustering before acting; reports newly-broken items as the headline |
+| `codifier` | Persist | edit + Bash | Must prove each new rule fires on the original failure before claiming it |
+| `spec-auditor` | Review | read + web | Audits against the specification, not the tests; separates undocumented gaps from planned deferrals |
+
+Withholding Bash from `batch-synth` is the load-bearing constraint of the whole
+design. It is what makes the first-pass number mean something and what forces
+root causes into the open.
+
+### 5.3 What counts as a breaking change
 
 CDR encodes by position, not by tag. Anyone whose intuition was trained on protobuf will over-trust IDL evolution, so the registry encodes these rules and the semantic differ enforces them:
 

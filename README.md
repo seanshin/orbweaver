@@ -32,6 +32,36 @@ Every failure in assumption B had **one** root cause: IDL identifier clashes are
 
 가정 B의 실패는 **전부 하나의 원인**이었습니다 — IDL 식별자 충돌은 대소문자를 구분하지 않습니다. 다른 언어에서는 자연스러운 명명이 여기서는 불법이며, 그래서 Phase 1의 첫 린트 규칙이 됩니다.
 
+## How the work runs / 작업 방식
+
+Everything runs as a **batch loop**, never item by item. That result above is the reason: 20 files, 7 failures, **1** shared cause. Item-by-item work would have produced seven patches and never surfaced the rule.
+
+모든 작업은 건건이가 아니라 **일괄 루프**로 돕니다. 위 결과가 그 이유입니다 — 20건, 실패 7건, 공통 원인 **1개**. 건건이 처리했다면 패치 7개가 나왔을 뿐 규칙은 드러나지 않았습니다.
+
+```
+  1. Batch     produce the whole set in one pass, oracle not consulted
+  2. Oracle    verify the whole set, cluster diagnostics BY ROOT CAUSE
+  3. Repair    one fix per cause across every affected item, re-verify all
+  4. Codify    make the cause impossible — lint rule, prompt constraint, corpus case
+     ↺         repeat until a round finds no new causes
+```
+
+Each step is a defined agent role in [`.claude/agents/`](.claude/agents/). The load-bearing constraint: **`batch-synth` has no Bash tool**, so it cannot peek at the oracle. That is what keeps the first-pass rate honest and forces shared causes into the open.
+
+각 단계는 [`.claude/agents/`](.claude/agents/)의 에이전트 역할입니다. 설계의 하중을 지탱하는 제약은 **`batch-synth`에 Bash 도구가 없다**는 것입니다. 오라클을 미리 볼 수 없어야 1차 통과율이 정직해지고 공통 원인이 드러납니다.
+
+| Role | Step | Constraint |
+|---|---|---|
+| [`batch-synth`](.claude/agents/batch-synth.md) | produce | no Bash — cannot consult the oracle |
+| [`oracle-sweep`](.claude/agents/oracle-sweep.md) | verify | returns causes with affected items, never a bare failure list |
+| [`batch-repair`](.claude/agents/batch-repair.md) | fix | one fix per cause; challenges the clustering first |
+| [`codifier`](.claude/agents/codifier.md) | persist | must prove each rule fires on the original failure |
+| [`spec-auditor`](.claude/agents/spec-auditor.md) | review | audits against the OMG spec, not against the tests |
+
+Working rules live in [`CLAUDE.md`](CLAUDE.md) — the licensing boundary, the IDL rules the compiler enforces, and the three harness bugs that produced phantom failures in Phase 0.
+
+작업 규칙은 [`CLAUDE.md`](CLAUDE.md)에 있습니다 — 라이선스 경계, 컴파일러가 강제하는 IDL 규칙, Phase 0에서 유령 실패를 만든 하네스 버그 3건.
+
 ---
 
 ## The idea / 착안점
