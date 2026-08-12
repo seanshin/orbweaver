@@ -218,6 +218,50 @@ else
 fi
 pkill -f spike-server >/dev/null 2>&1 || true
 
+# ── Naming: resolve a target the way a deployment does ───────────────────────
+hr "object-reference acquisition — corbaname: through a real naming service"
+pkill -f omniNames >/dev/null 2>&1 || true
+pkill -f register_name >/dev/null 2>&1 || true
+sleep 0.5
+rm -rf /tmp/orbweaver-names && mkdir -p /tmp/orbweaver-names
+( omniNames -start 2809 -logdir /tmp/orbweaver-names >/tmp/orbweaver-names/out.log 2>&1 & )
+names_up=0
+for _ in $(seq 1 60); do
+  lsof -nP -iTCP:2809 >/dev/null 2>&1 && { names_up=1; break; }
+  sleep 0.2
+done
+if [ "$names_up" -eq 0 ]; then
+  echo "  FAIL omniNames did not start on 2809"; fail_total=$((fail_total+1))
+else
+  ( cd "$ROOT/spikes" && exec python3 register_name.py >/tmp/orbweaver-reg.log 2>&1 & )
+  reg_up=0
+  for _ in $(seq 1 100); do
+    grep -q READY /tmp/orbweaver-reg.log 2>/dev/null && { reg_up=1; break; }
+    sleep 0.1
+  done
+  if [ "$reg_up" -eq 0 ]; then
+    echo "  FAIL could not bind a name into the naming service"; fail_total=$((fail_total+1))
+  else
+    nm=$(cargo run -q --bin spike-naming 2>&1)
+    if printf '%s' "$nm" | grep -q "naming: PASS"; then
+      printf '%s\n' "$nm" | grep "^  ok" | sed 's/^/  /'
+      # The default in corbaloc::host is GIOP 1.0, so this path only works
+      # because of the version negotiation from batch 1. Assert it rather than
+      # let a silent upgrade to 1.2 hide a regression.
+      if printf '%s' "$nm" | grep -q "GIOP 1.0"; then
+        echo "  ok   naming service contacted at GIOP 1.0, as corbaloc defaults require"
+      else
+        echo "  FAIL expected GIOP 1.0 for a corbaloc URL with no version"; fail_total=$((fail_total+1))
+      fi
+    else
+      echo "  FAIL naming resolution"; printf '%s' "$nm" | grep -iE "fail|error" | head -3 | sed 's/^/       /'
+      fail_total=$((fail_total+1))
+    fi
+  fi
+fi
+pkill -f register_name >/dev/null 2>&1 || true
+pkill -f omniNames >/dev/null 2>&1 || true
+
 # ── Second peer: JacORB, both directions ─────────────────────────────────────
 hr "second peer — JacORB (independent implementation)"
 JH=${JAVA_HOME_21:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home}

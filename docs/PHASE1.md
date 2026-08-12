@@ -605,7 +605,63 @@ restored the alignment origin to zero instead of the enclosing value, which
 misaligns a struct nested inside a sequence. Our round-trips missed it because
 the decoder saved and restored correctly and the offsets coincided.
 
-## Still open after Batch 6
+---
+
+# Batch 7: object-reference acquisition
+
+Everything before this found a target by reading a stringified IOR out of a
+file. That is fine for a spike and is not how anything is deployed: real
+systems publish into a naming service and hand out a URL. The dynamic invoker
+cannot look a target up in a catalogue without this.
+
+Delivered: `corbaloc:` and `corbaname:` parsing (§7.6.10), a CosNaming client
+with both `resolve` and `resolve_str`, and an end-to-end path verified against
+a real `omniNames`.
+
+```
+object-reference acquisition — corbaname: through a real naming service
+    ok   connected to the naming context
+    ok   resolve() returned IDL:spike/Echo:1.0 (1 profile(s))
+    ok   resolve_str() agreed with resolve()
+    ok   ping() through the resolved reference -> 42
+  ok   naming service contacted at GIOP 1.0, as corbaloc defaults require
+```
+
+## The defaults are the trap, and Batch 1 already paid for them
+
+`corbaloc::host/Key` — empty protocol token, no port — is legal and extremely
+common. §7.6.10.3 then fills in **IIOP 1.0** and **port 2809**.
+
+The version default is the interesting one. Contacting a naming service through
+a bare `corbaloc:` URL means speaking **GIOP 1.0**, and until Batch 1 this
+implementation always emitted 1.2 regardless of what the peer advertised. That
+defect (cause C1) would have made every `corbaname:` resolution fail with a
+`MessageError` — the audit's finding predicted exactly this case, and here it
+is in the ordinary path rather than a corner.
+
+The harness asserts the negotiated version rather than only the outcome, so a
+silent upgrade to 1.2 cannot hide a regression behind a passing test.
+
+기본값이 함정이다. 버전 없는 `corbaloc:`는 **GIOP 1.0**을 뜻하고, Batch 1 이전에는
+피어가 무엇을 광고하든 1.2를 보냈다. 그 결함(C1)이었다면 모든 `corbaname:` 해석이
+`MessageError`로 실패했을 것이다. 감사가 예측한 그 케이스가 구석이 아니라 평범한
+경로에 있었다.
+
+## Details worth pinning
+
+- **IPv6 must be bracketed.** `corbaloc:iiop:[::1]:88/Key` — unbracketed, the
+  address's own colons are read as a port separator and the host truncates to
+  nothing. The key split also has to skip over brackets before looking for `/`.
+- **The object key is bytes, not text.** `%XX` escapes decode to raw octets,
+  including `%00`; it is opaque server state and may hold anything.
+- **A comma-separated address list becomes one profile per address**, so
+  multi-profile failover covers it without a second mechanism.
+- **`corbaloc:rir:` addresses nothing dialable** and deliberately produces no
+  IOR — it is a request to resolve locally.
+- Parse failures name the `BAD_PARAM` minor code §7.6.10.3 assigns (7–10), so a
+  diagnostic and the specification say the same thing.
+
+## Still open after Batch 7
 - Wiring the negotiated converter through `Connection` and the string paths,
   including the per-connection "send the context once" rule and the
   `MARSHAL` minor 9 case for conflicting contexts on one connection.
@@ -628,8 +684,6 @@ Phase 1 scope from `docs/PLAN.md` §7 and remains open:
 - **`LocateRequest` send, `CancelRequest` send** — served but not sent.
 - **`wchar`/`wstring` and `long double`** — `any` and `TypeCode` landed in
   Batch 6; these remain.
-- **`corbaloc:` / `corbaname:` / CosNaming** — no object-reference acquisition
-  beyond a stringified IOR.
 - **Multi-profile failover, `TAG_ALTERNATE_IIOP_ADDRESS`, SSLIOP port
   extraction.** Components are now preserved but not interpreted.
 - **A second interop peer.** TAO is not in homebrew and needs a source build;

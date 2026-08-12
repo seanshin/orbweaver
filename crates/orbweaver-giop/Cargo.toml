@@ -33,3 +33,7 @@ euc-kr = ["dep:encoding_rs"]
 [[bin]]
 name = "spike-server"
 path = "src/bin/spike_server.rs"
+
+[[bin]]
+name = "spike-naming"
+path = "src/bin/spike_naming.rs"

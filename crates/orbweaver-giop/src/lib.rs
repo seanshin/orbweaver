@@ -25,6 +25,7 @@
 #![deny(missing_docs)]
 
 pub mod codeset;
+pub mod naming;
 pub mod server;
 pub mod typecode;
 
