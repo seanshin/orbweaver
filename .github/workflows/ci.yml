@@ -136,7 +136,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            omniidl omniorb-nameserver libomniorb4-dev python3-dev build-essential
+            omniidl omniorb-idl omniorb-nameserver libomniorb4-dev \
+            python3-dev build-essential
           dpkg-query -W -f='${Version}\n' libomniorb4-dev
 
       - name: build omniORBpy against the packaged core
@@ -148,6 +149,15 @@ jobs:
             "https://downloads.sourceforge.net/project/omniorb/omniORBpy/omniORBpy-${ver}/omniORBpy-${ver}.tar.bz2"
           mkdir -p /tmp/opy && tar xf /tmp/omniORBpy.tar.bz2 -C /tmp/opy --strip-components=1
           cd /tmp/opy
+          # omniORBpy compiles omniORB's own IDL (corbaidl.idl, ir.idl,
+          # boxes.idl, pollable.idl) and looks for it under
+          # $(IMPORT_TREES)/idl, which --with-omniorb=/usr makes /usr/idl.
+          # Debian ships those files at /usr/share/idl/omniORB, so the build
+          # failed with "couldn't find idl file corbaidl.idl" until they were
+          # put where its makefiles look.
+          sudo mkdir -p /usr/idl
+          sudo cp -r /usr/share/idl/omniORB /usr/idl/
+          ls /usr/idl/omniORB | head
           ./configure --prefix=/usr --with-omniorb=/usr
           make -j"$(nproc)"
           sudo make install
