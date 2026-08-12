@@ -37,7 +37,23 @@ The client hand-encodes GIOP 1.2 `Request` messages and decodes the replies.
 기존 ORB를 링크·벤더링하지 않는다. 순정 omniORB 4.3.4 Python 서버를 피어로 두고,
 클라이언트가 GIOP 1.2 `Request`를 직접 인코딩하고 응답을 디코딩한다.
 
-**Result: 14/14 cases pass, in both byte orders, across 5 cold starts.**
+**Result: 12/12 asserted cases pass, in both byte orders, across 5 cold starts.**
+
+> **Correction (2026-08-12, from the Phase 1 spec audit).** This section
+> originally reported "14/14". That was an over-claim. The Korean round-trip
+> case printed a result in all three branches and never incremented the failure
+> counter, so it was **structurally incapable of failing** — 12 of the 14
+> printed lines were assertions and 2 were informational probes. The harness now
+> counts and labels them separately. The finding is worse than a miscount: the
+> probe passed only because omniORB's default is byte-transparent, and with no
+> `CodeSets` service context the specified transmission codeset is ISO-8859-1
+> while we send UTF-8, so it was never evidence of correctness. See §Assumption A
+> note on codesets below.
+>
+> **정정.** 원래 "14/14"로 보고했으나 과대 진술이었다. 한국어 케이스는 세 분기
+> 모두 실패를 집계하지 않아 **구조적으로 실패가 불가능**했다. 실제 단언은 12건,
+> 정보성 프로브가 2건이다. 더 나쁜 점은, 그 프로브가 통과한 이유가 omniORB의
+> 바이트 투명 기본값 때문이지 우리 구현이 옳아서가 아니라는 것이다.
 
 | Case | Exercises |
 |---|---|

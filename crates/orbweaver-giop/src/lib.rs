@@ -1,24 +1,33 @@
 //! GIOP messages, IIOP transport, and IOR handling.
 //!
-//! Scope is deliberately the Phase 0 spike surface: GIOP 1.2 `Request` and
-//! `Reply` over TCP, enough IOR parsing to find a target, and a synchronous
-//! invoker. Fragmentation, `LocateRequest`, GIOP 1.0/1.1 compatibility and
-//! codeset negotiation are Phase 1 work.
+//! Implements GIOP 1.0, 1.1 and 1.2 request/reply on the client side, with the
+//! version-conditional header layouts each one requires. Fragmentation,
+//! `LocateRequest`, codeset negotiation and the serving half are Phase 1 work
+//! still outstanding; where they are absent this code fails loudly rather than
+//! misparsing.
 //!
-//! The alignment rule that governs everything here: a GIOP message aligns
-//! from the first byte of its 12-byte header, so the header is built into the
-//! same buffer as the body and the CDR origin stays at zero. Encapsulations
-//! nested inside (IOR profiles, service contexts) restart alignment at their
-//! own first byte.
+//! # Two rules that govern everything here
 //!
-//! Spec: OMG CORBA 3.4 Part 2, sections 9.4 (GIOP) and 9.7 (IIOP/IOR).
+//! **Alignment origin.** A GIOP message aligns from the first byte of its
+//! 12-byte header, so the header is built into the same buffer as the body and
+//! the CDR origin stays at zero. An encapsulation nested inside (IOR profiles,
+//! service contexts) restarts alignment at its own first byte.
+//!
+//! **The version is the peer's to choose.** An IIOP profile advertises the
+//! highest GIOP minor version the server supports, and CORBA 3.4 §9.4.1
+//! forbids exceeding it. Header layouts differ between versions in ways that
+//! misparse rather than error — `ReplyHeader_1_0` puts `service_context`
+//! first, `ReplyHeader_1_2` puts it last — so the version travels with every
+//! message rather than being assumed.
+//!
+//! Spec: OMG CORBA 3.4 Part 2, sections 9.3 (CDR), 9.4 (GIOP), 9.7 (IIOP/IOR).
 
 #![deny(missing_docs)]
 
 use orbweaver_cdr::{Decoder, Encoder, Endian};
 use std::fmt;
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 /// The four bytes every GIOP message starts with.
@@ -30,7 +39,71 @@ pub const HEADER_LEN: usize = 12;
 /// Profile tag for an IIOP profile inside an IOR.
 pub const TAG_INTERNET_IOP: u32 = 0;
 
-/// GIOP message types used by this crate.
+/// Default ceiling on an inbound message body.
+///
+/// `message_size` is four attacker-controlled bytes that used to drive a
+/// `Vec::resize` directly, so `ff ff ff ff` asked for a 4 GiB zeroed
+/// allocation and an allocation failure aborts the process. A ceiling is not
+/// optional on a network-facing decoder.
+pub const DEFAULT_MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
+
+/// How many `LOCATION_FORWARD` hops to follow before giving up.
+pub const MAX_FORWARD_HOPS: u8 = 8;
+
+/// A GIOP protocol version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Version {
+    /// Major version. Always 1 in practice.
+    pub major: u8,
+    /// Minor version: 0, 1 or 2.
+    pub minor: u8,
+}
+
+impl Version {
+    /// GIOP 1.0.
+    pub const V1_0: Version = Version { major: 1, minor: 0 };
+    /// GIOP 1.1.
+    pub const V1_1: Version = Version { major: 1, minor: 1 };
+    /// GIOP 1.2 — the highest this implementation speaks.
+    pub const V1_2: Version = Version { major: 1, minor: 2 };
+
+    /// The highest version we can speak.
+    pub const fn max_supported() -> Version {
+        Version::V1_2
+    }
+
+    /// Whether headers use the 1.2 field order and `TargetAddress`.
+    pub const fn is_1_2_layout(self) -> bool {
+        self.minor >= 2
+    }
+
+    /// Whether a request/reply body is aligned to 8. Only 1.2 does this, and
+    /// only when the body is non-empty (§9.4.2.1, §9.4.3.1).
+    pub const fn aligns_body(self) -> bool {
+        self.minor >= 2
+    }
+
+    /// Whether the header carries the three reserved octets. 1.0 does not.
+    pub const fn has_reserved_octets(self) -> bool {
+        self.minor >= 1
+    }
+
+    /// Picks the version to speak to a peer advertising `advertised`.
+    ///
+    /// §9.4.1: a client must not exceed the minor version published in the
+    /// IIOP profile.
+    pub fn negotiate(advertised: Version) -> Version {
+        if advertised < Version::max_supported() { advertised } else { Version::max_supported() }
+    }
+}
+
+impl fmt::Display for Version {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "GIOP {}.{}", self.major, self.minor)
+    }
+}
+
+/// GIOP message types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum MsgType {
@@ -44,7 +117,7 @@ pub enum MsgType {
     LocateRequest = 3,
     /// Server answers a locate.
     LocateReply = 4,
-    /// Server is shutting down.
+    /// Peer is shutting the connection down cleanly.
     CloseConnection = 5,
     /// Peer could not process the message.
     MessageError = 6,
@@ -69,7 +142,7 @@ impl MsgType {
     }
 }
 
-/// Outcome reported by a GIOP 1.2 `Reply`.
+/// Outcome reported by a GIOP `Reply`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReplyStatus {
     /// Operation completed; the body holds the result.
@@ -78,23 +151,28 @@ pub enum ReplyStatus {
     UserException,
     /// Operation raised a system exception.
     SystemException,
-    /// Target moved; the body holds a new IOR.
+    /// Target moved; the body holds a new IOR to retry against.
     LocationForward,
-    /// Target moved for this request only.
+    /// Target moved permanently. GIOP 1.2 only.
     LocationForwardPerm,
-    /// Target address disposition was wrong; retry differently.
+    /// Wrong target addressing disposition. GIOP 1.2 only.
     NeedsAddressingMode,
 }
 
 impl ReplyStatus {
-    const fn from_u32(v: u32) -> Option<Self> {
+    /// Interprets a reply status for a given version.
+    ///
+    /// `ReplyStatusType_1_0` (used by GIOP 1.0 *and* 1.1) has four
+    /// enumerators; 4 and 5 were added in 1.2. Accepting them on a 1.1 reply
+    /// would be accepting a value the peer cannot have meant.
+    pub const fn from_u32(v: u32, version: Version) -> Option<Self> {
         Some(match v {
             0 => ReplyStatus::NoException,
             1 => ReplyStatus::UserException,
             2 => ReplyStatus::SystemException,
             3 => ReplyStatus::LocationForward,
-            4 => ReplyStatus::LocationForwardPerm,
-            5 => ReplyStatus::NeedsAddressingMode,
+            4 if version.minor >= 2 => ReplyStatus::LocationForwardPerm,
+            5 if version.minor >= 2 => ReplyStatus::NeedsAddressingMode,
             _ => return None,
         })
     }
@@ -105,15 +183,28 @@ impl ReplyStatus {
 pub enum Error {
     /// Underlying socket failure.
     Io(std::io::Error),
-    /// A CDR value could not be read.
+    /// A CDR value could not be read or written.
     Cdr(orbweaver_cdr::Error),
     /// The peer sent something that is not a GIOP message.
     NotGiop([u8; 4]),
-    /// The peer spoke a GIOP version this spike does not handle.
-    UnsupportedVersion(u8, u8),
+    /// The peer spoke a GIOP version this implementation does not handle.
+    UnsupportedVersion(Version),
+    /// The message-type octet had no valid interpretation.
+    UnknownMessageType(u8),
     /// The peer sent a message type we did not expect here.
     UnexpectedMessage(MsgType),
-    /// The reply status octet had no valid interpretation.
+    /// `message_size` exceeded the configured ceiling.
+    MessageTooLarge {
+        /// Size the peer declared.
+        declared: usize,
+        /// Ceiling in force.
+        limit: usize,
+    },
+    /// The peer fragmented a message. Reassembly is Phase 1 work still
+    /// outstanding; failing here is deliberate, because decoding the first
+    /// fragment as a whole message silently truncates the value.
+    FragmentUnsupported,
+    /// The reply status octet had no valid interpretation for its version.
     BadReplyStatus(u32),
     /// The target raised a CORBA system exception.
     SystemException {
@@ -124,15 +215,26 @@ pub enum Error {
         /// Whether the operation ran before failing.
         completed: u32,
     },
-    /// The target raised a user exception; the body is left to the caller.
+    /// The target raised a user exception. The undecoded body is retained so
+    /// the caller can read the exception's members.
     UserException {
         /// Repository ID of the exception.
         id: String,
+        /// The reply, positioned so `body()` starts at the repository ID.
+        reply: Box<Reply>,
     },
     /// The IOR string could not be parsed.
     BadIor(&'static str),
     /// The IOR carried no IIOP profile to connect to.
     NoIiopProfile,
+    /// The peer closed the connection cleanly. Per §9.4.7 the pending request
+    /// was not processed and may be safely re-sent on a new connection.
+    ConnectionClosed,
+    /// A previous failure left unread bytes in the stream, so the connection
+    /// can no longer be framed. It must be discarded, not reused.
+    Desynchronized,
+    /// `LOCATION_FORWARD` chain exceeded [`MAX_FORWARD_HOPS`].
+    TooManyForwards,
 }
 
 impl fmt::Display for Error {
@@ -141,15 +243,29 @@ impl fmt::Display for Error {
             Error::Io(e) => write!(f, "io: {e}"),
             Error::Cdr(e) => write!(f, "cdr: {e}"),
             Error::NotGiop(m) => write!(f, "not a GIOP message, magic was {m:?}"),
-            Error::UnsupportedVersion(a, b) => write!(f, "unsupported GIOP {a}.{b}"),
+            Error::UnsupportedVersion(v) => write!(f, "unsupported {v}"),
+            Error::UnknownMessageType(v) => write!(f, "unknown GIOP message type {v}"),
             Error::UnexpectedMessage(t) => write!(f, "unexpected GIOP message: {t:?}"),
-            Error::BadReplyStatus(v) => write!(f, "unknown reply status {v}"),
+            Error::MessageTooLarge { declared, limit } => {
+                write!(f, "peer declared a {declared}-byte message, ceiling is {limit}")
+            }
+            Error::FragmentUnsupported => {
+                write!(f, "peer fragmented the message; reassembly is not implemented")
+            }
+            Error::BadReplyStatus(v) => write!(f, "invalid reply status {v} for this version"),
             Error::SystemException { id, minor, completed } => {
                 write!(f, "system exception {id} (minor={minor}, completed={completed})")
             }
-            Error::UserException { id } => write!(f, "user exception {id}"),
+            Error::UserException { id, .. } => write!(f, "user exception {id}"),
             Error::BadIor(why) => write!(f, "bad IOR: {why}"),
             Error::NoIiopProfile => write!(f, "IOR has no IIOP profile"),
+            Error::ConnectionClosed => {
+                write!(f, "peer closed the connection; the request was not processed")
+            }
+            Error::Desynchronized => {
+                write!(f, "connection is desynchronized and must be discarded")
+            }
+            Error::TooManyForwards => write!(f, "too many LOCATION_FORWARD hops"),
         }
     }
 }
@@ -175,19 +291,33 @@ pub type Result<T> = std::result::Result<T, Error>;
 // IOR
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// The parts of an IIOP profile this spike needs to place a call.
+/// A component attached to an IIOP profile, kept verbatim.
+///
+/// §9.7.2 requires that data we do not understand be "ignored, but preserved",
+/// because an IOR we re-emit must still round-trip. Discarding components also
+/// loses `TAG_SSL_SEC_TRANS`, whose absence makes an SSLIOP profile look like
+/// port 0, and `TAG_CODE_SETS`, which codeset negotiation needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaggedComponent {
+    /// Component identifier.
+    pub tag: u32,
+    /// Undecoded component body.
+    pub data: Vec<u8>,
+}
+
+/// The parts of an IIOP profile needed to place a call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IiopProfile {
-    /// IIOP major version.
-    pub major: u8,
-    /// IIOP minor version.
-    pub minor: u8,
+    /// IIOP version, which bounds the GIOP version we may speak.
+    pub version: Version,
     /// Host to connect to, as advertised by the server.
     pub host: String,
     /// TCP port.
     pub port: u16,
     /// Opaque key identifying the servant behind the endpoint.
     pub object_key: Vec<u8>,
+    /// Components, preserved whether or not we understand them.
+    pub components: Vec<TaggedComponent>,
 }
 
 /// A parsed Interoperable Object Reference.
@@ -201,10 +331,18 @@ pub struct Ior {
 
 impl Ior {
     /// Parses the `IOR:<hex>` stringified form.
+    ///
+    /// §7.6.9 defines the prefix case-insensitively and states that the case
+    /// of a stringified IOR is not significant.
     pub fn parse(s: &str) -> Result<Self> {
-        let hex = s.strip_prefix("IOR:").ok_or(Error::BadIor("missing 'IOR:' prefix"))?;
-        if hex.len() % 2 != 0 {
-            return Err(Error::BadIor("hex body has odd length"));
+        let s = s.trim();
+        let hex = s
+            .get(..4)
+            .filter(|p| p.eq_ignore_ascii_case("IOR:"))
+            .map(|_| &s[4..])
+            .ok_or(Error::BadIor("missing 'IOR:' prefix"))?;
+        if hex.is_empty() || hex.len() % 2 != 0 {
+            return Err(Error::BadIor("hex body has odd or zero length"));
         }
         let mut bytes = Vec::with_capacity(hex.len() / 2);
         for pair in hex.as_bytes().chunks(2) {
@@ -218,8 +356,27 @@ impl Ior {
     /// Parses the CDR encapsulation that a stringified IOR wraps.
     pub fn from_encapsulation(bytes: &[u8]) -> Result<Self> {
         let mut d = Decoder::encapsulation(bytes)?;
-        let type_id = d.get_string().unwrap_or_default();
+        Self::read_from(&mut d)
+    }
+
+    /// Reads an IOR marshalled inline in an existing stream.
+    ///
+    /// §9.3.6 marshals an object reference inline, not as a standalone
+    /// encapsulation, which is how a `LOCATION_FORWARD` body and every
+    /// `Object`-typed parameter arrive.
+    pub fn read_from(d: &mut Decoder<'_>) -> Result<Self> {
+        // A decode failure here must be fatal. Swallowing it with
+        // `unwrap_or_default` leaves the cursor mid-string, so the profile
+        // count is then read out of string content and the resulting profile
+        // carries a host and port taken from arbitrary bytes — a parse that
+        // succeeds and dials an endpoint nobody intended.
+        let type_id = match d.get_string_bytes() {
+            Ok(b) => String::from_utf8_lossy(b).into_owned(),
+            Err(e) => return Err(Error::Cdr(e)),
+        };
         let count = d.get_u32()?;
+        // Each profile costs at least a 4-byte tag plus a 4-byte length.
+        let count = d.validate_count(count, 8)?;
         let mut profiles = Vec::new();
         for _ in 0..count {
             let tag = d.get_u32()?;
@@ -231,7 +388,12 @@ impl Ior {
         Ok(Ior { type_id, profiles })
     }
 
-    /// The first IIOP profile, which is the one this spike dials.
+    /// Whether this is the nil reference: no type and no profiles.
+    pub fn is_nil(&self) -> bool {
+        self.type_id.is_empty() && self.profiles.is_empty()
+    }
+
+    /// The first IIOP profile, which is the one dialed first.
     pub fn primary(&self) -> Result<&IiopProfile> {
         self.profiles.first().ok_or(Error::NoIiopProfile)
     }
@@ -250,59 +412,112 @@ fn parse_iiop_profile(body: &[u8]) -> Result<IiopProfile> {
     let mut d = Decoder::encapsulation(body)?;
     let major = d.get_u8()?;
     let minor = d.get_u8()?;
-    let host = d.get_string()?;
+    let host = String::from_utf8_lossy(d.get_string_bytes()?).into_owned();
     let port = d.get_u16()?;
     let object_key = d.get_octet_seq()?.to_vec();
-    // IIOP >= 1.1 appends tagged components; the spike does not need them.
-    Ok(IiopProfile { major, minor, host, port, object_key })
+
+    // IIOP 1.0 profiles carry no components; 1.1 and later do. A 1.0 profile
+    // with trailing data is malformed per §9.7.2, but tolerate it rather than
+    // reject an otherwise usable reference.
+    let mut components = Vec::new();
+    if minor >= 1 && !d.is_empty() {
+        let count = d.get_u32()?;
+        let count = d.validate_count(count, 8)?;
+        for _ in 0..count {
+            let tag = d.get_u32()?;
+            let data = d.get_octet_seq()?.to_vec();
+            components.push(TaggedComponent { tag, data });
+        }
+    }
+
+    Ok(IiopProfile {
+        version: Version { major, minor },
+        host,
+        port,
+        object_key,
+        components,
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Messages
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Encodes a GIOP 1.2 `Request` whose body is written by `write_body`.
+/// Encodes a GIOP `Request` for `version`, whose body is written by
+/// `write_body`.
 ///
-/// The `message_size` field cannot be known until the body exists, so it is
-/// written as a placeholder and patched once the length is final.
+/// Header layout is version-conditional. 1.0 and 1.1 put `service_context`
+/// first, use a `boolean response_expected`, carry the object key as a raw
+/// sequence and end with `requesting_principal`; 1.2 puts `service_context`
+/// last and addresses through a `TargetAddress` union. Sending the wrong shape
+/// does not produce an error at the peer, it produces a misparse.
 pub fn encode_request<F>(
+    version: Version,
     endian: Endian,
     request_id: u32,
     object_key: &[u8],
     operation: &str,
     expect_reply: bool,
     write_body: F,
-) -> Vec<u8>
+) -> Result<Vec<u8>>
 where
     F: FnOnce(&mut Encoder),
 {
+    if version.major != 1 || version.minor > 2 {
+        return Err(Error::UnsupportedVersion(version));
+    }
     let mut e = Encoder::new(endian);
 
     // ── message header (12 bytes, alignment origin) ──
     e.put_bytes(MAGIC);
-    e.put_u8(1); // GIOP major
-    e.put_u8(2); // GIOP minor
-    e.put_u8(endian.as_flag()); // bit 0 byte order, bit 1 fragment
+    e.put_u8(version.major);
+    e.put_u8(version.minor);
+    if version.minor == 0 {
+        // 1.0 defines this octet as a `boolean byte_order`, not a flags field.
+        e.put_bool(endian == Endian::Little);
+    } else {
+        e.put_u8(endian.as_flag()); // bit 0 byte order, bit 1 more-fragments
+    }
     e.put_u8(MsgType::Request as u8);
     let size_at = e.len();
     e.put_bytes(&[0, 0, 0, 0]); // message_size placeholder
 
-    // ── RequestHeader_1_2 ──
-    e.put_u32(request_id);
-    e.put_u8(if expect_reply { 3 } else { 0 }); // response_flags
-    e.put_bytes(&[0, 0, 0]); // reserved
-    e.put_u16(0); // TargetAddress discriminator: 0 = ObjectKey
-    e.put_octet_seq(object_key);
-    e.put_str(operation);
-    e.put_u32(0); // empty ServiceContextList
+    if version.is_1_2_layout() {
+        e.put_u32(request_id);
+        e.put_u8(if expect_reply { 3 } else { 0 }); // response_flags
+        e.put_bytes(&[0, 0, 0]); // reserved
+        e.put_u16(0); // TargetAddress discriminator: 0 = KeyAddr
+        e.put_octet_seq(object_key);
+        e.put_str(operation);
+        e.put_u32(0); // empty ServiceContextList
+    } else {
+        e.put_u32(0); // empty ServiceContextList comes first before 1.2
+        e.put_u32(request_id);
+        e.put_bool(expect_reply); // response_expected
+        if version.has_reserved_octets() {
+            e.put_bytes(&[0, 0, 0]); // 1.1 only
+        }
+        e.put_octet_seq(object_key);
+        e.put_str(operation);
+        e.put_octet_seq(&[]); // requesting_principal
+    }
 
-    // GIOP 1.2 aligns the request body to 8 from the start of the message.
-    e.align_to(8);
-    write_body(&mut e);
+    // §9.4.2.1: "There is no padding after the request header when an
+    // unfragmented request message body is empty." Measure the body first so
+    // the padding is only emitted when something follows it.
+    let mut body = Encoder::new(endian);
+    write_body(&mut body);
+    let body_bytes = body.finish().map_err(Error::Cdr)?;
+    if !body_bytes.is_empty() {
+        if version.aligns_body() {
+            e.align_to(8);
+        }
+        e.put_bytes(&body_bytes);
+    }
 
     let size = (e.len() - HEADER_LEN) as u32;
     e.patch_u32(size_at, size);
-    e.finish()
+    e.finish().map_err(Error::Cdr)
 }
 
 /// A decoded GIOP `Reply`, with its body left as raw CDR for the caller.
@@ -314,6 +529,8 @@ pub struct Reply {
     pub status: ReplyStatus,
     /// Byte order the reply was encoded in.
     pub endian: Endian,
+    /// Version the reply was encoded with.
+    pub version: Version,
     /// Whole message, retained so body offsets stay meaningful.
     raw: Vec<u8>,
     /// Offset in `raw` where the reply body begins.
@@ -323,99 +540,187 @@ pub struct Reply {
 impl Reply {
     /// A decoder positioned at the start of the reply body.
     ///
-    /// Alignment is preserved by decoding over the whole message, so any
-    /// 8-byte-aligned value in the body lands where the peer put it.
-    pub fn body(&self) -> Decoder<'_> {
+    /// Fallible on purpose. The previous version discarded the seek error,
+    /// which left the decoder at offset 0 and returned the GIOP magic as
+    /// payload — wrong values, no error, nothing in the logs.
+    pub fn body(&self) -> Result<Decoder<'_>> {
         let mut d = Decoder::new(&self.raw, self.endian);
-        let _ = d.get_bytes(self.body_at);
-        d
+        d.seek_to(self.body_at)?;
+        Ok(d)
+    }
+
+    /// The undecoded message, for diagnostics.
+    pub fn raw(&self) -> &[u8] {
+        &self.raw
     }
 }
 
+/// A framed but undecoded GIOP message.
+#[derive(Debug, Clone)]
+pub struct RawMessage {
+    /// Message type from the header.
+    pub msg_type: MsgType,
+    /// Version from the header.
+    pub version: Version,
+    /// Byte order from the header.
+    pub endian: Endian,
+    /// Header and body together.
+    pub bytes: Vec<u8>,
+}
+
 /// Reads one whole GIOP message from `stream`.
-pub fn read_message(stream: &mut impl Read) -> Result<(MsgType, Endian, Vec<u8>)> {
+///
+/// Rejects a `message_size` above `max_size` before allocating, and refuses a
+/// fragmented message rather than decoding its first piece as a whole.
+pub fn read_message(stream: &mut impl Read, max_size: usize) -> Result<RawMessage> {
     let mut header = [0u8; HEADER_LEN];
     stream.read_exact(&mut header)?;
     if &header[0..4] != MAGIC {
         return Err(Error::NotGiop([header[0], header[1], header[2], header[3]]));
     }
-    let (major, minor) = (header[4], header[5]);
-    if major != 1 || minor > 2 {
-        return Err(Error::UnsupportedVersion(major, minor));
+    let version = Version { major: header[4], minor: header[5] };
+    if version.major != 1 || version.minor > 2 {
+        return Err(Error::UnsupportedVersion(version));
     }
-    let endian = Endian::from_flag(header[6]);
-    let msg_type = MsgType::from_octet(header[7]).ok_or(Error::UnexpectedMessage(MsgType::MessageError))?;
+
+    let flags = header[6];
+    let endian = if flags & 1 == 1 { Endian::Little } else { Endian::Big };
+    if version.minor >= 1 {
+        // §9.4.1: the top six bits must be zero.
+        if flags & 0b1111_1100 != 0 {
+            return Err(Error::Cdr(orbweaver_cdr::Error::Malformed(
+                "reserved bits of the GIOP flags octet must be zero",
+            )));
+        }
+        if flags & 0b10 != 0 {
+            return Err(Error::FragmentUnsupported);
+        }
+    } else if flags > 1 {
+        // 1.0 defines the octet as a boolean.
+        return Err(Error::Cdr(orbweaver_cdr::Error::Malformed(
+            "GIOP 1.0 byte_order octet must be 0 or 1",
+        )));
+    }
+
+    let msg_type = MsgType::from_octet(header[7]).ok_or(Error::UnknownMessageType(header[7]))?;
 
     let size = match endian {
         Endian::Big => u32::from_be_bytes([header[8], header[9], header[10], header[11]]),
         Endian::Little => u32::from_le_bytes([header[8], header[9], header[10], header[11]]),
     } as usize;
+    if size > max_size {
+        return Err(Error::MessageTooLarge { declared: size, limit: max_size });
+    }
 
-    let mut raw = Vec::with_capacity(HEADER_LEN + size);
-    raw.extend_from_slice(&header);
-    raw.resize(HEADER_LEN + size, 0);
-    stream.read_exact(&mut raw[HEADER_LEN..])?;
-    Ok((msg_type, endian, raw))
+    let mut bytes = Vec::with_capacity(HEADER_LEN + size);
+    bytes.extend_from_slice(&header);
+    bytes.resize(HEADER_LEN + size, 0);
+    stream.read_exact(&mut bytes[HEADER_LEN..])?;
+    Ok(RawMessage { msg_type, version, endian, bytes })
 }
 
-/// Decodes a GIOP 1.2 `Reply` message that `read_message` already framed.
-pub fn decode_reply(endian: Endian, raw: Vec<u8>) -> Result<Reply> {
+/// Decodes a `Reply` that [`read_message`] already framed.
+///
+/// The field order is version-conditional: 1.0 and 1.1 marshal
+/// `service_context, request_id, reply_status`, while 1.2 marshals
+/// `request_id, reply_status, service_context`. Reading a 1.1 reply with the
+/// 1.2 order takes the service-context *count* as the request id, which is why
+/// this cannot be version-agnostic.
+pub fn decode_reply(msg: RawMessage) -> Result<Reply> {
+    let RawMessage { version, endian, bytes: raw, .. } = msg;
     let mut d = Decoder::new(&raw, endian);
-    d.get_bytes(HEADER_LEN)?; // step over the message header, keeping alignment
+    d.seek_to(HEADER_LEN)?; // step over the header, keeping alignment
 
-    let request_id = d.get_u32()?;
-    let status_raw = d.get_u32()?;
-    let status = ReplyStatus::from_u32(status_raw).ok_or(Error::BadReplyStatus(status_raw))?;
+    let (request_id, status_raw);
+    if version.is_1_2_layout() {
+        request_id = d.get_u32()?;
+        status_raw = d.get_u32()?;
+        skip_service_contexts(&mut d)?;
+    } else {
+        skip_service_contexts(&mut d)?;
+        request_id = d.get_u32()?;
+        status_raw = d.get_u32()?;
+    }
 
-    // ServiceContextList
+    let status = ReplyStatus::from_u32(status_raw, version)
+        .ok_or(Error::BadReplyStatus(status_raw))?;
+
+    // §9.4.3.1: no padding after the header when the body is empty. Aligning
+    // unconditionally can push the cursor past the end of a short message.
+    let body_at = if version.aligns_body() && !d.is_empty() {
+        d.align_to(8)?;
+        d.offset()
+    } else {
+        d.offset()
+    };
+
+    Ok(Reply { request_id, status, endian, version, raw, body_at })
+}
+
+fn skip_service_contexts(d: &mut Decoder<'_>) -> Result<()> {
     let n = d.get_u32()?;
+    let n = d.validate_count(n, 8)?;
     for _ in 0..n {
         let _id = d.get_u32()?;
         let _data = d.get_octet_seq()?;
     }
-
-    d.align_to(8); // GIOP 1.2 body alignment
-    let body_at = d.offset();
-    Ok(Reply { request_id, status, endian, raw, body_at })
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Invoker
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A synchronous one-connection-per-target invoker.
+/// A synchronous, single-connection invoker.
 ///
-/// Deliberately minimal: it exists to answer whether a from-scratch GIOP
-/// implementation can talk to a stock ORB. Connection pooling, pipelining and
-/// reconnection belong to Phase 1.
+/// Deliberately minimal, but no longer optimistic: it negotiates the version
+/// from the IOR, follows `LOCATION_FORWARD`, distinguishes a clean
+/// `CloseConnection` from a protocol error, and poisons itself rather than
+/// reusing a stream whose framing is in doubt.
+///
+/// Connection pooling, request multiplexing and send-side fragmentation remain
+/// Phase 1 work.
 #[derive(Debug)]
 pub struct Connection {
     stream: TcpStream,
     object_key: Vec<u8>,
+    version: Version,
     endian: Endian,
     next_id: u32,
+    max_message_size: usize,
+    /// Set once framing can no longer be trusted. A desynchronized stream must
+    /// be discarded: the next read would take payload bytes as a GIOP header.
+    poisoned: bool,
 }
 
 impl Connection {
-    /// Connects to the endpoint named by an IOR's first IIOP profile.
+    /// Connects to the endpoint named by an IOR's first IIOP profile,
+    /// negotiating the GIOP version down to what that profile advertises.
     pub fn connect(ior: &Ior, timeout: Duration) -> Result<Self> {
         let p = ior.primary()?;
-        // Resolve through the advertised host; NAT and container rewriting is
-        // exactly the failure mode Phase 0 assumption D probes.
-        let addr = format!("{}:{}", p.host, p.port);
-        let sock = addr
-            .parse()
-            .map(|a| TcpStream::connect_timeout(&a, timeout))
-            .unwrap_or_else(|_| TcpStream::connect(&addr))?;
-        sock.set_read_timeout(Some(timeout))?;
-        sock.set_write_timeout(Some(timeout))?;
-        sock.set_nodelay(true)?;
+        Self::connect_to(p, timeout)
+    }
+
+    /// Connects to a specific profile.
+    pub fn connect_to(p: &IiopProfile, timeout: Duration) -> Result<Self> {
+        let stream = dial(&p.host, p.port, timeout)?;
+        stream.set_read_timeout(Some(timeout))?;
+        stream.set_write_timeout(Some(timeout))?;
+        stream.set_nodelay(true)?;
         Ok(Self {
-            stream: sock,
+            stream,
             object_key: p.object_key.clone(),
+            version: Version::negotiate(p.version),
             endian: Endian::native(),
             next_id: 1,
+            max_message_size: DEFAULT_MAX_MESSAGE_SIZE,
+            poisoned: false,
         })
+    }
+
+    /// The GIOP version negotiated for this connection.
+    pub fn version(&self) -> Version {
+        self.version
     }
 
     /// Byte order this connection writes. Defaults to native.
@@ -423,58 +728,140 @@ impl Connection {
         self.endian = endian;
     }
 
+    /// Overrides the inbound message ceiling.
+    pub fn set_max_message_size(&mut self, bytes: usize) {
+        self.max_message_size = bytes;
+    }
+
     /// The object key extracted from the IOR.
     pub fn object_key(&self) -> &[u8] {
         &self.object_key
     }
 
-    /// Invokes `operation`, writing arguments via `write_args`, and returns
-    /// the reply for the caller to decode.
+    /// Whether framing is still trustworthy.
+    pub fn is_usable(&self) -> bool {
+        !self.poisoned
+    }
+
+    fn next_request_id(&mut self) -> u32 {
+        let id = self.next_id;
+        // §9.4.2.1 forbids reusing an id whose request is still outstanding.
+        // Wrapping past zero is astronomically unlikely here but must not
+        // panic in a debug build.
+        self.next_id = self.next_id.wrapping_add(1).max(1);
+        id
+    }
+
+    /// Invokes `operation`, writing arguments via `write_args`.
     ///
-    /// A `SystemException` reply is surfaced as an error, since no caller can
-    /// meaningfully read the body of one without the repository ID first.
+    /// Follows `LOCATION_FORWARD` transparently, as §9.4.3.2 requires, up to
+    /// [`MAX_FORWARD_HOPS`].
     pub fn invoke<F>(&mut self, operation: &str, write_args: F) -> Result<Reply>
     where
-        F: FnOnce(&mut Encoder),
+        F: Fn(&mut Encoder),
     {
-        let id = self.next_id;
-        self.next_id += 1;
+        for _ in 0..MAX_FORWARD_HOPS {
+            match self.invoke_once(operation, &write_args)? {
+                Outcome::Done(reply) => return Ok(reply),
+                Outcome::Forwarded(ior) => {
+                    let p = ior.primary()?;
+                    let next = Self::connect_to(p, Duration::from_secs(10))?;
+                    let endian = self.endian;
+                    *self = next;
+                    self.endian = endian;
+                }
+            }
+        }
+        Err(Error::TooManyForwards)
+    }
 
-        let msg = encode_request(self.endian, id, &self.object_key, operation, true, write_args);
+    fn invoke_once<F>(&mut self, operation: &str, write_args: &F) -> Result<Outcome>
+    where
+        F: Fn(&mut Encoder),
+    {
+        if self.poisoned {
+            return Err(Error::Desynchronized);
+        }
+        let id = self.next_request_id();
+        let msg = encode_request(
+            self.version,
+            self.endian,
+            id,
+            &self.object_key,
+            operation,
+            true,
+            write_args,
+        )?;
         self.stream.write_all(&msg)?;
         self.stream.flush()?;
 
         loop {
-            let (ty, endian, raw) = read_message(&mut self.stream)?;
-            match ty {
+            // Any framing failure from here leaves unread bytes behind.
+            let raw = match read_message(&mut self.stream, self.max_message_size) {
+                Ok(m) => m,
+                Err(e) => {
+                    self.poisoned = true;
+                    return Err(e);
+                }
+            };
+            match raw.msg_type {
                 MsgType::Reply => {
-                    let reply = decode_reply(endian, raw)?;
+                    let reply = decode_reply(raw).inspect_err(|_| self.poisoned = true)?;
                     if reply.request_id != id {
-                        continue; // not ours; keep reading
+                        // A reply for a request we are not waiting on means
+                        // our accounting is wrong; keeping the connection
+                        // would compound it.
+                        self.poisoned = true;
+                        return Err(Error::Desynchronized);
                     }
-                    return match reply.status {
-                        ReplyStatus::NoException => Ok(reply),
-                        ReplyStatus::SystemException => {
-                            let mut b = reply.body();
-                            Err(Error::SystemException {
-                                id: b.get_string().unwrap_or_else(|_| "<unreadable>".into()),
-                                minor: b.get_u32().unwrap_or(0),
-                                completed: b.get_u32().unwrap_or(0),
-                            })
-                        }
-                        ReplyStatus::UserException => {
-                            let mut b = reply.body();
-                            Err(Error::UserException {
-                                id: b.get_string().unwrap_or_else(|_| "<unreadable>".into()),
-                            })
-                        }
-                        _ => Ok(reply), // location forwards are the caller's problem for now
-                    };
+                    return self.interpret(reply);
                 }
                 MsgType::CloseConnection => {
-                    return Err(Error::UnexpectedMessage(MsgType::CloseConnection));
+                    // §9.4.7: the request was not processed and is safe to
+                    // re-send on a fresh connection.
+                    self.poisoned = true;
+                    return Err(Error::ConnectionClosed);
                 }
-                other => return Err(Error::UnexpectedMessage(other)),
+                other => {
+                    self.poisoned = true;
+                    return Err(Error::UnexpectedMessage(other));
+                }
+            }
+        }
+    }
+
+    fn interpret(&mut self, reply: Reply) -> Result<Outcome> {
+        match reply.status {
+            ReplyStatus::NoException => Ok(Outcome::Done(reply)),
+            ReplyStatus::SystemException => {
+                let mut b = reply.body()?;
+                Err(Error::SystemException {
+                    id: b.get_string().unwrap_or_else(|_| "<unreadable>".into()),
+                    minor: b.get_u32().unwrap_or(0),
+                    completed: b.get_u32().unwrap_or(0),
+                })
+            }
+            ReplyStatus::UserException => {
+                // Read the id but hand the reply back, so the caller can
+                // decode the exception's members. Consuming and dropping the
+                // body left callers able to see that a call failed but never
+                // why.
+                let id = reply
+                    .body()?
+                    .get_string()
+                    .unwrap_or_else(|_| "<unreadable>".into());
+                Err(Error::UserException { id, reply: Box::new(reply) })
+            }
+            ReplyStatus::LocationForward | ReplyStatus::LocationForwardPerm => {
+                let mut b = reply.body()?;
+                let ior = Ior::read_from(&mut b)?;
+                Ok(Outcome::Forwarded(ior))
+            }
+            ReplyStatus::NeedsAddressingMode => {
+                // Answering this requires the ProfileAddr and ReferenceAddr
+                // target dispositions, which are not implemented. Failing is
+                // correct; pretending the body is a return value is not.
+                Err(Error::UnexpectedMessage(MsgType::Reply))
             }
         }
     }
@@ -485,72 +872,341 @@ impl Connection {
     }
 }
 
+enum Outcome {
+    Done(Reply),
+    Forwarded(Ior),
+}
+
+/// Resolves and connects with a real timeout.
+///
+/// `"host:port".parse::<SocketAddr>()` only succeeds for numeric literals, so
+/// routing DNS names through a `parse().unwrap_or_else(connect)` fallback
+/// silently dropped the timeout for every hostname — and produced
+/// `::1:9999` for IPv6 literals, which resolves to nothing at all.
+fn dial(host: &str, port: u16, timeout: Duration) -> Result<TcpStream> {
+    let addrs = (host, port)
+        .to_socket_addrs()
+        .map_err(Error::Io)?
+        .collect::<Vec<_>>();
+    if addrs.is_empty() {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            format!("no address for {host}:{port}"),
+        )));
+    }
+    let mut last = None;
+    for addr in &addrs {
+        match TcpStream::connect_timeout(addr, timeout) {
+            Ok(s) => return Ok(s),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(Error::Io(last.expect("addrs was non-empty")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn req(version: Version, endian: Endian, op: &str, expect_reply: bool) -> Vec<u8> {
+        encode_request(version, endian, 42, b"key", op, expect_reply, |_| {}).unwrap()
+    }
+
     #[test]
     fn request_header_layout_is_giop_1_2() {
-        let msg = encode_request(Endian::Big, 42, b"key", "ping", true, |_| {});
-
+        let msg = req(Version::V1_2, Endian::Big, "ping", true);
         assert_eq!(&msg[0..4], MAGIC);
-        assert_eq!(msg[4], 1, "GIOP major");
-        assert_eq!(msg[5], 2, "GIOP minor");
+        assert_eq!(msg[4], 1);
+        assert_eq!(msg[5], 2);
         assert_eq!(msg[6], 0, "big-endian flag");
         assert_eq!(msg[7], MsgType::Request as u8);
 
         let size = u32::from_be_bytes([msg[8], msg[9], msg[10], msg[11]]) as usize;
         assert_eq!(size, msg.len() - HEADER_LEN, "message_size excludes the header");
-
-        // request_id sits immediately after the header, already 4-aligned.
         assert_eq!(u32::from_be_bytes([msg[12], msg[13], msg[14], msg[15]]), 42);
         assert_eq!(msg[16], 3, "response_flags requests a reply");
     }
 
+    /// Audit CONFIRMED #6: §9.4.2.1 forbids padding after the header when the
+    /// body is empty. The Phase 0 encoder emitted four bytes of it.
     #[test]
-    fn request_body_is_eight_byte_aligned() {
-        // GIOP 1.2 requires the body to start on an 8-byte boundary measured
-        // from the first byte of the message.
-        let mut body_at = None;
-        let msg = encode_request(Endian::Little, 1, b"k", "op", true, |e| {
-            body_at = Some(e.len());
+    fn empty_body_gets_no_alignment_padding() {
+        // "ping": header 12 + id 4 + flags 1 + reserved 3 + target 2 + pad 2
+        //         + keylen 4 + "key" 3 + pad 1 + oplen 4 + "ping\0" 5 + pad 3
+        //         + ctx 4 = 48. A multiple of 8 by coincidence, so it proves
+        //         nothing on its own.
+        assert_eq!(req(Version::V1_2, Endian::Big, "ping", true).len(), 48);
+
+        // "abc" lands on 44, which is not a multiple of 8. If the encoder were
+        // still aligning unconditionally this would be 48.
+        let msg = req(Version::V1_2, Endian::Big, "abc", true);
+        assert_eq!(msg.len(), 44);
+        assert_ne!(msg.len() % 8, 0, "no padding may follow an empty body");
+    }
+
+    #[test]
+    fn nonempty_body_is_eight_byte_aligned_in_1_2() {
+        let msg = encode_request(Version::V1_2, Endian::Little, 1, b"k", "op", true, |e| {
             e.put_f64(1.5);
-        });
-        let at = body_at.expect("body closure ran");
+        })
+        .unwrap();
+        let at = msg.len() - 8;
         assert_eq!(at % 8, 0, "body must start 8-aligned, started at {at}");
-        assert_eq!(&msg[at..at + 8], &1.5f64.to_le_bytes());
+        assert_eq!(&msg[at..], &1.5f64.to_le_bytes());
+    }
+
+    /// Audit CONFIRMED #1/#2: 1.0 and 1.1 put service_context first, use a
+    /// boolean response_expected, and never align the body.
+    #[test]
+    fn request_header_layout_is_giop_1_0() {
+        let msg = encode_request(Version::V1_0, Endian::Big, 7, b"k", "op", true, |e| {
+            e.put_f64(1.5);
+        })
+        .unwrap();
+        assert_eq!(msg[5], 0, "minor version");
+        // service_context count comes first in 1.0
+        assert_eq!(u32::from_be_bytes([msg[12], msg[13], msg[14], msg[15]]), 0);
+        assert_eq!(u32::from_be_bytes([msg[16], msg[17], msg[18], msg[19]]), 7, "request_id");
+        assert_eq!(msg[20], 1, "response_expected is a boolean in 1.0");
+        // Body is unaligned in 1.0, so the double sits at the very end.
+        assert_eq!(&msg[msg.len() - 8..], &1.5f64.to_be_bytes());
+    }
+
+    /// The 1.1 `reserved[3]` field is invisible on the wire for a request.
+    ///
+    /// `response_expected` always ends at offset 21, and the `object_key`
+    /// sequence that follows aligns to 4 regardless — so 1.0 pads 21→24 with
+    /// zeros and 1.1 writes three explicit zeros into the same span. The two
+    /// encodings are byte-identical apart from the version octet.
+    ///
+    /// Worth pinning: the obvious expectation is that 1.1 is three bytes
+    /// longer, and acting on that would mean "fixing" an encoder that is
+    /// already correct.
+    #[test]
+    fn giop_1_1_reserved_octets_land_in_1_0s_padding() {
+        let v10 = encode_request(Version::V1_0, Endian::Big, 7, b"k", "op", true, |_| {}).unwrap();
+        let v11 = encode_request(Version::V1_1, Endian::Big, 7, b"k", "op", true, |_| {}).unwrap();
+
+        assert_eq!(v11.len(), v10.len(), "alignment absorbs the reserved field");
+        assert_eq!(v10[5], 0);
+        assert_eq!(v11[5], 1);
+        assert_eq!(&v10[6..], &v11[6..], "identical past the version octet");
+        assert_eq!(&v11[21..24], &[0, 0, 0], "reserved octets are zero");
     }
 
     #[test]
     fn oneway_clears_the_reply_flag() {
-        let msg = encode_request(Endian::Big, 7, b"k", "fire", false, |_| {});
+        let msg = req(Version::V1_2, Endian::Big, "fire", false);
         assert_eq!(msg[16], 0, "oneway must not request a reply");
+        let v10 = req(Version::V1_0, Endian::Big, "fire", false);
+        assert_eq!(v10[20], 0, "1.0 response_expected must be false");
+    }
+
+    #[test]
+    fn version_negotiation_never_exceeds_the_peer() {
+        assert_eq!(Version::negotiate(Version::V1_0), Version::V1_0);
+        assert_eq!(Version::negotiate(Version::V1_1), Version::V1_1);
+        assert_eq!(Version::negotiate(Version::V1_2), Version::V1_2);
+        assert_eq!(Version::negotiate(Version { major: 1, minor: 9 }), Version::V1_2);
+    }
+
+    /// Audit CONFIRMED #14: statuses 4 and 5 arrived in 1.2.
+    #[test]
+    fn reply_status_is_version_aware() {
+        assert_eq!(ReplyStatus::from_u32(3, Version::V1_0), Some(ReplyStatus::LocationForward));
+        assert_eq!(ReplyStatus::from_u32(4, Version::V1_1), None);
+        assert_eq!(
+            ReplyStatus::from_u32(4, Version::V1_2),
+            Some(ReplyStatus::LocationForwardPerm)
+        );
+        assert_eq!(ReplyStatus::from_u32(9, Version::V1_2), None);
+    }
+
+    fn build_reply(version: Version, endian: Endian, id: u32, status: u32, contexts: u32) -> Vec<u8> {
+        let mut e = Encoder::new(endian);
+        e.put_bytes(MAGIC);
+        e.put_u8(version.major);
+        e.put_u8(version.minor);
+        e.put_u8(endian.as_flag());
+        e.put_u8(MsgType::Reply as u8);
+        let size_at = e.len();
+        e.put_bytes(&[0, 0, 0, 0]);
+        if version.is_1_2_layout() {
+            e.put_u32(id);
+            e.put_u32(status);
+            e.put_u32(contexts);
+            for _ in 0..contexts {
+                e.put_u32(1);
+                e.put_octet_seq(&[0xAB, 0xCD]);
+            }
+        } else {
+            e.put_u32(contexts);
+            for _ in 0..contexts {
+                e.put_u32(1);
+                e.put_octet_seq(&[0xAB, 0xCD]);
+            }
+            e.put_u32(id);
+            e.put_u32(status);
+        }
+        if version.aligns_body() {
+            e.align_to(8);
+        }
+        e.put_f64(2.25);
+        let size = (e.len() - HEADER_LEN) as u32;
+        e.patch_u32(size_at, size);
+        e.finish().unwrap()
+    }
+
+    #[test]
+    fn reply_body_offset_preserves_alignment_in_1_2() {
+        let raw = build_reply(Version::V1_2, Endian::Big, 99, 0, 0);
+        let mut cursor: &[u8] = &raw;
+        let msg = read_message(&mut cursor, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+        let reply = decode_reply(msg).unwrap();
+        assert_eq!(reply.request_id, 99);
+        assert_eq!(reply.status, ReplyStatus::NoException);
+        assert_eq!(reply.body().unwrap().get_f64().unwrap(), 2.25);
+    }
+
+    /// Audit CONFIRMED #1, the highest-damage finding: a 1.1 reply carrying a
+    /// service context used to be read with the 1.2 field order, turning the
+    /// context count into the request id and the request id into the status.
+    #[test]
+    fn giop_1_1_reply_with_service_context_decodes_correctly() {
+        let raw = build_reply(Version::V1_1, Endian::Big, 1, 0, 1);
+        let mut cursor: &[u8] = &raw;
+        let msg = read_message(&mut cursor, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+        let reply = decode_reply(msg).unwrap();
+        assert_eq!(reply.request_id, 1, "must not read the context count as the id");
+        assert_eq!(reply.status, ReplyStatus::NoException, "must not read the id as the status");
+        assert_eq!(reply.body().unwrap().get_f64().unwrap(), 2.25);
+    }
+
+    #[test]
+    fn giop_1_0_reply_decodes_with_the_old_field_order() {
+        let raw = build_reply(Version::V1_0, Endian::Little, 5, 0, 2);
+        let mut cursor: &[u8] = &raw;
+        let msg = read_message(&mut cursor, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+        let reply = decode_reply(msg).unwrap();
+        assert_eq!(reply.request_id, 5);
+        assert_eq!(reply.body().unwrap().get_f64().unwrap(), 2.25);
+    }
+
+    #[test]
+    fn non_giop_traffic_is_rejected() {
+        let mut junk: &[u8] = b"HTTP/1.1 200 OK\r\n\r\npadding-to-twelve";
+        assert!(matches!(
+            read_message(&mut junk, DEFAULT_MAX_MESSAGE_SIZE),
+            Err(Error::NotGiop(_))
+        ));
+    }
+
+    /// Audit HOSTILE #1: twelve bytes used to buy a 4 GiB zeroed allocation,
+    /// and an allocation failure aborts the process.
+    #[test]
+    fn oversized_message_is_refused_before_allocating() {
+        let mut hostile: &[u8] = &[
+            b'G', b'I', b'O', b'P', 1, 2, 1, 1, 0xff, 0xff, 0xff, 0xff,
+        ];
+        match read_message(&mut hostile, DEFAULT_MAX_MESSAGE_SIZE) {
+            Err(Error::MessageTooLarge { declared, limit }) => {
+                assert_eq!(declared, 0xffff_ffff);
+                assert_eq!(limit, DEFAULT_MAX_MESSAGE_SIZE);
+            }
+            other => panic!("expected MessageTooLarge, got {other:?}"),
+        }
+    }
+
+    /// Audit CONFIRMED #4: the more-fragments bit was masked away, so the
+    /// first fragment was decoded as a whole message.
+    #[test]
+    fn fragmented_message_is_refused_not_truncated() {
+        let mut frag: &[u8] = &[b'G', b'I', b'O', b'P', 1, 2, 0b11, 1, 0, 0, 0, 0];
+        assert!(matches!(
+            read_message(&mut frag, DEFAULT_MAX_MESSAGE_SIZE),
+            Err(Error::FragmentUnsupported)
+        ));
+    }
+
+    #[test]
+    fn reserved_flag_bits_must_be_zero() {
+        let mut bad: &[u8] = &[b'G', b'I', b'O', b'P', 1, 2, 0b1000_0001, 1, 0, 0, 0, 0];
+        assert!(read_message(&mut bad, DEFAULT_MAX_MESSAGE_SIZE).is_err());
+    }
+
+    #[test]
+    fn unknown_message_type_names_itself() {
+        let mut bad: &[u8] = &[b'G', b'I', b'O', b'P', 1, 2, 1, 99, 0, 0, 0, 0];
+        match read_message(&mut bad, DEFAULT_MAX_MESSAGE_SIZE) {
+            Err(Error::UnknownMessageType(99)) => {}
+            other => panic!("expected UnknownMessageType(99), got {other:?}"),
+        }
+    }
+
+    // ── IOR ──────────────────────────────────────────────────────────────────
+
+    fn sample_ior(minor: u8, with_component: bool) -> Vec<u8> {
+        let mut profile = Encoder::encapsulation(Endian::Little);
+        profile.put_u8(1);
+        profile.put_u8(minor);
+        profile.put_str("192.0.2.10");
+        profile.put_u16(9999);
+        profile.put_octet_seq(b"objkey");
+        if minor >= 1 {
+            if with_component {
+                profile.put_u32(1);
+                profile.put_u32(20); // TAG_SSL_SEC_TRANS
+                profile.put_octet_seq(&[1, 2, 3, 4]);
+            } else {
+                profile.put_u32(0);
+            }
+        }
+        let mut ior = Encoder::encapsulation(Endian::Little);
+        ior.put_str("IDL:spike/Echo:1.0");
+        ior.put_u32(1);
+        ior.put_u32(TAG_INTERNET_IOP);
+        ior.put_encapsulation(profile);
+        ior.finish().unwrap()
     }
 
     #[test]
     fn ior_round_trips_through_our_own_encoder() {
-        // Build an IOR the way a server would, then read it back.
-        let mut profile = Encoder::encapsulation(Endian::Little);
-        profile.put_u8(1); // IIOP major
-        profile.put_u8(2); // IIOP minor
-        profile.put_str("192.0.2.10");
-        profile.put_u16(9999);
-        profile.put_octet_seq(b"objkey");
-        profile.put_u32(0); // no tagged components
-
-        let mut ior = Encoder::encapsulation(Endian::Little);
-        ior.put_str("IDL:spike/Echo:1.0");
-        ior.put_u32(1); // one profile
-        ior.put_u32(TAG_INTERNET_IOP);
-        ior.put_encapsulation(profile);
-
-        let parsed = Ior::from_encapsulation(&ior.finish()).unwrap();
+        let parsed = Ior::from_encapsulation(&sample_ior(2, false)).unwrap();
         assert_eq!(parsed.type_id, "IDL:spike/Echo:1.0");
         let p = parsed.primary().unwrap();
-        assert_eq!((p.major, p.minor), (1, 2));
+        assert_eq!(p.version, Version::V1_2);
         assert_eq!(p.host, "192.0.2.10");
         assert_eq!(p.port, 9999);
         assert_eq!(p.object_key, b"objkey");
+    }
+
+    /// Audit CONFIRMED #11: components used to be discarded, which loses the
+    /// real port of an SSLIOP profile and blocks codeset negotiation.
+    #[test]
+    fn tagged_components_are_preserved() {
+        let parsed = Ior::from_encapsulation(&sample_ior(2, true)).unwrap();
+        let p = parsed.primary().unwrap();
+        assert_eq!(p.components.len(), 1);
+        assert_eq!(p.components[0].tag, 20);
+        assert_eq!(p.components[0].data, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn iiop_1_0_profile_has_no_components() {
+        let parsed = Ior::from_encapsulation(&sample_ior(0, false)).unwrap();
+        let p = parsed.primary().unwrap();
+        assert_eq!(p.version, Version::V1_0);
+        assert!(p.components.is_empty());
+    }
+
+    /// Audit CONFIRMED #12: §7.6.9 says the case of a stringified IOR is not
+    /// significant.
+    #[test]
+    fn ior_prefix_is_case_insensitive() {
+        let hex: String = sample_ior(2, false).iter().map(|b| format!("{b:02x}")).collect();
+        for prefix in ["IOR:", "ior:", "Ior:", "iOr:"] {
+            assert!(Ior::parse(&format!("{prefix}{hex}")).is_ok(), "rejected {prefix}");
+        }
     }
 
     #[test]
@@ -558,39 +1214,46 @@ mod tests {
         assert!(matches!(Ior::parse("nope"), Err(Error::BadIor(_))));
         assert!(matches!(Ior::parse("IOR:xyz"), Err(Error::BadIor(_))));
         assert!(matches!(Ior::parse("IOR:abc"), Err(Error::BadIor(_))));
+        assert!(matches!(Ior::parse("IOR:"), Err(Error::BadIor(_))));
+    }
+
+    /// Audit HOSTILE #2: a truncated IOR used to parse "successfully" into a
+    /// profile whose host and port came from string content.
+    #[test]
+    fn truncated_ior_fails_instead_of_inventing_an_endpoint() {
+        let full = sample_ior(2, false);
+        for cut in [6, 10, 14, 20, 26] {
+            let truncated = &full[..cut.min(full.len())];
+            match Ior::from_encapsulation(truncated) {
+                Err(_) => {}
+                Ok(ior) => panic!(
+                    "truncation at {cut} produced a usable IOR with {} profile(s)",
+                    ior.profiles.len()
+                ),
+            }
+        }
     }
 
     #[test]
-    fn reply_body_offset_preserves_alignment() {
-        // Hand-build a Reply with a double in the body and confirm the decoder
-        // finds it at the alignment the sender used.
-        let endian = Endian::Big;
-        let mut e = Encoder::new(endian);
-        e.put_bytes(MAGIC);
-        e.put_u8(1);
-        e.put_u8(2);
-        e.put_u8(endian.as_flag());
-        e.put_u8(MsgType::Reply as u8);
-        let size_at = e.len();
-        e.put_bytes(&[0, 0, 0, 0]);
-        e.put_u32(99); // request_id
-        e.put_u32(0); // NO_EXCEPTION
-        e.put_u32(0); // empty service contexts
-        e.align_to(8);
-        e.put_f64(2.25);
-        let size = (e.len() - HEADER_LEN) as u32;
-        e.patch_u32(size_at, size);
-        let raw = e.finish();
+    fn ior_read_inline_matches_encapsulated() {
+        // A LOCATION_FORWARD body marshals the IOR inline, not encapsulated.
+        let mut e = Encoder::new(Endian::Little);
+        e.put_str("IDL:spike/Echo:1.0");
+        e.put_u32(1);
+        e.put_u32(TAG_INTERNET_IOP);
+        let mut profile = Encoder::encapsulation(Endian::Little);
+        profile.put_u8(1);
+        profile.put_u8(2);
+        profile.put_str("10.0.0.1");
+        profile.put_u16(1234);
+        profile.put_octet_seq(b"k");
+        profile.put_u32(0);
+        e.put_encapsulation(profile);
+        let raw = e.finish().unwrap();
 
-        let reply = decode_reply(endian, raw).unwrap();
-        assert_eq!(reply.request_id, 99);
-        assert_eq!(reply.status, ReplyStatus::NoException);
-        assert_eq!(reply.body().get_f64().unwrap(), 2.25);
-    }
-
-    #[test]
-    fn non_giop_traffic_is_rejected() {
-        let mut junk: &[u8] = b"HTTP/1.1 200 OK\r\n\r\npadding-to-twelve";
-        assert!(matches!(read_message(&mut junk), Err(Error::NotGiop(_))));
+        let mut d = Decoder::new(&raw, Endian::Little);
+        let ior = Ior::read_from(&mut d).unwrap();
+        assert_eq!(ior.primary().unwrap().host, "10.0.0.1");
+        assert_eq!(ior.primary().unwrap().port, 1234);
     }
 }

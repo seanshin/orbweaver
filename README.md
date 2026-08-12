@@ -5,6 +5,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Phase 0: GO](https://img.shields.io/badge/Phase%200-GO-2F6B4F.svg)](docs/PHASE0.md)
+[![Phase 1: batch 1](https://img.shields.io/badge/Phase%201-batch%201%20landed-1D4C5C.svg)](docs/PHASE1.md)
 [![Spec: OMG IDL 4.2](https://img.shields.io/badge/spec-OMG%20IDL%204.2-1D4C5C.svg)](https://www.omg.org/spec/IDL/4.2/)
 
 > **Status / 상태** — Phase 0 feasibility spike complete, verdict **GO**. A from-scratch MIT GIOP client interoperates with a stock omniORB server; see [`docs/PHASE0.md`](docs/PHASE0.md) for the measurements. Phase 1 (wire protocol core) is next. Full plan: [`docs/PLAN.md`](docs/PLAN.md) (English) · [`docs/PLAN.ko.md`](docs/PLAN.ko.md) (한국어).
@@ -14,7 +15,7 @@
 
 | # | Assumption / 가정 | Result |
 |---|---|---|
-| **A** | A from-scratch GIOP implementation can talk to a stock ORB<br>자체 GIOP 구현이 순정 ORB와 통신 가능한가 | ✅ **14/14** cases, both byte orders, 5 cold starts |
+| **A** | A from-scratch GIOP implementation can talk to a stock ORB<br>자체 GIOP 구현이 순정 ORB와 통신 가능한가 | ✅ **12/12** asserted cases, both byte orders, 5 cold starts |
 | **B** | An LLM can write IDL that compiles<br>LLM이 컴파일되는 IDL을 쓰는가 | ✅ **65%** first pass → **100%** after one self-repair round |
 | **C** | IDL 4 `@annotation` survives deployed toolchains<br>배포된 툴체인이 어노테이션을 수용하는가 | ❌ **Rejected** — structured-comment fallback confirmed working |
 | **D** | IOR addressing works under NAT/containers<br>NAT·컨테이너에서 IOR 주소가 동작하는가 | ⚠️ **Hazard real** — endpoint rewriting mitigates it |
@@ -294,6 +295,7 @@ And the reason that matters most: interfaces are increasingly called by agents r
 
 | Document | 문서 | Contents |
 |---|---|---|
+| [`docs/PHASE1.md`](docs/PHASE1.md) | Phase 1 배치 1 |  Spec-audit work set, 4 root causes, hostile-input hardening — bilingual |
 | [`docs/PHASE0.md`](docs/PHASE0.md) | Phase 0 결과 | Feasibility measurements, findings, what Phase 1 inherits — bilingual |
 | [`docs/PLAN.md`](docs/PLAN.md) | Development plan (English) | Full technical plan, research findings, risk register |
 | [`docs/PLAN.ko.md`](docs/PLAN.ko.md) | 개발 계획서 (한국어) | 전체 기술 계획, 조사 결과, 리스크 목록 |

@@ -3,7 +3,7 @@
 //! trace can be read off directly instead of inferred.
 
 use orbweaver_cdr::Endian;
-use orbweaver_giop::{Ior, encode_request};
+use orbweaver_giop::{Ior, Version, encode_request};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
@@ -26,7 +26,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ior = Ior::parse(std::fs::read_to_string(&path)?.trim())?;
     let p = ior.primary()?;
-    println!("endpoint {}:{}  object_key {} bytes\n", p.host, p.port, p.object_key.len());
+    println!("endpoint {}:{}  object_key {} bytes  (IIOP {}.{})\n",
+        p.host, p.port, p.object_key.len(), p.version.major, p.version.minor);
 
     let endian = match std::env::args().nth(3).as_deref() {
         Some("big") => Endian::Big,
@@ -40,7 +41,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     sock.set_nodelay(true)?;
 
     for id in 1..=calls {
-        let msg = encode_request(endian, id, &p.object_key, &op, true, |_| {});
+        let version = Version::negotiate(p.version);
+        let msg = encode_request(version, endian, id, &p.object_key, &op, true, |_| {})?;
         if id == 1 {
             hex_dump("REQUEST", &msg);
         }

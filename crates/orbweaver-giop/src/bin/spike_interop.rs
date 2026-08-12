@@ -49,11 +49,12 @@ fn run(ior_text: &str) -> Result<u32, Error> {
     let p = ior.primary()?;
     println!("target");
     println!("  type_id    {}", ior.type_id);
-    println!("  endpoint   {}:{}  (IIOP {}.{})", p.host, p.port, p.major, p.minor);
+    println!("  endpoint   {}:{}  (IIOP {}.{})", p.host, p.port, p.version.major, p.version.minor);
     println!("  object_key {} bytes", p.object_key.len());
     println!();
 
     let mut fails = 0u32;
+    let mut asserted = 0u32;
 
     // Both byte orders, because a CDR encoder that only works native-endian
     // passes every local test and fails in the field.
@@ -68,7 +69,8 @@ fn run(ior_text: &str) -> Result<u32, Error> {
         conn.set_endian(endian);
 
         // 1. Nullary call with a scalar return.
-        match conn.invoke_nullary("ping").and_then(|r| Ok(r.body().get_i32()?)) {
+        asserted += 1;
+        match conn.invoke_nullary("ping").and_then(|r| Ok(r.body()?.get_i32()?)) {
             Ok(42) => println!("  {OK} ping() -> 42"),
             Ok(v) => {
                 println!("  {NO} ping() -> {v}, expected 42");
@@ -81,12 +83,13 @@ fn run(ior_text: &str) -> Result<u32, Error> {
         }
 
         // 2. Two aligned integer arguments.
+        asserted += 1;
         match conn
             .invoke("add", |e| {
                 e.put_i32(1_000_000);
                 e.put_i32(337);
             })
-            .and_then(|r| Ok(r.body().get_i32()?))
+            .and_then(|r| Ok(r.body()?.get_i32()?))
         {
             Ok(1_000_337) => println!("  {OK} add(1000000, 337) -> 1000337"),
             Ok(v) => {
@@ -100,9 +103,10 @@ fn run(ior_text: &str) -> Result<u32, Error> {
         }
 
         // 3. String round-trip: length prefix counts the NUL.
+        asserted += 1;
         match conn
             .invoke("echo_string", |e| e.put_str("hello from a hand-rolled ORB"))
-            .and_then(|r| Ok(r.body().get_string()?))
+            .and_then(|r| Ok(r.body()?.get_string()?))
         {
             Ok(s) if s == "hello from a hand-rolled ORB" => {
                 println!("  {OK} echo_string() round-tripped {} chars", s.len())
@@ -119,12 +123,13 @@ fn run(ior_text: &str) -> Result<u32, Error> {
 
         // 4. Eight-byte alignment: the body must start 8-aligned, and a double
         //    inside it must land where the peer expects.
+        asserted += 1;
         match conn
             .invoke("scale", |e| {
                 e.put_f64(1.5);
                 e.put_f64(4.0);
             })
-            .and_then(|r| Ok(r.body().get_f64()?))
+            .and_then(|r| Ok(r.body()?.get_f64()?))
         {
             Ok(v) if (v - 6.0).abs() < 1e-9 => println!("  {OK} scale(1.5, 4.0) -> 6.0"),
             Ok(v) => {
@@ -139,6 +144,7 @@ fn run(ior_text: &str) -> Result<u32, Error> {
 
         // 5. Ragged struct from corpus/golden/02-alignment.idl, the case that
         //    catches padding mistakes.
+        asserted += 1;
         match conn
             .invoke("echo_ragged", |e| {
                 e.put_octet(0xAA);
@@ -148,7 +154,7 @@ fn run(ior_text: &str) -> Result<u32, Error> {
                 e.put_octet(0xBB);
             })
             .and_then(|r| {
-                let mut b = r.body();
+                let mut b = r.body()?;
                 Ok((b.get_u8()?, b.get_i32()?, b.get_i16()?, b.get_f64()?, b.get_u8()?))
             }) {
             Ok((0xAA, -7, 9, d, 0xBB)) if (d - 2.5).abs() < 1e-9 => {
@@ -164,21 +170,25 @@ fn run(ior_text: &str) -> Result<u32, Error> {
             }
         }
 
-        // 6. Korean text. Without CodeSets negotiation the default transmission
-        //    codeset is ISO-8859-1, so this is expected to be lossy until
-        //    Phase 1 implements negotiation. Reported, not counted as failure.
+        // 6. Korean text. NOT AN ASSERTION — it cannot fail, and must not be
+        //    counted as if it could. Without a CodeSets service context the
+        //    specified transmission codeset is ISO-8859-1 while we send UTF-8
+        //    (CORBA 3.4 §7.10.2.5), so this passing against omniORB reflects
+        //    that peer's byte-transparent default rather than correctness on
+        //    our side. It stays as a probe until negotiation lands.
         let korean = "함정 전투체계";
         match conn
             .invoke("echo_string", |e| e.put_str(korean))
-            .and_then(|r| Ok(r.body().get_string()?))
+            .and_then(|r| Ok(r.body()?.get_string()?))
         {
-            Ok(s) if s == korean => println!("  {OK} korean round-trip intact (codesets agreed)"),
+            Ok(s) if s == korean => println!("  probe korean round-trip intact — omniORB is byte-transparent, not proof of negotiation"),
             Ok(s) => println!("  note korean came back as {s:?} — CodeSets negotiation needed (Phase 1)"),
             Err(e) => println!("  note korean round-trip failed: {e} — CodeSets negotiation needed (Phase 1)"),
         }
 
         // 7. Unknown operation must produce BAD_OPERATION, not a hang or a
         //    mis-parse. Error handling is part of interoperating.
+        asserted += 1;
         match conn.invoke_nullary("no_such_operation") {
             Err(Error::SystemException { id, .. }) if id.contains("BAD_OPERATION") => {
                 println!("  {OK} unknown op -> BAD_OPERATION as specified")
@@ -199,5 +209,7 @@ fn run(ior_text: &str) -> Result<u32, Error> {
         println!();
     }
 
+    println!("asserted cases: {asserted}, failures: {fails}");
+    println!("(the korean line is a probe, not an assertion — see the comment at case 6)");
     Ok(fails)
 }
