@@ -135,16 +135,17 @@ jobs:
       - name: install the omniORB peer
         run: |
           sudo apt-get update -qq
-          # omniidl-python is the IDL compiler's Python back-end, packaged
-          # separately and listed only as a *suggestion* of omniidl — which is
-          # why installing omniidl alone left every fixture dying on
-          # "Could not import back-end 'python'".
+          # apt suggests omniidl-python, the IDL compiler's Python back-end,
+          # but noble carries no installation candidate for it — it has been
+          # dropped from the archive along with the Python runtime binding.
+          # The back-end therefore comes out of the omniORBpy source tree in
+          # the next step.
           sudo apt-get install -y --no-install-recommends \
-            omniidl omniidl-python omniorb-idl omniorb-nameserver \
+            omniidl omniorb-idl omniorb-nameserver \
             libomniorb4-dev python3-dev build-essential
           dpkg-query -W -f='${Version}\n' libomniorb4-dev
-          echo "--- where the IDL back-ends actually live:"
-          dpkg -L omniidl omniidl-python | grep -iE "omniidl_be|back" || true
+          echo "--- where omniidl keeps its back-ends:"
+          dpkg -L omniidl | grep -iE "omniidl_be" || echo "  (omniidl ships no omniidl_be)"
 
       - name: build omniORBpy against the packaged core
         run: |
@@ -175,16 +176,23 @@ jobs:
           # omniidl imports omniidl_be from /usr/lib/python3/dist-packages. The
           # two directories shadow each other rather than merging, and every
           # fixture died on "Could not import back-end 'python'". Merge them.
-          # Last round's search came up empty because it was restricted to
-          # directories under /usr at a fixed depth. Look everywhere, and print
-          # it, so a future failure here is diagnosed rather than guessed at.
-          echo "--- every omniidl_be on the filesystem:"
-          find / -name 'omniidl_be*' -maxdepth 8 2>/dev/null || true
-          apt_be=/usr/lib/python3/dist-packages/omniidl_be
-          for src in $(find /usr/local -name omniidl_be -type d 2>/dev/null); do
-            [ "$src" = "$apt_be" ] && continue
-            [ -d "$apt_be" ] && sudo cp -rn "$src"/. "$apt_be"/ || true
+          # `make install` did not put omniidl's Python back-end anywhere the
+          # compiler looks — a filesystem-wide search for omniidl_be after the
+          # previous round came back empty. The source tree definitely has it,
+          # so install it from there into every place omniidl might look, and
+          # print what was found either way.
+          echo "--- omniidl_be anywhere on the filesystem:"
+          find / -maxdepth 8 -name 'omniidl_be' 2>/dev/null || true
+          echo "--- in the source tree:"
+          ls /tmp/opy/python3/omniidl_be
+
+          for be in $(dpkg -L omniidl | grep -oE '.*/omniidl_be' | sort -u) \
+                    /usr/lib/python3/dist-packages/omniidl_be; do
+            sudo mkdir -p "$be"
+            sudo cp -r /tmp/opy/python3/omniidl_be/. "$be"/
+            echo "installed the python back-end into $be"
           done
+
           python3 -c "import omniidl_be.python; print('python back-end importable')"
 
       # The fixtures call omniORB.importIDL, which shells out to omniidl with
