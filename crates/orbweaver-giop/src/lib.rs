@@ -24,6 +24,8 @@
 
 #![deny(missing_docs)]
 
+pub mod codeset;
+
 use orbweaver_cdr::{Decoder, Encoder, Endian};
 use std::fmt;
 use std::io::{Read, Write};

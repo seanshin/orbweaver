@@ -185,6 +185,111 @@ Worth recording because both looked like defects:
 
 ---
 
+---
+
+# Batch 2: codeset negotiation
+
+The highest-value gap from Batch 1, and the one the Phase 0 correction exposed.
+Scoped after resolving `D001`: **only the EUC-KR conversion table is blocked**,
+and the negotiation machinery around it is protocol work with no data
+dependency.
+
+## The decision that reversed itself
+
+`D001` originally recommended writing our own EUC-KR table, "consistent with the
+decision already taken for the ORB". Checking the actual licence files killed
+that reasoning — using a rule the document itself had stated and then failed to
+apply to itself: *a table derived from an incompatibly-licensed source is not
+laundered by being retyped.*
+
+| Upstream | Licence (read from the file, not a summary) |
+|---|---|
+| WHATWG `index-euc-kr.txt` — 17,048 entries, the normative euc-kr definition | CC BY 4.0, and *"to the extent portions of it are incorporated into source code, such portions… are licensed under the **BSD 3-Clause License** instead"* |
+| Unicode data files | `Unicode-3.0` — OSI-approved, MIT-based, expressly covers data |
+
+The ORB and the table are not the same kind of problem. **The ORB is logic**: GIOP
+is a published specification, so implementing it owes nobody anything. **The
+table is data we do not own**: there is no specification to implement it from,
+only somebody's compilation of 17,048 mappings, and typing them in by hand
+produces the same derived work more slowly and with transcription errors.
+
+The sharpest consequence: the pure-MIT `encoding` crate is the *least*
+trustworthy option, not the safest. A declared MIT licence that does not account
+for its data's provenance does not remove the upstream obligation, it hides it.
+An honestly-disclosed BSD-3-Clause is a better legal position than an
+unexplained MIT.
+
+ORB는 로직이고 테이블은 우리 것이 아닌 데이터다. 손으로 옮겨 적어도 같은
+파생물이 된다. 출처를 설명하지 않는 MIT 선언은 상류 의무를 없애지 않고 가릴 뿐이다.
+
+**Awaiting owner sign-off**, because it amends the stated policy. Recommended
+wording: *MIT for everything we write; where a component is data we cannot
+originate, permissive-with-attribution is accepted, disclosed in `NOTICE`, and
+recorded as a decision.*
+
+## Codeset IDs, captured rather than recalled
+
+The registry values are magic numbers, so they were taken off the wire instead
+of from memory. A capture socket answered omniORB's `LocateRequest` with
+`OBJECT_HERE`, which made it send the real `Request`:
+
+```
+ServiceId=1  010000000100010009010100
+             ^^        ^^^^^^^^ ^^^^^^^^
+             flag      char TCS  wchar TCS
+  char  TCS = 0x00010001  ISO-8859-1
+  wchar TCS = 0x00010109  UTF-16
+```
+
+**This is the Phase 0 correction proven on the wire.** omniORB declares
+ISO-8859-1 for `char` while we send UTF-8 bytes with no context at all. §7.10.2.5
+says that absent a context the transmission codeset *is* ISO-8859-1, so our
+Korean text round-tripped only because omniORB passes bytes through when no
+conversion is called for. Nothing agreed; nothing converted.
+
+**Phase 0 정정이 와이어에서 증명됐다.** omniORB는 char에 ISO-8859-1을 선언하고,
+우리는 컨텍스트 없이 UTF-8 바이트를 보낸다. 한국어가 왕복된 것은 변환이 일어나지
+않았기 때문이지 합의가 있어서가 아니다.
+
+Incidental: omniORB sends a `LocateRequest` and **waits for the `LocateReply`**
+before sending its first `Request`. Serving one is not optional for the serving
+half.
+
+## Delivered
+
+| Piece | Spec |
+|---|---|
+| `TAG_CODE_SETS` component parsing | §7.6.6.5 |
+| `CodeSets` service context encode/decode | §7.10.2.5 |
+| Negotiation algorithm with its five ordered cases | §7.10.2.6 |
+| UTF-8, ISO-8859-1, US-ASCII, UTF-16 conversion | §9.3.2.7 |
+
+Two design choices worth stating:
+
+- **A common conversion set is resolved by our preference order, not by registry
+  number.** Both are deterministic, but list order carries intent — ISO-8859-1
+  is listed before ASCII because it is the superset — while the lowest OSF
+  number is an accident of assignment. (The first implementation used numeric
+  minimum; the test that caught it now pins the better rule.)
+- **`Unsupported` is a distinct error from `Incompatible`.** When a peer asks
+  for EUC-KR the two sides *agree* and the gap is ours. Collapsing them into one
+  error would send someone hunting for a peer misconfiguration that does not
+  exist.
+
+Latin-1 conversion **refuses** Korean rather than substituting. A silent
+substitution is how mojibake reaches a database and stays there.
+
+## Still open after Batch 2
+
+- **EUC-KR conversion** — blocked on the `D001` sign-off above. The seam is in
+  place, so adding it is a table drop-in rather than a redesign.
+- Wiring the negotiated converter through `Connection` and the string paths,
+  including the per-connection "send the context once" rule and the
+  `MARSHAL` minor 9 case for conflicting contexts on one connection.
+- Everything in the Batch 1 list below.
+
+---
+
 ## What Batch 1 did not do
 
 Stated plainly so the next batch does not have to rediscover it. All of this is
