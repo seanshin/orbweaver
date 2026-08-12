@@ -458,7 +458,83 @@ Where the peer publishes no `TAG_CODE_SETS`, §7.10.2.5 specifies ISO-8859-1 and
 we send no context — claiming otherwise would be asserting an agreement that
 never happened.
 
-## Still open after Batch 4
+---
+
+# Batch 5: a second peer
+
+Every interop result so far carried the same caveat: *it proves compatibility
+with omniORB*. One peer is the most dangerous kind of evidence, because it feels
+like proof. JacORB 3.9 is now a second, independently implemented peer, in both
+directions.
+
+지금까지의 모든 상호운용 결과에 같은 단서가 붙어 있었다 — *omniORB와의 호환을
+증명할 뿐*. 피어 하나는 가장 위험한 종류의 증거다. 증명처럼 느껴지기 때문이다.
+
+| Direction | Result |
+|---|---|
+| JacORB client → our Rust server | **5/5** |
+| Our Rust client → JacORB server | **14/14**, both byte orders |
+| Codeset negotiated with the second peer | **UTF-8**, Korean round-trips |
+
+## What the second peer actually exercised
+
+**A big-endian request path.** JacORB is big-endian, being Java; omniORB was
+little-endian. Our server had decoded a great many requests and never one from a
+big-endian peer. The harness now asserts this rather than hoping for it — it
+greps the server log for a GIOP 1.2 **(Big)** request and fails if the second
+peer stopped providing one.
+
+**Negotiation against a different `TAG_CODE_SETS`.** Both peers publish
+different codeset components, and negotiation reached UTF-8 with each. Agreeing
+with two independently written implementations is much better evidence that the
+logic reads real data than agreeing with one twice.
+
+**JacORB는 자바라서 big-endian이다.** 우리 서버는 수많은 요청을 디코딩했지만
+big-endian 피어의 요청은 한 번도 받은 적이 없었다. 하네스가 이제 이를 단언한다.
+
+## The fixture met JEP 320 in person
+
+JacORB 3.9 will not run on a modern JDK without help, for two reasons that are
+the project's own subject matter looking back at it:
+
+1. **`java.applet.Applet`** is referenced by JacORB's `ORB.init` signature and
+   was removed in JDK 24, so the fixture will not even *compile* there. It needs
+   JDK 21.
+2. **`javax.rmi.CORBA`** was removed by [JEP 320](https://openjdk.org/jeps/320)
+   in JDK 11 and JacORB still needs it at runtime. Supplying it required a
+   standalone RMI-IIOP API jar; the obvious GlassFish one drags in
+   `com.sun.corba.ee` internals, so the JBoss spec jar is used instead.
+
+The migration `docs/PLAN.md` §1.2 cites as *demand for automation* is the same
+one that cost this batch three attempts to stand up a test fixture.
+
+`docs/PLAN.md` §1.2가 *자동화 수요*라고 지목한 그 마이그레이션이, 이번 배치에서
+테스트 픽스처 하나 세우는 데 세 번의 시도를 쓰게 만든 바로 그것이다.
+
+## Two harness bugs, both self-inflicted
+
+- **The JacORB check called `start_server`, which launches the *omniORB*
+  fixture.** The JacORB client then dialled a stale IOR and failed while the
+  same command passed by hand. Fixed by naming the two helpers apart:
+  `start_server` for the omniORB fixture, `start_rust_server` for ours.
+- **`./run_checks.sh | tail; echo $?` reports `tail`'s exit code**, not the
+  harness's. It read as green while the verdict line said failed. Measuring the
+  wrong thing is the recurring theme of this project's harness bugs.
+
+## Skipping is not passing
+
+The JacORB jars are downloaded artefacts and are not committed, so a fresh clone
+cannot run this check. The harness reports it as **SKIPPED** and the verdict line
+says so separately from the pass count:
+
+```
+  1 check group(s) SKIPPED — those claims are unmeasured, not passing
+  all measured checks green
+```
+
+`spikes/jacorb/setup.sh` fetches and builds the fixture reproducibly.
+
+## Still open after Batch 5
 - Wiring the negotiated converter through `Connection` and the string paths,
   including the per-connection "send the context once" rule and the
   `MARSHAL` minor 9 case for conflicting contexts on one connection.

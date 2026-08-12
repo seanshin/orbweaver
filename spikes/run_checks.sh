@@ -10,6 +10,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 fail_total=0
+skipped=0
 
 hr() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 need() { command -v "$1" >/dev/null 2>&1 || { echo "missing tool: $1"; exit 2; }; }
@@ -42,6 +43,21 @@ start_server() {
     sleep 0.1
   done
   echo "  FAIL fixture did not publish an IOR within 10s"
+  return 1
+}
+
+# Starts OUR server. Distinct from start_server, which launches the omniORB
+# fixture; conflating the two silently pointed a check at the wrong process.
+start_rust_server() {
+  pkill -f spike-server >/dev/null 2>&1 || true
+  rm -f "$ROOT/spikes/server.ior"
+  ( cd "$ROOT" && exec cargo run -q --bin spike-server -- spikes/server.ior 127.0.0.1 0 \
+      >/tmp/orbweaver-srv.log 2>&1 & )
+  for _ in $(seq 1 100); do
+    [ -s "$ROOT/spikes/server.ior" ] && { sleep 0.3; return 0; }
+    sleep 0.1
+  done
+  echo "  FAIL our server did not publish an IOR"
   return 1
 }
 
@@ -178,15 +194,7 @@ fi
 
 # ── Reverse interop: a stock ORB calls US ───────────────────────────────────
 hr "reverse interop — omniORB client against our server"
-pkill -f spike-server >/dev/null 2>&1 || true
-rm -f "$ROOT/spikes/server.ior"
-( cd "$ROOT" && cargo run -q --bin spike-server -- spikes/server.ior 127.0.0.1 0 >/tmp/orbweaver-srv.log 2>&1 & )
-srv_up=0
-for _ in $(seq 1 100); do
-  [ -s "$ROOT/spikes/server.ior" ] && { sleep 0.3; srv_up=1; break; }
-  sleep 0.1
-done
-if [ "$srv_up" -eq 1 ]; then
+if start_rust_server; then
   rev_fail=0
   for v in 1.0 1.1 1.2; do
     if python3 spikes/reverse_client.py spikes/server.ior -ORBmaxGIOPVersion "$v" >/dev/null 2>&1; then
@@ -206,13 +214,74 @@ if [ "$srv_up" -eq 1 ]; then
   fi
   [ "$rev_fail" -eq 0 ] || fail_total=$((fail_total+1))
 else
-  echo "  FAIL our server did not publish an IOR"; fail_total=$((fail_total+1))
+  fail_total=$((fail_total+1))
 fi
 pkill -f spike-server >/dev/null 2>&1 || true
 
+# ── Second peer: JacORB, both directions ─────────────────────────────────────
+hr "second peer — JacORB (independent implementation)"
+JH=${JAVA_HOME_21:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home}
+JCP="lib/jacorb.jar:lib/jacorb-omgapi.jar:lib/jboss-rmi-api.jar:lib/slf4j-api-1.7.36.jar:classes"
+if [ ! -d "$ROOT/spikes/jacorb/classes" ] || [ ! -x "$JH/bin/java" ]; then
+  # Not a pass. An absent fixture means the claim is unmeasured, and the
+  # summary says so rather than letting silence read as success.
+  echo "  SKIPPED  fixture absent — run spikes/jacorb/setup.sh (needs JDK 21)"
+  skipped=$((skipped+1))
+else
+  jfail=0
+  # JacORB client -> our Rust server.
+  if start_rust_server; then
+    out=$(cd "$ROOT/spikes/jacorb" && "$JH/bin/java" -cp "$JCP" Client ../server.ior 2>&1)
+    if printf '%s' "$out" | grep -q "failures: 0"; then
+      echo "  ok   JacORB client -> our server, 5/5"
+    else
+      echo "  FAIL JacORB client -> our server"; printf '%s' "$out" | grep FAIL | head -3 | sed 's/^/       /'
+      jfail=1
+    fi
+    # JacORB is big-endian where omniORB was little-endian, so this exercises a
+    # decode path the first peer never touched. Worth asserting, not assuming.
+    if grep -q "first request at GIOP 1.2 (Big)" /tmp/orbweaver-srv.log 2>/dev/null; then
+      echo "  ok   big-endian request path exercised by the second peer"
+    else
+      echo "  FAIL expected a big-endian request from JacORB"; jfail=1
+    fi
+  else
+    jfail=1
+  fi
+  pkill -f spike-server >/dev/null 2>&1 || true
+
+  # Our Rust client -> JacORB server.
+  pkill -f "classes Server" >/dev/null 2>&1 || true
+  rm -f "$ROOT/spikes/jacorb.ior"
+  ( cd "$ROOT/spikes/jacorb" && exec "$JH/bin/java" -cp "$JCP" Server ../jacorb.ior >/tmp/orbweaver-jacorb.log 2>&1 & )
+  jup=0
+  for _ in $(seq 1 150); do
+    [ -s "$ROOT/spikes/jacorb.ior" ] && { sleep 0.5; jup=1; break; }
+    sleep 0.1
+  done
+  if [ "$jup" -eq 1 ]; then
+    out=$(cargo run -q --bin spike-interop -- spikes/jacorb.ior 2>&1)
+    if printf '%s' "$out" | grep -q "assumption A: PASS"; then
+      echo "  ok   our client -> JacORB server, 14/14 both byte orders"
+      cs=$(printf '%s' "$out" | grep -m1 "negotiated char codeset" | sed 's/.*: //')
+      echo "  ok   codeset negotiated with a second peer: $cs"
+    else
+      echo "  FAIL our client -> JacORB server"; printf '%s' "$out" | grep "  FAIL" | head -3 | sed 's/^/       /'
+      jfail=1
+    fi
+  else
+    echo "  FAIL JacORB server did not publish an IOR"; jfail=1
+  fi
+  pkill -f "classes Server" >/dev/null 2>&1 || true
+  [ "$jfail" -eq 0 ] || fail_total=$((fail_total+1))
+fi
+
 hr "verdict"
+if [ "$skipped" -gt 0 ]; then
+  echo "  $skipped check group(s) SKIPPED — those claims are unmeasured, not passing"
+fi
 if [ "$fail_total" -eq 0 ]; then
-  echo "  all checks green"
+  echo "  all measured checks green"
 else
   echo "  $fail_total check group(s) failed"
 fi

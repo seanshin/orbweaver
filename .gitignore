@@ -50,3 +50,9 @@ spikes/*.log
 # Claude Code local settings (machine-specific permission grants)
 .claude/settings.local.json
 spikes/server.ior
+
+# JacORB interop fixture: downloaded jars and generated stubs
+spikes/jacorb/lib/
+spikes/jacorb/gen/
+spikes/jacorb/classes/
+spikes/jacorb.ior

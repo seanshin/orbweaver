@@ -34,6 +34,10 @@ verdict
   all checks green
 ```
 
+**Interoperability runs both ways, against two independent ORBs.** JacORB 3.9 joins omniORB 4.3.4 as a second peer — and being Java, it is big-endian where omniORB was little-endian, so it exercises a decode path the first peer never touched.
+
+**상호운용이 양방향이며, 서로 독립적인 두 ORB를 상대로 검증됩니다.**
+
 **Interoperability runs both ways.** A from-scratch MIT implementation calls a stock omniORB server, and a stock omniORB client calls our Rust server — at GIOP 1.0, 1.1 and 1.2. The server records which versions it actually received, because three passing runs prove nothing if the peer used one version three times.
 
 **상호운용이 양방향입니다.** 밑바닥부터 만든 MIT 구현이 순정 omniORB 서버를 호출하고, 순정 omniORB 클라이언트가 우리 Rust 서버를 호출합니다 — GIOP 1.0·1.1·1.2 모두. 서버가 실제 수신 버전을 기록합니다. 피어가 한 버전을 세 번 썼다면 세 번의 통과는 아무것도 증명하지 못하기 때문입니다.
