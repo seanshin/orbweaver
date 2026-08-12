@@ -1,0 +1,4 @@
+// A member clashing with its own enclosing struct, not with a module.
+// Missed by the first version of spikes/idl_lint.py, which only considered
+// module scopes. Pinned so that gap cannot reopen.
+module n09 { struct Version { unsigned long version; }; };

@@ -50,6 +50,27 @@ else
   echo "  ok   cargo test --workspace"
 fi
 
+# ── Lint (runs before the oracle, on purpose) ────────────────────────────────
+hr "IDL lint — case-insensitive identifier clashes"
+lint_out=$(python3 spikes/idl_lint.py corpus/golden/*.idl corpus/requirements/generated/*.idl spikes/*.idl 2>&1)
+if [ -z "$lint_out" ]; then
+  echo "  ok   no clashes in files that are expected to compile"
+else
+  echo "$lint_out" | sed 's/^/  /'
+  fail_total=$((fail_total+1))
+fi
+# The lint must keep catching what it was written for.
+lint_neg=0
+for f in corpus/negative/n02-identifier-clash.idl corpus/negative/n03-scope-clash.idl corpus/negative/n09-struct-scope-clash.idl; do
+  [ -n "$(python3 spikes/idl_lint.py "$f" 2>&1)" ] && lint_neg=$((lint_neg+1))
+done
+if [ "$lint_neg" -eq 3 ]; then
+  echo "  ok   still catches all 3 pinned clash cases"
+else
+  echo "  FAIL lint caught only $lint_neg/3 pinned clash cases — it has regressed"
+  fail_total=$((fail_total+1))
+fi
+
 # ── Golden corpus ────────────────────────────────────────────────────────────
 hr "golden IDL corpus (must all compile)"
 gp=0; gf=0

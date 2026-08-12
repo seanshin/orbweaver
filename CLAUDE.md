@@ -85,6 +85,10 @@ MIT-equivalent, otherwise we write it.
   and `struct Version { unsigned long version; }` are all illegal. This is
   natural naming in every other language, which is exactly why it is the
   dominant generation failure. *가장 흔한 실패 원인.*
+  Run `python3 spikes/idl_lint.py <files>` before the oracle — it catches this
+  class with an actionable message. Documenting the rule does not prevent it:
+  it has since caught two corpus files and two fixtures, one written by someone
+  who had just described the rule in that same file's header.
 - `TypeCode` must be qualified as `::CORBA::TypeCode`.
 - v1 wire support excludes `valuetype`, abstract interfaces and `fixed`. The
   parser accepts them; the wire does not. See `docs/PLAN.md` §4.4.
@@ -130,6 +134,7 @@ Each of these produced a phantom failure during Phase 0. They will recur.
 ```bash
 cargo test --workspace          # unit tests: CDR alignment, GIOP framing, IOR
 ./spikes/run_phase0.sh          # full assumption harness; exit code is the verdict
+python3 spikes/idl_lint.py *.idl  # pre-oracle lint: case-insensitive clashes
 omniidl -b dump <file>.idl      # conformance oracle for a single file
 cargo run -q --bin spike-dump -- spikes/echo.ior <op> <big|little> <n>
 ```

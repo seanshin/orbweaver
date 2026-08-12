@@ -1,0 +1,112 @@
+// Interop peer covering the v1 wire-type support matrix (PLAN §4.4).
+//
+// The Phase 0 peer (echo.idl) proved the connection works. This one exercises
+// every constructed type we commit to putting on the wire, because a CDR
+// encoder that handles scalars and strings can still be wrong about unions,
+// nested sequences and arrays — and those are where alignment mistakes hide.
+//
+// Deferred at wire level and deliberately absent: valuetype, abstract
+// interfaces, fixed.
+//
+// Identifier note: operations are prefixed to avoid the case-insensitive
+// clash rule (CLAUDE.md) — `echo_ragged`, not `ragged`.
+
+module matrix {
+
+  // ── alignment hazards ────────────────────────────────────────────────
+  struct Ragged {
+    octet  a;   // 0, then 3 pad
+    long   b;   // 4
+    short  c;   // 8, then 6 pad
+    double d;   // 16
+    octet  e;   // 24
+  };
+  struct Nested { octet lead; Ragged inner; octet trail; };
+
+  // ── enum and union ───────────────────────────────────────────────────
+  enum Kind { K_LONG, K_STRING, K_BYTES, K_DOUBLE };
+
+  typedef sequence<octet> Bytes;
+
+  union Payload switch (Kind) {
+    case K_LONG:   long   as_long;
+    case K_STRING: string as_string;
+    case K_BYTES:  Bytes  as_bytes;
+    case K_DOUBLE: double as_double;
+  };
+
+  union Defaulted switch (long) {
+    case 1: long    one;
+    case 2:
+    case 3: string  two_or_three;
+    default: boolean other;
+  };
+
+  union BoolSwitched switch (boolean) {
+    case TRUE:  long  yes;
+    case FALSE: octet no;
+  };
+
+  // ── sequences and arrays ─────────────────────────────────────────────
+  typedef sequence<long>       LongSeq;
+  typedef sequence<long, 4>    BoundedSeq;
+  typedef sequence<LongSeq>    SeqOfSeq;
+  typedef sequence<string>     StringSeq;
+  typedef long                 Matrix3x4[3][4];
+  typedef octet                Digest[16];
+
+  struct Collections {
+    LongSeq    unbounded;
+    BoundedSeq bounded;
+    SeqOfSeq   nested;
+    StringSeq  strings;
+    Matrix3x4  grid;
+    Digest     fingerprint;
+  };
+
+  // ── boundary values ──────────────────────────────────────────────────
+  struct Extremes {
+    short              s_min;
+    short              s_max;
+    long               l_min;
+    long               l_max;
+    long long          ll_min;
+    long long          ll_max;
+    unsigned long long ull_max;
+    float              f_val;
+    double             d_val;
+  };
+
+  // ── text, for codeset negotiation ────────────────────────────────────
+  struct Text {
+    string  narrow;   // "함정 전투체계" — EUC-KR peers are the real test
+    wstring wide;
+    string  ascii;
+    string  empty;
+  };
+
+  // ── exceptions ───────────────────────────────────────────────────────
+  exception Simple {};
+  exception Detailed { string reason; long code; };
+
+  // ── the peer ─────────────────────────────────────────────────────────
+  interface TypeMatrix {
+    Ragged      echo_ragged(in Ragged v);
+    Nested      echo_nested(in Nested v);
+    Payload     echo_payload(in Payload v);
+    Defaulted   echo_defaulted(in Defaulted v);
+    BoolSwitched echo_bool_switched(in BoolSwitched v);
+    Collections echo_collections(in Collections v);
+    Extremes    echo_extremes(in Extremes v);
+    Text        echo_text(in Text v);
+    any         echo_any(in any v);
+
+    void raise_simple()   raises (Simple);
+    void raise_detailed() raises (Detailed);
+
+    oneway void fire_and_forget(in string note);
+    long        fired_count();
+
+    readonly attribute long call_count;
+  };
+};

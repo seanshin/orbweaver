@@ -48,6 +48,12 @@ IDL are:
 - SIDL annotations use structured comments (`//@ ai_desc: ...`), not `@annotation`.
 - `valuetype`, abstract interfaces and `fixed` are parser-only in v1.
 
+The identifier rule is the one that actually bites. It has now caught seven
+generated files, two corpus files and two fixtures — including one written
+immediately after its author documented the rule in that same file's header.
+Check every member, parameter and operation name against every type and scope
+name in view before you finish an item.
+
 If you notice a convention that is clearly required but not yet written down,
 apply it and flag it in your report — that is a codification candidate.
 
