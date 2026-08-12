@@ -1109,6 +1109,42 @@ impl Connection {
         id
     }
 
+    /// The byte order this connection encodes requests in.
+    pub fn endian(&self) -> Endian {
+        self.endian
+    }
+
+    /// Invokes a `oneway` operation: sends the request and does not wait.
+    ///
+    /// Not `invoke` with a flag, because the two differ in what the caller may
+    /// conclude. A oneway carries no reply, so there is nothing to correlate
+    /// and no `LOCATION_FORWARD` to follow — §9.4.3.2's redirect needs a reply
+    /// to travel in, which is why `Server` refuses to forward one either. A
+    /// successful return here means the bytes were written, and nothing more.
+    pub fn invoke_oneway<F>(&mut self, operation: &str, write_args: F) -> Result<()>
+    where
+        F: Fn(&mut Encoder),
+    {
+        if self.poisoned {
+            return Err(Error::Desynchronized);
+        }
+        let id = self.next_request_id();
+        let msg = encode_request(
+            self.version,
+            self.endian,
+            id,
+            &self.object_key,
+            operation,
+            false,
+            write_args,
+        )?;
+        for piece in fragment_message(msg, self.fragment_threshold)? {
+            self.stream.write_all(&piece).inspect_err(|_| self.poisoned = true)?;
+        }
+        self.stream.flush().inspect_err(|_| self.poisoned = true)?;
+        Ok(())
+    }
+
     /// Invokes `operation`, writing arguments via `write_args`.
     ///
     /// Follows `LOCATION_FORWARD` transparently, as §9.4.3.2 requires, up to

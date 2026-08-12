@@ -10,6 +10,10 @@ rust-version.workspace = true
 [dependencies]
 orbweaver-cdr = { path = "../orbweaver-cdr" }
 orbweaver-giop = { path = "../orbweaver-giop", default-features = false }
+orbweaver-registry = { path = "../orbweaver-registry" }
+
+[dev-dependencies]
+orbweaver-idl = { path = "../orbweaver-idl" }
 
 [lints]
 workspace = true

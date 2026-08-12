@@ -193,7 +193,12 @@ jobs:
             echo "installed the python back-end into $be"
           done
 
-          python3 -c "import omniidl_be.python; print('python back-end importable')"
+          # Not verified with `python3 -c "import omniidl_be.python"`: omniidl
+          # keeps its own modules in /usr/lib/omniidl, which is not on the
+          # default sys.path — the compiler puts it there itself. Importing the
+          # back-end standalone therefore fails even when omniidl works, which
+          # is how the previous round failed a step whose actual work had
+          # succeeded. The real check is running the compiler, in the step below.
 
       # The fixtures call omniORB.importIDL, which shells out to omniidl with
       # the python back-end. Proving that works here turns a confusing cascade

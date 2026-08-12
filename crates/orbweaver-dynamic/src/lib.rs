@@ -30,6 +30,8 @@
 
 #![deny(missing_docs)]
 
+pub mod invoke;
+
 use std::fmt;
 
 use orbweaver_cdr::{Decoder, Encoder};
