@@ -34,6 +34,21 @@ verdict
   all checks green
 ```
 
+**A breaking change was proved breaking, not asserted.** `docs/PLAN.md` §5.3 lists which contract edits deployed peers survive. Against an omniORB servant built from the previous contract, a client encoding a struct whose two `long` members had been swapped called `first({px:11, py:22})` and received **22 — the other member's value, with no exception raised**. CDR marshals by position and carries no tags, so nothing on either side can notice. `idl-diff` refuses that revision before it ships, and accepts the additive-only one.
+
+**파괴적 변경이 실제로 파괴적임을 실측했습니다.** 이전 계약으로 빌드된 omniORB 서번트에 대해, 구조체 멤버 두 개를 맞바꾼 클라이언트가 호출하자 **예외 없이 다른 멤버의 값**이 돌아왔습니다. CDR은 위치로 마샬링하며 태그가 없어 양쪽 모두 알아챌 수 없습니다. `idl-diff`가 릴리스 전에 이를 거부합니다.
+
+```console
+$ idl-diff released.idl proposed.idl
+[BREAKING] IDL:evo/Point:1.0: members reordered: ["px", "py"] became ["py", "px"] — CDR
+  marshals members by position and carries no tags, so a reordered struct is read
+  field-for-field into the wrong members and nothing detects it
+[server-first] IDL:evo/Reader:1.0: operation "total" added — servers must be updated
+  before clients, or a new client calling an old server receives BAD_OPERATION
+
+refused: 1 change(s) break deployed peers
+```
+
 **Interoperability runs both ways, against two independent ORBs.** JacORB 3.9 joins omniORB 4.3.4 as a second peer — and being Java, it is big-endian where omniORB was little-endian, so it exercises a decode path the first peer never touched.
 
 **상호운용이 양방향이며, 서로 독립적인 두 ORB를 상대로 검증됩니다.**

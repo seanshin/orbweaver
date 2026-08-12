@@ -18,3 +18,11 @@ workspace = true
 [[bin]]
 name = "registry-check"
 path = "src/bin/registry_check.rs"
+
+[[bin]]
+name = "spike-evolution"
+path = "src/bin/spike_evolution.rs"
+
+[[bin]]
+name = "idl-diff"
+path = "src/bin/idl_diff.rs"

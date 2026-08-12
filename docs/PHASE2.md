@@ -288,3 +288,112 @@ the policy. A key minted by a different POA is not ours either.
 A new crate, because `_is_a` needs the registry and the registry already depends
 on `orbweaver-giop`; putting the object model in `giop` would have made that
 circular. The order is now cdr → giop → idl → registry → object.
+
+---
+
+# Batch 5: contract evolution
+
+`docs/PLAN.md` §5.3 sets out which changes a deployed peer survives. Until now
+that table was a set of claims. This batch turns it into a tool that refuses
+releases, and — more importantly — checks the claims against a peer that was
+built before the change.
+
+```
+contract evolution — §5.3 verdicts against a peer that predates the change
+  ok   the swapped struct members are flagged BREAKING before release
+  ok   omniORB answered the swapped call with the WRONG member, no exception
+  ok   an added operation on an un-updated server gives BAD_OPERATION
+  ok   after the additive release, old and new clients are both served
+  ok   idl-diff refuses the breaking revision (exit 1)
+  ok   idl-diff accepts the additive-only revision
+```
+
+## The dangerous case is the quiet one
+
+`spikes/evolution_v2.idl` differs from v1 by swapping two `long` members of one
+struct and adding one operation. Both edits look harmless in review. Against an
+omniORB servant compiled from v1, a client encoding per v2 called
+`first({px:11, py:22})` and received **22** — the other member's value. No
+exception, no warning, no log line. A caller has no way to detect this.
+
+That is the whole argument for the gate. A breaking change that raised `MARSHAL`
+would merely be an outage; this one returns plausible numbers indefinitely.
+
+위험한 쪽은 시끄러운 변경이 아니라 **조용한 변경**이다. 구조체 멤버 두 개를 맞바꾼
+v2 클라이언트가 v1 서버를 호출하자 예외 없이 **다른 멤버의 값**이 돌아왔다. CDR은
+멤버를 위치로만 인코딩하고 태그도 길이도 싣지 않으므로, 수신자가 이를 알아챌 방법이
+없다. protobuf·JSON·Avro의 직관이 여기서 정확히 반대로 작동한다.
+
+## Four verdicts, because "breaking" alone is useless advice
+
+A differ that answers *breaking* to everything can only ever say "change
+nothing". §5.3's severities are therefore distinguished:
+
+| Verdict | Meaning | Example |
+| --- | --- | --- |
+| `compatible` | nobody acts | a new type or interface; a gained base |
+| `server-first` | safe if servers roll out first | an added operation or attribute |
+| `conditionally breaking` | wire-legal, meaningless to old receivers | an appended enumerator; an added union case |
+| `BREAKING` | deployed peers misread or fail | any struct member edit; any signature change; any rename |
+
+`idl-diff` exits non-zero on the bottom two. `--approve <reason>` overrides it
+and prints the reason next to the findings, so the decision travels with the
+diff rather than living in a chat log — approval records responsibility, it does
+not make a change safe.
+
+*server-first* earns its own row because the constraint is on **rollout order**,
+not on the change: the harness shows the same added operation returning
+`BAD_OPERATION` from an un-updated server and answering correctly after the
+release, with the un-recompiled v1 client unaffected throughout.
+
+## One edit must be one finding
+
+The first run reported the single swapped pair **three times** — once truthfully
+against the struct, and twice as *"operation `first` changed the type of
+parameter 0"*. Both extra lines were derived noise, and worse than noise: they
+send a reviewer looking for an edit to `first` that nobody made, and they bury
+the one real finding.
+
+The cause was comparing parameter and member types **structurally**. A named
+type is its repository id and nothing else, so type *references* are now
+compared by identity while the type's own entry carries the structural change.
+A test pins both halves: one edit yields one finding, and a parameter re-pointed
+at a genuinely different type is still caught.
+
+한 번의 수정은 **하나의 지적**이어야 한다. 첫 실행은 구조체 멤버 교체 하나를 세 번
+보고했고, 그중 둘은 아무도 건드리지 않은 연산을 가리켰다. 명명된 타입의 정체성은
+저장소 ID뿐이므로, 타입 *참조*는 정체성으로 비교하고 구조적 변경은 타입 자신의
+항목에서만 보고하도록 고쳤다.
+
+## A defect the harness surfaced by accident
+
+Building the registry alone compiles `orbweaver-giop` without `euc-kr`, and a
+diagnostic helper became dead code in that configuration — invisible until now
+because the licence check ran `--no-default-features` behind an exit-status test,
+and warnings cannot fail one. That check now runs with `-D warnings`.
+
+Turning warnings into errors then exposed a real bug in Batch 4. `Poa::new`
+derived its process incarnation from the address of a temporary `Box`, with a
+comment explaining that avoiding the clock kept tests deterministic. The
+temporary was freed before the next call, so the allocator returned the same
+address and two POAs created in sequence **shared an incarnation** — precisely
+the staleness the field exists to detect. It had passed only because the
+allocator happened to vary the address; a rebuild stopped it doing so.
+
+The reasoning was the error, not the code: distinctness, not determinism, is
+what the field is for. It is now seeded from the clock and the pid and advanced
+by a counter, and the two-POA test is joined by one that mints sixty-four.
+
+Batch 4의 실제 버그가 여기서 드러났다. `Poa::new`가 임시 `Box`의 주소로 incarnation을
+만들었는데, 그 임시 객체는 즉시 해제되어 할당자가 같은 주소를 재사용했다. 연속으로
+만든 두 POA가 **같은 incarnation을 공유**했다 — 이 필드가 막으려던 바로 그 상황이다.
+"결정론을 위해 시계를 피한다"는 주석의 **추론 자체가 틀렸다.** 필요한 것은 결정론이
+아니라 유일성이다.
+
+## Scope
+
+The differ compares two IDL files. It does not yet read a *released* contract
+from a registry of record, so "released" currently means "the file you point it
+at"; wiring it to a stored baseline, and to `@ai_since` versioned interfaces, is
+Phase 4 work. Value types and `fixed` are still absent, so their evolution rules
+are unwritten rather than wrong.

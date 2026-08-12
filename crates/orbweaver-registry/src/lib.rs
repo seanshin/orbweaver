@@ -22,6 +22,8 @@
 
 #![deny(missing_docs)]
 
+pub mod diff;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use orbweaver_giop::typecode::{Member as TcMember, TypeCode, UnionCase as TcUnionCase};

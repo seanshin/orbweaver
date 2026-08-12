@@ -1,0 +1,20 @@
+// A proposed revision carrying one change of each interesting severity:
+//
+//   - Point's members are swapped        — BREAKING (positional CDR)
+//   - Reader gains `total`               — SERVER-FIRST
+//
+// Both edits look harmless in a review diff. `spike-evolution` puts the first
+// one on the wire against a peer built from evolution_v1.idl and shows that it
+// corrupts data silently.
+module evo {
+  struct Point {
+    long py;
+    long px;
+  };
+
+  interface Reader {
+    long first(in Point p);
+    long second(in Point p);
+    long total(in Point p);
+  };
+};

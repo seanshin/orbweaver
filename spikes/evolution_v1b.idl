@@ -1,0 +1,17 @@
+// The same revision as evolution_v2.idl with the struct edit left out: the
+// additive-only path an author should have taken.
+//
+// The differ must separate this from v2. If both come back "BREAKING" the tool
+// is useless, because the only advice it can give is "change nothing".
+module evo {
+  struct Point {
+    long px;
+    long py;
+  };
+
+  interface Reader {
+    long first(in Point p);
+    long second(in Point p);
+    long total(in Point p);
+  };
+};

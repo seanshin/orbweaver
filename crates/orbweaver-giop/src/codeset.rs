@@ -193,6 +193,11 @@ pub enum NegotiationError {
 }
 
 /// Keeps a diagnostic readable without swallowing the evidence.
+///
+/// Only the EUC-KR path can reject a whole string; `put_wchar` rejects one
+/// character and has nothing to truncate. The cfg keeps the attribution-free
+/// build warning-clean, which the harness now enforces rather than assumes.
+#[cfg(feature = "euc-kr")]
 fn truncate_for_message(s: &str) -> String {
     const MAX: usize = 32;
     if s.chars().count() <= MAX {

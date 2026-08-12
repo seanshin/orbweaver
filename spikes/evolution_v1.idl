@@ -1,0 +1,18 @@
+// The deployed contract. `spikes/evolution_server.py` is built from this file
+// and stands in for a service that is already in production.
+//
+// `first` returns the member declared first and `second` the one declared
+// second, which makes the positional nature of CDR observable from a client:
+// if the two members are swapped on one side only, `first` answers with the
+// other member's value and nothing on either side notices.
+module evo {
+  struct Point {
+    long px;
+    long py;
+  };
+
+  interface Reader {
+    long first(in Point p);
+    long second(in Point p);
+  };
+};

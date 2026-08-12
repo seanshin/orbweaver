@@ -525,6 +525,12 @@ CDR encodes by position, not by tag. Anyone whose intuition was trained on proto
 
 Consequence: interface evolution happens through **versioned interfaces** (a `Transfer_2` in a versioned module, plus `@ai_since` metadata), never by editing deployed types in place. The differ blocks any registration that edits a released type unless the change is in the compatible set or carries an explicit approval.
 
+**Status — implemented and measured (Phase 2 Batch 5).** `orbweaver-registry::diff` implements the table and `idl-diff` is the gate, exiting non-zero on `BREAKING` and `conditionally breaking` unless given `--approve <reason>`, which prints the reason beside the findings.
+
+The table's central claim was verified on the wire rather than asserted: against an omniORB servant built from the previous contract, a client encoding a struct whose two members had been swapped received **the other member's value, with no exception raised**. A caller cannot detect this, which is why the check has to happen before release. The *server-first* row was verified in both states — `BAD_OPERATION` from an un-updated server, correct answers after the additive release, with the un-recompiled old client unaffected throughout. See `docs/PHASE2.md`.
+
+Two limits: "released" currently means the file `idl-diff` is pointed at rather than a contract read from a registry of record, and value types and `fixed` have no evolution rules yet because they are not on the wire yet.
+
 ---
 
 ## 6. Technology decisions

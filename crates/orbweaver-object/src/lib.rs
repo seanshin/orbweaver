@@ -86,6 +86,36 @@ pub trait ServantLocator {
     fn locate(&mut self, id: &ObjectId) -> Located;
 }
 
+/// A value that is distinct across processes *and* within one.
+///
+/// Across processes, so a transient reference held over a restart is
+/// recognisably stale rather than landing on whatever occupies that id now.
+/// Within a process, so two POAs of the same name do not adopt each other's
+/// references.
+///
+/// An earlier version took the address of a temporary `Box`, on the stated
+/// reasoning that avoiding the clock kept tests deterministic. Distinctness,
+/// not determinism, is what the field is for, and the temporary was freed
+/// before the next call — so the allocator handed back the same address and two
+/// POAs created in sequence shared an incarnation. That is precisely the
+/// staleness this field exists to detect, and it survived review by passing:
+/// the allocator happened to vary the address until a rebuild stopped it.
+fn next_incarnation() -> u64 {
+    static SEED: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    static MINTED: AtomicU64 = AtomicU64::new(0);
+    const ODD: u64 = 0x9E37_79B9_7F4A_7C15;
+
+    let seed = *SEED.get_or_init(|| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64);
+        // The pid alone repeats after a wrap and the clock alone can be coarse
+        // or stepped backwards; neither failure mode is shared with the other.
+        nanos.rotate_left(17) ^ u64::from(std::process::id()).wrapping_mul(ODD)
+    });
+    seed.wrapping_add(MINTED.fetch_add(1, Ordering::Relaxed).wrapping_mul(ODD))
+}
+
 /// A Portable Object Adapter: servant identity, lifecycle and reference
 /// creation.
 #[derive(Debug)]
@@ -111,13 +141,7 @@ impl Poa {
             active: HashMap::new(),
             lifespan: Lifespan::Transient,
             unknown_id: UnknownIdPolicy::Reject,
-            // Time is unavailable to keep this deterministic under test; the
-            // address of a heap allocation is enough to separate two runs.
-            incarnation: {
-                let b = Box::new(0u8);
-                let v = (&raw const *b) as u64;
-                v
-            },
+            incarnation: next_incarnation(),
             type_id: type_id.to_owned(),
             published: None,
             next_transient: AtomicU64::new(1),
@@ -417,6 +441,18 @@ mod tests {
         let id = ObjectId::from_name("x");
         assert_ne!(a.object_key(&id), b.object_key(&id), "incarnations must differ");
         assert_eq!(b.parse_key(&a.object_key(&id)), None);
+    }
+
+    /// The two-POA test above passed for a while against an implementation
+    /// that reused a freed heap address, because the allocator happened to
+    /// vary it. Asking for many at once removes the luck.
+    #[test]
+    fn every_poa_in_a_process_gets_its_own_incarnation() {
+        let id = ObjectId::from_name("x");
+        let keys: std::collections::BTreeSet<Vec<u8>> = (0..64)
+            .map(|_| Poa::new("RootPOA", "IDL:m/I:1.0").object_key(&id))
+            .collect();
+        assert_eq!(keys.len(), 64, "two POAs minted the same transient key");
     }
 
     #[test]

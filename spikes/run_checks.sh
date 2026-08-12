@@ -21,10 +21,25 @@ need cargo
 # asynchronous, so returning early lets the next fixture race a dying process.
 cleanup() {
   pkill -f echo_server.py >/dev/null 2>&1 || true
+  pkill -f evolution_server.py >/dev/null 2>&1 || true
   for _ in $(seq 1 50); do
-    pgrep -f echo_server.py >/dev/null 2>&1 || return 0
+    pgrep -f "echo_server.py|evolution_server.py" >/dev/null 2>&1 || return 0
     sleep 0.1
   done
+}
+
+# Starts the contract-evolution peer. `$1` is empty for the deployed version or
+# --updated for the same service after an additive release.
+start_evolution_server() {
+  cleanup
+  rm -f "$ROOT/spikes/evolution.ior"
+  ( cd "$ROOT/spikes" && exec python3 evolution_server.py ${1:+"$1"} >/dev/null 2>&1 & )
+  for _ in $(seq 1 100); do
+    [ -s "$ROOT/spikes/evolution.ior" ] && { sleep 0.2; return 0; }
+    sleep 0.1
+  done
+  echo "  FAIL evolution fixture did not publish an IOR within 10s"
+  return 1
 }
 trap cleanup EXIT
 
@@ -87,10 +102,15 @@ if cargo tree -p orbweaver-giop --no-default-features 2>/dev/null | grep -q enco
 else
   echo "  ok   --no-default-features drops encoding_rs, as NOTICE states"
 fi
-if cargo test -p orbweaver-giop --lib --no-default-features --quiet >/dev/null 2>&1; then
-  echo "  ok   the attribution-free build still passes its tests"
+# -D warnings, because this configuration is only built here: a helper that
+# became dead once encoding_rs was gone sat un-noticed behind an exit-status
+# check that warnings cannot fail.
+if RUSTFLAGS="-D warnings" cargo test -p orbweaver-giop --lib --no-default-features --quiet \
+     >/dev/null 2>&1; then
+  echo "  ok   the attribution-free build still passes its tests, warning-free"
 else
-  echo "  FAIL the attribution-free build does not build or test"; fail_total=$((fail_total+1))
+  echo "  FAIL the attribution-free build does not build cleanly or does not test"
+  fail_total=$((fail_total+1))
 fi
 
 hr "orbweaver-idl — our parser against the oracle"
@@ -485,6 +505,59 @@ else
   pkill -f "classes Server" >/dev/null 2>&1 || true
   [ "$jfail" -eq 0 ] || fail_total=$((fail_total+1))
 fi
+
+# ── Contract evolution: is the §5.3 rule table true? ─────────────────────────
+hr "contract evolution — §5.3 verdicts against a peer that predates the change"
+# The differ's verdicts are predictions about deployed peers. Asserting them
+# only against our own tests would prove that two pieces of our code agree, so
+# the predicted consequence is produced on the wire by omniORB instead.
+ev_fail=0
+if start_evolution_server; then
+  out=$(cargo run -q --bin spike-evolution -- \
+        spikes/evolution_v1.idl spikes/evolution_v2.idl spikes/evolution_v1b.idl \
+        spikes/evolution.ior 2>&1)
+  if printf '%s' "$out" | grep -q "contract evolution: PASS"; then
+    echo "  ok   the swapped struct members are flagged BREAKING before release"
+    echo "  ok   omniORB answered the swapped call with the WRONG member, no exception"
+    echo "  ok   an added operation on an un-updated server gives BAD_OPERATION"
+  else
+    echo "  FAIL a §5.3 verdict did not match what the wire did"
+    printf '%s' "$out" | grep "  FAIL" | head -3 | sed 's/^/       /'
+    ev_fail=1
+  fi
+else
+  ev_fail=1
+fi
+# The other half of "server-first": the additive release must serve both.
+if start_evolution_server --updated; then
+  out=$(cargo run -q --bin spike-evolution -- --updated spikes/evolution.ior 2>&1)
+  if printf '%s' "$out" | grep -q "contract evolution: PASS"; then
+    echo "  ok   after the additive release, old and new clients are both served"
+  else
+    echo "  FAIL the additive release did not behave as 'compatible' predicts"
+    printf '%s' "$out" | grep "  FAIL" | head -2 | sed 's/^/       /'
+    ev_fail=1
+  fi
+else
+  ev_fail=1
+fi
+cleanup
+# The gate is the deliverable, not the report: check that it actually refuses.
+if cargo run -q --bin idl-diff -- spikes/evolution_v1.idl spikes/evolution_v2.idl \
+     >/dev/null 2>&1; then
+  echo "  FAIL idl-diff accepted a change that corrupts data on the wire"
+  ev_fail=1
+else
+  echo "  ok   idl-diff refuses the breaking revision (exit 1)"
+fi
+if cargo run -q --bin idl-diff -- spikes/evolution_v1.idl spikes/evolution_v1b.idl \
+     >/dev/null 2>&1; then
+  echo "  ok   idl-diff accepts the additive-only revision"
+else
+  echo "  FAIL idl-diff refuses a revision that breaks nothing"
+  ev_fail=1
+fi
+[ "$ev_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
 hr "verdict"
 if [ "$skipped" -gt 0 ]; then
