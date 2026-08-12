@@ -1,0 +1,14 @@
+module bank {
+  //@ ai_desc: Transfers funds between accounts. Rolls back in full on failure.
+  interface Transfer {
+    //@ ai_effect: destructive
+    //@ ai_idempotent: false
+    //@ ai_authz: bank.transfer.write
+    void execute(
+      //@ ai_pii: high
+      in long from,
+      //@ ai_unit: KRW
+      in long amount
+    );
+  };
+};

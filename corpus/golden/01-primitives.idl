@@ -1,0 +1,17 @@
+// 01 — every primitive type. Baseline CDR alignment coverage.
+module gc01 {
+  struct Primitives {
+    boolean       b;
+    char          c;
+    octet         o;
+    short         s;
+    unsigned short us;
+    long          l;
+    unsigned long ul;
+    long long     ll;
+    unsigned long long ull;
+    float         f;
+    double        d;
+  };
+  interface Echo { Primitives roundtrip(in Primitives v); };
+};

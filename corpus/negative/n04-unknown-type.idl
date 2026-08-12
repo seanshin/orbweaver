@@ -1,0 +1,1 @@
+module n04 { struct S { Widget w; }; };

@@ -1,0 +1,11 @@
+module printing {
+  enum JobState { QUEUED, RUNNING, DONE, FAILED };
+  exception NoSuchJob { string job_id; };
+  exception NotCancellable { string job_id; JobState state; };
+  struct JobStatus { string job_id; JobState state; string detail; };
+  interface PrintQueue {
+    string    submit(in string document_uri, in unsigned long copies);
+    JobStatus status(in string job_id) raises (NoSuchJob);
+    void      cancel(in string job_id) raises (NoSuchJob, NotCancellable);
+  };
+};

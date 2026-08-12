@@ -1,0 +1,11 @@
+// 04 — codeset negotiation probe. EUC-KR native peers must round-trip these.
+// This case exists because a wrong CodeSets negotiation corrupts exactly the
+// text this project's home market cares about.
+module gc04 {
+  struct KoreanText {
+    string  hangul;      // "함정 전투체계"
+    wstring hangul_wide; // same content as wstring
+    string  mixed;       // "IDL 4.2 명세 / spec"
+  };
+  interface Echo { KoreanText roundtrip(in KoreanText v); };
+};

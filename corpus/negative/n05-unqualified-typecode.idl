@@ -1,0 +1,1 @@
+module n05 { interface I { TypeCode describe(); }; };

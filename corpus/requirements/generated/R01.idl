@@ -1,0 +1,12 @@
+module accounts {
+  struct User { string id; string email; string display_name; };
+  exception NoSuchUser { string id; };
+  typedef sequence<User> UserSeq;
+  interface UserDirectory {
+    User create(in string email, in string display_name);
+    User get(in string id) raises (NoSuchUser);
+    User get_by_email(in string email) raises (NoSuchUser);
+    void remove(in string id) raises (NoSuchUser);
+    UserSeq list();
+  };
+};

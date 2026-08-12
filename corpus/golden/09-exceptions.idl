@@ -1,0 +1,10 @@
+// 09 — user exceptions with and without members; multiple raises.
+module gc09 {
+  exception NotFound { string key; };
+  exception Denied   { string reason; long code; };
+  exception Empty    {};
+  interface Store {
+    string get(in string key) raises (NotFound, Denied);
+    void   clear() raises (Empty);
+  };
+};

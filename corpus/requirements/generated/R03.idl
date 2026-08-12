@@ -1,0 +1,18 @@
+module cms {
+  enum TrackClass { UNKNOWN, SURFACE, AIR, SUBSURFACE };
+  struct Position { double latitude; double longitude; };
+  struct Track {
+    long       track_id;
+    TrackClass classification;
+    Position   pos;
+    double     course_deg;
+    double     speed_kn;
+  };
+  typedef sequence<Track> TrackSeq;
+  exception NoSuchTrack { long track_id; };
+  interface TrackManager {
+    TrackSeq list_tracks();
+    Track    get_track(in long track_id) raises (NoSuchTrack);
+    readonly attribute long track_count;
+  };
+};

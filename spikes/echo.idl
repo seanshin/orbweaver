@@ -1,0 +1,18 @@
+// Peer interface for the Phase 0 interop spike. Deliberately covers the
+// alignment cases that break hand-written CDR encoders.
+module spike {
+  struct Ragged {
+    octet  a;
+    long   b;
+    short  c;
+    double d;
+    octet  e;
+  };
+  interface Echo {
+    long   ping();
+    long   add(in long a, in long b);
+    string echo_string(in string msg);
+    double scale(in double v, in double by);
+    Ragged echo_ragged(in Ragged v);
+  };
+};

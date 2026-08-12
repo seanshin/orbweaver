@@ -1,0 +1,9 @@
+// 13 — typedef chains must be resolved to the aliased type for CDR.
+module gc13 {
+  typedef long      Meters;
+  typedef Meters    Distance;
+  typedef Distance  Range;
+  typedef sequence<Range> RangeSeq;
+  struct Reading { Range r; RangeSeq history; };
+  interface Echo { Reading roundtrip(in Reading v); };
+};

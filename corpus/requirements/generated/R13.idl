@@ -1,0 +1,13 @@
+module logging {
+  enum Severity { TRACE, DEBUG, INFO, WARN, ERROR, FATAL };
+  struct LogRecord {
+    long long occurred_epoch_ms;
+    Severity  level;
+    string    source;
+    string    message;
+  };
+  typedef sequence<LogRecord> LogRecordSeq;
+  interface LogSink {
+    oneway void submit(in LogRecordSeq records);
+  };
+};

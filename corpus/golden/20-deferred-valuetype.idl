@@ -1,0 +1,12 @@
+// 20 — DEFERRED at wire level (v1 support matrix, PLAN §4.4).
+// Parser must accept it; CDR support is a Phase 4 decision gate.
+module gc20 {
+  valuetype Money {
+    public string  currency;
+    public long    units;
+    public long    nanos;
+  };
+  valuetype Named : Money { public string label; };
+  abstract interface Describable { string describe(); };
+  interface Wallet { Money balance(); };
+};

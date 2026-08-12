@@ -1,0 +1,13 @@
+// 02 — deliberate alignment hazards. octet before long forces 3 pad bytes;
+// short before double forces 6. The classic CDR encoder bug surface.
+module gc02 {
+  struct Ragged {
+    octet  a;      // offset 0, then 3 pad
+    long   b;      // offset 4
+    short  c;      // offset 8, then 6 pad
+    double d;      // offset 16
+    octet  e;      // offset 24
+  };
+  struct Nested { octet lead; Ragged inner; octet trail; };
+  interface Echo { Ragged roundtrip(in Ragged v); Nested wrap(in Nested v); };
+};

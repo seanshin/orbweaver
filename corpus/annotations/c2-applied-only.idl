@@ -1,0 +1,4 @@
+module bank {
+  @ai_desc("Transfers funds between accounts.")
+  interface Transfer { void execute(in long amount); };
+};

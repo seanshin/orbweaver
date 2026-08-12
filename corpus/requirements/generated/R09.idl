@@ -1,0 +1,17 @@
+module chat {
+  struct Message { string sender; string body; long long sent_epoch_ms; };
+  typedef sequence<Message> MessageSeq;
+  typedef sequence<string> ParticipantSeq;
+  exception NoSuchRoom { string room_id; };
+  exception NotAParticipant { string room_id; string user_id; };
+  interface ChatRoom {
+    string         create_room(in string title);
+    void           add_participant(in string room_id, in string user_id) raises (NoSuchRoom);
+    void           remove_participant(in string room_id, in string user_id)
+                     raises (NoSuchRoom, NotAParticipant);
+    ParticipantSeq participants(in string room_id) raises (NoSuchRoom);
+    void           send(in string room_id, in string user_id, in string body)
+                     raises (NoSuchRoom, NotAParticipant);
+    MessageSeq     recent(in string room_id, in unsigned long count) raises (NoSuchRoom);
+  };
+};

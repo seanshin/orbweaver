@@ -1,0 +1,10 @@
+module auth {
+  enum FailureReason { UNKNOWN_USER, BAD_PASSWORD, ACCOUNT_LOCKED, EXPIRED };
+  exception AuthFailed { FailureReason reason; string detail; };
+  struct Token { string value; long long expires_epoch_s; };
+  interface Authenticator {
+    Token issue(in string username, in string password) raises (AuthFailed);
+    void  validate(in string token) raises (AuthFailed);
+    void  revoke(in string token);
+  };
+};

@@ -1,0 +1,7 @@
+// 10 — single and multiple interface inheritance; is_a / narrowing surface.
+module gc10 {
+  interface Base      { readonly attribute string id; };
+  interface Nameable  { attribute string name; };
+  interface Derived : Base { long value(); };
+  interface Both : Derived, Nameable { void touch(); };
+};

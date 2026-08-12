@@ -1,0 +1,14 @@
+module stats {
+  typedef sequence<double> DoubleSeq;
+  struct Summary {
+    double minimum;
+    double maximum;
+    double mean;
+    double standard_deviation;
+    unsigned long count;
+  };
+  exception EmptySample {};
+  interface Aggregator {
+    Summary summarize(in DoubleSeq samples) raises (EmptySample);
+  };
+};

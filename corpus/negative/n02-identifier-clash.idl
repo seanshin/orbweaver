@@ -1,0 +1,2 @@
+// The dominant real-world failure: IDL identifier clashes are case-insensitive.
+module n02 { struct Position { double x; }; struct T { Position position; }; };

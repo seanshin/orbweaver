@@ -1,0 +1,8 @@
+// 18 — degenerate shapes that encoders commonly mishandle.
+module gc18 {
+  struct SingleOctet { octet only; };
+  struct OnlyString  { string only; };
+  typedef sequence<octet> Bytes;
+  struct MaybeEmpty { Bytes payload; };   // zero-length sequence is legal
+  interface Nothing { void noop(); };     // no args, no return
+};

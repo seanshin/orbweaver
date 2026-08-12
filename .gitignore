@@ -15,8 +15,10 @@ Cargo.lock
 node_modules/
 *.tsbuildinfo
 
-# Generated IDL artifacts
+# Generated IDL artifacts (build output, not the benchmark corpus)
 generated/
+!corpus/requirements/generated/
+!corpus/requirements/generated/**
 *.pyc
 *_idl.py
 *C.cpp
@@ -41,3 +43,7 @@ omniORB.log
 .idea/
 .vscode/
 *.swp
+
+# Phase 0 spike fixtures
+spikes/echo.ior
+spikes/*.log

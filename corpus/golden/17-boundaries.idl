@@ -1,0 +1,16 @@
+// 17 — numeric boundary values. AnyJSON must carry 64-bit ints as strings,
+// since JSON numbers lose precision past 2^53.
+module gc17 {
+  struct Extremes {
+    short              s_min;   // -32768
+    short              s_max;   //  32767
+    long               l_min;   // -2147483648
+    long               l_max;   //  2147483647
+    long long          ll_min;  // -9223372036854775808
+    long long          ll_max;  //  9223372036854775807
+    unsigned long long ull_max; //  18446744073709551615
+    double             tiny;
+    double             huge;
+  };
+  interface Echo { Extremes roundtrip(in Extremes v); };
+};

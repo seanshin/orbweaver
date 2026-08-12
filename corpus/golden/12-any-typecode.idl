@@ -1,0 +1,11 @@
+// 12 — any carries a TypeCode; the DII path depends entirely on this working.
+module gc12 {
+  struct Tagged { string name; any value; };
+  typedef sequence<any> AnySeq;
+  interface Bag {
+    any    get(in string key);
+    void   put(in string key, in any value);
+    AnySeq all();
+    ::CORBA::TypeCode describe(in string key);
+  };
+};

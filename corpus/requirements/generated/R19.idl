@@ -1,0 +1,13 @@
+module scheduling {
+  typedef sequence<long long> EpochSeq;
+  exception InvalidCron { string expression; string reason; };
+  exception NoSuchSchedule { string schedule_id; };
+  struct Schedule { string schedule_id; string cron_expression; string task_name; };
+  interface Scheduler {
+    string   register_schedule(in string cron_expression, in string task_name)
+               raises (InvalidCron);
+    EpochSeq next_runs(in string schedule_id, in unsigned long how_many)
+               raises (NoSuchSchedule);
+    void     unregister(in string schedule_id) raises (NoSuchSchedule);
+  };
+};

@@ -1,0 +1,13 @@
+module routing {
+  struct Coordinate { double latitude; double longitude; };
+  typedef sequence<Coordinate> CoordinateSeq;
+  struct Route {
+    CoordinateSeq waypoints;
+    double        total_distance_m;
+    long long     estimated_duration_s;
+  };
+  exception NoRouteFound { Coordinate origin; Coordinate destination; };
+  interface RoutePlanner {
+    Route plan(in Coordinate origin, in Coordinate destination) raises (NoRouteFound);
+  };
+};

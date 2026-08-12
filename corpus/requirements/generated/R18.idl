@@ -1,0 +1,8 @@
+module i18n {
+  exception NoSuchMessage { string key; string locale; };
+  typedef sequence<string> StringSeq;
+  interface MessageCatalog {
+    wstring   translate(in string key, in string locale) raises (NoSuchMessage);
+    StringSeq available_locales();
+  };
+};

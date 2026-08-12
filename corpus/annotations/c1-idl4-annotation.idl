@@ -1,0 +1,11 @@
+@annotation ai_desc   { string text; };
+@annotation ai_unit   { string unit; };
+@annotation ai_effect { string kind; };
+
+module bank {
+  @ai_desc("Transfers funds between accounts.")
+  interface Transfer {
+    @ai_effect("destructive")
+    void execute(@ai_unit("KRW") in long amount);
+  };
+};

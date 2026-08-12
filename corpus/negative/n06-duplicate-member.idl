@@ -1,0 +1,1 @@
+module n06 { struct S { long a; long a; }; };

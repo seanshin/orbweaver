@@ -1,0 +1,11 @@
+module banking {
+  exception InsufficientFunds { long long available; long long requested; };
+  exception AccountFrozen { string account_id; string reason; };
+  exception NoSuchAccount { string account_id; };
+  struct Receipt { string transaction_id; long long amount_krw; };
+  interface Transfer {
+    Receipt execute(in string from_account, in string to_account, in long long amount_krw)
+      raises (InsufficientFunds, AccountFrozen, NoSuchAccount);
+    long long balance(in string account_id) raises (NoSuchAccount);
+  };
+};

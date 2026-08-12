@@ -1,0 +1,12 @@
+module ordering {
+  struct OrderLine { string product_code; unsigned long quantity; long long unit_price_krw; };
+  typedef sequence<OrderLine> OrderLineSeq;
+  struct Order { string order_id; string customer_id; OrderLineSeq lines; };
+  struct Total { long long subtotal_krw; long long tax_krw; long long total_krw; };
+  exception EmptyOrder {};
+  exception UnknownProduct { string product_code; };
+  interface OrderProcessor {
+    Total place(in Order placed) raises (EmptyOrder, UnknownProduct);
+    Total quote(in OrderLineSeq lines) raises (EmptyOrder, UnknownProduct);
+  };
+};

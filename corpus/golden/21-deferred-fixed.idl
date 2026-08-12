@@ -1,0 +1,7 @@
+// 21 — DEFERRED at wire level (v1 support matrix, PLAN §4.4).
+// fixed needs decimal fidelity; AnyJSON carries it as a string.
+module gc21 {
+  typedef fixed<9,2> Amount;
+  struct Invoice { Amount total; Amount tax; };
+  interface Billing { Amount sum(in Amount a, in Amount b); };
+};

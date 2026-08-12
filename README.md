@@ -4,11 +4,33 @@
 **AI 기반 CORBA/IDL 인터페이스 자동화 — 자연어 명세에서 실제 ORB 연동까지, 손으로 쓴 스텁 없이.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Status: planning](https://img.shields.io/badge/status-planning-orange.svg)](docs/PLAN.md)
+[![Phase 0: GO](https://img.shields.io/badge/Phase%200-GO-2F6B4F.svg)](docs/PHASE0.md)
 [![Spec: OMG IDL 4.2](https://img.shields.io/badge/spec-OMG%20IDL%204.2-1D4C5C.svg)](https://www.omg.org/spec/IDL/4.2/)
 
-> **Status / 상태** — Planning stage. No code yet. The full plan lives in [`docs/PLAN.md`](docs/PLAN.md) (English) and [`docs/PLAN.ko.md`](docs/PLAN.ko.md) (한국어). Phase 0 is a three-week feasibility spike whose outcome may still reshape this architecture.
-> 기획 단계입니다. 아직 코드는 없습니다. 전체 계획은 [`docs/PLAN.md`](docs/PLAN.md)(영문)과 [`docs/PLAN.ko.md`](docs/PLAN.ko.md)(국문)에 있습니다. Phase 0은 3주짜리 타당성 검증이며, 그 결과에 따라 아키텍처가 바뀔 수 있습니다.
+> **Status / 상태** — Phase 0 feasibility spike complete, verdict **GO**. A from-scratch MIT GIOP client interoperates with a stock omniORB server; see [`docs/PHASE0.md`](docs/PHASE0.md) for the measurements. Phase 1 (wire protocol core) is next. Full plan: [`docs/PLAN.md`](docs/PLAN.md) (English) · [`docs/PLAN.ko.md`](docs/PLAN.ko.md) (한국어).
+> Phase 0 타당성 검증 완료, 판정 **GO**. 밑바닥부터 작성한 MIT GIOP 클라이언트가 순정 omniORB 서버와 상호운용됩니다. 측정 결과는 [`docs/PHASE0.md`](docs/PHASE0.md)에 있습니다. 다음은 Phase 1(와이어 프로토콜 코어)입니다.
+
+## Phase 0 results / 검증 결과
+
+| # | Assumption / 가정 | Result |
+|---|---|---|
+| **A** | A from-scratch GIOP implementation can talk to a stock ORB<br>자체 GIOP 구현이 순정 ORB와 통신 가능한가 | ✅ **14/14** cases, both byte orders, 5 cold starts |
+| **B** | An LLM can write IDL that compiles<br>LLM이 컴파일되는 IDL을 쓰는가 | ✅ **65%** first pass → **100%** after one self-repair round |
+| **C** | IDL 4 `@annotation` survives deployed toolchains<br>배포된 툴체인이 어노테이션을 수용하는가 | ❌ **Rejected** — structured-comment fallback confirmed working |
+| **D** | IOR addressing works under NAT/containers<br>NAT·컨테이너에서 IOR 주소가 동작하는가 | ⚠️ **Hazard real** — endpoint rewriting mitigates it |
+
+```console
+$ ./spikes/run_phase0.sh
+assumption A — GIOP interop against a stock ORB
+  ok   both byte orders interoperated
+...
+verdict
+  Phase 0: all checks green
+```
+
+Every failure in assumption B had **one** root cause: IDL identifier clashes are case-insensitive, so `Position position` and `module inventory { interface Inventory }` are both illegal. Natural naming in every other language, illegal here — which makes it the first lint rule Phase 1 ships.
+
+가정 B의 실패는 **전부 하나의 원인**이었습니다 — IDL 식별자 충돌은 대소문자를 구분하지 않습니다. 다른 언어에서는 자연스러운 명명이 여기서는 불법이며, 그래서 Phase 1의 첫 린트 규칙이 됩니다.
 
 ---
 
@@ -157,8 +179,8 @@ Everything below is MIT and written in this repository unless marked otherwise.
 
 | Component | 구성요소 | Scope |
 |---|---|---|
-| `orbweaver-cdr` | CDR 인코더 | OMG CDR encoding/decoding, both endiannesses |
-| `orbweaver-giop` | GIOP/IIOP 전송 | GIOP 1.0–1.2 messages, IIOP over TCP, IOR parse/emit |
+| `orbweaver-cdr` ✅ | CDR 인코더 | OMG CDR encoding/decoding, both endiannesses — *spike landed* |
+| `orbweaver-giop` ✅ | GIOP/IIOP 전송 | GIOP 1.2 Request/Reply, IOR parse, invoker — *spike landed* |
 | `orbweaver-poa` | 객체 어댑터 | Servant lifecycle, object activation, request dispatch |
 | `orbweaver-idl` | IDL 컴파일러 | OMG IDL 4.2 front end, `@annotation` support, pluggable back ends |
 | `orbweaver-registry` | 타입 레지스트리 | IFR-equivalent store; also ingests remote IFRs |
@@ -242,9 +264,22 @@ And the reason that matters most: interfaces are increasingly called by agents r
 
 | Document | 문서 | Contents |
 |---|---|---|
+| [`docs/PHASE0.md`](docs/PHASE0.md) | Phase 0 결과 | Feasibility measurements, findings, what Phase 1 inherits — bilingual |
 | [`docs/PLAN.md`](docs/PLAN.md) | Development plan (English) | Full technical plan, research findings, risk register |
 | [`docs/PLAN.ko.md`](docs/PLAN.ko.md) | 개발 계획서 (한국어) | 전체 기술 계획, 조사 결과, 리스크 목록 |
-| [`docs/plan-page.html`](docs/plan-page.html) | Rendered plan | Standalone HTML version of the plan |
+| [`docs/plan-page.html`](docs/plan-page.html) | Rendered brief | Standalone HTML version of the project brief |
+
+## Running the spike / 스파이크 실행
+
+```bash
+brew install omniorb          # interop fixture only — never linked or shipped
+cargo test --workspace        # 17 unit tests: CDR alignment, GIOP framing, IOR
+./spikes/run_phase0.sh        # full Phase 0 harness
+```
+
+`cargo tree` shows zero external dependencies: the wire implementation is written against the published OMG specification alone. omniORB (LGPL/GPL) is used only as a separate-process wire peer and as an `omniidl` conformance oracle — no linking, no vendoring, no redistribution.
+
+`cargo tree`에 외부 의존성이 없습니다. 와이어 구현은 공개 OMG 명세만 보고 작성했습니다. omniORB(LGPL/GPL)는 별도 프로세스 피어와 `omniidl` 적합성 채점기로만 사용하며, 링크·벤더링·재배포하지 않습니다.
 
 ## References / 참고 자료
 

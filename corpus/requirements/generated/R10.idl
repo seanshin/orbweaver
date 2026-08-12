@@ -1,0 +1,18 @@
+module settings {
+  enum ValueKind { V_LONG, V_DOUBLE, V_BOOLEAN, V_STRING };
+  union Value switch (ValueKind) {
+    case V_LONG:    long    as_long;
+    case V_DOUBLE:  double  as_double;
+    case V_BOOLEAN: boolean as_boolean;
+    case V_STRING:  string  as_string;
+  };
+  struct Entry { string key; Value val; };
+  typedef sequence<Entry> EntrySeq;
+  exception NoSuchKey { string key; };
+  interface ConfigStore {
+    Value    get(in string key) raises (NoSuchKey);
+    void     put(in string key, in Value val);
+    void     remove(in string key) raises (NoSuchKey);
+    EntrySeq snapshot();
+  };
+};

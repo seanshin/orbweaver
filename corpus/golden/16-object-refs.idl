@@ -1,0 +1,10 @@
+// 16 — object references on the wire are IORs; Object is the base type.
+module gc16 {
+  interface Target { long ping(); };
+  struct Handle { Object generic; Target typed; string note; };
+  interface Registry {
+    Target lookup(in string name);
+    void   bind(in string name, in Target ref);
+    Handle describe(in string name);
+  };
+};

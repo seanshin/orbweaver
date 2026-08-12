@@ -1,0 +1,12 @@
+// 15 — forward declarations and recursive types via sequence indirection.
+module gc15 {
+  interface Node;
+  typedef sequence<Node> NodeSeq;
+  interface Node {
+    readonly attribute string label;
+    NodeSeq children();
+  };
+  struct Tree;
+  typedef sequence<Tree> TreeSeq;
+  struct Tree { string label; TreeSeq kids; };
+};

@@ -1,0 +1,11 @@
+module events {
+  struct Event { string topic; string payload; long long emitted_epoch_ms; };
+  interface EventListener {
+    oneway void on_event(in Event evt);
+  };
+  exception NoSuchSubscription { string subscription_id; };
+  interface EventSource {
+    string subscribe(in string topic, in EventListener listener);
+    void   unsubscribe(in string subscription_id) raises (NoSuchSubscription);
+  };
+};

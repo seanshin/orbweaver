@@ -1,0 +1,6 @@
+// 05 — enum wire form is an unsigned long ordinal; AnyJSON carries the name.
+module gc05 {
+  enum Severity { INFO, WARNING, ERROR, CRITICAL };
+  struct Event { Severity level; string message; };
+  interface Echo { Event roundtrip(in Event v); Severity pick(in Severity v); };
+};

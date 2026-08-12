@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/orbweaver-cdr",
+    "crates/orbweaver-giop",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/seanshin/orbweaver"
+rust-version = "1.85"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

@@ -1,0 +1,13 @@
+module storage {
+  typedef sequence<octet> Chunk;
+  exception NoSuchFile { string path; };
+  exception ChunkOutOfRange { unsigned long index; unsigned long total; };
+  struct FileInfo { string path; unsigned long long size_bytes; string checksum_sha256; };
+  interface FileStore {
+    void          upload_chunk(in string path, in unsigned long index, in Chunk data);
+    Chunk         download_chunk(in string path, in unsigned long index)
+                    raises (NoSuchFile, ChunkOutOfRange);
+    FileInfo      stat(in string path) raises (NoSuchFile);
+    unsigned long chunk_count(in string path) raises (NoSuchFile);
+  };
+};

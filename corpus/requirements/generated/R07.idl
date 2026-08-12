@@ -1,0 +1,18 @@
+module atc {
+  struct Waypoint { string name; double latitude; double longitude; };
+  typedef sequence<Waypoint> WaypointSeq;
+  struct FlightPlan {
+    string      callsign;
+    string      origin_icao;
+    string      destination_icao;
+    long long   departure_epoch_s;
+    WaypointSeq route;
+  };
+  exception NoSuchPlan { string callsign; };
+  exception InvalidPlan { string field; string reason; };
+  interface FlightPlanRegistry {
+    void       file_plan(in FlightPlan plan) raises (InvalidPlan);
+    FlightPlan get_plan(in string callsign) raises (NoSuchPlan);
+    void       amend_plan(in FlightPlan plan) raises (NoSuchPlan, InvalidPlan);
+  };
+};

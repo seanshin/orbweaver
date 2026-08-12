@@ -1,0 +1,24 @@
+// 19 — a service shaped like real legacy code, not a type-system exercise.
+module tms {
+  enum TrackClass { UNKNOWN, SURFACE, AIR, SUBSURFACE };
+  struct Position { double lat; double lon; double alt; };
+  struct Track {
+    long        id;
+    TrackClass  klass;
+    Position    pos;
+    double      course;
+    double      speed;
+    string      designation;
+  };
+  typedef sequence<Track> TrackSeq;
+  exception NoSuchTrack { long id; };
+  exception Overloaded  { long retry_after_ms; };
+  interface TrackManager {
+    TrackSeq  snapshot();
+    Track     get(in long id) raises (NoSuchTrack);
+    long      create(in Track t) raises (Overloaded);
+    void      update(in Track t) raises (NoSuchTrack);
+    oneway void drop(in long id);
+    readonly attribute long count;
+  };
+};

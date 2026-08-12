@@ -1,0 +1,8 @@
+// 08 — arrays are encoded without a length prefix. Multi-dimensional included.
+module gc08 {
+  typedef long   Matrix[3][4];
+  typedef octet  Digest[16];
+  typedef string Names[2];
+  struct Holder { Matrix m; Digest d; Names n; };
+  interface Echo { Holder roundtrip(in Holder v); };
+};

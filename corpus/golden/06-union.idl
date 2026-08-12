@@ -1,0 +1,20 @@
+// 06 — unions over several discriminator types, with and without default.
+module gc06 {
+  enum Kind { K_LONG, K_STRING, K_SEQ };
+  union Payload switch (Kind) {
+    case K_LONG:   long          as_long;
+    case K_STRING: string        as_string;
+    case K_SEQ:    sequence<octet> as_bytes;
+  };
+  union WithDefault switch (long) {
+    case 1: long one;
+    case 2:
+    case 3: string two_or_three;
+    default: boolean other;
+  };
+  union BoolUnion switch (boolean) {
+    case TRUE:  long  yes;
+    case FALSE: octet no;
+  };
+  interface Echo { Payload roundtrip(in Payload v); WithDefault d(in WithDefault v); };
+};

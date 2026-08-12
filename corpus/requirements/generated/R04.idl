@@ -1,0 +1,14 @@
+module telemetry {
+  enum AlarmLevel { INFO, WARNING, DANGER };
+  struct Sample {
+    double temperature_c;
+    double humidity_pct;
+    double pressure_hpa;
+  };
+  struct Assessment { Sample reading; AlarmLevel level; string cause; };
+  interface Sensor {
+    Sample     read_now();
+    Assessment evaluate();
+    attribute  double temperature_threshold_c;
+  };
+};

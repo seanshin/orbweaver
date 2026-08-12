@@ -1,0 +1,11 @@
+// 03 — bounded and unbounded strings, wide strings.
+module gc03 {
+  typedef string<16> ShortName;
+  struct Strings {
+    string     unbounded;
+    ShortName  bounded;
+    wstring    wide;
+    string     empty;
+  };
+  interface Echo { Strings roundtrip(in Strings v); };
+};

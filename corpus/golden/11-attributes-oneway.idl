@@ -1,0 +1,9 @@
+// 11 — attributes compile to _get_/_set_ operations; oneway has no reply.
+module gc11 {
+  interface Sensor {
+    readonly attribute double temperature;
+    attribute string label;
+    oneway void reset();
+    oneway void publish(in string topic, in string payload);
+  };
+};

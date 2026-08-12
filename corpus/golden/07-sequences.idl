@@ -1,0 +1,9 @@
+// 07 — bounded, unbounded, nested and empty sequences.
+module gc07 {
+  typedef sequence<long>        LongSeq;
+  typedef sequence<long, 4>     BoundedSeq;
+  typedef sequence<LongSeq>     SeqOfSeq;
+  typedef sequence<string>      StringSeq;
+  struct Bundle { LongSeq a; BoundedSeq b; SeqOfSeq c; StringSeq d; };
+  interface Echo { Bundle roundtrip(in Bundle v); };
+};

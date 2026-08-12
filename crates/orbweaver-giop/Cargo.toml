@@ -1,0 +1,22 @@
+[package]
+name = "orbweaver-giop"
+description = "GIOP/IIOP messages, IOR handling, and a minimal synchronous invoker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+orbweaver-cdr = { path = "../orbweaver-cdr" }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "spike-interop"
+path = "src/bin/spike_interop.rs"
+
+[[bin]]
+name = "spike-dump"
+path = "src/bin/spike_dump.rs"

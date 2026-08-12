@@ -1,0 +1,15 @@
+module docs {
+  struct Version { string document_id; unsigned long version_number; long long saved_epoch_s; };
+  typedef sequence<Version> VersionSeq;
+  exception NoSuchDocument { string document_id; };
+  exception NoSuchVersion { string document_id; unsigned long version_number; };
+  interface DocumentStore {
+    unsigned long save(in string document_id, in string content);
+    string        fetch(in string document_id, in unsigned long version_number)
+                    raises (NoSuchDocument, NoSuchVersion);
+    VersionSeq    history(in string document_id) raises (NoSuchDocument);
+    string        diff(in string document_id, in unsigned long from_version,
+                       in unsigned long to_version)
+                    raises (NoSuchDocument, NoSuchVersion);
+  };
+};

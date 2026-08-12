@@ -1,0 +1,15 @@
+module monitoring {
+  enum EquipmentState { RUNNING, STOPPED, MAINTENANCE };
+  struct Equipment {
+    string         equipment_id;
+    string         label;
+    EquipmentState state;
+    long long      last_updated_epoch_s;
+  };
+  typedef sequence<Equipment> EquipmentSeq;
+  exception NoSuchEquipment { string equipment_id; };
+  interface EquipmentMonitor {
+    EquipmentSeq list_equipment();
+    Equipment    get_equipment(in string equipment_id) raises (NoSuchEquipment);
+  };
+};

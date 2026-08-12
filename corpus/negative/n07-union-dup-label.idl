@@ -1,0 +1,1 @@
+module n07 { union U switch (long) { case 1: long a; case 1: long b; }; };

@@ -1,0 +1,11 @@
+module inventory {
+  struct StockLevel { string sku; long quantity; };
+  typedef sequence<StockLevel> StockLevelSeq;
+  typedef sequence<string> SkuSeq;
+  exception NoSuchSku { string sku; };
+  exception WouldGoNegative { string sku; long current; long delta; };
+  interface InventoryService {
+    long          adjust(in string sku, in long delta) raises (NoSuchSku, WouldGoNegative);
+    StockLevelSeq query(in SkuSeq skus) raises (NoSuchSku);
+  };
+};

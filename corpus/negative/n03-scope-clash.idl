@@ -1,0 +1,1 @@
+module inventory { interface Inventory { long count(); }; };
