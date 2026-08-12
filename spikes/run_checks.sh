@@ -285,6 +285,61 @@ else
 fi
 pkill -f spike-server >/dev/null 2>&1 || true
 
+# ── Object model ─────────────────────────────────────────────────────────────
+hr "object model — references, identity, LOCATION_FORWARD"
+if start_rust_server; then
+  out=$(python3 spikes/object_client.py spikes/server.ior 2>&1)
+  if printf '%s' "$out" | grep -q "failures: 0"; then
+    echo "  ok   _is_a answered from the inheritance graph, no network lookup"
+    echo "  ok   an object reference survives as a value and is callable"
+  else
+    echo "  FAIL object model against omniORB"
+    printf '%s' "$out" | grep FAIL | head -3 | sed 's/^/       /'
+    fail_total=$((fail_total+1))
+  fi
+else
+  fail_total=$((fail_total+1))
+fi
+cleanup
+
+# LOCATION_FORWARD: Phase 1 could follow one and never send one. A peer must
+# retry transparently, and the server logs the emission so a call that would
+# have succeeded anyway cannot be mistaken for proof.
+fwd_fail=0
+for peer in omni jacorb; do
+  pkill -f spike-server >/dev/null 2>&1 || true
+  rm -f "$ROOT/spikes/server.ior"
+  ( cd "$ROOT" && ORBWEAVER_FORWARD_PING=1 exec cargo run -q --bin spike-server -- \
+      spikes/server.ior 127.0.0.1 0 >/tmp/orbweaver-fwd.log 2>&1 & )
+  up=0
+  for _ in $(seq 1 100); do
+    [ -s "$ROOT/spikes/server.ior" ] && { sleep 0.3; up=1; break; }
+    sleep 0.1
+  done
+  [ "$up" -eq 1 ] || { echo "  FAIL forwarding server did not start"; fwd_fail=1; break; }
+
+  if [ "$peer" = omni ]; then
+    got=$(python3 spikes/object_client.py spikes/server.ior 2>&1 | grep -c "get_self() is callable -> 42")
+    label="omniORB"
+  else
+    if [ ! -d "$ROOT/spikes/jacorb/classes" ] || [ ! -x "$JH_CHECK/bin/java" ]; then
+      echo "  SKIPPED  JacORB half — fixture absent"; skipped=$((skipped+1)); continue
+    fi
+    got=$(cd "$ROOT/spikes/jacorb" && "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Client ../server.ior 2>&1 | grep -c "ping() -> 42")
+    label="JacORB"
+  fi
+  sleep 0.3
+  emitted=$(grep -c "emitted LOCATION_FORWARD" /tmp/orbweaver-fwd.log 2>/dev/null || echo 0)
+  if [ "$got" -ge 1 ] && [ "$emitted" -ge 1 ]; then
+    echo "  ok   $label followed a LOCATION_FORWARD we emitted"
+  else
+    echo "  FAIL $label: call ok=$got, forwards emitted=$emitted"
+    fwd_fail=1
+  fi
+done
+pkill -f spike-server >/dev/null 2>&1 || true
+[ "$fwd_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
 # ── Registry: does IDL-derived type metadata match the wire? ────────────────
 hr "type registry — TypeCode derived from IDL vs the peer's"
 # Deriving a TypeCode and encoding it with our own encoder proves only that two

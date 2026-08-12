@@ -19,5 +19,7 @@ module spike {
     Payload blob(in unsigned long size);
     long    blob_sum(in Payload b);
     wstring echo_wstring(in wstring w);
+    Echo    get_self();
+    boolean same_as(in Echo other);
   };
 };

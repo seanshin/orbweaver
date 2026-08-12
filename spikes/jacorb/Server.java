@@ -25,6 +25,8 @@ public class Server {
             return b;
         }
         public String echo_wstring(String w) { return w; }
+        public spike.Echo get_self() { return _this(); }
+        public boolean same_as(spike.Echo other) { return _this()._is_equivalent(other); }
         public int blob_sum(byte[] b) {
             long s = 0;
             for (byte x : b) s += (x & 0xff);

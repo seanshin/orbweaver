@@ -4,6 +4,7 @@ members = [
     "crates/orbweaver-cdr",
     "crates/orbweaver-giop",
     "crates/orbweaver-idl",
+    "crates/orbweaver-object",
     "crates/orbweaver-registry",
 ]
 

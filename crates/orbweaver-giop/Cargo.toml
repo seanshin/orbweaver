@@ -30,9 +30,6 @@ path = "src/bin/spike_dump.rs"
 default = ["euc-kr"]
 euc-kr = ["dep:encoding_rs"]
 
-[[bin]]
-name = "spike-server"
-path = "src/bin/spike_server.rs"
 
 [[bin]]
 name = "spike-naming"

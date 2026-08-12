@@ -39,6 +39,12 @@ class Echo(spike__POA.Echo):
     def echo_wstring(self, w):
         return w
 
+    def get_self(self):
+        return self._this()
+
+    def same_as(self, other):
+        return self._this()._is_equivalent(other)
+
     def blob_sum(self, b):
         return sum(b) % 2147483647
 

@@ -217,3 +217,74 @@ may be loaded from input nobody checked.
   having one.
 - The peer cross-check covers one struct. Extending it to unions and enums
   needs fixture operations that carry them.
+
+---
+
+# Batch 4: the object model
+
+`docs/PLAN.md` §4.7 argues that references, identity and lifecycle are what make
+a *conversation* possible, and that the AI path needs conversations:
+`search_interfaces` → `describe_interface` → `invoke_operation` is a workflow in
+which something must hold a reference between steps. This batch supplies that.
+
+```
+object model — references, identity, LOCATION_FORWARD
+  ok   _is_a answered from the inheritance graph, no network lookup
+  ok   an object reference survives as a value and is callable
+  ok   omniORB followed a LOCATION_FORWARD we emitted
+  ok   JacORB followed a LOCATION_FORWARD we emitted
+```
+
+## We can now send what Phase 1 could only follow
+
+`LOCATION_FORWARD` was the archetype of Batch 1's cause C2 — we returned it to
+callers as though it were a normal reply, so they decoded a marshalled IOR as
+their return value. Batch 1 taught us to *follow* one. This batch emits one, and
+both peers retry against it transparently, as §9.4.3.2 requires.
+
+The proof needed care. A forwarded `ping()` still returns 42, so a passing call
+proves nothing on its own — the server therefore logs each emission and the
+harness requires both the successful call *and* the logged forward. An earlier
+run looked like success and was not: a raw diagnostic tool had consumed the
+forward first, leaving the peer to receive an ordinary reply.
+
+전달된 `ping()`도 42를 돌려주므로 **호출 성공만으로는 아무것도 증명하지 못한다.**
+서버가 발행을 기록하고, 하네스는 성공한 호출과 기록된 forward를 **둘 다** 요구한다.
+앞선 실행이 정확히 그 함정에 빠졌다 — 진단 도구가 forward를 먼저 소비했고 피어는
+평범한 응답을 받았다.
+
+## `_is_a` without a network call
+
+Answered from the registry's inheritance graph (Batch 3), which is faster than
+asking and works when the target is unreachable. omniORB's `_narrow` succeeds
+against our server, `_is_a` reports correctly for the interface, for
+`CORBA::Object`, and negatively for an unrelated id.
+
+## Identity, with its limits documented
+
+- **`_is_equivalent` confirms identity and can never refute it.** §7.2.1 permits
+  `false` for two references that do denote the same object, so anything
+  treating a `false` as proof of difference is wrong. Said in the doc comment
+  and pinned by a test, because it is the kind of thing a reader assumes.
+- **`_hash` buckets references; it does not compare them.** Equivalent
+  references hash alike, and the converse does not hold.
+- **`_interface` returns `NO_IMPLEMENT`** rather than a nil the caller would
+  dereference: answering it needs an Interface Repository object we do not
+  expose.
+
+## The POA, and a stale-reference hazard
+
+A transient object key carries the process incarnation, so a reference minted by
+a previous run is *recognisably* stale rather than silently landing on whatever
+now occupies that id — which would be the worst kind of correct-looking bug.
+Persistent keys omit it and are reproducible across runs, which is the point of
+the policy. A key minted by a different POA is not ours either.
+
+일시적(transient) 객체 키에는 프로세스 incarnation이 들어간다. 이전 실행이 만든
+참조가 **조용히 다른 객체에 도달하는 대신 눈에 띄게 낡은 것**이 되도록 하기 위해서다.
+
+## Layering
+
+A new crate, because `_is_a` needs the registry and the registry already depends
+on `orbweaver-giop`; putting the object model in `giop` would have made that
+circular. The order is now cdr → giop → idl → registry → object.

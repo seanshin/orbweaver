@@ -240,6 +240,30 @@ where
     e.finish().map_err(Error::Cdr)
 }
 
+/// Encodes a `LOCATION_FORWARD` reply, whose body is the new reference.
+///
+/// §9.4.3.2 requires the client to retry against it *transparently*, so this is
+/// how a `ServantLocator` moves a caller without the caller noticing. Phase 1
+/// taught us to follow one of these; until now we could not send one.
+pub fn encode_location_forward(
+    version: Version,
+    endian: Endian,
+    request_id: u32,
+    to: &crate::Ior,
+) -> Result<Vec<u8>> {
+    let mut err = None;
+    let bytes = encode_reply(version, endian, request_id, ReplyStatus::LocationForward, |b| {
+        // The IOR is marshalled inline here, not as an encapsulation (§9.3.6).
+        if let Err(e) = to.write_to(b) {
+            err = Some(e);
+        }
+    })?;
+    match err {
+        Some(e) => Err(e),
+        None => Ok(bytes),
+    }
+}
+
 /// Encodes a `Reply` carrying a system exception.
 pub fn encode_system_exception(
     version: Version,
@@ -349,6 +373,16 @@ pub trait Dispatch {
     /// everything, which is right for a single-servant process.
     fn knows(&self, _object_key: &[u8]) -> bool {
         true
+    }
+
+    /// A reference to redirect this request to, instead of serving it.
+    ///
+    /// Returning `Some` produces a `LOCATION_FORWARD`, which §9.4.3.2 requires
+    /// the client to retry against transparently. It lives here rather than in
+    /// `dispatch` because a forward *replaces* the reply rather than filling
+    /// one in.
+    fn forward(&mut self, _request: &Request) -> Option<crate::Ior> {
+        None
     }
 }
 
@@ -495,6 +529,19 @@ impl Server {
     fn handle_request<D: Dispatch>(&self, req: &Request, d: &mut D) -> Result<Option<Vec<u8>>> {
         if !d.knows(&req.object_key) {
             return self.reply_exception(req, &SystemException::object_not_exist());
+        }
+        if let Some(to) = d.forward(req) {
+            if !req.expect_reply {
+                // A oneway cannot be redirected; there is no reply to carry the
+                // new address, and inventing one would be worse than serving it.
+                return Ok(None);
+            }
+            return Ok(Some(encode_location_forward(
+                req.version,
+                req.endian,
+                req.request_id,
+                &to,
+            )?));
         }
 
         // Servants write into a detached buffer, so it too must know where it

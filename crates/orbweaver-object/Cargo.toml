@@ -1,0 +1,22 @@
+[package]
+name = "orbweaver-object"
+description = "CORBA object model: POA, object references as values, pseudo-operations"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+orbweaver-cdr = { path = "../orbweaver-cdr" }
+orbweaver-giop = { path = "../orbweaver-giop", default-features = false }
+orbweaver-registry = { path = "../orbweaver-registry" }
+
+orbweaver-idl = { path = "../orbweaver-idl" }
+
+[[bin]]
+name = "spike-server"
+path = "src/bin/spike_server.rs"
+
+[lints]
+workspace = true
