@@ -36,6 +36,8 @@ use std::fmt;
 
 use orbweaver_cdr::{Decoder, Encoder};
 use orbweaver_giop::Ior;
+use orbweaver_giop::Version;
+use orbweaver_giop::codeset::{CodeSetId, WideCodec};
 use orbweaver_giop::typecode::{TypeCode, UnionCase};
 
 /// A CDR value, shaped to match `TypeCode` one variant at a time.
@@ -167,17 +169,48 @@ impl<'a> Path<'a> {
     }
 }
 
+/// The wide-character codec a value is marshalled with.
+///
+/// `wstring` is the one part of CDR whose encoding is not determined by the
+/// `TypeCode`: it depends on the GIOP version and the negotiated wchar
+/// codeset, and Phase 1 established the hard way that peers do **not** infer
+/// wide-char byte order from the message byte order — a big-endian client
+/// talking to omniORB or JacORB gets byte-swapped text unless a BOM says
+/// otherwise. `WideCodec` already encodes all of that.
+///
+/// The first version of this module re-implemented wstring here instead of
+/// using it, and a stock omniORB rejected the result immediately: a leading
+/// U+FEFF surviving into the decoded value one way, and `UNKNOWN` from the peer
+/// the other. Duplicating knowledge the project had already paid for is how it
+/// came back.
+fn default_codec() -> WideCodec {
+    // GIOP 1.2 and UTF-16: what both fixtures negotiate in practice, and what
+    // an encapsulated `any` uses regardless of the connection's version.
+    WideCodec::new(Version::V1_2, CodeSetId::UTF_16).expect("1.2 + UTF-16 is always valid")
+}
+
 /// Encodes `value` as `tc` into `e`, which the caller has already positioned.
 ///
 /// The encoder's origin matters and is not adjusted here; see the module
-/// documentation.
+/// documentation. Wide strings use [`default_codec`]; call [`encode_with`] to
+/// supply the one a connection actually negotiated.
 pub fn encode(e: &mut Encoder, tc: &TypeCode, value: &Value) -> Result<()> {
-    encode_at(e, tc, value, &Path::root())
+    encode_with(e, tc, value, default_codec())
+}
+
+/// Encodes with a specific wide-character codec.
+pub fn encode_with(e: &mut Encoder, tc: &TypeCode, value: &Value, wide: WideCodec) -> Result<()> {
+    encode_at(e, tc, value, &Path::root(), wide)
 }
 
 /// Decodes a value of type `tc` from `d`.
 pub fn decode(d: &mut Decoder<'_>, tc: &TypeCode) -> Result<Value> {
-    decode_at(d, tc, &Path::root())
+    decode_with(d, tc, default_codec())
+}
+
+/// Decodes with a specific wide-character codec.
+pub fn decode_with(d: &mut Decoder<'_>, tc: &TypeCode, wide: WideCodec) -> Result<Value> {
+    decode_at(d, tc, &Path::root(), wide)
 }
 
 /// Follows `alias` links to the type that actually governs encoding.
@@ -251,7 +284,13 @@ fn cdr<T>(p: &Path<'_>, r: std::result::Result<T, orbweaver_cdr::Error>) -> Resu
     r.map_err(|e| Error { path: p.render(), message: e.to_string() })
 }
 
-fn encode_at(e: &mut Encoder, tc: &TypeCode, v: &Value, p: &Path<'_>) -> Result<()> {
+fn encode_at(
+    e: &mut Encoder,
+    tc: &TypeCode,
+    v: &Value,
+    p: &Path<'_>,
+    wide: WideCodec,
+) -> Result<()> {
     match (resolved(tc), v) {
         (TypeCode::Null | TypeCode::Void, _) => Ok(()),
         (TypeCode::Boolean, Value::Bool(x)) => {
@@ -307,18 +346,9 @@ fn encode_at(e: &mut Encoder, tc: &TypeCode, v: &Value, p: &Path<'_>) -> Result<
         // to this layer; §7.10.2 makes it a property of the connection. Until
         // the dynamic path carries a codec, UTF-16 is what both fixtures agreed
         // on and what `WideCodec` emits by default.
-        (TypeCode::WChar, Value::WChar(c)) => {
-            let mut buf = [0u16; 2];
-            let units = c.encode_utf16(&mut buf);
-            if units.len() != 1 {
-                return p.fail(format!(
-                    "{c:?} is outside the Basic Multilingual Plane and needs a surrogate \
-                     pair, which is two UTF-16 units and therefore not one wchar"
-                ));
-            }
-            e.put_u16(units[0]);
-            Ok(())
-        }
+        (TypeCode::WChar, Value::WChar(c)) => wide
+            .put_wchar(e, *c)
+            .map_err(|err| Error { path: p.render(), message: err.to_string() }),
 
         (TypeCode::String(bound), Value::String(s)) => {
             check_bound(p, *bound, s.chars().count(), "string")?;
@@ -326,18 +356,12 @@ fn encode_at(e: &mut Encoder, tc: &TypeCode, v: &Value, p: &Path<'_>) -> Result<
             Ok(())
         }
         (TypeCode::WString(bound), Value::WString(s)) => {
-            let units: Vec<u16> = s.encode_utf16().collect();
-            check_bound(p, *bound, units.len(), "wstring")?;
-            // GIOP 1.2 counts octets, earlier versions count characters, and
-            // that difference lives in `WideCodec` rather than here — this path
-            // is the encapsulated form used inside an `any`, which is 1.2-style
-            // throughout. Callers marshalling a bare parameter go through the
-            // codec.
-            e.put_u32(units.len() as u32 * 2);
-            for u in units {
-                e.put_u16(u);
-            }
-            Ok(())
+            check_bound(p, *bound, s.encode_utf16().count(), "wstring")?;
+            // Through the codec, never by hand: the length unit is
+            // version-dependent and the BOM is what stops a peer reading our
+            // units in the wrong order.
+            wide.put_wstring(e, s)
+                .map_err(|err| Error { path: p.render(), message: err.to_string() })
         }
 
         (TypeCode::Enum { members, name, .. }, Value::Enum(label)) => {
@@ -379,7 +403,7 @@ fn encode_at(e: &mut Encoder, tc: &TypeCode, v: &Value, p: &Path<'_>) -> Result<
                         gname
                     ));
                 }
-                encode_at(e, &m.tc, gval, &p.member(&m.name))?;
+                encode_at(e, &m.tc, gval, &p.member(&m.name), wide)?;
             }
             Ok(())
         }
@@ -388,14 +412,14 @@ fn encode_at(e: &mut Encoder, tc: &TypeCode, v: &Value, p: &Path<'_>) -> Result<
             TypeCode::Union { discriminator, cases, name, default_index, .. },
             Value::Union { discriminator: d, value },
         ) => {
-            encode_at(e, discriminator, d, &p.member("_d"))?;
-            let case = select_case(discriminator, cases, *default_index, d, p, name)?;
+            encode_at(e, discriminator, d, &p.member("_d"), wide)?;
+            let case = select_case(discriminator, cases, *default_index, d, p, name, wide)?;
             match (case, value) {
                 (None, None) => Ok(()),
                 (None, Some(_)) => p.fail(format!(
                     "the selected branch of {name} has no member, but a value was given"
                 )),
-                (Some(c), Some(val)) => encode_at(e, &c.tc, val, &p.member(&c.name)),
+                (Some(c), Some(val)) => encode_at(e, &c.tc, val, &p.member(&c.name), wide),
                 (Some(c), None) => p.fail(format!("branch {:?} of {name} needs a value", c.name)),
             }
         }
@@ -404,7 +428,7 @@ fn encode_at(e: &mut Encoder, tc: &TypeCode, v: &Value, p: &Path<'_>) -> Result<
             check_bound(p, *bound, items.len(), "sequence")?;
             e.put_u32(items.len() as u32);
             for (i, item) in items.iter().enumerate() {
-                encode_at(e, element, item, &p.index(i))?;
+                encode_at(e, element, item, &p.index(i), wide)?;
             }
             Ok(())
         }
@@ -414,7 +438,7 @@ fn encode_at(e: &mut Encoder, tc: &TypeCode, v: &Value, p: &Path<'_>) -> Result<
             }
             // No length prefix: an array's length is in its type.
             for (i, item) in items.iter().enumerate() {
-                encode_at(e, element, item, &p.index(i))?;
+                encode_at(e, element, item, &p.index(i), wide)?;
             }
             Ok(())
         }
@@ -425,12 +449,12 @@ fn encode_at(e: &mut Encoder, tc: &TypeCode, v: &Value, p: &Path<'_>) -> Result<
                 // keep aligning against the outer stream; building it in a
                 // detached buffer restarts alignment at zero and misplaces
                 // every padding byte after the first.
-                let _ = encode_at(enc, inner_tc, inner, &Path::root());
+                let _ = encode_at(enc, inner_tc, inner, &Path::root(), wide);
             })
             .map_err(|e| Error { path: p.render(), message: e.to_string() })?;
             // Re-run the inner encode's validation, which the closure swallowed
             // so that a failure cannot leave a half-written encapsulation.
-            validate(inner_tc, inner, p)
+            validate(inner_tc, inner, p, wide)
         }
 
         (TypeCode::ObjRef { .. }, Value::ObjRef(r)) => match r {
@@ -451,9 +475,9 @@ fn encode_at(e: &mut Encoder, tc: &TypeCode, v: &Value, p: &Path<'_>) -> Result<
 }
 
 /// Type-checks without writing, for the `any` path where the writer cannot fail.
-fn validate(tc: &TypeCode, v: &Value, p: &Path<'_>) -> Result<()> {
+fn validate(tc: &TypeCode, v: &Value, p: &Path<'_>, wide: WideCodec) -> Result<()> {
     let mut probe = Encoder::new(orbweaver_cdr::Endian::Little);
-    encode_at(&mut probe, tc, v, p)
+    encode_at(&mut probe, tc, v, p, wide)
 }
 
 fn check_bound(p: &Path<'_>, bound: u32, len: usize, what: &str) -> Result<()> {
@@ -471,9 +495,10 @@ fn select_case<'c>(
     d: &Value,
     p: &Path<'_>,
     name: &str,
+    wide: WideCodec,
 ) -> Result<Option<&'c UnionCase>> {
     let mut probe = Encoder::new(orbweaver_cdr::Endian::Big);
-    encode_at(&mut probe, disc_tc, d, &p.member("_d"))?;
+    encode_at(&mut probe, disc_tc, d, &p.member("_d"), wide)?;
     let label = probe.finish().map_err(|e| Error { path: p.render(), message: e.to_string() })?;
 
     if let Some(c) = cases.iter().find(|c| c.label == label) {
@@ -491,7 +516,7 @@ fn select_case<'c>(
     ))
 }
 
-fn decode_at(d: &mut Decoder<'_>, tc: &TypeCode, p: &Path<'_>) -> Result<Value> {
+fn decode_at(d: &mut Decoder<'_>, tc: &TypeCode, p: &Path<'_>, wide: WideCodec) -> Result<Value> {
     Ok(match resolved(tc) {
         TypeCode::Null | TypeCode::Void => Value::Struct(Vec::new()),
         TypeCode::Boolean => Value::Bool(cdr(p, d.get_bool())?),
@@ -506,28 +531,18 @@ fn decode_at(d: &mut Decoder<'_>, tc: &TypeCode, p: &Path<'_>) -> Result<Value> 
         TypeCode::Float => Value::Float(cdr(p, d.get_f32())?),
         TypeCode::Double => Value::Double(cdr(p, d.get_f64())?),
         TypeCode::LongDouble => Value::LongDouble(cdr(p, d.get_long_double())?),
-        TypeCode::WChar => {
-            let unit = cdr(p, d.get_u16())?;
-            match char::decode_utf16([unit]).next() {
-                Some(Ok(c)) => Value::WChar(c),
-                _ => return p.fail(format!("0x{unit:04X} is a lone surrogate, not a character")),
-            }
-        }
+        // Through the codec, like the encoder: GIOP 1.2 prefixes a wchar with
+        // an octet count and earlier versions do not, so reading a bare u16
+        // here silently disagreed with what encode had just written.
+        TypeCode::WChar => Value::WChar(
+            wide.get_wchar(d)
+                .map_err(|err| Error { path: p.render(), message: err.to_string() })?,
+        ),
         TypeCode::String(_) => Value::String(cdr(p, d.get_string())?),
-        TypeCode::WString(_) => {
-            let octets = cdr(p, d.get_u32())?;
-            if octets % 2 != 0 {
-                return p.fail(format!("a wstring of {octets} octets is not whole UTF-16 units"));
-            }
-            let mut units = Vec::with_capacity(octets as usize / 2);
-            for _ in 0..octets / 2 {
-                units.push(cdr(p, d.get_u16())?);
-            }
-            match String::from_utf16(&units) {
-                Ok(s) => Value::WString(s),
-                Err(_) => return p.fail("wstring is not valid UTF-16"),
-            }
-        }
+        TypeCode::WString(_) => Value::WString(
+            wide.get_wstring(d)
+                .map_err(|err| Error { path: p.render(), message: err.to_string() })?,
+        ),
         TypeCode::Enum { members, name, .. } => {
             let ord = cdr(p, d.get_u32())? as usize;
             match members.get(ord) {
@@ -547,15 +562,15 @@ fn decode_at(d: &mut Decoder<'_>, tc: &TypeCode, p: &Path<'_>) -> Result<Value> 
         TypeCode::Struct { members, .. } | TypeCode::Except { members, .. } => {
             let mut out = Vec::with_capacity(members.len());
             for m in members {
-                out.push((m.name.clone(), decode_at(d, &m.tc, &p.member(&m.name))?));
+                out.push((m.name.clone(), decode_at(d, &m.tc, &p.member(&m.name), wide)?));
             }
             Value::Struct(out)
         }
         TypeCode::Union { discriminator, cases, default_index, name, .. } => {
-            let disc = decode_at(d, discriminator, &p.member("_d"))?;
-            let case = select_case(discriminator, cases, *default_index, &disc, p, name)?;
+            let disc = decode_at(d, discriminator, &p.member("_d"), wide)?;
+            let case = select_case(discriminator, cases, *default_index, &disc, p, name, wide)?;
             let value = match case {
-                Some(c) => Some(Box::new(decode_at(d, &c.tc, &p.member(&c.name))?)),
+                Some(c) => Some(Box::new(decode_at(d, &c.tc, &p.member(&c.name), wide)?)),
                 None => None,
             };
             Value::Union { discriminator: Box::new(disc), value }
@@ -569,21 +584,21 @@ fn decode_at(d: &mut Decoder<'_>, tc: &TypeCode, p: &Path<'_>) -> Result<Value> 
             let n = cdr(p, d.validate_count(n, min_width(element)))?;
             let mut out = Vec::with_capacity(n);
             for i in 0..n {
-                out.push(decode_at(d, element, &p.index(i))?);
+                out.push(decode_at(d, element, &p.index(i), wide)?);
             }
             Value::List(out)
         }
         TypeCode::Array { element, length } => {
             let mut out = Vec::with_capacity(*length as usize);
             for i in 0..*length as usize {
-                out.push(decode_at(d, element, &p.index(i))?);
+                out.push(decode_at(d, element, &p.index(i), wide)?);
             }
             Value::List(out)
         }
         TypeCode::Any => {
             let inner_tc = orbweaver_giop::typecode::decode(d)
                 .map_err(|e| Error { path: p.render(), message: e.to_string() })?;
-            let inner = decode_at(d, &inner_tc, p)?;
+            let inner = decode_at(d, &inner_tc, p, wide)?;
             Value::Any(Box::new(inner_tc), Box::new(inner))
         }
         TypeCode::ObjRef { .. } => {

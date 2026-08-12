@@ -26,7 +26,9 @@ use orbweaver_cdr::Encoder;
 use orbweaver_giop::{Connection, Error as GiopError};
 use orbweaver_registry::{OperationSig, ParamDirection, Registry};
 
-use crate::{Error, Result, Value, decode, encode};
+use orbweaver_giop::codeset::{CodeSetId, WideCodec};
+
+use crate::{Error, Result, Value, decode_with, encode_with};
 
 /// What came back from a call.
 #[derive(Debug, Clone, PartialEq)]
@@ -119,18 +121,25 @@ pub fn invoke(
 
     check_arguments(operation, sig, args)?;
 
+    // The codec comes from the connection, not from a constant. `wstring` is
+    // the one part of CDR whose encoding depends on the GIOP version rather
+    // than the TypeCode, and Phase 1 established that a peer will not infer
+    // wide-char byte order from the message byte order. Defaulting to 1.2 here
+    // would put a length in octets on a 1.1 connection that expects characters.
+    let wide = wide_codec(conn)?;
+
     // Marshal once, before sending, so a bad argument is a local error instead
     // of a half-written message and a desynchronised connection. `invoke` takes
     // a closure it may call more than once (a LOCATION_FORWARD is retried), so
     // the bytes have to be reproducible anyway.
     let mut probe = Encoder::new(conn.endian());
-    write_args(&mut probe, sig, args)?;
+    write_args(&mut probe, sig, args, wide)?;
 
     if sig.oneway {
         // A oneway has no reply to decode and no out parameters to fill; §5.3
         // treats changing one into a twoway as breaking for this reason.
         conn.invoke_oneway(operation, |e| {
-            let _ = write_args(e, sig, args);
+            let _ = write_args(e, sig, args, wide);
         })?;
         return Ok(Outcome { returns: Value::Struct(Vec::new()), outputs: BTreeMap::new() });
     }
@@ -138,11 +147,11 @@ pub fn invoke(
     let reply = match conn.invoke(operation, |e| {
         // Already validated above, so a failure here cannot happen; ignoring it
         // is safe only because of that, and only here.
-        let _ = write_args(e, sig, args);
+        let _ = write_args(e, sig, args, wide);
     }) {
         Ok(reply) => reply,
         Err(GiopError::UserException { id, reply }) => {
-            return Err(InvokeError::User(decode_user_exception(registry, &id, &reply)));
+            return Err(InvokeError::User(decode_user_exception(registry, &id, &reply, wide)));
         }
         Err(e) => return Err(e.into()),
     };
@@ -151,11 +160,11 @@ pub fn invoke(
     // Order is fixed by §7.9.1: the return value, then the out and inout
     // parameters in the order they were declared. Not alphabetical, and not the
     // order the caller happened to supply them in.
-    let returns = decode(&mut body, &sig.returns)?;
+    let returns = decode_with(&mut body, &sig.returns, wide)?;
     let mut outputs = BTreeMap::new();
     for p in &sig.params {
         if matches!(p.direction, ParamDirection::Out | ParamDirection::InOut) {
-            outputs.insert(p.name.clone(), decode(&mut body, &p.tc)?);
+            outputs.insert(p.name.clone(), decode_with(&mut body, &p.tc, wide)?);
         }
     }
     Ok(Outcome { returns, outputs })
@@ -214,20 +223,41 @@ fn check_arguments(
     Ok(())
 }
 
-fn write_args(e: &mut Encoder, sig: &OperationSig, args: &BTreeMap<String, Value>) -> Result<()> {
+fn write_args(
+    e: &mut Encoder,
+    sig: &OperationSig,
+    args: &BTreeMap<String, Value>,
+    wide: WideCodec,
+) -> Result<()> {
     for p in &sig.params {
         if matches!(p.direction, ParamDirection::In | ParamDirection::InOut) {
             let v = args.get(&p.name).expect("checked by check_arguments");
-            encode(e, &p.tc, v)?;
+            encode_with(e, &p.tc, v, wide)?;
         }
     }
     Ok(())
+}
+
+/// The wide-character codec for this connection's negotiated version.
+///
+/// GIOP 1.0 forbids `wchar` outright (§9.3.1.6), so there is no codec to build.
+/// That is only a problem for an operation that actually uses one, and saying
+/// so at that point is more useful than refusing every call on a 1.0
+/// connection — but the invoker cannot know yet, so it reports the version.
+fn wide_codec(conn: &Connection) -> std::result::Result<WideCodec, InvokeError> {
+    WideCodec::new(conn.version(), CodeSetId::UTF_16).map_err(|_| {
+        bad(format!(
+            "{} cannot carry wchar or wstring data (§9.3.1.6); this connection negotiated it",
+            conn.version()
+        ))
+    })
 }
 
 fn decode_user_exception(
     registry: &Registry,
     id: &str,
     reply: &orbweaver_giop::Reply,
+    wide: WideCodec,
 ) -> UserException {
     let members = (|| {
         let tc = registry.typecode(id)?;
@@ -236,7 +266,7 @@ fn decode_user_exception(
         // and the members follow it; re-reading from the start means skipping
         // it again rather than assuming a fresh decoder starts after it.
         body.get_string().ok()?;
-        decode(&mut body, tc).ok()
+        decode_with(&mut body, tc, wide).ok()
     })();
     UserException { id: id.to_owned(), members }
 }
@@ -344,7 +374,8 @@ mod tests {
             ("zebra".to_owned(), Value::Long(1)),
         ]);
         let mut e = Encoder::new(orbweaver_cdr::Endian::Big);
-        write_args(&mut e, sig, &args).expect("encodes");
+        let wide = WideCodec::new(orbweaver_giop::Version::V1_2, CodeSetId::UTF_16).unwrap();
+        write_args(&mut e, sig, &args, wide).expect("encodes");
         assert_eq!(
             e.finish().unwrap(),
             vec![0, 0, 0, 1, 0, 0, 0, 2],

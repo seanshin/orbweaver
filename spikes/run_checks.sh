@@ -421,14 +421,33 @@ pkill -f omniNames >/dev/null 2>&1 || true
 pkill -f register_name >/dev/null 2>&1 || true
 sleep 0.5
 rm -rf /tmp/orbweaver-names && mkdir -p /tmp/orbweaver-names
-( omniNames -start 2809 -logdir /tmp/orbweaver-names >/tmp/orbweaver-names/out.log 2>&1 & )
-names_up=0
-for _ in $(seq 1 60); do
-  lsof -nP -iTCP:2809 >/dev/null 2>&1 && { names_up=1; break; }
-  sleep 0.2
-done
+# Whether something is listening, without needing lsof. The probe used to be
+# `lsof -nP -iTCP:2809`, which is absent on a stock CI runner — so the check
+# could not tell "nothing is listening" from "I cannot look", and reported the
+# first. bash's /dev/tcp needs no package.
+port_open() { (exec 3<>/dev/tcp/127.0.0.1/"$1") >/dev/null 2>&1; }
+if ! command -v omniNames >/dev/null 2>&1; then
+  echo "  SKIPPED  omniNames is not installed — naming is unmeasured, not passing"
+  skipped=$((skipped+1))
+  names_up=-1
+else
+  ( omniNames -start 2809 -logdir /tmp/orbweaver-names >/tmp/orbweaver-names/out.log 2>&1 & )
+  names_up=0
+  for _ in $(seq 1 60); do
+    port_open 2809 && { names_up=1; break; }
+    sleep 0.2
+  done
+fi
 if [ "$names_up" -eq 0 ]; then
-  echo "  FAIL omniNames did not start on 2809"; fail_total=$((fail_total+1))
+  echo "  FAIL omniNames did not start on 2809"
+  if [ -s /tmp/orbweaver-names/out.log ]; then
+    tail -8 /tmp/orbweaver-names/out.log | sed 's/^/       | /'
+  else
+    echo "       it wrote nothing at all"
+  fi
+  fail_total=$((fail_total+1))
+elif [ "$names_up" -eq -1 ]; then
+  :
 else
   ( cd "$ROOT/spikes" && exec python3 register_name.py >/tmp/orbweaver-reg.log 2>&1 & )
   reg_up=0
@@ -516,6 +535,59 @@ else
   pkill -f "classes Server" >/dev/null 2>&1 || true
   [ "$jfail" -eq 0 ] || fail_total=$((fail_total+1))
 fi
+
+# ── Dynamic invocation: calling with nothing generated ───────────────────────
+hr "dynamic invocation — calls built from IDL text alone"
+# The whole AI path rests on this: invoke_operation gets a name and a bag of
+# values at runtime and has only the registry to work from. Checked against
+# peers we did not write, because a dynamic invoker that agrees only with our
+# own decoder has not been tested.
+dyn_fail=0
+if start_server; then
+  dv=$(cargo run -q --bin spike-dynamic -- spikes/echo.ior spikes/echo.idl \
+       IDL:spike/Echo:1.0 2>&1)
+  if printf '%s' "$dv" | grep -q "dynamic invocation: PASS"; then
+    echo "  ok   omniORB answered 8 dynamically built calls, both byte orders"
+    echo "  ok   wrong arguments are refused locally, before anything is sent"
+    echo "  ok   a refused call leaves the connection usable"
+  else
+    echo "  FAIL a dynamically built call did not work against omniORB"
+    printf '%s' "$dv" | grep "FAIL" | head -3 | sed 's/^/       /'
+    dyn_fail=1
+  fi
+else
+  dyn_fail=1
+fi
+cleanup
+if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
+  pkill -f "classes Server" >/dev/null 2>&1 || true
+  rm -f "$ROOT/spikes/jacorb.ior"
+  ( cd "$ROOT/spikes/jacorb" && exec "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Server ../jacorb.ior \
+      >/tmp/orbweaver-jdyn.log 2>&1 & )
+  jd=0
+  for _ in $(seq 1 150); do
+    [ -s "$ROOT/spikes/jacorb.ior" ] && { sleep 0.5; jd=1; break; }
+    sleep 0.1
+  done
+  if [ "$jd" -eq 1 ]; then
+    dv=$(cargo run -q --bin spike-dynamic -- spikes/jacorb.ior spikes/echo.idl \
+         IDL:spike/Echo:1.0 2>&1)
+    if printf '%s' "$dv" | grep -q "dynamic invocation: PASS"; then
+      echo "  ok   JacORB answered them too — a second, independent decoder"
+    else
+      echo "  FAIL a dynamically built call did not work against JacORB"
+      printf '%s' "$dv" | grep "FAIL" | head -3 | sed 's/^/       /'
+      dyn_fail=1
+    fi
+  else
+    echo "  FAIL JacORB server did not publish an IOR"; dyn_fail=1
+  fi
+  pkill -f "classes Server" >/dev/null 2>&1 || true
+else
+  echo "  SKIPPED  JacORB half — fixture absent"
+  skipped=$((skipped+1))
+fi
+[ "$dyn_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
 # ── Contract evolution: is the §5.3 rule table true? ─────────────────────────
 hr "contract evolution — §5.3 verdicts against a peer that predates the change"
