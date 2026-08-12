@@ -1,7 +1,9 @@
 # Orbweaver — Development Plan
 
-> Version 0.4 · 2026-08-12 · **Phase 0 complete, verdict GO** — see [`PHASE0.md`](PHASE0.md)
+> Version 0.5 · 2026-08-12 · **Phase 0 complete (GO); Phase 1 batches 1–4 landed** — see [`PHASE0.md`](PHASE0.md), [`PHASE1.md`](PHASE1.md)
 > 한국어판: [`PLAN.ko.md`](PLAN.ko.md)
+
+**Changes from v0.4** — Added the object model (§4.7) and identity/credential propagation (§4.8), which turned out to be one subject rather than two: **an IOR is a bearer address**, so making references first-class immediately raises who may hold one. Consequences: AnyJSON gains object-reference and nil rows, and has no raw-IOR encoding by design (§4.5); references crossing the MCP boundary are capability handles, not IORs; three new components (`orbweaver-object`, `orbweaver-capability`, `orbweaver-identity`); five new risks (R13–R17), of which **R13 confused deputy is the default behaviour rather than a failure mode**. Phase 2 extends to 11 weeks, a 2-week Phase 3.5 lands capability handles *with* the MCP bridge rather than after it, and identity propagation becomes its own Phase 5. Timeline 45 → 58 weeks.
 
 **Changes from v0.3** — Added the operating model (§5.1): all work runs as a batch → oracle → repair → codify loop rather than item by item, justified by the Phase 0 measurement in which 20 generated files produced 7 failures sharing 1 root cause. Added the automation roster (§5.2) mapping each loop step to a defined agent role in `.claude/agents/`. Working rules extracted to `CLAUDE.md`. Wire-compatibility rules renumbered §5.1 → §5.3.
 
@@ -256,6 +258,9 @@ All components are MIT-licensed and written in this repository.
 | 10 | `orbweaver-guard` | Interceptor chain: authorization, dry-run, approval for destructive calls, audit log |
 | 11 | `orbweaver-test` | Contract and property test generation from annotations; DynAny-driven fuzzing |
 | 12 | `orbweaver-console` | Catalog browser, contract diff viewer, invocation traces |
+| 13 | `orbweaver-object` | Object references as values, `_is_a`/`_is_equivalent`/`_hash`, POA object ids and activation policies, servant managers (§4.7) |
+| 14 | `orbweaver-capability` | The handle table: mints, resolves, scopes and expires the opaque references that cross the MCP boundary, so an agent never holds a dialable IOR (§4.7) |
+| 15 | `orbweaver-identity` | Credential store, OAuth2/JWT ↔ CSIv2 token exchange, SAS context encoding, delegation policy (§4.8) |
 
 ### 4.3 Dual-path binding
 
@@ -301,6 +306,8 @@ The dynamic path stands on a deterministic, lossless, bidirectional mapping betw
 | `struct`/`exception` | JSON object, member order preserved from IDL | CDR is positional |
 | `string`/`wstring` | JSON string (UTF-8); codeset conversion happens at the wire | One text representation agent-side |
 | `any` | `{"_t": <TypeCode repr>, "_v": ...}` | Self-description survives the crossing |
+| **object reference** | `{"_ref": <handle>, "_type": <repository id>}` | A **handle**, never a raw IOR — see §4.7 |
+| **nil reference** | `{"_ref": null}` | Distinct from an absent field |
 | NaN / ±Inf | `{"_f": "nan" \| "+inf" \| "-inf"}` | JSON has no encoding for them |
 
 Verification: for every golden-corpus type, `any → JSON → any` must reproduce identical CDR bytes (§8).
@@ -330,6 +337,127 @@ Curated per-operation tools remain available as an opt-in for small, stable, hig
 | **S7** Verify | Binding | Contract tests, interceptors, tracing | Pass verdict plus telemetry | 90% |
 
 **S4 is the safety belt of the whole system.** An LLM writes plausible IDL that may be semantically wrong; an IDL compiler rejects syntactically wrong IDL every time without exception. That asymmetry — probabilistic synthesis, deterministic verification — is what makes the trust model work. Everything upstream of S4 is allowed to be uncertain because S4 is not.
+
+### 4.7 The object model
+
+Everything so far treats a target as an address plus an operation name. That is
+enough for one-shot calls and not enough for anything else. CORBA's object model
+— references as first-class values, identity, lifecycle — is what makes a
+*conversation* possible, and the AI path needs conversations: `search_interfaces`
+→ `describe_interface` → `invoke_operation` is a workflow in which something has
+to hold a reference between steps. An agent that cannot hold a reference can only
+call targets it already knew about, which is the static world this project exists
+to escape.
+
+**References as values.** `Object`-typed parameters and returns marshal inline
+(§9.3.6), not as encapsulations. Registries hand them out, factories return them,
+and callbacks pass them in. Without this, an interface as ordinary as
+`Registry::lookup(in string name) -> Target` is uncallable.
+
+**Identity.** `_is_a` for narrowing, `_is_equivalent` and `_hash` for comparison,
+`_non_existent` for liveness. Two of these have sharp edges worth planning
+around: `_is_equivalent` is permitted to return false for two references that do
+denote the same object, so it can confirm identity but never refute it; and
+`_is_a` is answerable **locally** from the registry's inheritance graph, which is
+both faster and works when the target is unreachable.
+
+**Lifecycle.** A POA with object ids and activation policies, plus servant
+managers. `ServantLocator` is what produces `LOCATION_FORWARD`, which the client
+already follows (§Batch 1) but which we cannot yet *emit*. Dynamically created
+services need registration and retirement that cannot leak references to
+servants that are gone.
+
+#### An IOR is a bearer address, and that changes the MCP surface
+
+This is where the object model stops being a data-modelling question.
+
+**An IOR names an endpoint and an object key, and nothing else.** Anything
+holding one and able to reach the network can invoke the target directly. Hand a
+raw IOR to an agent and you have handed it a way around `orbweaver-guard` —
+around the authorization checks, the `destructive` approvals and the audit log
+(§4.6, R12). The guard would still be in the architecture diagram and no longer
+in the call path.
+
+So references crossing the MCP boundary are **capability handles**: opaque,
+unguessable tokens that the bridge maps to IORs in its own table. The agent can
+pass a handle back to `invoke_operation` and cannot dial it. Handles carry the
+target's repository id so an agent can reason about type, are scoped to the
+session that obtained them, and expire.
+
+Raw IORs remain available to native CORBA peers over the static path, where the
+caller is already inside the trust boundary. The handle exists for the boundary,
+not for the protocol.
+
+**IOR은 베어러 주소다.** 엔드포인트와 객체 키만 담고 있어서, 그것을 쥐고 네트워크에
+닿을 수 있는 누구든 대상을 직접 호출할 수 있다. 원시 IOR을 에이전트에 넘기는 것은
+`orbweaver-guard`를 우회할 수단을 넘기는 것이다 — 인가 검사도, `destructive` 승인도,
+감사로그도 함께 우회된다. 그래서 MCP 경계를 넘는 참조는 **능력 핸들**이다: 브릿지가
+자기 테이블에서 IOR로 매핑하는 불투명·추측불가 토큰이며, 세션에 종속되고 만료된다.
+
+### 4.8 Identity and credential propagation
+
+The bridge authenticates to a legacy target with **its own** credentials. The
+target therefore sees `orbweaver` on every call, whichever user or agent asked.
+Every audit trail records the same principal, and any authorization decision the
+target makes is being made about the wrong subject. This is the confused-deputy
+problem, and an AI bridge is an unusually attractive deputy: it is trusted,
+long-lived, and reachable by many callers.
+
+브릿지는 **자기** 자격증명으로 레거시에 인증한다. 그러면 대상은 누가 요청했든 모든
+호출에서 `orbweaver`만 본다. 감사 기록은 전부 같은 주체를 가리키고, 대상이 내리는
+인가 판단은 잘못된 주체에 대한 판단이 된다. 혼동된 대리자 문제이며, AI 브릿지는
+신뢰받고 오래 살아 있으며 많은 호출자가 닿을 수 있어 특히 매력적인 대리자다.
+
+Three things must travel, and they are not the same thing:
+
+| Layer | Question it answers | Mechanism |
+|---|---|---|
+| **Transport identity** | Which process is connected? | mTLS / SSLIOP certificate |
+| **Caller identity** | On whose behalf is this call made? | CSIv2 SAS identity token |
+| **Authorization attributes** | What is that caller allowed to do? | Scopes, matched against `@ai_authz` |
+
+**The standard surface is CSIv2.** `TAG_CSI_SEC_MECH_LIST` (33) in the IOR
+declares what a target accepts; the `SecurityAttributeService` context
+(ServiceId 15) carries `EstablishContext` with its client-authentication,
+identity and authorization tokens; GSSUP covers username/password, and
+`ITTPrincipalName` / `ITTX509CertChain` / `ITTAnonymous` cover identity assertion.
+
+**The bridge is a token exchange point, and that is a trust boundary rather than
+a mapping function.** Agents arrive holding OAuth2 or JWT credentials; legacy
+targets understand GSSUP or an identity token. Something must convert one into
+the other, and whatever does that conversion is asserting to the target that a
+claim it cannot itself verify is true. That deserves to be designed, logged and
+constrained — not implemented as a lookup table.
+
+**브릿지는 토큰 교환 지점이며, 이는 매핑 함수가 아니라 신뢰 경계다.** 변환을 수행하는
+주체는 대상에게 "대상이 스스로 검증할 수 없는 주장이 참이다"라고 단언하는 것이다.
+
+#### Four things that will be uncomfortable, stated now
+
+1. **CSIv2 interop across vendors is poor.** The Phase 1 audit flagged it and the
+   literature agrees. Plan for a working subset against named peers plus explicit
+   fallbacks, and treat "CSIv2 support" as a per-peer claim rather than a feature
+   we either have or do not.
+2. **Many legacy targets have no authentication at all.** Against those the bridge
+   cannot delegate; it can only *record*. Asserting an identity the target ignores
+   is theatre, and documenting it as a security control would be worse than
+   leaving it out. Where the target cannot enforce, the bridge is the only
+   enforcement point and must say so in the catalogue.
+   *대상이 강제할 수 없는 곳에서는 브릿지가 유일한 강제 지점이며, 카탈로그에 그렇게
+   표시해야 한다. 대상이 무시하는 신원을 주장하는 것은 연극이다.*
+3. **Delegation done wrong is privilege escalation.** Impersonation is default-deny
+   and enabled per interface with a recorded decision, never inherited from "the
+   agent was trusted enough to connect".
+4. **Token lifetime and connection lifetime disagree.** CORBA connections are
+   long-lived by design and tokens expire by design. Re-establishment has to
+   happen mid-connection, and a call must not silently proceed on an expired
+   context.
+
+**Credential hygiene.** A store of credentials that reach legacy systems is a
+high-value target and is treated as one: never logged, never written to disk in
+recoverable form, held for the shortest useful lifetime, and excluded from
+diagnostics by construction rather than by remembering to redact. The audit-log
+entry records *which* principal was asserted, never the material that asserted it.
 
 ### 5.1 The operating model: batch → oracle → repair → codify
 
@@ -419,7 +547,14 @@ Consequence: interface evolution happens through **versioned interfaces** (a `Tr
 
 ## 7. Roadmap
 
-Approximately 45 weeks. Building the ORB core in-house adds roughly 15 weeks over an adopt-an-ORB plan, purchased in exchange for full MIT freedom.
+Approximately 58 weeks. Building the ORB core in-house adds roughly 15 weeks
+over an adopt-an-ORB plan, purchased in exchange for full MIT freedom; the
+object model and identity propagation add a further 13 (§4.7, §4.8).
+
+That second increase is worth naming plainly rather than absorbing quietly. It
+buys two things the earlier plan assumed away: an agent that can hold a
+reference across steps instead of only making one-shot calls, and a target that
+learns *who* is calling instead of always seeing the bridge.
 
 ### Phase 0 — Feasibility spike (3 weeks) — gates everything
 
@@ -446,12 +581,16 @@ Also in Phase 0: build the **golden IDL corpus v0**, 20–30 cases covering nest
 
 *Deliverable: an MIT ORB that can call and be called by existing CORBA systems.*
 
-### Phase 2 — IDL compiler and registry (8 weeks)
+### Phase 2 — IDL compiler, registry and object model (11 weeks)
 
 - `orbweaver-idl`: IDL 4.2 front end, `@annotation`, AST, pluggable back ends
 - Differential conformance testing against tao_idl and omniidl
 - `orbweaver-registry`: type registry, remote IFR ingestion, versioning, semantic diff, breaking-change detection
 - `orbweaver-poa`: servant lifecycle and dispatch
+- `orbweaver-object`: references as values (inline marshalling), `_is_a`
+  answered locally from the inheritance graph, `_is_equivalent`/`_hash`,
+  object ids and activation policies, servant managers and the
+  `LOCATION_FORWARD` we can currently follow but not emit (§4.7)
 
 ### Phase 3 — Dynamic invocation and the AI pipeline (10 weeks) — the headline demo
 
@@ -464,6 +603,17 @@ Also in Phase 0: build the **golden IDL corpus v0**, 20–30 cases covering nest
 
 *Deliverable: an AI agent invokes an existing CORBA system with no generated code. This is the demo the project is judged on.*
 
+### Phase 3.5 — Capability handles (2 weeks)
+
+Small, and sequenced deliberately: it must land **with** the MCP bridge, not
+after it. Shipping agent-visible references as raw IORs and tightening later
+would mean a window in which the guard is bypassable, and handles already issued
+would have to be revoked.
+
+- `orbweaver-capability`: mint, resolve, scope and expire opaque handles
+- AnyJSON object-reference encoding (§4.5), which has no raw-IOR form by design
+- Guard integration: every handle resolution is an authorization point
+
 ### Phase 4 — Static generation and promotion (8 weeks)
 
 - `orbweaver-gen`: stubs, skeletons, server scaffolds, client SDKs, build files
@@ -474,7 +624,26 @@ Also in Phase 0: build the **golden IDL corpus v0**, 20–30 cases covering nest
 - Decision gate: `valuetype`/`fixed` wire support, driven by pilot demand (§4.4)
 - Optional read-only standard IFR facade (`CORBA::Repository`) so foreign DII clients can browse the registry
 
-### Phase 5 — Productionization (6 weeks)
+### Phase 5 — Identity and credential propagation (8 weeks)
+
+Its own phase rather than a line in productionization, because it is the
+difference between an audited bridge and a confused deputy (R13), and because
+getting delegation wrong is privilege escalation rather than a bug.
+
+- `TAG_CSI_SEC_MECH_LIST` parsing; per-peer capability discovery
+- `SecurityAttributeService` context (ServiceId 15): `EstablishContext`,
+  identity and authorization tokens
+- GSSUP; `ITTPrincipalName` / `ITTX509CertChain` / `ITTAnonymous`
+- OAuth2/JWT ↔ CSIv2 token exchange, with the trust boundary documented and
+  every assertion logged
+- Delegation policy: default-deny, per-interface, recorded as a decision
+- Mid-connection re-establishment on token expiry (R17)
+- Credential hygiene: no logging, no recoverable persistence, diagnostics
+  exclusion by construction (R16)
+- Catalogue marking for targets that cannot enforce, so "the bridge is the only
+  enforcement point" is visible rather than assumed
+
+### Phase 6 — Productionization (6 weeks)
 
 - TLS transport, certificate management, least-privilege scopes
 - OpenTelemetry via interceptors; dashboards
@@ -538,6 +707,11 @@ Putting an AI bridge in front of legacy CORBA widens the attack surface in ways 
 | **R10** | Dynamic path too slow | Low | Medium | Structurally solved by promotion. Hot paths always use static stubs |
 | **R11** | **Prompt injection through interface metadata** — hostile IFR/IDL text steers the agent (tool poisoning) | High | Medium | §9.0 controls: metadata untrusted by default, sanitized on render, quarantined until approved |
 | **R12** | **The bridge amplifies legacy exposure** — unauthenticated internal services become AI-reachable | High | Medium | Default-deny allowlist, per-interface exposure review, bridge-level authentication, network segmentation |
+| **R13** | **Confused deputy** — the target sees the bridge's identity on every call, so its authorization decisions and audit trail are about the wrong subject | Critical | **High** — this is the default behaviour, not a failure mode | Caller identity propagated via CSIv2 SAS (§4.8). Where a target cannot enforce, the catalogue records that the bridge is the only enforcement point rather than implying the target checks |
+| **R14** | **A raw IOR escapes to an agent** — an IOR is a bearer address, so holding one bypasses the guard entirely | Critical | Medium | Capability handles at the MCP boundary (§4.7); raw IORs never serialised into agent-visible payloads; AnyJSON has no encoding that could carry one |
+| **R15** | **CSIv2 interop is poor across vendors** — a known weakness, not a surprise | High | High | Working subset per named peer, explicit fallbacks, and "CSIv2 support" reported per peer rather than as a feature flag |
+| **R16** | **Credential store is a high-value target** | High | Medium | Never logged or persisted in recoverable form, shortest useful lifetime, excluded from diagnostics by construction; audit records which principal was asserted, never the material |
+| **R17** | **Token lifetime disagrees with connection lifetime** — CORBA connections are long-lived, tokens expire | Medium | High | Mid-connection re-establishment; a call on an expired context fails rather than silently proceeding |
 
 ---
 

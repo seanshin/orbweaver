@@ -236,6 +236,9 @@ Everything below is MIT and written in this repository unless marked otherwise.
 | `orbweaver-forge` | 명세 파이프라인 | S1–S5: ingest, synthesize, annotate, validate, register |
 | `orbweaver-mcp` | MCP 브릿지 | Projects the registry as MCP `tools/list`; delegates calls |
 | `orbweaver-guard` | 가드레일 | Interceptor chain: authz, dry-run, approval, audit log |
+| `orbweaver-object` | 객체 모델 | References as values, `_is_a`/`_is_equivalent`, POA lifecycle |
+| `orbweaver-capability` | 능력 핸들 | Opaque handles at the MCP boundary — an agent never holds a dialable IOR |
+| `orbweaver-identity` | 신원 전파 | Credential store, OAuth2/JWT ↔ CSIv2 exchange, delegation policy |
 | `orbweaver-gen` | 정적 생성 | Static generation: stubs, skeletons, scaffolds, client SDKs |
 | `orbweaver-test` | 계약 테스트 | Contract/property tests from annotations; DynAny fuzzing |
 | `orbweaver-console` | 웹 콘솔 | Catalog browser, contract diff viewer, invocation traces |
@@ -244,18 +247,20 @@ Everything below is MIT and written in this repository unless marked otherwise.
 
 ## Roadmap / 로드맵
 
-Roughly 45 weeks. Building the ORB core in-house adds about 15 weeks over an adopt-an-ORB plan; the licensing constraint buys full MIT freedom in exchange.
+Roughly 58 weeks. Building the ORB core in-house adds about 15 weeks over an adopt-an-ORB plan, bought with full MIT freedom; the object model and identity propagation add a further 13, bought with an agent that can hold a reference across steps and a target that learns *who* is calling instead of always seeing the bridge.
 
-약 45주. ORB 코어 자체 구현은 기존 ORB 채택 대비 약 15주를 추가합니다. 라이선스 제약의 대가로 완전한 MIT 자유도를 얻습니다.
+약 58주. ORB 코어 자체 구현이 약 15주를 추가하고 그 대가로 완전한 MIT 자유도를 얻습니다. 객체 모델과 신원 전파가 다시 13주를 더하고, 그 대가로 단계를 넘어 참조를 쥘 수 있는 에이전트와, 늘 브릿지만 보는 대신 *누가* 호출하는지 아는 대상을 얻습니다.
 
 | Phase | Weeks | Focus | 내용 |
 |---|---|---|---|
 | **0** | 3 | Feasibility spike — **gates everything** | 타당성 검증 — 전체의 관문 |
 | **1** | 10 | `orbweaver-cdr` + `orbweaver-giop` + IOR; interop against TAO/omniORB containers | 와이어 프로토콜 코어 및 상호운용 |
-| **2** | 8 | `orbweaver-idl` (IDL 4.2 + `@annotation`) + `orbweaver-registry` + POA | IDL 컴파일러·타입 레지스트리·POA |
+| **2** | 11 | `orbweaver-idl` + `orbweaver-registry` + POA + **object model** (references as values, identity, lifecycle) | IDL 컴파일러·레지스트리·POA·**객체 모델** |
 | **3** | 10 | `orbweaver-dynamic` + `orbweaver-forge` + `orbweaver-mcp` — **the headline demo** | 동적 호출·AI 파이프라인·MCP 브릿지 |
 | **4** | 8 | Static generation, multi-target back ends, promotion engine, contract tests | 정적 생성·다중 타깃·승격 엔진 |
-| **5** | 6 | TLS transport, observability, governance, web console, pilot | 보안·관측·거버넌스·파일럿 |
+| **3.5** | 2 | Capability handles — must land *with* the MCP bridge, not after | 능력 핸들 — 브릿지와 동시 |
+| **5** | 8 | Identity and credential propagation: CSIv2 SAS, token exchange, delegation policy | 신원·자격증명 전파 |
+| **6** | 6 | TLS transport, observability, governance, web console, pilot | 보안·관측·거버넌스·파일럿 |
 
 ### Phase 0 gates the project / Phase 0가 프로젝트의 관문
 
