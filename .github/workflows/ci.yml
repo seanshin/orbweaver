@@ -205,7 +205,10 @@ jobs:
       # of "fixture did not publish an IOR" into one clear failure.
       - name: check the fixtures can compile their IDL
         run: |
-          omniidl -bpython -o /tmp/idlcheck spikes/echo.idl
+          # -C, not -o: omniidl's output-directory flag. (tao_idl uses -o,
+          # which is why differential.sh spells it differently.)
+          mkdir -p /tmp/idlcheck
+          omniidl -bpython -C /tmp/idlcheck spikes/echo.idl
           python3 -c "import sys; sys.path.insert(0, '/tmp/idlcheck'); import spike; print('spike stubs generated')"
 
       - name: build the JacORB fixture
