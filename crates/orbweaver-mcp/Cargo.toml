@@ -20,3 +20,7 @@ workspace = true
 [[bin]]
 name = "spike-mcp"
 path = "src/bin/spike_mcp.rs"
+
+[[bin]]
+name = "orbweaver-mcp-server"
+path = "src/bin/orbweaver_mcp_server.rs"

@@ -648,6 +648,28 @@ fi
 cleanup
 [ "$mcp_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
+# ── The MCP transport, as a client drives it ─────────────────────────────────
+hr "MCP over stdio — a real client session"
+# The bridge is exercised in-process elsewhere. This is the part that only
+# exists once there is a process: handshake ordering, one JSON object per line,
+# and the rule that stdout carries the protocol and nothing else.
+stdio_fail=0
+if start_server; then
+  cargo build -q --bin orbweaver-mcp-server --bin spike-dump 2>/dev/null
+  mout=$(python3 spikes/mcp_session.py spikes/echo.ior spikes/echo.idl 2>&1)
+  if printf '%s' "$mout" | grep -q "mcp session: PASS"; then
+    printf '%s\n' "$mout" | grep "^  ok" | head -11
+  else
+    echo "  FAIL the stdio transport did not behave"
+    printf '%s' "$mout" | grep "FAIL" | head -4 | sed 's/^/       /'
+    stdio_fail=1
+  fi
+else
+  stdio_fail=1
+fi
+cleanup
+[ "$stdio_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
 # ── Contract evolution: is the §5.3 rule table true? ─────────────────────────
 hr "contract evolution — §5.3 verdicts against a peer that predates the change"
 # The differ's verdicts are predictions about deployed peers. Asserting them

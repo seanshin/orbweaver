@@ -163,6 +163,22 @@ impl CapabilityTable {
         self.live(handle).map(|e| e.type_id.as_str())
     }
 
+    /// Live handles naming an object of `type_id`.
+    ///
+    /// How an agent obtains its first handle. Without this the bootstrap
+    /// existed only on the operator's terminal, so a session could describe an
+    /// interface and had no way to reach an instance of it — the tools were
+    /// complete and the workflow was not.
+    pub fn handles_for(&self, type_id: &str) -> Vec<&str> {
+        self.entries
+            .iter()
+            .filter(|(_, e)| {
+                e.type_id == type_id && e.session == self.session && e.issued.elapsed() < self.ttl
+            })
+            .map(|(k, _)| k.as_str())
+            .collect()
+    }
+
     /// Forgets a handle. Idempotent.
     pub fn revoke(&mut self, handle: &str) -> bool {
         self.entries.remove(handle).is_some()

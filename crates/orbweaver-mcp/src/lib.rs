@@ -31,6 +31,8 @@
 
 pub mod handles;
 pub mod policy;
+pub mod rpc;
+pub mod session;
 
 use std::collections::BTreeMap;
 
@@ -123,12 +125,24 @@ impl<'a> Bridge<'a> {
 
     /// `search_interfaces(query)`.
     pub fn search(&self, query: &str, limit: usize) -> Json {
-        search_interfaces(self.registry, &self.exposure, query, limit)
+        search_interfaces(self.registry, &self.exposure, &self.handles, query, limit)
     }
 
     /// `describe_interface(id)`.
     pub fn describe(&self, id: &str) -> Result<Json, Denied> {
         describe_interface(self.registry, &self.exposure, id)
+    }
+
+    /// Whether this session may call `operation` on what `handle` names.
+    ///
+    /// Answerable without a target, and deliberately so: see `check_handle`.
+    pub fn check(
+        &self,
+        handle: &str,
+        operation: &str,
+        approval: Approval,
+    ) -> Result<String, ToolError> {
+        check_handle(self.registry, &self.exposure, &self.handles, handle, operation, approval)
     }
 
     /// `invoke_operation(handle, operation, args)`.
@@ -172,7 +186,13 @@ fn s(text: impl Into<String>) -> Json {
 /// match is what can be built without a model in the loop, and calling it
 /// semantic would overstate it. Results are capped, and the count of what was
 /// left out is reported rather than dropped silently.
-fn search_interfaces(registry: &Registry, exposure: &Exposure, query: &str, limit: usize) -> Json {
+fn search_interfaces(
+    registry: &Registry,
+    exposure: &Exposure,
+    table: &CapabilityTable,
+    query: &str,
+    limit: usize,
+) -> Json {
     let needle = query.trim().to_lowercase();
     let mut hits: Vec<Json> = Vec::new();
     let mut matched = 0usize;
@@ -197,6 +217,9 @@ fn search_interfaces(registry: &Registry, exposure: &Exposure, query: &str, limi
                 ("id", s(id)),
                 ("description", s(desc)),
                 ("operations", Json::Number(iface.operations.len().to_string())),
+                // The bootstrap: an agent cannot construct a handle and has to
+                // be given one. Only this session's, and only live ones.
+                ("handles", Json::Array(table.handles_for(id).into_iter().map(s).collect())),
             ]));
         }
     }
@@ -306,6 +329,33 @@ fn type_name(tc: &orbweaver_giop::typecode::TypeCode) -> String {
     }
 }
 
+/// The security half of a call: does this handle name something, and may this
+/// session call that operation on it?
+///
+/// Separate from making the call because the answer must not depend on whether
+/// a target happens to be reachable. A forged handle that got "no target to
+/// call" would be telling the caller their handle was fine, which is a fact
+/// about server state they were not given. Security first, operational reality
+/// second.
+///
+/// The type comes from the table rather than from the request, so the policy
+/// check runs against what the handle actually names and not against anything
+/// the caller asserted.
+fn check_handle(
+    registry: &Registry,
+    exposure: &Exposure,
+    table: &CapabilityTable,
+    handle: &str,
+    operation: &str,
+    approval: Approval,
+) -> Result<String, ToolError> {
+    let Some(id) = table.type_of(handle).map(str::to_owned) else {
+        return Err(ToolError::UnknownHandle(handle.to_owned()));
+    };
+    exposure.check_call(registry, &id, operation, approval)?;
+    Ok(id)
+}
+
 /// `invoke_operation(handle, operation, args)` — the call.
 ///
 /// `handle` is a capability handle, never an address: §4.7. The reference it
@@ -321,12 +371,7 @@ fn invoke_operation(
     args: &Json,
     approval: Approval,
 ) -> Result<Json, ToolError> {
-    // The type first, so the policy check happens against what the handle
-    // actually names rather than against anything the caller asserted.
-    let Some(id) = table.type_of(handle).map(str::to_owned) else {
-        return Err(ToolError::UnknownHandle(handle.to_owned()));
-    };
-    exposure.check_call(registry, &id, operation, approval)?;
+    let id = check_handle(registry, exposure, table, handle, operation, approval)?;
 
     let Some((_, sig)) = registry.resolve_operation(&id, operation) else {
         // Reachable when the exposure names an operation the contract does not
@@ -434,7 +479,7 @@ mod tests {
     fn search_returns_only_what_is_exposed() {
         let r = registry(IDL);
         let e = Exposure::nothing().allow_interface("IDL:bank/Account:1.0");
-        let hits = search_interfaces(&r, &e, "", 10);
+        let hits = search_interfaces(&r, &e, &CapabilityTable::new("t"), "", 10);
         let Some(Json::Array(list)) = hits.get("interfaces") else { panic!("{hits}") };
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].get("id").and_then(Json::as_str), Some("IDL:bank/Account:1.0"));
@@ -450,7 +495,7 @@ mod tests {
         let e = Exposure::nothing()
             .allow_interface("IDL:bank/Account:1.0")
             .allow_interface("IDL:bank/Ledger:1.0");
-        let hits = search_interfaces(&r, &e, "aggregate", 10);
+        let hits = search_interfaces(&r, &e, &CapabilityTable::new("t"), "aggregate", 10);
         let Some(Json::Array(list)) = hits.get("interfaces") else { panic!() };
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].get("id").and_then(Json::as_str), Some("IDL:bank/Ledger:1.0"));
@@ -470,7 +515,7 @@ mod tests {
         for i in 0..20 {
             e = e.allow_interface(format!("IDL:big/I{i}:1.0"));
         }
-        let hits = search_interfaces(&r, &e, "", 5);
+        let hits = search_interfaces(&r, &e, &CapabilityTable::new("t"), "", 5);
         assert_eq!(hits.get("matched"), Some(&Json::Number("20".into())));
         assert_eq!(hits.get("truncated"), Some(&Json::Bool(true)));
     }

@@ -403,3 +403,91 @@ does not call an external compiler: the differential oracles
 — and belong on a different cadence. S1–S3 (ingest, synthesis, annotation) need
 a model in the loop and are not here; what is here is the thing that lets them
 be uncertain.
+
+---
+
+# Batch 5: the transport, and the gap it exposed
+
+Everything before this exercised the bridge in-process. `orbweaver-mcp-server`
+is the part that only exists once there is a process: JSON-RPC 2.0 over stdio,
+one object per line, driven by `spikes/mcp_session.py` the way a client drives
+it.
+
+```
+MCP over stdio — a real client session
+  ok   initialize -> protocol 2024-11-05
+  ok   tools/list -> the generic triad, whatever the catalog holds
+  ok   search_interfaces hands the session a handle, so it can bootstrap itself
+  ok   describe_interface shows the two exposed operations and hides nine
+  ok   invoke_operation(add, 40, 2) -> 42, through a capability handle
+  ok   an unexposed operation is refused as content, not as a protocol error
+  ok   a forged handle resolves to nothing
+  ok   an unknown method is a JSON-RPC error, unlike a refused tool call
+  ok   a malformed line is answered rather than closing the session
+  ok   9 frames on stdout, every one a single-line JSON object
+  ok   no endpoint or stringified IOR on the wire to the agent
+```
+
+## The gap: nothing carried a handle
+
+The first driver fed every frame down a pipe at once and read the handle out of
+an earlier run. It could not work, and it was right not to — a capability table
+belongs to one session, so a handle from another process is worthless. **That is
+the property.**
+
+But rewriting the driver to be interactive surfaced the real problem: at that
+point nothing in a *result* carried a handle at all. The bootstrap existed only
+as a line on the operator's terminal. A session could search a catalog, read a
+contract, and had no way to reach an instance of anything.
+
+`search_interfaces` now carries the live handles this session holds for each
+interface. Three tools still, and the workflow closes.
+
+A test that could only be written by simulating a real client is what found it.
+Every in-process test had passed, because every one of them was handed a handle
+by the code that wrote the test.
+
+첫 드라이버는 모든 프레임을 한 번에 파이프로 밀어 넣고 **이전 실행의 핸들**을 썼다.
+동작할 리 없고, 동작하지 않는 것이 맞다 — 능력 테이블은 한 세션의 것이므로 다른
+프로세스의 핸들은 무가치하다. **그것이 성질이다.** 그런데 드라이버를 대화형으로 고치자
+진짜 문제가 드러났다: 그때까지 **어떤 결과도 핸들을 싣지 않았다.** 부트스트랩은 운영자
+터미널의 한 줄로만 존재했고, 세션은 카탈로그를 뒤지고 계약을 읽을 수 있었지만 그
+인스턴스에 닿을 방법이 없었다. 실제 클라이언트를 흉내내야만 쓸 수 있는 테스트가
+그것을 찾았다 — 인프로세스 테스트는 전부 통과했는데, 전부 테스트를 쓴 코드가 핸들을
+쥐여주고 있었기 때문이다.
+
+## Ordering is a security property
+
+A session with no target used to answer a forged handle with *"this session has
+no target to call"*, which tells the caller their handle might have been fine —
+a fact about server state they were not given. The handle and the policy are now
+checked **before** the connection is looked at, so the answer is the same either
+way. One helper does both checks, for the invoker and for the transport, because
+two copies of a security check are one copy and one liability.
+
+## Refusal and error are different answers
+
+A denied tool call is a **successful** JSON-RPC response carrying `isError`.
+A protocol error says the request was malformed and invites a retry of the same
+thing; a refusal says it was understood and denied, which is what an agent must
+act on. Only `initialize`-ordering, unknown methods and malformed frames are
+protocol errors.
+
+## stdout is the protocol
+
+One JSON object per line and nothing else, ever. The root handle an operator
+needs goes to stderr — on stdout it would be a stray frame, and the client would
+report the session as malformed JSON rather than as the bug it is. A test asserts
+every emittable frame is a single line, including the ones built from hostile
+input.
+
+## What is not verified
+
+**No real MCP client has driven this server in this repository.** The shapes
+follow the `2024-11-05` revision and the harness drives them with hand-written
+frames, which checks that the server is self-consistent and does not check that
+a client agrees. It is a genuine gap and is stated rather than left to be found.
+
+**실제 MCP 클라이언트가 이 서버를 구동한 적은 없다.** 하네스는 손으로 쓴 프레임으로
+구동하며, 이는 서버가 자기 자신과 일관됨을 확인할 뿐 클라이언트가 동의함을 확인하지
+않는다. 진짜 공백이고, 나중에 발견되도록 두지 않고 적어 둔다.
