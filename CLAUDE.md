@@ -74,8 +74,30 @@ fixtures, never dependencies.**
 - CI images containing them are built or pulled inside CI and **never published**
   as project artifacts — publishing is redistribution.
 
-Before adding any dependency, check its license against this rule. MIT or
-MIT-equivalent, otherwise we write it.
+**Amended 2026-08-12 (D001, approved).** MIT for everything we write. Where a
+component is **data we cannot originate** — a character mapping table, a
+timezone database — permissive-with-attribution is accepted, disclosed in
+`NOTICE`, and recorded under `docs/decisions/`.
+
+The distinction is the point, not a loophole. Logic defined by a published
+specification we implement ourselves and owe nobody for; that is why the ORB
+core is first-party. A mapping table is somebody's compilation of facts with no
+specification to implement from, so retyping it produces the same derived work
+rather than an original one — *a table derived from an incompatibly-licensed
+source is not laundered by being retyped.*
+
+우리가 쓰는 것은 MIT. **우리가 원저작할 수 없는 데이터**는 귀속 표시 조건의 관대
+라이선스를 허용하되 `NOTICE`에 공개하고 결정으로 기록한다. 로직과 데이터의 구분이
+핵심이며 빠져나갈 구멍이 아니다.
+
+Currently accepted under this clause: `encoding_rs` for EUC-KR, behind the
+default-on `euc-kr` feature. `--no-default-features` removes it and the
+obligation. Both configurations are tested by `run_phase0.sh`.
+
+Before adding any dependency, check its licence against this rule — and check
+the provenance of its *data*, not only its declared licence. A crate declaring
+MIT over a table it does not account for is a worse position than an honestly
+disclosed BSD-3-Clause.
 
 ### IDL rules the compiler enforces / 컴파일러가 강제하는 IDL 규칙
 

@@ -51,6 +51,26 @@ else
 fi
 
 # ── Lint (runs before the oracle, on purpose) ────────────────────────────────
+hr "licence boundary"
+if cargo tree --workspace 2>/dev/null | grep -qiE "omniorb|jacorb"; then
+  echo "  FAIL an ORB fixture has become a dependency"; fail_total=$((fail_total+1))
+else
+  echo "  ok   no ORB fixture appears in cargo tree"
+fi
+# NOTICE promises that --no-default-features drops encoding_rs and the
+# BSD-3-Clause obligation with it. That promise is testable, so it is tested.
+if cargo tree -p orbweaver-giop --no-default-features 2>/dev/null | grep -q encoding_rs; then
+  echo "  FAIL --no-default-features still pulls encoding_rs; NOTICE is wrong"
+  fail_total=$((fail_total+1))
+else
+  echo "  ok   --no-default-features drops encoding_rs, as NOTICE states"
+fi
+if cargo test -p orbweaver-giop --lib --no-default-features --quiet >/dev/null 2>&1; then
+  echo "  ok   the attribution-free build still passes its tests"
+else
+  echo "  FAIL the attribution-free build does not build or test"; fail_total=$((fail_total+1))
+fi
+
 hr "IDL lint — case-insensitive identifier clashes"
 lint_out=$(python3 spikes/idl_lint.py corpus/golden/*.idl corpus/requirements/generated/*.idl spikes/*.idl 2>&1)
 if [ -z "$lint_out" ]; then

@@ -9,6 +9,8 @@ rust-version.workspace = true
 
 [dependencies]
 orbweaver-cdr = { path = "../orbweaver-cdr" }
+# See NOTICE and docs/decisions/D001: data we cannot originate.
+encoding_rs = { version = "0.8", optional = true }
 
 [lints]
 workspace = true
@@ -20,3 +22,10 @@ path = "src/bin/spike_interop.rs"
 [[bin]]
 name = "spike-dump"
 path = "src/bin/spike_dump.rs"
+
+[features]
+# EUC-KR conversion pulls in encoding_rs, whose BSD-3-Clause term covers the
+# WHATWG mapping data. Default-on so Korean peers work out of the box;
+# --no-default-features removes both the support and the obligation.
+default = ["euc-kr"]
+euc-kr = ["dep:encoding_rs"]

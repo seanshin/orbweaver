@@ -279,10 +279,48 @@ Two design choices worth stating:
 Latin-1 conversion **refuses** Korean rather than substituting. A silent
 substitution is how mojibake reaches a database and stays there.
 
-## Still open after Batch 2
+## EUC-KR — approved and landed
 
-- **EUC-KR conversion** — blocked on the `D001` sign-off above. The seam is in
-  place, so adding it is a table drop-in rather than a redesign.
+`D001` was approved, the policy amended, and `encoding_rs` adopted behind the
+default-on `euc-kr` feature with attribution in [`NOTICE`](../NOTICE).
+
+Verified against an **independent** implementation rather than a self-round-trip:
+`"함정 전투체계"` must encode to `c7d4 c1a4 20 c0fc c5f5 c3bc b0e8`, which is
+what Python's EUC-KR codec produces. A self-round-trip would pass even if the
+table were wrong in a self-consistent way. 13 bytes against 19 in UTF-8 — the
+whole reason peers use it.
+
+자기 왕복이 아니라 **독립 구현**과 대조해 검증했다. 자기 왕복은 테이블이 자기모순
+없이 틀려도 통과한다.
+
+Two behaviours worth pinning, both of which the library gets wrong for our
+purposes by default:
+
+- **`encoding_rs` substitutes HTML numeric character references** for
+  characters it cannot map. Correct for a browser; catastrophic here, because
+  the peer would receive the literal text `&#26085;`. We check the flag and
+  raise `Untranslatable`, naming the offending text in the message.
+- **Malformed input decodes to U+FFFD.** Accepting that hands the caller a
+  string that looks fine and is not what the peer sent. We raise `Malformed`.
+
+A third case emerged while testing the attribution-free build. With `euc-kr`
+off, a Korean-only peer produced `Incompatible` — technically true, and
+misleading: it sends an operator hunting a peer misconfiguration that does not
+exist. Negotiation now checks whether the peer asked for something this crate
+*implements but this build excluded*, and reports `Unsupported` so the
+diagnostic points at the build flags.
+
+`--no-default-features` drops the dependency and the obligation, and the
+harness tests that promise rather than repeating it:
+
+```
+licence boundary
+  ok   no ORB fixture appears in cargo tree
+  ok   --no-default-features drops encoding_rs, as NOTICE states
+  ok   the attribution-free build still passes its tests
+```
+
+## Still open after Batch 2
 - Wiring the negotiated converter through `Connection` and the string paths,
   including the per-connection "send the context once" rule and the
   `MARSHAL` minor 9 case for conflicting contexts on one connection.

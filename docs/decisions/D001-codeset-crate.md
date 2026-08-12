@@ -1,9 +1,7 @@
 # D001 — EUC-KR conversion: which dependency, if any
 
-**Status:** RESOLVED for everything except the EUC-KR table itself, which needs
-an owner sign-off because it amends the licensing policy.
-**상태:** EUC-KR 테이블을 제외하고 해결. 테이블은 라이선스 방침 개정이 필요하므로
-소유자 승인 대기.
+**Status:** APPROVED and implemented 2026-08-12. Policy amended; `encoding_rs` adopted behind the default-on `euc-kr` feature with attribution in `NOTICE`.
+**상태:** 2026-08-12 승인·구현 완료. 방침 개정, `encoding_rs` 채택, `NOTICE`에 귀속 표시.
 
 **Verified 2026-08-12** against the actual licence files, not summaries.
 
@@ -71,7 +69,24 @@ than an unexplained MIT.
 아니라 **가장 신뢰하기 어려운 선택**이다. 데이터 출처를 설명하지 않는 MIT 선언은
 상류 의무를 없애지 않고 가릴 뿐이다.
 
-## Recommendation / 권고
+## Outcome / 결과 — approved and implemented
+
+**`encoding_rs` adopted for EUC-KR, behind the default-on `euc-kr` feature.**
+Attribution is in `NOTICE`; the policy amendment is in `CLAUDE.md`, `README.md`
+and `PLAN.md` §10. `--no-default-features` removes both the dependency and the
+obligation, and `run_phase0.sh` tests that promise rather than merely repeating
+it.
+
+Verification of the table itself was done against an **independent**
+implementation rather than a self-round-trip: `"함정 전투체계"` must encode to
+`c7d4 c1a4 20 c0fc c5f5 c3bc b0e8`, which is what Python's EUC-KR codec
+produces. A self-round-trip would pass even if the table were wrong in a
+self-consistent way.
+
+테이블 검증은 자기 왕복이 아니라 **독립 구현**과 대조했다. 자기 왕복은 테이블이
+자기모순 없이 틀려도 통과하기 때문이다.
+
+## Recommendation as filed / 당시 권고
 
 **Use `encoding_rs` for EUC-KR, and amend the policy to say so explicitly.**
 

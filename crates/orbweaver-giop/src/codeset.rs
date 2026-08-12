@@ -43,7 +43,8 @@ impl CodeSetId {
     pub const UTF_8: CodeSetId = CodeSetId(0x0501_0001);
     /// ISO 646:1991 IRV (7-bit ASCII).
     pub const ASCII: CodeSetId = CodeSetId(0x0001_0020);
-    /// EUC-KR. Conversion is not implemented; see `docs/decisions/D001`.
+    /// EUC-KR (Windows-949 / Unified Hangul Code). Conversion requires the
+    /// `euc-kr` feature; see `NOTICE` and `docs/decisions/D001`.
     pub const EUC_KR: CodeSetId = CodeSetId(0x0004_0002);
 
     /// A human-readable name, for diagnostics.
@@ -59,12 +60,18 @@ impl CodeSetId {
         }
     }
 
-    /// Whether this crate can convert to and from it today.
+    /// Whether this build can convert to and from it.
+    ///
+    /// EUC-KR depends on the `euc-kr` feature, which pulls in `encoding_rs`
+    /// and its BSD-3-Clause attribution for the WHATWG mapping data. Building
+    /// without it removes both the support and the obligation, so this is a
+    /// build-time question rather than a fixed list.
     pub fn is_supported(self) -> bool {
-        matches!(
-            self,
-            CodeSetId::ISO_8859_1 | CodeSetId::UTF_8 | CodeSetId::ASCII | CodeSetId::UTF_16
-        )
+        match self {
+            CodeSetId::ISO_8859_1 | CodeSetId::UTF_8 | CodeSetId::ASCII | CodeSetId::UTF_16 => true,
+            CodeSetId::EUC_KR => cfg!(feature = "euc-kr"),
+            _ => false,
+        }
     }
 }
 
@@ -170,6 +177,29 @@ pub enum NegotiationError {
     /// The server declared no wchar codeset but wide data is required.
     /// `INV_OBJREF` minor 1 in §7.10.2.6.
     NoWcharCodeSet,
+    /// The codeset is supported, but this particular text has no
+    /// representation in it. `DATA_CONVERSION` in CORBA terms.
+    Untranslatable {
+        /// The codeset that cannot carry the text.
+        codeset: CodeSetId,
+        /// A short excerpt, so the report names the offending data.
+        text: String,
+    },
+    /// Received bytes are not valid in the negotiated codeset.
+    Malformed {
+        /// The codeset the bytes were supposed to be in.
+        codeset: CodeSetId,
+    },
+}
+
+/// Keeps a diagnostic readable without swallowing the evidence.
+fn truncate_for_message(s: &str) -> String {
+    const MAX: usize = 32;
+    if s.chars().count() <= MAX {
+        return s.to_owned();
+    }
+    let head: String = s.chars().take(MAX).collect();
+    format!("{head}…")
 }
 
 impl std::fmt::Display for NegotiationError {
@@ -189,16 +219,29 @@ impl std::fmt::Display for NegotiationError {
             NegotiationError::NoWcharCodeSet => {
                 write!(f, "peer declared no wchar codeset")
             }
+            NegotiationError::Untranslatable { codeset, text } => {
+                write!(f, "text has no representation in {codeset}: {text:?}")
+            }
+            NegotiationError::Malformed { codeset } => {
+                write!(f, "received bytes are not valid {codeset}")
+            }
         }
     }
 }
 
 /// What this implementation offers for `char` data.
+///
+/// Conversion order is preference order (§7.10.2.6 case 4 resolves by it), so
+/// EUC-KR sits ahead of the Latin sets: against a Korean peer that offers both,
+/// choosing EUC-KR carries the text and choosing ISO-8859-1 destroys it.
 pub fn client_char_component() -> CodeSetComponent {
-    CodeSetComponent {
-        native: Some(CodeSetId::UTF_8),
-        conversions: vec![CodeSetId::ISO_8859_1, CodeSetId::ASCII],
+    let mut conversions = Vec::new();
+    if cfg!(feature = "euc-kr") {
+        conversions.push(CodeSetId::EUC_KR);
     }
+    conversions.push(CodeSetId::ISO_8859_1);
+    conversions.push(CodeSetId::ASCII);
+    CodeSetComponent { native: Some(CodeSetId::UTF_8), conversions }
 }
 
 /// What this implementation offers for `wchar` data.
@@ -249,10 +292,33 @@ pub fn negotiate(
         return check_supported(CodeSetId::UTF_8);
     }
 
+    // Before declaring the peers incompatible, check whether the peer asked for
+    // something this crate knows about but was built without. That is a
+    // different situation and deserves a different report: "rebuild with the
+    // feature" rather than "the peer is misconfigured", which would send an
+    // operator hunting a problem that does not exist.
+    if let Some(missing) = server
+        .native
+        .into_iter()
+        .chain(server.conversions.iter().copied())
+        .find(|id| compiled_out(*id))
+    {
+        return Err(NegotiationError::Unsupported(missing));
+    }
+
     Err(NegotiationError::Incompatible {
         client_native,
         server_native: server.native,
     })
+}
+
+/// Whether a codeset has an implementation in this crate that the current
+/// build excluded, as opposed to one we have never implemented.
+fn compiled_out(id: CodeSetId) -> bool {
+    match id {
+        CodeSetId::EUC_KR => !cfg!(feature = "euc-kr"),
+        _ => false,
+    }
 }
 
 fn check_supported(id: CodeSetId) -> std::result::Result<CodeSetId, NegotiationError> {
@@ -311,6 +377,20 @@ impl Converter {
                 }
                 Ok(out)
             }
+            #[cfg(feature = "euc-kr")]
+            CodeSetId::EUC_KR => {
+                let (bytes, _, unmappable) = encoding_rs::EUC_KR.encode(s);
+                // encoding_rs substitutes numeric character references for
+                // characters it cannot map. That is correct for HTML and wrong
+                // here: a CORBA peer would receive "&#26085;" as literal text.
+                if unmappable {
+                    return Err(NegotiationError::Untranslatable {
+                        codeset: self.id,
+                        text: truncate_for_message(s),
+                    });
+                }
+                Ok(bytes.into_owned())
+            }
             other => Err(NegotiationError::Unsupported(other)),
         }
     }
@@ -337,6 +417,16 @@ impl Converter {
                     .map(|c| u16::from_be_bytes([c[0], c[1]]))
                     .collect();
                 String::from_utf16(&units).map_err(|_| NegotiationError::Unsupported(self.id))
+            }
+            #[cfg(feature = "euc-kr")]
+            CodeSetId::EUC_KR => {
+                let (text, _, malformed) = encoding_rs::EUC_KR.decode(bytes);
+                // Malformed input becomes U+FFFD. Accepting that would hand the
+                // caller a string that looks fine and is not what the peer sent.
+                if malformed {
+                    return Err(NegotiationError::Malformed { codeset: self.id });
+                }
+                Ok(text.into_owned())
             }
             other => Err(NegotiationError::Unsupported(other)),
         }
@@ -466,23 +556,34 @@ mod tests {
         ));
     }
 
-    /// A peer asking for EUC-KR must produce a distinct, actionable error —
-    /// not `Incompatible`, because the peers agree and the gap is ours.
+    /// EUC-KR support is a build-time property, so this asserts the right
+    /// behaviour in both configurations rather than pinning one of them.
+    ///
+    /// With the feature on, a Korean peer negotiates successfully. With it off,
+    /// the result must be `Unsupported` and never `Incompatible`: the two sides
+    /// agree and the gap is ours, so the report should send someone to our
+    /// build flags, not hunting a peer misconfiguration that does not exist.
     #[test]
-    fn euc_kr_is_refused_as_unsupported_not_incompatible() {
-        let client = CodeSetComponent {
+    fn euc_kr_availability_follows_the_feature() {
+        let peer = CodeSetComponent {
             native: Some(CodeSetId::EUC_KR),
-            conversions: vec![],
+            conversions: vec![CodeSetId::EUC_KR],
         };
-        let server = client.clone();
-        match negotiate(&client, &server) {
-            Err(NegotiationError::Unsupported(id)) => assert_eq!(id, CodeSetId::EUC_KR),
-            other => panic!("expected Unsupported(EUC-KR), got {other:?}"),
+        let outcome = negotiate(&client_char_component(), &peer);
+
+        if cfg!(feature = "euc-kr") {
+            assert_eq!(outcome.unwrap(), CodeSetId::EUC_KR);
+            assert!(Converter::new(CodeSetId::EUC_KR).is_ok());
+        } else {
+            match outcome {
+                Err(NegotiationError::Unsupported(id)) => assert_eq!(id, CodeSetId::EUC_KR),
+                other => panic!("expected Unsupported(EUC-KR), got {other:?}"),
+            }
+            assert!(matches!(
+                Converter::new(CodeSetId::EUC_KR),
+                Err(NegotiationError::Unsupported(_))
+            ));
         }
-        assert!(matches!(
-            Converter::new(CodeSetId::EUC_KR),
-            Err(NegotiationError::Unsupported(_))
-        ));
     }
 
     // ── conversion ──────────────────────────────────────────────────────────
@@ -528,6 +629,92 @@ mod tests {
     fn utf16_rejects_an_odd_length() {
         let c = Converter::new(CodeSetId::UTF_16).unwrap();
         assert!(c.decode(&[0x00, 0xD5, 0x48]).is_err());
+    }
+
+    // ── EUC-KR (feature `euc-kr`; see NOTICE and docs/decisions/D001) ───────
+
+    /// Cross-checked against Python's independent EUC-KR codec: the bytes are
+    /// c7d4 c1a4 20 c0fc c5f5 c3bc b0e8 for "함정 전투체계". Two implementations
+    /// agreeing on the exact bytes is worth more than a self-round-trip, which
+    /// would pass even if the table were wrong in a self-consistent way.
+    #[cfg(feature = "euc-kr")]
+    #[test]
+    fn euc_kr_matches_an_independent_implementation() {
+        let c = Converter::new(CodeSetId::EUC_KR).unwrap();
+        let s = "함정 전투체계";
+        let expected = [
+            0xc7, 0xd4, 0xc1, 0xa4, 0x20, 0xc0, 0xfc, 0xc5, 0xf5, 0xc3, 0xbc, 0xb0, 0xe8,
+        ];
+        assert_eq!(c.encode(s).unwrap(), expected);
+        assert_eq!(c.decode(&expected).unwrap(), s);
+        assert_eq!(
+            expected.len(),
+            13,
+            "13 bytes in EUC-KR against 19 in UTF-8 — the whole reason peers use it"
+        );
+    }
+
+    #[cfg(feature = "euc-kr")]
+    #[test]
+    fn euc_kr_handles_ascii_and_mixed_text() {
+        let c = Converter::new(CodeSetId::EUC_KR).unwrap();
+        for s in ["", "plain ascii", "IDL 4.2 명세 / spec", "가나다"] {
+            assert_eq!(c.decode(&c.encode(s).unwrap()).unwrap(), s, "failed on {s:?}");
+        }
+    }
+
+    /// encoding_rs substitutes HTML numeric character references for
+    /// unmappable characters. Correct for a browser, catastrophic here: the
+    /// peer would receive the literal text "&#26085;" instead of a character.
+    #[cfg(feature = "euc-kr")]
+    #[test]
+    fn euc_kr_refuses_unmappable_text_rather_than_substituting() {
+        let c = Converter::new(CodeSetId::EUC_KR).unwrap();
+        match c.encode("emoji 🛰 does not exist in EUC-KR") {
+            Err(NegotiationError::Untranslatable { codeset, text }) => {
+                assert_eq!(codeset, CodeSetId::EUC_KR);
+                assert!(text.contains("🛰"), "the diagnostic must name the offending data");
+            }
+            Ok(bytes) => panic!(
+                "silently produced {} bytes instead of failing: {:?}",
+                bytes.len(),
+                String::from_utf8_lossy(&bytes)
+            ),
+            other => panic!("expected Untranslatable, got {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "euc-kr")]
+    #[test]
+    fn euc_kr_rejects_malformed_input_rather_than_replacing_it() {
+        let c = Converter::new(CodeSetId::EUC_KR).unwrap();
+        // 0xC7 begins a two-byte sequence; 0x20 cannot continue it.
+        match c.decode(&[0xC7, 0x20, 0xFF]) {
+            Err(NegotiationError::Malformed { codeset }) => {
+                assert_eq!(codeset, CodeSetId::EUC_KR)
+            }
+            Ok(s) => panic!("accepted malformed bytes as {s:?} (U+FFFD smuggled in)"),
+            other => panic!("expected Malformed, got {other:?}"),
+        }
+    }
+
+    /// The negotiation this feature exists for: a Korean peer offering both
+    /// EUC-KR and Latin-1 must get EUC-KR, because Latin-1 destroys the text.
+    #[cfg(feature = "euc-kr")]
+    #[test]
+    fn korean_peer_negotiates_euc_kr_not_latin1() {
+        let server = CodeSetComponent {
+            native: Some(CodeSetId::EUC_KR),
+            conversions: vec![CodeSetId::ISO_8859_1, CodeSetId::EUC_KR],
+        };
+        let chosen = negotiate(&client_char_component(), &server).unwrap();
+        assert_eq!(chosen, CodeSetId::EUC_KR);
+        // And the choice actually carries the text, which is the point.
+        assert!(Converter::new(chosen).unwrap().encode("함정 전투체계").is_ok());
+        assert!(
+            Converter::new(CodeSetId::ISO_8859_1).unwrap().encode("함정 전투체계").is_err(),
+            "the alternative would have destroyed it"
+        );
     }
 
     #[test]

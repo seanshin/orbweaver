@@ -178,9 +178,17 @@ Pure code generation breaks automation the moment a schema changes — every cha
 
 ## Licensing stance / 라이선스 방침
 
-**This project is MIT-licensed, and every component we ship is MIT or MIT-equivalent — or we write it ourselves.** That constraint has a hard consequence worth stating plainly:
+**MIT for everything we write. Where a component is _data we cannot originate_ — a character mapping table — permissive-with-attribution is accepted, disclosed in [`NOTICE`](NOTICE), and recorded under [`docs/decisions/`](docs/decisions/).**
 
-**이 프로젝트는 MIT이며, 배포하는 모든 구성요소는 MIT 또는 MIT 동등이거나 직접 구현합니다.** 이 제약에는 분명히 밝혀 둘 결과가 하나 있습니다.
+**우리가 쓰는 것은 MIT. _우리가 원저작할 수 없는 데이터_는 귀속 표시 조건의 관대 라이선스를 허용하되 [`NOTICE`](NOTICE)에 공개하고 [`docs/decisions/`](docs/decisions/)에 기록합니다.**
+
+The distinction is the point. Logic defined by a published specification we implement ourselves; a mapping table is somebody's compilation of facts, and retyping it produces the same derived work rather than an original one. Today that clause covers exactly one component: `encoding_rs` for EUC-KR, behind a default-on feature that `--no-default-features` removes along with the obligation — a promise the harness tests rather than merely states.
+
+구분이 핵심입니다. 공개 명세로 정의된 로직은 직접 구현하지만, 매핑 테이블은 누군가의 사실 편찬물이라 옮겨 적어도 원저작물이 되지 않습니다.
+
+That policy has a hard consequence worth stating plainly:
+
+이 방침에는 분명히 밝혀 둘 결과가 하나 있습니다.
 
 > **No CORBA ORB is available under MIT.** Verified 2026-08.
 > **MIT 라이선스로 제공되는 CORBA ORB는 존재하지 않습니다.** 2026-08 확인.
