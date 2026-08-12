@@ -5,6 +5,11 @@ name: CI
 # we read and (b) separate-process wire peers over TCP. Nothing here links them
 # into Orbweaver, and no image or artifact containing them is published —
 # publishing would be redistribution. See docs/PLAN.md §10.
+#
+# Installs are best-effort (`|| true`) on purpose: the harness scripts decide
+# whether an oracle or peer is present, because they are the ones that know
+# whether its absence is a skip or a failure. An apt step that aborts the job
+# tells you a package name was wrong and nothing about the code.
 
 on:
   push:
@@ -63,7 +68,7 @@ jobs:
 
   # ── The differential oracle: two independent deployed IDL compilers. ───────
   differential:
-    name: differential conformance (omniidl + tao_idl)
+    name: differential conformance (omniidl + JacORB)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -75,20 +80,32 @@ jobs:
             target
           key: cargo-diff-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: cargo-diff-${{ runner.os }}-
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
 
-      - name: install the oracles
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends omniidl tao-idl
-          omniidl -V || true
-          tao_idl -V || true
+      # TAO is deliberately not installed: Ubuntu has no tao-idl package, which
+      # the first run of this workflow established rather than assumed. The
+      # script picks it up if a future runner has it; JacORB's IDL compiler is
+      # the second oracle in the meantime, and being an independent Java
+      # implementation it serves the same purpose.
+      - name: install omniidl
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends omniidl || true
+
+      - name: fetch the JacORB IDL compiler
+        env:
+          JAVA_HOME_21: ${{ env.JAVA_HOME }}
+        run: ./spikes/jacorb/setup.sh --jars-only
 
       # --require makes a missing oracle a failure rather than a skip. On a
       # laptop one oracle is normal; in CI an unmeasured column is a failure,
       # because a harness that reports green on something it did not run is
       # worse than no harness.
       - name: differential conformance
-        run: ./spikes/differential.sh --require omniidl,tao_idl
+        env:
+          JAVA_HOME_21: ${{ env.JAVA_HOME }}
+        run: ./spikes/differential.sh --require omniidl,jacorb_idl
 
   # ── The wire: two independent ORBs, both directions. ──────────────────────
   interop:
@@ -104,17 +121,33 @@ jobs:
             target
           key: cargo-interop-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: cargo-interop-${{ runner.os }}-
-
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'   # JDK 24 removed java.applet.Applet; JacORB 3.9 needs it
 
-      - name: install the peers
+      # The fixtures are Python servants, so the omniORB Python binding is the
+      # load-bearing package. Its name is discovered rather than guessed: the
+      # first run of this workflow died on `python3-omniorb`, which does not
+      # exist on this runner.
+      - name: install the omniORB peer
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            omniidl omniorb-nameserver python3-omniorb libomniorb4-dev
+            omniidl omniorb-nameserver libomniorb4-dev || true
+          echo "--- omniORB-related packages on this runner:"
+          apt-cache search --names-only 'omni' || true
+          py=$(apt-cache search --names-only '^python3?-omniorb' | awk '{print $1}' | head -1)
+          if [ -n "$py" ]; then
+            echo "--- installing binding package: $py"
+            sudo apt-get install -y --no-install-recommends "$py" || true
+          else
+            echo "::warning::no omniORB Python binding is packaged for this runner"
+          fi
+          echo "--- what we ended up with:"
+          command -v omniidl && omniidl -V || echo "omniidl MISSING"
+          python3 -c "import omniORB, sys; print('omniORB python', omniORB.__file__)" \
+            || echo "omniORB python MISSING"
 
       - name: build the JacORB fixture
         env:

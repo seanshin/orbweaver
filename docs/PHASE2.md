@@ -397,3 +397,143 @@ from a registry of record, so "released" currently means "the file you point it
 at"; wiring it to a stored baseline, and to `@ai_since` versioned interfaces, is
 Phase 4 work. Value types and `fixed` are still absent, so their evolution rules
 are unwritten rather than wrong.
+
+---
+
+# Batch 6: differential conformance, made permanent
+
+The oracle has been `omniidl` on a laptop since Phase 0. That measures one
+thing well and another thing not at all: whether we agree with omniORB, and
+nothing about whether the corpus means the same to any other compiler.
+
+```
+differential conformance — every front end on every corpus file
+  56 file(s) through: omniidl jacorb_idl + orbweaver
+  ok   our front end matches the corpus everywhere the oracles uphold it
+  ok   no unexplained divergence between 2 independent front ends
+  note 3 recorded divergence(s), see corpus/divergences.tsv:
+       12-any-typecode.idl — omniidl=accept jacorb_idl=reject
+       n02-identifier-clash.idl — omniidl=reject jacorb_idl=accept
+       n10-operation-name-clash.idl — omniidl=reject jacorb_idl=accept
+```
+
+## Two oracles separate two findings that looked identical
+
+With one oracle there is exactly one kind of disagreement and it is always
+ours. With two, `spikes/differential.sh` separates:
+
+- **our front end against a consensus** — we are wrong, as `CLAUDE.md` has said
+  since Phase 0;
+- **the oracles against each other** — the *corpus file* is wrong, because it
+  does not mean the same thing to every deployed compiler. Agreeing with either
+  oracle cannot surface this, which is why one oracle could never have found it.
+
+A third check falls out for free: the verdict each file is filed under (accept
+for `golden/`, reject for `negative/`) is now compared against the consensus
+instead of assumed. A golden file that every compiler rejects is a broken
+fixture, and quietly agreeing with the compilers would have hidden it.
+
+## The second oracle paid for itself on its first run
+
+Three divergences, two causes, and both are worth knowing:
+
+**JacORB 3.9 does not enforce the case-insensitive identifier rule.** It accepts
+`struct T { Position position; }` and `Blob blob(in unsigned long size)` — the
+two shapes of the failure that dominated Phase 0 and that this project has
+tripped over five times. CORBA 3.4 §7.2.3 makes identifiers collide
+case-insensitively and omniidl rejects both. We follow the specification.
+
+This is not a reason to loosen; it is a reason the strictness matters. IDL that
+builds cleanly under JacORB can fail under omniORB, which is exactly the kind of
+late, confusing breakage the generator pipeline exists to prevent.
+
+**JacORB 3.9 cannot resolve `::CORBA::TypeCode`.** It reports `Undefined name:
+gc12.Bag.CORBA.TypeCode` — it looked an absolute scope up relative to the
+enclosing one. `CLAUDE.md` requires the qualified spelling because the
+unqualified one is itself a case clash, so the corpus file stays as written.
+
+두 번째 오라클이 첫 실행에서 값을 했다. **JacORB 3.9는 대소문자 무시 식별자 충돌
+규칙을 강제하지 않는다** — Phase 0을 지배했고 이 프로젝트가 다섯 번 걸려 넘어진 바로
+그 규칙이다. 이는 규칙을 느슨하게 할 이유가 아니라, 엄격함이 왜 중요한지에 대한
+근거다. JacORB에서 깨끗하게 빌드되는 IDL이 omniORB에서 실패할 수 있다.
+
+## A divergence must be explained, and the explanation must expire
+
+`corpus/divergences.tsv` records each one with the reason we side with one
+oracle. An entry exempts a file from failing, never from being reported — the
+three above are printed on every run.
+
+The registry is checked in both directions, and both directions were tested by
+temporarily breaking them rather than assumed to work: an **unrecorded**
+divergence fails and names the file, and a **recorded divergence that stops
+happening** also fails, because an exemption that no longer describes reality
+silently covers whatever moves into its place.
+
+등록은 실패 면제일 뿐 보고 면제가 아니다. 미등록 불일치도, **더 이상 발생하지 않는
+등록**도 실패한다. 현실을 설명하지 못하는 면제는 그 자리에 들어오는 다른 문제를
+조용히 덮기 때문이다. 두 방향 모두 일부러 깨뜨려 발동을 확인했다.
+
+오라클이 하나면 불일치는 언제나 우리 잘못이다. 둘이면 **우리가 틀린 경우**와
+**말뭉치 파일이 이식 가능하지 않은 경우**가 분리된다. 후자는 어느 한쪽과 일치하는
+것만으로는 절대 드러나지 않는다.
+
+## An absent oracle is a failure, not a skip
+
+`--require omniidl,tao_idl` makes a missing compiler fatal. CI passes it; a
+laptop usually has one oracle and the harness says so, incrementing the
+unmeasured counter rather than printing a green line. This is the Phase 0
+harness rule applied to the oracle itself.
+
+## Gating fmt and clippy found three lies in the code
+
+None of the three was a crash. All three told the next reader something untrue
+about the protocol, which is the more expensive kind of defect in a codebase
+whose whole claim is that it implements a published specification correctly.
+
+- **`Connection::invoke` wrapped its reply handling in a loop where every branch
+  returned.** The structure announced that some messages could be skipped and
+  the read retried. Nothing may do that until request multiplexing exists: with
+  one outstanding request, a message that is not our reply means our accounting
+  is wrong, and reading past it compounds the error instead of recovering.
+
+- **`handle_request` branched on GIOP version to compute a reply header length,
+  with the same value in both arms.** It read as though the 1.0/1.1-versus-1.2
+  service-context reordering had been accounted for. It has not been: both come
+  to 12 bytes *only* because the context list we emit is empty. The constant now
+  says so, and says what would break it.
+
+- **`is_supported`** is explicitly `#[allow]`ed rather than incidentally warned
+  about, because folding its `cfg!` arm into `matches!` would hide that EUC-KR
+  support is a build-time question.
+
+`rustfmt.toml` pins the house style — `max_width = 100`, `use_small_heuristics
+= "Max"` — and the workspace now carries `clippy::all` as a warning, promoted to
+an error in CI.
+
+fmt·clippy를 게이트로 걸기 위해 먼저 깨끗하게 만드는 과정에서 **프로토콜에 대해
+사실이 아닌 말을 하는 코드 세 곳**이 나왔다. 셋 다 크래시는 아니지만, 공개 명세를
+정확히 구현했다고 주장하는 코드베이스에서는 더 비싼 종류의 결함이다.
+
+## What CI runs
+
+Three jobs, each on a throwaway `ubuntu-latest` runner. omniORB, TAO and JacORB
+are `apt`-installed or downloaded **into the runner** and never published as an
+artifact — publishing would be redistribution, which §10 forbids.
+
+| Job | What it establishes |
+| --- | --- |
+| `rust` | fmt, `clippy -D warnings`, tests under `-D warnings`, the attribution-free build, and `cargo tree` free of ORB fixtures |
+| `differential` | our front end against **omniidl and JacORB's IDL compiler**, both required |
+| `interop` | the full harness: both directions, both peers, GIOP 1.0/1.1/1.2 |
+
+TAO is not installed: Ubuntu packages no `tao-idl`, which the workflow's first
+run established rather than assumed. The script still picks it up if a runner
+has it. Installs are best-effort and the harness scripts are the gate, because
+an apt step that aborts the job reports a wrong package name and nothing about
+the code — which is precisely what the first run did, twice, for one reason:
+**I guessed two package names instead of checking them.**
+
+apt 설치는 의도적으로 best-effort이고 판정은 하네스 스크립트가 한다. 중단된 apt
+단계는 패키지 이름이 틀렸다는 것만 알려주고 코드에 대해서는 아무것도 알려주지 않는다
+— 첫 실행이 정확히 그랬다. 두 job의 실패, 원인은 하나: **패키지 이름을 확인하지 않고
+추측했다.**

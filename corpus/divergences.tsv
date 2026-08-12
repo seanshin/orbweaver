@@ -1,0 +1,23 @@
+# Known divergences between IDL front ends.
+#
+# `spikes/differential.sh` fails on any file where the oracles disagree with
+# each other, because such a file does not mean the same thing to every
+# deployed compiler. Some of those disagreements are real and permanent: a
+# compiler is lax where the specification is strict, or cannot resolve
+# something the specification requires. Those belong here, with the reason we
+# side with one oracle over the other.
+#
+# An entry is an exemption from failing, never from being reported. A recorded
+# divergence that stops happening is also flagged — an exemption that no longer
+# describes reality is worse than none, because it silently covers whatever
+# takes its place.
+#
+# Columns: file <TAB> oracle <TAB> that oracle's verdict <TAB> why we accept it
+#
+# 파일별 알려진 오라클 불일치. 규격이 엄격한 곳에서 특정 컴파일러가 느슨한 경우처럼
+# 실재하고 영구적인 불일치를 사유와 함께 기록한다. 등록은 실패 면제일 뿐 보고 면제가
+# 아니며, 더 이상 발생하지 않는 등록도 함께 지적된다.
+
+n02-identifier-clash.idl	jacorb_idl	accept	CORBA 3.4 §7.2.3 makes identifier collisions case-insensitive, so `Position position` is illegal. omniidl rejects it; JacORB 3.9 does not enforce the rule at all. We follow the specification and omniidl. This is the project's dominant generation failure, and finding that a widely deployed compiler accepts it is a reason to be stricter, not looser: IDL that builds under JacORB can fail under omniORB.
+n10-operation-name-clash.idl	jacorb_idl	accept	The same rule in its operation-name shape (`Blob blob()`). JacORB 3.9 does not enforce it; omniidl does. Same verdict, same reason.
+12-any-typecode.idl	jacorb_idl	reject	JacORB 3.9 cannot resolve the fully-qualified `::CORBA::TypeCode`; it reports `Undefined name: gc12.Bag.CORBA.TypeCode`, having looked the absolute scope up relative to the enclosing one. omniidl resolves it, and CLAUDE.md requires the qualified spelling because the unqualified one is itself a case clash. The file stays as written.

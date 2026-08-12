@@ -8,8 +8,15 @@
 #
 # Needs JDK 21. JDK 24+ removed java.applet.Applet, which JacORB 3.9's
 # ORB.init signature still references, so it will not even compile there.
+#
+# `--jars-only` stops after the download. The differential conformance check
+# uses JacORB's IDL compiler as a second oracle and needs no wire peer, so it
+# has no reason to pay for stub generation or a Java compile.
 set -euo pipefail
 cd "$(dirname "$0")"
+
+JARS_ONLY=0
+[ "${1:-}" = --jars-only ] && JARS_ONLY=1
 
 JAVA_HOME_21=${JAVA_HOME_21:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home}
 [ -x "$JAVA_HOME_21/bin/javac" ] || { echo "need JDK 21 at $JAVA_HOME_21 (brew install openjdk@21)"; exit 2; }
@@ -26,6 +33,8 @@ fetch org/slf4j/slf4j-api/1.7.36/slf4j-api-1.7.36.jar                           
 # JEP 320 removed javax.rmi.CORBA from the JDK and JacORB still needs it — the
 # very migration this project exists to automate, met in our own test rig.
 fetch org/jboss/spec/javax/rmi/jboss-rmi-api_1.0_spec/1.0.6.Final/jboss-rmi-api_1.0_spec-1.0.6.Final.jar jboss-rmi-api.jar
+
+[ "$JARS_ONLY" -eq 0 ] || { echo "jacorb jars ready"; exit 0; }
 
 CP="lib/jacorb.jar:lib/jacorb-omgapi.jar:lib/jacorb-idl-compiler.jar:lib/jboss-rmi-api.jar:lib/slf4j-api-1.7.36.jar"
 java -cp "$CP" org.jacorb.idl.parser -d gen ../echo.idl
