@@ -19,6 +19,13 @@ pub struct ParseError {
     pub message: String,
     /// Where.
     pub span: Span,
+    /// A stable identifier for the failure, matching `sema::Diagnostic::rule`.
+    ///
+    /// Most parse failures are "the grammar broke here" and share the generic
+    /// `parse`, because the cause is rarely where the token is and a confident
+    /// wrong hint costs a self-repair round. The ones with an unambiguous fix
+    /// get their own name so tooling can offer it (§3.3).
+    pub rule: &'static str,
 }
 
 impl std::fmt::Display for ParseError {
@@ -31,7 +38,7 @@ impl std::error::Error for ParseError {}
 
 impl From<LexError> for ParseError {
     fn from(e: LexError) -> Self {
-        ParseError { message: e.message, span: e.span }
+        ParseError { message: e.message, span: e.span, rule: "parse" }
     }
 }
 
@@ -93,7 +100,7 @@ impl Parser {
     }
 
     fn err<T>(&self, message: impl Into<String>) -> Result<T> {
-        Err(ParseError { message: message.into(), span: self.peek().span })
+        Err(ParseError { message: message.into(), span: self.peek().span, rule: "parse" })
     }
 
     fn expect_punct(&mut self, p: &str) -> Result<()> {
@@ -118,6 +125,7 @@ impl Parser {
                              write '_{text}' to use it as an identifier, or choose another name"
                         ),
                         span: t.span,
+                        rule: "reserved-word",
                     });
                 }
                 Ok(Named { text, span: t.span })
@@ -125,6 +133,7 @@ impl Parser {
             other => Err(ParseError {
                 message: format!("expected an identifier, found {other}"),
                 span: t.span,
+                rule: "parse",
             }),
         }
     }
@@ -706,6 +715,7 @@ impl Parser {
             other => Err(ParseError {
                 message: format!("expected a constant expression, found {other}"),
                 span: t.span,
+                rule: "parse",
             }),
         }
     }

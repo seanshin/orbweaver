@@ -1,0 +1,21 @@
+[package]
+name = "orbweaver-forge"
+description = "S4, the validation gate: every deterministic check, with diagnostics a generator can act on"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+orbweaver-idl = { path = "../orbweaver-idl" }
+orbweaver-registry = { path = "../orbweaver-registry" }
+orbweaver-dynamic = { path = "../orbweaver-dynamic" }
+orbweaver-giop = { path = "../orbweaver-giop", default-features = false }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "sidl-validate"
+path = "src/bin/sidl_validate.rs"

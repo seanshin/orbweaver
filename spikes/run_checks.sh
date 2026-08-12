@@ -536,6 +536,37 @@ else
   [ "$jfail" -eq 0 ] || fail_total=$((fail_total+1))
 fi
 
+# ── S4, the validation gate ──────────────────────────────────────────────────
+hr "S4 validation gate — diagnostics a generator can act on"
+# §5: everything upstream of S4 is allowed to be uncertain because S4 is not.
+# §3.3: the self-repair loop is only as good as the messages it feeds on, so
+# fix-hint coverage is measured here rather than assumed.
+s4_fail=0
+if ! cargo run -q --bin sidl-validate -- corpus/golden/*.idl \
+     corpus/requirements/generated/*.idl spikes/*.idl >/tmp/orbweaver-s4.log 2>&1; then
+  echo "  FAIL the gate rejected IDL both oracles accept"
+  grep "error:" /tmp/orbweaver-s4.log | head -3 | sed 's/^/       /'
+  s4_fail=1
+else
+  echo "  ok   accepts all $(ls corpus/golden/*.idl corpus/requirements/generated/*.idl spikes/*.idl | wc -l | tr -d ' ') valid files"
+fi
+s4_bad=""
+for f in corpus/negative/*.idl; do
+  cargo run -q --bin sidl-validate -- "$f" >/dev/null 2>&1 && s4_bad="$s4_bad $(basename "$f")"
+done
+if [ -z "$s4_bad" ]; then
+  echo "  ok   rejects all $(ls corpus/negative/*.idl | wc -l | tr -d ' ') negatives"
+else
+  echo "  FAIL accepted:$s4_bad"; s4_fail=1
+fi
+# The measurement §3.3 asks for. Reported as a number, not as a pass: a fix
+# hint that cannot be given honestly is better absent than invented.
+s4_json=$(cargo run -q --bin sidl-validate -- --json corpus/negative/*.idl 2>/dev/null)
+s4_cov=$(printf '%s' "$s4_json" | grep -o '"fix"' | wc -l | tr -d ' ')
+s4_tot=$(ls corpus/negative/*.idl | wc -l | tr -d ' ')
+echo "  ok   $s4_cov of $s4_tot rejections carry an actionable fix (a missing separator has no unambiguous one)"
+[ "$s4_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
 # ── Dynamic invocation: calling with nothing generated ───────────────────────
 hr "dynamic invocation — calls built from IDL text alone"
 # The whole AI path rests on this: invoke_operation gets a name and a bag of

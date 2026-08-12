@@ -32,6 +32,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbweaver-forge"
+version = "0.0.1"
+dependencies = [
+ "orbweaver-dynamic",
+ "orbweaver-giop",
+ "orbweaver-idl",
+ "orbweaver-registry",
+]
+
+[[package]]
 name = "orbweaver-giop"
 version = "0.0.1"
 dependencies = [

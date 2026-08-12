@@ -30,7 +30,7 @@ pub use sema::{Analysis, Diagnostic, analyse};
 /// problem would make each round correct exactly one thing.
 pub fn check(src: &str) -> std::result::Result<ast::Spec, Vec<Diagnostic>> {
     let spec = parse(src)
-        .map_err(|e| vec![Diagnostic { message: e.message, span: e.span, rule: "parse" }])?;
+        .map_err(|e| vec![Diagnostic { message: e.message, span: e.span, rule: e.rule }])?;
     let analysis = analyse(&spec);
     if analysis.is_ok() { Ok(spec) } else { Err(analysis.diagnostics) }
 }

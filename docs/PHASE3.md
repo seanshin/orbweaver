@@ -313,3 +313,93 @@ for a session and wrong for a bridge behind a load balancer; §4.8's credential
 propagation is Phase 5. `search` has no embeddings. The MCP transport itself —
 the JSON-RPC framing and `tools/list` — is not here: what is here is everything
 those three tools would call, which is the part that had to be true first.
+
+---
+
+# Batch 4: S4, the validation gate
+
+`docs/PLAN.md` §5 calls S4 the safety belt of the whole system. The reason is an
+asymmetry: **an LLM writes plausible IDL that may be semantically wrong; a
+deterministic checker rejects wrong IDL every time without exception.**
+Everything upstream of S4 is allowed to be uncertain *because* S4 is not.
+
+```
+S4 validation gate — diagnostics a generator can act on
+  ok   accepts all 46 valid files
+  ok   rejects all 10 negatives
+  ok   9 of 10 rejections carry an actionable fix (a missing separator has no unambiguous one)
+```
+
+## Error-message quality, measured
+
+§3.3 says diagnostics are a product surface and error quality is a tested
+feature rather than a nicety. That is now a test, not a sentence: every
+rejection must carry a concrete edit, with a **named** exemption list, and an
+exemption that stops applying fails too — a fix becoming possible should shrink
+the list rather than go unnoticed.
+
+The one exemption is a missing separator. It is reported wherever the grammar
+noticed, which is not reliably where the semicolon belongs, and a confident
+wrong instruction costs a self-repair round. **Saying nothing beats pointing
+wrongly.**
+
+Adding one required a real change rather than string-matching: `ParseError`
+gained a `rule`, so the parser can distinguish "the grammar broke here" from
+"this is a reserved word", which has exactly one fix (`_interface`) and now
+carries it.
+
+§3.3이 말하는 "진단은 제품"을 문장이 아니라 **테스트**로 만들었다. 면제 목록은
+이름으로 적히고, 면제가 더 이상 필요 없어지면 그것도 실패한다 — 수정이 가능해졌다면
+목록이 줄어야지 조용히 넘어가서는 안 된다.
+
+## The repair prompt groups by cause, not by line
+
+Phase 0 measured why this matters: twenty files, seven failures, **one** root
+cause. A list of seven line numbers invites seven patches and never surfaces the
+rule; a list of one cause with seven occurrences invites the fix.
+
+```
+[identifier-case-clash] 2 occurrence(s)
+  "position" clashes with "Position" in the same scope — IDL compares
+  identifiers ignoring case...
+  IDL identifiers collide case-insensitively (CORBA 3.4 §7.2.3). Rename
+  "position" to ... Renaming the *type* is usually wrong: it is the one other
+  files refer to.
+    line 4, column 24: position
+    line 5, column 21: value
+```
+
+The last sentence is there because the obvious fix is the wrong one. Renaming
+the *type* silences the compiler and breaks every file that referred to it.
+
+수리 프롬프트는 **줄이 아니라 원인으로** 묶는다. 운영 모델을 축소한 것이다.
+
+## Severity has three levels because two would lie
+
+| Level | Blocks? | Example |
+| --- | --- | --- |
+| error | yes | any semantic clash; a §5.3 breaking change against a released contract |
+| warning | no | a `valuetype`, which is legal IDL that this wire cannot carry (§4.4) |
+| advice | no | an operation with no `ai_desc`, which is valid CORBA and useless to an agent |
+
+A gate that blocks on advice is one people route around, and then it blocks
+nothing. A gate that stays silent about a `valuetype` lets a file through that
+compiles and cannot be called.
+
+## S4 covers contract evolution too
+
+`validate_against(proposed, released)` folds §5.3 into the same gate, because a
+file can be entirely valid and still be a change nobody may ship — and "add a
+field to the response" is exactly what a generator asked to extend an interface
+will do. Breaking is an error with the §5.3 advice attached; server-first is
+advice; a file that does not parse is reported *only* for that, since a diff
+against a broken file is noise that buries the real cause.
+
+## Scope
+
+The gate runs in-process in milliseconds, thousands of times, and deliberately
+does not call an external compiler: the differential oracles
+(`spikes/differential.sh`) answer a different question — whether *we* are right
+— and belong on a different cadence. S1–S3 (ingest, synthesis, annotation) need
+a model in the loop and are not here; what is here is the thing that lets them
+be uncertain.
