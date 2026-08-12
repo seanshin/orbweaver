@@ -249,47 +249,77 @@ pub fn client_wchar_component() -> CodeSetComponent {
     CodeSetComponent { native: Some(CodeSetId::UTF_16), conversions: vec![] }
 }
 
-/// Chooses a transmission codeset, following §7.10.2.6.
+/// How much text a codeset can carry, used to break ties the spec leaves open.
 ///
-/// The order matters: preferring the server's native set when we can convert
-/// to it avoids forcing conversion work onto the peer, which is what the spec
-/// intends by listing that case before the reverse.
+/// §7.10.2.6 says a match between one side's native set and the other's
+/// conversion list is acceptable, but does **not** say which direction wins
+/// when both hold. That latitude is not neutral: against omniORB, whose native
+/// char set is ISO-8859-1 and whose conversion list includes UTF-8, taking the
+/// peer's native would agree on Latin-1 and silently make Korean text
+/// unrepresentable, while taking ours agrees on UTF-8 and carries it.
+///
+/// So among the mutually acceptable candidates we choose the widest
+/// repertoire. Picking a narrower codeset is a data-loss decision taken at
+/// connection setup, before anyone knows what text will actually flow.
+fn repertoire_rank(id: CodeSetId) -> u8 {
+    match id {
+        CodeSetId::UTF_8 => 5,   // all of Unicode, and compact for ASCII
+        CodeSetId::UTF_16 => 4,  // all of Unicode
+        CodeSetId::EUC_KR => 3,  // Korean plus ASCII
+        CodeSetId::ISO_8859_1 => 2,
+        CodeSetId::ASCII => 1,
+        _ => 0,
+    }
+}
+
+/// Chooses a transmission codeset, following §7.10.2.6.
 pub fn negotiate(
     client: &CodeSetComponent,
     server: &CodeSetComponent,
 ) -> std::result::Result<CodeSetId, NegotiationError> {
     let client_native = client.native.ok_or(NegotiationError::NoWcharCodeSet)?;
 
-    // 1. Identical native sets: transmit as-is, no conversion by anyone.
+    // 1. Identical native sets: transmit as-is, nobody converts.
     if server.native == Some(client_native) {
         return check_supported(client_native);
     }
-    // 2. We can convert to the server's native set.
+
+    // 2-4. Collect every candidate the spec permits, then choose among them by
+    //      repertoire rather than by the order they happen to be listed in.
+    let mut candidates: Vec<CodeSetId> = Vec::new();
     if let Some(sn) = server.native
         && client.conversions.contains(&sn)
     {
-        return check_supported(sn);
+        candidates.push(sn); // we convert to the peer's native
     }
-    // 3. The server can convert to ours.
     if server.conversions.contains(&client_native) {
-        return check_supported(client_native);
+        candidates.push(client_native); // the peer converts to ours
     }
-    // 4. Some conversion set in common. Resolved by the *client's* preference
-    //    order rather than by numeric id: both are deterministic, but list
-    //    order carries intent — we list ISO-8859-1 before ASCII because it is
-    //    the superset — whereas the lowest registry number is an accident of
-    //    how OSF assigned them.
-    if let Some(common) = client
-        .conversions
-        .iter()
-        .find(|c| server.conversions.contains(c))
-    {
-        return check_supported(*common);
-    }
-    // 5. §7.10.2.6 allows falling back to a universal set when both sides can
-    //    reach it. UTF-8 is the char fallback.
+    candidates.extend(
+        client
+            .conversions
+            .iter()
+            .filter(|c| server.conversions.contains(c))
+            .copied(),
+    );
+
+    // 5. §7.10.2.6 allows a universal fallback when both sides can reach it.
     if client.supports(CodeSetId::UTF_8) && server.supports(CodeSetId::UTF_8) {
-        return check_supported(CodeSetId::UTF_8);
+        candidates.push(CodeSetId::UTF_8);
+    }
+
+    // Widest repertoire wins; ties break on the lower registry id so the
+    // result never depends on iteration order.
+    if let Some(best) = candidates
+        .iter()
+        .filter(|c| c.is_supported())
+        .max_by_key(|c| (repertoire_rank(**c), std::cmp::Reverse(c.0)))
+    {
+        return Ok(*best);
+    }
+    // Something was agreed but we cannot convert it — report that distinctly.
+    if let Some(agreed) = candidates.first() {
+        return Err(NegotiationError::Unsupported(*agreed));
     }
 
     // Before declaring the peers incompatible, check whether the peer asked for
@@ -496,10 +526,11 @@ mod tests {
         assert_eq!(negotiate(&both, &both).unwrap(), CodeSetId::UTF_8);
     }
 
-    /// The case that matters in practice: omniORB is natively ISO-8859-1 and we
-    /// are natively UTF-8, so we must convert rather than assume.
+    /// omniORB as it actually declares itself: native ISO-8859-1, conversion
+    /// list including UTF-8. Both directions are permitted by §7.10.2.6, and
+    /// the choice decides whether Korean text survives the connection.
     #[test]
-    fn converts_to_the_peers_native_when_we_can() {
+    fn omniorb_shaped_peer_negotiates_utf8_not_latin1() {
         let server = CodeSetComponent {
             native: Some(CodeSetId::ISO_8859_1),
             conversions: vec![CodeSetId::UTF_8],
@@ -507,8 +538,23 @@ mod tests {
         let chosen = negotiate(&client_char_component(), &server).unwrap();
         assert_eq!(
             chosen,
-            CodeSetId::ISO_8859_1,
-            "the peer's native set is preferred so conversion cost stays with us"
+            CodeSetId::UTF_8,
+            "both are legal; the wider repertoire is the one that keeps the data"
+        );
+        assert!(Converter::new(chosen).unwrap().encode("함정 전투체계").is_ok());
+    }
+
+    /// With no wider option available we do take the peer's native set — the
+    /// preference is for repertoire, not for UTF-8 as such.
+    #[test]
+    fn falls_back_to_the_peers_native_when_it_is_the_only_option() {
+        let server = CodeSetComponent {
+            native: Some(CodeSetId::ISO_8859_1),
+            conversions: vec![],
+        };
+        assert_eq!(
+            negotiate(&client_char_component(), &server).unwrap(),
+            CodeSetId::ISO_8859_1
         );
     }
 
@@ -521,15 +567,14 @@ mod tests {
         assert_eq!(negotiate(&client_char_component(), &server).unwrap(), CodeSetId::UTF_8);
     }
 
-    /// A common conversion set is resolved by *our* preference order, not by
-    /// the peer's and not by registry number. Order carries intent: ISO-8859-1
-    /// is listed before ASCII because it is the superset, so it must win even
-    /// though the peer lists ASCII first.
+    /// A common conversion set is resolved by repertoire, and deterministically:
+    /// ISO-8859-1 beats ASCII because it is the superset, regardless of the
+    /// order either side listed them in.
     #[test]
-    fn common_conversion_set_follows_our_preference_order() {
+    fn common_conversion_set_resolves_by_repertoire() {
         let client = CodeSetComponent {
             native: Some(CodeSetId(0x0AAA_0000)),
-            conversions: vec![CodeSetId::UTF_8, CodeSetId::ISO_8859_1, CodeSetId::ASCII],
+            conversions: vec![CodeSetId::ASCII, CodeSetId::ISO_8859_1],
         };
         let server = CodeSetComponent {
             native: Some(CodeSetId(0x0BBB_0000)),
@@ -537,7 +582,19 @@ mod tests {
         };
         let a = negotiate(&client, &server).unwrap();
         assert_eq!(a, negotiate(&client, &server).unwrap(), "must be deterministic");
-        assert_eq!(a, CodeSetId::ISO_8859_1, "our order decides, not the peer's");
+        assert_eq!(a, CodeSetId::ISO_8859_1, "superset wins over subset");
+    }
+
+    /// A Korean peer offering EUC-KR and Latin-1 must not be answered with
+    /// Latin-1 just because it appears first in someone's list.
+    #[cfg(feature = "euc-kr")]
+    #[test]
+    fn repertoire_beats_list_order_for_korean() {
+        let server = CodeSetComponent {
+            native: Some(CodeSetId::EUC_KR),
+            conversions: vec![CodeSetId::ISO_8859_1, CodeSetId::ASCII],
+        };
+        assert_eq!(negotiate(&client_char_component(), &server).unwrap(), CodeSetId::EUC_KR);
     }
 
     #[test]

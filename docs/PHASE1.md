@@ -398,7 +398,67 @@ they mean, and echoing verbatim is the one answer correct under any codeset.
 
 The harness is now `spikes/run_checks.sh`; it outgrew the name `run_phase0.sh`.
 
-## Still open after Batch 3
+---
+
+# Batch 4: negotiation wired to the call path
+
+The machinery from Batch 2 existed but nothing used it. `Connection` now parses
+`TAG_CODE_SETS` from the peer's profile, negotiates, sends the `CodeSets`
+context on the first request of a connection, and exposes the agreed converter.
+
+## The spec left a gap, and the gap was not neutral
+
+§7.10.2.6 accepts a match between one side's native codeset and the other's
+conversion list, but does **not** say which direction wins when both hold.
+Against omniORB — native ISO-8859-1, conversion list including UTF-8 — both
+readings are legal and they disagree about whether Korean survives:
+
+| Choice | Legal? | Korean |
+|---|---|---|
+| Peer's native, ISO-8859-1 | yes | **destroyed** |
+| Ours, UTF-8 | yes | carried |
+
+The first implementation took the peer's native, on the reasoning that it keeps
+conversion cost on our side. That reasoning optimised the wrong thing. Among
+mutually acceptable candidates we now choose the **widest repertoire**, because
+picking a narrower codeset is a data-loss decision taken at connection setup,
+before anyone knows what text will actually flow.
+
+명세는 두 방향을 모두 허용하면서 우선순위를 정하지 않는다. 그 재량은 중립적이지
+않다 — omniORB 상대로 한쪽은 한국어를 살리고 다른 쪽은 파괴한다. 상호 수용
+가능한 후보 중 **가장 넓은 레퍼토리**를 고른다. 더 좁은 코드셋을 고르는 것은,
+어떤 텍스트가 흐를지 아무도 모르는 연결 설정 시점에 내리는 데이터 손실 결정이다.
+
+## Proving it is negotiation and not byte-transparency again
+
+Korean round-tripping through omniORB proves nothing on its own: if the peer
+passes bytes through, the test passes whether or not either side agreed
+anything. That is exactly how the Phase 0 result fooled us.
+
+The evidence is peer-side. With `-ORBtraceLevel 40` the server logs:
+
+```
+Receive codeset service context and set TCS to (UTF-8,UTF-16)
+```
+
+and the received bytes carry our context — `0501 0001` (UTF-8) and
+`0001 0109` (UTF-16). **The peer changed its behaviour because of what we
+declared.** That is negotiation; the Phase 0 pass was not.
+
+한국어 왕복만으로는 아무것도 증명하지 못한다 — 피어가 바이트를 통과시키면 아무도
+합의하지 않아도 통과한다. Phase 0가 우리를 속인 방식이 정확히 그것이다. 증거는
+피어 쪽 로그다: **피어가 우리 선언 때문에 동작을 바꿨다.**
+
+The interop probe is therefore now a real assertion, and the run reports
+**14/14 asserted** rather than 12/12 plus two probes that could not fail. If
+negotiation picked a codeset that cannot carry the text, `encode` fails and the
+case fails with it.
+
+Where the peer publishes no `TAG_CODE_SETS`, §7.10.2.5 specifies ISO-8859-1 and
+we send no context — claiming otherwise would be asserting an agreement that
+never happened.
+
+## Still open after Batch 4
 - Wiring the negotiated converter through `Connection` and the string paths,
   including the per-connection "send the context once" rule and the
   `MARSHAL` minor 9 case for conflicting contexts on one connection.

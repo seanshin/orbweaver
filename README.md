@@ -15,7 +15,7 @@
 
 | # | Assumption / 가정 | Result |
 |---|---|---|
-| **A** | A from-scratch GIOP implementation can talk to a stock ORB<br>자체 GIOP 구현이 순정 ORB와 통신 가능한가 | ✅ **12/12** asserted cases, both byte orders, 5 cold starts |
+| **A** | A from-scratch GIOP implementation can talk to a stock ORB<br>자체 GIOP 구현이 순정 ORB와 통신 가능한가 | ✅ **14/14** asserted cases, both byte orders (12 at Phase 0, plus 2 once codeset negotiation made the Korean probe a real assertion) |
 | **B** | An LLM can write IDL that compiles<br>LLM이 컴파일되는 IDL을 쓰는가 | ✅ **65%** first pass → **100%** after one self-repair round |
 | **C** | IDL 4 `@annotation` survives deployed toolchains<br>배포된 툴체인이 어노테이션을 수용하는가 | ❌ **Rejected** — structured-comment fallback confirmed working |
 | **D** | IOR addressing works under NAT/containers<br>NAT·컨테이너에서 IOR 주소가 동작하는가 | ⚠️ **Hazard real** — endpoint rewriting mitigates it |

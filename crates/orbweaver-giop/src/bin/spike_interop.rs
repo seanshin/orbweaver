@@ -170,20 +170,42 @@ fn run(ior_text: &str) -> Result<u32, Error> {
             }
         }
 
-        // 6. Korean text. NOT AN ASSERTION — it cannot fail, and must not be
-        //    counted as if it could. Without a CodeSets service context the
-        //    specified transmission codeset is ISO-8859-1 while we send UTF-8
-        //    (CORBA 3.4 §7.10.2.5), so this passing against omniORB reflects
-        //    that peer's byte-transparent default rather than correctness on
-        //    our side. It stays as a probe until negotiation lands.
+        // 6. Korean text through the *negotiated* codeset. This is now a real
+        //    assertion: the bytes are converted to whatever was agreed and
+        //    converted back, so passing means the two sides agree about what
+        //    the bytes mean rather than that neither converted them.
         let korean = "함정 전투체계";
-        match conn
-            .invoke("echo_string", |e| e.put_str(korean))
-            .and_then(|r| Ok(r.body()?.get_string()?))
-        {
-            Ok(s) if s == korean => println!("  probe korean round-trip intact — omniORB is byte-transparent, not proof of negotiation"),
-            Ok(s) => println!("  note korean came back as {s:?} — CodeSets negotiation needed (Phase 1)"),
-            Err(e) => println!("  note korean round-trip failed: {e} — CodeSets negotiation needed (Phase 1)"),
+        let cs = conn.char_converter();
+        println!("  ---  negotiated char codeset: {}", cs.id());
+        asserted += 1;
+        match cs.encode(korean) {
+            Ok(sent) => match conn
+                .invoke("echo_string", |e| e.put_string_bytes(&sent))
+                .and_then(|r| Ok(r.body()?.get_string_bytes()?.to_vec()))
+                .map(|got| cs.decode(&got))
+            {
+                Ok(Ok(back)) if back == korean => {
+                    println!("  {OK} korean round-trip through negotiated {}", cs.id())
+                }
+                Ok(Ok(back)) => {
+                    println!("  {NO} korean came back as {back:?}");
+                    fails += 1;
+                }
+                Ok(Err(e)) => {
+                    println!("  {NO} korean reply would not decode: {e}");
+                    fails += 1;
+                }
+                Err(e) => {
+                    println!("  {NO} korean round-trip failed: {e}");
+                    fails += 1;
+                }
+            },
+            Err(e) => {
+                // A negotiated codeset that cannot carry Korean is a real
+                // failure to report, not something to paper over.
+                println!("  {NO} negotiated {} cannot represent the text: {e}", cs.id());
+                fails += 1;
+            }
         }
 
         // 7. Unknown operation must produce BAD_OPERATION, not a hang or a
@@ -210,6 +232,5 @@ fn run(ior_text: &str) -> Result<u32, Error> {
     }
 
     println!("asserted cases: {asserted}, failures: {fails}");
-    println!("(the korean line is a probe, not an assertion — see the comment at case 6)");
     Ok(fails)
 }

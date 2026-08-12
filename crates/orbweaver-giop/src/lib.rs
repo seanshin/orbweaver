@@ -496,6 +496,15 @@ fn parse_iiop_profile(body: &[u8]) -> Result<IiopProfile> {
 // Messages
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// A service context attached to a request or reply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceContext {
+    /// `IOP::ServiceId`, e.g. [`codeset::SERVICE_ID_CODE_SETS`].
+    pub id: u32,
+    /// Encapsulated body.
+    pub data: Vec<u8>,
+}
+
 /// Encodes a GIOP `Request` for `version`, whose body is written by
 /// `write_body`.
 ///
@@ -511,6 +520,30 @@ pub fn encode_request<F>(
     object_key: &[u8],
     operation: &str,
     expect_reply: bool,
+    write_body: F,
+) -> Result<Vec<u8>>
+where
+    F: FnOnce(&mut Encoder),
+{
+    encode_request_with_contexts(
+        version, endian, request_id, object_key, operation, expect_reply, &[], write_body,
+    )
+}
+
+/// As [`encode_request`], but attaching service contexts.
+///
+/// Codeset negotiation needs this: §7.10.2.5 carries the agreed transmission
+/// codesets in a `CodeSets` context, and without one the specified default is
+/// ISO-8859-1 regardless of what bytes we actually send.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_request_with_contexts<F>(
+    version: Version,
+    endian: Endian,
+    request_id: u32,
+    object_key: &[u8],
+    operation: &str,
+    expect_reply: bool,
+    contexts: &[ServiceContext],
     write_body: F,
 ) -> Result<Vec<u8>>
 where
@@ -542,9 +575,9 @@ where
         e.put_u16(0); // TargetAddress discriminator: 0 = KeyAddr
         e.put_octet_seq(object_key);
         e.put_str(operation);
-        e.put_u32(0); // empty ServiceContextList
+        write_contexts(&mut e, contexts);
     } else {
-        e.put_u32(0); // empty ServiceContextList comes first before 1.2
+        write_contexts(&mut e, contexts); // 1.0/1.1 put the list first
         e.put_u32(request_id);
         e.put_bool(expect_reply); // response_expected
         if version.has_reserved_octets() {
@@ -576,6 +609,14 @@ where
     let size = (e.len() - HEADER_LEN) as u32;
     e.patch_u32(size_at, size);
     e.finish().map_err(Error::Cdr)
+}
+
+fn write_contexts(e: &mut Encoder, contexts: &[ServiceContext]) {
+    e.put_u32(contexts.len() as u32);
+    for c in contexts {
+        e.put_u32(c.id);
+        e.put_octet_seq(&c.data);
+    }
 }
 
 /// A decoded GIOP `Reply`, with its body left as raw CDR for the caller.
@@ -749,6 +790,11 @@ pub struct Connection {
     /// Set once framing can no longer be trusted. A desynchronized stream must
     /// be discarded: the next read would take payload bytes as a GIOP header.
     poisoned: bool,
+    /// Negotiated `char` converter, or `None` when the peer published no
+    /// codeset component. §7.10.2.5 then specifies ISO-8859-1 and no context.
+    char_converter: Option<codeset::Converter>,
+    /// Whether the `CodeSets` context still needs to go out.
+    codeset_context_pending: bool,
 }
 
 impl Connection {
@@ -765,6 +811,21 @@ impl Connection {
         stream.set_read_timeout(Some(timeout))?;
         stream.set_write_timeout(Some(timeout))?;
         stream.set_nodelay(true)?;
+        // Negotiate from TAG_CODE_SETS if the peer published one. Absent it,
+        // §7.10.2.5 makes the transmission codeset ISO-8859-1 and forbids
+        // pretending otherwise, so no context is sent and strings are Latin-1.
+        let mut char_converter = None;
+        for c in &p.components {
+            if c.tag == codeset::TAG_CODE_SETS
+                && let Ok(info) = codeset::CodeSetComponentInfo::parse(&c.data)
+                && let Ok(id) = codeset::negotiate(&codeset::client_char_component(), &info.for_char)
+                && let Ok(conv) = codeset::Converter::new(id)
+            {
+                char_converter = Some(conv);
+            }
+        }
+        let codeset_context_pending = char_converter.is_some();
+
         Ok(Self {
             stream,
             object_key: p.object_key.clone(),
@@ -773,6 +834,20 @@ impl Connection {
             next_id: 1,
             max_message_size: DEFAULT_MAX_MESSAGE_SIZE,
             poisoned: false,
+            char_converter,
+            codeset_context_pending,
+        })
+    }
+
+    /// The converter for `char`/`string` data on this connection.
+    ///
+    /// Falls back to ISO-8859-1, which is what §7.10.2.5 specifies when no
+    /// context is negotiated. It is `Copy`, so take it before calling
+    /// [`Connection::invoke`] and use it inside the closure.
+    pub fn char_converter(&self) -> codeset::Converter {
+        self.char_converter.unwrap_or_else(|| {
+            codeset::Converter::new(codeset::CodeSetId::ISO_8859_1)
+                .expect("ISO-8859-1 is always supported")
         })
     }
 
@@ -841,15 +916,36 @@ impl Connection {
             return Err(Error::Desynchronized);
         }
         let id = self.next_request_id();
-        let msg = encode_request(
+        // §7.10.2.5 negotiates per connection, so the context goes on the
+        // first request only. Sending it again on a later request would risk
+        // MARSHAL minor 9 for conflicting contexts on one connection.
+        let contexts = if self.codeset_context_pending {
+            match self.char_converter {
+                Some(c) => vec![ServiceContext {
+                    id: codeset::SERVICE_ID_CODE_SETS,
+                    data: codeset::CodeSetContext {
+                        char_data: c.id(),
+                        wchar_data: codeset::CodeSetId::UTF_16,
+                    }
+                    .encode(self.endian)?,
+                }],
+                None => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+
+        let msg = encode_request_with_contexts(
             self.version,
             self.endian,
             id,
             &self.object_key,
             operation,
             true,
+            &contexts,
             write_args,
         )?;
+        self.codeset_context_pending = false;
         self.stream.write_all(&msg)?;
         self.stream.flush()?;
 
