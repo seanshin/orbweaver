@@ -248,7 +248,7 @@ fn run(ior_path: &str, idl_path: &str, interface_id: &str) -> Result<u32, String
     let mut dreg = Registry::new();
     dreg.load(&dspec).map_err(|e| e.to_string())?;
     let dexp = Exposure::nothing().allow_interface("IDL:vault/Store:1.0");
-    match dexp.check_call(&dreg, "IDL:vault/Store:1.0", "erase", Approval::default()) {
+    match dexp.check_call(&dreg, "IDL:vault/Store:1.0", "erase", Approval::default(), None) {
         Err(e) => println!("  {OK} a destructive operation, exposed: {e}"),
         Ok(()) => {
             println!("  {NO} a destructive operation was callable without approval");
@@ -256,7 +256,13 @@ fn run(ior_path: &str, idl_path: &str, interface_id: &str) -> Result<u32, String
         }
     }
     if dexp
-        .check_call(&dreg, "IDL:vault/Store:1.0", "erase", Approval { destructive_approved: true })
+        .check_call(
+            &dreg,
+            "IDL:vault/Store:1.0",
+            "erase",
+            Approval { destructive_approved: true },
+            None,
+        )
         .is_ok()
     {
         println!("  {OK} and callable once a human has approved it");

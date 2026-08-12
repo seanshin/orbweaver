@@ -23,7 +23,13 @@ use std::collections::BTreeSet;
 
 use orbweaver_registry::Registry;
 
-/// What a caller has been authorised to do beyond the default.
+use crate::identity::Caller;
+
+/// What a **host** has decided, as distinct from what a caller claims.
+///
+/// Never built from the agent's own request. A caller that can assert its own
+/// approval has no approval gate, so this arrives from the process that
+/// authenticated the human — at present the operator who launched the bridge.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Approval {
     /// A human has approved this specific call.
@@ -41,6 +47,25 @@ pub enum Denied {
         id: String,
         /// Operation name.
         operation: String,
+    },
+    /// The contract requires an authorization scope the caller does not hold.
+    MissingScope {
+        /// Repository id.
+        id: String,
+        /// Operation name.
+        operation: String,
+        /// What `ai_authz` asks for.
+        required: String,
+    },
+    /// The contract names an authorization requirement and nobody is
+    /// authenticated to satisfy it.
+    NotAuthenticated {
+        /// Repository id.
+        id: String,
+        /// Operation name.
+        operation: String,
+        /// What `ai_authz` asks for.
+        required: String,
     },
     /// The operation is exposed but marked destructive and unapproved.
     NeedsApproval {
@@ -64,6 +89,16 @@ impl std::fmt::Display for Denied {
             Denied::OperationNotExposed { id, operation } => {
                 write!(f, "{id} is exposed but {operation:?} is not among its allowed operations")
             }
+            Denied::MissingScope { id, operation, required } => write!(
+                f,
+                "{id}.{operation} requires the scope {required:?}, which this caller does not \
+                 hold"
+            ),
+            Denied::NotAuthenticated { id, operation, required } => write!(
+                f,
+                "{id}.{operation} requires the scope {required:?} and this session has no \
+                 authenticated caller, so there is nobody to check it against"
+            ),
             Denied::NeedsApproval { id, operation, effect } => write!(
                 f,
                 "{id}.{operation} is marked {effect} and needs an explicit approval before it \
@@ -136,6 +171,7 @@ impl Exposure {
         id: &str,
         operation: &str,
         approval: Approval,
+        caller: Option<&Caller>,
     ) -> Result<(), Denied> {
         if !self.exposes(id) {
             return Err(Denied::InterfaceNotExposed(id.to_owned()));
@@ -145,6 +181,29 @@ impl Exposure {
                 id: id.to_owned(),
                 operation: operation.to_owned(),
             });
+        }
+        // The authorization row of §4.8's table. The requirement is written in
+        // the contract by whoever owns the interface, so it is checked before
+        // the effect gate — an unauthorised caller should not be told which
+        // operations would merely have needed an approval.
+        for required in required_scopes(registry, id, operation) {
+            match caller {
+                None => {
+                    return Err(Denied::NotAuthenticated {
+                        id: id.to_owned(),
+                        operation: operation.to_owned(),
+                        required,
+                    });
+                }
+                Some(c) if !c.scopes.contains(&required) => {
+                    return Err(Denied::MissingScope {
+                        id: id.to_owned(),
+                        operation: operation.to_owned(),
+                        required,
+                    });
+                }
+                Some(_) => {}
+            }
         }
         if let Some(effect) = destructive_effect(registry, id, operation)
             && !approval.destructive_approved
@@ -157,6 +216,19 @@ impl Exposure {
         }
         Ok(())
     }
+}
+
+/// The scopes `ai_authz` asks for, comma-separated in the annotation.
+///
+/// An operation with no `ai_authz` requires none. That is not a loophole — it
+/// is what an unannotated legacy contract looks like, and S4 already reports
+/// the absence as advice so it is visible rather than silent.
+fn required_scopes(registry: &Registry, id: &str, operation: &str) -> Vec<String> {
+    let Some((_, sig)) = registry.resolve_operation(id, operation) else { return Vec::new() };
+    sig.annotations
+        .get("ai_authz")
+        .map(|v| v.split(',').map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default()
 }
 
 /// The `ai_effect` value, when it is one that needs a human.
@@ -202,7 +274,7 @@ mod tests {
         let e = Exposure::nothing();
         assert!(!e.exposes("IDL:bank/Account:1.0"));
         assert_eq!(
-            e.check_call(&r, "IDL:bank/Account:1.0", "balance", Approval::default()),
+            e.check_call(&r, "IDL:bank/Account:1.0", "balance", Approval::default(), None),
             Err(Denied::InterfaceNotExposed("IDL:bank/Account:1.0".into()))
         );
     }
@@ -211,8 +283,12 @@ mod tests {
     fn allowlisting_an_interface_covers_its_operations() {
         let r = registry(IDL);
         let e = Exposure::nothing().allow_interface("IDL:bank/Account:1.0");
-        assert!(e.check_call(&r, "IDL:bank/Account:1.0", "balance", Approval::default()).is_ok());
-        assert!(e.check_call(&r, "IDL:bank/Account:1.0", "touch", Approval::default()).is_ok());
+        assert!(
+            e.check_call(&r, "IDL:bank/Account:1.0", "balance", Approval::default(), None).is_ok()
+        );
+        assert!(
+            e.check_call(&r, "IDL:bank/Account:1.0", "touch", Approval::default(), None).is_ok()
+        );
         // And still covers nothing else.
         assert!(!e.exposes("IDL:bank/Ledger:1.0"));
     }
@@ -221,9 +297,11 @@ mod tests {
     fn naming_operations_excludes_the_ones_not_named() {
         let r = registry(IDL);
         let e = Exposure::nothing().allow_operation("IDL:bank/Account:1.0", "balance");
-        assert!(e.check_call(&r, "IDL:bank/Account:1.0", "balance", Approval::default()).is_ok());
+        assert!(
+            e.check_call(&r, "IDL:bank/Account:1.0", "balance", Approval::default(), None).is_ok()
+        );
         assert_eq!(
-            e.check_call(&r, "IDL:bank/Account:1.0", "touch", Approval::default()),
+            e.check_call(&r, "IDL:bank/Account:1.0", "touch", Approval::default(), None),
             Err(Denied::OperationNotExposed {
                 id: "IDL:bank/Account:1.0".into(),
                 operation: "touch".into()
@@ -236,14 +314,15 @@ mod tests {
     fn a_destructive_operation_needs_an_approval_even_when_exposed() {
         let r = registry(IDL);
         let e = Exposure::nothing().allow_interface("IDL:bank/Account:1.0");
-        let denied = e.check_call(&r, "IDL:bank/Account:1.0", "close", Approval::default());
+        let denied = e.check_call(&r, "IDL:bank/Account:1.0", "close", Approval::default(), None);
         assert!(matches!(denied, Err(Denied::NeedsApproval { .. })), "{denied:?}");
         assert!(
             e.check_call(
                 &r,
                 "IDL:bank/Account:1.0",
                 "close",
-                Approval { destructive_approved: true }
+                Approval { destructive_approved: true },
+                None
             )
             .is_ok()
         );
@@ -255,7 +334,7 @@ mod tests {
         let r = registry("module m { interface I { //@ ai_effect: probably_fine\n void f(); }; };");
         let e = Exposure::nothing().allow_interface("IDL:m/I:1.0");
         assert!(matches!(
-            e.check_call(&r, "IDL:m/I:1.0", "f", Approval::default()),
+            e.check_call(&r, "IDL:m/I:1.0", "f", Approval::default(), None),
             Err(Denied::NeedsApproval { .. })
         ));
     }
@@ -265,9 +344,64 @@ mod tests {
     fn an_unexposed_interface_reveals_nothing_about_its_operations() {
         let r = registry(IDL);
         let e = Exposure::nothing();
-        let real = e.check_call(&r, "IDL:bank/Account:1.0", "balance", Approval::default());
-        let invented = e.check_call(&r, "IDL:bank/Account:1.0", "no_such_op", Approval::default());
+        let real = e.check_call(&r, "IDL:bank/Account:1.0", "balance", Approval::default(), None);
+        let invented =
+            e.check_call(&r, "IDL:bank/Account:1.0", "no_such_op", Approval::default(), None);
         assert_eq!(real, invented, "the two answers must be indistinguishable");
+    }
+
+    /// The authorization row of §4.8's table: `ai_authz` in the contract,
+    /// scopes on the caller, matched here.
+    #[test]
+    fn an_ai_authz_scope_is_enforced_against_the_caller() {
+        let r = registry(
+            "module bank { interface Account { //@ ai_authz: accounts:write\n void close(); }; };",
+        );
+        let e = Exposure::nothing().allow_interface("IDL:bank/Account:1.0");
+
+        // Nobody signed in: refused, and the message says why.
+        let d = e.check_call(&r, "IDL:bank/Account:1.0", "close", Approval::default(), None);
+        assert!(matches!(d, Err(Denied::NotAuthenticated { .. })), "{d:?}");
+
+        // Signed in without the scope: refused.
+        let alice = Caller::new("alice").with_scope("accounts:read");
+        let d =
+            e.check_call(&r, "IDL:bank/Account:1.0", "close", Approval::default(), Some(&alice));
+        assert!(matches!(d, Err(Denied::MissingScope { .. })), "{d:?}");
+
+        // With the scope: allowed.
+        let admin = Caller::new("root").with_scope("accounts:write");
+        assert!(
+            e.check_call(&r, "IDL:bank/Account:1.0", "close", Approval::default(), Some(&admin))
+                .is_ok()
+        );
+    }
+
+    /// Several scopes, comma-separated, all required.
+    #[test]
+    fn every_listed_scope_is_required_not_any() {
+        let r =
+            registry("module m { interface I { //@ ai_authz: a:read, b:write\n void f(); }; };");
+        let e = Exposure::nothing().allow_interface("IDL:m/I:1.0");
+        let partial = Caller::new("x").with_scope("a:read");
+        assert!(matches!(
+            e.check_call(&r, "IDL:m/I:1.0", "f", Approval::default(), Some(&partial)),
+            Err(Denied::MissingScope { required, .. }) if required == "b:write"
+        ));
+        let full = Caller::new("x").with_scope("a:read").with_scope("b:write");
+        assert!(e.check_call(&r, "IDL:m/I:1.0", "f", Approval::default(), Some(&full)).is_ok());
+    }
+
+    /// The scope gate runs before the effect gate: an unauthorised caller is
+    /// not told which operations would merely have needed approval.
+    #[test]
+    fn the_scope_gate_answers_before_the_approval_gate() {
+        let r = registry(
+            "module m { interface I { //@ ai_authz: admin\n //@ ai_effect: destructive\n void wipe(); }; };",
+        );
+        let e = Exposure::nothing().allow_interface("IDL:m/I:1.0");
+        let d = e.check_call(&r, "IDL:m/I:1.0", "wipe", Approval::default(), None);
+        assert!(matches!(d, Err(Denied::NotAuthenticated { .. })), "{d:?}");
     }
 
     #[test]
@@ -278,7 +412,7 @@ mod tests {
         );
         let e = Exposure::nothing().allow_interface("IDL:m/Derived:1.0");
         assert!(matches!(
-            e.check_call(&r, "IDL:m/Derived:1.0", "wipe", Approval::default()),
+            e.check_call(&r, "IDL:m/Derived:1.0", "wipe", Approval::default(), None),
             Err(Denied::NeedsApproval { .. })
         ));
     }

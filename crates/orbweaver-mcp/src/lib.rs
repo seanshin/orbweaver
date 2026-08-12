@@ -43,6 +43,7 @@ use orbweaver_giop::Connection;
 use orbweaver_registry::{Entry, ParamDirection, Registry};
 
 use handles::CapabilityTable;
+use identity::Caller;
 use policy::{Approval, Denied, Exposure};
 
 /// Why a tool call did not produce a result.
@@ -99,12 +100,16 @@ pub struct Bridge<'a> {
     registry: &'a Registry,
     exposure: Exposure,
     handles: CapabilityTable,
+    /// Who this session's calls are on behalf of, when the host authenticated
+    /// somebody. `None` is a session nobody is signed into, and operations
+    /// whose contract names an `ai_authz` scope will refuse it.
+    caller: Option<Caller>,
 }
 
 impl<'a> Bridge<'a> {
     /// A session over `registry`, exposing exactly what `exposure` allows.
     pub fn new(registry: &'a Registry, exposure: Exposure, session: impl Into<String>) -> Self {
-        Self { registry, exposure, handles: CapabilityTable::new(session) }
+        Self { registry, exposure, handles: CapabilityTable::new(session), caller: None }
     }
 
     /// Uses a capability table the caller already has, for a bridge that keeps
@@ -112,6 +117,20 @@ impl<'a> Bridge<'a> {
     pub fn with_handles(mut self, handles: CapabilityTable) -> Self {
         self.handles = handles;
         self
+    }
+
+    /// Attaches the caller the host authenticated.
+    ///
+    /// From the host, never from the agent's own request: a caller that can
+    /// assert its own identity has no identity check.
+    pub fn on_behalf_of(mut self, caller: Caller) -> Self {
+        self.caller = Some(caller);
+        self
+    }
+
+    /// Who this session is on behalf of, for audit lines.
+    pub fn caller(&self) -> Option<&Caller> {
+        self.caller.as_ref()
     }
 
     /// The session's capability table.
@@ -143,7 +162,15 @@ impl<'a> Bridge<'a> {
         operation: &str,
         approval: Approval,
     ) -> Result<String, ToolError> {
-        check_handle(self.registry, &self.exposure, &self.handles, handle, operation, approval)
+        check_handle(
+            self.registry,
+            &self.exposure,
+            &self.handles,
+            handle,
+            operation,
+            approval,
+            self.caller.as_ref(),
+        )
     }
 
     /// `invoke_operation(handle, operation, args)`.
@@ -164,6 +191,7 @@ impl<'a> Bridge<'a> {
             operation,
             args,
             approval,
+            self.caller.as_ref(),
         )
     }
 }
@@ -342,6 +370,7 @@ fn type_name(tc: &orbweaver_giop::typecode::TypeCode) -> String {
 /// The type comes from the table rather than from the request, so the policy
 /// check runs against what the handle actually names and not against anything
 /// the caller asserted.
+#[allow(clippy::too_many_arguments)]
 fn check_handle(
     registry: &Registry,
     exposure: &Exposure,
@@ -349,11 +378,12 @@ fn check_handle(
     handle: &str,
     operation: &str,
     approval: Approval,
+    caller: Option<&Caller>,
 ) -> Result<String, ToolError> {
     let Some(id) = table.type_of(handle).map(str::to_owned) else {
         return Err(ToolError::UnknownHandle(handle.to_owned()));
     };
-    exposure.check_call(registry, &id, operation, approval)?;
+    exposure.check_call(registry, &id, operation, approval, caller)?;
     Ok(id)
 }
 
@@ -371,8 +401,9 @@ fn invoke_operation(
     operation: &str,
     args: &Json,
     approval: Approval,
+    caller: Option<&Caller>,
 ) -> Result<Json, ToolError> {
-    let id = check_handle(registry, exposure, table, handle, operation, approval)?;
+    let id = check_handle(registry, exposure, table, handle, operation, approval, caller)?;
 
     let Some((_, sig)) = registry.resolve_operation(&id, operation) else {
         // Reachable when the exposure names an operation the contract does not
