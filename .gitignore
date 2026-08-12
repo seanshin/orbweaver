@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Rust
+target/
+Cargo.lock
+
+# Node
+node_modules/
+*.tsbuildinfo
+
+# Generated IDL artifacts
+generated/
+*.pyc
+*_idl.py
+*C.cpp
+*C.h
+*S.cpp
+*S.h
+
+# ORB runtime state
+*.ior
+omniORB.log
+*.log
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

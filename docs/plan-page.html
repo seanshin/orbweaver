@@ -1,0 +1,544 @@
+<title>Orbweaver</title>
+<style>
+  :root {
+    --ground:#F1F3F5; --surface:#FFFFFF; --surface-alt:#E9ECEF; --sunk:#E4E7EA;
+    --line:#D3D8DD; --line-soft:#E2E6EA;
+    --ink:#11161B; --ink-2:#3A444E; --ink-3:#6B7783;
+    --accent:#A8501C; --accent-soft:#F3E4D8;
+    --struct:#1D4C5C; --struct-soft:#DCE8EB;
+    --ok:#26614A; --warn:#8A5E00; --crit:#932323;
+    --ok-bg:#DDEBE4; --warn-bg:#F3E7CB; --crit-bg:#F3DEDE;
+    --shadow:0 1px 2px rgba(17,22,27,.05), 0 8px 24px -16px rgba(17,22,27,.22);
+    --font-sans:-apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard Variable", Pretendard, "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+    --font-mono:ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:#0D1116; --surface:#151A20; --surface-alt:#1C222A; --sunk:#10151A;
+      --line:#2A323B; --line-soft:#232A32;
+      --ink:#E3E8ED; --ink-2:#B3BEC8; --ink-3:#7E8B97;
+      --accent:#DC8B52; --accent-soft:#33231A;
+      --struct:#6BAABE; --struct-soft:#16282E;
+      --ok:#6DBF9C; --warn:#D3A44E; --crit:#E08585;
+      --ok-bg:#16281F; --warn-bg:#2C2314; --crit-bg:#2E1A1A;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:#0D1116; --surface:#151A20; --surface-alt:#1C222A; --sunk:#10151A;
+    --line:#2A323B; --line-soft:#232A32;
+    --ink:#E3E8ED; --ink-2:#B3BEC8; --ink-3:#7E8B97;
+    --accent:#DC8B52; --accent-soft:#33231A;
+    --struct:#6BAABE; --struct-soft:#16282E;
+    --ok:#6DBF9C; --warn:#D3A44E; --crit:#E08585;
+    --ok-bg:#16281F; --warn-bg:#2C2314; --crit-bg:#2E1A1A;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.7);
+  }
+
+  * { box-sizing:border-box; }
+  body {
+    background:var(--ground); color:var(--ink);
+    font-family:var(--font-sans); font-size:16px; line-height:1.72;
+    -webkit-font-smoothing:antialiased; word-break:keep-all;
+  }
+  .shell { max-width:840px; margin:0 auto; padding:0 28px 96px; }
+
+  /* Masthead */
+  .masthead { border-bottom:2px solid var(--ink); padding:64px 0 28px; margin-bottom:52px; }
+  .eyebrow {
+    font-family:var(--font-mono); font-size:.7rem; letter-spacing:.16em; text-transform:uppercase;
+    color:var(--accent); display:flex; flex-wrap:wrap; gap:14px; margin-bottom:20px;
+  }
+  .eyebrow span::before { content:"·"; margin-right:14px; color:var(--ink-3); }
+  .eyebrow span:first-child::before { content:none; margin:0; }
+  h1 { font-size:clamp(2.4rem,6vw,3.6rem); line-height:1.02; letter-spacing:-.04em; font-weight:800; margin:0 0 14px; }
+  .tagline { font-size:1.14rem; color:var(--ink); max-width:60ch; margin:0 0 6px; font-weight:600; letter-spacing:-.01em; }
+  .tagline-ko { font-size:1.02rem; color:var(--ink-2); max-width:60ch; margin:0; }
+  .facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); margin-top:36px; }
+  .fact { background:var(--surface); padding:13px 16px; }
+  .fact dt { font-family:var(--font-mono); font-size:.64rem; letter-spacing:.13em; text-transform:uppercase; color:var(--ink-3); margin:0 0 3px; }
+  .fact dd { margin:0; font-size:1.1rem; font-weight:700; letter-spacing:-.02em; font-variant-numeric:tabular-nums; }
+
+  /* Sections */
+  section { margin-bottom:64px; scroll-margin-top:24px; }
+  section > h2 {
+    display:grid; grid-template-columns:40px 1fr; align-items:baseline; gap:4px;
+    font-size:1.5rem; line-height:1.28; letter-spacing:-.025em; font-weight:750;
+    margin:0 0 6px; text-wrap:balance;
+  }
+  section > h2 .n { font-family:var(--font-mono); font-size:.78rem; font-weight:500; color:var(--accent); letter-spacing:.04em; }
+  .h2ko {
+    margin:0 0 22px 40px; padding-bottom:13px; border-bottom:1px solid var(--line);
+    font-size:.9rem; color:var(--ink-3); letter-spacing:-.01em;
+  }
+  h3 { font-size:1.02rem; font-weight:700; letter-spacing:-.012em; margin:36px 0 10px; }
+  h3 .ko { font-weight:400; color:var(--ink-3); font-size:.88rem; margin-left:8px; }
+  p { margin:0 0 12px; max-width:66ch; }
+  p.ko { color:var(--ink-2); font-size:.945rem; margin-bottom:20px; }
+  ul { margin:0 0 16px; padding-left:20px; max-width:66ch; }
+  li { margin-bottom:8px; }
+  li .ko { display:block; color:var(--ink-3); font-size:.88rem; margin-top:2px; }
+  a { color:var(--accent); text-underline-offset:2px; }
+  a:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  code { font-family:var(--font-mono); font-size:.855em; background:var(--surface-alt); padding:1px 5px; border-radius:3px; }
+  strong { font-weight:700; }
+
+  /* Thesis cards */
+  .thesis { display:flex; flex-direction:column; gap:14px; margin:26px 0; }
+  .card { background:var(--surface); border:1px solid var(--line); border-left:3px solid var(--accent); padding:18px 22px; box-shadow:var(--shadow); }
+  .card .tag { font-family:var(--font-mono); font-size:.64rem; letter-spacing:.15em; text-transform:uppercase; color:var(--accent); display:block; margin-bottom:8px; }
+  .card p { margin:0 0 8px; }
+  .card p:last-child { margin:0; }
+  .card.struct { border-left-color:var(--struct); }
+  .card.struct .tag { color:var(--struct); }
+  .card.crit { border-left-color:var(--crit); }
+  .card.crit .tag { color:var(--crit); }
+
+  /* Tables */
+  .tw { overflow-x:auto; margin:20px 0 24px; border:1px solid var(--line); background:var(--surface); }
+  table { border-collapse:collapse; width:100%; min-width:520px; font-size:.865rem; }
+  thead th {
+    background:var(--surface-alt); text-align:left; font-family:var(--font-mono);
+    font-size:.64rem; letter-spacing:.11em; text-transform:uppercase; color:var(--ink-2);
+    font-weight:600; padding:10px 14px; border-bottom:1px solid var(--line); white-space:nowrap;
+  }
+  tbody td { padding:11px 14px; border-bottom:1px solid var(--line-soft); vertical-align:top; line-height:1.58; }
+  tbody tr:last-child td { border-bottom:none; }
+  tbody tr:hover { background:var(--sunk); }
+  td.num, th.num { font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap; }
+  td.id { font-family:var(--font-mono); font-size:.76rem; color:var(--ink-3); white-space:nowrap; }
+  td .ko { display:block; color:var(--ink-3); font-size:.82rem; }
+
+  .chip { display:inline-block; font-family:var(--font-mono); font-size:.64rem; letter-spacing:.06em; padding:2px 7px; border-radius:2px; white-space:nowrap; font-weight:600; }
+  .chip.crit { background:var(--crit-bg); color:var(--crit); }
+  .chip.warn { background:var(--warn-bg); color:var(--warn); }
+  .chip.ok { background:var(--ok-bg); color:var(--ok); }
+  .chip.neu { background:var(--struct-soft); color:var(--struct); }
+
+  pre.code {
+    background:var(--sunk); border:1px solid var(--line); border-left:3px solid var(--struct);
+    padding:16px 18px; overflow-x:auto; font-family:var(--font-mono);
+    font-size:.785rem; line-height:1.66; margin:20px 0 24px; tab-size:2;
+  }
+  pre.code .c { color:var(--ink-3); }
+  pre.code .k { color:var(--struct); font-weight:600; }
+  pre.code .a { color:var(--accent); }
+  .diagram { background:var(--surface); border:1px solid var(--line); padding:18px; overflow-x:auto; margin:20px 0 24px; }
+
+  /* Flow strip */
+  .flow { display:grid; grid-template-columns:1fr auto 1fr auto 1fr; align-items:center; gap:10px; margin:26px 0; }
+  .flow .step { background:var(--surface); border:1px solid var(--line); padding:14px 16px; text-align:center; box-shadow:var(--shadow); }
+  .flow .step b { display:block; font-size:.9rem; letter-spacing:-.01em; }
+  .flow .step span { display:block; font-size:.78rem; color:var(--ink-3); margin-top:3px; }
+  .flow .arr { font-family:var(--font-mono); color:var(--accent); font-size:1rem; }
+  @media (max-width:700px) { .flow { grid-template-columns:1fr; } .flow .arr { transform:rotate(90deg); } }
+
+  /* Phases */
+  .phases { display:flex; flex-direction:column; gap:12px; margin:22px 0; }
+  .phase { background:var(--surface); border:1px solid var(--line); padding:16px 20px; display:grid; grid-template-columns:78px 1fr; gap:18px; box-shadow:var(--shadow); }
+  .phase.hot { border-left:3px solid var(--crit); }
+  .phase .marker { font-family:var(--font-mono); }
+  .phase .marker .p { display:block; font-size:.9rem; font-weight:700; color:var(--accent); }
+  .phase .marker .w { display:block; font-size:.7rem; color:var(--ink-3); margin-top:2px; }
+  .phase h4 { margin:0 0 3px; font-size:.98rem; font-weight:700; letter-spacing:-.01em; }
+  .phase .sub { margin:0 0 8px; font-size:.83rem; color:var(--ink-3); }
+  .phase p.d { margin:0; font-size:.875rem; color:var(--ink-2); }
+  @media (max-width:640px) { .phase { grid-template-columns:1fr; gap:8px; } }
+
+  footer {
+    border-top:1px solid var(--line); margin-top:48px; padding-top:20px;
+    font-family:var(--font-mono); font-size:.72rem; color:var(--ink-3);
+    display:flex; flex-wrap:wrap; gap:16px; justify-content:space-between;
+  }
+  @media (max-width:980px) { .shell { padding:0 20px 72px; } .masthead { padding-top:44px; } }
+  @media (prefers-reduced-motion: reduce) { * { animation:none !important; transition:none !important; } }
+</style>
+
+<div class="shell">
+
+  <header class="masthead">
+    <div class="eyebrow"><span>Project brief</span><span>Plan v0.2</span><span>2026-08-12</span><span>MIT</span></div>
+    <h1>Orbweaver</h1>
+    <p class="tagline">AI-driven CORBA/IDL interface automation — from natural-language spec to a live ORB binding, with no hand-written stubs.</p>
+    <p class="tagline-ko">AI 기반 CORBA/IDL 인터페이스 자동화 — 자연어 명세에서 실제 ORB 연동까지, 손으로 쓴 스텁 없이.</p>
+    <dl class="facts">
+      <div class="fact"><dt>Timeline</dt><dd>45주</dd></div>
+      <div class="fact"><dt>Phases</dt><dd>6</dd></div>
+      <div class="fact"><dt>License</dt><dd>MIT</dd></div>
+      <div class="fact"><dt>ORB core</dt><dd>자체</dd></div>
+      <div class="fact"><dt>Human-in-loop</dt><dd>≤15%</dd></div>
+    </dl>
+  </header>
+
+  <!-- 01 THESIS -->
+  <section id="thesis">
+    <h2><span class="n">01</span><span>The thesis</span></h2>
+    <p class="h2ko">착안점</p>
+
+    <p>CORBA already has what AI agents need, and nobody noticed. The Model Context Protocol standardized runtime tool discovery in 2025: a client calls <code>tools/list</code> and receives a live catalog of callable operations with schemas. CORBA shipped that in 1996 — the <strong>Interface Repository</strong>, with the <strong>Dynamic Invocation Interface</strong> as its matching call path.</p>
+    <p class="ko">CORBA는 AI 에이전트가 필요로 하는 것을 이미 갖고 있습니다. 아무도 주목하지 않았을 뿐입니다. MCP는 2025년에 런타임 도구 발견을 표준화했지만, CORBA는 1996년에 이미 제공했습니다 — <strong>Interface Repository</strong>와, 대응하는 호출 경로인 <strong>Dynamic Invocation Interface</strong>입니다.</p>
+
+    <div class="thesis">
+      <div class="card">
+        <span class="tag">Proposition 1 · 명제 1</span>
+        <p><strong>CORBA is a runtime self-describing type system.</strong> IFR + TypeCode + DII/DSI + DynAny let a caller discover and correctly invoke an interface it has never seen, with zero generated code. The discovery mechanism does not need inventing.</p>
+        <p class="ko"><strong>CORBA는 런타임 자기기술 타입 시스템이다.</strong> IFR + TypeCode + DII/DSI + DynAny 조합이면 한 번도 본 적 없는 인터페이스를 생성 코드 없이 발견해 정확히 호출할 수 있다. 발견 메커니즘을 새로 발명할 필요가 없다.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Proposition 2 · 명제 2</span>
+        <p><strong>For an LLM, IDL's verbosity is an asset.</strong> The strictness that drove humans to REST is exactly what makes machine-generated interfaces verifiable. An IDL compiler rejects malformed IDL deterministically, every time — a ground-truth oracle that OpenAPI-based approaches lack.</p>
+        <p class="ko"><strong>LLM에게 IDL의 장황함은 자산이다.</strong> 인간을 REST로 몰아낸 그 엄격함이 기계 생성 인터페이스를 검증 가능하게 만든다. IDL 컴파일러는 잘못된 IDL을 예외 없이 거부한다 — OpenAPI 기반 접근이 갖지 못한 정답 채점기다.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Proposition 3 · 명제 3</span>
+        <p><strong>The bottleneck is specification quality, not code generation.</strong> <a href="https://arxiv.org/html/2507.16044v2">AutoMCP</a> compiled 5,066 endpoints across 50 real APIs: 76.5% worked immediately, 99.9% after ~19 lines of <em>spec</em> fixes per API. Failures were spec defects — missing security schemes 62%, undocumented headers 47%, bad base URLs 41%.</p>
+        <p class="ko"><strong>병목은 코드 생성이 아니라 명세 품질이다.</strong> <a href="https://arxiv.org/html/2507.16044v2">AutoMCP</a>는 실제 API 50개·엔드포인트 5,066개에서 즉시 동작 76.5%, API당 약 19줄의 <em>명세</em> 수정 후 99.9%를 기록했다. 실패는 전부 명세 결함이었다.</p>
+      </div>
+    </div>
+
+    <p>Proposition 3 sets the priority: the first-class deliverable is a <strong>semantic annotation vocabulary</strong>, not a code generator.</p>
+    <p class="ko">명제 3이 우선순위를 정합니다 — 1급 산출물은 코드 생성기가 아니라 <strong>의미 어노테이션 어휘</strong>입니다.</p>
+  </section>
+
+  <!-- 02 PIPELINE -->
+  <section id="pipeline">
+    <h2><span class="n">02</span><span>What it does</span></h2>
+    <p class="h2ko">무엇을 하는가</p>
+
+    <div class="flow">
+      <div class="step"><b>Requirement</b><span>자연어 요구사항</span></div>
+      <div class="arr">▶</div>
+      <div class="step"><b>Annotated IDL</b><span>컴파일러 검증 계약</span></div>
+      <div class="arr">▶</div>
+      <div class="step"><b>Live binding</b><span>스텁 없는 연동</span></div>
+    </div>
+
+    <div class="tw"><table>
+      <thead><tr><th>Stage</th><th>단계</th><th>Input → Output</th><th class="num">Target</th></tr></thead>
+      <tbody>
+        <tr><td class="id">S1</td><td>흡수</td><td>requirements / legacy source / existing IDL → IR</td><td class="num">95%</td></tr>
+        <tr><td class="id">S2</td><td>합성</td><td>IR → OMG IDL 4.2 draft</td><td class="num">90%</td></tr>
+        <tr><td class="id">S3</td><td>의미부착</td><td>IDL → SIDL (<code>@ai_*</code> semantics)</td><td class="num">80%</td></tr>
+        <tr><td class="id">S4</td><td>검증</td><td>SIDL → compile gate + self-repair loop</td><td class="num">100%</td></tr>
+        <tr><td class="id">S5</td><td>등록</td><td>SIDL → type registry + semantic index</td><td class="num">100%</td></tr>
+        <tr><td class="id">S6</td><td>연동</td><td>catalog → dynamic call, or generated stubs</td><td class="num">85%</td></tr>
+        <tr><td class="id">S7</td><td>검증·운영</td><td>binding → contract tests, interceptors, tracing</td><td class="num">90%</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="card struct">
+      <span class="tag">S4 is the safety belt · S4가 안전벨트</span>
+      <p>An LLM writes plausible IDL that may be wrong; an IDL compiler rejects wrong IDL every single time. That asymmetry — <strong>probabilistic synthesis, deterministic verification</strong> — is the trust model the whole system rests on. Everything upstream of S4 is allowed to be uncertain because S4 is not.</p>
+      <p class="ko">LLM은 그럴듯하지만 틀릴 수 있는 IDL을 씁니다. IDL 컴파일러는 틀린 IDL을 100% 거부합니다. 이 비대칭 — <strong>확률적 합성, 결정론적 검증</strong> — 이 시스템 전체의 신뢰 모델입니다. S4 상류가 불확실해도 되는 이유는 S4가 그렇지 않기 때문입니다.</p>
+    </div>
+  </section>
+
+  <!-- 03 SIDL -->
+  <section id="sidl">
+    <h2><span class="n">03</span><span>SIDL — the semantic layer</span></h2>
+    <p class="h2ko">의미 계층</p>
+
+    <p>IDL nails syntax and says nothing about meaning. <code>long transfer(in long acct, in long amt)</code> is perfectly typed and tells an agent nothing about whether the unit is won or cents, whether it is idempotent, whether it is destructive, or whether the argument is PII. SIDL closes that gap using OMG IDL 4.x's own <code>@annotation</code> construct — a standard feature, not an extension.</p>
+    <p class="ko">IDL은 구문은 완벽히 잡지만 의미는 말하지 않습니다. 단위가 원인지 센트인지, 멱등한지, 파괴적인지, 인자가 PII인지 — 에이전트가 알아야 할 것은 하나도 담지 못합니다. SIDL은 OMG IDL 4.x의 표준 <code>@annotation</code> 문법으로 이 간극을 메웁니다.</p>
+
+<pre class="code"><span class="c">// sidl_annotations.idl</span>
+<span class="a">@annotation</span> ai_desc       { <span class="k">string</span>  text;  };  <span class="c">// intent in prose    / 자연어 의도</span>
+<span class="a">@annotation</span> ai_unit       { <span class="k">string</span>  unit;  };  <span class="c">// KRW, meter, ms     / 단위</span>
+<span class="a">@annotation</span> ai_effect     { <span class="k">string</span>  kind;  };  <span class="c">// pure|read|write|destructive</span>
+<span class="a">@annotation</span> ai_idempotent { <span class="k">boolean</span> value; };  <span class="c">// retry safety       / 재시도 안전성</span>
+<span class="a">@annotation</span> ai_pii        { <span class="k">string</span>  level; };  <span class="c">// none|low|high</span>
+<span class="a">@annotation</span> ai_authz      { <span class="k">string</span>  scope; };  <span class="c">// required permission/ 필요 권한</span>
+
+<span class="k">module</span> bank {
+  <span class="a">@ai_desc</span>("Transfers funds between accounts. Rolls back in full on failure.")
+  <span class="k">interface</span> Transfer {
+    <span class="a">@ai_effect</span>("destructive") <span class="a">@ai_idempotent</span>(FALSE)
+    <span class="a">@ai_authz</span>("bank.transfer.write")
+    <span class="k">void</span> execute(
+      <span class="a">@ai_pii</span>("high") <span class="k">in long</span> from,
+      <span class="a">@ai_pii</span>("high") <span class="k">in long</span> to,
+      <span class="a">@ai_unit</span>("KRW") <span class="k">in long</span> amount
+    ) <span class="k">raises</span> (InsufficientFunds, AccountFrozen);
+  };
+};</pre>
+
+    <p>One vocabulary drives both directions: at runtime it is the tool description an agent reads; at build time it is the source for generated contract tests and guardrails.</p>
+    <p class="ko">하나의 어휘가 양방향을 구동합니다. 런타임에는 에이전트가 읽는 도구 설명이고, 빌드 타임에는 계약 테스트와 가드레일을 생성하는 근거입니다.</p>
+  </section>
+
+  <!-- 04 LICENSING -->
+  <section id="licensing">
+    <h2><span class="n">04</span><span>The licensing constraint that reshaped the plan</span></h2>
+    <p class="h2ko">계획을 다시 짜게 만든 라이선스 제약</p>
+
+    <p>Policy: <strong>every shipped component is MIT or MIT-equivalent, or it is written here.</strong> That has one hard consequence worth stating plainly.</p>
+    <p class="ko">방침: <strong>배포하는 모든 구성요소는 MIT 또는 MIT 동등이거나, 직접 작성한다.</strong> 여기에는 분명히 밝혀 둘 결과가 하나 있습니다.</p>
+
+    <div class="card crit">
+      <span class="tag">Verified 2026-08 · 확인 완료</span>
+      <p><strong>No CORBA ORB is available under MIT.</strong> Every mature open-source ORB is excluded, so the ORB core is built in-house.</p>
+      <p class="ko"><strong>MIT로 제공되는 CORBA ORB는 존재하지 않습니다.</strong> 성숙한 오픈소스 ORB가 전부 배제되므로 ORB 코어는 직접 구현합니다.</p>
+    </div>
+
+    <div class="tw"><table>
+      <thead><tr><th>Project</th><th>License (verified)</th><th>Verdict · 판정</th></tr></thead>
+      <tbody>
+        <tr><td>omniORB / omniORBpy</td><td>LGPL (libs) + GPL (tools)</td><td><span class="chip crit">excluded</span> 배제 · interop target</td></tr>
+        <tr><td>JacORB</td><td>LGPL</td><td><span class="chip crit">excluded</span> 배제 · interop target</td></tr>
+        <tr><td>GlassFish CORBA</td><td>EPL / GPLv2+CPE</td><td><span class="chip crit">excluded</span> 배제</td></tr>
+        <tr><td>MICO</td><td>GPL / LGPL</td><td><span class="chip crit">excluded</span> 배제</td></tr>
+        <tr><td>ACE / TAO</td><td>DOC License — permissive, MIT-equivalent in effect, no SPDX id</td><td><span class="chip warn">not MIT</span> 문자 그대로는 MIT 아님</td></tr>
+        <tr><td><code>foxglove/omgidl</code></td><td><strong>MIT</strong></td><td><span class="chip ok">usable</span> 사용 가능</td></tr>
+        <tr><td><code>tier4/idl_parser</code>, eProsima</td><td>Apache-2.0</td><td><span class="chip warn">reference only</span> 참조만</td></tr>
+        <tr><td><code>sugarsweetrobotics</code>, <code>asenac</code></td><td><strong>none declared</strong></td><td><span class="chip crit">unusable</span> 사용 불가</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="card struct">
+      <span class="tag">Why this is survivable · 왜 감당 가능한가</span>
+      <p><strong>Interoperability requires no license.</strong> GIOP/IIOP is a published OMG specification; implementing the wire protocol creates no obligation toward TAO, omniORB or JacORB — no linking, no derivation, no redistribution. Those ORBs move from the dependency list to the <strong>interop test matrix</strong>: pulled into throwaway CI containers to verify wire correctness, never shipped.</p>
+      <p class="ko"><strong>상호운용에는 라이선스가 필요하지 않습니다.</strong> GIOP/IIOP는 공개된 OMG 명세이며, 와이어 프로토콜 구현은 TAO·omniORB·JacORB에 대해 어떤 의무도 발생시키지 않습니다. 링크도, 파생도, 재배포도 없기 때문입니다. 이들은 의존성에서 <strong>상호운용 테스트 매트릭스</strong>로 이동합니다 — CI 컨테이너에서 와이어 정확성 검증에만 쓰고 배포물에는 넣지 않습니다.</p>
+    </div>
+
+    <p><strong>Cost:</strong> ~15 additional weeks — CDR, GIOP framing, IIOP transport, IOR handling, POA and the type registry all become first-party work. <strong>Benefit:</strong> owning the parser makes the annotation fallback possible, and owning the registry means the semantic catalog <em>is</em> the registry rather than a layer bolted onto a foreign IFR.</p>
+    <p class="ko"><strong>비용:</strong> 약 15주 추가 — CDR, GIOP 프레이밍, IIOP 전송, IOR 처리, POA, 타입 레지스트리가 전부 자체 작업이 됩니다. <strong>이득:</strong> 파서 소유가 어노테이션 폴백을 가능하게 하고, 레지스트리 소유는 시맨틱 카탈로그가 외부 IFR에 덧붙는 계층이 아니라 레지스트리 <em>그 자체</em>가 되게 합니다.</p>
+  </section>
+
+  <!-- 05 ARCHITECTURE -->
+  <section id="architecture">
+    <h2><span class="n">05</span><span>Architecture</span></h2>
+    <p class="h2ko">아키텍처</p>
+
+    <div class="diagram">
+<pre class="mermaid">
+graph TB
+    subgraph IN["Input · 입력"]
+        A1["Natural-language requirement"]
+        A3["Existing IDL / proto / OpenAPI"]
+        A4["Remote IFR of a running ORB"]
+    end
+    subgraph SPEC["Spec Forge"]
+        B1["IDL synthesizer (LLM)"]
+        B2["SIDL annotator"]
+        B3["Validation gate"]
+    end
+    subgraph REG["Registry · 레지스트리"]
+        C1["Versioned contract store"]
+        C2["Type registry (IFR-equivalent)"]
+        C3["Semantic catalog"]
+    end
+    subgraph CORE["ORB core — MIT, in-house · 자체 구현"]
+        K1["CDR codec"]
+        K2["GIOP / IIOP transport"]
+        K3["POA / object adapter"]
+    end
+    subgraph RT["Dual-path binding · 이중 경로"]
+        D1["Dynamic: DII / DSI / DynAny"]
+        D2["Static: generated stubs"]
+    end
+    subgraph OUT["Consumers · 소비자"]
+        E1["MCP bridge"]
+        E3["Native CORBA peers"]
+    end
+    A1 --> B1
+    A3 --> B1
+    A4 --> C2
+    B1 --> B2 --> B3 --> C1
+    C1 --> C2 --> C3
+    C3 --> D1
+    C1 --> D2
+    K1 --> K2 --> K3
+    K3 --> D1
+    K3 --> D2
+    D1 --> E1
+    D2 --> E3
+    D2 -. promotion .-> D1
+</pre>
+    </div>
+
+    <h3>Dual-path binding<span class="ko">이중 경로 연동</span></h3>
+    <p>Pure code generation breaks automation the moment a schema changes; pure dynamic invocation is too slow for a hot path. Running both and promoting between them satisfies each constraint where it actually binds.</p>
+    <p class="ko">순수 코드 생성은 스키마가 바뀌는 순간 자동화가 깨지고, 순수 동적 호출은 임계 경로에 쓰기엔 느립니다. 둘 다 운영하고 사이에서 승격시키면 각 제약이 실제로 작용하는 지점에서 각각 해소됩니다.</p>
+
+    <div class="tw"><table>
+      <thead><tr><th></th><th>Dynamic path · 동적 경로</th><th>Static path · 정적 경로</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Mechanism</strong></td><td>DII + DynAny</td><td>Generated stubs</td></tr>
+        <tr><td><strong>Code generated</strong></td><td>none · 없음</td><td>full · 전체</td></tr>
+        <tr><td><strong>Schema change</strong></td><td>adapts automatically · 자동 적응</td><td>regenerate + redeploy · 재생성·재배포</td></tr>
+        <tr><td><strong>Latency</strong></td><td>higher · 높음</td><td>lowest · 최저</td></tr>
+        <tr><td><strong>Type safety</strong></td><td>runtime · 런타임</td><td>compile time · 컴파일 타임</td></tr>
+        <tr><td><strong>Best for</strong></td><td>discovery, experiments · 탐색·실험</td><td>hot paths, real-time · 임계 경로·실시간</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>Promotion criteria</strong> — ≥1,000 calls/day <em>and</em> schema unchanged for 30 days <em>and</em> regression suite green. Explore dynamically, settle statically.</p>
+    <p class="ko"><strong>승격 조건</strong> — 일 1,000회 이상 호출 <em>그리고</em> 스키마 30일 무변경 <em>그리고</em> 회귀 스위트 통과. 탐색은 동적으로, 정착은 정적으로.</p>
+  </section>
+
+  <!-- 06 ROADMAP -->
+  <section id="roadmap">
+    <h2><span class="n">06</span><span>Roadmap</span></h2>
+    <p class="h2ko">로드맵</p>
+
+    <p>Approximately 45 weeks. Building the ORB core in-house adds roughly 15 weeks over an adopt-an-ORB plan, purchased in exchange for full MIT freedom.</p>
+    <p class="ko">약 45주. ORB 코어 자체 구현이 기존 ORB 채택 대비 약 15주를 추가하며, 그 대가로 완전한 MIT 자유도를 얻습니다.</p>
+
+    <div class="phases">
+      <article class="phase hot">
+        <div class="marker"><span class="p">Phase 0</span><span class="w">3 weeks</span></div>
+        <div>
+          <h4>Feasibility spike <span class="chip crit">gates everything</span></h4>
+          <p class="sub">타당성 검증 — 전체의 관문</p>
+          <p class="d">Four assumptions tested before anything is built; two can invalidate the architecture. Golden IDL corpus v0 built alongside.</p>
+        </div>
+      </article>
+      <article class="phase">
+        <div class="marker"><span class="p">Phase 1</span><span class="w">10 weeks</span></div>
+        <div>
+          <h4>Wire protocol core</h4>
+          <p class="sub">와이어 프로토콜 코어</p>
+          <p class="d"><code>orbweaver-cdr</code> + <code>orbweaver-giop</code> + IOR handling. Interop CI against TAO, omniORB and JacORB containers from the first commit. <em>Deliverable: an MIT ORB that speaks to existing CORBA systems.</em></p>
+        </div>
+      </article>
+      <article class="phase">
+        <div class="marker"><span class="p">Phase 2</span><span class="w">8 weeks</span></div>
+        <div>
+          <h4>IDL compiler and registry</h4>
+          <p class="sub">IDL 컴파일러와 레지스트리</p>
+          <p class="d"><code>orbweaver-idl</code> (IDL 4.2 + <code>@annotation</code>), differential conformance against tao_idl and omniidl, <code>orbweaver-registry</code>, <code>orbweaver-poa</code>.</p>
+        </div>
+      </article>
+      <article class="phase">
+        <div class="marker"><span class="p">Phase 3</span><span class="w">10 weeks</span></div>
+        <div>
+          <h4>Dynamic invocation and AI pipeline <span class="chip neu">headline demo</span></h4>
+          <p class="sub">동적 호출과 AI 파이프라인 — 하이라이트 데모</p>
+          <p class="d"><code>orbweaver-dynamic</code>, <code>orbweaver-forge</code> (S1–S5 with self-repair loop), semantic catalog, <code>orbweaver-mcp</code>, guardrails v1. <em>Deliverable: an agent invokes a real CORBA system with no generated code.</em></p>
+        </div>
+      </article>
+      <article class="phase">
+        <div class="marker"><span class="p">Phase 4</span><span class="w">8 weeks</span></div>
+        <div>
+          <h4>Static generation and promotion</h4>
+          <p class="sub">정적 생성과 승격</p>
+          <p class="d">Multi-target back ends (Rust, Python, C++, Java), promotion engine, contract-test generation, DDS-XTypes target experiment.</p>
+        </div>
+      </article>
+      <article class="phase">
+        <div class="marker"><span class="p">Phase 5</span><span class="w">6 weeks</span></div>
+        <div>
+          <h4>Productionization</h4>
+          <p class="sub">운영화</p>
+          <p class="d">TLS transport, OpenTelemetry, governance workflows, web console, one pilot integration.</p>
+        </div>
+      </article>
+    </div>
+
+    <h3>Phase 0 gates the project<span class="ko">Phase 0가 프로젝트의 관문</span></h3>
+    <ul>
+      <li><strong>A — GIOP interop is reachable.</strong> Hand-encode a GIOP 1.2 <code>Request</code>; get a correct reply from stock TAO and omniORB. <em>If a minimal ORB cannot interoperate, the in-house path fails and the MIT-only constraint must be revisited.</em>
+        <span class="ko">GIOP 상호운용이 가능한가. 최소 ORB가 상호운용되지 않으면 자체 구현 경로가 무너지고 MIT 전용 제약을 재검토해야 한다.</span></li>
+      <li><strong>B — LLMs write compilable IDL.</strong> 20 requirements → IDL. Target ≥60% first-pass, ≥95% within three self-repair rounds.
+        <span class="ko">LLM이 컴파일되는 IDL을 쓰는가. 목표 1차 통과 ≥60%, 자가수정 3회 내 ≥95%.</span></li>
+      <li><strong>C — <code>@annotation</code> survives real toolchains.</strong> Most deployed ORB compilers predate IDL 4. <em>Fallback: structured comments plus sidecar YAML — viable because we own the parser.</em>
+        <span class="ko">배포된 ORB 컴파일러 대부분은 IDL 4 이전 세대다. 폴백은 구조화 주석 + 사이드카 YAML이며, 파서를 우리가 소유하므로 가능하다.</span></li>
+      <li><strong>D — IOR addressing works under NAT/containers.</strong> An internal IP baked into an IOR is uncallable from outside; verify endpoint rewriting under Kubernetes early.
+        <span class="ko">IOR에 박힌 컨테이너 내부 IP는 외부에서 호출할 수 없다. K8s의 endpoint 재작성을 조기에 검증한다.</span></li>
+    </ul>
+  </section>
+
+  <!-- 07 RISK -->
+  <section id="risk">
+    <h2><span class="n">07</span><span>Top risks</span></h2>
+    <p class="h2ko">주요 리스크</p>
+
+    <div class="tw"><table>
+      <thead><tr><th class="num">ID</th><th>Risk · 리스크</th><th>Impact</th><th>Mitigation · 대응</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="id">R0</td>
+          <td><strong>In-house ORB fails to interoperate</strong> — GIOP has version and vendor quirks<span class="ko">자체 ORB가 상호운용에 실패</span></td>
+          <td><span class="chip crit">critical</span></td>
+          <td>Phase 0 assumption A, tested first. Interop CI from Phase 1's first commit. On failure, revisit the licensing constraint before proceeding<span class="ko">최우선 검증. 실패 시 진행 전 라이선스 제약 재검토</span></td>
+        </tr>
+        <tr>
+          <td class="id">R1</td>
+          <td><strong><code>@annotation</code> unsupported</strong> by deployed ORB compilers<span class="ko">배포된 컴파일러가 어노테이션 미지원</span></td>
+          <td><span class="chip crit">critical</span></td>
+          <td>Phase 0 assumption C. Fallback to structured comments plus sidecar YAML<span class="ko">폴백: 구조화 주석 + 사이드카 YAML</span></td>
+        </tr>
+        <tr>
+          <td class="id">R2</td>
+          <td><strong>No IFR deployed</strong> in the target environment — common in practice<span class="ko">대상 환경에 IFR이 없음 — 실무에서 흔함</span></td>
+          <td><span class="chip crit">high</span></td>
+          <td>Registry is first-party and populated from IDL source; offline mode works from IDL text alone<span class="ko">레지스트리가 자체 구현이며 IDL 소스로 채운다</span></td>
+        </tr>
+        <tr>
+          <td class="id">R3</td>
+          <td><strong>IIOP insecure by default</strong> — plaintext on 683/tcp; CSIv2+TLS is a known source of cross-vendor breakage<span class="ko">IIOP 기본 비암호화</span></td>
+          <td><span class="chip crit">high</span></td>
+          <td>TLS mandatory on new paths; legacy wrapped in mTLS tunnels. Penetration test as a Phase 5 gate<span class="ko">신규 경로 TLS 필수, 레거시는 mTLS 터널</span></td>
+        </tr>
+        <tr>
+          <td class="id">R7</td>
+          <td><strong>IOR addressing under NAT/containers</strong><span class="ko">NAT·컨테이너의 IOR 주소 문제</span></td>
+          <td><span class="chip warn">medium</span></td>
+          <td>Endpoint rewriting templated into every deployment; verified in Phase 0<span class="ko">배포 템플릿화, Phase 0에서 검증</span></td>
+        </tr>
+        <tr>
+          <td class="id">R9</td>
+          <td>CORBA market contraction<span class="ko">CORBA 시장 축소</span></td>
+          <td><span class="chip neu">strategic</span></td>
+          <td>IDL 4.x is shared with DDS — land a DDS target early. Position as an OMG IDL automation platform, not a CORBA product<span class="ko">DDS 타깃 조기 확보. CORBA 제품이 아닌 IDL 자동화 플랫폼으로 포지셔닝</span></td>
+        </tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- 08 WHY NOW -->
+  <section id="why">
+    <h2><span class="n">08</span><span>Why CORBA in 2026</span></h2>
+    <p class="h2ko">왜 지금 CORBA인가</p>
+
+    <p>Not nostalgia. Three concrete reasons, plus one that matters more than the rest.</p>
+    <p class="ko">향수가 아닙니다. 구체적인 이유가 셋, 그리고 나머지보다 중요한 것이 하나 있습니다.</p>
+
+    <ul>
+      <li><strong>The legacy is load-bearing and not going away.</strong> Naval combat systems, command and control, telecom switching, air traffic control, core banking, large physics installations — environments where a rewrite is not an option.
+        <span class="ko">레거시가 하중을 지탱하고 있고 사라지지 않습니다. 함정 전투체계, 지휘통제, 통신 교환기, 항공관제, 금융 코어 — 재작성이 선택지가 아닌 환경들입니다.</span></li>
+      <li><strong>OMG IDL 4.x is shared with DDS.</strong> Korean defense programs are standardizing on DDS-based middleware, and DDS-XTypes uses the same IDL. One pipeline serves both, turning a shrinking CORBA market into an expansion path.
+        <span class="ko">OMG IDL 4.x는 DDS와 공유됩니다. 하나의 파이프라인이 양쪽을 커버하므로, 축소되는 CORBA 시장이 확장 경로가 됩니다.</span></li>
+      <li><strong>Java severed its own connection.</strong> <a href="https://openjdk.org/jeps/320">JEP 320</a> removed <code>java.corba</code> in JDK 11, so Java legacy now needs a third-party ORB just to keep running. That forced migration is itself demand for automation.
+        <span class="ko">Java는 스스로 연결을 끊었습니다. JEP 320이 JDK 11에서 <code>java.corba</code>를 제거해, Java 레거시는 동작 유지만을 위해서도 서드파티 ORB가 필요합니다.</span></li>
+    </ul>
+
+    <div class="card">
+      <span class="tag">The reason that matters most · 가장 중요한 이유</span>
+      <p>Interfaces are increasingly called by agents rather than people. In that world a contract that is verbose but precise beats one that is terse but ambiguous. <strong>The complexity humans rejected in CORBA is the precision agents need.</strong></p>
+      <p class="ko">인터페이스를 호출하는 주체가 점점 사람에서 에이전트로 옮겨가고 있습니다. 그 세계에서는 장황하지만 정밀한 계약이 간결하지만 모호한 계약을 이깁니다. <strong>인간이 거부했던 CORBA의 복잡성이, 에이전트에게는 필요한 정밀성입니다.</strong></p>
+    </div>
+  </section>
+
+  <!-- 09 DOCS -->
+  <section id="docs">
+    <h2><span class="n">09</span><span>Full plan</span></h2>
+    <p class="h2ko">전체 계획서</p>
+    <p>This page is a brief. The complete plan — research findings, component specifications, the full risk register, verification strategy and references — is maintained in the repository in both languages.</p>
+    <p class="ko">이 페이지는 요약입니다. 조사 결과, 구성요소 명세, 전체 리스크 목록, 검증 전략, 참고 자료를 포함한 완전한 계획서는 저장소에 두 언어로 유지됩니다.</p>
+    <div class="tw"><table>
+      <thead><tr><th>Document</th><th>문서</th><th>Contents</th></tr></thead>
+      <tbody>
+        <tr><td><code>README.md</code></td><td>저장소 소개</td><td>Bilingual overview, licensing stance, component list</td></tr>
+        <tr><td><code>docs/PLAN.md</code></td><td>개발 계획서 (영문)</td><td>Full technical plan, research, risk register</td></tr>
+        <tr><td><code>docs/PLAN.ko.md</code></td><td>개발 계획서 (국문)</td><td>전체 기술 계획, 조사 결과, 리스크 목록</td></tr>
+      </tbody>
+    </table></div>
+    <p>Repository · 저장소 — <a href="https://github.com/seanshin/orbweaver">github.com/seanshin/orbweaver</a></p>
+  </section>
+
+  <footer>
+    <span>Orbweaver · Project brief · Plan v0.2</span>
+    <span>MIT · 2026-08-12 · Draft, pending Phase 0</span>
+  </footer>
+
+</div>
