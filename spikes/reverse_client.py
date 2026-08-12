@@ -35,6 +35,13 @@ r = spike.Ragged(a=0xAA, b=-7, c=9, d=2.5, e=0xBB)
 back = echo.echo_ragged(r)
 check("echo_ragged(...)", (back.a, back.b, back.c, back.d, back.e), (0xAA, -7, 9, 2.5, 0xBB))
 
+# A large reply, which the Rust server fragments when asked to. If our
+# fragments were malformed the peer would raise rather than reassemble.
+for n in (100, 40000, 250000):
+    data = echo.blob(n)
+    expected = bytes((i % 251) for i in range(n))
+    check(f"blob({n})", data == expected and len(data) == n, True)
+
 # An unknown operation must come back as BAD_OPERATION, not a hang.
 try:
     echo._get_interface()
@@ -44,5 +51,5 @@ except CORBA.BAD_OPERATION:
 except CORBA.SystemException as e:
     print(f"  ok   unknown op -> {type(e).__name__}")
 
-print(f"\nasserted cases: 5, failures: {fails}")
+print(f"\nasserted cases: 8, failures: {fails}")
 sys.exit(1 if fails else 0)

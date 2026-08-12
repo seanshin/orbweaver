@@ -55,6 +55,19 @@ pub const DEFAULT_MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
 /// How many `LOCATION_FORWARD` hops to follow before giving up.
 pub const MAX_FORWARD_HOPS: u8 = 8;
 
+/// Body size above which an outbound message is split into fragments.
+///
+/// Chosen below omniORB's 2 MiB default `giopMaxMsgSize` so a large sequence
+/// leaves here already fragmented rather than being rejected whole with
+/// `MARSHAL`. Peers advertise no limit, so this is a guess that errs small.
+pub const DEFAULT_FRAGMENT_THRESHOLD: usize = 1024 * 1024;
+
+/// Most fragments to accept for one logical message before calling it hostile.
+///
+/// A peer that never sets the final-fragment bit would otherwise hold the
+/// connection open and grow the reassembly buffer without bound.
+pub const MAX_FRAGMENTS: usize = 4096;
+
 /// A GIOP protocol version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Version {
@@ -656,6 +669,91 @@ impl Reply {
     }
 }
 
+/// Splits an encoded message into a leading message plus `Fragment`
+/// continuations, if it exceeds `threshold`.
+///
+/// §9.4.9 constrains the leading and intermediate pieces: `message_size + 12`
+/// must be divisible by 8, so that the next piece resumes on the alignment the
+/// unfragmented stream would have had. Getting that wrong shifts every
+/// subsequent field, which is why the split point is rounded rather than taken
+/// wherever the threshold happens to fall.
+///
+/// Returns a single element when no split was needed.
+pub fn fragment_message(msg: Vec<u8>, threshold: usize) -> Result<Vec<Vec<u8>>> {
+    if msg.len() <= threshold || msg.len() <= HEADER_LEN {
+        return Ok(vec![msg]);
+    }
+    let version = Version { major: msg[4], minor: msg[5] };
+    if !version.is_1_2_layout() {
+        // 1.1 fragments carry no request id and restart alignment; we do not
+        // emit them for the same reason we refuse to read them.
+        return Ok(vec![msg]);
+    }
+    let endian = if msg[6] & 1 == 1 { Endian::Little } else { Endian::Big };
+    let msg_type = MsgType::from_octet(msg[7]).ok_or(Error::UnknownMessageType(msg[7]))?;
+    if !matches!(
+        msg_type,
+        MsgType::Request | MsgType::Reply | MsgType::LocateRequest | MsgType::LocateReply
+    ) {
+        return Ok(vec![msg]);
+    }
+    let request_id = logical_request_id(&msg, endian, version, msg_type)?;
+
+    // The first piece keeps the original header, so its total length must be a
+    // multiple of 8.
+    let mut cut = threshold.max(HEADER_LEN + 8);
+    cut -= cut % 8;
+    if cut >= msg.len() {
+        return Ok(vec![msg]);
+    }
+
+    let mut out = Vec::new();
+    let mut head = msg[..cut].to_vec();
+    head[6] |= 0b10; // more fragments
+    patch_size(&mut head, endian, (cut - HEADER_LEN) as u32);
+    out.push(head);
+
+    let mut pos = cut;
+    while pos < msg.len() {
+        // Each fragment is a header plus a 4-byte request id plus payload, and
+        // the same divisible-by-8 rule applies while more follow.
+        let mut take = threshold.saturating_sub(HEADER_LEN + 4).max(8);
+        if pos + take < msg.len() {
+            let total = HEADER_LEN + 4 + take;
+            take -= total % 8;
+        }
+        let end = (pos + take).min(msg.len());
+        let last = end == msg.len();
+
+        let mut frag = Vec::with_capacity(HEADER_LEN + 4 + (end - pos));
+        frag.extend_from_slice(MAGIC);
+        frag.push(version.major);
+        frag.push(version.minor);
+        frag.push(endian.as_flag() | if last { 0 } else { 0b10 });
+        frag.push(MsgType::Fragment as u8);
+        frag.extend_from_slice(&[0, 0, 0, 0]);
+        let id_bytes = match endian {
+            Endian::Big => request_id.to_be_bytes(),
+            Endian::Little => request_id.to_le_bytes(),
+        };
+        frag.extend_from_slice(&id_bytes);
+        frag.extend_from_slice(&msg[pos..end]);
+        let size = (frag.len() - HEADER_LEN) as u32;
+        patch_size(&mut frag, endian, size);
+        out.push(frag);
+        pos = end;
+    }
+    Ok(out)
+}
+
+fn patch_size(msg: &mut [u8], endian: Endian, size: u32) {
+    let b = match endian {
+        Endian::Big => size.to_be_bytes(),
+        Endian::Little => size.to_le_bytes(),
+    };
+    msg[8..12].copy_from_slice(&b);
+}
+
 /// A framed but undecoded GIOP message.
 #[derive(Debug, Clone)]
 pub struct RawMessage {
@@ -665,15 +763,106 @@ pub struct RawMessage {
     pub version: Version,
     /// Byte order from the header.
     pub endian: Endian,
+    /// Whether the more-fragments bit was set. Always false after reassembly.
+    pub more_fragments: bool,
+    /// How many wire messages this logical message was reassembled from.
+    /// One means the peer did not fragment.
+    pub fragments: usize,
     /// Header and body together.
     pub bytes: Vec<u8>,
 }
 
-/// Reads one whole GIOP message from `stream`.
+/// Reads one logical GIOP message, reassembling fragments if the peer sent
+/// any.
 ///
-/// Rejects a `message_size` above `max_size` before allocating, and refuses a
-/// fragmented message rather than decoding its first piece as a whole.
+/// §9.4.9 lets a peer split `Request`, `Reply`, `LocateRequest` and
+/// `LocateReply` across a leading message plus `Fragment` continuations. In
+/// GIOP 1.2 alignment does **not** restart per fragment — the pieces form one
+/// logical stream — so reassembly is a concatenation of the leading message
+/// with each fragment's payload, and the result aligns exactly as an
+/// unfragmented message would have.
 pub fn read_message(stream: &mut impl Read, max_size: usize) -> Result<RawMessage> {
+    let first = read_one_message(stream, max_size)?;
+    if !first.more_fragments {
+        return Ok(first);
+    }
+    if !first.version.is_1_2_layout() {
+        // GIOP 1.1 restarts alignment relative to each fragment and carries no
+        // request id to correlate them, so concatenation is not reassembly and
+        // there is no way to tell whose fragments these are. Refusing beats
+        // producing a plausible wrong value.
+        return Err(Error::FragmentUnsupported);
+    }
+
+    let RawMessage { msg_type, version, endian, mut bytes, .. } = first;
+    let mut count = 0usize;
+    loop {
+        count += 1;
+        if count > MAX_FRAGMENTS {
+            return Err(Error::MessageTooLarge { declared: count, limit: MAX_FRAGMENTS });
+        }
+        let next = read_one_message(stream, max_size)?;
+        if next.msg_type != MsgType::Fragment {
+            return Err(Error::UnexpectedMessage(next.msg_type));
+        }
+        // FragmentHeader_1_2 is a single request_id, which must match.
+        let mut d = Decoder::new(&next.bytes, next.endian);
+        d.seek_to(HEADER_LEN)?;
+        let frag_id = d.get_u32()?;
+        let own_id = logical_request_id(&bytes, endian, version, msg_type)?;
+        if frag_id != own_id {
+            return Err(Error::Desynchronized);
+        }
+        let payload = &next.bytes[HEADER_LEN + 4..];
+        if bytes.len() + payload.len() > max_size {
+            return Err(Error::MessageTooLarge {
+                declared: bytes.len() + payload.len(),
+                limit: max_size,
+            });
+        }
+        bytes.extend_from_slice(payload);
+        if !next.more_fragments {
+            break;
+        }
+    }
+
+    // Rewrite the header so the reassembled message describes itself: the
+    // more-fragments bit is gone and message_size covers everything.
+    let size = (bytes.len() - HEADER_LEN) as u32;
+    bytes[6] &= !0b10;
+    let size_bytes = match endian {
+        Endian::Big => size.to_be_bytes(),
+        Endian::Little => size.to_le_bytes(),
+    };
+    bytes[8..12].copy_from_slice(&size_bytes);
+    Ok(RawMessage { msg_type, version, endian, more_fragments: false, fragments: count + 1, bytes })
+}
+
+/// Reads the `request_id` of a partially-received message, to match fragments
+/// against it.
+fn logical_request_id(
+    bytes: &[u8],
+    endian: Endian,
+    version: Version,
+    msg_type: MsgType,
+) -> Result<u32> {
+    let mut d = Decoder::new(bytes, endian);
+    d.seek_to(HEADER_LEN)?;
+    match msg_type {
+        // In 1.2 the request id is the first field of all four fragmentable
+        // message types.
+        MsgType::Request | MsgType::Reply | MsgType::LocateRequest | MsgType::LocateReply => {
+            let _ = version;
+            Ok(d.get_u32()?)
+        }
+        other => Err(Error::UnexpectedMessage(other)),
+    }
+}
+
+/// Reads exactly one GIOP message, without reassembling anything.
+///
+/// Rejects a `message_size` above `max_size` before allocating.
+pub fn read_one_message(stream: &mut impl Read, max_size: usize) -> Result<RawMessage> {
     let mut header = [0u8; HEADER_LEN];
     stream.read_exact(&mut header)?;
     if &header[0..4] != MAGIC {
@@ -686,15 +875,13 @@ pub fn read_message(stream: &mut impl Read, max_size: usize) -> Result<RawMessag
 
     let flags = header[6];
     let endian = if flags & 1 == 1 { Endian::Little } else { Endian::Big };
+    let more_fragments = version.minor >= 1 && flags & 0b10 != 0;
     if version.minor >= 1 {
         // §9.4.1: the top six bits must be zero.
         if flags & 0b1111_1100 != 0 {
             return Err(Error::Cdr(orbweaver_cdr::Error::Malformed(
                 "reserved bits of the GIOP flags octet must be zero",
             )));
-        }
-        if flags & 0b10 != 0 {
-            return Err(Error::FragmentUnsupported);
         }
     } else if flags > 1 {
         // 1.0 defines the octet as a boolean.
@@ -717,7 +904,7 @@ pub fn read_message(stream: &mut impl Read, max_size: usize) -> Result<RawMessag
     bytes.extend_from_slice(&header);
     bytes.resize(HEADER_LEN + size, 0);
     stream.read_exact(&mut bytes[HEADER_LEN..])?;
-    Ok(RawMessage { msg_type, version, endian, bytes })
+    Ok(RawMessage { msg_type, version, endian, more_fragments, fragments: 1, bytes })
 }
 
 /// Decodes a `Reply` that [`read_message`] already framed.
@@ -797,6 +984,10 @@ pub struct Connection {
     char_converter: Option<codeset::Converter>,
     /// Whether the `CodeSets` context still needs to go out.
     codeset_context_pending: bool,
+    /// Body size above which outbound messages are fragmented.
+    fragment_threshold: usize,
+    /// Largest number of fragments any one reply arrived in.
+    max_reply_fragments: usize,
 }
 
 impl Connection {
@@ -838,6 +1029,8 @@ impl Connection {
             poisoned: false,
             char_converter,
             codeset_context_pending,
+            fragment_threshold: DEFAULT_FRAGMENT_THRESHOLD,
+            max_reply_fragments: 1,
         })
     }
 
@@ -866,6 +1059,21 @@ impl Connection {
     /// Overrides the inbound message ceiling.
     pub fn set_max_message_size(&mut self, bytes: usize) {
         self.max_message_size = bytes;
+    }
+
+    /// Overrides the outbound fragmentation threshold.
+    pub fn set_fragment_threshold(&mut self, bytes: usize) {
+        self.fragment_threshold = bytes;
+    }
+
+    /// The most fragments any single reply on this connection arrived in.
+    ///
+    /// Exists so a test can prove the peer actually fragmented. "We exercised
+    /// reassembly" is only true if something was reassembled, and a peer that
+    /// quietly sent whole messages would otherwise produce a passing run that
+    /// tested nothing.
+    pub fn max_reply_fragments(&self) -> usize {
+        self.max_reply_fragments
     }
 
     /// The object key extracted from the IOR.
@@ -948,7 +1156,9 @@ impl Connection {
             write_args,
         )?;
         self.codeset_context_pending = false;
-        self.stream.write_all(&msg)?;
+        for piece in fragment_message(msg, self.fragment_threshold)? {
+            self.stream.write_all(&piece)?;
+        }
         self.stream.flush()?;
 
         loop {
@@ -960,6 +1170,7 @@ impl Connection {
                     return Err(e);
                 }
             };
+            self.max_reply_fragments = self.max_reply_fragments.max(raw.fragments);
             match raw.msg_type {
                 MsgType::Reply => {
                     let reply = decode_reply(raw).inspect_err(|_| self.poisoned = true)?;
@@ -1274,13 +1485,116 @@ mod tests {
     }
 
     /// Audit CONFIRMED #4: the more-fragments bit was masked away, so the
-    /// first fragment was decoded as a whole message.
+    /// first fragment was decoded as a whole message and the value silently
+    /// truncated. Batch 8 reassembles instead — but a stream that *promises*
+    /// more and then ends must still error rather than hand back the piece it
+    /// managed to read.
     #[test]
-    fn fragmented_message_is_refused_not_truncated() {
+    fn incomplete_fragment_stream_errors_rather_than_truncating() {
         let mut frag: &[u8] = &[b'G', b'I', b'O', b'P', 1, 2, 0b11, 1, 0, 0, 0, 0];
+        match read_message(&mut frag, DEFAULT_MAX_MESSAGE_SIZE) {
+            Err(_) => {}
+            Ok(m) => panic!("returned a {}-byte message from an unfinished stream", m.bytes.len()),
+        }
+    }
+
+    /// Fragmenting and reassembling must reproduce the original byte for byte,
+    /// including alignment — a split at the wrong offset shifts every field
+    /// after it, and the peer reports garbage at the end rather than an error
+    /// where the damage is.
+    #[test]
+    fn fragment_round_trip_reproduces_the_original() {
+        for endian in [Endian::Big, Endian::Little] {
+            for payload in [64usize, 1000, 5000, 20000] {
+                let msg = encode_request(Version::V1_2, endian, 7, b"k", "blob", true, |e| {
+                    e.put_u32(payload as u32);
+                    for i in 0..payload {
+                        e.put_octet((i % 251) as u8);
+                    }
+                })
+                .unwrap();
+
+                let pieces = fragment_message(msg.clone(), 512).unwrap();
+                if msg.len() > 512 {
+                    assert!(pieces.len() > 1, "{payload} bytes should have split");
+                }
+                // Every piece but the last must set the more-fragments bit, and
+                // 9.4.9 requires their total length to be divisible by 8.
+                for p in &pieces[..pieces.len() - 1] {
+                    assert_eq!(p[6] & 0b10, 0b10, "non-final piece must say more follow");
+                    assert_eq!(p.len() % 8, 0, "non-final piece must be 8-aligned overall");
+                }
+                assert_eq!(pieces.last().unwrap()[6] & 0b10, 0, "final piece must not");
+
+                let wire: Vec<u8> = pieces.concat();
+                let mut cursor: &[u8] = &wire;
+                let back = read_message(&mut cursor, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+                assert!(!back.more_fragments);
+                assert_eq!(back.bytes, msg, "{payload} bytes, {endian:?} did not reassemble");
+                assert!(cursor.is_empty(), "reassembly must consume every fragment");
+            }
+        }
+    }
+
+    #[test]
+    fn small_messages_are_not_fragmented() {
+        let msg = encode_request(Version::V1_2, Endian::Big, 1, b"k", "ping", true, |_| {}).unwrap();
+        assert_eq!(fragment_message(msg.clone(), 4096).unwrap(), vec![msg]);
+    }
+
+    /// GIOP 1.1 restarts alignment per fragment and carries no request id, so
+    /// concatenation is not reassembly. Refusing is correct; producing a
+    /// plausible wrong value would not be.
+    #[test]
+    fn giop_1_1_fragments_are_refused_rather_than_concatenated() {
+        let mut frag: &[u8] = &[b'G', b'I', b'O', b'P', 1, 1, 0b11, 0, 0, 0, 0, 0];
         assert!(matches!(
             read_message(&mut frag, DEFAULT_MAX_MESSAGE_SIZE),
             Err(Error::FragmentUnsupported)
+        ));
+    }
+
+    /// A peer that never sets the final bit must not grow our buffer forever.
+    #[test]
+    fn endless_fragments_are_bounded() {
+        let mut wire = encode_request(Version::V1_2, Endian::Big, 3, b"k", "op", true, |e| {
+            e.put_u32(1);
+        })
+        .unwrap();
+        wire[6] |= 0b10;
+        // Append fragments that always claim more follow.
+        for _ in 0..(MAX_FRAGMENTS + 2) {
+            let mut f = Vec::new();
+            f.extend_from_slice(MAGIC);
+            f.extend_from_slice(&[1, 2, 0b10, MsgType::Fragment as u8]);
+            f.extend_from_slice(&12u32.to_be_bytes());
+            f.extend_from_slice(&3u32.to_be_bytes());
+            f.extend_from_slice(&[0u8; 8]);
+            wire.extend_from_slice(&f);
+        }
+        let mut cursor: &[u8] = &wire;
+        assert!(read_message(&mut cursor, DEFAULT_MAX_MESSAGE_SIZE).is_err());
+    }
+
+    /// A fragment for a different request means our accounting is wrong.
+    #[test]
+    fn mismatched_fragment_id_is_rejected() {
+        let mut wire = encode_request(Version::V1_2, Endian::Big, 3, b"k", "op", true, |e| {
+            e.put_u32(1);
+        })
+        .unwrap();
+        wire[6] |= 0b10;
+        let mut f = Vec::new();
+        f.extend_from_slice(MAGIC);
+        f.extend_from_slice(&[1, 2, 0, MsgType::Fragment as u8]);
+        f.extend_from_slice(&12u32.to_be_bytes());
+        f.extend_from_slice(&999u32.to_be_bytes()); // wrong request id
+        f.extend_from_slice(&[0u8; 8]);
+        wire.extend_from_slice(&f);
+        let mut cursor: &[u8] = &wire;
+        assert!(matches!(
+            read_message(&mut cursor, DEFAULT_MAX_MESSAGE_SIZE),
+            Err(Error::Desynchronized)
         ));
     }
 

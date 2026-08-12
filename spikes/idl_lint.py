@@ -65,8 +65,12 @@ def check(path: Path) -> list[str]:
         return text.count("\n", 0, pos) + 1
 
     # 1. `TypeName identifier` where the two differ only by case.
-    #    Covers struct and exception members, and operation parameters.
-    for m in re.finditer(r"\b([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*(?=[;,)\[])", text):
+    #    Covers struct and exception members, operation parameters, and
+    #    operation names — the trailing `(` was missing from the first version,
+    #    so `Payload blob(...)` against a `Blob` typedef slipped through to the
+    #    oracle. A lint that catches most forms of a rule still lets the rule
+    #    cost you.
+    for m in re.finditer(r"\b([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*(?=[;,)\[(])", text):
         type_name, ident = m.group(1), m.group(2)
         if type_name in PRIMITIVES or ident in PRIMITIVES:
             continue

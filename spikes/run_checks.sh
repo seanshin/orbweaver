@@ -48,6 +48,9 @@ start_server() {
 
 # Starts OUR server. Distinct from start_server, which launches the omniORB
 # fixture; conflating the two silently pointed a check at the wrong process.
+JH_CHECK=${JAVA_HOME_21:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home}
+JCP_CHECK="lib/jacorb.jar:lib/jacorb-omgapi.jar:lib/jboss-rmi-api.jar:lib/slf4j-api-1.7.36.jar:classes"
+
 start_rust_server() {
   pkill -f spike-server >/dev/null 2>&1 || true
   rm -f "$ROOT/spikes/server.ior"
@@ -100,13 +103,13 @@ else
 fi
 # The lint must keep catching what it was written for.
 lint_neg=0
-for f in corpus/negative/n02-identifier-clash.idl corpus/negative/n03-scope-clash.idl corpus/negative/n09-struct-scope-clash.idl; do
+for f in corpus/negative/n02-identifier-clash.idl corpus/negative/n03-scope-clash.idl corpus/negative/n09-struct-scope-clash.idl corpus/negative/n10-operation-name-clash.idl; do
   [ -n "$(python3 spikes/idl_lint.py "$f" 2>&1)" ] && lint_neg=$((lint_neg+1))
 done
-if [ "$lint_neg" -eq 3 ]; then
-  echo "  ok   still catches all 3 pinned clash cases"
+if [ "$lint_neg" -eq 4 ]; then
+  echo "  ok   still catches all 4 pinned clash cases"
 else
-  echo "  FAIL lint caught only $lint_neg/3 pinned clash cases — it has regressed"
+  echo "  FAIL lint caught only $lint_neg/4 pinned clash cases — it has regressed"
   fail_total=$((fail_total+1))
 fi
 
@@ -215,6 +218,50 @@ if start_rust_server; then
   [ "$rev_fail" -eq 0 ] || fail_total=$((fail_total+1))
 else
   fail_total=$((fail_total+1))
+fi
+pkill -f spike-server >/dev/null 2>&1 || true
+
+# ── Fragmentation ────────────────────────────────────────────────────────────
+hr "GIOP fragmentation"
+# Neither available peer emits GIOP fragments: omniORB's giopMaxMsgSize is a
+# hard cap that raises MARSHAL rather than a split threshold, and JacORB 3.9
+# has no GIOP fragmentation property at all. So the independent evidence runs
+# in one direction only — we fragment, they reassemble — and the receiver is
+# covered by round-trip against our own (peer-validated) emitter. Stated here
+# rather than implied by a green line.
+pkill -f spike-server >/dev/null 2>&1 || true
+rm -f "$ROOT/spikes/server.ior"
+( cd "$ROOT" && ORBWEAVER_FRAGMENT_THRESHOLD=4096 exec cargo run -q --bin spike-server -- \
+    spikes/server.ior 127.0.0.1 0 >/tmp/orbweaver-frag.log 2>&1 & )
+frag_up=0
+for _ in $(seq 1 100); do
+  [ -s "$ROOT/spikes/server.ior" ] && { sleep 0.3; frag_up=1; break; }
+  sleep 0.1
+done
+if [ "$frag_up" -eq 0 ]; then
+  echo "  FAIL fragmenting server did not start"; fail_total=$((fail_total+1))
+else
+  ffail=0
+  out=$(python3 spikes/reverse_client.py spikes/server.ior 2>&1)
+  if printf '%s' "$out" | grep -q "failures: 0"; then
+    echo "  ok   omniORB reassembled our fragments (250 KB at a 4 KB threshold)"
+  else
+    echo "  FAIL omniORB could not reassemble our fragments"; ffail=1
+  fi
+  if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
+    out=$(cd "$ROOT/spikes/jacorb" && "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Client ../server.ior 2>&1)
+    if printf '%s' "$out" | grep -q "failures: 0"; then
+      echo "  ok   JacORB reassembled our fragments — a second, independent reader"
+    else
+      echo "  FAIL JacORB could not reassemble our fragments"; ffail=1
+    fi
+  else
+    echo "  SKIPPED  JacORB half — fixture absent"
+    skipped=$((skipped+1))
+  fi
+  echo "  note our *receiver* has no independent validation: no available peer emits"
+  echo "       GIOP fragments, so it is covered by round-trip against our own emitter"
+  [ "$ffail" -eq 0 ] || fail_total=$((fail_total+1))
 fi
 pkill -f spike-server >/dev/null 2>&1 || true
 

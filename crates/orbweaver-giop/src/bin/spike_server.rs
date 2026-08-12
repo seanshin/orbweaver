@@ -68,6 +68,20 @@ impl Dispatch for Echo {
                 out.put_octet(e);
             }
 
+            "blob" => {
+                let n = args.get_u32().map_err(|_| SystemException::marshal())? as usize;
+                out.put_u32(n as u32);
+                for i in 0..n {
+                    out.put_octet((i % 251) as u8);
+                }
+            }
+
+            "blob_sum" => {
+                let bytes = args.get_octet_seq().map_err(|_| SystemException::marshal())?;
+                let sum: u64 = bytes.iter().map(|&b| b as u64).sum();
+                out.put_i32((sum % 2_147_483_647) as i32);
+            }
+
             "echo_any" => {
                 // Relayed verbatim: decode the TypeCode to prove we can, then
                 // echo the original bytes. Re-encoding would test our encoder
@@ -99,7 +113,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host = std::env::args().nth(2).unwrap_or_else(|| "127.0.0.1".into());
     let port = std::env::args().nth(3).unwrap_or_else(|| "0".into());
 
-    let server = Server::bind(&format!("127.0.0.1:{port}"), b"OrbweaverEcho".to_vec())?;
+    let mut server = Server::bind(&format!("127.0.0.1:{port}"), b"OrbweaverEcho".to_vec())?;
+    // Neither available peer emits GIOP fragments, so the only way to test
+    // fragment handling against an independent implementation is to make *us*
+    // the fragmenting side and see whether they reassemble.
+    if let Some(t) = std::env::var("ORBWEAVER_FRAGMENT_THRESHOLD").ok().and_then(|v| v.parse().ok()) {
+        server.set_fragment_threshold(t);
+        println!("fragmenting outbound messages above {t} bytes");
+    }
     let bound = server.local_addr()?;
 
     // The published host is separate from the bind address on purpose: behind

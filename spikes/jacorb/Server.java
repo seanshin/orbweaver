@@ -19,6 +19,16 @@ public class Server {
         public double scale(double v, double by) { return v * by; }
         public Ragged echo_ragged(Ragged v) { return v; }
         public org.omg.CORBA.Any echo_any(org.omg.CORBA.Any v) { return v; }
+        public byte[] blob(int size) {
+            byte[] b = new byte[size];
+            for (int i = 0; i < size; i++) b[i] = (byte) (i % 251);
+            return b;
+        }
+        public int blob_sum(byte[] b) {
+            long s = 0;
+            for (byte x : b) s += (x & 0xff);
+            return (int) (s % 2147483647L);
+        }
     }
 
     public static void main(String[] args) throws Exception {

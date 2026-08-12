@@ -19,6 +19,8 @@ class Echo(spike__POA.Echo):
     def scale(self, v, by): return v * by
     def echo_ragged(self, v): return v
     def echo_any(self, v): return v
+    def blob(self, size): return bytes((i % 251) for i in range(size))
+    def blob_sum(self, b): return sum(b) % 2147483647
 
 
 def main():

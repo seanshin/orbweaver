@@ -1,0 +1,7 @@
+// An operation name clashing with a type. Missed by the first two versions of
+// spikes/idl_lint.py, which only looked for declarations ending in ; , ) or [
+// and so never saw the ( that follows an operation name.
+module n10 {
+  typedef sequence<octet> Blob;
+  interface Store { Blob blob(in unsigned long size); };
+};

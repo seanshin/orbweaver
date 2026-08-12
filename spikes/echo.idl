@@ -8,6 +8,7 @@ module spike {
     double d;
     octet  e;
   };
+  typedef sequence<octet> Payload;
   interface Echo {
     long   ping();
     long   add(in long a, in long b);
@@ -15,5 +16,7 @@ module spike {
     double scale(in double v, in double by);
     Ragged echo_ragged(in Ragged v);
     any    echo_any(in any v);
+    Payload blob(in unsigned long size);
+    long   blob_sum(in Payload b);
   };
 };

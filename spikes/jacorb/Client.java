@@ -40,7 +40,16 @@ public class Client {
         if (raggedOk) System.out.println("  ok   echo_ragged() preserved struct padding");
         else { System.out.println("  FAIL echo_ragged() -> " + back.a + "," + back.b + "," + back.c + "," + back.d + "," + back.e); fails++; }
 
-        System.out.println("\nasserted cases: 5, failures: " + fails);
+        // Large replies, which the Rust server fragments when asked to.
+        for (int n : new int[] { 100, 40000, 250000 }) {
+            byte[] data = echo.blob(n);
+            boolean ok = data.length == n;
+            for (int i = 0; ok && i < n; i++) ok = data[i] == (byte) (i % 251);
+            if (ok) System.out.println("  ok   blob(" + n + ") -> " + n + " bytes intact");
+            else { System.out.println("  FAIL blob(" + n + ")"); fails++; }
+        }
+
+        System.out.println("\nasserted cases: 8, failures: " + fails);
         System.exit(fails == 0 ? 0 : 1);
     }
 }

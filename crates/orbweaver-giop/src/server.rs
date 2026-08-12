@@ -27,7 +27,7 @@ use std::net::{TcpListener, TcpStream};
 
 use crate::{
     DEFAULT_MAX_MESSAGE_SIZE, Error, HEADER_LEN, MAGIC, MsgType, RawMessage, ReplyStatus, Result,
-    Version, read_message,
+    Version, fragment_message, read_message,
 };
 
 /// Repository ID of the exception raised for an operation we do not implement.
@@ -361,6 +361,7 @@ pub struct Server {
     listener: TcpListener,
     object_key: Vec<u8>,
     max_message_size: usize,
+    fragment_threshold: usize,
 }
 
 impl Server {
@@ -370,12 +371,18 @@ impl Server {
             listener: TcpListener::bind(addr)?,
             object_key,
             max_message_size: DEFAULT_MAX_MESSAGE_SIZE,
+            fragment_threshold: crate::DEFAULT_FRAGMENT_THRESHOLD,
         })
     }
 
     /// The address actually bound, after any port-zero assignment.
     pub fn local_addr(&self) -> Result<std::net::SocketAddr> {
         Ok(self.listener.local_addr()?)
+    }
+
+    /// Overrides the outbound fragmentation threshold.
+    pub fn set_fragment_threshold(&mut self, bytes: usize) {
+        self.fragment_threshold = bytes;
     }
 
     /// The servant's object key.
@@ -466,7 +473,9 @@ impl Server {
                     let req = decode_request(msg)?;
                     let reply = self.handle_request(&req, d)?;
                     if let Some(bytes) = reply {
-                        s.write_all(&bytes)?;
+                        for piece in fragment_message(bytes, self.fragment_threshold)? {
+                            s.write_all(&piece)?;
+                        }
                     }
                 }
                 MsgType::CancelRequest => {

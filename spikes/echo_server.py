@@ -33,6 +33,12 @@ class Echo(spike__POA.Echo):
     def echo_any(self, v):
         return v
 
+    def blob(self, size):
+        return bytes((i % 251) for i in range(size))
+
+    def blob_sum(self, b):
+        return sum(b) % 2147483647
+
 
 def main():
     orb = CORBA.ORB_init(sys.argv, CORBA.ORB_ID)

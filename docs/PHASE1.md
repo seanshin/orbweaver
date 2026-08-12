@@ -661,7 +661,79 @@ silent upgrade to 1.2 cannot hide a regression behind a passing test.
 - Parse failures name the `BAD_PARAM` minor code §7.6.10.3 assigns (7–10), so a
   diagnostic and the specification say the same thing.
 
-## Still open after Batch 7
+---
+
+# Batch 8: GIOP fragmentation
+
+Detected-and-refused was the correct interim behaviour and not the requirement.
+`docs/PLAN.md` §4.4 makes receive mandatory, and a peer that fragments is not
+exotic: any file transfer or large sequence reaches it.
+
+Delivered: reassembly for GIOP 1.2, send-side splitting, and the hostile-input
+bounds a reassembler needs.
+
+## What could be proven, and what could not
+
+This is the first batch where the honest answer is *half*.
+
+| Direction | Evidence |
+|---|---|
+| **We fragment, they reassemble** | ✅ omniORB **and** JacORB both reconstruct 250 KB split at a 4 KB threshold — roughly 61 fragments — byte for byte |
+| **They fragment, we reassemble** | ⚠️ **No independent evidence.** Covered only by round-trip against our own emitter |
+
+Neither available peer emits GIOP fragments. Two assumptions failed on the way
+to finding that out:
+
+- **omniORB's `giopMaxMsgSize` is a hard cap, not a split threshold.** Setting
+  it to 8 KiB and asking for 40 KB produced
+  `MARSHAL_MessageSizeExceedLimitOnClient` and a `MessageError`, not fragments.
+- **JacORB 3.9 has no GIOP fragmentation property.** `jacorb.fragment_size`
+  changed nothing, and the only `Fragment` class in the jar belongs to MIOP,
+  which is multicast rather than GIOP.
+
+The emission side is still strong evidence: our fragments are only reassembled
+correctly if the `divisible-by-8` rule for non-final pieces, the
+`FragmentHeader_1_2` request id and the flag handling are all right. Two
+independent readers agreeing on 61 pieces is not a coincidence.
+
+**증명된 것은 절반이다.** 두 피어 모두 GIOP 분할을 내보내지 않는다. omniORB의
+`giopMaxMsgSize`는 분할 임계값이 아니라 하드 상한이고, JacORB 3.9에는 GIOP 분할
+속성이 없다. 송신 측은 두 독립 구현이 61개 조각을 정확히 복원하므로 강한 증거지만,
+수신 측에는 독립 검증이 없다 — 그렇게 적어 둔다.
+
+## The false pass this batch nearly shipped
+
+The first JacORB run reported 4/4 green at every size. It proved nothing: the
+peer had sent whole messages and nothing was reassembled. The check now counts
+fragments per logical reply and says `note … the peer did not fragment` rather
+than `ok`, which is what turned an apparent success into the finding above.
+
+첫 JacORB 실행은 모든 크기에서 통과했고 아무것도 증명하지 못했다. 피어가 통짜로
+보냈기 때문이다. 이제 논리 응답당 조각 수를 세고, 분할이 없었으면 `ok`가 아니라
+`note`로 보고한다.
+
+## Bounds a reassembler needs
+
+- A cap on fragments per logical message, or a peer that never sets the final
+  bit holds the connection open and grows the buffer without limit.
+- The running total is checked against the message ceiling, not just each piece.
+- A fragment whose request id does not match is a desynchronisation, not
+  something to append.
+- **GIOP 1.1 fragments are refused.** They restart alignment per fragment and
+  carry no request id, so concatenation is not reassembly and there is no way
+  to tell whose fragments they are. Refusing beats producing a plausible wrong
+  value.
+
+## The lint had a hole, and the rule found it
+
+Adding a `Payload blob(...)` operation against a `Blob` typedef went straight
+to the oracle: the lint matched `Type ident` followed by `;` `,` `)` or `[`,
+and an operation name is followed by `(`. Fixed, with
+`corpus/negative/n10-operation-name-clash.idl` pinning it. **A lint that
+catches most forms of a rule still lets the rule cost you** — that is the
+fourth distinct shape this one identifier rule has taken.
+
+## Still open after Batch 8
 - Wiring the negotiated converter through `Connection` and the string paths,
   including the per-connection "send the context once" rule and the
   `MARSHAL` minor 9 case for conflicting contexts on one connection.
@@ -678,9 +750,6 @@ Phase 1 scope from `docs/PLAN.md` §7 and remains open:
   context, and conversion for UTF-8, UTF-16, ISO-8859-1 and EUC-KR. This is
   the highest-value gap for the domestic market and is blocked on decision
   `D001` (which dependency, if any, supplies EUC-KR conversion).
-- **`Fragment` reassembly.** Currently detected and refused with a clear error
-  rather than silently truncated, which is the correct interim behaviour but not
-  the requirement.
 - **`LocateRequest` send, `CancelRequest` send** — served but not sent.
 - **`wchar`/`wstring` and `long double`** — `any` and `TypeCode` landed in
   Batch 6; these remain.
