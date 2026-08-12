@@ -359,6 +359,19 @@ impl Encoder {
         self.put_u64(v.to_bits());
     }
 
+    /// Writes an IDL `long double`: 16 octets, 8-aligned.
+    ///
+    /// Carried as raw octets because Rust has no stable 128-bit float. Passing
+    /// the bytes through is lossless and honest; converting via `f64` would
+    /// silently discard precision that the peer took care to send.
+    pub fn put_long_double(&mut self, v: [u8; 16]) {
+        if self.poison.is_some() {
+            return;
+        }
+        self.align_to(8);
+        self.buf.extend_from_slice(&v);
+    }
+
     /// Writes an IDL `string`: a length that counts the terminating NUL,
     /// then the bytes, then the NUL.
     ///
@@ -607,6 +620,14 @@ impl<'a> Decoder<'a> {
         Ok(f64::from_bits(self.get_u64()?))
     }
 
+    /// Reads an IDL `long double` as 16 raw octets. See
+    /// [`Encoder::put_long_double`] for why they stay raw.
+    pub fn get_long_double(&mut self) -> Result<[u8; 16]> {
+        self.align_to(8)?;
+        let b = self.take(16)?;
+        Ok(b.try_into().expect("take(16) yields 16 bytes"))
+    }
+
     /// Reads an IDL `string` and returns its bytes without the terminating
     /// NUL. No codeset conversion is applied.
     ///
@@ -773,6 +794,25 @@ mod tests {
         b.extend_from_slice(&0xFFFF_FFFFu32.to_be_bytes());
         let mut d = Decoder::new(&b, Endian::Big);
         assert!(matches!(d.get_octet_seq(), Err(Error::BadLength(_))));
+    }
+
+    /// 16 octets, 8-aligned, and byte-transparent. A `long double` that
+    /// round-tripped through `f64` would lose the precision the peer sent.
+    #[test]
+    fn long_double_is_sixteen_transparent_octets() {
+        for endian in [Endian::Big, Endian::Little] {
+            let value: [u8; 16] = std::array::from_fn(|i| (i as u8) * 7 + 1);
+            let mut e = Encoder::new(endian);
+            e.put_octet(0xAA); // force padding before the 8-aligned value
+            e.put_long_double(value);
+            let raw = bytes(e);
+            assert_eq!(raw.len(), 24, "1 byte + 7 pad + 16");
+            assert_eq!(&raw[8..24], &value);
+
+            let mut d = Decoder::new(&raw, endian);
+            assert_eq!(d.get_u8().unwrap(), 0xAA);
+            assert_eq!(d.get_long_double().unwrap(), value);
+        }
     }
 
     #[test]

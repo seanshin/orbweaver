@@ -1051,6 +1051,18 @@ impl Connection {
         self.version
     }
 
+    /// Caps the version spoken on this connection.
+    ///
+    /// §9.4.1 forbids exceeding what the peer advertised, so this can only
+    /// lower the negotiated version, never raise it. Exists because the
+    /// version-conditional paths — `wstring` lengths above all — are otherwise
+    /// only reachable against a peer that happens to be old.
+    pub fn cap_version(&mut self, max: Version) {
+        if max < self.version {
+            self.version = max;
+        }
+    }
+
     /// Byte order this connection writes. Defaults to native.
     pub fn set_endian(&mut self, endian: Endian) {
         self.endian = endian;

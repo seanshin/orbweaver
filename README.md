@@ -231,7 +231,7 @@ Everything below is MIT and written in this repository unless marked otherwise.
 
 | Component | 구성요소 | Scope |
 |---|---|---|
-| `orbweaver-cdr` ✅ | CDR 인코더 | OMG CDR encoding/decoding, both endiannesses — *spike landed* |
+| `orbweaver-cdr` ✅ | CDR 인코더 | OMG CDR, both endiannesses, alignment origins, `long double` |
 | `orbweaver-giop` ✅ | GIOP/IIOP 전송 | GIOP 1.0–1.2 both directions, codesets, `any`/`TypeCode`, `corbaloc:`/CosNaming |
 | `orbweaver-poa` | 객체 어댑터 | Servant lifecycle, object activation, request dispatch |
 | `orbweaver-idl` | IDL 컴파일러 | OMG IDL 4.2 front end, `@annotation` support, pluggable back ends |

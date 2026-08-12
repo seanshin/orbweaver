@@ -774,9 +774,325 @@ mod tests {
         );
     }
 
+    // ── wide characters ─────────────────────────────────────────────────────
+
+    fn wide(v: Version) -> WideCodec {
+        WideCodec::new(v, CodeSetId::UTF_16).unwrap()
+    }
+
+    /// The length field means different things in 1.1 and 1.2, so the same
+    /// string produces different bytes. Reading one with the other's rule
+    /// returns a wrong string rather than an error, which is why both forms
+    /// are pinned to exact bytes.
+    #[test]
+    fn wstring_length_means_elements_in_1_1_and_octets_in_1_2() {
+        let mut e = Encoder::new(Endian::Big);
+        wide(Version::V1_2).put_wstring(&mut e, "ab").unwrap();
+        assert_eq!(
+            e.finish().unwrap(),
+            vec![0, 0, 0, 6, 0xFE, 0xFF, 0, b'a', 0, b'b'],
+            "octets including the BOM, no terminator"
+        );
+
+        let mut e = Encoder::new(Endian::Big);
+        wide(Version::V1_1).put_wstring(&mut e, "ab").unwrap();
+        assert_eq!(
+            e.finish().unwrap(),
+            vec![0, 0, 0, 4, 0xFE, 0xFF, 0, b'a', 0, b'b', 0, 0],
+            "elements including the BOM and the terminator"
+        );
+    }
+
+    /// A peer that wrote the opposite byte order marks it, and the reader must
+    /// act on that rather than keep the units as they lie. Getting this wrong
+    /// yields plausible CJK text instead of an error: `w` becomes U+7700.
+    #[test]
+    fn reversed_bom_swaps_the_units() {
+        // 0xFFFE then LE-ordered "ab", read from a big-endian stream.
+        let raw = [0u8, 0, 0, 6, 0xFF, 0xFE, b'a', 0, b'b', 0];
+        let mut d = Decoder::new(&raw, Endian::Big);
+        assert_eq!(wide(Version::V1_2).get_wstring(&mut d).unwrap(), "ab");
+    }
+
+    #[test]
+    fn absent_bom_is_read_in_stream_order() {
+        let raw = [0u8, 0, 0, 4, 0, b'a', 0, b'b'];
+        let mut d = Decoder::new(&raw, Endian::Big);
+        assert_eq!(wide(Version::V1_2).get_wstring(&mut d).unwrap(), "ab");
+    }
+
+    #[test]
+    fn wstring_round_trips_in_both_versions() {
+        for v in [Version::V1_1, Version::V1_2] {
+            for endian in [Endian::Big, Endian::Little] {
+                for s in ["", "ascii", "함정 전투체계", "mixed 한글 123"] {
+                    if s.is_empty() && v.minor < 2 {
+                        continue; // 1.1 cannot express a zero-length wstring
+                    }
+                    let mut e = Encoder::new(endian);
+                    wide(v).put_wstring(&mut e, s).unwrap();
+                    let raw = e.finish().unwrap();
+                    let mut d = Decoder::new(&raw, endian);
+                    assert_eq!(wide(v).get_wstring(&mut d).unwrap(), s, "{v} {endian:?} {s:?}");
+                }
+            }
+        }
+    }
+
+    /// §9.3.2.7 makes a zero-length wstring legal in 1.2 and impossible in 1.1,
+    /// where the count includes a terminator that must be there.
+    #[test]
+    fn empty_wstring_is_legal_in_1_2_only() {
+        let mut e = Encoder::new(Endian::Big);
+        wide(Version::V1_2).put_wstring(&mut e, "").unwrap();
+        assert_eq!(e.finish().unwrap(), vec![0, 0, 0, 0], "no BOM: nothing to mark");
+
+        let zero = [0u8, 0, 0, 0];
+        let mut d = Decoder::new(&zero, Endian::Big);
+        assert!(wide(Version::V1_1).get_wstring(&mut d).is_err(), "1.1 count includes a terminator");
+    }
+
+    #[test]
+    fn missing_terminator_is_rejected_in_1_1() {
+        let raw = [0u8, 0, 0, 2, 0, b'a', 0, b'b']; // says 2 elements, no null
+        let mut d = Decoder::new(&raw, Endian::Big);
+        assert!(wide(Version::V1_1).get_wstring(&mut d).is_err());
+    }
+
+    #[test]
+    fn odd_octet_count_is_rejected_in_1_2() {
+        let raw = [0u8, 0, 0, 3, 0, b'a', 0];
+        let mut d = Decoder::new(&raw, Endian::Big);
+        assert!(wide(Version::V1_2).get_wstring(&mut d).is_err());
+    }
+
+    /// §9.3.1.6: wchar is illegal in GIOP 1.0, and a peer that sends it anyway
+    /// must be met with MARSHAL rather than a guess.
+    #[test]
+    fn wchar_is_illegal_in_giop_1_0() {
+        assert!(!WideCodec::is_legal(Version::V1_0));
+        assert!(WideCodec::new(Version::V1_0, CodeSetId::UTF_16).is_err());
+        assert!(WideCodec::is_legal(Version::V1_1));
+    }
+
+    #[test]
+    fn wchar_is_length_prefixed_in_1_2_and_fixed_in_1_1() {
+        let mut e = Encoder::new(Endian::Big);
+        wide(Version::V1_2).put_wchar(&mut e, '한').unwrap();
+        assert_eq!(e.finish().unwrap(), vec![2, 0xD5, 0x5C], "octet count then the unit");
+
+        let mut e = Encoder::new(Endian::Big);
+        wide(Version::V1_1).put_wchar(&mut e, '한').unwrap();
+        assert_eq!(e.finish().unwrap(), vec![0xD5, 0x5C], "two fixed octets");
+
+        for v in [Version::V1_1, Version::V1_2] {
+            let mut e = Encoder::new(Endian::Big);
+            wide(v).put_wchar(&mut e, '정').unwrap();
+            let raw = e.finish().unwrap();
+            let mut d = Decoder::new(&raw, Endian::Big);
+            assert_eq!(wide(v).get_wchar(&mut d).unwrap(), '정');
+        }
+    }
+
+    /// A character outside the BMP is a surrogate pair, which is two UTF-16
+    /// units and therefore not one wchar. Emitting half of one would hand the
+    /// peer a lone surrogate.
+    #[test]
+    fn astral_characters_are_refused_rather_than_split() {
+        let mut e = Encoder::new(Endian::Big);
+        match wide(Version::V1_2).put_wchar(&mut e, '🛰') {
+            Err(NegotiationError::Untranslatable { text, .. }) => assert_eq!(text, "🛰"),
+            other => panic!("expected Untranslatable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn only_unicode_wchar_codesets_are_accepted() {
+        assert!(WideCodec::new(Version::V1_2, CodeSetId::UTF_16).is_ok());
+        assert!(WideCodec::new(Version::V1_2, CodeSetId::UCS_2).is_ok());
+        assert!(WideCodec::new(Version::V1_2, CodeSetId::ISO_8859_1).is_err());
+    }
+
     #[test]
     fn codeset_ids_display_usefully() {
         assert_eq!(CodeSetId::ISO_8859_1.to_string(), "ISO-8859-1 (0x00010001)");
         assert_eq!(CodeSetId(0x1234).to_string(), "unregistered (0x00001234)");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Wide characters
+// ─────────────────────────────────────────────────────────────────────────────
+
+use crate::Version;
+
+/// Byte-order mark, as it reads when the stream's order matches the writer's.
+const BOM: u16 = 0xFEFF;
+/// The same mark read from the opposite byte order.
+const BOM_SWAPPED: u16 = 0xFFFE;
+
+/// Encodes and decodes `wchar` and `wstring`, whose wire form changes between
+/// GIOP versions in ways that silently corrupt rather than fail.
+///
+/// | | `wstring` length means | terminator | `wchar` |
+/// |---|---|---|---|
+/// | 1.0 | — | — | **illegal** (§9.3.1.6) |
+/// | 1.1 | wide characters, **including** a terminating null | yes | fixed 2 octets |
+/// | 1.2 | **octets**, and zero is legal | no | octet count then octets |
+///
+/// Reading a 1.2 `wstring` with the 1.1 rule takes an octet count as a
+/// character count and then looks for a terminator that is not there. Nothing
+/// about that fails loudly; it just returns the wrong string.
+#[derive(Debug, Clone, Copy)]
+pub struct WideCodec {
+    version: Version,
+    tcs: CodeSetId,
+}
+
+impl WideCodec {
+    /// A codec for a negotiated wchar transmission codeset.
+    pub fn new(version: Version, tcs: CodeSetId) -> std::result::Result<Self, NegotiationError> {
+        if version.minor == 0 {
+            // §9.3.1.6 does not merely discourage this: a client meeting wchar
+            // data in a GIOP 1.0 message must raise MARSHAL minor 6.
+            return Err(NegotiationError::Unsupported(tcs));
+        }
+        match tcs {
+            CodeSetId::UTF_16 | CodeSetId::UCS_2 => Ok(Self { version, tcs }),
+            other => Err(NegotiationError::Unsupported(other)),
+        }
+    }
+
+    /// The negotiated wchar codeset.
+    pub fn codeset(self) -> CodeSetId {
+        self.tcs
+    }
+
+    /// Whether `wchar` may appear at all under this version.
+    pub fn is_legal(version: Version) -> bool {
+        version.minor >= 1
+    }
+
+    fn units(self, s: &str) -> Vec<u16> {
+        s.encode_utf16().collect()
+    }
+
+    /// Writes a `wstring`, prefixed with a byte-order mark.
+    ///
+    /// The BOM is not decoration. Both omniORB and JacORB misread a
+    /// big-endian UTF-16 `wstring` sent without one — `w` (U+0077) came back
+    /// as U+7700 — so peers do **not** infer wide-character order from the
+    /// enclosing message's byte order, whatever a reading of §9.3.2.7 might
+    /// suggest. Writing an explicit BOM removes the ambiguity instead of
+    /// betting on which convention the peer chose, and omniORB emits one
+    /// itself.
+    pub fn put_wstring(self, e: &mut Encoder, s: &str) -> std::result::Result<(), NegotiationError> {
+        let units = self.units(s);
+        let total = units.len() + 1; // the BOM is a unit too
+        if self.version.minor >= 2 {
+            // Octet count, no terminator. Zero length stays legal and carries
+            // no BOM, since there is nothing whose order needs marking.
+            if units.is_empty() {
+                e.put_u32(0);
+                return Ok(());
+            }
+            e.put_u32((total * 2) as u32);
+        } else {
+            // Element count including the terminating null.
+            e.put_u32(total as u32 + 1);
+        }
+        e.put_u16(BOM);
+        for u in units {
+            e.put_u16(u);
+        }
+        if self.version.minor < 2 {
+            e.put_u16(0);
+        }
+        Ok(())
+    }
+
+    /// Reads a `wstring`.
+    pub fn get_wstring(
+        self,
+        d: &mut Decoder<'_>,
+    ) -> std::result::Result<String, NegotiationError> {
+        let len = d.get_u32().map_err(|_| NegotiationError::Malformed { codeset: self.tcs })?;
+        let mut units = Vec::new();
+        if self.version.minor >= 2 {
+            if len % 2 != 0 {
+                return Err(NegotiationError::Malformed { codeset: self.tcs });
+            }
+            for _ in 0..len / 2 {
+                units.push(d.get_u16().map_err(|_| NegotiationError::Malformed { codeset: self.tcs })?);
+            }
+        } else {
+            if len == 0 {
+                // 1.1 counts the terminator, so zero cannot occur.
+                return Err(NegotiationError::Malformed { codeset: self.tcs });
+            }
+            for _ in 0..len {
+                units.push(d.get_u16().map_err(|_| NegotiationError::Malformed { codeset: self.tcs })?);
+            }
+            match units.pop() {
+                Some(0) => {}
+                _ => return Err(NegotiationError::Malformed { codeset: self.tcs }),
+            }
+        }
+        // Honour a leading BOM. A reversed one means the peer wrote the
+        // opposite order from the stream, so every unit needs swapping —
+        // silently keeping them would produce plausible-looking CJK mojibake
+        // rather than an error.
+        match units.first().copied() {
+            Some(BOM) => {
+                units.remove(0);
+            }
+            Some(BOM_SWAPPED) => {
+                units.remove(0);
+                for u in &mut units {
+                    *u = u.swap_bytes();
+                }
+            }
+            _ => {}
+        }
+        String::from_utf16(&units).map_err(|_| NegotiationError::Malformed { codeset: self.tcs })
+    }
+
+    /// Writes a `wchar`.
+    ///
+    /// Characters outside the Basic Multilingual Plane need a surrogate pair,
+    /// which is two UTF-16 units and therefore not one `wchar`. Refusing is
+    /// correct; emitting half a pair would hand the peer a lone surrogate.
+    pub fn put_wchar(self, e: &mut Encoder, c: char) -> std::result::Result<(), NegotiationError> {
+        let mut buf = [0u16; 2];
+        let units = c.encode_utf16(&mut buf);
+        if units.len() != 1 {
+            return Err(NegotiationError::Untranslatable {
+                codeset: self.tcs,
+                text: c.to_string(),
+            });
+        }
+        if self.version.minor >= 2 {
+            e.put_u8(2); // octet count
+            e.put_bytes(&units[0].to_be_bytes());
+        } else {
+            e.put_u16(units[0]);
+        }
+        Ok(())
+    }
+
+    /// Reads a `wchar`.
+    pub fn get_wchar(self, d: &mut Decoder<'_>) -> std::result::Result<char, NegotiationError> {
+        let bad = || NegotiationError::Malformed { codeset: self.tcs };
+        let unit = if self.version.minor >= 2 {
+            let n = d.get_u8().map_err(|_| bad())?;
+            if n != 2 {
+                return Err(bad());
+            }
+            let b = d.get_bytes(2).map_err(|_| bad())?;
+            u16::from_be_bytes([b[0], b[1]])
+        } else {
+            d.get_u16().map_err(|_| bad())?
+        };
+        char::from_u32(unit as u32).ok_or_else(bad)
     }
 }

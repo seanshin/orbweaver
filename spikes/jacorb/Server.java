@@ -24,6 +24,7 @@ public class Server {
             for (int i = 0; i < size; i++) b[i] = (byte) (i % 251);
             return b;
         }
+        public String echo_wstring(String w) { return w; }
         public int blob_sum(byte[] b) {
             long s = 0;
             for (byte x : b) s += (x & 0xff);

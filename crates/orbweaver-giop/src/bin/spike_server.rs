@@ -68,6 +68,18 @@ impl Dispatch for Echo {
                 out.put_octet(e);
             }
 
+            "echo_wstring" => {
+                // The wire form depends on the request's GIOP version, so the
+                // codec is built from it rather than assumed.
+                let w = orbweaver_giop::codeset::WideCodec::new(
+                    req.version,
+                    orbweaver_giop::codeset::CodeSetId::UTF_16,
+                )
+                .map_err(|_| SystemException::marshal())?;
+                let s = w.get_wstring(&mut args).map_err(|_| SystemException::marshal())?;
+                w.put_wstring(out, &s).map_err(|_| SystemException::marshal())?;
+            }
+
             "blob" => {
                 let n = args.get_u32().map_err(|_| SystemException::marshal())? as usize;
                 out.put_u32(n as u32);

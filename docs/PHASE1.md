@@ -733,7 +733,79 @@ and an operation name is followed by `(`. Fixed, with
 catches most forms of a rule still lets the rule cost you** — that is the
 fourth distinct shape this one identifier rule has taken.
 
-## Still open after Batch 8
+---
+
+# Batch 9: `wchar`, `wstring` and `long double`
+
+The last of the Phase 1 type surface, and the part where the wire form changes
+between GIOP versions in ways that corrupt rather than fail.
+
+| | `wstring` length means | terminator | `wchar` |
+|---|---|---|---|
+| **1.0** | — | — | **illegal** (§9.3.1.6) |
+| **1.1** | wide characters, **including** a terminating null | yes | fixed 2 octets |
+| **1.2** | **octets**, and zero is legal | no | octet count then octets |
+
+Reading a 1.2 `wstring` with the 1.1 rule takes an octet count as a character
+count and then hunts for a terminator that is not there. Nothing about that
+fails loudly.
+
+`long double` is carried as 16 raw octets. Rust has no stable 128-bit float, and
+routing it through `f64` would silently discard precision the peer took care to
+send.
+
+## The BOM, which self-tests could never have found
+
+Our first `wstring` implementation round-tripped perfectly against itself and
+against a little-endian peer. The **big-endian** client came back with
+`眀椀搀攀` — U+7700 where `w` (U+0077) belonged, every unit byte-swapped, from
+**both** peers.
+
+So neither omniORB nor JacORB infers wide-character order from the enclosing
+message's byte order. omniORB in fact prepends a byte-order mark to everything
+it sends. We now write an explicit BOM and act on one when reading, including
+swapping every unit when the mark comes back reversed — which removes the
+ambiguity rather than betting on which convention a peer picked.
+
+우리 첫 구현은 자기 자신과도, little-endian 피어와도 완벽히 왕복했다. **big-endian**
+클라이언트에서는 두 피어 모두 모든 단위가 바이트 스왑되어 돌아왔다. 어느 쪽도
+메시지 바이트오더로 와이드 문자 순서를 추론하지 않는다. 이제 BOM을 명시적으로
+쓰고, 뒤집힌 BOM을 만나면 전 단위를 스왑한다.
+
+Reversed-BOM handling matters more than it looks: without it the result is
+plausible CJK text rather than an error, so a corrupted field reaches a database
+looking like data.
+
+## What each peer would and would not do
+
+| | 1.2 `wstring` | 1.1 `wstring` |
+|---|---|---|
+| omniORB | ✅ | ❌ **declines** — publishes `UTF-16(1.2)` only |
+| JacORB | ✅ | ✅ |
+
+omniORB answers a 1.1 `wstring` with `BAD_PARAM`, OMG minor **23** — *wchar used
+against a peer that declared no wchar transmission codeset*. That is its
+published position, not a fault in what we sent, and the harness now says so
+instead of counting someone else's policy as our failure.
+
+Getting that right needed one more fix: a minor code is a 20-bit vendor id plus
+a 12-bit value, and printing all 32 bits turned "minor 23" into "1330446359",
+hiding which condition the peer had actually reported.
+
+**Result: 1.2 validated against both peers in both byte orders; 1.1 validated
+against JacORB.** The 1.1 rule is therefore confirmed by an independent
+implementation rather than by our own encoder agreeing with our own decoder.
+
+**1.2는 두 피어 양쪽 바이트오더로, 1.1은 JacORB로 검증됐다.** 1.1 규칙이 우리
+인코더와 디코더의 합의가 아니라 독립 구현으로 확인됐다는 뜻이다.
+
+## Also refused rather than approximated
+
+A character outside the Basic Multilingual Plane is a surrogate pair — two
+UTF-16 units, and therefore not one `wchar`. Emitting half a pair would hand the
+peer a lone surrogate, so it is an error.
+
+## Still open after Batch 9
 - Wiring the negotiated converter through `Connection` and the string paths,
   including the per-connection "send the context once" rule and the
   `MARSHAL` minor 9 case for conflicting contexts on one connection.

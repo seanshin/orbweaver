@@ -49,6 +49,17 @@ fn conn_endian(e: Endian) -> Endian {
     e
 }
 
+/// The OMG-defined part of a system exception's minor code, if it is one.
+///
+/// CORBA splits a minor code into a 20-bit vendor id and a 12-bit value;
+/// `0x4F4D0000` is OMG's. Reading the whole 32 bits as a number, as the
+/// first version of this harness printed it, turns "minor 23" into
+/// "1330446359" and hides which condition the peer actually reported.
+fn omg_minor(minor: u32) -> Option<u32> {
+    const OMGVMCID: u32 = 0x4F4D_0000;
+    if minor & 0xFFFF_F000 == OMGVMCID { Some(minor & 0xFFF) } else { None }
+}
+
 /// `any` payloads worth putting on the wire: a primitive, a bounded string and
 /// a constructed type, because a TypeCode encoder can be right about the first
 /// and wrong about the encapsulation the third needs.
@@ -281,7 +292,106 @@ fn run(ior_text: &str) -> Result<u32, Error> {
             }
         }
 
-        // 8. Unknown operation must produce BAD_OPERATION, not a hang or a
+        // 8. wstring, whose length field means different things in GIOP 1.1
+        //    and 1.2. Self round-trips pass even if both rules are wrong the
+        //    same way, so this has to go through a peer.
+        asserted += 1;
+        match orbweaver_giop::codeset::WideCodec::new(
+            conn.version(),
+            orbweaver_giop::codeset::CodeSetId::UTF_16,
+        ) {
+            Ok(w) => {
+                let text = "wide 함정 전투체계";
+                match conn
+                    .invoke("echo_wstring", move |e| {
+                        let _ = w.put_wstring(e, text);
+                    })
+                    .and_then(|r| {
+                        let mut b = r.body()?;
+                        Ok(w.get_wstring(&mut b))
+                    }) {
+                    Ok(Ok(back)) if back == text => {
+                        println!("  {OK} wstring round-tripped under {}", conn.version())
+                    }
+                    Ok(Ok(back)) => {
+                        println!("  {NO} wstring came back as {back:?}");
+                        fails += 1;
+                    }
+                    Ok(Err(e)) => {
+                        println!("  {NO} wstring reply would not decode: {e}");
+                        fails += 1;
+                    }
+                    Err(e) => {
+                        println!("  {NO} wstring: {e}");
+                        fails += 1;
+                    }
+                }
+            }
+            Err(_) => println!("  ---  wstring skipped: illegal under {}", conn.version()),
+        }
+
+        // 9. The same wstring under GIOP 1.1, where the length counts wide
+        //    characters and includes a terminator rather than counting octets.
+        //    A peer is the only thing that can tell us we read the rule right.
+        asserted += 1;
+        {
+            let mut c11 = Connection::connect(&ior, Duration::from_secs(5))?;
+            c11.set_endian(endian);
+            c11.cap_version(orbweaver_giop::Version::V1_1);
+            match orbweaver_giop::codeset::WideCodec::new(
+                c11.version(),
+                orbweaver_giop::codeset::CodeSetId::UTF_16,
+            ) {
+                Ok(w) => {
+                    let text = "1.1 wide 전투";
+                    match c11
+                        .invoke("echo_wstring", move |e| {
+                            let _ = w.put_wstring(e, text);
+                        })
+                        .and_then(|r| {
+                            let mut b = r.body()?;
+                            Ok(w.get_wstring(&mut b))
+                        }) {
+                        Ok(Ok(back)) if back == text => {
+                            println!("  {OK} wstring round-tripped under {}", c11.version())
+                        }
+                        Ok(Ok(back)) => {
+                            println!("  {NO} 1.1 wstring came back as {back:?}");
+                            fails += 1;
+                        }
+                        Ok(Err(e)) => {
+                            println!("  {NO} 1.1 wstring would not decode: {e}");
+                            fails += 1;
+                        }
+                        Err(Error::SystemException { ref id, minor, .. })
+                            if id.contains("BAD_PARAM") && omg_minor(minor) == Some(23) =>
+                        {
+                            // §7.10.2.6 minor 23: wchar used against a peer that
+                            // declared no wchar transmission codeset. omniORB
+                            // publishes "UTF-16(1.2)" only, so this is a
+                            // statement about the peer rather than a fault in
+                            // what we sent — counting it as our failure would
+                            // be reporting someone else's policy as our bug.
+                            println!(
+                                "  ---  1.1 wstring declined: peer offers no wchar codeset at 1.1 \
+                                 (BAD_PARAM/OMG minor 23)"
+                            );
+                            asserted -= 1;
+                        }
+                        Err(e) => {
+                            println!("  {NO} 1.1 wstring: {e}");
+                            fails += 1;
+                        }
+                    }
+                }
+                Err(_) => {
+                    println!("  {NO} wchar should be legal at 1.1");
+                    fails += 1;
+                }
+            }
+        }
+
+        // 10. Unknown operation must produce BAD_OPERATION, not a hang or a
         //    mis-parse. Error handling is part of interoperating.
         asserted += 1;
         match conn.invoke_nullary("no_such_operation") {
