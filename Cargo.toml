@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/orbweaver-cdr",
     "crates/orbweaver-giop",
+    "crates/orbweaver-idl",
 ]
 
 [workspace.package]

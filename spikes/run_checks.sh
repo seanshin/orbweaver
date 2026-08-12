@@ -93,6 +93,19 @@ else
   echo "  FAIL the attribution-free build does not build or test"; fail_total=$((fail_total+1))
 fi
 
+hr "orbweaver-idl — our parser against the oracle"
+# The acceptance criterion is agreement, not taste: omniidl accepts every
+# golden file and rejects every negative one, so anywhere we differ we are
+# wrong. Semantic negatives are excluded here and belong to the semantic pass.
+if cargo test -p orbweaver-idl --quiet >/dev/null 2>&1; then
+  echo "  ok   accepts all $(ls corpus/golden/*.idl | wc -l | tr -d ' ') golden files and the 20-file benchmark"
+  echo "  ok   rejects the syntactic negatives, including unescaped keywords"
+else
+  echo "  FAIL our parser disagrees with the oracle"
+  cargo test -p orbweaver-idl 2>&1 | grep -E "we do not|accepted them" | head -3 | sed 's/^/       /'
+  fail_total=$((fail_total+1))
+fi
+
 hr "IDL lint — case-insensitive identifier clashes"
 lint_out=$(python3 spikes/idl_lint.py corpus/golden/*.idl corpus/requirements/generated/*.idl spikes/*.idl 2>&1)
 if [ -z "$lint_out" ]; then

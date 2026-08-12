@@ -28,3 +28,7 @@ dependencies = [
  "encoding_rs",
  "orbweaver-cdr",
 ]
+
+[[package]]
+name = "orbweaver-idl"
+version = "0.0.1"
