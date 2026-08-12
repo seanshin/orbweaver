@@ -127,6 +127,71 @@ and the MCP bridge (§4.6) — which must land together with capability handles
 
 ---
 
+# Batch 2: AnyJSON, on a first-party JSON reader
+
+§4.5's mapping is normative rather than conventional because approximating it
+does not produce errors. It produces *wrong data delivered confidently*: a
+64-bit account number rounded, an octet sequence mangled by a text codec, a
+union whose active branch was inferred.
+
+The acceptance criterion is §8's, and it is what the tests check — for every
+value, `CDR → JSON → CDR` reproduces **identical bytes**, in both byte orders.
+Comparing values instead would miss a mapping that agrees with itself and
+disagrees with CDR.
+
+## The rules that carry weight
+
+| Rule | Why it is not a style choice |
+| --- | --- |
+| 64-bit integers cross as **strings** | A JSON number is a double everywhere that matters; past 2^53 the digits are gone |
+| `octet` sequences cross as **base64** | A megabyte of binary is otherwise a million JSON numbers |
+| Enumerators cross **by name** | An ordinal works today and means something else after the next release — §5.3's conditionally-breaking verdict exactly |
+| A union carries **`_d`** explicitly | Two branches can hold a string, so inferring the active one picks silently |
+| NaN and the infinities cross as `{"_f": …}` | `null` would make a missing value and a NaN indistinguishable |
+| An object reference crosses as a **handle** | §4.7: an IOR is a bearer address, so the mapping must be *incapable* of emitting one |
+
+A number that arrives where a string was specified is accepted **only when it
+survives exactly**. One that has already been through a double is refused with
+the reason rather than rounded — the failure mode the rule exists to prevent
+would otherwise arrive through the lenient path.
+
+An unknown struct member is refused rather than ignored: it is either a typo or
+a caller built against a different contract, and both are worth knowing before
+the bytes go out.
+
+64비트 정수를 문자열로 건네는 것은 취향이 아니다. JSON 숫자는 사실상 double이고,
+2^53을 넘으면 자릿수가 조용히 사라진다. 숫자로 도착한 값은 **정확히 살아남을 때만**
+받고, 이미 double을 거친 값은 반올림하지 않고 이유와 함께 거부한다.
+
+## Why the JSON reader is first-party
+
+Two reasons, and the second is the stronger one.
+
+A grammar is a published specification we can implement ourselves and owe
+nobody for — the same reasoning that makes the ORB core first-party. `CLAUDE.md`
+draws its line at *data we cannot originate*, and RFC 8259 is not that.
+
+More importantly, this parser sits at the agent boundary where input is
+untrusted by definition (§9.0). Owning it means the limits are ours: nesting is
+capped, so a few kilobytes of `[[[[…` cannot exhaust the stack. A dependency
+would make that somebody else's decision.
+
+Strictly RFC 8259 and nothing else — no comments, no trailing commas, no `NaN`
+literal — because accepting extensions means accepting input the agent's own
+writer cannot produce, which can only hide bugs. Duplicate keys are refused:
+the RFC leaves the winner unspecified, and unspecified is not something to guess
+when the value decides what goes on a wire.
+
+**Numbers keep their source text.** Parsing them to `f64` on the way in would
+destroy a 64-bit integer before the mapping could complain — the corruption the
+mapping exists to prevent, moved one layer down.
+
+이 파서는 **입력이 신뢰 불가인 에이전트 경계**에 앉는다. 중첩 상한이 남의 결정이 아니라
+우리 것이어야 하는 이유다. 숫자는 원문 텍스트를 보존한다 — 들어오는 길에 f64로
+파싱하면, 매핑이 항의하기도 전에 64비트 정수가 파괴된다.
+
+---
+
 # Batch 3: the MCP boundary and capability handles
 
 `docs/PLAN.md` requires these to land together, and this is why: the bridge is
