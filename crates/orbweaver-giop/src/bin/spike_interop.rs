@@ -45,10 +45,6 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-fn conn_endian(e: Endian) -> Endian {
-    e
-}
-
 /// The OMG-defined part of a system exception's minor code, if it is one.
 ///
 /// CORBA splits a minor code into a 20-bit vendor id and a 12-bit value;

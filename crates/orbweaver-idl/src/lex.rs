@@ -143,7 +143,6 @@ const PUNCT: &[&str] = &[
 /// Turns source into tokens.
 pub struct Lexer<'a> {
     src: &'a str,
-    bytes: &'a [u8],
     pos: usize,
     line: u32,
     col: u32,
@@ -153,7 +152,7 @@ pub struct Lexer<'a> {
 impl<'a> Lexer<'a> {
     /// A lexer over `src`.
     pub fn new(src: &'a str) -> Self {
-        Self { src, bytes: src.as_bytes(), pos: 0, line: 1, col: 1, pending: Vec::new() }
+        Self { src, pos: 0, line: 1, col: 1, pending: Vec::new() }
     }
 
     /// Tokenizes the whole input.

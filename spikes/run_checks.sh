@@ -106,23 +106,30 @@ else
   fail_total=$((fail_total+1))
 fi
 
-hr "IDL lint — case-insensitive identifier clashes"
-lint_out=$(python3 spikes/idl_lint.py corpus/golden/*.idl corpus/requirements/generated/*.idl spikes/*.idl 2>&1)
-if [ -z "$lint_out" ]; then
-  echo "  ok   no clashes in files that are expected to compile"
+hr "IDL semantics — full agreement with the oracle"
+# The interim regex lint (spikes/idl_lint.py) is retired: orbweaver-idl now
+# walks a real scope tree, so the identifier rules are expressed once instead
+# of re-approximated for each syntactic shape they take — which is how the
+# regex missed operation names, and struct scopes before that.
+neg_missed=""
+for f in corpus/negative/*.idl; do
+  if cargo run -q --bin idl-check -- "$f" >/dev/null 2>&1; then
+    neg_missed="$neg_missed $(basename "$f")"
+  fi
+done
+if [ -z "$neg_missed" ]; then
+  echo "  ok   rejects all $(ls corpus/negative/*.idl | wc -l | tr -d ' ') negatives, syntactic and semantic"
 else
-  echo "$lint_out" | sed 's/^/  /'
+  echo "  FAIL the oracle rejects these and we accept them:$neg_missed"
   fail_total=$((fail_total+1))
 fi
-# The lint must keep catching what it was written for.
-lint_neg=0
-for f in corpus/negative/n02-identifier-clash.idl corpus/negative/n03-scope-clash.idl corpus/negative/n09-struct-scope-clash.idl corpus/negative/n10-operation-name-clash.idl; do
-  [ -n "$(python3 spikes/idl_lint.py "$f" 2>&1)" ] && lint_neg=$((lint_neg+1))
-done
-if [ "$lint_neg" -eq 4 ]; then
-  echo "  ok   still catches all 4 pinned clash cases"
+# stdout only: a build warning on stderr is not an IDL diagnostic.
+cargo build -q --bin idl-check 2>/dev/null
+clean_out=$(cargo run -q --bin idl-check -- corpus/golden/*.idl corpus/requirements/generated/*.idl spikes/*.idl 2>/dev/null)
+if [ -z "$clean_out" ]; then
+  echo "  ok   accepts every golden, benchmark and fixture file the oracle accepts"
 else
-  echo "  FAIL lint caught only $lint_neg/4 pinned clash cases — it has regressed"
+  echo "$clean_out" | head -5 | sed 's/^/  FAIL /'
   fail_total=$((fail_total+1))
 fi
 

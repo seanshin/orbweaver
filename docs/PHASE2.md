@@ -73,3 +73,80 @@ strings.
 Not this batch: name resolution, the semantic checks the oracle applies (the
 eight semantic negatives are excluded from the parser test by name rather than
 quietly passing), the SIDL vocabulary itself, and code generation.
+
+---
+
+# Batch 2: semantic analysis
+
+The parser accepts anything shaped like IDL. This pass decides whether it
+*means* anything — and it retires `spikes/idl_lint.py`, the regex
+approximation that had been standing in for it.
+
+**Result: complete agreement with the oracle.** All 21 golden files and the
+20-file benchmark are clean; all 10 negatives are rejected, semantic ones
+included. The exclusion list that Batch 1 needed is gone.
+
+파서는 IDL처럼 생긴 것을 전부 받는다. 이 패스가 그것이 *의미*를 갖는지 판정하고,
+임시 정규식 린트를 은퇴시킨다. **오라클과 완전히 일치한다.**
+
+## The rule took a third shape, and the oracle had to settle it
+
+The identifier rule was already known in two forms. Implementing it properly
+turned up a third, and a guess would have been wrong in both directions.
+
+Four oracle queries were needed to find the boundary:
+
+| Input | Oracle |
+|---|---|
+| `Token issue(); void v(in string token);` | **accepted** |
+| `void v(in Token token);` | rejected |
+| `Token issue(in string token);` | **accepted** |
+| `long position(); Position get();` | rejected |
+
+So a parameter name lives in **its own parameter list**, not in the interface:
+it collides with types named *in that list* and not with the return type, nor
+with anything another operation mentions. Operation names, by contrast, are in
+the interface scope and do collide across operations.
+
+파라미터 이름은 인터페이스가 아니라 **자기 파라미터 목록** 안에 산다. 같은 목록에
+등장한 타입과는 충돌하지만 반환형이나 다른 연산과는 충돌하지 않는다. 연산 이름은
+반대로 인터페이스 범위에 있어 연산 간에도 충돌한다.
+
+Two of the tests written before asking were **wrong**, in the accepting
+direction: `struct S { A a; }` against an `enum A` does clash, and a constant
+used as a type reports the clash rather than a type error. Both were corrected
+to what the oracle says rather than what seemed reasonable.
+
+## Two implementation bugs the corpus caught
+
+- **Reopened scopes merged differently-cased names.** "A symbol of this kind
+  already exists" was read as "this is the definition of that forward
+  declaration", which silently unified `struct A` and `struct a` in a reopened
+  module. Symbols now record whether they are defined, and completing a forward
+  declaration requires the *exact* spelling.
+- **Inherited names were invisible to declaration checks**, so a derived
+  interface could redeclare a base operation. Declaration now consults
+  inherited scopes.
+
+## Cascading diagnostics are suppressed
+
+A reference that resolves to a differently-spelled symbol is the case clash
+already reported. Emitting a second diagnostic from the same cause would send
+the self-repair loop after the consequence instead of the cause — which is a
+real cost, not an aesthetic one, since the loop fixes what it is told about.
+
+연쇄 진단을 억제한다. 같은 원인에서 나온 두 번째 진단은 자가수정 루프를 원인이
+아니라 결과로 보낸다.
+
+## Why the regex had to go
+
+`spikes/idl_lint.py` matched syntax, so each new shape of the rule needed a new
+pattern — and it missed two of them: struct scopes, then operation names. A
+scope tree expresses the rule once. The replacement also catches what a regex
+never could: unknown names, duplicate declarations, inherited collisions,
+repeated union labels, and reserved words used as identifiers.
+
+Every diagnostic names the fix. `TypeCode` unqualified reports *write
+`::CORBA::TypeCode`*; a reserved word reports *write `_interface`*; a case
+clash says to rename the member rather than the type, because the type name is
+what callers depend on.

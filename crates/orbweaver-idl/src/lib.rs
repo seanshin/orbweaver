@@ -17,5 +17,21 @@
 pub mod ast;
 pub mod lex;
 pub mod parse;
+pub mod sema;
 
 pub use parse::{ParseError, parse};
+pub use sema::{Analysis, Diagnostic, analyse};
+
+/// Parses and analyses `src`, returning either the checked spec or everything
+/// wrong with it.
+///
+/// Diagnostics come back as a list rather than one error because the
+/// self-repair loop fixes a batch per round, and reporting only the first
+/// problem would make each round correct exactly one thing.
+pub fn check(src: &str) -> std::result::Result<ast::Spec, Vec<Diagnostic>> {
+    let spec = parse(src).map_err(|e| {
+        vec![Diagnostic { message: e.message, span: e.span, rule: "parse" }]
+    })?;
+    let analysis = analyse(&spec);
+    if analysis.is_ok() { Ok(spec) } else { Err(analysis.diagnostics) }
+}

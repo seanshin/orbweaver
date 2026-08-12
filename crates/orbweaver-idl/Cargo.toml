@@ -9,3 +9,7 @@ rust-version.workspace = true
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "idl-check"
+path = "src/bin/idl_check.rs"
