@@ -33,12 +33,14 @@ cleanup() {
 start_evolution_server() {
   cleanup
   rm -f "$ROOT/spikes/evolution.ior"
-  ( cd "$ROOT/spikes" && exec python3 evolution_server.py ${1:+"$1"} >/dev/null 2>&1 & )
+  ( cd "$ROOT/spikes" && exec python3 evolution_server.py ${1:+"$1"} \
+      >/tmp/orbweaver-evolution.log 2>&1 & )
   for _ in $(seq 1 100); do
     [ -s "$ROOT/spikes/evolution.ior" ] && { sleep 0.2; return 0; }
     sleep 0.1
   done
-  echo "  FAIL evolution fixture did not publish an IOR within 10s"
+  fixture_died "evolution fixture did not publish an IOR within 10s" \
+    /tmp/orbweaver-evolution.log
   return 1
 }
 trap cleanup EXIT
@@ -49,15 +51,30 @@ trap cleanup EXIT
 # microseconds and therefore did not wait at all; it only looked correct
 # because `cargo run` had to compile first and accidentally covered the race.
 # Once the build was warm the race surfaced as phantom GIOP timeouts.
+# Prints why a fixture did not come up. Discarding its output made "did not
+# publish an IOR" the only thing the harness could ever say, which is a
+# measurement of the symptom and not of the cause — on a CI runner, where the
+# fixture cannot be started by hand, that is the difference between a diagnosis
+# and a guess.
+fixture_died() {
+  echo "  FAIL $1"
+  if [ -s "$2" ]; then
+    echo "       last output from the fixture:"
+    tail -12 "$2" | sed 's/^/       | /'
+  else
+    echo "       the fixture wrote nothing at all"
+  fi
+}
+
 start_server() {
   cleanup
   rm -f "$ROOT/spikes/echo.ior"
-  ( cd "$ROOT/spikes" && exec python3 echo_server.py "$@" >/dev/null 2>&1 & )
+  ( cd "$ROOT/spikes" && exec python3 echo_server.py "$@" >/tmp/orbweaver-fixture.log 2>&1 & )
   for _ in $(seq 1 100); do
     [ -s "$ROOT/spikes/echo.ior" ] && { sleep 0.2; return 0; }  # settle after publish
     sleep 0.1
   done
-  echo "  FAIL fixture did not publish an IOR within 10s"
+  fixture_died "fixture did not publish an IOR within 10s" /tmp/orbweaver-fixture.log
   return 1
 }
 

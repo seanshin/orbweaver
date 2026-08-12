@@ -22,6 +22,14 @@ name = "orbweaver-cdr"
 version = "0.0.1"
 
 [[package]]
+name = "orbweaver-dynamic"
+version = "0.0.1"
+dependencies = [
+ "orbweaver-cdr",
+ "orbweaver-giop",
+]
+
+[[package]]
 name = "orbweaver-giop"
 version = "0.0.1"
 dependencies = [
