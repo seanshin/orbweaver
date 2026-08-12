@@ -163,6 +163,31 @@ jobs:
           sudo make install
           python3 -c "import omniORB; print('omniORB python at', omniORB.__file__)"
 
+          # omniidl loads its back-ends as submodules of one omniidl_be
+          # package. Debian's sysconfig inserts "local" into the install path,
+          # so omniORBpy's python back-end lands under /usr/local while the apt
+          # omniidl imports omniidl_be from /usr/lib/python3/dist-packages. The
+          # two directories shadow each other rather than merging, and every
+          # fixture died on "Could not import back-end 'python'". Merge them.
+          echo "--- omniidl_be trees before merging:"
+          for d in $(find /usr -maxdepth 6 -type d -name omniidl_be); do
+            echo "  $d: $(ls "$d" | tr '\n' ' ')"
+          done
+          src=$(find /usr/local -maxdepth 6 -type d -name omniidl_be | head -1)
+          dst=/usr/lib/python3/dist-packages/omniidl_be
+          if [ -n "$src" ] && [ -d "$dst" ] && [ "$src" != "$dst" ]; then
+            sudo cp -rn "$src"/. "$dst"/
+          fi
+          python3 -c "import omniidl_be.python; print('python back-end importable')"
+
+      # The fixtures call omniORB.importIDL, which shells out to omniidl with
+      # the python back-end. Proving that works here turns a confusing cascade
+      # of "fixture did not publish an IOR" into one clear failure.
+      - name: check the fixtures can compile their IDL
+        run: |
+          omniidl -bpython -o /tmp/idlcheck spikes/echo.idl
+          python3 -c "import sys; sys.path.insert(0, '/tmp/idlcheck'); import spike; print('spike stubs generated')"
+
       - name: build the JacORB fixture
         env:
           JAVA_HOME_21: ${{ env.JAVA_HOME }}
