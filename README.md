@@ -7,8 +7,8 @@
 [![Status: planning](https://img.shields.io/badge/status-planning-orange.svg)](docs/PLAN.md)
 [![Spec: OMG IDL 4.2](https://img.shields.io/badge/spec-OMG%20IDL%204.2-1D4C5C.svg)](https://www.omg.org/spec/IDL/4.2/)
 
-> **Status / 상태** — Planning stage. No code yet. The full plan lives in [`docs/PLAN.md`](docs/PLAN.md) (English) and [`docs/PLAN.ko.md`](docs/PLAN.ko.md) (한국어). Phase 0 is a two-to-three week feasibility spike whose outcome may still reshape this architecture.
-> 기획 단계입니다. 아직 코드는 없습니다. 전체 계획은 [`docs/PLAN.md`](docs/PLAN.md)(영문)과 [`docs/PLAN.ko.md`](docs/PLAN.ko.md)(국문)에 있습니다. Phase 0은 2~3주짜리 타당성 검증이며, 그 결과에 따라 아키텍처가 바뀔 수 있습니다.
+> **Status / 상태** — Planning stage. No code yet. The full plan lives in [`docs/PLAN.md`](docs/PLAN.md) (English) and [`docs/PLAN.ko.md`](docs/PLAN.ko.md) (한국어). Phase 0 is a three-week feasibility spike whose outcome may still reshape this architecture.
+> 기획 단계입니다. 아직 코드는 없습니다. 전체 계획은 [`docs/PLAN.md`](docs/PLAN.md)(영문)과 [`docs/PLAN.ko.md`](docs/PLAN.ko.md)(국문)에 있습니다. Phase 0은 3주짜리 타당성 검증이며, 그 결과에 따라 아키텍처가 바뀔 수 있습니다.
 
 ---
 
@@ -166,6 +166,9 @@ Everything below is MIT and written in this repository unless marked otherwise.
 | `orbweaver-forge` | 명세 파이프라인 | S1–S5: ingest, synthesize, annotate, validate, register |
 | `orbweaver-mcp` | MCP 브릿지 | Projects the registry as MCP `tools/list`; delegates calls |
 | `orbweaver-guard` | 가드레일 | Interceptor chain: authz, dry-run, approval, audit log |
+| `orbweaver-gen` | 정적 생성 | Static generation: stubs, skeletons, scaffolds, client SDKs |
+| `orbweaver-test` | 계약 테스트 | Contract/property tests from annotations; DynAny fuzzing |
+| `orbweaver-console` | 웹 콘솔 | Catalog browser, contract diff viewer, invocation traces |
 
 ---
 

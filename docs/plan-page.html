@@ -157,7 +157,7 @@
 <div class="shell">
 
   <header class="masthead">
-    <div class="eyebrow"><span>Project brief</span><span>Plan v0.2</span><span>2026-08-12</span><span>MIT</span></div>
+    <div class="eyebrow"><span>Project brief</span><span>Plan v0.3</span><span>2026-08-12</span><span>MIT</span></div>
     <h1>Orbweaver</h1>
     <p class="tagline">AI-driven CORBA/IDL interface automation — from natural-language spec to a live ORB binding, with no hand-written stubs.</p>
     <p class="tagline-ko">AI 기반 CORBA/IDL 인터페이스 자동화 — 자연어 명세에서 실제 ORB 연동까지, 손으로 쓴 스텁 없이.</p>
@@ -373,6 +373,10 @@ graph TB
     </table></div>
     <p><strong>Promotion criteria</strong> — ≥1,000 calls/day <em>and</em> schema unchanged for 30 days <em>and</em> regression suite green. Explore dynamically, settle statically.</p>
     <p class="ko"><strong>승격 조건</strong> — 일 1,000회 이상 호출 <em>그리고</em> 스키마 30일 무변경 <em>그리고</em> 회귀 스위트 통과. 탐색은 동적으로, 정착은 정적으로.</p>
+
+    <h3>Projecting into MCP<span class="ko">MCP 투영</span></h3>
+    <p>One tool per operation collapses at legacy scale — thousands of operations would swamp <code>tools/list</code>. The default projection is a generic triad — <code>search_interfaces</code>, <code>describe_interface</code>, <code>invoke_operation</code> — and exposure is <strong>default-deny</strong>: nothing becomes callable until explicitly allowlisted.</p>
+    <p class="ko">연산 하나당 도구 하나는 레거시 규모에서 무너집니다. 기본 투영은 범용 3종 — <code>search_interfaces</code>, <code>describe_interface</code>, <code>invoke_operation</code> — 이며, 노출은 <strong>기본 거부</strong>입니다. 명시적으로 허용 목록에 올리기 전에는 아무것도 호출할 수 없습니다.</p>
   </section>
 
   <!-- 06 ROADMAP -->
@@ -486,6 +490,12 @@ graph TB
           <td>Endpoint rewriting templated into every deployment; verified in Phase 0<span class="ko">배포 템플릿화, Phase 0에서 검증</span></td>
         </tr>
         <tr>
+          <td class="id">R11</td>
+          <td><strong>Prompt injection via interface metadata</strong> — hostile IFR/IDL text steers the agent<span class="ko">인터페이스 메타데이터를 통한 프롬프트 주입 (도구 오염)</span></td>
+          <td><span class="chip crit">high</span></td>
+          <td>Remote metadata untrusted by default — sanitized, quarantined until approved. MCP exposure is default-deny<span class="ko">원격 메타데이터 기본 불신·격리, MCP 노출은 기본 거부</span></td>
+        </tr>
+        <tr>
           <td class="id">R9</td>
           <td>CORBA market contraction<span class="ko">CORBA 시장 축소</span></td>
           <td><span class="chip neu">strategic</span></td>
@@ -537,7 +547,7 @@ graph TB
   </section>
 
   <footer>
-    <span>Orbweaver · Project brief · Plan v0.2</span>
+    <span>Orbweaver · Project brief · Plan v0.3</span>
     <span>MIT · 2026-08-12 · Draft, pending Phase 0</span>
   </footer>
 

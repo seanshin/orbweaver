@@ -1,7 +1,9 @@
 # Orbweaver — Development Plan
 
-> Version 0.2 · 2026-08-12 · **Draft, pending Phase 0 outcome**
+> Version 0.3 · 2026-08-12 · **Draft, pending Phase 0 outcome**
 > 한국어판: [`PLAN.ko.md`](PLAN.ko.md)
+
+**Changes from v0.2** — Detailed review pass. Added: wire-level decisions — GIOP version and codeset strategy, IOR acquisition, the v1 type-support matrix, runtime model (§4.4); the normative AnyJSON mapping (§4.5); the MCP projection triad with default-deny exposure (§4.6); concrete wire-compatibility rules (§5.1); a threat model with two new risks — metadata prompt injection and bridge amplification (§9.0, R11–R12); diagnostics-as-product for the self-repair loop (§3.3); benchmark discipline (§8).
 
 **Changes from v0.1** — The licensing policy was tightened to *MIT or MIT-equivalent, otherwise build it ourselves*. Since no CORBA ORB exists under MIT, the ORB core moved from "adopt omniORB/TAO" to "implement in-house against the published OMG wire specification". Existing ORBs are now interoperability test fixtures rather than dependencies. Timeline extended from 30 to 45 weeks.
 
@@ -49,7 +51,7 @@ Three propositions define the design.
 
 **In scope** — IDL synthesis and normalization, semantic annotation, validation, code generation, dynamic invocation runtime, type registry, semantic catalog, MCP bridge, contract-test generation, observability and audit.
 
-**Out of scope (v1)** — CORBA Component Model, Real-Time CORBA scheduling, rewriting business logic in existing systems, GIOP over protocols other than TCP.
+**Out of scope (v1)** — CORBA Component Model, Real-Time CORBA scheduling, rewriting business logic in existing systems, GIOP over protocols other than TCP, bidirectional GIOP (needed for callback-style systems behind firewalls; revisit after v1), and wire support for `valuetype`/`fixed` (the parser accepts them; wire support is a Phase 4 decision gate — §4.4).
 
 ---
 
@@ -160,6 +162,7 @@ Two consequences worth planning around:
 - **Prompt caching** — Required to keep a large legacy IDL corpus resident across repeated transformations; this dominates cost at scale.
 - **Retrieval** — Registry contents, existing IDL and a domain glossary are embedded so that synthesis can retrieve similar interfaces as few-shot references.
 - **Self-repair loop** — Generate, compile, feed the compiler's diagnostics back verbatim, regenerate. IDL compilers emit precise errors, which makes this loop converge quickly. Expected to be the single highest-leverage mechanism in the pipeline.
+- **Diagnostics as a product surface** — the self-repair loop is only as good as the error messages it feeds on, so `orbweaver-idl` emits structured diagnostics (JSON: source span, expected/found, fix hint) designed to be returned to the model verbatim. Error-message quality is a tested feature, not a nicety.
 
 ### 3.4 Adjacent standards
 
@@ -240,7 +243,7 @@ All components are MIT-licensed and written in this repository.
 | # | Component | Responsibility |
 |---|---|---|
 | 01 | `orbweaver-cdr` | OMG Common Data Representation encode/decode, both endiannesses, alignment rules |
-| 02 | `orbweaver-giop` | GIOP 1.0–1.2 message framing, IIOP over TCP, IOR parse and emit, connection management |
+| 02 | `orbweaver-giop` | GIOP 1.2 native with 1.0/1.1 compatibility both directions; IIOP over TCP; codeset negotiation; IOR parse/emit; `corbaloc:`/`corbaname:` resolution and a CosNaming client; connection management |
 | 03 | `orbweaver-poa` | Servant lifecycle, object activation policies, request dispatch |
 | 04 | `orbweaver-idl` | OMG IDL 4.2 front end with `@annotation`, AST, pluggable back ends |
 | 05 | `orbweaver-registry` | Type registry (IFR-equivalent); also ingests remote IFRs from foreign ORBs |
@@ -267,6 +270,49 @@ Pure code generation breaks automation the moment a schema changes, because ever
 
 **Promotion criteria** — at least 1,000 calls per day, schema unchanged for 30 days, and a green regression suite. Demotion is automatic on a breaking schema change.
 
+### 4.4 Wire-level decisions
+
+Settled here so Phase 1 does not relitigate them mid-build.
+
+**GIOP version strategy.** The version spoken on a connection is dictated by the peer: an IIOP profile in an IOR advertises a GIOP minor version a client must not exceed, and legacy clients may dial us with old versions. Orbweaver therefore implements **GIOP 1.2 natively, with 1.0/1.1 compatibility in both directions**, honoring their header and alignment differences. `Fragment` handling (introduced in 1.1) is mandatory on receive and supported on send. Bidirectional GIOP is explicitly deferred (§1.3).
+
+**Codeset negotiation is a first-class requirement, not an afterthought.** GIOP transmits `char`/`string` and `wchar`/`wstring` under codesets negotiated via the CodeSets service context, and `wchar` is undefined in GIOP 1.0. Korean legacy systems commonly run EUC-KR-family native codesets, so a wrong negotiation corrupts precisely the text this project's home market cares about. v1 ships UTF-8, UTF-16, ISO-8859-1 and EUC-KR conversion, and the interop matrix includes Korean-text round-trips against every fixture ORB.
+
+**Object reference acquisition.** DII is useless without an IOR to aim at. v1 resolves references from IOR strings and files, `corbaloc:` and `corbaname:` URLs, and a **CosNaming client** — the standard INS surface — implemented inside `orbweaver-giop`, because discovery is meaningless if the registry cannot reach a live object.
+
+**v1 wire-type support matrix.** Full CDR round-trip for primitives, `string`/`wstring`, `enum`, `struct`, `union`, `sequence`, arrays, `exception`, `any` and `TypeCode` (including indirection). **Deferred: `valuetype` (chunked encoding and truncation are a project of their own), abstract interfaces, and `fixed`.** The parser accepts all of them; wire support waits for a Phase 4 decision gate informed by pilot demand.
+
+**Runtime model.** The Rust core is async (tokio) with a blocking C-ABI facade; the Python control plane binds through PyO3 against the blocking facade. The transport stays concurrent under many in-flight requests without imposing async complexity on pipeline code.
+
+### 4.5 AnyJSON — the JSON ↔ `any` mapping
+
+The dynamic path stands on a deterministic, lossless, bidirectional mapping between agent-side JSON and CDR values. Handwaving here produces silent data corruption, so the mapping is a normative spec (**AnyJSON v1**) with property-tested round-trips:
+
+| IDL construct | JSON encoding | Why |
+|---|---|---|
+| `short`/`long`, `float`/`double` | JSON number | Within IEEE-754 exact range |
+| `long long` / `unsigned long long` | **JSON string** | JSON numbers lose integer precision past 2^53 |
+| `fixed` | JSON string | Decimal fidelity |
+| `octet` sequence | base64 string | Binary safety |
+| `enum` | Symbolic name string | Ordinals are wire detail, not meaning |
+| `union` | `{"_d": <discriminator>, "_v": <value>}` | The active member is explicit |
+| `struct`/`exception` | JSON object, member order preserved from IDL | CDR is positional |
+| `string`/`wstring` | JSON string (UTF-8); codeset conversion happens at the wire | One text representation agent-side |
+| `any` | `{"_t": <TypeCode repr>, "_v": ...}` | Self-description survives the crossing |
+| NaN / ±Inf | `{"_f": "nan" \| "+inf" \| "-inf"}` | JSON has no encoding for them |
+
+Verification: for every golden-corpus type, `any → JSON → any` must reproduce identical CDR bytes (§8).
+
+### 4.6 Projecting the registry into MCP
+
+Naive projection — one MCP tool per operation — collapses at legacy scale: thousands of operations make `tools/list` unusable and blow the agent's context. The default projection is therefore a **generic triad**:
+
+- `search_interfaces(query)` — semantic search over the catalog (names, SIDL annotations, embeddings)
+- `describe_interface(id)` — the full contract: operations, types, annotations, examples
+- `invoke_operation(ref, op, args, options)` — delegated to the dynamic invoker, guarded by `orbweaver-guard`
+
+Curated per-operation tools remain available as an opt-in for small, stable, high-traffic surfaces. **Exposure is default-deny**: nothing in the registry becomes callable through MCP until explicitly allowlisted (§9.0).
+
 ---
 
 ## 5. Pipeline
@@ -282,6 +328,21 @@ Pure code generation breaks automation the moment a schema changes, because ever
 | **S7** Verify | Binding | Contract tests, interceptors, tracing | Pass verdict plus telemetry | 90% |
 
 **S4 is the safety belt of the whole system.** An LLM writes plausible IDL that may be semantically wrong; an IDL compiler rejects syntactically wrong IDL every time without exception. That asymmetry — probabilistic synthesis, deterministic verification — is what makes the trust model work. Everything upstream of S4 is allowed to be uncertain because S4 is not.
+
+### 5.1 What counts as a breaking change
+
+CDR encodes by position, not by tag. Anyone whose intuition was trained on protobuf will over-trust IDL evolution, so the registry encodes these rules and the semantic differ enforces them:
+
+| Change | Verdict | Reason |
+|---|---|---|
+| Add an operation or attribute to an interface | Compatible for clients; **server-first rollout required** | Old servers answer `BAD_OPERATION` |
+| Add / remove / reorder / retype a struct, union or exception member | **Breaking** | Positional CDR, no tags |
+| Add an enum constant at the end | **Conditionally breaking** | Wire-legal, but out-of-range for old receivers — treated as breaking unless receivers update first |
+| Change an operation signature, `raises` clause included | **Breaking** | — |
+| Add a new type or interface | Compatible | — |
+| Rename anything | **Breaking** at the contract level | Repository IDs change |
+
+Consequence: interface evolution happens through **versioned interfaces** (a `Transfer_2` in a versioned module, plus `@ai_since` metadata), never by editing deployed types in place. The differ blocks any registration that edits a released type unless the change is in the compatible set or carries an explicit approval.
 
 ---
 
@@ -318,15 +379,16 @@ Four assumptions are tested before anything else is built. Two can invalidate th
   *Fallback: structured comments plus sidecar YAML.*
 - **D. IOR addressing works under NAT and containers.** Verify endpoint rewriting under Kubernetes.
 
-Also in Phase 0: build the **golden IDL corpus v0**, 20–30 cases covering nested structs, unions, sequences, typedefs, inheritance, exceptions, valuetypes, `oneway`, and `any`. Without it, AI quality cannot be measured at all.
+Also in Phase 0: build the **golden IDL corpus v0**, 20–30 cases covering nested structs, unions, sequences, typedefs, inheritance, exceptions, valuetypes, `oneway`, and `any`. Without it, AI quality cannot be measured at all. Deferred wire types (`valuetype`, `fixed`) are covered at parser level only, matching the v1 support matrix (§4.4); a companion **negative corpus** of deliberately broken IDL exercises diagnostic quality — the raw material of the self-repair loop.
 
 **Go/No-Go** — assumption A is the gate. If GIOP interop fails, stop and revisit the licensing constraint before writing further code.
 
 ### Phase 1 — Wire protocol core (10 weeks)
 
 - `orbweaver-cdr`: CDR encode/decode, both endiannesses, alignment, all primitive and constructed types
-- `orbweaver-giop`: GIOP 1.0–1.2 framing, `Request`/`Reply`/`LocateRequest`/`CancelRequest`, IIOP over TCP
-- IOR parsing and emission, profile handling, endpoint rewriting
+- `orbweaver-giop`: GIOP 1.2 framing (`Request`/`Reply`/`LocateRequest`/`CancelRequest`/`Fragment`), 1.0/1.1 compatibility in both directions, IIOP over TCP
+- Codeset negotiation: UTF-8, UTF-16, ISO-8859-1, EUC-KR — Korean-text round-trips wired into the interop matrix
+- IOR parsing and emission, profile handling, endpoint rewriting, `corbaloc:`/`corbaname:` resolution, CosNaming client
 - **Interop CI**: round-trip against TAO, omniORB and JacORB containers on every commit
 
 *Deliverable: an MIT ORB that can call and be called by existing CORBA systems.*
@@ -340,12 +402,12 @@ Also in Phase 0: build the **golden IDL corpus v0**, 20–30 cases covering nest
 
 ### Phase 3 — Dynamic invocation and the AI pipeline (10 weeks) — the headline demo
 
-- `orbweaver-dynamic`: DII/DSI/DynAny equivalents, lossless JSON ↔ `any`
+- `orbweaver-dynamic`: DII/DSI/DynAny equivalents; **AnyJSON v1** (§4.5) with property-tested round-trips
 - `orbweaver-forge`: S1–S5 — ingest, synthesize, annotate, **validation gate with self-repair loop**
 - SIDL vocabulary v1 finalized
 - Semantic catalog: embedding index, natural-language interface search
-- `orbweaver-mcp`: registry projected as MCP tools
-- `orbweaver-guard` v1: authorization, dry-run, audit logging
+- `orbweaver-mcp`: the generic triad projection with **default-deny allowlisting** (§4.6)
+- `orbweaver-guard` v1: `@ai_authz` scope enforcement, client-side dry-run, human approval for `destructive`, correlated audit logging
 
 *Deliverable: an AI agent invokes an existing CORBA system with no generated code. This is the demo the project is judged on.*
 
@@ -356,6 +418,8 @@ Also in Phase 0: build the **golden IDL corpus v0**, 20–30 cases covering nest
 - Promotion engine: call-statistics-driven dynamic-to-static transition with regression gating
 - `orbweaver-test`: contract and property tests from annotations; DynAny fuzzing
 - DDS-XTypes target experiment from the same IDL
+- Decision gate: `valuetype`/`fixed` wire support, driven by pilot demand (§4.4)
+- Optional read-only standard IFR facade (`CORBA::Repository`) so foreign DII clients can browse the registry
 
 ### Phase 5 — Productionization (6 weeks)
 
@@ -380,10 +444,31 @@ Also in Phase 0: build the **golden IDL corpus v0**, 20–30 cases covering nest
 | Generated code | Compile, contract tests, static result equals dynamic result | Zero mismatches |
 | End to end | Pilot integration with a real legacy system | ≥80% reduction versus manual |
 | AI quality | 100-case requirement regression benchmark, every release | Release blocked on a drop in first-pass rate |
+| Codesets | Korean-text round-trips (EUC-KR / UTF-8 / UTF-16) against every fixture ORB | 100% lossless |
+| AnyJSON | `any → JSON → any` across the golden corpus | Byte-identical CDR |
+| Performance | LAN echo benchmark, dynamic path vs static stub | Within §11 targets |
+
+**Benchmark discipline.** The AI benchmark is frozen and versioned; a hold-out subset is never touched during prompt development, and cases rotate between releases so the pipeline is not tuned to its own exam.
 
 ---
 
-## 9. Risk register
+## 9. Threats and risks
+
+### 9.0 Threat model
+
+Putting an AI bridge in front of legacy CORBA widens the attack surface in ways a risk table alone does not capture. The standing posture:
+
+| Threat | Vector | Control |
+|---|---|---|
+| Plaintext legacy IIOP | Eavesdropping / MITM on 683/tcp | TLS on new paths; mTLS tunnels around legacy; network segmentation (R3) |
+| **Tool poisoning via remote metadata** | A remote IFR or ingested IDL carries hostile text in names, comments or annotations that an agent reads as instructions | Remote-sourced metadata is untrusted by default: sanitized, rendered as data rather than instructions, and quarantined from agent-visible descriptions until human-approved |
+| Over-broad agent authority | An agent discovers more than intended and calls destructive operations | **Default-deny MCP exposure** (§4.6); `@ai_effect("destructive")` requires human approval; `@ai_authz` scopes enforced in `orbweaver-guard` |
+| Unauthenticated legacy servers | Many deployed CORBA services trust the network | The bridge is the enforcement point: it authenticates callers even when the target cannot |
+| Audit gaps | Untraceable agent actions | Every invocation logs caller identity, MCP-request-id ↔ GIOP-request-id correlation, an argument digest, and the verdict |
+
+**On dry-run honesty** — a true server-side dry-run needs target cooperation that legacy will not provide. The guard's dry-run is a **client-side gate**: it validates, marshals and shows what would be sent, without sending it. Documentation must not oversell this.
+
+### 9.1 Risk register
 
 | ID | Risk | Impact | Likelihood | Mitigation |
 |---|---|---|---|---|
@@ -398,6 +483,8 @@ Also in Phase 0: build the **golden IDL corpus v0**, 20–30 cases covering nest
 | **R8** | Scope growth from building the ORB core | Medium | Medium | Phases 1–2 are strictly wire and compiler work with no AI scope creep. GIOP 1.2 over TCP only in v1 |
 | **R9** | CORBA market contraction | Strategic | Medium | IDL 4.x is shared with DDS; land a DDS target early. Position as an OMG IDL automation platform, not a CORBA product |
 | **R10** | Dynamic path too slow | Low | Medium | Structurally solved by promotion. Hot paths always use static stubs |
+| **R11** | **Prompt injection through interface metadata** — hostile IFR/IDL text steers the agent (tool poisoning) | High | Medium | §9.0 controls: metadata untrusted by default, sanitized on render, quarantined until approved |
+| **R12** | **The bridge amplifies legacy exposure** — unauthenticated internal services become AI-reachable | High | Medium | Default-deny allowlist, per-interface exposure review, bridge-level authentication, network segmentation |
 
 ---
 
@@ -419,6 +506,8 @@ Because the OMG specifications are open, this is achievable rather than aspirati
 
 **On the interop fixtures.** Running an LGPL or GPL ORB in a CI container to verify wire compatibility does not create a derivative work of it and imposes no license obligation on Orbweaver — no linking, no code reuse, no redistribution. This boundary is deliberate and must be preserved: no Orbweaver code may import, link, or vendor any part of these projects.
 
+**Fixture hygiene.** The CI images containing GPL/LGPL ORBs are built or pulled inside CI and never published as project artifacts — publishing them would be redistribution, and it is the one way to break this boundary by accident.
+
 **Standing requirement.** License facts are re-verified before each release, and any new dependency is checked against this policy before it enters the tree.
 
 ---
@@ -435,6 +524,7 @@ Because the OMG specifications are open, this is achievable rather than aspirati
 | Contract tests auto-generated | 0% | ≥ 80% |
 | Breaking changes caught pre-merge | Manual | 100% |
 | Interop matrix pass rate | — | 100% |
+| Dynamic-path overhead vs static stub (LAN echo, p50) | — | ≤ 5 ms added and ≤ 3× static |
 | Human intervention across the pipeline | 100% | ≤ 15% |
 
 ---
@@ -446,6 +536,7 @@ Because the OMG specifications are open, this is achievable rather than aspirati
 3. **Stand up the interop CI harness** — TAO, omniORB and JacORB containers, wired before Phase 1 code exists.
 4. **Select a pilot system** — real IDL assets, a cooperative owner, low blast radius.
 5. **Staff the team** — one engineer with ORB and wire-protocol experience (essential), two backend engineers, one AI engineer.
+6. **Freeze AI benchmark v1** — with a hold-out subset, before any prompt tuning begins.
 
 ---
 
