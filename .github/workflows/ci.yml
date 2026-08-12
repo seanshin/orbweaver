@@ -127,27 +127,31 @@ jobs:
           java-version: '21'   # JDK 24 removed java.applet.Applet; JacORB 3.9 needs it
 
       # The fixtures are Python servants, so the omniORB Python binding is the
-      # load-bearing package. Its name is discovered rather than guessed: the
-      # first run of this workflow died on `python3-omniorb`, which does not
-      # exist on this runner.
+      # load-bearing piece. Two runs of this workflow established, rather than
+      # assumed, that Ubuntu packages no such binding: `apt-cache search omni`
+      # on noble returns omniORB's C++ libraries, omniidl and the nameserver,
+      # and nothing else. omniORBpy is therefore built from source against the
+      # packaged C++ core, at a version matched to it.
       - name: install the omniORB peer
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            omniidl omniorb-nameserver libomniorb4-dev || true
-          echo "--- omniORB-related packages on this runner:"
-          apt-cache search --names-only 'omni' || true
-          py=$(apt-cache search --names-only '^python3?-omniorb' | awk '{print $1}' | head -1)
-          if [ -n "$py" ]; then
-            echo "--- installing binding package: $py"
-            sudo apt-get install -y --no-install-recommends "$py" || true
-          else
-            echo "::warning::no omniORB Python binding is packaged for this runner"
-          fi
-          echo "--- what we ended up with:"
-          command -v omniidl && omniidl -V || echo "omniidl MISSING"
-          python3 -c "import omniORB, sys; print('omniORB python', omniORB.__file__)" \
-            || echo "omniORB python MISSING"
+            omniidl omniorb-nameserver libomniorb4-dev python3-dev build-essential
+          dpkg-query -W -f='${Version}\n' libomniorb4-dev
+
+      - name: build omniORBpy against the packaged core
+        run: |
+          set -x
+          ver=$(dpkg-query -W -f='${Version}' libomniorb4-dev | sed 's/[+-].*//')
+          echo "omniORB core is $ver; building the matching omniORBpy"
+          curl -sfL --max-time 180 -o /tmp/omniORBpy.tar.bz2 \
+            "https://downloads.sourceforge.net/project/omniorb/omniORBpy/omniORBpy-${ver}/omniORBpy-${ver}.tar.bz2"
+          mkdir -p /tmp/opy && tar xf /tmp/omniORBpy.tar.bz2 -C /tmp/opy --strip-components=1
+          cd /tmp/opy
+          ./configure --prefix=/usr --with-omniorb=/usr
+          make -j"$(nproc)"
+          sudo make install
+          python3 -c "import omniORB; print('omniORB python at', omniORB.__file__)"
 
       - name: build the JacORB fixture
         env:
