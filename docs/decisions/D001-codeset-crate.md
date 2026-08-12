@@ -74,7 +74,7 @@ than an unexplained MIT.
 **`encoding_rs` adopted for EUC-KR, behind the default-on `euc-kr` feature.**
 Attribution is in `NOTICE`; the policy amendment is in `CLAUDE.md`, `README.md`
 and `PLAN.md` §10. `--no-default-features` removes both the dependency and the
-obligation, and `run_phase0.sh` tests that promise rather than merely repeating
+obligation, and `run_checks.sh` tests that promise rather than merely repeating
 it.
 
 Verification of the table itself was done against an **independent**

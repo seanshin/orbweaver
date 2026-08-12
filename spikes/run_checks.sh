@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Phase 0 harness: runs every feasibility assumption and prints a verdict.
+# Project check harness: every Phase 0 feasibility assumption plus the
+# Phase 1 wire and licence checks. Exit code is the verdict.
+#
+# Named run_checks.sh until Phase 1 outgrew it.
 #
 # The omniORB fixture is LGPL/GPL and is used only as a wire peer and a
 # conformance oracle. Nothing here links it into Orbweaver. See docs/PLAN.md §10.
@@ -173,10 +176,44 @@ else
   fail_total=$((fail_total+1))
 fi
 
+# ── Reverse interop: a stock ORB calls US ───────────────────────────────────
+hr "reverse interop — omniORB client against our server"
+pkill -f spike-server >/dev/null 2>&1 || true
+rm -f "$ROOT/spikes/server.ior"
+( cd "$ROOT" && cargo run -q --bin spike-server -- spikes/server.ior 127.0.0.1 0 >/tmp/orbweaver-srv.log 2>&1 & )
+srv_up=0
+for _ in $(seq 1 100); do
+  [ -s "$ROOT/spikes/server.ior" ] && { sleep 0.3; srv_up=1; break; }
+  sleep 0.1
+done
+if [ "$srv_up" -eq 1 ]; then
+  rev_fail=0
+  for v in 1.0 1.1 1.2; do
+    if python3 spikes/reverse_client.py spikes/server.ior -ORBmaxGIOPVersion "$v" >/dev/null 2>&1; then
+      echo "  ok   omniORB client at GIOP $v -> our server, 5/5"
+    else
+      echo "  FAIL omniORB client at GIOP $v could not call our server"; rev_fail=1
+    fi
+  done
+  # "We tested three versions" is only true if the peer used three. An ORB that
+  # ignored the option would otherwise give three identical passes proving one.
+  seen=$(grep -c "first request at GIOP" /tmp/orbweaver-srv.log 2>/dev/null || echo 0)
+  if [ "$seen" -eq 3 ]; then
+    echo "  ok   server confirms three distinct GIOP versions were received"
+  else
+    echo "  FAIL server saw $seen distinct versions, not 3 — the option was ignored"
+    rev_fail=1
+  fi
+  [ "$rev_fail" -eq 0 ] || fail_total=$((fail_total+1))
+else
+  echo "  FAIL our server did not publish an IOR"; fail_total=$((fail_total+1))
+fi
+pkill -f spike-server >/dev/null 2>&1 || true
+
 hr "verdict"
 if [ "$fail_total" -eq 0 ]; then
-  echo "  Phase 0: all checks green"
+  echo "  all checks green"
 else
-  echo "  Phase 0: $fail_total check group(s) failed"
+  echo "  $fail_total check group(s) failed"
 fi
 exit "$fail_total"

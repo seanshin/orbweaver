@@ -25,6 +25,7 @@
 #![deny(missing_docs)]
 
 pub mod codeset;
+pub mod server;
 
 use orbweaver_cdr::{Decoder, Encoder, Endian};
 use std::fmt;
@@ -322,6 +323,28 @@ pub struct IiopProfile {
     pub components: Vec<TaggedComponent>,
 }
 
+impl IiopProfile {
+    /// Encodes this profile as the encapsulation an IOR carries.
+    pub fn encapsulate(&self, endian: Endian) -> Result<Encoder> {
+        let mut e = Encoder::encapsulation(endian);
+        e.put_u8(self.version.major);
+        e.put_u8(self.version.minor);
+        e.put_str(&self.host);
+        e.put_u16(self.port);
+        e.put_octet_seq(&self.object_key);
+        // §9.7.2: a 1.0 profile must carry no trailing data at all, so the
+        // component list is emitted only from 1.1 onward.
+        if self.version.minor >= 1 {
+            e.put_u32(self.components.len() as u32);
+            for c in &self.components {
+                e.put_u32(c.tag);
+                e.put_octet_seq(&c.data);
+            }
+        }
+        Ok(e)
+    }
+}
+
 /// A parsed Interoperable Object Reference.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ior {
@@ -393,6 +416,34 @@ impl Ior {
     /// Whether this is the nil reference: no type and no profiles.
     pub fn is_nil(&self) -> bool {
         self.type_id.is_empty() && self.profiles.is_empty()
+    }
+
+    /// Marshals this reference inline into an existing stream (§9.3.6).
+    pub fn write_to(&self, e: &mut Encoder) -> Result<()> {
+        e.put_str(&self.type_id);
+        e.put_u32(self.profiles.len() as u32);
+        for p in &self.profiles {
+            e.put_u32(TAG_INTERNET_IOP);
+            e.put_encapsulation(p.encapsulate(e.endian())?);
+        }
+        Ok(())
+    }
+
+    /// Produces the `IOR:<hex>` stringified form.
+    ///
+    /// Needed to publish a reference at all: a peer cannot call us until it
+    /// has one of these. Emission is deliberately little-endian, matching what
+    /// every ORB observed here produces, but the parser accepts either.
+    pub fn to_stringified(&self) -> Result<String> {
+        let mut e = Encoder::encapsulation(Endian::Little);
+        self.write_to(&mut e)?;
+        let bytes = e.finish().map_err(Error::Cdr)?;
+        let mut out = String::with_capacity(4 + bytes.len() * 2);
+        out.push_str("IOR:");
+        for b in bytes {
+            out.push_str(&format!("{b:02x}"));
+        }
+        Ok(out)
     }
 
     /// The first IIOP profile, which is the one dialed first.
@@ -507,7 +558,12 @@ where
     // §9.4.2.1: "There is no padding after the request header when an
     // unfragmented request message body is empty." Measure the body first so
     // the padding is only emitted when something follows it.
-    let mut body = Encoder::new(endian);
+    // The body is measured before being emitted, so that padding can be
+    // omitted when it turns out to be empty. It must still align as though it
+    // sat where it will actually land — CDR counts from the start of the
+    // message, not from the start of whatever buffer we built it in.
+    let body_start = if version.aligns_body() { e.len().div_ceil(8) * 8 } else { e.len() };
+    let mut body = Encoder::continuing_at(endian, body_start);
     write_body(&mut body);
     let body_bytes = body.finish().map_err(Error::Cdr)?;
     if !body_bytes.is_empty() {

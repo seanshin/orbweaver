@@ -138,13 +138,36 @@ pub struct Encoder {
     endian: Endian,
     /// Offset that counts as position zero for alignment purposes.
     origin: usize,
+    /// Bytes notionally already written before this buffer begins.
+    virtual_offset: usize,
     poison: Option<Error>,
 }
 
 impl Encoder {
     /// A new encoder whose alignment origin is the start of its buffer.
     pub fn new(endian: Endian) -> Self {
-        Self { buf: Vec::with_capacity(256), endian, origin: 0, poison: None }
+        Self { buf: Vec::with_capacity(256), endian, origin: 0, virtual_offset: 0, poison: None }
+    }
+
+    /// An encoder that aligns as though `offset` bytes already preceded it.
+    ///
+    /// Needed whenever a fragment of a stream is built in its own buffer and
+    /// spliced in later. CDR alignment is measured from the start of the
+    /// enclosing message, so a detached buffer that starts counting at zero
+    /// pads to the wrong boundaries.
+    ///
+    /// This is not hypothetical: building a GIOP request body in a plain
+    /// `Encoder::new` looked correct against GIOP 1.2, where the body happens
+    /// to start 8-aligned, and silently mis-encoded every `double` in a 1.0 or
+    /// 1.1 body, where it does not.
+    pub fn continuing_at(endian: Endian, offset: usize) -> Self {
+        Self {
+            buf: Vec::with_capacity(256),
+            endian,
+            origin: 0,
+            virtual_offset: offset,
+            poison: None,
+        }
     }
 
     /// A new encoder for an encapsulation: the byte-order flag is written
@@ -170,9 +193,10 @@ impl Encoder {
         self.buf.is_empty()
     }
 
-    /// Current offset relative to the alignment origin.
+    /// Current offset relative to the alignment origin, including any
+    /// virtual prefix from [`Encoder::continuing_at`].
     pub fn position(&self) -> usize {
-        self.buf.len() - self.origin
+        self.buf.len() - self.origin + self.virtual_offset
     }
 
     /// The first error encountered, if any.

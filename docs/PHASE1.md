@@ -1,7 +1,7 @@
 # Phase 1 — Batch 1: hardening the wire core
 
 > 2026-08-12 · Batch 1 of Phase 1 (wire protocol core)
-> Reproduce with `cargo test --workspace && ./spikes/run_phase0.sh`
+> Reproduce with `cargo test --workspace && ./spikes/run_checks.sh`
 
 The work set came from an adversarial audit of the Phase 0 spike against OMG
 CORBA 3.4 Part 2. Phase 0 proved the code interoperates with **one** peer,
@@ -320,7 +320,85 @@ licence boundary
   ok   the attribution-free build still passes its tests
 ```
 
-## Still open after Batch 2
+---
+
+# Batch 3: the serving half
+
+Until now the asymmetry was that we could call existing CORBA systems and they
+could not call us. `docs/PLAN.md` §7 commits to GIOP 1.0/1.1 compatibility **in
+both directions**, so half the commitment was outstanding.
+
+**Result: a stock omniORB client invokes our Rust server successfully at GIOP
+1.0, 1.1 and 1.2 — 5/5 assertions each, with the server confirming it really
+received three distinct versions.**
+
+지금까지의 비대칭은, 우리가 기존 CORBA 시스템을 호출할 수는 있어도 그쪽이 우리를
+호출할 수는 없다는 것이었다. **순정 omniORB 클라이언트가 GIOP 1.0·1.1·1.2로 우리
+Rust 서버를 호출한다.**
+
+## What had to exist first
+
+- `decode_request` for all three versions, `encode_reply`, and system-exception
+  replies.
+- **`LocateRequest` / `LocateReply`.** Captured in Batch 2: omniORB sends a
+  `LocateRequest` and *waits for the reply* before its first `Request`. A server
+  that treats it as unexpected never receives an invocation at all — it hangs at
+  the handshake rather than failing somewhere informative.
+- **IOR emission.** A peer cannot call us until we can publish a reference.
+- `_is_a` and `_non_existent`, which every ORB probes with.
+- `MessageError`, so a malformed message gets an answer instead of silence
+  (§9.4.8).
+
+`LocateReply` carries its own trap: §9.4.6 marshals the body **immediately**
+after the header with no alignment — the opposite of `Reply` in 1.2. Applying
+the `Reply` rule shifts every byte of an `OBJECT_FORWARD` body.
+
+## The bug the round-trip test caught
+
+Writing the server surfaced a defect **I had introduced in Batch 1** while
+making body padding conditional. The body was built in its own `Encoder`, whose
+alignment origin was the start of *that buffer* rather than the start of the
+message. CDR counts from the message, so:
+
+- Under GIOP **1.2** the body starts 8-aligned, buffer-relative and
+  message-relative alignment coincide, and everything passed.
+- Under **1.0/1.1** the body starts wherever the header ended. Every `double`
+  in the body landed on the wrong boundary.
+
+It was invisible to every test written so far because they all used 1.2. The
+fix is `Encoder::continuing_at`, which lets a detached buffer align as though
+the bytes preceding it were already written.
+
+Batch 1에서 **내가 넣은** 결함이다. 바디를 별도 버퍼에 만들면서 정렬 원점이 메시지
+시작이 아니라 버퍼 시작이 됐다. 1.2에서는 두 원점이 우연히 일치해 보이지 않았고,
+1.0/1.1에서만 드러난다.
+
+## Guarding against a false pass
+
+Three version runs passing means nothing if the peer used one version three
+times. omniORB's `-ORBmaxGIOPVersion` could have been ignored, and this project
+has already produced two passes that could not fail. The server therefore logs
+each distinct version it receives, and the harness fails unless it sees exactly
+three:
+
+```
+reverse interop — omniORB client against our server
+  ok   omniORB client at GIOP 1.0 -> our server, 5/5
+  ok   omniORB client at GIOP 1.1 -> our server, 5/5
+  ok   omniORB client at GIOP 1.2 -> our server, 5/5
+  ok   server confirms three distinct GIOP versions were received
+```
+
+세 버전 실행이 통과해도 피어가 한 버전을 세 번 썼다면 아무 의미가 없다. 서버가
+수신 버전을 기록하고, 하네스는 정확히 세 개를 보지 못하면 실패한다.
+
+`echo_string` on the server side passes bytes through rather than decoding to a
+Rust string: without a negotiated codeset there is no basis for claiming what
+they mean, and echoing verbatim is the one answer correct under any codeset.
+
+The harness is now `spikes/run_checks.sh`; it outgrew the name `run_phase0.sh`.
+
+## Still open after Batch 3
 - Wiring the negotiated converter through `Connection` and the string paths,
   including the per-connection "send the context once" rule and the
   `MARSHAL` minor 9 case for conflicting contexts on one connection.
@@ -340,11 +418,7 @@ Phase 1 scope from `docs/PLAN.md` §7 and remains open:
 - **`Fragment` reassembly.** Currently detected and refused with a clear error
   rather than silently truncated, which is the correct interim behaviour but not
   the requirement.
-- **`LocateRequest` / `LocateReply` / `CancelRequest` / `MessageError`** — none
-  are sent or served. omniORB sends a `LocateRequest` before its first `Request`,
-  so a peer dialing us gets an `UnexpectedMessage`.
-- **The entire serving half.** There is no `decode_request`, no `encode_reply`,
-  no dispatch. §7 commits to 1.0/1.1 compatibility *in both directions*.
+- **`LocateRequest` send, `CancelRequest` send** — served but not sent.
 - **`wchar`/`wstring`, `any`, `TypeCode`, `long double`, and inline object
   references in general** — `Ior::read_from` exists now, but the constructed-type
   surface is still only `sequence<octet>` and `string`.

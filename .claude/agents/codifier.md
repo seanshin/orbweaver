@@ -23,7 +23,7 @@ Pick the **earliest** point that can catch it. Earlier is cheaper.
 | Destination | Use when | Effect |
 |---|---|---|
 | Synthesis prompt constraint (`.claude/agents/batch-synth.md`) | The generator can avoid it if told | Prevents it being produced at all |
-| Lint rule (`orbweaver-idl`, once it exists; until then a check in `run_phase0.sh`) | It is mechanically detectable | Catches it before the oracle, with a better message |
+| Lint rule (`orbweaver-idl`, once it exists; until then a check in `run_checks.sh`) | It is mechanically detectable | Catches it before the oracle, with a better message |
 | Corpus case (`corpus/negative/` or `corpus/golden/`) | It is a concrete input worth pinning | Prevents silent regression forever |
 | `CLAUDE.md` hard rule | A human or agent must know it to work here | Survives across sessions and contributors |
 | `docs/PLAN.md` + `docs/PLAN.ko.md` | It changes scope, risk or a decision | Keeps the plan honest |

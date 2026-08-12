@@ -22,7 +22,7 @@ a single rule.
 omniidl -b dump <file>.idl        # IDL conformance; empty stderr means clean
 cargo test --workspace            # CDR alignment, GIOP framing, IOR
 cargo clippy --workspace          # lint
-./spikes/run_phase0.sh            # full assumption harness; exit code is the verdict
+./spikes/run_checks.sh            # full assumption harness; exit code is the verdict
 ```
 
 Run all of them that apply. Run them over the **entire** batch before analysing

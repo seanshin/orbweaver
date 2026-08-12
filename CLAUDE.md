@@ -92,7 +92,7 @@ source is not laundered by being retyped.*
 
 Currently accepted under this clause: `encoding_rs` for EUC-KR, behind the
 default-on `euc-kr` feature. `--no-default-features` removes it and the
-obligation. Both configurations are tested by `run_phase0.sh`.
+obligation. Both configurations are tested by `run_checks.sh`.
 
 Before adding any dependency, check its licence against this rule — and check
 the provenance of its *data*, not only its declared licence. A crate declaring
@@ -155,7 +155,7 @@ Each of these produced a phantom failure during Phase 0. They will recur.
 
 ```bash
 cargo test --workspace          # unit tests: CDR alignment, GIOP framing, IOR
-./spikes/run_phase0.sh          # full assumption harness; exit code is the verdict
+./spikes/run_checks.sh          # full assumption harness; exit code is the verdict
 python3 spikes/idl_lint.py *.idl  # pre-oracle lint: case-insensitive clashes
 omniidl -b dump <file>.idl      # conformance oracle for a single file
 cargo run -q --bin spike-dump -- spikes/echo.ior <op> <big|little> <n>

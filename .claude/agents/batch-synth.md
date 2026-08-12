@@ -10,7 +10,7 @@ You are the batch producer in Orbweaver's batch → oracle → repair → codify
 
 **Produce every item in the set in a single pass. Do not run the oracle.**
 
-Not `omniidl`, not `cargo test`, not `run_phase0.sh` — you have no Bash tool and
+Not `omniidl`, not `cargo test`, not `run_checks.sh` — you have no Bash tool and
 that is deliberate. Two reasons, and the second matters more:
 
 1. Consulting the oracle mid-pass destroys the first-pass measurement, which is

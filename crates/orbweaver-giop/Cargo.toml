@@ -29,3 +29,7 @@ path = "src/bin/spike_dump.rs"
 # --no-default-features removes both the support and the obligation.
 default = ["euc-kr"]
 euc-kr = ["dep:encoding_rs"]
+
+[[bin]]
+name = "spike-server"
+path = "src/bin/spike_server.rs"

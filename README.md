@@ -5,7 +5,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Phase 0: GO](https://img.shields.io/badge/Phase%200-GO-2F6B4F.svg)](docs/PHASE0.md)
-[![Phase 1: batch 1](https://img.shields.io/badge/Phase%201-batch%201%20landed-1D4C5C.svg)](docs/PHASE1.md)
+[![Phase 1: bidirectional](https://img.shields.io/badge/Phase%201-bidirectional%20interop-1D4C5C.svg)](docs/PHASE1.md)
 [![Spec: OMG IDL 4.2](https://img.shields.io/badge/spec-OMG%20IDL%204.2-1D4C5C.svg)](https://www.omg.org/spec/IDL/4.2/)
 
 > **Status / 상태** — Phase 0 feasibility spike complete, verdict **GO**. A from-scratch MIT GIOP client interoperates with a stock omniORB server; see [`docs/PHASE0.md`](docs/PHASE0.md) for the measurements. Phase 1 (wire protocol core) is next. Full plan: [`docs/PLAN.md`](docs/PLAN.md) (English) · [`docs/PLAN.ko.md`](docs/PLAN.ko.md) (한국어).
@@ -21,13 +21,22 @@
 | **D** | IOR addressing works under NAT/containers<br>NAT·컨테이너에서 IOR 주소가 동작하는가 | ⚠️ **Hazard real** — endpoint rewriting mitigates it |
 
 ```console
-$ ./spikes/run_phase0.sh
+$ ./spikes/run_checks.sh
 assumption A — GIOP interop against a stock ORB
   ok   both byte orders interoperated
 ...
+reverse interop — omniORB client against our server
+  ok   omniORB client at GIOP 1.0 -> our server, 5/5
+  ok   omniORB client at GIOP 1.1 -> our server, 5/5
+  ok   omniORB client at GIOP 1.2 -> our server, 5/5
+  ok   server confirms three distinct GIOP versions were received
 verdict
-  Phase 0: all checks green
+  all checks green
 ```
+
+**Interoperability runs both ways.** A from-scratch MIT implementation calls a stock omniORB server, and a stock omniORB client calls our Rust server — at GIOP 1.0, 1.1 and 1.2. The server records which versions it actually received, because three passing runs prove nothing if the peer used one version three times.
+
+**상호운용이 양방향입니다.** 밑바닥부터 만든 MIT 구현이 순정 omniORB 서버를 호출하고, 순정 omniORB 클라이언트가 우리 Rust 서버를 호출합니다 — GIOP 1.0·1.1·1.2 모두. 서버가 실제 수신 버전을 기록합니다. 피어가 한 버전을 세 번 썼다면 세 번의 통과는 아무것도 증명하지 못하기 때문입니다.
 
 Every failure in assumption B had **one** root cause: IDL identifier clashes are case-insensitive, so `Position position` and `module inventory { interface Inventory }` are both illegal. Natural naming in every other language, illegal here — which makes it the first lint rule Phase 1 ships.
 
@@ -314,7 +323,7 @@ And the reason that matters most: interfaces are increasingly called by agents r
 ```bash
 brew install omniorb          # interop fixture only — never linked or shipped
 cargo test --workspace        # 17 unit tests: CDR alignment, GIOP framing, IOR
-./spikes/run_phase0.sh        # full Phase 0 harness
+./spikes/run_checks.sh        # full Phase 0 harness
 ```
 
 `cargo tree` shows zero external dependencies: the wire implementation is written against the published OMG specification alone. omniORB (LGPL/GPL) is used only as a separate-process wire peer and as an `omniidl` conformance oracle — no linking, no vendoring, no redistribution.

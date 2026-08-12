@@ -1,7 +1,7 @@
 # Phase 0 — Feasibility findings / 타당성 검증 결과
 
 > 2026-08-12 · Run on macOS 26.6 (arm64), Rust 1.95, Python 3.14, omniORB 4.3.4
-> Reproduce with `./spikes/run_phase0.sh`
+> Reproduce with `./spikes/run_checks.sh`
 
 **Verdict: GO.** All four assumptions were measured. Two were confirmed as
 planned, one was confirmed *negative* exactly as risk R1 predicted (the fallback
@@ -309,7 +309,7 @@ omniORB 코드는 import·링크·벤더링·재배포되지 않는다. `crates/
 
 - `orbweaver-cdr` — CDR encode/decode, both endiannesses, alignment, encapsulations. 10 unit tests.
 - `orbweaver-giop` — GIOP 1.2 `Request`/`Reply`, IOR parsing, synchronous invoker. 7 unit tests.
-- `spikes/run_phase0.sh` — the harness, green and reproducible across consecutive runs.
+- `spikes/run_checks.sh` — the harness, green and reproducible across consecutive runs.
 
 **Decisions settled**
 
