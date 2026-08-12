@@ -44,6 +44,17 @@ name = "orbweaver-idl"
 version = "0.0.1"
 
 [[package]]
+name = "orbweaver-mcp"
+version = "0.0.1"
+dependencies = [
+ "orbweaver-cdr",
+ "orbweaver-dynamic",
+ "orbweaver-giop",
+ "orbweaver-idl",
+ "orbweaver-registry",
+]
+
+[[package]]
 name = "orbweaver-object"
 version = "0.0.1"
 dependencies = [

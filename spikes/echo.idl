@@ -9,8 +9,13 @@ module spike {
     octet  e;
   };
   typedef sequence<octet> Payload;
+  //@ ai_desc: Echo service used to exercise CDR alignment and codeset paths
   interface Echo {
+    //@ ai_desc: Answers a fixed number; the cheapest liveness check
+    //@ ai_effect: read_only
     long   ping();
+    //@ ai_desc: Adds two signed 32-bit integers
+    //@ ai_effect: read_only
     long   add(in long a, in long b);
     string echo_string(in string msg);
     double scale(in double v, in double by);

@@ -39,40 +39,43 @@ use orbweaver_giop::typecode::TypeCode;
 use crate::json::Json;
 use crate::{Error, Result, Value};
 
-/// How an object reference crosses the boundary.
+/// Where an object reference is parked while its name crosses the boundary.
 ///
-/// The mapping never emits an IOR, so it needs somewhere to put one and
-/// something to put in its place. §4.7's capability handles land here in Phase
-/// 3.5; until then this records the reference and issues an opaque name for it,
-/// which is the same shape and keeps the JSON side honest in the meantime.
+/// §4.7: an IOR is a bearer address. Anything holding one can dial the target
+/// directly, bypassing authorisation, approval and the audit log, so the
+/// mapping must be *incapable* of emitting one. It emits a name instead, and
+/// this is what turns a name back into an address.
+///
+/// A trait rather than a type, because the real implementation belongs at the
+/// MCP boundary where sessions and expiry live (`orbweaver-mcp`), and this
+/// crate sits below it. What the mapping needs is only these two operations.
+pub trait References {
+    /// Issues a handle naming `ior`, or returns the one it already has.
+    fn issue(&mut self, ior: &orbweaver_giop::Ior) -> String;
+
+    /// The reference a handle names, if this table issued it and it is still
+    /// valid. Returning `None` is the whole point: a handle nobody issued
+    /// cannot be turned into an address by guessing.
+    fn resolve(&self, handle: &str) -> Option<orbweaver_giop::Ior>;
+}
+
+/// A reference table with no session and no expiry, for tests and for the
+/// static path where the caller is already inside the trust boundary.
+///
+/// Not for the agent boundary: the handles are sequential, so one is guessable
+/// from another. `orbweaver_mcp::CapabilityTable` is the one to use there, and
+/// it is a different type precisely so this one cannot be reached for by
+/// accident.
 #[derive(Debug, Default)]
-pub struct Handles {
+pub struct LocalReferences {
     by_handle: BTreeMap<String, orbweaver_giop::Ior>,
     next: u64,
 }
 
-impl Handles {
+impl LocalReferences {
     /// An empty table.
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Issues a handle for a reference, or returns the one it already has.
-    pub fn issue(&mut self, ior: &orbweaver_giop::Ior) -> String {
-        if let Some((h, _)) = self.by_handle.iter().find(|(_, v)| *v == ior) {
-            return h.clone();
-        }
-        self.next += 1;
-        // Opaque and non-guessable in shape, so nothing downstream is tempted
-        // to parse it. A handle is a name, not an address.
-        let handle = format!("obj-{:016x}", self.next.wrapping_mul(0x9E37_79B9_7F4A_7C15));
-        self.by_handle.insert(handle.clone(), ior.clone());
-        handle
-    }
-
-    /// The reference a handle names, if this table issued it.
-    pub fn resolve(&self, handle: &str) -> Option<&orbweaver_giop::Ior> {
-        self.by_handle.get(handle)
     }
 
     /// How many references are outstanding.
@@ -83,6 +86,22 @@ impl Handles {
     /// Whether nothing has been issued.
     pub fn is_empty(&self) -> bool {
         self.by_handle.is_empty()
+    }
+}
+
+impl References for LocalReferences {
+    fn issue(&mut self, ior: &orbweaver_giop::Ior) -> String {
+        if let Some((h, _)) = self.by_handle.iter().find(|(_, v)| *v == ior) {
+            return h.clone();
+        }
+        self.next += 1;
+        let handle = format!("local-{}", self.next);
+        self.by_handle.insert(handle.clone(), ior.clone());
+        handle
+    }
+
+    fn resolve(&self, handle: &str) -> Option<orbweaver_giop::Ior> {
+        self.by_handle.get(handle).cloned()
     }
 }
 
@@ -99,12 +118,12 @@ fn index(path: &str, i: usize) -> String {
 }
 
 /// Converts a CDR value to its AnyJSON form.
-pub fn to_json(tc: &TypeCode, v: &Value, handles: &mut Handles) -> Result<Json> {
+pub fn to_json(tc: &TypeCode, v: &Value, handles: &mut dyn References) -> Result<Json> {
     to_json_at(tc, v, handles, "")
 }
 
 /// Converts an AnyJSON document to the CDR value `tc` describes.
-pub fn from_json(tc: &TypeCode, j: &Json, handles: &Handles) -> Result<Value> {
+pub fn from_json(tc: &TypeCode, j: &Json, handles: &dyn References) -> Result<Value> {
     from_json_at(tc, j, handles, "")
 }
 
@@ -143,7 +162,7 @@ fn special_float(tag: &str) -> Json {
     Json::Object(BTreeMap::from([("_f".to_owned(), Json::String(tag.to_owned()))]))
 }
 
-fn to_json_at(tc: &TypeCode, v: &Value, h: &mut Handles, p: &str) -> Result<Json> {
+fn to_json_at(tc: &TypeCode, v: &Value, h: &mut dyn References, p: &str) -> Result<Json> {
     Ok(match (resolved(tc), v) {
         (TypeCode::Boolean, Value::Bool(x)) => Json::Bool(*x),
         (TypeCode::Octet, Value::Octet(x)) => number(x),
@@ -247,7 +266,7 @@ fn to_json_at(tc: &TypeCode, v: &Value, h: &mut Handles, p: &str) -> Result<Json
     })
 }
 
-fn from_json_at(tc: &TypeCode, j: &Json, h: &Handles, p: &str) -> Result<Value> {
+fn from_json_at(tc: &TypeCode, j: &Json, h: &dyn References, p: &str) -> Result<Value> {
     let t = resolved(tc);
     Ok(match t {
         TypeCode::Boolean => match j {
@@ -394,7 +413,7 @@ fn from_json_at(tc: &TypeCode, j: &Json, h: &Handles, p: &str) -> Result<Value> 
         TypeCode::ObjRef { .. } => match j.get("_ref") {
             Some(Json::Null) => Value::ObjRef(None),
             Some(Json::String(handle)) => match h.resolve(handle) {
-                Some(ior) => Value::ObjRef(Some(ior.clone())),
+                Some(ior) => Value::ObjRef(Some(ior)),
                 // A handle we never issued is the whole point of handles: it
                 // cannot be turned into an address by guessing.
                 None => return fail(p, format!("no reference is held under handle {handle:?}")),
@@ -582,7 +601,7 @@ mod tests {
     /// Comparing `Value`s would miss an encoder that agrees with a decoder and
     /// disagrees with CDR.
     fn bytes_survive(tc: &TypeCode, v: &Value) {
-        let mut h = Handles::new();
+        let mut h = LocalReferences::new();
         let j = to_json(tc, v, &mut h).unwrap_or_else(|e| panic!("to_json: {e}"));
         let text = j.to_string();
         let reparsed = Json::parse(&text).unwrap_or_else(|e| panic!("{text}: {e}"));
@@ -635,7 +654,7 @@ mod tests {
         let v = Value::ULongLong(18_446_744_073_709_551_615);
         bytes_survive(&TypeCode::ULongLong, &v);
 
-        let mut h = Handles::new();
+        let mut h = LocalReferences::new();
         let j = to_json(&TypeCode::ULongLong, &v, &mut h).unwrap();
         assert_eq!(j, Json::String("18446744073709551615".into()));
 
@@ -646,7 +665,7 @@ mod tests {
     /// and refused, with the reason, when something would be.
     #[test]
     fn a_64_bit_integer_sent_as_a_number_is_checked_rather_than_rounded() {
-        let h = Handles::new();
+        let h = LocalReferences::new();
         let small = Json::parse("42").unwrap();
         assert_eq!(from_json(&TypeCode::LongLong, &small, &h).unwrap(), Value::LongLong(42));
 
@@ -665,7 +684,7 @@ mod tests {
         let v = Value::List((0u16..=255).map(|b| Value::Octet(b as u8)).collect());
         bytes_survive(&tc, &v);
 
-        let mut h = Handles::new();
+        let mut h = LocalReferences::new();
         let j = to_json(&tc, &Value::List(vec![Value::Octet(0xFF), Value::Octet(0x00)]), &mut h)
             .unwrap();
         assert_eq!(j, Json::String("/wA=".into()));
@@ -691,7 +710,7 @@ mod tests {
 
     #[test]
     fn nan_and_the_infinities_survive() {
-        let mut h = Handles::new();
+        let mut h = LocalReferences::new();
         for (x, tag) in [(f64::NAN, "nan"), (f64::INFINITY, "+inf"), (f64::NEG_INFINITY, "-inf")] {
             let j = to_json(&TypeCode::Double, &Value::Double(x), &mut h).unwrap();
             assert_eq!(j.get("_f").and_then(Json::as_str), Some(tag));
@@ -723,20 +742,20 @@ mod tests {
         // JSON objects are unordered, so the members must come back in the
         // order the TypeCode gives, not the order the document listed them.
         let j = Json::parse(r#"{"py":22,"px":11}"#).unwrap();
-        assert_eq!(from_json(&point(), &j, &Handles::new()).unwrap(), v);
+        assert_eq!(from_json(&point(), &j, &LocalReferences::new()).unwrap(), v);
     }
 
     #[test]
     fn an_unknown_member_is_refused_rather_than_ignored() {
         let j = Json::parse(r#"{"px":1,"py":2,"pz":3}"#).unwrap();
-        let err = from_json(&point(), &j, &Handles::new()).unwrap_err();
+        let err = from_json(&point(), &j, &LocalReferences::new()).unwrap_err();
         assert!(err.message.contains("pz"), "{err}");
     }
 
     #[test]
     fn a_missing_member_names_itself() {
         let j = Json::parse(r#"{"px":1}"#).unwrap();
-        let err = from_json(&point(), &j, &Handles::new()).unwrap_err();
+        let err = from_json(&point(), &j, &LocalReferences::new()).unwrap_err();
         assert!(err.message.contains("\"py\""), "{err}");
     }
 
@@ -744,7 +763,7 @@ mod tests {
     fn a_nested_diagnostic_names_the_path() {
         let tc = TypeCode::Sequence { element: Box::new(point()), bound: 0 };
         let j = Json::parse(r#"[{"px":1,"py":2},{"px":1,"py":"two"}]"#).unwrap();
-        let err = from_json(&tc, &j, &Handles::new()).unwrap_err();
+        let err = from_json(&tc, &j, &LocalReferences::new()).unwrap_err();
         assert_eq!(err.path, "[1].py", "{err}");
     }
 
@@ -757,7 +776,7 @@ mod tests {
         };
         bytes_survive(&tc, &Value::Enum("GREEN".into()));
 
-        let err = from_json(&tc, &Json::parse("1").unwrap(), &Handles::new()).unwrap_err();
+        let err = from_json(&tc, &Json::parse("1").unwrap(), &LocalReferences::new()).unwrap_err();
         assert!(err.message.contains("named, not numbered"), "{err}");
     }
 
@@ -790,7 +809,7 @@ mod tests {
         };
         bytes_survive(&union_tc(), &v);
 
-        let mut h = Handles::new();
+        let mut h = LocalReferences::new();
         let j = to_json(&union_tc(), &v, &mut h).unwrap();
         assert_eq!(j.get("_d"), Some(&Json::Number("2".into())));
         assert_eq!(j.get("_v"), Some(&Json::String("chosen".into())));
@@ -807,7 +826,7 @@ mod tests {
         let v = Value::Any(Box::new(TypeCode::Double), Box::new(Value::Double(2.5)));
         bytes_survive(&tc, &v);
 
-        let mut h = Handles::new();
+        let mut h = LocalReferences::new();
         let j = to_json(&tc, &v, &mut h).unwrap();
         assert_eq!(j.get("_t").and_then(Json::as_str), Some("double"));
     }
@@ -829,7 +848,7 @@ mod tests {
         };
         let tc = TypeCode::ObjRef { id: "IDL:m/I:1.0".into(), name: "I".into() };
 
-        let mut h = Handles::new();
+        let mut h = LocalReferences::new();
         let j = to_json(&tc, &Value::ObjRef(Some(ior.clone())), &mut h).unwrap();
         let text = j.to_string();
         assert!(!text.contains("10.0.0.7"), "the host leaked into JSON: {text}");
@@ -841,7 +860,7 @@ mod tests {
 
         // A handle nobody issued cannot be turned into an address by guessing.
         let forged = Json::parse(r#"{"_ref":"obj-0000000000000001"}"#).unwrap();
-        assert!(from_json(&tc, &forged, &Handles::new()).is_err());
+        assert!(from_json(&tc, &forged, &LocalReferences::new()).is_err());
     }
 
     #[test]
@@ -849,7 +868,7 @@ mod tests {
         let tc = TypeCode::ObjRef { id: "IDL:m/I:1.0".into(), name: "I".into() };
         bytes_survive(&tc, &Value::ObjRef(None));
 
-        let mut h = Handles::new();
+        let mut h = LocalReferences::new();
         let j = to_json(&tc, &Value::ObjRef(None), &mut h).unwrap();
         assert_eq!(j, Json::parse(r#"{"_ref":null}"#).unwrap());
         assert!(from_json(&tc, &Json::parse("{}").unwrap(), &h).is_err(), "absent is not nil");

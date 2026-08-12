@@ -5,6 +5,7 @@ members = [
     "crates/orbweaver-dynamic",
     "crates/orbweaver-giop",
     "crates/orbweaver-idl",
+    "crates/orbweaver-mcp",
     "crates/orbweaver-object",
     "crates/orbweaver-registry",
 ]

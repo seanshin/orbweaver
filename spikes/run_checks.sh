@@ -589,6 +589,34 @@ else
 fi
 [ "$dyn_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
+# ── The MCP boundary ─────────────────────────────────────────────────────────
+hr "MCP bridge — an agent session with no address in it"
+# §4.7: an IOR is a bearer address, so an agent holding one is past the guard,
+# past destructive approval and past the audit log. The check is not that the
+# calls work — it is that the transcript the agent saw contains no host, port,
+# object key or stringified IOR. A leak is a failure even when every call
+# succeeded, because that is the shape it would ship in.
+mcp_fail=0
+if start_server; then
+  mv=$(cargo run -q --bin spike-mcp -- spikes/echo.ior spikes/echo.idl \
+       IDL:spike/Echo:1.0 2>&1)
+  if printf '%s' "$mv" | grep -q "MCP bridge: PASS"; then
+    echo "  ok   default-deny: an un-allowlisted catalog is invisible"
+    echo "  ok   search -> describe -> invoke, entirely in JSON, nothing generated"
+    echo "  ok   a returned object reference crosses as a handle and can be passed back"
+    echo "  ok   destructive operations need approval; other sessions' handles are worthless"
+    printf '%s' "$mv" | grep "JSON message(s) contain no host" | sed 's/^  ok /  ok  /'
+  else
+    echo "  FAIL the MCP boundary did not hold"
+    printf '%s' "$mv" | grep "FAIL" | head -4 | sed 's/^/       /'
+    mcp_fail=1
+  fi
+else
+  mcp_fail=1
+fi
+cleanup
+[ "$mcp_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
 # ── Contract evolution: is the §5.3 rule table true? ─────────────────────────
 hr "contract evolution — §5.3 verdicts against a peer that predates the change"
 # The differ's verdicts are predictions about deployed peers. Asserting them
