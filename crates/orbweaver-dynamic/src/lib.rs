@@ -30,7 +30,9 @@
 
 #![deny(missing_docs)]
 
+pub mod anyjson;
 pub mod invoke;
+pub mod json;
 
 use std::fmt;
 
@@ -488,6 +490,22 @@ fn check_bound(p: &Path<'_>, bound: u32, len: usize, what: &str) -> Result<()> {
 }
 
 /// Finds the branch a discriminator selects, or the default.
+/// Which branch a discriminator selects, for callers outside this module.
+///
+/// Exposed rather than reimplemented: the default-branch rule is subtle enough
+/// that two copies would eventually disagree, and a union that JSON and CDR
+/// disagree about is silent corruption of exactly the §5.3 kind.
+pub(crate) fn select_case_public<'c>(
+    disc_tc: &TypeCode,
+    cases: &'c [UnionCase],
+    default_index: i32,
+    d: &Value,
+    path: &str,
+) -> Result<Option<&'c UnionCase>> {
+    let root = Path::root();
+    select_case(disc_tc, cases, default_index, d, &root, path, default_codec())
+}
+
 fn select_case<'c>(
     disc_tc: &TypeCode,
     cases: &'c [UnionCase],
