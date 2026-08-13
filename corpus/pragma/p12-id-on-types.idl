@@ -1,0 +1,10 @@
+// `#pragma ID` on data types, including one a sequence typedef refers to.
+module p12 {
+    struct Payload {
+        long size;
+    };
+#pragma ID Payload "IDL:vendor.example/Payload:2.0"
+
+    typedef sequence<Payload> Batch;
+#pragma ID Batch "IDL:vendor.example/Batch:2.0"
+};

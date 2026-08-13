@@ -1,0 +1,11 @@
+// A nested module under a file-scope prefix: the prefix is inherited by the
+// inner scope rather than applying only to the outermost one.
+#pragma prefix "acme.com"
+
+module p03 {
+    module inner {
+        interface Probe {
+            void ping();
+        };
+    };
+};

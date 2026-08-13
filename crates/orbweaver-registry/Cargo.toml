@@ -34,3 +34,7 @@ path = "src/bin/spike_ifr.rs"
 [[bin]]
 name = "spike-ingest"
 path = "src/bin/spike_ingest.rs"
+
+[[bin]]
+name = "repository-ids"
+path = "src/bin/repository_ids.rs"

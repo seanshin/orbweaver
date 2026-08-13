@@ -1,0 +1,14 @@
+// An exception under a prefix, named by a raises clause. The id in the
+// raises edge and the id of the exception itself have to be the same string
+// or a caught exception is unmatchable.
+#pragma prefix "acme.com"
+
+module p16 {
+    exception Refused {
+        long code;
+    };
+
+    interface Doer {
+        void go() raises (Refused);
+    };
+};

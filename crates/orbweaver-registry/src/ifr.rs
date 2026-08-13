@@ -662,10 +662,49 @@ impl RepositoryServer {
         chain
     }
 
+    /// The `Contained` triple — name, container, version — for a registered id.
+    ///
+    /// [`split_repository_id`] alone is wrong once `#pragma prefix` is in
+    /// play: it reads every leading path segment as an enclosing module, so
+    /// `IDL:acme.com/Toplevel:1.0` comes back contained in a module
+    /// `IDL:acme.com:1.0` that does not exist. The registry recorded the
+    /// qualified name when it loaded the IDL, and the count of its segments is
+    /// exactly what says how much of the path is prefix.
+    ///
+    /// Entries with no recorded name — anything ingested from a peer — fall
+    /// back to the split, which is all the information there is for those.
+    fn contained_of(&self, id: &str) -> (String, RepositoryId, String) {
+        let split = split_repository_id(id);
+        let Some(qual) = self.registry.qualified_name(id) else { return split };
+        let (_, _, version) = split;
+        let Some(path) =
+            id.strip_prefix("IDL:").and_then(|rest| rest.rsplit_once(':').map(|(p, _)| p))
+        else {
+            return split_repository_id(id);
+        };
+        let name = qual.rsplit("::").next().unwrap_or(qual).to_owned();
+        let segments: Vec<&str> = path.split('/').collect();
+        let defined_in = if qual.split("::").count() < 2 || segments.len() < 2 {
+            // Top level: the container is the repository, which has no id.
+            String::new()
+        } else {
+            format!("IDL:{}:{version}", segments[..segments.len() - 1].join("/"))
+        };
+        (name, defined_in, version)
+    }
+
+    /// `::bank::Account` — the scoped name, with no prefix in it.
+    fn absolute_name_of(&self, id: &str) -> String {
+        match self.registry.qualified_name(id) {
+            Some(qual) => format!("::{qual}"),
+            None => absolute_name(id),
+        }
+    }
+
     /// Builds an `ExceptionDescription` from a repository id, taking the
     /// TypeCode from the registry when the exception is registered.
     fn exception_description(&self, id: &str) -> ExceptionDescription {
-        let (name, defined_in, version) = split_repository_id(id);
+        let (name, defined_in, version) = self.contained_of(id);
         // An unregistered raises-clause means the IDL referenced an exception
         // we never saw a definition for. Reporting an empty tk_except is
         // honest — the members are genuinely unknown here — and keeps the
@@ -688,7 +727,7 @@ impl RepositoryServer {
         if self.registry.interface(id).is_none() {
             return Err(SystemException::bad_operation());
         }
-        let (name, defined_in, version) = split_repository_id(id);
+        let (name, defined_in, version) = self.contained_of(id);
         let chain = self.declaring_chain(id);
 
         let mut operations = Vec::new();
@@ -807,8 +846,8 @@ impl RepositoryServer {
             }
             (Target::Entry(id), "_get_def_kind") => out.put_u32(self.def_kind(id) as u32),
             (Target::Entry(id), "_get_id") => out.put_str(id),
-            (Target::Entry(id), "_get_name") => out.put_str(&split_repository_id(id).0),
-            (Target::Entry(id), "_get_absolute_name") => out.put_str(&absolute_name(id)),
+            (Target::Entry(id), "_get_name") => out.put_str(&self.contained_of(id).0),
+            (Target::Entry(id), "_get_absolute_name") => out.put_str(&self.absolute_name_of(id)),
             (Target::Entry(id), "describe_interface") => {
                 self.describe_interface(id)?
                     .write_to(out)
@@ -1112,6 +1151,59 @@ mod tests {
         );
         assert_eq!(absolute_name("IDL:a/b/C:1.0"), "::a::b::C");
         assert_eq!(absolute_name("nonsense"), "::nonsense", "never mangled silently");
+    }
+
+    /// Under `#pragma prefix` the id alone stops being enough: splitting it
+    /// reads the prefix as an enclosing module. The facade asks the registry
+    /// for the name it recorded when it loaded the IDL instead.
+    ///
+    /// The top-level case is the sharp one — `IDL:acme.com/Solo:1.0` split
+    /// naively is "Solo, contained in module `IDL:acme.com:1.0`", and that
+    /// module does not exist anywhere.
+    #[test]
+    fn a_prefix_is_identity_and_never_a_containing_module() {
+        let registry = registry_from_idl(
+            "#pragma prefix \"acme.com\"\n\
+             interface Solo { void a(); };\n\
+             module bank { interface Account { long balance(); }; };",
+        )
+        .expect("prefixed IDL loads");
+        let ifr = RepositoryServer::new("127.0.0.1", 1, ROOT.to_vec(), registry);
+
+        let nested = "IDL:acme.com/bank/Account:1.0";
+        assert_eq!(
+            ifr.contained_of(nested),
+            ("Account".into(), "IDL:acme.com/bank:1.0".into(), "1.0".into()),
+            "the container is module bank, whose own id also carries the prefix"
+        );
+        assert_eq!(ifr.absolute_name_of(nested), "::bank::Account", "no prefix in the name");
+
+        let solo = "IDL:acme.com/Solo:1.0";
+        assert_eq!(
+            ifr.contained_of(solo),
+            ("Solo".into(), String::new(), "1.0".into()),
+            "top level: the container is the repository, which has no id"
+        );
+        assert_eq!(ifr.absolute_name_of(solo), "::Solo");
+
+        // Unchanged for everything without a prefix, which is every fixture
+        // this project already publishes.
+        assert_eq!(
+            facade(1).contained_of("IDL:gc10/Both:1.0"),
+            split_repository_id("IDL:gc10/Both:1.0")
+        );
+    }
+
+    /// An id we only know from a peer has no recorded name, so the split is
+    /// all there is — and saying so beats inventing one.
+    #[test]
+    fn an_unrecorded_id_falls_back_to_splitting() {
+        let ifr = facade(1);
+        assert_eq!(ifr.absolute_name_of("IDL:elsewhere/Thing:1.0"), "::elsewhere::Thing");
+        assert_eq!(
+            ifr.contained_of("IDL:elsewhere/Thing:1.0"),
+            split_repository_id("IDL:elsewhere/Thing:1.0")
+        );
     }
 
     // ── refusal shapes, over the wire ───────────────────────────────────────

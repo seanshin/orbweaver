@@ -1,0 +1,18 @@
+// A base declared under one prefix, a derived interface under another. The
+// inheritance edge must carry the base's own id: an `_is_a` walk built from
+// re-derived ids would agree with itself and with no peer.
+#pragma prefix "base.example"
+
+module p10base {
+    interface Root {
+        void a();
+    };
+};
+
+#pragma prefix "derived.example"
+
+module p10derived {
+    interface Leaf : ::p10base::Root {
+        void b();
+    };
+};

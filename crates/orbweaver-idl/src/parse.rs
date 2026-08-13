@@ -8,9 +8,69 @@
 //! Diagnostics are a product surface (`docs/PLAN.md` §3.3): every error says
 //! what to do, not only what is wrong, because the self-repair loop is only as
 //! good as the messages it feeds on.
+//!
+//! # Repository ids and `#pragma`
+//!
+//! The parser is where `#pragma prefix`, `#pragma version` and `#pragma ID`
+//! are resolved, because all three are *positional*: a prefix is in effect
+//! from where it is written to the end of the enclosing scope, and `version`
+//! and `ID` name something already declared. Source order is the parser's, so
+//! the resolution lives here and the result is a map of overrides on
+//! [`Spec::repository_ids`]; the registry formats nothing it is not given.
+//!
+//! The rules implemented, each measured against `omniidl` by the cases in
+//! `corpus/pragma/` (see `corpus/pragma/expected.tsv`):
+//!
+//! * `#pragma prefix "P"` applies to every declaration after it in the
+//!   enclosing scope, and to nested scopes, until the scope closes or another
+//!   `prefix` pragma replaces it. It does **not** escape a closing brace, and
+//!   it does not retroactively change the enclosing scope's own id.
+//! * **A prefix replaces the scope path so far; it is not prepended to it.**
+//!   At file scope the two readings agree — `#pragma prefix "acme.com"` above
+//!   `module bank` gives `IDL:acme.com/bank/Account:1.0` either way — and
+//!   inside a module they do not: a prefix written in the body of `module p02`
+//!   gives `IDL:acme.com/Ledger:1.0`, with `p02` **gone from the id**.
+//!   Measured, not reasoned: `corpus/pragma/p02-prefix-inside-module.idl` and
+//!   `p05-prefix-does-not-escape.idl`, and recorded in
+//!   `corpus/divergences.tsv` because the specification's wording reads the
+//!   other way. Interop is with deployed compilers, not with a document.
+//! * `#pragma prefix ""` resets to no prefix — the scope path becomes empty
+//!   rather than gaining a leading `/`.
+//! * `#pragma version <name> M.m` replaces the `:1.0` of that item's id.
+//! * `#pragma ID <name> "…"` replaces the whole id and wins over both the
+//!   prefix and any `version`, whichever order they are written in.
+//!
+//! ## What is not implemented
+//!
+//! Stated here rather than discovered later, because a partially-understood
+//! identity rule silently produces wrong ids:
+//!
+//! * **`#pragma prefix` is only honoured at file, module and interface
+//!   scope.** A pragma written between struct members, union cases, enum
+//!   members or operation parameters is parsed and then dropped — those
+//!   positions declare nothing that has a repository id of its own.
+//! * **No other `#pragma` form has any effect.** `#pragma sendtop`,
+//!   `#pragma inhibit_code_generation`, omniORB's `#pragma hh`/`#pragma
+//!   validate_disconnect`, and the IDL-4 `typeid`/`typeprefix` *keywords* are
+//!   all ignored. `typeid`/`typeprefix` are reserved words to the lexer, so a
+//!   file using them fails at the grammar rather than being silently
+//!   mis-identified.
+//! * **The pragma names are matched case-sensitively** (`prefix`, `version`,
+//!   `ID`) — see [`crate::lex`] for why leniency here is the dangerous
+//!   direction.
+//! * **`#pragma version` and `#pragma ID` resolve their name lexically from
+//!   the current scope outwards**, over what has already been declared. A
+//!   forward reference to something declared later in the file is not
+//!   resolved and is reported as an error rather than guessed at.
+//! * **An id given by `#pragma ID` is not validated.** It is put on the wire
+//!   as written, including a non-`IDL:` format such as `RMI:` or `DCE:`; the
+//!   registry's own ingestion validator is the thing that has an opinion
+//!   about id syntax, and it only guards ids that arrive from a peer.
+
+use std::collections::{BTreeMap, HashMap};
 
 use crate::ast::*;
-use crate::lex::{Annotation, LexError, Lexer, Span, Tok, Token};
+use crate::lex::{Annotation, LexError, Lexer, Pragma, Span, Tok, Token};
 
 /// A parse failure, positioned and phrased as something to fix.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,12 +108,58 @@ pub type Result<T> = std::result::Result<T, ParseError>;
 /// Parses a whole IDL source file.
 pub fn parse(src: &str) -> Result<Spec> {
     let tokens = Lexer::new(src).tokenize()?;
-    Parser { toks: tokens, i: 0 }.spec()
+    Parser {
+        toks: tokens,
+        i: 0,
+        scope: Vec::new(),
+        scope_ids: vec![String::new()],
+        ids: BTreeMap::new(),
+        declared: HashMap::new(),
+        declared_scope: HashMap::new(),
+        versions: HashMap::new(),
+        explicit: HashMap::new(),
+    }
+    .spec()
 }
 
 struct Parser {
     toks: Vec<Token>,
     i: usize,
+    /// The enclosing module/interface names, outermost first.
+    scope: Vec<String>,
+    /// The id path every declaration in the current scope hangs off, one entry
+    /// per open scope; `""` at file scope with no prefix.
+    ///
+    /// Not "the prefix": `#pragma prefix` **replaces** this string rather than
+    /// being prepended to it, which is what makes `p02::Ledger` come out as
+    /// `IDL:acme.com/Ledger:1.0` with the enclosing module gone. Pushing a
+    /// derived copy on entry and popping on exit is what stops a prefix
+    /// escaping a closing brace.
+    scope_ids: Vec<String>,
+    /// Repository ids that differ from the plain derivation, by qualified name.
+    ids: BTreeMap<String, String>,
+    /// Every qualified name declared so far, keyed by its lowercase form —
+    /// what `#pragma version`/`#pragma ID` resolve their argument against.
+    /// Lowercase because IDL resolves identifiers ignoring case.
+    declared: HashMap<String, Vec<String>>,
+    /// The scope id path each name was declared under, by qualified name.
+    ///
+    /// Kept because `#pragma version` arrives *after* the declaration and has
+    /// to rebuild the id from the scope that applied at the declaration, not
+    /// the one in effect at the pragma.
+    declared_scope: HashMap<String, String>,
+    /// Versions set by `#pragma version`, by qualified name.
+    versions: HashMap<String, (u32, u32)>,
+    /// Names whose id was given outright by `#pragma ID`. Nothing recomputes
+    /// those: an explicit id overrides derivation entirely, so neither a
+    /// prefix, a later `version`, nor a body following a forward declaration
+    /// may quietly rebuild it.
+    explicit: HashMap<String, ()>,
+}
+
+/// The repository id a path has with no pragma in play.
+fn derived_id(path: &[String]) -> String {
+    format!("IDL:{}:1.0", path.join("/"))
 }
 
 impl Parser {
@@ -142,20 +248,129 @@ impl Parser {
         self.peek().annotations.clone()
     }
 
+    // ── repository ids ──────────────────────────────────────────────────────
+
+    /// Consumes the identity pragmas written just before the current token.
+    ///
+    /// Called at the top of every definition-list loop, *before* the test for
+    /// the closing brace, so the pragmas attached to a scope's `}` are seen
+    /// too — that is where a `#pragma ID` naming the last item in a module
+    /// lives.
+    ///
+    /// The pragmas are taken out of the token, not copied, so a loop that
+    /// peeks repeatedly applies each one exactly once.
+    fn apply_pragmas(&mut self) -> Result<()> {
+        let i = self.i.min(self.toks.len() - 1);
+        let pragmas = std::mem::take(&mut self.toks[i].pragmas);
+        for at in pragmas {
+            match at.pragma {
+                Pragma::Prefix(p) => {
+                    if let Some(current) = self.scope_ids.last_mut() {
+                        *current = p.unwrap_or_default();
+                    }
+                }
+                Pragma::Id { name, id } => {
+                    let path = self.resolve_declared(&name, at.span, "ID")?;
+                    let qual = path.join("::");
+                    self.explicit.insert(qual.clone(), ());
+                    self.ids.insert(qual, id);
+                }
+                Pragma::Version { name, major, minor } => {
+                    let path = self.resolve_declared(&name, at.span, "version")?;
+                    let qual = path.join("::");
+                    self.versions.insert(qual.clone(), (major, minor));
+                    self.set_id(&qual, &path);
+                }
+                Pragma::Other(_) => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Finds what a `#pragma version`/`#pragma ID` argument names, searching
+    /// from the current scope outwards the way IDL resolves any other name.
+    fn resolve_declared(&self, name: &str, span: Span, what: &str) -> Result<Vec<String>> {
+        let absolute = name.starts_with("::");
+        let tail = name.trim_start_matches("::").to_lowercase();
+        let miss = || ParseError {
+            message: format!(
+                "#pragma {what} names {name:?}, which is not declared in this scope; \
+                 a pragma must come after the declaration it names"
+            ),
+            span,
+            rule: "pragma-unknown-name",
+        };
+        if absolute {
+            return self.declared.get(&tail).cloned().ok_or_else(miss);
+        }
+        for cut in (0..=self.scope.len()).rev() {
+            let mut key = self.scope[..cut].join("::").to_lowercase();
+            if !key.is_empty() {
+                key.push_str("::");
+            }
+            key.push_str(&tail);
+            if let Some(p) = self.declared.get(&key) {
+                return Ok(p.clone());
+            }
+        }
+        Err(miss())
+    }
+
+    /// Records a declaration at the current scope and derives its id.
+    fn declare(&mut self, name: &str) {
+        let mut path = self.scope.clone();
+        path.push(name.to_owned());
+        let qual = path.join("::");
+        self.declared.insert(qual.to_lowercase(), path.clone());
+        // A body following a forward declaration re-declares the same name;
+        // the scope in effect is the same either way, and an explicit id is
+        // left alone by `set_id`.
+        let scope_id = self.scope_ids.last().cloned().unwrap_or_default();
+        self.declared_scope.insert(qual.clone(), scope_id);
+        self.set_id(&qual, &path);
+    }
+
+    /// Rebuilds `qual`'s id from its scope and version, or leaves an explicit
+    /// one alone. Only a *difference* from the plain derivation is recorded.
+    fn set_id(&mut self, qual: &str, path: &[String]) {
+        if self.explicit.contains_key(qual) {
+            return;
+        }
+        let name = path.last().cloned().unwrap_or_default();
+        let body = match self.declared_scope.get(qual).map(String::as_str).unwrap_or_default() {
+            "" => name,
+            scope => format!("{scope}/{name}"),
+        };
+        let (major, minor) = self.versions.get(qual).copied().unwrap_or((1, 0));
+        let id = format!("IDL:{body}:{major}.{minor}");
+        if id == derived_id(path) {
+            self.ids.remove(qual);
+        } else {
+            self.ids.insert(qual.to_owned(), id);
+        }
+    }
+
     // ── top level ───────────────────────────────────────────────────────────
 
     fn spec(&mut self) -> Result<Spec> {
         let mut definitions = Vec::new();
-        while !matches!(self.peek_tok(), Tok::Eof) {
+        loop {
+            self.apply_pragmas()?;
+            if matches!(self.peek_tok(), Tok::Eof) {
+                break;
+            }
             definitions.push(self.definition()?);
         }
-        Ok(Spec { definitions })
+        Ok(Spec { definitions, repository_ids: std::mem::take(&mut self.ids) })
     }
 
     fn definition(&mut self) -> Result<Definition> {
         let ann = self.take_annotations();
         let d = self.definition_inner(ann)?;
         self.expect_punct(";")?;
+        // After the body, so the scope stack is back where it was: a prefix
+        // set *inside* a module does not change that module's own id.
+        self.declare(&d.name().text);
         Ok(d)
     }
 
@@ -209,15 +424,37 @@ impl Parser {
         self.next(); // module
         let name = self.expect_ident()?;
         self.expect_punct("{")?;
+        self.enter(&name.text);
         let mut definitions = Vec::new();
-        while !self.at_punct("}") {
+        loop {
+            self.apply_pragmas()?;
+            if self.at_punct("}") {
+                break;
+            }
             if matches!(self.peek_tok(), Tok::Eof) {
                 return self.err(format!("module {:?} is missing its closing '}}'", name.text));
             }
             definitions.push(self.definition()?);
         }
+        self.leave();
         self.expect_punct("}")?;
         Ok(Module { name, definitions, annotations })
+    }
+
+    /// Opens a scope: the name joins both the qualified path and the id path,
+    /// the latter by value so a `#pragma prefix` inside cannot leak back out.
+    fn enter(&mut self, name: &str) {
+        let child = match self.scope_ids.last().map(String::as_str).unwrap_or_default() {
+            "" => name.to_owned(),
+            parent => format!("{parent}/{name}"),
+        };
+        self.scope.push(name.to_owned());
+        self.scope_ids.push(child);
+    }
+
+    fn leave(&mut self) {
+        self.scope.pop();
+        self.scope_ids.pop();
     }
 
     fn interface(&mut self, annotations: Vec<Annotation>) -> Result<Interface> {
@@ -248,13 +485,19 @@ impl Parser {
             }
         }
         self.expect_punct("{")?;
+        self.enter(&name.text);
         let mut body = Vec::new();
-        while !self.at_punct("}") {
+        loop {
+            self.apply_pragmas()?;
+            if self.at_punct("}") {
+                break;
+            }
             if matches!(self.peek_tok(), Tok::Eof) {
                 return self.err(format!("interface {:?} is missing its closing '}}'", name.text));
             }
             body.push(self.interface_member()?);
         }
+        self.leave();
         self.expect_punct("}")?;
         Ok(Interface { name, bases, body: Some(body), modifier, annotations })
     }
@@ -270,6 +513,7 @@ impl Parser {
             if self.at_kw(kw) {
                 let d = self.definition_inner(ann)?;
                 self.expect_punct(";")?;
+                self.declare(&d.name().text);
                 return Ok(InterfaceMember::Nested(d));
             }
         }
@@ -504,8 +748,13 @@ impl Parser {
             }
         }
         self.expect_punct("{")?;
+        self.enter(&name.text);
         let mut members = Vec::new();
-        while !self.at_punct("}") {
+        loop {
+            self.apply_pragmas()?;
+            if self.at_punct("}") {
+                break;
+            }
             if matches!(self.peek_tok(), Tok::Eof) {
                 return self.err(format!("valuetype {:?} is missing its closing '}}'", name.text));
             }
@@ -519,6 +768,7 @@ impl Parser {
                 members.push(ValueMember::Other(Box::new(self.interface_member()?)));
             }
         }
+        self.leave();
         self.expect_punct("}")?;
         Ok(ValueTypeDef { name, base, supports, members: Some(members), is_abstract, annotations })
     }
@@ -625,8 +875,13 @@ impl Parser {
         if self.at_punct(">>") {
             // Rewrite the token in place so the outer nesting sees its own '>'.
             let span = self.peek().span;
-            self.toks[self.i] =
-                Token { tok: Tok::Punct(">"), span, annotations: Vec::new(), escaped: false };
+            self.toks[self.i] = Token {
+                tok: Tok::Punct(">"),
+                span,
+                annotations: Vec::new(),
+                pragmas: Vec::new(),
+                escaped: false,
+            };
             return Ok(());
         }
         self.err(format!("expected '>', found {}", self.peek_tok()))
@@ -718,5 +973,161 @@ impl Parser {
                 rule: "parse",
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The override map, which is empty unless an identity pragma moved
+    /// something.
+    fn ids(src: &str) -> BTreeMap<String, String> {
+        parse(src).expect("parses").repository_ids
+    }
+
+    fn id(src: &str, qualified: &str) -> String {
+        ids(src).get(qualified).cloned().unwrap_or_else(|| panic!("{qualified} was not overridden"))
+    }
+
+    /// The measured defect this batch closed: without the pragma we said
+    /// `IDL:bank/Account:1.0` and omniidl said `IDL:acme.com/bank/Account:1.0`,
+    /// so against any deployment with a prefix we disagreed about the identity
+    /// of every type while looking correct locally.
+    #[test]
+    fn a_file_scope_prefix_leads_the_id() {
+        assert_eq!(
+            id(
+                "#pragma prefix \"acme.com\"\n\
+                 module bank { interface Account { long balance(); }; };",
+                "bank::Account"
+            ),
+            "IDL:acme.com/bank/Account:1.0"
+        );
+    }
+
+    /// A prefix inside a module **replaces** the scope path rather than
+    /// leading it — the enclosing module is gone from the id. omniidl's answer
+    /// (`corpus/pragma/p02`), against the specification's wording; the reason
+    /// we follow it is in `corpus/divergences.tsv`.
+    #[test]
+    fn a_prefix_inside_a_module_replaces_the_scope_path() {
+        assert_eq!(
+            id(
+                "module m {\n    #pragma prefix \"acme.com\"\n    interface I { void a(); };\n};",
+                "m::I"
+            ),
+            "IDL:acme.com/I:1.0"
+        );
+    }
+
+    /// The rule an implementation gets wrong by keeping one variable instead
+    /// of a stack. Invisible in a one-module file.
+    #[test]
+    fn a_prefix_does_not_escape_its_scope() {
+        let out = ids("module a {\n#pragma prefix \"in.example\"\ninterface I { void f(); }; };\n\
+             module b { interface J { void g(); }; };");
+        assert_eq!(out.get("a::I").unwrap(), "IDL:in.example/I:1.0");
+        assert_eq!(out.get("b::J"), None, "b is untouched, so it has no override at all");
+    }
+
+    #[test]
+    fn nested_scopes_inherit_the_prefix() {
+        assert_eq!(
+            id(
+                "#pragma prefix \"acme.com\"\n\
+                 module a { module b { interface I { void f(); }; }; };",
+                "a::b::I"
+            ),
+            "IDL:acme.com/a/b/I:1.0"
+        );
+    }
+
+    #[test]
+    fn a_second_prefix_replaces_the_first_and_an_empty_one_resets() {
+        let out = ids("#pragma prefix \"one.example\"\nmodule a { interface I { void f(); }; };\n\
+             #pragma prefix \"two.example\"\nmodule b { interface J { void g(); }; };\n\
+             #pragma prefix \"\"\nmodule c { interface K { void h(); }; };");
+        assert_eq!(out.get("a::I").unwrap(), "IDL:one.example/a/I:1.0");
+        assert_eq!(out.get("b::J").unwrap(), "IDL:two.example/b/J:1.0");
+        assert_eq!(out.get("c::K"), None, "reset to none, not to an empty leading segment");
+    }
+
+    #[test]
+    fn version_sets_the_version_part_and_prefix_sets_the_rest() {
+        assert_eq!(
+            id("module m { interface I { void f(); };\n#pragma version I 2.3\n};", "m::I"),
+            "IDL:m/I:2.3"
+        );
+        assert_eq!(
+            id(
+                "#pragma prefix \"acme.com\"\n\
+                 module m { interface I { void f(); };\n#pragma version I 5.4\n};",
+                "m::I"
+            ),
+            "IDL:acme.com/m/I:5.4"
+        );
+    }
+
+    /// An explicit id overrides derivation entirely — and in either order, so
+    /// a `version` pragma cannot reach inside one and edit it.
+    #[test]
+    fn an_explicit_id_wins_over_prefix_and_version() {
+        assert_eq!(
+            id(
+                "#pragma prefix \"acme.com\"\n\
+                 module m { interface I { void f(); };\n\
+                 #pragma ID I \"IDL:other/Thing:7.2\"\n#pragma version I 9.9\n};",
+                "m::I"
+            ),
+            "IDL:other/Thing:7.2"
+        );
+    }
+
+    /// A body following a forward declaration must not quietly rebuild an id
+    /// the author pinned between the two.
+    #[test]
+    fn a_body_after_a_forward_declaration_does_not_undo_a_pinned_id() {
+        assert_eq!(
+            id(
+                "module m { interface I;\n#pragma ID I \"IDL:pinned/I:1.0\"\n\
+                 interface I { void f(); }; };",
+                "m::I"
+            ),
+            "IDL:pinned/I:1.0"
+        );
+    }
+
+    /// A pragma at the very end of a scope still applies: it rides on the
+    /// closing brace, which is the token the definition loop stops at.
+    #[test]
+    fn a_pragma_before_a_closing_brace_is_seen() {
+        assert_eq!(
+            id(
+                "module m { interface I { void f(); };\n#pragma ID I \"IDL:late/I:1.0\"\n};",
+                "m::I"
+            ),
+            "IDL:late/I:1.0"
+        );
+    }
+
+    /// Naming something that does not exist is an error with a fix in it, not
+    /// a silently derived id. A pragma must follow its declaration.
+    #[test]
+    fn a_pragma_naming_nothing_is_reported() {
+        let e = parse("module m { interface I { void f(); };\n#pragma ID Nope \"IDL:x:1.0\"\n};")
+            .unwrap_err();
+        assert_eq!(e.rule, "pragma-unknown-name");
+        assert!(e.message.contains("after the declaration"), "{}", e.message);
+    }
+
+    /// The invariant the whole change rests on: a file with no identity pragma
+    /// records nothing, so nothing downstream can move.
+    #[test]
+    fn a_file_without_pragmas_records_no_overrides() {
+        assert!(
+            ids("module m { interface I { void f(); }; struct S { long x; }; };").is_empty(),
+            "no prefix means no change"
+        );
     }
 }

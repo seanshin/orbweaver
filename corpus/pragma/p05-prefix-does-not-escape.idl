@@ -1,0 +1,15 @@
+// A prefix set inside a module must not survive that module's closing brace.
+// Getting this wrong is invisible in a one-module file and renames everything
+// that follows in a real one.
+module p05a {
+#pragma prefix "inner.example"
+    interface Inside {
+        void a();
+    };
+};
+
+module p05b {
+    interface Outside {
+        void b();
+    };
+};

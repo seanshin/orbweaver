@@ -23,10 +23,23 @@
 //!
 //! # Scope
 //!
-//! Derives what the wire needs. `#pragma prefix` and explicit `typeid` are not
-//! yet honoured, so a repository id is `IDL:` plus the qualified name plus
-//! `:1.0` — which is what every fixture in this project publishes, and what a
-//! peer must agree with for `_is_a` to mean anything.
+//! Derives what the wire needs. A repository id is `IDL:` plus the qualified
+//! name plus `:1.0` — unless the IDL says otherwise, which it does through
+//! `#pragma prefix`, `#pragma version` and `#pragma ID`. Those are resolved by
+//! the front end ([`orbweaver_idl::ast::Spec::repository_ids`], which records
+//! only the *differences* from the plain derivation) and this crate does no
+//! id arithmetic of its own beyond applying them.
+//!
+//! **Why the front end and not here.** All three pragmas are positional — a
+//! prefix runs from where it is written to the end of its scope — and source
+//! order is the parser's to know. `orbweaver_idl::parse`'s module docs state
+//! exactly which forms are honoured and which are not; read them before
+//! trusting an id.
+//!
+//! The IDL-4 `typeid` and `typeprefix` *keywords* are still not honoured. They
+//! are reserved words to our lexer, so a file using them fails at the grammar
+//! rather than being silently mis-identified — which is the safe direction for
+//! something that decides identity.
 
 #![deny(missing_docs)]
 
@@ -191,6 +204,14 @@ pub struct Registry {
     entries: BTreeMap<RepositoryId, Entry>,
     /// Qualified IDL name (`spike::Echo`) to repository id.
     by_name: HashMap<String, RepositoryId>,
+    /// The inverse, which stops being derivable once a prefix is in play.
+    ///
+    /// `IDL:acme.com/bank/Account:1.0` is `bank::Account`, not
+    /// `acme.com::bank::Account`: the prefix is part of the identity and no
+    /// part of the name. Splitting the id cannot tell the two apart — an id
+    /// alone does not say how many leading segments are prefix — so the
+    /// mapping is recorded when the IDL is loaded instead of recomputed.
+    by_id: BTreeMap<RepositoryId, String>,
     /// SIDL annotations attached to a registered entry.
     annotations: BTreeMap<RepositoryId, BTreeMap<String, String>>,
     /// Ids whose provenance is a remote IFR, mapped to the source label.
@@ -213,7 +234,12 @@ impl Registry {
     pub fn load(&mut self, spec: &Spec) -> Result<(), RegistryError> {
         let mut names = NameTable::default();
         names.collect(&[], &spec.definitions);
-        let mut builder = Builder { reg: self, names, in_progress: Vec::new() };
+        let mut builder = Builder {
+            reg: self,
+            names,
+            in_progress: Vec::new(),
+            overrides: spec.repository_ids.clone(),
+        };
         builder.walk(&[], &spec.definitions);
         Ok(())
     }
@@ -247,6 +273,9 @@ impl Registry {
                 return Err(DefineError::NameInUse(held.clone()));
             }
             self.by_name.insert(name, id.clone());
+            // Deliberately not mirrored into `by_id`: the name above is a
+            // guess from the id's shape, and `qualified_name` promises the
+            // recorded answer or none at all.
         }
         self.ingested.insert(id.clone(), source.to_owned());
         self.entries.insert(id, entry);
@@ -301,6 +330,16 @@ impl Registry {
     /// Looks a repository id up by qualified IDL name, e.g. `spike::Echo`.
     pub fn id_of(&self, qualified: &str) -> Option<&RepositoryId> {
         self.by_name.get(qualified)
+    }
+
+    /// The qualified IDL name behind a repository id, e.g. `bank::Account`.
+    ///
+    /// Not the same as splitting the id on `/`: under a `#pragma prefix` the
+    /// leading segments are identity, not scope. Anything read off the wire
+    /// rather than loaded from IDL has no recorded name and answers `None`,
+    /// because for those the id genuinely is all we know.
+    pub fn qualified_name(&self, id: &str) -> Option<&str> {
+        self.by_id.get(id).map(String::as_str)
     }
 
     /// The `TypeCode` of a registered type.
@@ -394,6 +433,11 @@ impl Registry {
 }
 
 /// Builds `IDL:a/b/C:1.0` from a qualified path.
+///
+/// The derivation with no pragma in play. When IDL is the source, prefer
+/// [`Registry::id_of`] or the override map the front end produces: this
+/// function cannot know about a `#pragma prefix` because a path does not carry
+/// one.
 pub fn repository_id(path: &[String]) -> RepositoryId {
     format!("IDL:{}:1.0", path.join("/"))
 }
@@ -403,6 +447,13 @@ pub fn repository_id(path: &[String]) -> RepositoryId {
 /// `None` for anything not in the `IDL:` format, because the mapping is only
 /// defined for that one — inventing a qualified name for an `RMI:` or a `DCE:`
 /// id would put a lookup key in the table that nothing can ever match.
+///
+/// **Approximate once a prefix is involved**, and unavoidably so: it reads
+/// `IDL:acme.com/bank/Account:1.0` as `acme.com::bank::Account`, because an id
+/// on its own does not say which leading segments are prefix. Use it only for
+/// ids that arrived from a peer, where the id is all there is;
+/// [`Registry::qualified_name`] is the exact answer for anything loaded from
+/// IDL.
 pub fn qualified_of_id(id: &str) -> Option<String> {
     let rest = id.strip_prefix("IDL:")?;
     let (path, _version) = rest.rsplit_once(':')?;
@@ -530,15 +581,33 @@ struct Builder<'a> {
     names: NameTable,
     /// Repository ids currently being derived, for recursion detection.
     in_progress: Vec<RepositoryId>,
+    /// Ids the front end resolved from identity pragmas, by qualified name.
+    /// Empty for every file without one, which is why loading such a file is
+    /// byte-for-byte what it was before pragmas existed.
+    overrides: BTreeMap<String, String>,
 }
 
 impl Builder<'_> {
+    /// The repository id of the definition at `path`.
+    ///
+    /// One place, so that a base interface declared under a *different*
+    /// `#pragma prefix` gets its own id rather than the deriving scope's — an
+    /// `_is_a` walk built from re-derived ids would agree with itself and with
+    /// nobody else.
+    fn id_for(&self, path: &[String]) -> RepositoryId {
+        match self.overrides.get(&qualified(path)) {
+            Some(id) => id.clone(),
+            None => repository_id(path),
+        }
+    }
+
     fn walk(&mut self, path: &[String], defs: &[Definition]) {
         for d in defs {
             let mut p = path.to_vec();
             p.push(d.name().text.clone());
-            let id = repository_id(&p);
+            let id = self.id_for(&p);
             self.reg.by_name.insert(qualified(&p), id.clone());
+            self.reg.by_id.insert(id.clone(), qualified(&p));
 
             match d {
                 Definition::Module(m) => {
@@ -597,7 +666,7 @@ impl Builder<'_> {
         let bases = i
             .bases
             .iter()
-            .filter_map(|b| self.names.resolve(scope, b).map(|p| repository_id(&p)))
+            .filter_map(|b| self.names.resolve(scope, b).map(|p| self.id_for(&p)))
             .collect();
         let Some(body) = &i.body else {
             return InterfaceEntry { bases, forward_only: true, ..InterfaceEntry::default() };
@@ -626,7 +695,7 @@ impl Builder<'_> {
                         raises: op
                             .raises
                             .iter()
-                            .filter_map(|r| self.names.resolve(path, r).map(|p| repository_id(&p)))
+                            .filter_map(|r| self.names.resolve(path, r).map(|p| self.id_for(&p)))
                             .collect(),
                         oneway: op.oneway,
                         annotations: to_map(&op.annotations),
@@ -655,7 +724,7 @@ impl Builder<'_> {
     /// Derives the `TypeCode` of the definition at `path`.
     fn derive(&mut self, path: &[String]) -> Option<TypeCode> {
         let key = qualified(path);
-        let id = repository_id(path);
+        let id = self.id_for(path);
         // Re-entering a type means recursion; §9.3.5.1 encodes that as an
         // indirection, which we represent by naming the type.
         if self.in_progress.contains(&id) {

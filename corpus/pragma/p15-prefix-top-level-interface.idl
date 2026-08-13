@@ -1,0 +1,8 @@
+// An interface at file scope under a prefix. The prefix is the only leading
+// path segment, which is where an id-splitter that assumes every segment is a
+// module invents a containing module that does not exist.
+#pragma prefix "acme.com"
+
+interface P15Toplevel {
+    void a();
+};

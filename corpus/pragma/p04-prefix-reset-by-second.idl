@@ -1,0 +1,17 @@
+// A second prefix pragma in the same scope replaces the first; it does not
+// accumulate.
+#pragma prefix "first.example"
+
+module p04a {
+    interface One {
+        void a();
+    };
+};
+
+#pragma prefix "second.example"
+
+module p04b {
+    interface Two {
+        void b();
+    };
+};

@@ -46,6 +46,31 @@ fn requirement_benchmark_is_accepted() {
     assert!(failures.is_empty(), "benchmark files must parse:\n  {}", failures.join("\n  "));
 }
 
+/// The identity-pragma cases are ordinary valid IDL as well as id fixtures.
+///
+/// `corpus/pragma/` exists to pin what `#pragma prefix`/`version`/`ID` derive
+/// (that comparison lives in `orbweaver-registry`, which is what holds ids).
+/// What belongs *here* is the other half: omniidl accepts all sixteen files,
+/// so a pragma that made one of them stop parsing or stop checking would be a
+/// front-end regression wearing an id-fixture's clothes.
+#[test]
+fn the_pragma_corpus_is_accepted_and_semantically_clean() {
+    let mut failures = Vec::new();
+    for path in corpus("pragma") {
+        let src = std::fs::read_to_string(&path).unwrap();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        match orbweaver_idl::check(&src) {
+            Ok(_) => {}
+            Err(ds) => failures.extend(ds.into_iter().map(|d| format!("{name}: {d}"))),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "the oracle accepts these and we do not:\n  {}",
+        failures.join("\n  ")
+    );
+}
+
 /// Every negative, syntactic and semantic alike.
 ///
 /// The parser alone could only reject the syntactic ones, and the exclusion

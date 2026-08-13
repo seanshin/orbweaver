@@ -1,0 +1,8 @@
+// `#pragma version` names an already-declared item and sets the version part
+// of its id.
+module p06 {
+    interface Versioned {
+        void a();
+    };
+#pragma version Versioned 2.3
+};
