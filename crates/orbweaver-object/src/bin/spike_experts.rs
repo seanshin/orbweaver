@@ -8,10 +8,11 @@
 //!
 //! # Why the control loop is not a second thread
 //!
-//! `Server` is single-threaded and handles one connection at a time — its own
-//! documentation says concurrency is later work — so wrapping the servant in
-//! a mutex and driving it from another thread would be pretending to a
-//! concurrency the server does not have. Instead the spike opens a serving
+//! The serving windows are a control-flow choice, not a limit of the server:
+//! since stream E connections are served concurrently, but *dispatch* is
+//! still serialized behind one servant, so a control loop that ran while the
+//! wire was open would contend for the same lock rather than run beside it.
+//! The window shape keeps the two phases legible. Instead the spike opens a serving
 //! window, does the wire work, closes it, and runs the out-of-band control
 //! steps with the servant back in hand. That is not a workaround: §5 puts
 //! residency transitions at *batch and statistics period*, and "between

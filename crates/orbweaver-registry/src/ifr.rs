@@ -105,10 +105,12 @@
 //! `CORBA.NO_PERMISSION` from `create_module`. The refusal is therefore what
 //! a foreign client sees, not only what our own client decodes.
 //!
-//! One serving limit the harness must respect, inherited from [`Server`]: one
-//! connection is served at a time, so the python client must run while
-//! nothing else holds a connection, and `--hold` is stopped by killing it —
-//! `destroy` is refused, so there is no remote shutdown.
+//! One serving limit the harness must respect, inherited from [`Server`]:
+//! `--hold` is stopped by killing it — `destroy` is refused, so there is no
+//! remote shutdown. The one-connection-at-a-time limit this note used to
+//! carry is gone (stream E): connections are served concurrently, though
+//! dispatch is still serialized behind one servant, so a slow operation
+//! delays other clients even though it no longer excludes them.
 //!
 //! [`Dispatch`]: orbweaver_giop::server::Dispatch
 //! [`Server`]: orbweaver_giop::server::Server
@@ -926,9 +928,11 @@ mod tests {
         RepositoryServer::new("127.0.0.1", port, ROOT.to_vec(), registry)
     }
 
-    /// A facade served on loopback. `Server` handles one connection at a
-    /// time, so tests dial strictly sequentially and shut down with the last
-    /// client still open — the F6 pattern, for the same reason.
+    /// A facade served on loopback. Tests dial sequentially and shut down
+    /// with the last client still open — the F6 pattern. Sequential is now a
+    /// choice rather than a constraint: since stream E the server accepts
+    /// concurrent connections, and these tests have nothing to learn from
+    /// overlapping them (`server.rs` measures the overlap itself).
     struct Served {
         server: RepositoryServer,
         root: Ior,

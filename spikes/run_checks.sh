@@ -12,6 +12,34 @@ ROOT=$(pwd)
 fail_total=0
 skipped=0
 
+# ── One harness at a time, machine-wide ──────────────────────────────────────
+# The fixtures are killed by pattern (`pkill -f echo_server.py`) and the logs
+# live at fixed /tmp paths, so two harnesses running at once destroy each
+# other's fixtures and report failures that are about the scheduling, not the
+# code. That has now happened twice — once in a worktree agent's run and once
+# in the main tree, both times producing "Connection refused" against a peer
+# that had been alive a moment earlier, and both times costing a diagnosis.
+#
+# Killing by captured PID would fix the fixtures and not the shared /tmp
+# paths, and the paths are threaded through 46 places. A machine-wide lock
+# fixes both classes at once and does it in ten lines, so it goes first; the
+# PID work is a separate batch with a separate risk.
+#
+# Refuse rather than queue: a harness that silently waits looks identical to a
+# harness that hung, and the person who started the second one wants to know
+# the first is running.
+LOCK=/tmp/orbweaver-harness.lock
+if ! mkdir "$LOCK" 2>/dev/null; then
+  holder=$(cat "$LOCK/owner" 2>/dev/null || echo "unknown")
+  echo "another harness is running (started by $holder)."
+  echo "the fixtures are killed by pattern and the logs share /tmp paths, so two"
+  echo "runs at once produce failures that are about the scheduling, not the code."
+  echo "wait for it, or remove $LOCK if you are sure nothing is running."
+  exit 2
+fi
+printf 'pid %s in %s at %s\n' "$$" "$ROOT" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >"$LOCK/owner"
+trap 'rm -rf "$LOCK"' EXIT
+
 hr() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 need() { command -v "$1" >/dev/null 2>&1 || { echo "missing tool: $1"; exit 2; }; }
 need omniidl
@@ -978,6 +1006,24 @@ else
   printf '%s' "$ex" | grep -i "FAIL" | head -3 | sed 's/^/       /'
   fail_total=$((fail_total+1))
 fi
+
+# ── Stream E: concurrent connections ─────────────────────────────────────────
+hr "concurrency — many clients at once, and a cap that says no out loud"
+# Every service above documented "one client at a time" as a limit its harness
+# group had to respect. The overlap is asserted against the server's own
+# counter rather than against timing, because a timing-based overlap check
+# passes on a fast serial server and is therefore not a check.
+cc_fail=0
+cy=$(cargo run -q --bin spike-concurrent 2>&1)
+if printf '%s' "$cy" | grep -q "concurrency: PASS"; then
+  echo "  ok   $(printf '%s' "$cy" | grep 'measured overlap' | sed 's/^ *//')"
+  echo "  ok   $(printf '%s' "$cy" | grep 'cap behaviour' | sed 's/^ *//') — over the cap gets §9.4.7's goodbye"
+else
+  echo "  FAIL concurrent serving"
+  printf '%s' "$cy" | grep -i "FAIL" | head -3 | sed 's/^/       /'
+  cc_fail=1
+fi
+[ "$cc_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
 # ── F5: tenancy, as an authorization property of the object key ─────────────
 hr "tenant service — LifeCycle and Property with the tenant in every key"

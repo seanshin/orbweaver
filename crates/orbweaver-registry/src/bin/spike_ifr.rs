@@ -42,10 +42,10 @@
 //! measured. That is the recommended harness snippet: one process holding,
 //! two `python3 -c` invocations, both compared against fixed strings.
 //!
-//! Two serving limits the harness must respect, both inherited from `Server`:
-//! one connection is served at a time, so the python client must run while
-//! nothing else holds a connection; and `--hold` is stopped by killing the
-//! process, since `destroy` is refused and there is no remote shutdown.
+//! One serving limit the harness must respect, inherited from `Server`:
+//! `--hold` is stopped by killing the process, since `destroy` is refused and
+//! there is no remote shutdown. The one-connection-at-a-time limit this note
+//! used to carry ended with stream E.
 
 use std::time::Duration;
 

@@ -7,8 +7,9 @@ its own servant, and decoding what we push.
 
 Usage: event_consumer.py <ior-file>   (against `spike-events <ior> --hold`)
 
-Prints PASS when at least one event arrives. Our server handles one connection
-at a time, so this must be the only client while it runs.
+Prints PASS when at least one event arrives. Since stream E the server accepts
+concurrent connections, so this no longer has to be the only client — it still
+is, because a second one would tell the check nothing.
 """
 
 import sys

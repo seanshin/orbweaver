@@ -870,11 +870,11 @@ mod tests {
 
     // ── a served instance ───────────────────────────────────────────────────
 
-    /// The service on loopback. `Server` handles one connection at a time, so
-    /// clients are used strictly sequentially and `shutdown` is called with
-    /// the last one still open — the stop flag is raised before it drops, so
-    /// the serve loop observes it after the connection ends rather than
-    /// blocking in accept.
+    /// The service on loopback. Clients are used sequentially and `shutdown`
+    /// is called with the last one still open — the stop flag is raised
+    /// before it drops, so the serve loop observes it after the connection
+    /// ends rather than blocking in accept. Sequential use is this test's
+    /// choice; since stream E the server would accept overlapping clients.
     struct Served {
         registry: Ior,
         loader: Ior,

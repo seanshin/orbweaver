@@ -11,7 +11,7 @@ Anything requiring a new dependency class needs a decision document first
 | Component | Status | What exists | What is missing |
 |---|---|---|---|
 | `orbweaver-cdr` | ✅ | full CDR, both endians, alignment origins | — |
-| `orbweaver-giop` | ✅ | GIOP 1.0–1.2 both directions, codesets, fragmentation, locate, failover, SSLIOP (`ssliop` feature) | multiplexing, pooling (stream E) |
+| `orbweaver-giop` | ✅ | GIOP 1.0–1.2 both directions, codesets, fragmentation, locate, failover, SSLIOP (`ssliop` feature), **concurrent connections** (stream E): one servant behind one mutex taken per message, cap 64 with the refusal spoken as §9.4.7's `CloseConnection`, `ServerStats` counters, deadlock proven absent by test rather than by argument | **dispatch is still serialized** — a slow operation delays every client though it no longer excludes them; multiplexing and pooling |
 | `orbweaver-idl` | ✅ | IDL 4.2 front end, SIDL comments, full oracle agreement | pluggable back ends beyond gen's use |
 | `orbweaver-registry` | ◐ | registry from IDL, TypeCodes vs two peers, §5.3 differ | **remote IFR ingestion** (planned scope, unstarted) |
 | `orbweaver-object` (poa) | ✅ | references, identity, POA, LOCATION_FORWARD emit, **expert residency state machine + ExpertLoader** (F3, 2026-08-14), **`moe::ExpertRegistry`/`ExpertLoader` served on the wire** (2026-08-15) | — |
