@@ -35,7 +35,14 @@
 //! | [`ingest`] | S1 | requirement text → [`ingest::Brief`] | is it a brief S2 can work from |
 //! | [`synthesize`] | S2 | brief → `.idl` | [`validate`], plus: is anything callable, did the brief survive |
 //! | [`annotate`] | S3 | `.idl` → SIDL | is every operation annotated, is every mutating operation scoped |
+//! | [`infer`] | S3i | an ingested [`Registry`] → SIDL **proposals** | is every claim marked, evidenced, and refused where the evidence is silent |
 //! | [`pipeline`] | — | the §5.1 loop over any one of them, and over all of them | — |
+//!
+//! S3 and S3i are alternatives, never both: one annotates IDL a model wrote
+//! from a brief we hold, the other proposes annotations for an interface a
+//! foreign Interface Repository described to us. The second cannot produce
+//! facts, only claims, and [`infer`] is mostly the machinery that keeps the
+//! difference legible everywhere a claim travels.
 //!
 //! Each is runnable alone, because a pipeline that only runs end to end can
 //! tell you the output is wrong and not which stage was wrong.
@@ -43,6 +50,7 @@
 #![deny(missing_docs)]
 
 pub mod annotate;
+pub mod infer;
 pub mod ingest;
 pub mod pipeline;
 pub mod synthesize;

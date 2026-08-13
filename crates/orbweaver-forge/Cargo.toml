@@ -27,3 +27,7 @@ path = "src/bin/sidl_validate.rs"
 [[bin]]
 name = "forge-pipeline"
 path = "src/bin/forge_pipeline.rs"
+
+[[bin]]
+name = "sidl-infer"
+path = "src/bin/sidl_infer.rs"
