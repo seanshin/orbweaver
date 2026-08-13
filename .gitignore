@@ -56,3 +56,6 @@ spikes/jacorb/lib/
 spikes/jacorb/gen/
 spikes/jacorb/classes/
 spikes/jacorb.ior
+
+# Agent worktrees (embedded checkouts, never part of the tree)
+.claude/worktrees/
