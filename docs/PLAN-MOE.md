@@ -60,7 +60,7 @@ with the findings in their headers; stream F batch 1 promotes them to
 | MoE 문서 개념 | Orbweaver 실물 | 상태 |
 |---|---|---|
 | Expert = 분산 객체 + IOR | `orbweaver-object` (references as values, `_is_a`) | ✅ 측정됨 |
-| POA ServantActivator 적재기 | `Poa` + `ServantLocator` (`Located::{Here,Forward,Unknown}`) | ✅ — 상태 머신은 F3 |
+| POA ServantActivator 적재기 | `Poa` + `ServantLocator` (`Located::{Here,Forward,Unknown}`) + `residency::ExpertLoader` | ✅ — 상태 머신 F3 착지 |
 | Interface Repository | `orbweaver-registry` + SIDL annotations (`ai_desc`… ≈ capability contract) | ✅ |
 | MCP 얼굴 + 핸들↔IOR 바인딩 | `orbweaver-mcp` triad + `CapabilityTable` | ✅, 원문보다 강함 |
 | PolicyDomain (인가·레지던시·감사) | `Exposure` + `Delegation` + `Caller`/`ai_authz` + audit lines | ◐ — residency 제약만 없음 |
@@ -88,11 +88,25 @@ reports an unmeasurable number later.
   over fixture offers; the §6 loading policy (`score = route_freq ×
   affinity ÷ mem_footprint`, watermarks, LFU eviction) replayed over recorded
   traces with pinned outcomes.
-- **F3 — residency state machine on the POA.** `ExpertLoader` over
+- **F3 — residency state machine on the POA.** ✅ *landed 2026-08-14:
+  `orbweaver-object::residency`, 20 tests (34 in the crate) — the 4×5
+  transition table pinned answer by answer, each of the guard's four
+  conditions proven necessary by flipping it alone, PERSISTENT state surviving
+  an evict/reload cycle, and a two-window `Decision` list applied end to end
+  against the real §6 policy.* `ExpertLoader` over
   `ServantLocator`; transitions only OFFLOADED→PREFETCHING→RESIDENT(→ACTIVE
   marker)→OFFLOADED; **no token-period transitions by construction** (the API
-  simply has no per-call hook). Oracle: transition tests incl. the eviction
+  simply has no per-call hook — held by a `compile_fail` doc test, not only by
+  documentation). Oracle: transition tests incl. the eviction
   guard (`inflight == 0`), PERSISTENT state preservation.
+  Two decisions worth their own line. **A request for an OFFLOADED expert is
+  refused (`OBJECT_NOT_EXIST`), never served by a synchronous load** —
+  demand-loading inside `locate` is precisely the latency §11 has prefetch
+  exist to hide, and it would hold a dispatch thread for the whole copy; the
+  miss instead requests a prefetch that the *next* window completes. And
+  `Located::Here` activates an id permanently, so eviction has to be
+  reconciled onto the POA (`ExpertLoader::reconcile`) or an evicted expert
+  keeps being served out of the active map.
 - **F4 — the interceptor chain, formalized.** The guard's checks become an
   ordered, extensible chain: authn → quota → safety → telemetry → audit (원문
   §4.5 순서), with telemetry feeding `CallStats`/`route_freq`. Oracle: order
