@@ -7,6 +7,10 @@
 //! The output is a crate **outside** the workspace, because that is what a
 //! consumer of generated code is: the harness compiling it proves the stubs
 //! stand on the published crate surface alone, not on being inside the tree.
+//! Each interface contributes both halves — the client stub and the server
+//! skeleton — and every generated module declares `#![forbid(unsafe_code)]`
+//! and `#![deny(missing_docs)]`, so compiling this crate is also where those
+//! two rules are proved to hold for generated code.
 //!
 //! The crate also contains `src/main.rs`, the stream-B oracle for the echo
 //! fixture: byte-equality between the static and dynamic marshalling of the

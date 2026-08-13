@@ -1,0 +1,55 @@
+// 24 — the server-skeleton surface: everything a generated dispatcher can get
+// wrong, in one contract. Added with stream B's skeleton batch.
+//
+//   * `oneway` — no reply may be written at all. An empty one is a whole extra
+//     message, and the peer, not waiting for it, reads it as the header of the
+//     next reply; every later request on that connection is then answered with
+//     the wrong bytes.
+//   * attributes — `_get_`/`_set_` are operations on the wire. A readonly
+//     attribute must produce no setter and must refuse `_set_`.
+//   * alignment origin — `Reading` starts with a `double`, so the first member
+//     of the reply body is 8-aligned and the padding depends on where the body
+//     sits inside the GIOP message, not on where the body starts.
+//
+// The `in double e` on `scale_all` is deliberate: every local the generator
+// emits is `__`-prefixed, and `e` is what a hand-written encoder would have
+// called its encoder. The rule needs a case that would break without it.
+module gc24 {
+  exception Rejected { string why; long code; };
+  exception Busy {};
+
+  struct Reading {
+    double at;            // 8-aligned first member — the alignment-origin pin
+    long   sequence_no;
+    string unit;
+  };
+
+  //@ ai_desc: A gauge whose skeleton exercises oneway, attributes and alignment
+  interface Gauge {
+    //@ ai_desc: The most recent reading, or a zeroed one before any sample
+    //@ ai_effect: read_only
+    readonly attribute Reading latest;
+
+    //@ ai_desc: Human-readable label for this gauge
+    attribute string label;
+
+    //@ ai_desc: Records one sample and returns the reading it produced
+    //@ ai_effect: idempotent
+    Reading record(in double sample, in string unit) raises (Rejected, Busy);
+
+    //@ ai_desc: Multiplies every stored sample and answers how many changed
+    //@ ai_effect: destructive
+    //@ ai_authz: gc24.gauge.scale
+    long scale_all(in double e);
+
+    //@ ai_desc: Discards every stored sample; the caller learns nothing about
+    //@ ai_desc: whether it happened, so the scope is all that guards it
+    //@ ai_effect: destructive
+    //@ ai_authz: gc24.gauge.reset
+    oneway void reset();
+
+    //@ ai_desc: Splits the latest reading into its parts
+    //@ ai_effect: read_only
+    void split(out double at, out string unit);
+  };
+};
