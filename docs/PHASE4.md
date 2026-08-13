@@ -87,3 +87,67 @@ level. The wide-character codec is pinned to GIOP 1.2 + UTF-16 (the dynamic
 default) rather than taken per-connection. The promotion engine and I1/I4
 integration batches (stubs through the guard, identity preserved across
 promotion) are separate batches, as §7.4 requires.
+
+---
+
+# Batch 2: integration point I1 — the same stub, both sides of the boundary
+
+```
+  ok   I1: the same stub through the guard — exposure, ai_authz scope and audit bind it
+  ok   I1: a refused call never reaches the wire; the audit holds nothing dialable
+```
+
+## The bypass a generator would otherwise compile in
+
+A generated stub calls `invoke("op", …)` directly. Hard-wired to `Connection`,
+it can only ever run *around* the guard — past the exposure list, the scope
+check, `destructive` approval and the audit log. That is §4.7's bypass
+recreated in compiled form, and it would ship as a build artifact.
+
+The fix is in the type, not in review discipline: stubs are generic over
+`Invoker`, and **which side of the trust boundary a stub runs on is decided by
+what it is handed, not by how it was generated.** Inside the boundary, hand it
+a raw `Connection` (§4.7 explicitly keeps that path). At the boundary,
+`Bridge::connect_static(handle, …)` resolves the capability handle, dials, and
+returns `Guarded` — the address never reaches the caller.
+
+우회는 리뷰 규율이 아니라 **타입**으로 막는다. 스텁은 `Invoker` 제네릭이고, 어느
+신뢰 경계 쪽에서 도는지는 생성 방식이 아니라 **무엇을 손에 쥐여주는가**가 결정한다.
+
+## The same checks, per operation, before anything is sent
+
+`Guarded` runs exactly the checks the dynamic path runs — exposure, `ai_authz`
+scopes against the caller, `destructive` approval — at call time, because the
+operation name is right there in the `invoke` signature. A refusal is CORBA
+`NO_PERMISSION`, the answer a native guard would give, so stub callers handle
+policy the way they already handle the target's own refusals; the *why* goes to
+the audit log, where §4.8 wants it.
+
+Two details the tests pin because they are where this quietly goes wrong:
+
+- **A refused call never reaches the transport.** Refusing after sending would
+  be logging, not guarding. Proven with a recording fake invoker: the transport
+  saw nothing.
+- **Oneways are gated like everything else.** A oneway that skipped the gate
+  would make fire-and-forget the way around the guard.
+
+Live, against omniORB: `blob_sum` now carries `//@ ai_authz: echo:blob` in the
+fixture contract, and the identical generated stub answers alice (who holds the
+scope) and refuses bob (who does not) — the C×B seam, on the wire. The guard's
+audit log is then searched for the host, the object key and `IOR:`, the same
+transcript-leak rule the MCP session enforces.
+
+같은 검사를 **연산 단위로, 전송 전에** 적용한다. 거부된 호출이 전송 후에 기록만
+된다면 그것은 가드가 아니라 로깅이다 — 기록 전용 가짜 invoker로 전송량이 0임을
+증명했다. oneway도 동일하게 게이트를 지난다: 건너뛰면 fire-and-forget이 우회로가
+된다.
+
+## Why `Guarded` owns its context
+
+It clones the exposure, caller and approval rather than borrowing the bridge —
+partly so holding a stub does not freeze the session, but mostly so the
+confused-deputy pairing (one session's connection under another session's
+policy, R13) cannot be assembled. The only constructor is
+`Bridge::connect_static`, and the interface id comes from the capability table,
+never from the stub: a stub asserting its own interface id would be asserting
+its own permissions.

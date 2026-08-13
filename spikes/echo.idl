@@ -22,6 +22,8 @@ module spike {
     Ragged echo_ragged(in Ragged v);
     any    echo_any(in any v);
     Payload blob(in unsigned long size);
+    //@ ai_desc: Sums the payload's octets modulo 2^31-1
+    //@ ai_authz: echo:blob
     long    blob_sum(in Payload b);
     wstring echo_wstring(in wstring w);
     Echo    get_self();

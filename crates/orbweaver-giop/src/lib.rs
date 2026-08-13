@@ -964,6 +964,39 @@ fn skip_service_contexts(d: &mut Decoder<'_>) -> Result<()> {
 // Invoker
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// The call surface a client stub needs, abstracted from the transport.
+///
+/// Generated stubs are generic over this rather than taking a `Connection`,
+/// and the difference is a security boundary, not a convenience: a stub
+/// hard-wired to `Connection` can only ever be used *around* the guard, so the
+/// static path would recreate in compiled form exactly the bypass §4.7 exists
+/// to prevent. With the trait, the same stub runs over a raw connection inside
+/// the trust boundary or over `orbweaver-mcp`'s guarded wrapper at it — and the
+/// guarded wrapper checks policy per operation, because the operation name is
+/// right here in the signature.
+pub trait Invoker {
+    /// The byte order requests are encoded in.
+    fn endian(&self) -> Endian;
+
+    /// Invokes a twoway operation.
+    fn invoke<F: Fn(&mut Encoder)>(&mut self, operation: &str, write_args: F) -> Result<Reply>;
+
+    /// Invokes a oneway operation: bytes written, nothing more promised.
+    fn invoke_oneway<F: Fn(&mut Encoder)>(&mut self, operation: &str, write_args: F) -> Result<()>;
+}
+
+impl Invoker for Connection {
+    fn endian(&self) -> Endian {
+        Connection::endian(self)
+    }
+    fn invoke<F: Fn(&mut Encoder)>(&mut self, operation: &str, write_args: F) -> Result<Reply> {
+        Connection::invoke(self, operation, write_args)
+    }
+    fn invoke_oneway<F: Fn(&mut Encoder)>(&mut self, operation: &str, write_args: F) -> Result<()> {
+        Connection::invoke_oneway(self, operation, write_args)
+    }
+}
+
 /// A synchronous, single-connection invoker.
 ///
 /// Deliberately minimal, but no longer optimistic: it negotiates the version

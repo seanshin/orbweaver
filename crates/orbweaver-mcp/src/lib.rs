@@ -29,6 +29,7 @@
 
 #![deny(missing_docs)]
 
+pub mod guard;
 pub mod handles;
 pub mod identity;
 pub mod policy;
@@ -171,6 +172,39 @@ impl<'a> Bridge<'a> {
             approval,
             self.caller.as_ref(),
         )
+    }
+
+    /// Dials what `handle` names and returns a guarded invoker for it —
+    /// the only way a generated stub crosses the trust boundary (§7.4 I1).
+    ///
+    /// The address is resolved, dialed and wrapped inside this method; it
+    /// never reaches the caller. The guard carries this session's exposure,
+    /// caller and approval, so the confused-deputy pairing — one session's
+    /// connection under another session's policy — cannot be assembled.
+    pub fn connect_static(
+        &mut self,
+        handle: &str,
+        approval: Approval,
+        timeout: std::time::Duration,
+    ) -> Result<guard::Guarded<'a, Connection>, ToolError> {
+        let Some(id) = self.handles.type_of(handle).map(str::to_owned) else {
+            return Err(ToolError::UnknownHandle(handle.to_owned()));
+        };
+        let Some(ior) = orbweaver_dynamic::anyjson::References::resolve(&self.handles, handle)
+        else {
+            return Err(ToolError::UnknownHandle(handle.to_owned()));
+        };
+        let conn = Connection::connect(&ior, timeout)
+            .map_err(invoke::InvokeError::Transport)
+            .map_err(ToolError::Invoke)?;
+        Ok(guard::Guarded::assemble(
+            conn,
+            self.registry,
+            self.exposure.clone(),
+            self.caller.clone(),
+            id,
+            approval,
+        ))
     }
 
     /// `invoke_operation(handle, operation, args)`.

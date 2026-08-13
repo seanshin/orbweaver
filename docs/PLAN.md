@@ -672,7 +672,7 @@ independent by construction.
 
 | Point | Streams | What must be true |
 |---|---|---|
-| **I1. Generated stubs are guarded** | B × C | Static stubs go through the same `Exposure`/`Delegation`/audit path as dynamic calls. A stub that bypasses the guard recreates the §4.7 bypass in compiled form. Checked by the transcript-leak test running against a static client. |
+| **I1. Generated stubs are guarded** ✅ | B × C | Static stubs go through the same `Exposure`/`Delegation`/audit path as dynamic calls. A stub that bypasses the guard recreates the §4.7 bypass in compiled form. Checked by the transcript-leak test running against a static client. **Verified**: stubs are generic over `Invoker`; `Guarded` applies exposure, `ai_authz` scopes and `destructive` approval per operation, refuses as `NO_PERMISSION` before anything is sent, and its audit log is leak-checked live against omniORB. |
 | **I2. Pipeline output is exposed safely** | A × D | S5 registration feeds the catalog with **exposure off by default**; a generated interface becoming agent-visible requires the same explicit allowlist as a hand-written one. |
 | **I3. Search does not launder annotations** | A × D | The embedding index treats `ai_desc` as data (R11); injection cases from the negative corpus are part of the frozen query benchmark. |
 | **I4. Promotion respects identity** | B × C | A promoted static path carries the same `Caller` assertion behaviour as the dynamic path it replaced; "promotion dropped the identity context" is the regression gate's first test. |

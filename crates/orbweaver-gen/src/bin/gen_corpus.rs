@@ -111,6 +111,7 @@ orbweaver-dynamic = {{ path = "{ws}/crates/orbweaver-dynamic" }}
 orbweaver-registry = {{ path = "{ws}/crates/orbweaver-registry" }}
 orbweaver-idl = {{ path = "{ws}/crates/orbweaver-idl" }}
 orbweaver-gen = {{ path = "{ws}/crates/orbweaver-gen" }}
+orbweaver-mcp = {{ path = "{ws}/crates/orbweaver-mcp" }}
 
 [[bin]]
 name = "static-oracle"
@@ -317,6 +318,93 @@ fn run(ior_path: &str, idl_path: &str) -> Result<u32, String> {
         if let Ok(r) = self_ref {
             case("same_as(that reference) -> true", client.same_as(r).unwrap_or(false));
         }
+    }
+
+    // ── I1: the same stub, on the other side of the trust boundary ─────────
+    // PLAN §7.4: a stub that bypasses the guard recreates the §4.7 bypass in
+    // compiled form. Here the identical generated code runs over the guarded
+    // invoker, and the checks the dynamic path runs bind it per operation.
+    println!("── the same generated stub, through the guard (I1) ──");
+    use orbweaver_mcp::Bridge;
+    use orbweaver_mcp::identity::Caller;
+    use orbweaver_mcp::policy::{Approval, Exposure};
+
+    let exposure = Exposure::nothing()
+        .allow_operation("IDL:spike/Echo:1.0", "ping")
+        .allow_operation("IDL:spike/Echo:1.0", "add")
+        .allow_operation("IDL:spike/Echo:1.0", "blob_sum");
+    let mut check = |what: &str, pass: bool| {
+        if pass {
+            println!("  {OK} {what}");
+        } else {
+            println!("  {NO} {what}");
+            fails += 1;
+        }
+    };
+
+    let mut bridge = Bridge::new(&registry, exposure.clone(), "static-session")
+        .on_behalf_of(Caller::new("alice@example.com").with_scope("echo:blob"));
+    let handle = bridge
+        .handles()
+        .issue_checked(&ior)
+        .map_err(|e| e.to_string())?;
+    let guarded = bridge
+        .connect_static(handle.as_str(), Approval::default(), Duration::from_secs(5))
+        .map_err(|e| e.to_string())?;
+    let mut gclient = EchoClient::new(guarded);
+
+    check("ping() through the guard -> 42", gclient.ping().map(|v| v == 42).unwrap_or(false));
+    check(
+        "blob_sum() allowed: the caller holds the echo:blob scope the contract asks for",
+        gclient.blob_sum((0..64u8).collect()).map(|v| v == 2016).unwrap_or(false),
+    );
+    let refused = gclient.echo_string("x".into());
+    check(
+        "echo_string() refused as NO_PERMISSION: not among the allowed operations",
+        matches!(&refused, Err(orbweaver_giop::Error::SystemException { id, .. })
+            if id.contains("NO_PERMISSION")),
+    );
+    check(
+        "and the connection still works after the refusal",
+        gclient.add(40, 2).map(|v| v == 42).unwrap_or(false),
+    );
+
+    // A caller without the scope, same exposure: the contract's ai_authz line
+    // binds the static path exactly as it binds the dynamic one.
+    let mut bob = Bridge::new(&registry, exposure, "bob-session")
+        .on_behalf_of(Caller::new("bob@example.com"));
+    let bh = bob.handles().issue_checked(&ior).map_err(|e| e.to_string())?;
+    let bg = bob
+        .connect_static(bh.as_str(), Approval::default(), Duration::from_secs(5))
+        .map_err(|e| e.to_string())?;
+    let mut bclient = EchoClient::new(bg);
+    check(
+        "the same call without the scope is refused before it is sent",
+        bclient.blob_sum(vec![1, 2, 3]).is_err(),
+    );
+
+    // The audit trail, and the leak check over it: which principal, which
+    // operation, and nothing dialable.
+    let audit = gclient.conn.audit().join("\n") + "\n" + &bclient.conn.audit().join("\n");
+    check(
+        "the audit names principals and operations",
+        audit.contains("ALLOW caller=alice@example.com")
+            && audit.contains("operation=blob_sum")
+            && audit.contains("REFUSE caller=bob@example.com"),
+    );
+    let profile = ior.primary().map_err(|e| e.to_string())?;
+    let key_text = String::from_utf8_lossy(&profile.object_key).into_owned();
+    let mut leaked = false;
+    for needle in [profile.host.as_str(), key_text.as_str(), "IOR:"] {
+        if needle.len() >= 3 && audit.contains(needle) {
+            println!("  {NO} {needle:?} appears in the audit log");
+            leaked = true;
+        }
+    }
+    if leaked {
+        fails += 1;
+    } else {
+        println!("  {OK} the audit log contains no host, object key or IOR");
     }
 
     Ok(fails)

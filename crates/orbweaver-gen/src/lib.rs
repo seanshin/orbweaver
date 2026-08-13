@@ -522,13 +522,18 @@ fn emit_interface(registry: &Registry, id: &str, root: &str) -> Result<String, S
     let _ = writeln!(s, "///");
     let _ = writeln!(s, "/// Static twin of the dynamic path; §8 requires their bytes to be");
     let _ = writeln!(s, "/// identical, and the harness holds them to it.");
-    let _ = writeln!(s, "pub struct {}Client {{", ident(&name));
-    let _ = writeln!(s, "    /// The connection calls travel over.");
-    let _ = writeln!(s, "    pub conn: rt::Connection,");
+    let _ = writeln!(s, "///");
+    let _ = writeln!(s, "/// Generic over the invoker on purpose (PLAN §7.4 I1): over a raw");
+    let _ = writeln!(s, "/// `Connection` inside the trust boundary, or over the guarded");
+    let _ = writeln!(s, "/// wrapper at it — a stub hard-wired to the transport would be the");
+    let _ = writeln!(s, "/// §4.7 bypass in compiled form.");
+    let _ = writeln!(s, "pub struct {}Client<C: rt::Invoker> {{", ident(&name));
+    let _ = writeln!(s, "    /// What calls travel over.");
+    let _ = writeln!(s, "    pub conn: C,");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "impl {}Client {{", ident(&name));
-    let _ = writeln!(s, "    /// A stub over an open connection.");
-    let _ = writeln!(s, "    pub fn new(conn: rt::Connection) -> Self {{ Self {{ conn }} }}");
+    let _ = writeln!(s, "impl<C: rt::Invoker> {}Client<C> {{", ident(&name));
+    let _ = writeln!(s, "    /// A stub over an open invoker.");
+    let _ = writeln!(s, "    pub fn new(conn: C) -> Self {{ Self {{ conn }} }}");
 
     // Operations, inherited ones included: a stub less capable than the
     // dynamic invoker would fail the oracle before it failed a user.

@@ -9,7 +9,7 @@ use orbweaver_giop::Version;
 use orbweaver_giop::codeset::{CodeSetId, WideCodec};
 
 pub use orbweaver_cdr::{Decoder, Encoder, Endian};
-pub use orbweaver_giop::{Connection, Error as GiopError, Ior, Reply};
+pub use orbweaver_giop::{Connection, Error as GiopError, Invoker, Ior, Reply};
 
 /// The marshalling contract every generated type implements.
 ///
