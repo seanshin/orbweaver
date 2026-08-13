@@ -379,9 +379,14 @@ hr "GIOP fragmentation"
 # Neither available peer emits GIOP fragments: omniORB's giopMaxMsgSize is a
 # hard cap that raises MARSHAL rather than a split threshold, and JacORB 3.9
 # has no GIOP fragmentation property at all. So the independent evidence runs
-# in one direction only — we fragment, they reassemble — and the receiver is
-# covered by round-trip against our own (peer-validated) emitter. Stated here
-# rather than implied by a green line.
+# in one direction only — we fragment, they reassemble. The receiver used to be
+# covered only by round-trip against our own emitter, which is one shape; it is
+# now also driven by hand-built streams from §9.4.9 that a conformant peer may
+# legally send and ours never does (`tests/fragment_reception.rs`, run by cargo
+# test). That found two reception bugs no peer could have shown us: a stray
+# leading Fragment was returned as a message, and a fragment at a different
+# GIOP version was accepted as a continuation — in 1.1 the bytes read as a
+# request id are body, so a match would have been a coincidence.
 fkill spike-server
 rm -f "$ROOT/spikes/server.ior"
 ( cd "$ROOT" && ORBWEAVER_FRAGMENT_THRESHOLD=4096 exec cargo run -q --bin spike-server -- \

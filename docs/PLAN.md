@@ -680,9 +680,10 @@ produces), and **oracle** (what verifies the whole batch deterministically).
   ~~`CancelRequest`/`CloseConnection` send~~, ~~multi-profile failover~~,
   ~~`TAG_ALTERNATE_IIOP_ADDRESS`~~ (all measured against both peers,
   2026-08-13/14), ~~concurrent connections~~ (one servant behind one mutex,
-  cap 64, refusal spoken as §9.4.7's `CloseConnection`). Remaining: fragment
-  *reception* validated independently, request multiplexing, connection
-  pooling, `#pragma prefix`, and the limit concurrency did **not** remove —
+  cap 64, refusal spoken as §9.4.7's `CloseConnection`). Remaining: ~~fragment
+  *reception*~~ (no peer fragments, so the specification is the oracle:
+  hand-built §9.4.9 streams found two reception bugs), request multiplexing,
+  connection pooling, `#pragma prefix`, and the limit concurrency did **not** remove —
   **dispatch is still serialized**, so a slow operation delays every client
   even though it no longer excludes them. Lifting that means `Dispatch: Sync`
   and interior mutability in every servant, which is a cross-crate batch and

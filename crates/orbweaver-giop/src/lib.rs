@@ -961,6 +961,15 @@ pub struct RawMessage {
 /// unfragmented message would have.
 pub fn read_message(stream: &mut impl Read, max_size: usize) -> Result<RawMessage> {
     let first = read_one_message(stream, max_size)?;
+    // A `Fragment` continues something. Arriving first it continues nothing,
+    // and handing it back as a message makes every caller responsible for a
+    // check none of them make — the server would see a message type it has no
+    // arm for, which is a worse place to notice than here. Our own emitter
+    // cannot produce this, which is exactly why it went unnoticed: no peer
+    // that fragments exists to have shown it to us.
+    if first.msg_type == MsgType::Fragment {
+        return Err(Error::UnexpectedMessage(MsgType::Fragment));
+    }
     if !first.more_fragments {
         return Ok(first);
     }
@@ -982,6 +991,17 @@ pub fn read_message(stream: &mut impl Read, max_size: usize) -> Result<RawMessag
         let next = read_one_message(stream, max_size)?;
         if next.msg_type != MsgType::Fragment {
             return Err(Error::UnexpectedMessage(next.msg_type));
+        }
+        // The version must not change mid-message. This is not pedantry about
+        // a field: a 1.1 `Fragment` carries no request id, so the four bytes
+        // read below would be *body*. Matching them against the leading
+        // message's id would then be a coincidence, and mismatching them would
+        // report a desynchronised connection when the real fault is a peer
+        // switching layouts. Byte order is deliberately NOT constrained here —
+        // each message header carries its own flag, the id is decoded with the
+        // fragment's, and the payload is opaque bytes either way.
+        if next.version != version {
+            return Err(Error::UnexpectedMessage(MsgType::Fragment));
         }
         // FragmentHeader_1_2 is a single request_id, which must match.
         let mut d = Decoder::new(&next.bytes, next.endian);
