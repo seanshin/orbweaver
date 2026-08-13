@@ -56,3 +56,7 @@ path = "src/bin/spike_locate.rs"
 [[bin]]
 name = "spike-failover"
 path = "src/bin/spike_failover.rs"
+
+[[bin]]
+name = "spike-cancel"
+path = "src/bin/spike_cancel.rs"
