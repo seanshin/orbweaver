@@ -32,9 +32,35 @@ use crate::promote::CallStats;
 /// The repository id `NO_PERMISSION` travels under.
 pub const NO_PERMISSION: &str = "IDL:omg.org/CORBA/NO_PERMISSION:1.0";
 
+/// The decision field of an audit line for a call the policy allowed.
+pub const DECISION_ALLOW: &str = "ALLOW";
+/// The decision field of an audit line for a call the policy refused.
+pub const DECISION_REFUSE: &str = "REFUSE";
+/// The decision field for a **dry run** the policy would have allowed. No call
+/// was made; see [`crate::dryrun`].
+pub const DECISION_DRY_RUN_ALLOW: &str = "DRYRUN-ALLOW";
+/// The decision field for a **dry run** the policy would have refused. No call
+/// was made; see [`crate::dryrun`].
+pub const DECISION_DRY_RUN_REFUSE: &str = "DRYRUN-REFUSE";
+
+/// Whether an audit line's decision field describes a call that never
+/// happened.
+///
+/// The one place the distinction is decided, so that every reader of the log
+/// draws it the same way. [`crate::promote::verify_promotion`] uses it to
+/// refuse a hypothetical line outright: a promotion gated on a call nobody
+/// made would be comparing a prediction against a measurement.
+pub fn is_hypothetical(decision: &str) -> bool {
+    decision == DECISION_DRY_RUN_ALLOW || decision == DECISION_DRY_RUN_REFUSE
+}
+
 /// One audit line, in **the** format:
 /// `ALLOW caller=<principal> target=<id> operation=<op>`, with
 /// ` why=<reason>` appended on a `REFUSE`. An absent caller is `<nobody>`.
+///
+/// `decision` is one of [`DECISION_ALLOW`], [`DECISION_REFUSE`] or the dry-run
+/// pair — the field that distinguishes a call from a question, in a format
+/// that is otherwise identical for both.
 ///
 /// The single place the format lives. Since F4 there is a single place it is
 /// *called* from too — [`crate::interceptor::AuditInterceptor`], the §4.5 audit
@@ -127,6 +153,24 @@ impl<'r, C: Invoker> Guarded<'r, C> {
     /// built-ins are already in it; see [`Chain::insert_after`].
     pub fn chain_mut(&mut self) -> &mut Chain {
         &mut self.chain
+    }
+
+    /// What this guard *would* do with `operation`, without invoking it.
+    ///
+    /// The same chain [`Invoker::invoke`] runs, on a [`CallContext`] built the
+    /// same way from the same three fields — and `self.conn` is not read. A
+    /// generated stub is compiled code and cannot be asked politely what it
+    /// intends; this is how an operator asks the guard instead, before handing
+    /// the stub out.
+    pub fn dry_run(&mut self, operation: &str) -> crate::dryrun::Prediction {
+        let ctx = CallContext {
+            registry: self.registry,
+            caller: self.caller.as_ref(),
+            target: self.id.as_str(),
+            operation,
+            approval: self.approval,
+        };
+        crate::dryrun::predict(&mut self.chain, &ctx)
     }
 }
 

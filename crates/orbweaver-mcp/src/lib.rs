@@ -39,6 +39,7 @@
 
 #![deny(missing_docs)]
 
+pub mod dryrun;
 pub mod embed;
 pub mod guard;
 pub mod handles;
@@ -184,8 +185,15 @@ impl<'a> Bridge<'a> {
     /// From the host, never from the agent's own request: a caller that can
     /// assert its own identity has no identity check.
     pub fn on_behalf_of(mut self, caller: Caller) -> Self {
-        self.caller = Some(caller);
+        self.set_caller(caller);
         self
+    }
+
+    /// The same, on a bridge that is already owned by something else — a
+    /// [`session::Session`], which builds its bridge internally and so cannot
+    /// use the consuming form.
+    pub fn set_caller(&mut self, caller: Caller) {
+        self.caller = Some(caller);
     }
 
     /// Who this session is on behalf of, for audit lines.
@@ -244,6 +252,70 @@ impl<'a> Bridge<'a> {
             operation,
             approval,
             self.caller.as_ref(),
+        )
+    }
+
+    /// What the gate **would** do with `operation` on `id`, having done
+    /// nothing: the fourth question, alongside search, describe and invoke.
+    ///
+    /// Keyed by repository id and not by handle, on purpose. The question is
+    /// asked *before* a deployment, when no handle has been issued to hold —
+    /// and resolving one is the step that produces an address, which is the
+    /// step this must not take. There is no connection parameter for the same
+    /// reason: not passing one is a rule a signature can keep.
+    ///
+    /// Not advertised in [`rpc::tool_definitions`], deliberately. The report
+    /// names operations the exposure hides and scopes the caller lacks —
+    /// exactly the facts §4.6 keeps out of `describe_interface` so that a
+    /// refusal cannot become an oracle for what sits behind it. It is an
+    /// **operator's** instrument, reached by the host process (and by
+    /// `orbweaver-mcp-server --dry-run`), not a fourth tool for the agent.
+    ///
+    /// See [`crate::dryrun`] for the audit decision and its argument.
+    pub fn dry_run(&mut self, id: &str, operation: &str, approval: Approval) -> Json {
+        let ctx = interceptor::CallContext {
+            registry: self.registry,
+            caller: self.caller.as_ref(),
+            target: id,
+            operation,
+            approval,
+        };
+        dryrun::predict(&mut self.chain, &ctx).to_json()
+    }
+
+    /// The same question for every operation of one interface.
+    ///
+    /// An interface outside this session's exposure is still answerable: every
+    /// row comes back not-exposed, which is the answer to "what would happen if
+    /// I allowlisted an agent onto this?" — minus the allowlisting.
+    pub fn dry_run_interface(&mut self, id: &str, approval: Approval) -> Json {
+        dryrun::survey(
+            &mut self.chain,
+            self.registry,
+            &self.exposure,
+            self.caller.as_ref(),
+            approval,
+            Some(id),
+        )
+    }
+
+    /// The question an operator asks before a deployment: for this caller and
+    /// this exposure, every operation and what would happen to it.
+    ///
+    /// The per-operation question is not the one that gets asked at that
+    /// moment — an exposure is signed off as a whole or not at all.
+    ///
+    /// The enumeration comes from this session's exposure snapshot and the
+    /// catalog; every *verdict* comes from the chain, which is the session's
+    /// real gate. Enumerating is not deciding.
+    pub fn dry_run_all(&mut self, approval: Approval) -> Json {
+        dryrun::survey(
+            &mut self.chain,
+            self.registry,
+            &self.exposure,
+            self.caller.as_ref(),
+            approval,
+            None,
         )
     }
 
@@ -358,11 +430,11 @@ impl<'a> Bridge<'a> {
     }
 }
 
-fn obj(pairs: impl IntoIterator<Item = (&'static str, Json)>) -> Json {
+pub(crate) fn obj(pairs: impl IntoIterator<Item = (&'static str, Json)>) -> Json {
     Json::Object(pairs.into_iter().map(|(k, v)| (k.to_owned(), v)).collect())
 }
 
-fn s(text: impl Into<String>) -> Json {
+pub(crate) fn s(text: impl Into<String>) -> Json {
     Json::String(text.into())
 }
 
@@ -1361,6 +1433,94 @@ mod tests {
         assert_eq!(b.stats().calls(forged, "balance"), 0, "a forged handle named no path");
         assert_eq!(b.stats().calls("IDL:bank/Account:1.0", "balance"), 1, "and touched no other");
         assert_eq!(b.audit().len(), 2, "both decisions are still on record");
+    }
+
+    // --- the dry-run tool surface ---
+
+    /// The tool method and the live gate must answer the same question the
+    /// same way — checked here through the *public* surface an operator uses,
+    /// not through the chain: `Bridge::check` is what a real call is gated by
+    /// and `Bridge::dry_run` is what the report is built from, and if those two
+    /// ever part company the report is worse than nothing.
+    #[test]
+    fn the_dry_run_tool_and_the_live_check_answer_alike() {
+        let r = registry(IDL);
+        let (_listener, ior) = dummy_target();
+        for exposure in [
+            Exposure::nothing(),
+            Exposure::nothing().allow_interface("IDL:bank/Account:1.0"),
+            Exposure::nothing().allow_operation("IDL:bank/Account:1.0", "balance"),
+        ] {
+            for caller in [None, Some(Caller::new("alice"))] {
+                for approved in [false, true] {
+                    let approval = Approval { destructive_approved: approved };
+                    let mut b = Bridge::new(&r, exposure.clone(), "s");
+                    if let Some(c) = caller.clone() {
+                        b.set_caller(c);
+                    }
+                    let h = b.handles().issue_checked(&ior).expect("issued");
+                    for op in ["balance", "close", "no_such_op"] {
+                        let live = b.check(h.as_str(), op, approval);
+                        let doc = b.dry_run("IDL:bank/Account:1.0", op, approval);
+                        let would = doc.get("would").and_then(Json::as_str).unwrap_or("");
+                        let case = format!("{op}/approved={approved}/caller={:?}", caller);
+                        match live {
+                            Ok(_) => assert_eq!(would, "allow", "{case}"),
+                            Err(e) => {
+                                assert_ne!(would, "allow", "{case}");
+                                // And the same reason, word for word: the
+                                // report's `why` is the live `Denied`'s own
+                                // rendering, not a paraphrase of it.
+                                assert_eq!(
+                                    doc.get("why").and_then(Json::as_str),
+                                    Some(e.to_string().as_str()),
+                                    "{case}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The bulk question, asked of a bridge that has no connection, no handle
+    /// and no target: the operator's position on the day before a deployment.
+    /// It answers, it leaves the promotion counters alone, and every line it
+    /// writes says it was a question.
+    #[test]
+    fn a_bulk_dry_run_needs_no_target_and_counts_nothing() {
+        let r = registry(IDL);
+        let exposure = Exposure::nothing()
+            .allow_interface("IDL:bank/Account:1.0")
+            .allow_operation("IDL:bank/Ledger:1.0", "total");
+        let mut b = Bridge::new(&r, exposure, "before-deployment");
+        b.set_caller(Caller::new("alice"));
+
+        let report = b.dry_run_all(Approval::default());
+        let Some(Json::Array(interfaces)) = report.get("interfaces") else { panic!("{report}") };
+        assert_eq!(interfaces.len(), 2);
+        assert_eq!(report.get("caller").and_then(Json::as_str), Some("alice"));
+        // balance and total allowed, close needing a human.
+        assert_eq!(
+            report.get("summary").and_then(|s| s.get("allow")),
+            Some(&Json::Number("2".into())),
+            "{report}"
+        );
+        assert_eq!(
+            report.get("summary").and_then(|s| s.get("need_approval")),
+            Some(&Json::Number("1".into())),
+            "{report}"
+        );
+
+        for op in ["balance", "close"] {
+            assert_eq!(b.stats().calls("IDL:bank/Account:1.0", op), 0, "{op}");
+        }
+        assert_eq!(b.audit().len(), 3, "one line per question");
+        for line in b.audit() {
+            let decision = line.split_whitespace().next().expect("a decision");
+            assert!(guard::is_hypothetical(decision), "{line}");
+        }
     }
 
     /// An invoker that swallows what reaches it, so a real `Guarded` can run

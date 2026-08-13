@@ -206,6 +206,14 @@ pub enum PromotionRegression {
         /// The line that did not parse.
         line: String,
     },
+    /// An audit line describes a call that never happened — a
+    /// [`crate::dryrun`] prediction, not a measurement. Comparing a promotion
+    /// against one would be gating a real change on a hypothesis, so the token
+    /// that distinguishes the two is checked rather than ignored.
+    HypotheticalAudit {
+        /// The dry-run line that was offered as evidence.
+        line: String,
+    },
 }
 
 impl std::fmt::Display for PromotionRegression {
@@ -231,6 +239,11 @@ impl std::fmt::Display for PromotionRegression {
             PromotionRegression::MalformedAudit { line } => {
                 write!(f, "cannot verify identity preservation: unparseable audit line {line:?}")
             }
+            PromotionRegression::HypotheticalAudit { line } => write!(
+                f,
+                "that audit line is a dry run and not a call: {line:?}. A promotion is gated on \
+                 what the two paths did, never on what they would have done"
+            ),
         }
     }
 }
@@ -241,6 +254,9 @@ impl std::error::Error for PromotionRegression {}
 /// [`crate::guard::Guarded`] and the dynamic path both write:
 /// `ALLOW caller=<principal> target=<id> operation=<op>`.
 struct AuditContext<'a> {
+    /// The line's first field: what was decided, and — since the dry run
+    /// landed — whether anything was actually done about it.
+    decision: &'a str,
     caller: &'a str,
     operation: &'a str,
 }
@@ -258,7 +274,11 @@ fn parse_audit(line: &str) -> Option<AuditContext<'_>> {
             operation = Some(v);
         }
     }
-    Some(AuditContext { caller: caller?, operation: operation? })
+    Some(AuditContext {
+        decision: line.split_whitespace().next()?,
+        caller: caller?,
+        operation: operation?,
+    })
 }
 
 /// The regression gate: may this static path replace the dynamic path it was
@@ -267,7 +287,11 @@ fn parse_audit(line: &str) -> Option<AuditContext<'_>> {
 /// `dynamic_audit` and `static_audit` are the audit lines the two paths wrote
 /// for the compared call, in the guard's format. The checks, in order:
 ///
-/// 1. Both audit lines must parse — an unverifiable line refuses.
+/// 1. Both audit lines must parse — an unverifiable line refuses. A line from
+///    a [`crate::dryrun`] parses and is still refused, by
+///    [`PromotionRegression::HypotheticalAudit`]: it records what a path
+///    *would* have done, and a promotion decided on that is decided on nothing
+///    that happened.
 /// 2. **The identity context must match.** Caller first: a differing caller
 ///    is [`PromotionRegression::IdentityDropped`], and it fires even when the
 ///    results are identical, because a right answer under the wrong principal
@@ -285,6 +309,14 @@ pub fn verify_promotion(
         .ok_or_else(|| PromotionRegression::MalformedAudit { line: dynamic_audit.to_owned() })?;
     let promoted = parse_audit(static_audit)
         .ok_or_else(|| PromotionRegression::MalformedAudit { line: static_audit.to_owned() })?;
+
+    // A prediction is not evidence. Checked before anything is compared,
+    // because comparing two hypotheticals would "pass" perfectly well.
+    for (line, parsed) in [(dynamic_audit, &dynamic), (static_audit, &promoted)] {
+        if crate::guard::is_hypothetical(parsed.decision) {
+            return Err(PromotionRegression::HypotheticalAudit { line: line.to_owned() });
+        }
+    }
 
     // Identity before results: I4's first test, see the module docs.
     if dynamic.caller != promoted.caller {
@@ -437,6 +469,39 @@ mod tests {
         let err =
             verify_promotion(&out, &out.clone(), "not an audit line", "also not one").unwrap_err();
         assert!(matches!(err, PromotionRegression::MalformedAudit { .. }), "{err}");
+    }
+
+    /// The hazard the dry run introduced, closed. A dry-run line is
+    /// well-formed, names a caller and an operation, and would sail through a
+    /// gate that only looked at those — while attesting to a call nobody made.
+    /// The line here is one a real `Guarded::dry_run` wrote.
+    #[test]
+    fn a_dry_run_line_is_refused_as_evidence_however_well_formed_it_is() {
+        let reg = registry();
+        let exposure = Exposure::nothing().allow_interface("IDL:bank/Account:1.0");
+        let mut g: Guarded<'_, Recorder> = Guarded::assemble(
+            Recorder { reached: Vec::new() },
+            &reg,
+            exposure,
+            Some(Caller::new("alice")),
+            "IDL:bank/Account:1.0".to_owned(),
+            Approval::default(),
+        );
+        g.dry_run("balance");
+        let hypothetical = g.audit().last().expect("the dry run was recorded").clone();
+        assert!(hypothetical.contains("caller=alice"), "{hypothetical}");
+
+        let real = static_audit_line(&reg, Some(Caller::new("alice")));
+        let out = outcome(orbweaver_dynamic::Value::Long(42));
+        let err = verify_promotion(&out, &out.clone(), &hypothetical, &real).unwrap_err();
+        assert_eq!(
+            err,
+            PromotionRegression::HypotheticalAudit { line: hypothetical.clone() },
+            "{err}"
+        );
+        // And in the other position too: neither side may be a prediction.
+        let err = verify_promotion(&out, &out.clone(), &real, &hypothetical).unwrap_err();
+        assert_eq!(err, PromotionRegression::HypotheticalAudit { line: hypothetical }, "{err}");
     }
 
     // --- the end-to-end shape: a real Guarded static path's audit line ---
