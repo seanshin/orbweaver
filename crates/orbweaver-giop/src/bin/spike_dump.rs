@@ -54,6 +54,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+
+    // The transport-identity row of the same §4.8 table: does this target
+    // advertise a TLS listener at all? Printed for the same reason as the
+    // csiv2 lines — "we can see SSLIOP endpoints" is a claim to measure on
+    // real IORs, not to assume. Dialing one is D002's business, not ours yet.
+    match orbweaver_giop::ssliop::advertised(&p.components) {
+        None => println!("ssliop  no TAG_SSL_SEC_TRANS"),
+        Some(Err(e)) => println!("ssliop  TAG_SSL_SEC_TRANS present but unreadable: {e}"),
+        Some(Ok(ssl)) => {
+            println!(
+                "ssliop  supports={:#06x} requires={:#06x} port={}",
+                ssl.target_supports, ssl.target_requires, ssl.port
+            );
+            if let Some((host, port)) = orbweaver_giop::ssliop::ssl_endpoint(p) {
+                println!("ssliop  TLS endpoint would be {host}:{port}");
+            }
+        }
+    }
     println!();
 
     let endian = match std::env::args().nth(3).as_deref() {
