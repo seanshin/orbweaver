@@ -717,6 +717,48 @@ echo "  note CSIv2 encoding is unit-tested in both byte orders; no peer here enf
 echo "       so interop remains a per-peer claim and is unmeasured (docs/PLAN.md §4.8)"
 [ "$id_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
+# ── Static generation: stream B ──────────────────────────────────────────────
+hr "static generation — stubs from the registry, oracle: static equals dynamic"
+# The dynamic path is the reference implementation — it is the one verified
+# against two independent ORBs — so a generated stub is correct exactly when
+# its bytes equal the dynamic bytes for the same values (§8). The generated
+# crate is deliberately OUTSIDE the workspace: compiling it proves the stubs
+# stand on the published crate surface alone.
+gen_fail=0
+GEN_OUT=$(mktemp -d)/genout
+if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
+     corpus/golden/*.idl spikes/echo.idl >/tmp/orbweaver-gen.log 2>&1; then
+  n_items=$(grep -o 'generated [0-9]* item' /tmp/orbweaver-gen.log | grep -o '[0-9]*')
+  echo "  ok   $n_items item(s) generated from the golden corpus plus the fixture"
+  grep '^skipped' /tmp/orbweaver-gen.log | sed 's/^/  note /'
+  if (cd "$GEN_OUT" && CARGO_TARGET_DIR="$ROOT/target" cargo build -q 2>/tmp/orbweaver-genc.log); then
+    echo "  ok   every generated stub compiles outside the workspace"
+    if start_server; then
+      so=$("$ROOT/target/debug/static-oracle" spikes/echo.ior spikes/echo.idl 2>&1)
+      if printf '%s' "$so" | grep -q "static generation: PASS"; then
+        echo "  ok   static bytes equal dynamic bytes: Ragged, wstring, any, sequence, both orders"
+        echo "  ok   the generated stub calls omniORB: 10/10 cases, both byte orders"
+      else
+        echo "  FAIL static did not equal dynamic"
+        printf '%s' "$so" | grep "FAIL" | head -3 | sed 's/^/       /'
+        gen_fail=1
+      fi
+    else
+      gen_fail=1
+    fi
+    cleanup
+  else
+    echo "  FAIL generated code does not compile"
+    head -5 /tmp/orbweaver-genc.log | sed 's/^/       /'
+    gen_fail=1
+  fi
+else
+  echo "  FAIL generation failed"; head -3 /tmp/orbweaver-gen.log | sed 's/^/       /'
+  gen_fail=1
+fi
+rm -rf "$(dirname "$GEN_OUT")"
+[ "$gen_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
 # ── Contract evolution: is the §5.3 rule table true? ─────────────────────────
 hr "contract evolution — §5.3 verdicts against a peer that predates the change"
 # The differ's verdicts are predictions about deployed peers. Asserting them

@@ -244,6 +244,8 @@ pub enum Error {
     },
     /// The IOR string could not be parsed.
     BadIor(&'static str),
+    /// Generated or dynamic decode found bytes that do not fit the contract.
+    Decode(&'static str),
     /// The IOR carried no IIOP profile to connect to.
     NoIiopProfile,
     /// The peer closed the connection cleanly. Per §9.4.7 the pending request
@@ -277,6 +279,7 @@ impl fmt::Display for Error {
             }
             Error::UserException { id, .. } => write!(f, "user exception {id}"),
             Error::BadIor(why) => write!(f, "bad IOR: {why}"),
+            Error::Decode(why) => write!(f, "decode: {why}"),
             Error::NoIiopProfile => write!(f, "IOR has no IIOP profile"),
             Error::ConnectionClosed => {
                 write!(f, "peer closed the connection; the request was not processed")

@@ -4,6 +4,7 @@ members = [
     "crates/orbweaver-cdr",
     "crates/orbweaver-dynamic",
     "crates/orbweaver-forge",
+    "crates/orbweaver-gen",
     "crates/orbweaver-giop",
     "crates/orbweaver-idl",
     "crates/orbweaver-mcp",

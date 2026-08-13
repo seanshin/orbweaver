@@ -1,0 +1,22 @@
+[package]
+name = "orbweaver-gen"
+description = "Static generation: Rust client stubs from the registry, oracle-checked against the dynamic path"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+orbweaver-cdr = { path = "../orbweaver-cdr" }
+orbweaver-giop = { path = "../orbweaver-giop", default-features = false }
+orbweaver-dynamic = { path = "../orbweaver-dynamic" }
+orbweaver-registry = { path = "../orbweaver-registry" }
+orbweaver-idl = { path = "../orbweaver-idl" }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "gen-corpus"
+path = "src/bin/gen_corpus.rs"

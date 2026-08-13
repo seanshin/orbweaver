@@ -566,8 +566,25 @@ impl Builder<'_> {
                             .collect::<Vec<_>>()
                     })
                     .collect();
-                let default_index =
-                    u.cases.iter().position(|c| c.is_default).map_or(-1, |i| i as i32);
+                // Indexed against the *expanded* case list. A branch with
+                // several labels becomes several cases, so any multi-label
+                // branch before the default shifts it — computing the position
+                // in the AST list pointed the default at the wrong case, and
+                // everything consuming this TypeCode (the dynamic invoker's
+                // branch selection, the peer we encode it for, the static
+                // generator) inherited the error. Found by the generator's
+                // union tests, which is stream B's oracle earning its keep.
+                let default_index = {
+                    let mut index = -1i32;
+                    let mut expanded = 0usize;
+                    for c in &u.cases {
+                        if c.is_default {
+                            index = expanded as i32;
+                        }
+                        expanded += c.labels.len().max(1);
+                    }
+                    index
+                };
                 TypeCode::Union {
                     id: id.clone(),
                     name,
@@ -839,6 +856,25 @@ mod tests {
         }
     }
 
+    /// A multi-label branch before the default used to shift the default
+    /// index: it was computed against the AST case list while the cases were
+    /// expanded, so the default pointed at the wrong branch. The dynamic
+    /// invoker selects default branches from this index, so it inherited the
+    /// error too.
+    #[test]
+    fn the_default_index_survives_multi_label_expansion() {
+        let r = load(
+            "module m { union U switch (long) { case 1: long one; case 2: case 3: string s; \
+             default: boolean b; }; };",
+        );
+        let Some(TypeCode::Union { cases, default_index, .. }) = r.typecode("IDL:m/U:1.0") else {
+            panic!("not a union");
+        };
+        assert_eq!(cases.len(), 4, "1, 2, 3, default");
+        assert_eq!(default_index, &3, "the default is the FOURTH expanded case");
+        assert_eq!(cases[3].name, "b");
+    }
+
     /// A branch with several labels becomes several cases sharing one member.
     #[test]
     fn multiple_labels_on_one_branch_expand() {
@@ -850,7 +886,14 @@ mod tests {
                 assert_eq!(cases.len(), 3, "two labels plus the default");
                 assert_eq!(cases[0].name, "both");
                 assert_eq!(cases[1].name, "both");
-                assert_eq!(*default_index, 1, "index of the default *branch*");
+                // This assertion used to read `default_index == 1, "index of
+                // the default *branch*"` — which pinned the bug. The TypeCode
+                // field indexes the expanded case list that goes on the wire
+                // (and that the dynamic invoker selects from), not the source
+                // branches; a test asserting the wrong semantics is how a wrong
+                // implementation survives its own test suite.
+                assert_eq!(*default_index, 2, "index into the EXPANDED cases");
+                assert_eq!(cases[2].name, "o");
             }
             other => panic!("{other:?}"),
         }
