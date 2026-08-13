@@ -6,7 +6,8 @@
 // Parameters the document named `e` are `ex` here: gen-corpus binds its
 // encoder closure argument as `e`, and this batch's compile oracle caught the
 // generated stub shadowing it (`e.put(e)`) — a generator hygiene bug, filed
-// for a crate-side fix; until then a param spelled `e` cannot be golden.
+// A parameter literally named `e` is kept ON PURPOSE: it pins the generator
+// hygiene fix (generated locals are __-prefixed so no IDL name can shadow them).
 module moe {
 
   typedef sequence<octet> Tensor;      // reference-carrying; never inlined
@@ -50,9 +51,9 @@ module moe {
 
   //@ ai_desc: Offer registry the trading service reads
   interface ExpertRegistry {
-    void register_expert(in Expert ex, in Capability cap);
-    void deregister(in Expert ex);
-    void heartbeat(in Expert ex, in Capability updated_cap);
+    void register_expert(in Expert e, in Capability cap);
+    void deregister(in Expert e);
+    void heartbeat(in Expert e, in Capability updated_cap);
   };
 
   //@ ai_desc: POA-backed loader: residency transitions, never per token

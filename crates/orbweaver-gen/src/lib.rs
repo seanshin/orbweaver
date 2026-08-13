@@ -626,42 +626,42 @@ fn emit_operation(
     // than a half-written message — the same rule the dynamic invoker follows.
     // No arguments, nothing that can fail, no probe.
     if !ins.is_empty() {
-        let _ = writeln!(s, "        let mut probe = rt::Encoder::new(self.conn.endian());");
+        let _ = writeln!(s, "        let mut __probe = rt::Encoder::new(self.conn.endian());");
         for p in &ins {
-            let _ = writeln!(s, "        {}.put(&mut probe)?;", ident(p));
+            let _ = writeln!(s, "        {}.put(&mut __probe)?;", ident(p));
         }
-        let _ = writeln!(s, "        probe.finish().map_err(rt::GiopError::Cdr)?;");
+        let _ = writeln!(s, "        __probe.finish().map_err(rt::GiopError::Cdr)?;");
     }
-    let closure_arg = if ins.is_empty() { "|_e|" } else { "|e|" };
+    let closure_arg = if ins.is_empty() { "|__e|" } else { "|__e|" };
     if sig.oneway {
         let _ = writeln!(s, "        self.conn.invoke_oneway(\"{wire_name}\", {closure_arg} {{");
         for p in &ins {
-            let _ = writeln!(s, "            let _ = {}.put(e);", ident(p));
+            let _ = writeln!(s, "            let _ = {}.put(__e);", ident(p));
         }
         let _ = writeln!(s, "        }})");
         let _ = writeln!(s, "    }}");
         return Ok(());
     }
-    let _ = writeln!(s, "        let reply = self.conn.invoke(\"{wire_name}\", {closure_arg} {{");
+    let _ = writeln!(s, "        let __reply = self.conn.invoke(\"{wire_name}\", {closure_arg} {{");
     for p in &ins {
-        let _ = writeln!(s, "            let _ = {}.put(e);", ident(p));
+        let _ = writeln!(s, "            let _ = {}.put(__e);", ident(p));
     }
     let _ = writeln!(s, "        }})?;");
     let mut reads: Vec<String> = Vec::new();
     if !matches!(sig.returns, TypeCode::Void) || !out_reads.is_empty() {
-        let _ = writeln!(s, "        let mut body = reply.body()?;");
+        let _ = writeln!(s, "        let mut __body = __reply.body()?;");
     }
     if !matches!(sig.returns, TypeCode::Void) {
-        let _ = writeln!(s, "        let ret_ = Cdr::get(&mut body)?;");
-        reads.push("ret_".into());
+        let _ = writeln!(s, "        let __ret = Cdr::get(&mut __body)?;");
+        reads.push("__ret".into());
     }
     for (i, name) in out_reads.iter().enumerate() {
-        let _ = writeln!(s, "        let out_{i} = Cdr::get(&mut body)?; // out {name}");
-        reads.push(format!("out_{i}"));
+        let _ = writeln!(s, "        let __out_{i} = Cdr::get(&mut __body)?; // out {name}");
+        reads.push(format!("__out_{i}"));
     }
     match reads.len() {
         0 => {
-            let _ = writeln!(s, "        let _ = reply;");
+            let _ = writeln!(s, "        let _ = __reply;");
             let _ = writeln!(s, "        Ok(())");
         }
         1 => {
