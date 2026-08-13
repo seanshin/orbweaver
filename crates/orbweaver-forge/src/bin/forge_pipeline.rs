@@ -1,237 +1,312 @@
-//! `forge-pipeline` — the §5.1 batch loop over a requirements directory.
+//! `forge-pipeline` — the §5 stages over a requirements set, in the §5.1 loop.
 //!
 //! ```text
-//! forge-pipeline --requirements <dir> --generator <command> --out <dir>
+//! forge-pipeline --out <dir>
+//!                [--requirements <dir>]
+//!                [--ingest <cmd>] [--synthesize <cmd>] [--annotate <cmd>]
+//!                [--from s1] [--to s4] [--only s3]
 //!                [--max-rounds N] [--register]
+//!                [--print-prompt s1|s2|s3]
 //! ```
 //!
-//! Every `.txt` file in the requirements directory is one item (id = file
-//! stem). Per item, the generator command is run as
+//! # One command contract for every stage
 //!
 //! ```text
-//! <command> <requirement-file>              round 1
-//! <command> <requirement-file> <repair>     later rounds; <repair> is a temp
-//!                                           file holding the S4 repair prompt
+//! <command> <input-file> [<repair-file>]
 //! ```
 //!
-//! and its stdout is the IDL, written to `<out>/<id>.idl` each round
-//! (overwritten on repair). Exit status: 0 all items valid, 1 some are not,
-//! 2 could not run at all.
+//! with `FORGE_STAGE` (`s1`, `s2` or `s3`) and `FORGE_PROMPT` (a file holding
+//! that stage's constraints, straight out of this crate) in the environment.
+//! Standard output is the artifact. One wrapper script therefore serves all
+//! three stages, and the prompt it uses is versioned with the checker that
+//! grades it — the 2026-08-13 run record's proposed rule, made mechanical:
+//! *a first-pass rate is meaningless without the prompt that produced it.*
 //!
-//! `--register` runs S5 after a batch in which every item is valid: the
-//! generated files are loaded into a registry (re-checked at the gate) and
-//! `<out>/exposure.todo.tsv` lists every exposable interface, all
-//! `exposed=no` — exposure is a human allowlist decision, never a pipeline
-//! side effect (`docs/PLAN.md` §7.4 I2). The registration is in-process; the
-//! durable catalog store (PLAN §6) is future work and S5 is its seam.
-//!
-//! The model is deliberately an external concern. A shell script wrapping an
-//! LLM CLI plugs in later without touching this crate:
-//!
-//! ```text
+//! ```sh
 //! #!/bin/sh
-//! # $1 = requirement file, $2 = repair prompt file (rounds 2+ only)
-//! claude -p "Write OMG IDL for this requirement. IDL only, no fences.
+//! # $1 = input file, $2 = repair prompt (rounds 2+ only)
+//! claude -p "$(cat "$FORGE_PROMPT")
+//!
 //! $(cat "$1")
 //! ${2:+$(cat "$2")}"
 //! ```
 //!
-//! Honesty note, per the project rules: no model has been run through this
-//! loop in this repository yet. The loop's mechanics are tested with scripted
-//! generators; a real generator's first-pass rate is unmeasured.
+//! # Artifacts, and re-running one stage
+//!
+//! ```text
+//! <out>/<id>.brief.json   S1
+//! <out>/<id>.idl          S2
+//! <out>/<id>.sidl.idl     S3
+//! ```
+//!
+//! `--from s3` reads the drafts already in `--out` and needs no requirements
+//! directory; `--only s4` re-gates whatever is there. Editing a brief by hand
+//! and re-running `--from s2` is the supported way to correct S1's reading,
+//! and it is not a special path — every stage always reads its input from the
+//! workspace.
+//!
+//! Exit status: 0 every item valid at every stage, 1 some are not, 2 could not
+//! run at all.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use orbweaver_forge::pipeline::{Generator, ItemStatus, register, run_batch};
+use orbweaver_forge::pipeline::{
+    CommandStage, EXPOSURE_TODO_FILE, ItemStatus, Pipeline, StageId, Workspace, register,
+    run_pipeline,
+};
 
-/// A generator that shells out: `<command> <requirement-file> [<repair-file>]`.
-///
-/// Items are recognized by their requirement text, which is why `main`
-/// refuses duplicate requirement contents up front — two ids sharing one text
-/// would be indistinguishable here, and a wrong guess would write one item's
-/// IDL over the other's.
-struct CommandGenerator {
-    command: String,
-    out_dir: PathBuf,
-    /// requirement text → (id, requirement file path)
-    by_text: HashMap<String, (String, PathBuf)>,
+fn usage() -> String {
+    format!(
+        "usage: forge-pipeline --out <dir> [--requirements <dir>]\n\
+         \x20   [--ingest <cmd>] [--synthesize <cmd>] [--annotate <cmd>]\n\
+         \x20   [--from {stages}] [--to {stages}] [--only {stages}]\n\
+         \x20   [--max-rounds N] [--register] [--print-prompt s1|s2|s3]\n\
+         \n\
+         Every producer is invoked as `<cmd> <input-file> [<repair-file>]`, with\n\
+         FORGE_STAGE and FORGE_PROMPT in the environment; stdout is the artifact.",
+        stages = "s1|s2|s3|s4"
+    )
 }
 
-impl Generator for CommandGenerator {
-    fn generate(&mut self, requirement: &str, repair: Option<&str>) -> Result<String, String> {
-        let (id, req_path) =
-            self.by_text.get(requirement).ok_or("internal: requirement text not in map")?;
-
-        let mut cmd = std::process::Command::new(&self.command);
-        cmd.arg(req_path);
-        let repair_file = match repair {
-            Some(text) => {
-                let path = std::env::temp_dir()
-                    .join(format!("forge-pipeline-{}-{id}.repair.txt", std::process::id()));
-                std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
-                cmd.arg(&path);
-                Some(path)
-            }
-            None => None,
-        };
-
-        let output = cmd.output().map_err(|e| format!("cannot run {}: {e}", self.command));
-        if let Some(path) = repair_file {
-            let _ = std::fs::remove_file(path);
-        }
-        let output = output?;
-        if !output.status.success() {
-            return Err(format!(
-                "generator exited {}: {}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
-        }
-
-        let idl = String::from_utf8_lossy(&output.stdout).into_owned();
-        // Written every round, valid or not: a batch that stops half way must
-        // leave what it had on disk, not in a lost variable.
-        let out = self.out_dir.join(format!("{id}.idl"));
-        std::fs::write(&out, &idl).map_err(|e| format!("{}: {e}", out.display()))?;
-        Ok(idl)
-    }
-}
-
-fn usage() -> &'static str {
-    "usage: forge-pipeline --requirements <dir> --generator <command> --out <dir> \
-     [--max-rounds N] [--register]"
+#[derive(Default)]
+struct Args {
+    out: Option<PathBuf>,
+    requirements: Option<PathBuf>,
+    ingest: Option<String>,
+    synthesize: Option<String>,
+    annotate: Option<String>,
+    from: Option<StageId>,
+    to: Option<StageId>,
+    max_rounds: Option<usize>,
+    do_register: bool,
 }
 
 fn main() -> ExitCode {
-    let mut requirements_dir: Option<PathBuf> = None;
-    let mut generator_cmd: Option<String> = None;
-    let mut out_dir: Option<PathBuf> = None;
-    let mut max_rounds = 3usize;
-    let mut do_register = false;
+    match run() {
+        Ok(code) => code,
+        Err(message) => {
+            eprintln!("{message}");
+            ExitCode::from(2)
+        }
+    }
+}
 
-    let mut args = std::env::args().skip(1);
-    while let Some(a) = args.next() {
+fn run() -> Result<ExitCode, String> {
+    let mut a = Args::default();
+    let mut argv = std::env::args().skip(1);
+    while let Some(arg) = argv.next() {
         let mut value =
-            |flag: &str| args.next().ok_or_else(|| format!("{flag} needs a value\n{}", usage()));
-        let result = match a.as_str() {
-            "--requirements" => value("--requirements").map(|v| requirements_dir = Some(v.into())),
-            "--generator" => value("--generator").map(|v| generator_cmd = Some(v)),
-            "--out" => value("--out").map(|v| out_dir = Some(v.into())),
-            "--max-rounds" => value("--max-rounds").and_then(|v| {
-                v.parse().map(|n| max_rounds = n).map_err(|_| format!("--max-rounds: {v:?}"))
-            }),
-            "--register" => {
-                do_register = true;
-                Ok(())
+            |flag: &str| argv.next().ok_or_else(|| format!("{flag} needs a value\n{}", usage()));
+        let stage = |flag: &str, v: String| {
+            StageId::parse(&v).ok_or_else(|| format!("{flag}: {v:?} is not a stage\n{}", usage()))
+        };
+        match arg.as_str() {
+            "--out" => a.out = Some(value("--out")?.into()),
+            "--requirements" => a.requirements = Some(value("--requirements")?.into()),
+            "--ingest" => a.ingest = Some(value("--ingest")?),
+            // `--generator` is what the 2026-08-13 run record invoked; kept so
+            // an existing harness keeps working against the split pipeline.
+            "--synthesize" | "--generator" => a.synthesize = Some(value("--synthesize")?),
+            "--annotate" => a.annotate = Some(value("--annotate")?),
+            "--from" => a.from = Some(stage("--from", value("--from")?)?),
+            "--to" => a.to = Some(stage("--to", value("--to")?)?),
+            "--only" => {
+                let s = stage("--only", value("--only")?)?;
+                a.from = Some(s);
+                a.to = Some(s);
+            }
+            "--max-rounds" => {
+                let v = value("--max-rounds")?;
+                a.max_rounds = Some(v.parse().map_err(|_| format!("--max-rounds: {v:?}"))?);
+            }
+            "--register" => a.do_register = true,
+            "--print-prompt" => {
+                let v = value("--print-prompt")?;
+                let s = stage("--print-prompt", v)?;
+                let prompt = s
+                    .prompt()
+                    .ok_or_else(|| format!("{} has no prompt: it is a check, not a producer", s))?;
+                print!("{prompt}");
+                return Ok(ExitCode::SUCCESS);
             }
             "-h" | "--help" => {
                 println!("{}", usage());
-                return ExitCode::SUCCESS;
+                return Ok(ExitCode::SUCCESS);
             }
-            other => Err(format!("unknown argument {other:?}\n{}", usage())),
-        };
-        if let Err(e) = result {
-            eprintln!("{e}");
-            return ExitCode::from(2);
+            other => return Err(format!("unknown argument {other:?}\n{}", usage())),
         }
     }
-    let (Some(req_dir), Some(command), Some(out_dir)) = (requirements_dir, generator_cmd, out_dir)
-    else {
-        eprintln!("{}", usage());
-        return ExitCode::from(2);
+
+    let out_dir = a.out.clone().ok_or_else(usage)?;
+    let workspace = Workspace::new(&out_dir);
+    std::fs::create_dir_all(&out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
+
+    // The range: what was asked for, or the smallest one the producers imply.
+    // Defaulting to "every stage" would demand an ingest command from every
+    // caller who only wanted to re-gate a directory.
+    let first = a.from.unwrap_or_else(|| {
+        if a.ingest.is_some() {
+            StageId::Ingest
+        } else if a.synthesize.is_some() {
+            StageId::Synthesize
+        } else if a.annotate.is_some() {
+            StageId::Annotate
+        } else {
+            StageId::Validate
+        }
+    });
+    let last = a.to.unwrap_or(StageId::Validate).min(StageId::Validate);
+
+    let items = collect_items(first, &a, &workspace)?;
+    if items.is_empty() {
+        return Err(format!(
+            "nothing to run: no item has an input artifact for {}\n{}",
+            first.title(),
+            usage()
+        ));
+    }
+
+    let scratch = out_dir.join(".forge");
+    let mut ingest = a.ingest.map(|c| CommandStage::new(StageId::Ingest, c, &scratch));
+    let mut synthesize = a.synthesize.map(|c| CommandStage::new(StageId::Synthesize, c, &scratch));
+    let mut annotate = a.annotate.map(|c| CommandStage::new(StageId::Annotate, c, &scratch));
+    let mut pipeline = Pipeline {
+        ingest: ingest.as_mut().map(|s| s as &mut dyn orbweaver_forge::pipeline::Stage),
+        synthesize: synthesize.as_mut().map(|s| s as &mut dyn orbweaver_forge::pipeline::Stage),
+        annotate: annotate.as_mut().map(|s| s as &mut dyn orbweaver_forge::pipeline::Stage),
+        first,
+        last,
+        max_rounds: a.max_rounds.unwrap_or(3),
     };
 
-    // One requirement per .txt file, id = stem, in name order so runs are
-    // comparable across machines.
-    let mut files: Vec<PathBuf> = match std::fs::read_dir(&req_dir) {
-        Ok(entries) => entries
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|x| x == "txt"))
-            .collect(),
-        Err(e) => {
-            eprintln!("{}: {e}", req_dir.display());
-            return ExitCode::from(2);
-        }
-    };
-    files.sort();
-    if files.is_empty() {
-        eprintln!("{}: no .txt requirement files", req_dir.display());
-        return ExitCode::from(2);
-    }
+    println!(
+        "range: {} → {} over {} item(s), {} repair round(s) allowed per stage",
+        first.title(),
+        last.title(),
+        items.len(),
+        pipeline.max_rounds
+    );
+    let report = run_pipeline(&mut pipeline, &workspace, &items).map_err(|e| e.to_string())?;
 
-    let mut requirements: Vec<(String, String)> = Vec::new();
-    let mut by_text: HashMap<String, (String, PathBuf)> = HashMap::new();
-    for path in files {
-        let id = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
-        let text = match std::fs::read_to_string(&path) {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("{}: {e}", path.display());
-                return ExitCode::from(2);
-            }
-        };
-        if let Some((other, _)) = by_text.get(&text) {
-            // The loop keys generator calls by requirement text; two ids with
-            // one text would be indistinguishable and one would silently
-            // shadow the other. Refusing is honest; guessing is not.
-            eprintln!("{id} and {other} have identical requirement text; ids must be distinct");
-            return ExitCode::from(2);
-        }
-        by_text.insert(text.clone(), (id.clone(), path));
-        requirements.push((id, text));
-    }
-
-    if let Err(e) = std::fs::create_dir_all(&out_dir) {
-        eprintln!("{}: {e}", out_dir.display());
-        return ExitCode::from(2);
-    }
-
-    let mut generator = CommandGenerator { command, out_dir: out_dir.clone(), by_text };
-    let report = run_batch(&mut generator, &requirements, max_rounds);
-
-    // The §5.1 summary: batch size, first-pass rate and round count stated
-    // separately, causes with affected counts, and a plain statement when the
-    // rounds ran out — never only a final number.
+    // The §5.1 summary, per stage: batch size, first-pass rate and round count
+    // stated separately, causes with affected counts, and a plain statement
+    // when the rounds ran out — never only a final number.
     print!("{report}");
-    for item in report.items.iter() {
-        if let ItemStatus::Invalid { repair_prompt } = &item.status {
-            println!("=== {}\n{repair_prompt}", item.id);
+    for stage in &report.stages {
+        for item in &stage.items {
+            if let ItemStatus::Invalid { repair_prompt } = &item.status {
+                println!("=== {} {}\n{repair_prompt}", stage.stage.tag(), item.id);
+            }
         }
+    }
+
+    // Attribution, in one line: "S4 passed" says something different about a
+    // file no annotation stage has seen.
+    if let Some(s4) = report.stage(StageId::Validate) {
+        let annotated = s4
+            .items
+            .iter()
+            .filter(|i| {
+                workspace
+                    .gated_artifact(&i.id)
+                    .is_some_and(|p| p.to_string_lossy().ends_with(".sidl.idl"))
+            })
+            .count();
+        println!(
+            "S4 gated {annotated} annotated file(s) and {} unannotated draft(s)",
+            s4.items.len().saturating_sub(annotated)
+        );
     }
 
     if !report.all_valid() {
-        if do_register {
+        if a.do_register {
             println!("S5: skipped — registration requires every item valid");
         }
-        return ExitCode::FAILURE;
+        return Ok(ExitCode::FAILURE);
     }
-    if do_register {
-        // S5. In-process registry plus a worksheet; the durable catalog
-        // (PLAN §6) is future work, and this call is its seam.
-        match register(&report, &out_dir) {
+    if a.do_register {
+        let Some(gated) = report.stage(StageId::Validate) else {
+            return Err("--register needs S4 in the range: nothing has been gated".to_owned());
+        };
+        match register(gated, &out_dir) {
             Ok(registration) => {
                 println!(
                     "S5: registered {} item(s); {} exposable interface(s), every one exposed=no",
-                    report.items.len(),
+                    gated.items.len(),
                     registration.exposable.len()
                 );
-                println!(
-                    "S5: allowlist worksheet: {}",
-                    out_dir.join(orbweaver_forge::pipeline::EXPOSURE_TODO_FILE).display()
-                );
+                println!("S5: allowlist worksheet: {}", out_dir.join(EXPOSURE_TODO_FILE).display());
             }
             Err(e) => {
                 eprintln!("S5 register: {e}");
                 // A gate refusal means an item was not valid after all (1);
                 // an unwritable worksheet means S5 could not run (2).
                 return match e {
-                    orbweaver_forge::pipeline::RegisterError::Io { .. } => ExitCode::from(2),
-                    _ => ExitCode::FAILURE,
+                    orbweaver_forge::pipeline::RegisterError::Io { .. } => Ok(ExitCode::from(2)),
+                    _ => Ok(ExitCode::FAILURE),
                 };
             }
         }
     }
-    ExitCode::SUCCESS
+    Ok(ExitCode::SUCCESS)
+}
+
+/// The `(id, input)` pairs for the first stage in the range.
+///
+/// S1 and a brief-less S2 read the requirements directory; every later stage
+/// reads the workspace, which is what makes "re-run from here" need nothing but
+/// `--out`.
+fn collect_items(
+    first: StageId,
+    args: &Args,
+    workspace: &Workspace,
+) -> Result<Vec<(String, String)>, String> {
+    let from_requirements = || -> Result<Vec<(String, String)>, String> {
+        let dir = args.requirements.as_ref().ok_or_else(|| {
+            format!("{} reads natural-language requirements: pass --requirements", first.title())
+        })?;
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map_err(|e| format!("{}: {e}", dir.display()))?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "txt"))
+            .collect();
+        // Name order, so runs are comparable across machines.
+        files.sort();
+        if files.is_empty() {
+            return Err(format!("{}: no .txt requirement files", dir.display()));
+        }
+        files
+            .into_iter()
+            .map(|path| {
+                let id = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+                let text = std::fs::read_to_string(&path)
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                Ok((id, text))
+            })
+            .collect()
+    };
+
+    let from_workspace = |stage: StageId| -> Result<Vec<(String, String)>, String> {
+        workspace
+            .ids_ready_for(stage)
+            .into_iter()
+            .map(|id| {
+                let text = workspace.load(stage, &id).map_err(|e| e.to_string())?;
+                Ok((id, text))
+            })
+            .collect()
+    };
+
+    match first {
+        StageId::Ingest => from_requirements(),
+        // S2 prefers a brief and falls back to prose. The fallback is the old
+        // single-prompt pipeline, and the report says which it was by whether
+        // an S1 stage ran — the coverage half of S2's gate is silent on prose.
+        StageId::Synthesize => {
+            let briefs = from_workspace(StageId::Synthesize)?;
+            if briefs.is_empty() { from_requirements() } else { Ok(briefs) }
+        }
+        other => from_workspace(other),
+    }
 }

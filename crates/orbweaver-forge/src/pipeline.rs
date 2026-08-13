@@ -1,61 +1,179 @@
-//! The §5.1 batch loop, run mechanically: generate → validate → repair →
-//! regenerate.
+//! The §5 pipeline as the stages §5 actually names, driven by the §5.1 batch
+//! loop.
 //!
-//! Every part of the loop already existed — the S4 gate ([`validate`]), the
-//! repair prompt ([`crate::Report::repair_prompt`], grouped by cause per
-//! §3.3), the requirements corpus — but nothing drove them over a set. This
-//! module is that driver, and it enforces the two load-bearing rules of §5.1
-//! structurally rather than by asking politely:
+//! ```text
+//! S1 ingest      requirement text   → brief JSON   gate: ingest::gate
+//! S2 synthesize  brief JSON         → .idl         gate: synthesize::gate
+//! S3 annotate    .idl               → .sidl.idl    gate: annotate::check_against
+//! S4 validate    the annotated file → verdict      gate: validate  (the gate)
+//! S5 register    valid SIDL         → catalog      register()
+//! ```
 //!
-//! - **No oracle peeking mid-pass.** Within a round, the generate loop over
-//!   every pending item completes before the validate loop begins; the
-//!   generator is handed no verdict while a pass is in flight. That keeps the
-//!   first-pass rate an honest measurement of the generator and keeps shared
-//!   causes visible — the same constraint §5.2 imposes on `batch-synth` by
-//!   withholding Bash, imposed here by control flow.
-//! - **Causes, not items.** Failures are recorded per rule per round, and the
-//!   text handed back for the next round is `repair_prompt()`, which states
-//!   each cause once with its occurrences under it. §3.3: the self-repair
-//!   loop is only as good as the messages it feeds on.
+//! # One shape for every stage
 //!
-//! The generator is a trait so the loop is testable **without a model API**;
-//! the tests drive it with scripted fakes. The real model is an external
-//! concern: the `forge-pipeline` binary invokes any command that reads a
-//! requirement file and prints IDL, so a shell script wrapping an LLM CLI
-//! plugs in later without touching this crate. Per the honesty rules, stated
-//! plainly: **no model has been run through this loop in this repository
-//! yet.** What is measured here is the loop's mechanics; the first-pass rate
-//! of a real generator is not, and nothing below pretends otherwise.
+//! A [`Stage`] is a **producer plus its own gate**. That is the whole
+//! abstraction, and it is what makes each stage runnable and measurable alone:
+//! [`run_batch`] drives any one of them over a whole set, in the §5.1 loop, and
+//! returns a [`BatchReport`] whose first-pass rate and round count are about
+//! *that stage*. A pipeline that can only run end to end can tell you the
+//! output is wrong; it cannot tell you which stage was wrong, and the entire
+//! reason S1 and S3 are stages rather than clauses in S2's prompt is
+//! attribution.
+//!
+//! # What the loop enforces structurally
+//!
+//! - **No oracle peeking mid-pass.** Within a round, the produce loop over
+//!   every pending item completes before the gate loop begins. §5.2 imposes
+//!   this on `batch-synth` by withholding Bash; here it is control flow.
+//! - **Causes, not items.** Failures are grouped per rule per round — each
+//!   cause carrying the ids it affected, which is what §5.1 asks the oracle
+//!   step to produce — and the text handed back is
+//!   [`crate::Report::repair_prompt`], which states each cause once with its
+//!   occurrences under it.
+//!
+//! # Re-running a stage alone
+//!
+//! Every stage writes its output to a [`Workspace`] and reads its input from
+//! the one before it, so `--from s3` is not a special path: it is the ordinary
+//! path with the earlier artifacts already on disk. A human who edits
+//! `R07.brief.json` and re-runs from S2 is using the same mechanism the full
+//! run uses, which is why editing a brief is a supported operation rather than
+//! a hope.
+//!
+//! **모든 단계는 같은 모양이다: 생산자 + 자기 게이트.** 그래서 각 단계를 단독
+//! 실행·측정할 수 있고, 실패를 어느 단계 탓인지 말할 수 있다.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use orbweaver_registry::Registry;
 
-use crate::{Severity, validate};
+use crate::ingest::Brief;
+use crate::{Report, Severity, annotate, ingest, synthesize, validate};
 
-/// Something that turns a requirement into IDL text.
-///
-/// `repair` is the S4 repair prompt produced for **this item** in the previous
-/// round, `None` on the first attempt. It is the only feedback channel the
-/// loop offers, deliberately: §3.3 says the diagnostics are the product, and a
-/// generator that needs more than the diagnostics is a report about the
-/// diagnostics.
-pub trait Generator {
-    /// Produce IDL for `requirement`, or say why that was impossible.
-    ///
-    /// An `Err` is a per-item failure the report carries honestly — an API
-    /// outage must not read as "the model wrote invalid IDL", and must never
-    /// panic the batch. The item is retried in later rounds with the same
-    /// `repair` context it had, since a transport failure carries no new
-    /// information about the IDL.
-    fn generate(&mut self, requirement: &str, repair: Option<&str>) -> Result<String, String>;
+/// One stage of the §5 pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StageId {
+    /// S1 — requirements in, a [`Brief`] out.
+    Ingest,
+    /// S2 — a brief in, an IDL draft out.
+    Synthesize,
+    /// S3 — a draft in, SIDL out.
+    Annotate,
+    /// S4 — the gate.
+    Validate,
+    /// S5 — registration.
+    Register,
 }
 
-/// Where one item ended up when the loop stopped.
+impl StageId {
+    /// Every stage, in pipeline order.
+    pub const ORDER: [StageId; 5] = [
+        StageId::Ingest,
+        StageId::Synthesize,
+        StageId::Annotate,
+        StageId::Validate,
+        StageId::Register,
+    ];
+
+    /// The short name used on the command line: `s1` … `s5`.
+    pub fn tag(self) -> &'static str {
+        match self {
+            StageId::Ingest => "s1",
+            StageId::Synthesize => "s2",
+            StageId::Annotate => "s3",
+            StageId::Validate => "s4",
+            StageId::Register => "s5",
+        }
+    }
+
+    /// The name used in reports: `S1 ingest`.
+    pub fn title(self) -> &'static str {
+        match self {
+            StageId::Ingest => "S1 ingest",
+            StageId::Synthesize => "S2 synthesize",
+            StageId::Annotate => "S3 annotate",
+            StageId::Validate => "S4 validate",
+            StageId::Register => "S5 register",
+        }
+    }
+
+    /// Accepts `s1`, `S1` or the stage's own word (`ingest`).
+    pub fn parse(text: &str) -> Option<StageId> {
+        let t = text.trim().to_ascii_lowercase();
+        StageId::ORDER.into_iter().find(|s| {
+            s.tag() == t || s.title().split_whitespace().nth(1).is_some_and(|word| word == t)
+        })
+    }
+
+    /// Position in the pipeline, 0-based.
+    pub fn index(self) -> usize {
+        StageId::ORDER.iter().position(|s| *s == self).unwrap_or(0)
+    }
+
+    /// The file name suffix this stage's artifact carries, if it writes one.
+    ///
+    /// S4 and S5 produce verdicts and catalog entries, not files, so they have
+    /// no suffix — which is also why they cannot be re-run from an artifact of
+    /// their own.
+    pub fn artifact_suffix(self) -> Option<&'static str> {
+        match self {
+            StageId::Ingest => Some(".brief.json"),
+            StageId::Synthesize => Some(".idl"),
+            StageId::Annotate => Some(".sidl.idl"),
+            StageId::Validate | StageId::Register => None,
+        }
+    }
+
+    /// The constraints this stage's prompt carries, for a wrapper script that
+    /// wants them (`forge-pipeline --print-prompt s3`).
+    pub fn prompt(self) -> Option<&'static str> {
+        match self {
+            StageId::Ingest => Some(ingest::S1_PROMPT),
+            StageId::Synthesize => Some(synthesize::S2_PROMPT),
+            StageId::Annotate => Some(annotate::S3_PROMPT),
+            StageId::Validate | StageId::Register => None,
+        }
+    }
+}
+
+impl std::fmt::Display for StageId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.title())
+    }
+}
+
+/// A producer and the deterministic gate that judges what it produced.
+///
+/// Both halves belong to the stage. A producer with someone else's gate cannot
+/// be measured — its failures land in another stage's numbers — and a gate with
+/// no producer is a check, not a stage.
+pub trait Stage {
+    /// Which stage this is.
+    fn id(&self) -> StageId;
+
+    /// Turn one input artifact into one output artifact.
+    ///
+    /// `repair` is the gate's own [`crate::Report::repair_prompt`] for **this
+    /// item** in the previous round, `None` on the first attempt. It is the
+    /// only feedback channel, deliberately: §3.3 says the diagnostics are the
+    /// product, and a producer that needs more than the diagnostics is a report
+    /// about the diagnostics.
+    ///
+    /// An `Err` is a per-item failure carried honestly — an API outage must not
+    /// read as "the model wrote invalid IDL" and must never panic the batch.
+    fn produce(&mut self, input: &str, repair: Option<&str>) -> Result<String, String>;
+
+    /// Judge one output. `input` is what the stage was given, for the checks
+    /// that only make sense as a comparison (did the brief survive; did the
+    /// contract change).
+    fn gate(&self, input: &str, output: &str) -> Report;
+}
+
+/// Where one item ended up when a stage's loop stopped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ItemStatus {
-    /// S4 accepted it.
+    /// The stage's gate accepted it.
     Valid,
     /// Still rejected when the rounds ran out.
     Invalid {
@@ -63,51 +181,62 @@ pub enum ItemStatus {
         /// caller (or a human) can pick up exactly where the loop stopped.
         repair_prompt: String,
     },
-    /// The generator itself failed; nothing here says anything about IDL.
+    /// The producer itself failed; nothing here says anything about the
+    /// artifact.
     Error {
-        /// The generator's own words, verbatim.
+        /// The producer's own words, verbatim.
         message: String,
     },
 }
 
-/// One item's outcome.
+/// One item's outcome in one stage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ItemReport {
     /// The item's identifier, as given by the caller.
     pub id: String,
     /// Where it ended up.
     pub status: ItemStatus,
-    /// How many rounds this item was generated in. 1 means it passed (or was
+    /// How many rounds this item ran in this stage. 1 means it passed (or was
     /// abandoned) first try; 0 means it was never attempted (`max_rounds` 0).
     pub rounds: usize,
-    /// The last IDL the generator produced for it, `None` if it never
-    /// produced any. Kept even when invalid — a failed batch you can inspect
-    /// beats a failed batch you cannot.
-    pub idl: Option<String>,
+    /// The last artifact the producer emitted, `None` if it never emitted one.
+    /// Kept even when invalid — a failed batch you can inspect beats one you
+    /// cannot.
+    pub output: Option<String>,
 }
 
-/// What one batch run measured, in the shape §5.1 requires it reported.
+/// What one batch through **one stage** measured, in the shape §5.1 requires.
 ///
-/// The first-pass rate and the round count are carried **separately** and
-/// [`std::fmt::Display`] prints them separately: the first measures the
-/// generator, the second measures the oracle, and a single "final" number
-/// would hide whichever of the two is the problem.
+/// The first-pass rate and the round count are carried separately and printed
+/// separately: the first measures the producer, the second measures the gate,
+/// and a single "final" number would hide whichever of the two is the problem.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchReport {
+    /// Which stage this is a report about.
+    pub stage: StageId,
     /// Per-item outcomes, in the caller's order.
     pub items: Vec<ItemReport>,
     /// How many items were valid after round 1 — measured before any repair,
-    /// which is what makes it a statement about the generator.
+    /// which is what makes it a statement about the producer.
     pub first_pass_valid: usize,
     /// How many rounds actually ran.
     pub rounds_used: usize,
     /// The limit the caller set, so "ran out" is distinguishable from
     /// "converged".
     pub max_rounds: usize,
-    /// Causes seen per round: rule name → number of affected items. A
-    /// generator `Err` appears under the pseudo-rule `generator-error` so it
-    /// is counted, never lost — an unmeasured failure is still a failure.
-    pub causes: Vec<BTreeMap<String, usize>>,
+    /// Causes seen per round: rule name → **the items it affected**, in batch
+    /// order.
+    ///
+    /// Items rather than a count, because §5.1 says the output of the oracle
+    /// step is "a list of causes with their affected items". A count tells you
+    /// a cause hit two files and leaves you re-running the batch to find out
+    /// which two — measured the hard way on 2026-08-13, when the run record
+    /// could not say whether `identifier-case-clash` and `enclosing-scope-clash`
+    /// were one item with two rules or two items with one each.
+    ///
+    /// A producer `Err` appears under the pseudo-rule `producer-error` so it is
+    /// counted, never lost — an unmeasured failure is still a failure.
+    pub causes: Vec<BTreeMap<String, Vec<String>>>,
 }
 
 impl BatchReport {
@@ -120,92 +249,109 @@ impl BatchReport {
         self.first_pass_valid as f64 / self.items.len() as f64
     }
 
-    /// Whether every item ended valid — the CLI's exit code, and nothing
-    /// a caller should quote without the two numbers behind it.
+    /// Whether every item ended valid — and nothing a caller should quote
+    /// without the two numbers behind it.
     pub fn all_valid(&self) -> bool {
         self.items.iter().all(|i| i.status == ItemStatus::Valid)
+    }
+
+    /// The items this stage accepted, in order.
+    pub fn valid(&self) -> impl Iterator<Item = &ItemReport> {
+        self.items.iter().filter(|i| i.status == ItemStatus::Valid)
+    }
+
+    /// The items one rule affected in one round, empty if it did not fire.
+    /// `round` is 0-based.
+    pub fn affected(&self, round: usize, rule: &str) -> &[String] {
+        self.causes.get(round).and_then(|r| r.get(rule)).map(Vec::as_slice).unwrap_or_default()
     }
 }
 
 impl std::fmt::Display for BatchReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "batch: {} item(s)", self.items.len())?;
+        writeln!(f, "{}: {} item(s)", self.stage.title(), self.items.len())?;
         writeln!(
             f,
-            "first-pass: {}/{} valid ({:.0}%) — after round 1, before any repair",
+            "  first-pass: {}/{} valid ({:.0}%) — after round 1, before any repair",
             self.first_pass_valid,
             self.items.len(),
             self.first_pass_rate() * 100.0
         )?;
-        writeln!(f, "rounds: {} used, {} allowed", self.rounds_used, self.max_rounds)?;
+        writeln!(f, "  rounds: {} used, {} allowed", self.rounds_used, self.max_rounds)?;
         for (i, round) in self.causes.iter().enumerate() {
             if round.is_empty() {
-                writeln!(f, "  round {}: no causes", i + 1)?;
+                writeln!(f, "    round {}: no causes", i + 1)?;
             } else {
-                for (rule, n) in round {
-                    writeln!(f, "  round {}: [{rule}] {n} item(s)", i + 1)?;
+                for (rule, ids) in round {
+                    writeln!(
+                        f,
+                        "    round {}: [{rule}] {} item(s): {}",
+                        i + 1,
+                        ids.len(),
+                        ids.join(", ")
+                    )?;
                 }
             }
         }
         let failed: Vec<&ItemReport> =
             self.items.iter().filter(|i| i.status != ItemStatus::Valid).collect();
         if failed.is_empty() {
-            writeln!(f, "result: all {} item(s) valid", self.items.len())
+            writeln!(f, "  result: all {} item(s) valid", self.items.len())
         } else {
             // The honesty rule: exhausting the rounds with failures is the
             // headline, never a footnote under a final number.
             writeln!(
                 f,
-                "result: NOT all valid — {} item(s) still failing after {} round(s):",
+                "  result: NOT all valid — {} item(s) still failing after {} round(s):",
                 failed.len(),
                 self.rounds_used
             )?;
             for item in failed {
                 let why = match &item.status {
-                    ItemStatus::Invalid { .. } => "rejected by S4",
+                    ItemStatus::Invalid { .. } => "rejected by the stage gate",
                     ItemStatus::Error { message } => message.as_str(),
                     ItemStatus::Valid => unreachable!("filtered above"),
                 };
-                writeln!(f, "  {}: {why}", item.id)?;
+                writeln!(f, "    {}: {why}", item.id)?;
             }
             Ok(())
         }
     }
 }
 
-/// Runs the §5.1 loop over a requirements set: `(id, requirement text)` pairs.
+/// Runs the §5.1 loop over a set through **one** stage: `(id, input)` pairs.
 ///
-/// Round 1 generates **every** item before any validation — the generate loop
-/// completes before the validate loop starts, so there is no code path on
-/// which a verdict reaches the generator mid-pass. Then the whole round is
-/// validated at once, failures are recorded by rule, and each failed item's
-/// next round carries its own `repair_prompt()`. Rounds repeat until a round
-/// ends clean or `max_rounds` is spent; either way the report says which.
+/// Round 1 produces **every** item before any gating — the produce loop
+/// completes before the gate loop starts, so there is no code path on which a
+/// verdict reaches the producer mid-pass. Then the whole round is gated at
+/// once, failures are recorded by rule, and each failed item's next round
+/// carries its own `repair_prompt()`. Rounds repeat until a round ends clean or
+/// `max_rounds` is spent; either way the report says which.
 pub fn run_batch(
-    generator: &mut dyn Generator,
-    requirements: &[(String, String)],
+    stage: &mut dyn Stage,
+    items: &[(String, String)],
     max_rounds: usize,
 ) -> BatchReport {
     struct State {
         status: ItemStatus,
         repair: Option<String>,
         rounds: usize,
-        idl: Option<String>,
+        output: Option<String>,
     }
-    let mut states: Vec<State> = requirements
+    let mut states: Vec<State> = items
         .iter()
         .map(|_| State {
             // Overwritten by the first round; survives only when max_rounds
             // is 0, in which case it is the truth.
-            status: ItemStatus::Error { message: "never generated: max_rounds is 0".into() },
+            status: ItemStatus::Error { message: "never produced: max_rounds is 0".into() },
             repair: None,
             rounds: 0,
-            idl: None,
+            output: None,
         })
         .collect();
 
-    let mut pending: Vec<usize> = (0..requirements.len()).collect();
-    let mut causes: Vec<BTreeMap<String, usize>> = Vec::new();
+    let mut pending: Vec<usize> = (0..items.len()).collect();
+    let mut causes: Vec<BTreeMap<String, Vec<String>>> = Vec::new();
     let mut first_pass_valid = 0;
     let mut rounds_used = 0;
 
@@ -215,28 +361,31 @@ pub fn run_batch(
         }
         rounds_used = round;
 
-        // Generate phase: the whole pending set, no validation interleaved.
+        // Produce phase: the whole pending set, no gating interleaved.
         // §5.1 rule 1 lives in the shape of this loop.
         let mut produced: Vec<(usize, Result<String, String>)> = Vec::new();
         for &i in &pending {
             let state = &mut states[i];
             state.rounds = round;
-            produced.push((i, generator.generate(&requirements[i].1, state.repair.as_deref())));
+            produced.push((i, stage.produce(&items[i].1, state.repair.as_deref())));
         }
 
-        // Oracle phase: only now does anything get validated.
-        let mut round_causes: BTreeMap<String, usize> = BTreeMap::new();
+        // Gate phase: only now does anything get judged.
+        let mut round_causes: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut still_failing: Vec<usize> = Vec::new();
         for (i, result) in produced {
             match result {
                 Err(message) => {
-                    *round_causes.entry("generator-error".into()).or_default() += 1;
+                    round_causes
+                        .entry("producer-error".into())
+                        .or_default()
+                        .push(items[i].0.clone());
                     states[i].status = ItemStatus::Error { message };
                     still_failing.push(i);
                 }
                 Ok(text) => {
-                    let report = validate(&text);
-                    states[i].idl = Some(text);
+                    let report = stage.gate(&items[i].1, &text);
+                    states[i].output = Some(text);
                     if report.is_ok() {
                         states[i].status = ItemStatus::Valid;
                     } else {
@@ -250,7 +399,10 @@ pub fn run_batch(
                             .map(|x| x.rule.as_str())
                             .collect();
                         for rule in rules {
-                            *round_causes.entry(rule.to_owned()).or_default() += 1;
+                            round_causes
+                                .entry(rule.to_owned())
+                                .or_default()
+                                .push(items[i].0.clone());
                         }
                         let prompt = report.repair_prompt();
                         states[i].repair = Some(prompt.clone());
@@ -262,21 +414,22 @@ pub fn run_batch(
         }
 
         if round == 1 {
-            first_pass_valid = requirements.len() - still_failing.len();
+            first_pass_valid = items.len() - still_failing.len();
         }
         causes.push(round_causes);
         pending = still_failing;
     }
 
     BatchReport {
-        items: requirements
+        stage: stage.id(),
+        items: items
             .iter()
             .zip(states)
             .map(|((id, _), s)| ItemReport {
                 id: id.clone(),
                 status: s.status,
                 rounds: s.rounds,
-                idl: s.idl,
+                output: s.output,
             })
             .collect(),
         first_pass_valid,
@@ -284,6 +437,486 @@ pub fn run_batch(
         max_rounds,
         causes,
     }
+}
+
+/// The gate as a stage: S4, whose producer is the identity.
+///
+/// S4 is a verdict, not a rewrite, so its "producer" hands its input straight
+/// through and the loop runs for exactly one round. Modelling it as a [`Stage`]
+/// anyway is what lets `--from s4 --to s4` re-gate a directory of files with
+/// the same code path, the same report shape and the same numbers as a full
+/// run.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ValidateStage;
+
+impl Stage for ValidateStage {
+    fn id(&self) -> StageId {
+        StageId::Validate
+    }
+
+    fn produce(&mut self, input: &str, _repair: Option<&str>) -> Result<String, String> {
+        Ok(input.to_owned())
+    }
+
+    fn gate(&self, _input: &str, output: &str) -> Report {
+        validate(output)
+    }
+}
+
+/// A stage backed by an external command — the seam a model plugs into.
+///
+/// The contract is the same for every stage, so one wrapper script serves all
+/// three:
+///
+/// ```text
+/// <command> <input-file> [<repair-file>]
+/// ```
+///
+/// with `FORGE_STAGE` (`s1`/`s2`/`s3`) and `FORGE_PROMPT` (a file holding that
+/// stage's constraints) in the environment. Standard output is the artifact.
+/// A non-zero exit is a producer error, recorded as such and never as "the
+/// model wrote something invalid".
+///
+/// The prompt is passed as a file rather than baked into the wrapper because
+/// the 2026-08-13 run record's proposed rule applies here: *a first-pass rate
+/// is meaningless without the prompt that produced it*, and a prompt that lives
+/// in this crate is versioned with the checker that grades it.
+pub struct CommandStage {
+    stage: StageId,
+    command: String,
+    scratch: PathBuf,
+}
+
+impl CommandStage {
+    /// A stage that shells out to `command`. `scratch` holds the temporary
+    /// input, repair and prompt files.
+    pub fn new(stage: StageId, command: impl Into<String>, scratch: impl Into<PathBuf>) -> Self {
+        CommandStage { stage, command: command.into(), scratch: scratch.into() }
+    }
+
+    fn write(&self, name: &str, text: &str) -> Result<PathBuf, String> {
+        std::fs::create_dir_all(&self.scratch)
+            .map_err(|e| format!("{}: {e}", self.scratch.display()))?;
+        let path = self.scratch.join(name);
+        std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(path)
+    }
+}
+
+impl Stage for CommandStage {
+    fn id(&self) -> StageId {
+        self.stage
+    }
+
+    fn produce(&mut self, input: &str, repair: Option<&str>) -> Result<String, String> {
+        // S2 is handed the brief's *rendering*, not its JSON: the JSON is the
+        // canonical artifact a human edits, and the rendering is what a prompt
+        // can use. Prose input (S1 skipped) passes straight through.
+        let prepared = match (self.stage, Brief::parse(input)) {
+            (StageId::Synthesize, Ok(brief)) => brief.to_prompt(),
+            _ => input.to_owned(),
+        };
+
+        // One scratch file per stage, rewritten per call: `run_batch` calls
+        // producers one at a time, and a name per item would leave a directory
+        // of stale inputs beside the artifacts a human is meant to read.
+        let pid = std::process::id();
+        let input_file = self.write(&format!("{}-{pid}.input", self.stage.tag()), &prepared)?;
+        let mut cmd = std::process::Command::new(&self.command);
+        cmd.arg(&input_file);
+        cmd.env("FORGE_STAGE", self.stage.tag());
+        if let Some(prompt) = self.stage.prompt() {
+            let path = self.write(&format!("{}.prompt.txt", self.stage.tag()), prompt)?;
+            cmd.env("FORGE_PROMPT", &path);
+        }
+        if let Some(text) = repair {
+            let path = self.write(&format!("{}-{pid}.repair", self.stage.tag()), text)?;
+            cmd.arg(&path);
+        }
+
+        let output = cmd.output().map_err(|e| format!("cannot run {}: {e}", self.command))?;
+        if !output.status.success() {
+            return Err(format!(
+                "{} exited {}: {}",
+                self.command,
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    fn gate(&self, input: &str, output: &str) -> Report {
+        gate_for(self.stage, input, output)
+    }
+}
+
+/// The gate belonging to a stage, as a free function.
+///
+/// Exposed so a caller can check one artifact without constructing a producer:
+/// `gate_for(StageId::Annotate, draft, annotated)` is S3's whole verdict on one
+/// file.
+pub fn gate_for(stage: StageId, input: &str, output: &str) -> Report {
+    match stage {
+        StageId::Ingest => ingest::gate(output),
+        StageId::Synthesize => synthesize::gate(input, output),
+        StageId::Annotate => annotate::check_against(input, output),
+        StageId::Validate | StageId::Register => validate(output),
+    }
+}
+
+/// The directory the stages hand artifacts to each other through.
+///
+/// One file per item per stage, named by the item id, so a rerun that skips
+/// earlier stages is the ordinary path with the earlier files already present.
+#[derive(Debug, Clone)]
+pub struct Workspace {
+    root: PathBuf,
+}
+
+impl Workspace {
+    /// A workspace rooted at `root`. The directory is created on first write.
+    pub fn new(root: impl Into<PathBuf>) -> Workspace {
+        Workspace { root: root.into() }
+    }
+
+    /// The directory itself.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Where a stage's artifact for `id` lives, or `None` for the stages that
+    /// produce verdicts rather than files.
+    pub fn artifact(&self, stage: StageId, id: &str) -> Option<PathBuf> {
+        stage.artifact_suffix().map(|suffix| self.root.join(format!("{id}{suffix}")))
+    }
+
+    /// The file S4 gates for `id`: S3's output if it exists, else S2's.
+    ///
+    /// Which one it was is worth printing, because "S4 passed" means something
+    /// different about a file no annotation stage has seen.
+    pub fn gated_artifact(&self, id: &str) -> Option<PathBuf> {
+        let annotated = self.artifact(StageId::Annotate, id)?;
+        if annotated.exists() {
+            return Some(annotated);
+        }
+        let draft = self.artifact(StageId::Synthesize, id)?;
+        draft.exists().then_some(draft)
+    }
+
+    /// Writes a stage's artifact, canonicalising a brief so the file a human
+    /// opens is one they can read.
+    pub fn store(&self, stage: StageId, id: &str, text: &str) -> Result<(), PipelineError> {
+        let Some(path) = self.artifact(stage, id) else { return Ok(()) };
+        let body = match stage {
+            StageId::Ingest => match Brief::parse(text) {
+                Ok(brief) => brief.to_text(),
+                // Not a brief: keep exactly what was produced. A gate failure a
+                // human cannot see is a gate failure nobody can fix.
+                Err(_) => text.to_owned(),
+            },
+            _ => text.to_owned(),
+        };
+        let io =
+            |e: std::io::Error| PipelineError::Io { path: path.clone(), message: e.to_string() };
+        std::fs::create_dir_all(&self.root).map_err(io)?;
+        std::fs::write(&path, body).map_err(io)
+    }
+
+    /// Reads the artifact a stage would **consume** for `id` — the previous
+    /// stage's output, which is what makes resuming and running through the
+    /// same path.
+    pub fn load(&self, stage: StageId, id: &str) -> Result<String, PipelineError> {
+        let path = match stage {
+            StageId::Validate | StageId::Register => self.gated_artifact(id),
+            other => input_stage(other).and_then(|previous| self.artifact(previous, id)),
+        };
+        let Some(path) = path else {
+            return Err(PipelineError::MissingInput { stage, id: id.to_owned() });
+        };
+        std::fs::read_to_string(&path)
+            .map_err(|e| PipelineError::Io { path, message: e.to_string() })
+    }
+
+    /// The ids whose **input** artifact for `stage` is already on disk.
+    ///
+    /// This is how `--from s3` finds its work without being told: the drafts
+    /// that exist are the items. Returned sorted, so runs are comparable across
+    /// machines.
+    pub fn ids_ready_for(&self, stage: StageId) -> Vec<String> {
+        let Some(previous) = input_stage(stage) else { return Vec::new() };
+        let Some(suffix) = previous.artifact_suffix() else { return Vec::new() };
+        let Ok(entries) = std::fs::read_dir(&self.root) else { return Vec::new() };
+        let mut ids: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().to_str().map(str::to_owned))
+            .filter_map(|name| {
+                // `.idl` must not swallow `.sidl.idl`: the draft set and the
+                // annotated set are different sets of files.
+                if previous == StageId::Synthesize && name.ends_with(".sidl.idl") {
+                    return None;
+                }
+                name.strip_suffix(suffix).map(str::to_owned)
+            })
+            .collect();
+        ids.sort();
+        ids
+    }
+}
+
+/// The stage whose artifact `stage` consumes, or `None` for S1.
+fn input_stage(stage: StageId) -> Option<StageId> {
+    match stage {
+        StageId::Ingest => None,
+        StageId::Synthesize => Some(StageId::Ingest),
+        StageId::Annotate => Some(StageId::Synthesize),
+        // S4 and S5 gate whatever the last producing stage left; `load` resolves
+        // that to the annotated file if there is one.
+        StageId::Validate | StageId::Register => Some(StageId::Annotate),
+    }
+}
+
+/// Why a run could not start, or could not continue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PipelineError {
+    /// Nothing in the range could run: no producer falls inside it and the
+    /// gate is outside it. Refused rather than reported as a clean empty run —
+    /// an unmeasured check is a failure, never a pass.
+    NothingToRun {
+        /// The requested first stage.
+        first: StageId,
+        /// The requested last stage.
+        last: StageId,
+    },
+    /// A stage's input artifact is not on disk. Re-running from a later stage
+    /// requires the earlier stage's output to exist.
+    MissingInput {
+        /// The stage that has nothing to read.
+        stage: StageId,
+        /// The item.
+        id: String,
+    },
+    /// The range runs backwards.
+    BadRange {
+        /// The requested first stage.
+        first: StageId,
+        /// The requested last stage.
+        last: StageId,
+    },
+    /// An artifact could not be read or written.
+    Io {
+        /// The path that failed.
+        path: PathBuf,
+        /// The I/O error, verbatim.
+        message: String,
+    },
+}
+
+impl std::fmt::Display for PipelineError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PipelineError::NothingToRun { first, last } => write!(
+                f,
+                "nothing to run between {} and {}: no producer falls in that range and the gate \
+                 is outside it",
+                first.title(),
+                last.title()
+            ),
+            PipelineError::MissingInput { stage, id } => write!(
+                f,
+                "{}: {} has no input artifact in the workspace — run the stage before it, or \
+                 point --out at the directory that holds it",
+                stage.title(),
+                id
+            ),
+            PipelineError::BadRange { first, last } => {
+                write!(f, "{} comes after {}", first.title(), last.title())
+            }
+            PipelineError::Io { path, message } => write!(f, "{}: {message}", path.display()),
+        }
+    }
+}
+
+impl std::error::Error for PipelineError {}
+
+/// The producers for a run, and the range to run them over.
+///
+/// A producing stage inside the range with no producer is **skipped**, and the
+/// skip is named in the report ([`PipelineReport::skipped`]). Skipping has to be
+/// possible — running S2 and the gate without an annotation pass is the
+/// pre-split pipeline and a legitimate thing to ask for — but it must never be
+/// silent, because "S4 passed" means something different about a file no
+/// annotation stage has seen.
+pub struct Pipeline<'a> {
+    /// S1's producer.
+    pub ingest: Option<&'a mut dyn Stage>,
+    /// S2's producer.
+    pub synthesize: Option<&'a mut dyn Stage>,
+    /// S3's producer.
+    pub annotate: Option<&'a mut dyn Stage>,
+    /// The first stage to run.
+    pub first: StageId,
+    /// The last stage to run. Capped at [`StageId::Validate`]; S5 is
+    /// [`register`], which the caller invokes with the S4 report.
+    pub last: StageId,
+    /// Repair rounds allowed **per stage**.
+    pub max_rounds: usize,
+}
+
+impl<'a> Pipeline<'a> {
+    /// A pipeline with no producers, running S4 alone — the smallest useful
+    /// run, and the one a caller re-gating existing files wants.
+    pub fn gate_only() -> Pipeline<'a> {
+        Pipeline {
+            ingest: None,
+            synthesize: None,
+            annotate: None,
+            first: StageId::Validate,
+            last: StageId::Validate,
+            max_rounds: 1,
+        }
+    }
+
+    fn producer<'s>(&'s mut self, stage: StageId) -> Option<&'s mut (dyn Stage + 'a)> {
+        match stage {
+            StageId::Ingest => self.ingest.as_deref_mut(),
+            StageId::Synthesize => self.synthesize.as_deref_mut(),
+            StageId::Annotate => self.annotate.as_deref_mut(),
+            StageId::Validate | StageId::Register => None,
+        }
+    }
+}
+
+/// Every stage's report from one run, in the order the stages ran.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PipelineReport {
+    /// One entry per stage that ran.
+    pub stages: Vec<BatchReport>,
+    /// Items that never reached the end because an earlier stage rejected them:
+    /// `(id, the stage that stopped it)`. Carried explicitly so a later stage's
+    /// clean numbers cannot be read as "the batch is fine".
+    pub dropped: Vec<(String, StageId)>,
+    /// Stages inside the range that had no producer and did not run. Never
+    /// silent: a batch with no annotation pass is a different batch.
+    pub skipped: Vec<StageId>,
+}
+
+impl PipelineReport {
+    /// Whether every item passed every stage it reached, and none was dropped.
+    pub fn all_valid(&self) -> bool {
+        self.dropped.is_empty() && self.stages.iter().all(BatchReport::all_valid)
+    }
+
+    /// The last stage's report, which is what S5 registers from.
+    pub fn last(&self) -> Option<&BatchReport> {
+        self.stages.last()
+    }
+
+    /// One stage's report, if that stage ran.
+    pub fn stage(&self, stage: StageId) -> Option<&BatchReport> {
+        self.stages.iter().find(|s| s.stage == stage)
+    }
+}
+
+impl std::fmt::Display for PipelineReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for stage in &self.stages {
+            write!(f, "{stage}")?;
+        }
+        for stage in &self.skipped {
+            writeln!(
+                f,
+                "{}: SKIPPED — no producer was supplied, so nothing performed this stage's work",
+                stage.title()
+            )?;
+        }
+        if self.dropped.is_empty() {
+            return Ok(());
+        }
+        // The honesty rule, applied across stages: a later stage's 100% is
+        // 100% *of what reached it*, and what did not reach it is stated.
+        writeln!(f, "dropped before the end of the run:")?;
+        for (id, stage) in &self.dropped {
+            writeln!(f, "  {id}: rejected at {}", stage.title())?;
+        }
+        Ok(())
+    }
+}
+
+/// Runs a range of stages over a set, one whole stage at a time.
+///
+/// `items` are `(id, input)` for the **first** stage in the range; every later
+/// stage reads the previous stage's artifact out of `workspace`, which is
+/// exactly what a rerun from a later stage does. An item a stage rejects does
+/// not continue — it is recorded in [`PipelineReport::dropped`] so a later
+/// stage's clean number cannot be mistaken for a clean batch.
+pub fn run_pipeline(
+    pipeline: &mut Pipeline<'_>,
+    workspace: &Workspace,
+    items: &[(String, String)],
+) -> Result<PipelineReport, PipelineError> {
+    if pipeline.first.index() > pipeline.last.index() {
+        return Err(PipelineError::BadRange { first: pipeline.first, last: pipeline.last });
+    }
+    let (first, last) = (pipeline.first, pipeline.last);
+    let in_range = move |s: &StageId| {
+        s.index() >= first.index() && s.index() <= last.index() && *s != StageId::Register
+    };
+    // What can actually run: the producers supplied, plus the gate. A producing
+    // stage in the range with no producer is skipped and said so — see
+    // `Pipeline`'s documentation for why skipping is allowed and silence is not.
+    let mut stages: Vec<StageId> = Vec::new();
+    let mut skipped: Vec<StageId> = Vec::new();
+    for stage in StageId::ORDER.into_iter().filter(in_range) {
+        if stage == StageId::Validate || pipeline.producer(stage).is_some() {
+            stages.push(stage);
+        } else {
+            skipped.push(stage);
+        }
+    }
+    if stages.is_empty() {
+        return Err(PipelineError::NothingToRun { first: pipeline.first, last: pipeline.last });
+    }
+
+    let mut report = PipelineReport { stages: Vec::new(), dropped: Vec::new(), skipped };
+    let mut current: Vec<(String, String)> = items.to_vec();
+
+    for (position, stage) in stages.iter().copied().enumerate() {
+        if current.is_empty() {
+            break;
+        }
+        let max_rounds = pipeline.max_rounds;
+        let batch = match pipeline.producer(stage) {
+            Some(producer) => run_batch(producer, &current, max_rounds),
+            // S4 rewrites nothing, so one round is the whole loop.
+            None => run_batch(&mut ValidateStage, &current, 1),
+        };
+
+        for item in &batch.items {
+            if let Some(text) = &item.output {
+                workspace.store(stage, &item.id, text)?;
+            }
+            if item.status != ItemStatus::Valid {
+                report.dropped.push((item.id.clone(), stage));
+            }
+        }
+
+        // The next stage reads what this one wrote, from disk — the same path a
+        // rerun takes, so "run it all" and "resume from here" cannot diverge.
+        // "The next stage" is the next one that will *run*: a skipped S3 means
+        // S4 reads S2's draft, which `Workspace::load` resolves.
+        let survivors: Vec<String> = batch.valid().map(|i| i.id.clone()).collect();
+        report.stages.push(batch);
+        current = Vec::new();
+        if let Some(next) = stages.get(position + 1) {
+            for id in survivors {
+                let text = workspace.load(*next, &id)?;
+                current.push((id, text));
+            }
+        }
+    }
+
+    Ok(report)
 }
 
 /// The name of the worksheet [`register`] writes into its output directory.
@@ -309,7 +942,7 @@ pub struct Registration {
 /// Why S5 refused to register.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegisterError {
-    /// An item the report marks valid carries no IDL, so there is nothing
+    /// An item the report marks valid carries no artifact, so there is nothing
     /// whose validity could be re-checked — refused rather than trusted.
     MissingIdl {
         /// The item's id.
@@ -385,7 +1018,7 @@ impl std::error::Error for RegisterError {}
 pub fn register(report: &BatchReport, out_dir: &Path) -> Result<Registration, RegisterError> {
     let mut registry = Registry::new();
     for item in report.items.iter().filter(|i| i.status == ItemStatus::Valid) {
-        let Some(idl) = &item.idl else {
+        let Some(idl) = &item.output else {
             return Err(RegisterError::MissingIdl { id: item.id.clone() });
         };
         let recheck = validate(idl);
@@ -427,4 +1060,53 @@ pub fn register(report: &BatchReport, out_dir: &Path) -> Result<Registration, Re
     std::fs::write(&path, worksheet).map_err(io)?;
 
     Ok(Registration { registry, exposable })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stage_names_parse_both_ways() {
+        for stage in StageId::ORDER {
+            assert_eq!(StageId::parse(stage.tag()), Some(stage));
+            let word = stage.title().split_whitespace().nth(1).expect("a word");
+            assert_eq!(StageId::parse(word), Some(stage), "{}", stage.title());
+        }
+        assert_eq!(StageId::parse("s9"), None);
+    }
+
+    #[test]
+    fn the_stage_order_is_the_plan_order() {
+        let tags: Vec<&str> = StageId::ORDER.iter().map(|s| s.tag()).collect();
+        assert_eq!(tags, ["s1", "s2", "s3", "s4", "s5"]);
+        assert!(StageId::Ingest.index() < StageId::Annotate.index());
+    }
+
+    /// `.idl` must not swallow `.sidl.idl`: the draft set and the annotated set
+    /// are different sets of files, and confusing them would re-annotate an
+    /// already annotated file.
+    #[test]
+    fn the_draft_and_annotated_artifacts_do_not_collide() {
+        let dir = std::env::temp_dir().join(format!("forge-ws-suffix-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ws = Workspace::new(&dir);
+        ws.store(StageId::Synthesize, "R01", "module a {};").expect("writes");
+        ws.store(StageId::Annotate, "R01", "module a {};").expect("writes");
+
+        assert_eq!(ws.ids_ready_for(StageId::Annotate), vec!["R01".to_owned()]);
+        // S4 gates the annotated file when there is one.
+        assert!(ws.gated_artifact("R01").unwrap().to_string_lossy().ends_with(".sidl.idl"));
+    }
+
+    #[test]
+    fn s4_gates_the_draft_when_no_annotation_stage_ran() {
+        let dir = std::env::temp_dir().join(format!("forge-ws-draft-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ws = Workspace::new(&dir);
+        ws.store(StageId::Synthesize, "R02", "module a {};").expect("writes");
+        let gated = ws.gated_artifact("R02").expect("a draft");
+        assert!(gated.to_string_lossy().ends_with("R02.idl"));
+        assert!(!gated.to_string_lossy().ends_with(".sidl.idl"));
+    }
 }
