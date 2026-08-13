@@ -81,6 +81,7 @@ fn run(path: &str) -> Result<u32, String> {
     let mut dead = real.primary().map_err(|e| e.to_string())?.clone();
     dead.host = "127.0.0.1".into();
     dead.port = dead_port;
+    dead.components.retain(|c| c.tag != orbweaver_giop::TAG_ALTERNATE_IIOP_ADDRESS);
     let mut synthetic = real.clone();
     synthetic.profiles.insert(0, dead);
     println!(
@@ -119,10 +120,19 @@ fn run(path: &str) -> Result<u32, String> {
     // The negative half: with every profile dead, the error must say how many
     // endpoints were tried and why the last one failed. An unmeasured refusal
     // is not a refusal.
+    // All-dead means the ALTERNATES too. JacORB publishes
+    // TAG_ALTERNATE_IIOP_ADDRESS components, and the first two rounds of this
+    // check failed in CI because rewriting only the profile's own host:port
+    // left a live alternate inside the components — which the failover then
+    // used, exactly as designed. ("Port 1 answered" and "a provably-free port
+    // answered" were both the alternate answering; the environment theories
+    // were wrong.) A dead IOR is only dead once every endpoint the client can
+    // derive from it is dead.
     let mut all_dead = real.clone();
     for p in &mut all_dead.profiles {
         p.host = "127.0.0.1".into();
         p.port = provably_dead_port()?;
+        p.components.retain(|c| c.tag != orbweaver_giop::TAG_ALTERNATE_IIOP_ADDRESS);
     }
     let endpoints: usize = all_dead.profiles.iter().map(|p| p.endpoints().len()).sum();
     match Connection::connect(&all_dead, Duration::from_secs(5)) {
