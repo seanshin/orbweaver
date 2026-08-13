@@ -102,10 +102,24 @@
 //! them. That is what leaves [`SEAT_SAFETY_CONTENT`] empty rather than merely
 //! unimplemented: filling it is a change to where the chain runs, not just a
 //! stage to write.
+//!
+//! # Asking the chain without calling anything
+//!
+//! [`Chain::dry_run`] answers *what would this chain do* for a synthesized
+//! [`CallContext`], stage by stage, and makes no call. It is the same walk of
+//! the same gates in the same order — literally the same private function,
+//! `Chain::walk` — so the two cannot answer differently; `run` and `dry_run`
+//! differ only in what they do with the walk's answer afterwards. See
+//! [`crate::dryrun`] for what an operator reads off it and why an unaudited
+//! dry run was rejected.
+
+use std::cmp::Ordering;
 
 use orbweaver_registry::Registry;
 
-use crate::guard::audit_entry;
+use crate::guard::{
+    DECISION_ALLOW, DECISION_DRY_RUN_ALLOW, DECISION_DRY_RUN_REFUSE, DECISION_REFUSE, audit_entry,
+};
 use crate::identity::Caller;
 use crate::policy::{Approval, Denied, Exposure, destructive_effect, required_scopes};
 use crate::promote::CallStats;
@@ -197,6 +211,63 @@ pub enum CallResult<'a> {
     },
 }
 
+/// What one stage did during a [`Chain::dry_run`].
+///
+/// The third variant is the one an operator needs and a `Result` cannot
+/// express: a stage that never spoke is not a stage that approved. An
+/// operation refused at [`STAGE_EXPOSURE`] tells you nothing about whether the
+/// caller holds its scopes, because [`STAGE_SCOPES`] never ran.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StageOutcome {
+    /// The stage ran and had no objection.
+    Proceeded,
+    /// The stage ran and refused. Nothing after it ran.
+    Refused(Denied),
+    /// The stage never ran, because a stage ahead of it refused first. **Not**
+    /// an approval.
+    NotReached,
+}
+
+/// What a whole chain would do with a call, stage by stage, having made none.
+///
+/// Produced by [`Chain::dry_run`]. [`DryRun::verdict`] is the same
+/// `Result<(), Denied>` the live gate returns for the same context — the same
+/// walk produced both, so "the same" is by construction and not by agreement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DryRun {
+    stages: Vec<(&'static str, StageOutcome)>,
+}
+
+impl DryRun {
+    /// Every registered stage and its part, in registration order — including
+    /// the ones that never ran.
+    pub fn stages(&self) -> impl Iterator<Item = (&'static str, &StageOutcome)> {
+        self.stages.iter().map(|(name, outcome)| (*name, outcome))
+    }
+
+    /// The stage that refused and why, if one did.
+    pub fn refusal(&self) -> Option<(&'static str, &Denied)> {
+        self.stages.iter().find_map(|(name, outcome)| match outcome {
+            StageOutcome::Refused(why) => Some((*name, why)),
+            _ => None,
+        })
+    }
+
+    /// Whether every gate proceeded.
+    pub fn allowed(&self) -> bool {
+        self.refusal().is_none()
+    }
+
+    /// The verdict in the currency the live gate answers in, for comparing the
+    /// two directly.
+    pub fn verdict(&self) -> Result<(), Denied> {
+        match self.refusal() {
+            None => Ok(()),
+            Some((_, why)) => Err(why.clone()),
+        }
+    }
+}
+
 /// What a stage kept, for the chain's owner to read back.
 ///
 /// This exists because `Any` downcasting does not fit: [`Chain`] holds boxed
@@ -229,6 +300,19 @@ pub trait Interceptor {
     /// did not run.
     fn after(&mut self, ctx: &CallContext<'_>, result: &CallResult<'_>) {
         let _ = (ctx, result);
+    }
+
+    /// Called on the way out of a [`Chain::dry_run`], in reverse order over the
+    /// stages that ran, **in place of** [`Interceptor::after`].
+    ///
+    /// A separate notification rather than a fourth [`CallResult`], because
+    /// the two say different things: `after` reports the fate of a call, and
+    /// there is no call here to have a fate. A stage that keeps a history of
+    /// calls must therefore do nothing here, and the default does nothing —
+    /// [`TelemetryInterceptor`] overrides it with an explicit no-op so the
+    /// choice is readable rather than inferred from an absence.
+    fn considered(&mut self, ctx: &CallContext<'_>, dry: &DryRun) {
+        let _ = (ctx, dry);
     }
 
     /// What this stage recorded. Default: nothing.
@@ -316,23 +400,80 @@ impl Chain {
         self.stages.iter().map(|s| s.name)
     }
 
-    /// The gate: `before` in order, stopping at the first refusal, then `after`
-    /// in reverse over the stages that ran.
+    /// **The** walk of the gates: `before` in registration order, stopping at
+    /// the first refusal. Returns how many stages ran and what the last one
+    /// said.
+    ///
+    /// Private, and the only place a gate is ever asked. [`Chain::run`] and
+    /// [`Chain::dry_run`] are both thin wrappers around this call, which is
+    /// what makes "the dry run cannot disagree with the live gate" a property
+    /// of the code rather than of a test: there is one walk, and the two
+    /// entry points differ only in what they do with its answer once it is in
+    /// hand. A second walk written out longhand for the dry run would be a
+    /// second composition of the rules — the exact shape
+    /// `the_chain_and_check_call_answer_alike` exists because it drifts.
+    fn walk(&mut self, ctx: &CallContext<'_>) -> (usize, Option<Denied>) {
+        for i in 0..self.stages.len() {
+            if let Outcome::Refuse(why) = self.stages[i].interceptor.before(ctx) {
+                return (i + 1, Some(why));
+            }
+        }
+        (self.stages.len(), None)
+    }
+
+    /// The gate: [`Chain::walk`], then `after` in reverse over the stages that
+    /// ran.
     ///
     /// On `Ok` every stage ran and the caller owes the chain a
     /// [`Chain::completed`] once the call has been made — that is where the
     /// observers act. On `Err` the unwinding has already happened and the
     /// caller owes nothing.
     pub fn run(&mut self, ctx: &CallContext<'_>) -> Result<(), Denied> {
-        for i in 0..self.stages.len() {
-            let Outcome::Refuse(why) = self.stages[i].interceptor.before(ctx) else { continue };
-            let result = CallResult::Refused { stage: self.stages[i].name, why: &why };
-            for stage in self.stages[..=i].iter_mut().rev() {
-                stage.interceptor.after(ctx, &result);
-            }
-            return Err(why);
+        let (ran, refusal) = self.walk(ctx);
+        let Some(why) = refusal else { return Ok(()) };
+        let result = CallResult::Refused { stage: self.stages[ran - 1].name, why: &why };
+        for stage in self.stages[..ran].iter_mut().rev() {
+            stage.interceptor.after(ctx, &result);
         }
-        Ok(())
+        Err(why)
+    }
+
+    /// The same gate, asked and not obeyed: [`Chain::walk`], then
+    /// [`Interceptor::considered`] in reverse over the stages that ran.
+    ///
+    /// Nothing is called, nothing is counted, and the audit stage writes a line
+    /// that says plainly it is about a call that did not happen. The stages
+    /// past a refusal report [`StageOutcome::NotReached`] rather than an
+    /// approval they never gave.
+    ///
+    /// **What a dry run costs, stated.** It runs the real `before` of every
+    /// stage, so a stage that mutates state in `before` — a deployment's rate
+    /// limiter counting the attempt, say — is mutated by a question. That is
+    /// the price of asking the real chain instead of a copy of it, and the
+    /// copy is the worse bargain: a limiter that miscounts by one is a
+    /// nuisance, a policy preview that disagrees with the policy is a
+    /// deployment made on a false premise. The built-in gates are pure
+    /// functions of the contract and the request and are unaffected.
+    pub fn dry_run(&mut self, ctx: &CallContext<'_>) -> DryRun {
+        let (ran, refusal) = self.walk(ctx);
+        let mut stages = Vec::with_capacity(self.stages.len());
+        for (i, stage) in self.stages.iter().enumerate() {
+            let outcome = match (i + 1).cmp(&ran) {
+                Ordering::Less => StageOutcome::Proceeded,
+                // The last stage to run: the refuser, when there was one.
+                Ordering::Equal => match &refusal {
+                    Some(why) => StageOutcome::Refused(why.clone()),
+                    None => StageOutcome::Proceeded,
+                },
+                Ordering::Greater => StageOutcome::NotReached,
+            };
+            stages.push((stage.name, outcome));
+        }
+        let dry = DryRun { stages };
+        for stage in self.stages[..ran].iter_mut().rev() {
+            stage.interceptor.considered(ctx, &dry);
+        }
+        dry
     }
 
     /// Unwinds an allowed call: `after` in reverse order over every stage,
@@ -525,6 +666,22 @@ impl Interceptor for TelemetryInterceptor {
         }
     }
 
+    /// Deliberately nothing, and written out rather than left to the default.
+    ///
+    /// [`CallStats`] is the promotion policy's only input (§7.3 stream B). A
+    /// hypothetical counted as a call would recommend freezing into a compiled
+    /// stub a path **nobody ever invoked** — an operator's pre-deployment
+    /// survey of a thousand operations would make every one of them look hot.
+    /// The record of a dry run is its audit line, which is where a question
+    /// belongs; the counters are for calls that happened.
+    ///
+    /// Counting dry runs in a *separate* store was considered and rejected: it
+    /// would need a second map on this stage and a second accessor on
+    /// [`Chain`], and nothing reads it — the audit line already names the
+    /// caller, target and operation of every question asked, and it is
+    /// greppable by its own decision token.
+    fn considered(&mut self, _ctx: &CallContext<'_>, _dry: &DryRun) {}
+
     fn record(&self) -> Record<'_> {
         Record::Counters(&self.stats)
     }
@@ -581,14 +738,43 @@ impl Interceptor for AuditInterceptor {
             // question, and answering it here would make the audit log a
             // transport log.
             CallResult::Completed { .. } => {
-                audit_entry("ALLOW", ctx.caller, ctx.target, ctx.operation, None)
+                audit_entry(DECISION_ALLOW, ctx.caller, ctx.target, ctx.operation, None)
             }
-            CallResult::Refused { why, .. } => {
-                audit_entry("REFUSE", ctx.caller, ctx.target, ctx.operation, Some(&why.to_string()))
-            }
+            CallResult::Refused { why, .. } => audit_entry(
+                DECISION_REFUSE,
+                ctx.caller,
+                ctx.target,
+                ctx.operation,
+                Some(&why.to_string()),
+            ),
             CallResult::Unresolved { why } => {
-                audit_entry("REFUSE", ctx.caller, ctx.target, ctx.operation, Some(why))
+                audit_entry(DECISION_REFUSE, ctx.caller, ctx.target, ctx.operation, Some(why))
             }
+        };
+        self.lines.push(line);
+    }
+
+    /// A dry run is audited, in the one format, under its own decision token.
+    ///
+    /// The argument for auditing it at all, and against auditing it as an
+    /// `ALLOW`, is in [`crate::dryrun`]'s module docs. Mechanically: the
+    /// decision is the line's first field and is already what separates
+    /// `ALLOW` from `REFUSE`, so a hypothetical takes a token of its own
+    /// rather than a format of its own — same [`audit_entry`], same fields, in
+    /// the same order, so every reader and parser of the log keeps working and
+    /// none of them can mistake a question for a call.
+    fn considered(&mut self, ctx: &CallContext<'_>, dry: &DryRun) {
+        let line = match dry.refusal() {
+            None => {
+                audit_entry(DECISION_DRY_RUN_ALLOW, ctx.caller, ctx.target, ctx.operation, None)
+            }
+            Some((_, why)) => audit_entry(
+                DECISION_DRY_RUN_REFUSE,
+                ctx.caller,
+                ctx.target,
+                ctx.operation,
+                Some(&why.to_string()),
+            ),
         };
         self.lines.push(line);
     }
@@ -892,6 +1078,51 @@ mod tests {
                 "after refuser (refuser)",
                 "after outer (refuser)",
                 // and nothing at all from "inner"
+            ]
+        );
+    }
+
+    /// The dry run walks the gates exactly as a call does — same stages, same
+    /// order, same short circuit — and unwinds none of them: `after` reports
+    /// the fate of a call and there is no call. What a stage gets instead is
+    /// [`Interceptor::considered`], which by default is nothing.
+    #[test]
+    fn a_dry_run_walks_the_same_gates_and_calls_no_stage_s_after() {
+        let reg = registry(IDL);
+        let call = ctx(&reg, None, "balance", Approval::default());
+
+        let live_log = Rc::new(RefCell::new(Vec::new()));
+        let mut live = Chain::empty();
+        live.push("outer", tracer("outer", &live_log, false));
+        live.push("refuser", tracer("refuser", &live_log, true));
+        live.push("inner", tracer("inner", &live_log, false));
+        live.run(&call).unwrap_err();
+
+        let dry_log = Rc::new(RefCell::new(Vec::new()));
+        let mut dry = Chain::empty();
+        dry.push("outer", tracer("outer", &dry_log, false));
+        dry.push("refuser", tracer("refuser", &dry_log, true));
+        dry.push("inner", tracer("inner", &dry_log, false));
+        let answer = dry.dry_run(&call);
+
+        let befores: Vec<String> = live_log
+            .borrow()
+            .iter()
+            .filter(|l| l.starts_with("before "))
+            .map(String::clone)
+            .collect();
+        assert_eq!(befores, ["before outer", "before refuser"]);
+        assert_eq!(*dry_log.borrow(), befores, "the same walk, and nothing unwound");
+        assert_eq!(answer.refusal().map(|(stage, _)| stage), Some("refuser"));
+        assert_eq!(
+            answer.stages().map(|(_, o)| o.clone()).collect::<Vec<_>>(),
+            vec![
+                StageOutcome::Proceeded,
+                StageOutcome::Refused(Denied::Intercepted {
+                    stage: "refuser".to_owned(),
+                    reason: "no".to_owned()
+                }),
+                StageOutcome::NotReached,
             ]
         );
     }

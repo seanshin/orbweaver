@@ -169,6 +169,20 @@ impl Exposure {
         self.allowed.keys()
     }
 
+    /// The operations named for `id`. Empty means either "every operation this
+    /// interface declares" or "this interface is not exposed" — [`exposes`] is
+    /// what separates those, and no decision should be taken from this alone.
+    ///
+    /// It exists for [`crate::dryrun::survey`], which needs the names an
+    /// operator *wrote* and not only the ones the contract declares: an
+    /// exposure line for an operation that does not exist allowlists nothing,
+    /// and a report that enumerated only the contract would never mention it.
+    ///
+    /// [`exposes`]: Exposure::exposes
+    pub fn allowed_operations(&self, id: &str) -> impl Iterator<Item = &String> {
+        self.allowed.get(id).into_iter().flatten()
+    }
+
     /// Whether an operation is within the exposed set, ignoring approval.
     pub fn exposes_operation(&self, id: &str, operation: &str) -> bool {
         match self.allowed.get(id) {

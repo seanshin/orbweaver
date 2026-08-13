@@ -56,6 +56,17 @@ impl<'a> Session<'a> {
         self
     }
 
+    /// Attaches the caller the host authenticated, so the session's audit
+    /// lines and `ai_authz` checks are about somebody.
+    ///
+    /// From the host, never from the agent's own request — the same rule
+    /// [`Bridge::on_behalf_of`] states, and the reason this is not a
+    /// JSON-RPC parameter.
+    pub fn on_behalf_of(mut self, caller: crate::identity::Caller) -> Self {
+        self.bridge.set_caller(caller);
+        self
+    }
+
     /// The bridge, for a host that wants to seed the capability table.
     pub fn bridge(&mut self) -> &mut Bridge<'a> {
         &mut self.bridge
