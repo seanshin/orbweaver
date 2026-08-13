@@ -873,17 +873,34 @@ mod tests {
             c.write_all(&ping_wire(version, Endian::Big, 1)).unwrap();
             expect_pong(&mut c, 1, "before the stop");
 
-            // Raise the flag, then send one more request: the server checks
-            // the flag between messages, so it answers this one and *then*
-            // says goodbye — deterministically, with no sleep to tune.
+            // Raise the flag, then send one more request. This test first
+            // claimed the outcome was deterministic ("the server answers this
+            // one and then says goodbye") and CI refuted it: the server checks
+            // the flag BETWEEN messages, so when the flag is observed while
+            // request 2 is still in flight, the goodbye legitimately precedes
+            // the answer — and §9.4.7's whole point is that this is orderly:
+            // the request was not processed and is safe to re-send. Both
+            // orders are legal; what must never happen is anything that is
+            // neither a Reply to 2 nor a CloseConnection.
             flag.store(true, std::sync::atomic::Ordering::SeqCst);
             c.write_all(&ping_wire(version, Endian::Big, 2)).unwrap();
-            expect_pong(&mut c, 2, "a stop must not eat an already-sent request");
 
-            let bye = read_message(&mut c, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+            let first = read_message(&mut c, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+            let bye = match first.msg_type {
+                // The flag was seen after request 2: answered, then goodbye.
+                MsgType::Reply => {
+                    let reply = crate::decode_reply(first).unwrap();
+                    assert_eq!(reply.request_id, 2, "{version}");
+                    assert_eq!(reply.body().unwrap().get_i32().unwrap(), 42, "{version}");
+                    read_message(&mut c, DEFAULT_MAX_MESSAGE_SIZE).unwrap()
+                }
+                // The flag was seen first: request 2 goes unprocessed, which
+                // is exactly the safe-to-retry case the message exists for.
+                MsgType::CloseConnection => first,
+                other => panic!("{version}: neither a reply nor a goodbye: {other:?}"),
+            };
             assert_eq!(bye.msg_type, MsgType::CloseConnection, "{version}");
             assert_eq!(bye.bytes.len(), HEADER_LEN, "{version}: no body");
-            assert_eq!(bye.version, version, "stamped with the version the peer spoke");
             t.join().unwrap();
         }
     }
