@@ -8,10 +8,13 @@
 [![Phase 0: GO](https://img.shields.io/badge/Phase%200-GO-2F6B4F.svg)](docs/PHASE0.md)
 [![Phase 1: bidirectional](https://img.shields.io/badge/Phase%201-bidirectional%20interop-1D4C5C.svg)](docs/PHASE1.md)
 [![Phase 2: IDL + registry + objects](https://img.shields.io/badge/Phase%202-IDL%20%C2%B7%20registry%20%C2%B7%20objects-1D4C5C.svg)](docs/PHASE2.md)
+[![Phase 4: stubs + skeletons](https://img.shields.io/badge/Phase%204-stubs%20%C2%B7%20skeletons-1D4C5C.svg)](docs/PHASE4.md)
+[![Peers: omniORB + JacORB](https://img.shields.io/badge/peers-omniORB%204.3.4%20%C2%B7%20JacORB%203.9-1D4C5C.svg)](docs/COMPONENTS.md)
+[![Dependencies: 2](https://img.shields.io/badge/external%20crates-2-2F6B4F.svg)](docs/decisions/)
 [![Spec: OMG IDL 4.2](https://img.shields.io/badge/spec-OMG%20IDL%204.2-1D4C5C.svg)](https://www.omg.org/spec/IDL/4.2/)
 
-> **Status / 상태** — **v0.1.0 released** (2026-08-13). Phases 0–3.5 complete, Phase 5 half landed, and the remainder runs as parallel streams (PLAN §7.3); the first real-model pipeline batch measured 20/20 first-pass. Phase 0 verdict **GO**; Phase 1 (wire core) and Phase 2 (IDL front end, type registry, object model, contract evolution) complete. A from-scratch MIT ORB interoperates with omniORB 4.3.4 and JacORB 3.9 **in both directions** at GIOP 1.0/1.1/1.2. Measurements: [`docs/PHASE0.md`](docs/PHASE0.md) · [`docs/PHASE1.md`](docs/PHASE1.md) · [`docs/PHASE2.md`](docs/PHASE2.md). Full plan: [`docs/PLAN.md`](docs/PLAN.md) (English) · [`docs/PLAN.ko.md`](docs/PLAN.ko.md) (한국어).
-> Phase 0 판정 **GO**. Phase 1(와이어 코어)과 Phase 2(IDL 프론트엔드·타입 레지스트리·객체 모델·계약 진화) 완료. 밑바닥부터 만든 MIT ORB가 omniORB 4.3.4 및 JacORB 3.9와 **양방향으로** GIOP 1.0·1.1·1.2에서 상호운용됩니다.
+> **Status / 상태** — **v0.2.0** (2026-08-14). Phases 0–3.5 complete, **Phase 4 substantially landed**, Phase 5 half landed; the remainder runs as parallel streams (PLAN §7.3). A from-scratch MIT ORB interoperates with omniORB 4.3.4 and JacORB 3.9 **in both directions** at GIOP 1.0/1.1/1.2, and both directions are now measured for generated code too: omniORB's python client drives a **generated server skeleton**, and JacORB's Interface Repository serves our **ingestion** client. Five CORBA services are served on our own POA (Naming, Event, Trading, a read-only Interface Repository, LifeCycle/tenancy). Structure: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Measurements: [`docs/COMPONENTS.md`](docs/COMPONENTS.md). Plan: [`docs/PLAN.md`](docs/PLAN.md) · [`docs/PLAN.ko.md`](docs/PLAN.ko.md).
+> **v0.2.0** (2026-08-14). Phase 0–3.5 완료, **Phase 4 대부분 착지**, Phase 5 절반. 밑바닥부터 만든 MIT ORB가 omniORB 4.3.4·JacORB 3.9와 GIOP 1.0/1.1/1.2에서 **양방향** 상호운용되며, 이제 생성 코드도 양방향으로 측정됩니다 — omniORB의 python 클라이언트가 **생성된 서버 스켈레톤**을 구동하고, JacORB의 인터페이스 리포지토리가 우리 **수집** 클라이언트에게 서빙합니다. CORBA 서비스 다섯 개를 우리 POA 위에서 제공합니다.
 
 ## Phase 0 results / 검증 결과
 
@@ -246,31 +249,37 @@ Everything below is MIT and written in this repository unless marked otherwise.
 
 아래는 별도 표기가 없는 한 모두 MIT이며 본 저장소에서 직접 작성합니다.
 
-| Component | 구성요소 | Scope |
+| Component | 구성요소 | Status |
 |---|---|---|
-| `orbweaver-cdr` ✅ | CDR 인코더 | OMG CDR, both endiannesses, alignment origins, `long double` |
-| `orbweaver-giop` ✅ | GIOP/IIOP 전송 | GIOP 1.0–1.2 both directions, codesets, `any`/`TypeCode`, `corbaloc:`/CosNaming |
-| `orbweaver-poa` | 객체 어댑터 | Servant lifecycle, object activation, request dispatch |
-| `orbweaver-idl` | IDL 컴파일러 | OMG IDL 4.2 front end, `@annotation` support, pluggable back ends |
-| `orbweaver-registry` | 타입 레지스트리 | IFR-equivalent store; also ingests remote IFRs |
-| `orbweaver-dynamic` | 동적 호출 | DII/DSI/DynAny equivalents; lossless JSON ↔ CORBA `any` |
-| `orbweaver-forge` | 명세 파이프라인 | S1–S5: ingest, synthesize, annotate, validate, register |
-| `orbweaver-mcp` | MCP 브릿지 | Projects the registry as MCP `tools/list`; delegates calls |
-| `orbweaver-guard` | 가드레일 | Interceptor chain: authz, dry-run, approval, audit log |
-| `orbweaver-object` | 객체 모델 | References as values, `_is_a`/`_is_equivalent`, POA lifecycle |
-| `orbweaver-capability` | 능력 핸들 | Opaque handles at the MCP boundary — an agent never holds a dialable IOR |
-| `orbweaver-identity` | 신원 전파 | Credential store, OAuth2/JWT ↔ CSIv2 exchange, delegation policy |
-| `orbweaver-gen` | 정적 생성 | Static generation: stubs, skeletons, scaffolds, client SDKs |
-| `orbweaver-test` | 계약 테스트 | Contract/property tests from annotations; DynAny fuzzing |
-| `orbweaver-console` | 웹 콘솔 | Catalog browser, contract diff viewer, invocation traces |
+| `orbweaver-cdr` | CDR 인코더 | ✅ both endiannesses, alignment origins, `long double` |
+| `orbweaver-giop` | GIOP/IIOP 전송 | ✅ GIOP 1.0–1.2 both directions, codesets, fragmentation, locate, failover, concurrent connections, SSLIOP behind a feature |
+| `orbweaver-idl` | IDL 컴파일러 | ✅ OMG IDL 4.2 front end, SIDL structured comments, full oracle agreement |
+| `orbweaver-registry` | 타입 레지스트리 | ✅ types and interfaces as data, read-only IFR facade, **remote IFR ingestion** with provenance |
+| `orbweaver-object` | 객체 모델·POA | ✅ references, POA, `LOCATION_FORWARD`, expert residency, tenancy — no separate `orbweaver-poa` crate exists; the object adapter lives here |
+| `orbweaver-dynamic` | 동적 호출 | ✅ value marshalling, DII/DSI-shaped invoke, AnyJSON, recursive types |
+| `orbweaver-trading` | 트레이딩 | ✅ offer store, constraint queries, loading policy |
+| `orbweaver-forge` | 명세 파이프라인 | ✅ S1–S5 as distinct stages, each a producer plus its own gate |
+| `orbweaver-mcp` | MCP 브릿지·가드·능력 핸들 | ✅ the triad, default-deny exposure, interceptor chain, dry-run, capability handles — `orbweaver-guard`, `orbweaver-capability` and `orbweaver-identity` live inside this crate rather than as separate ones |
+| `orbweaver-gen` | 정적 생성 | ✅ client stubs and server skeletons, static-equals-dynamic oracle in **both** directions |
+| `orbweaver-test` | 계약·속성 테스트 | ✅ seeded round-trip property, contract advice, wire fuzz |
+| `orbweaver-console` | 콘솔 | ◐ in flight — unblocked by D004 (2026-08-14) |
+
+Two crates in the original roster never came into existence and that is
+recorded rather than quietly dropped: `orbweaver-poa` is part of
+`orbweaver-object`, and `orbweaver-guard` / `orbweaver-capability` /
+`orbweaver-identity` are modules of `orbweaver-mcp`. Both are location choices,
+not gaps; [`docs/COMPONENTS.md`](docs/COMPONENTS.md) says so per row.
+
+원래 명단의 두 크레이트는 끝내 생기지 않았고, 조용히 빠지는 대신 그 사실을
+기록합니다 — 위치 선택이지 공백이 아닙니다.
 
 ---
 
 ## Roadmap / 로드맵
 
-Phases 0–3.5 are complete and Phase 5 is half landed; the remainder is organised as **five parallel streams** (PLAN §7.3), each with its own batch unit and oracle, meeting only at four named integration points. The table below records what the phases were and where each landed.
+Phases 0–3.5 are complete, Phase 4 is substantially landed, and Phase 5 is half landed; the remainder is organised as **five parallel streams** (PLAN §7.3), each with its own batch unit and oracle, meeting only at four named integration points. The table below records what the phases were and where each landed.
 
-Phase 0–3.5 완료, Phase 5 절반 착지. 남은 작업은 **병행 스트림 다섯 개**(계획서 §7.3)로 조직되며, 각 스트림은 자체 일괄 단위와 오라클을 갖고 네 개의 명명된 통합 지점에서만 만납니다. 아래 표는 각 단계가 무엇이었고 어디에 착지했는지의 기록입니다.
+Phase 0–3.5 완료, Phase 4 대부분 착지, Phase 5 절반. 남은 작업은 **병행 스트림 다섯 개**(계획서 §7.3)로 조직되며, 각 스트림은 자체 일괄 단위와 오라클을 갖고 네 개의 명명된 통합 지점에서만 만납니다.
 
 | Phase | Weeks | Focus | 내용 |
 |---|---|---|---|
@@ -280,7 +289,7 @@ Phase 0–3.5 완료, Phase 5 절반 착지. 남은 작업은 **병행 스트림
 | **3** | ✅ done¹ | Dynamic invocation, AnyJSON, MCP triad over stdio, S4 gate ([PHASE3](docs/PHASE3.md)) | 동적 호출·AnyJSON·MCP·S4 게이트 |
 | **3.5** | ✅ done | Capability handles, landed *with* the bridge | 능력 핸들 — 브릿지와 동시 착지 |
 | **5** | ◐ half | CSIv2 wire + delegation policy + `@ai_authz` scopes; TLS and token exchange remain → **stream C** ([PHASE5](docs/PHASE5.md)) | 신원 전파 — 절반 착지, 나머지는 스트림 C |
-| **4** | → stream B | Static generation and promotion | 정적 생성·승격 → 스트림 B |
+| **4** | ◐ mostly | Static generation: client stubs **and server skeletons**, promotion gate, static-equals-dynamic in both directions ([PHASE4](docs/PHASE4.md)) | 정적 생성 — 스텁·스켈레톤 양방향 |
 | **6** | → streams C·D | TLS, observability, governance, console, pilot | 운영화 → 스트림 C·D |
 
 ¹ minus S1–S3, the model-in-the-loop stages → **stream A** / 모델이 개입하는 S1–S3 제외 → 스트림 A
@@ -345,18 +354,28 @@ And the reason that matters most: interfaces are increasingly called by agents r
 | [`docs/PLAN.md`](docs/PLAN.md) | Development plan (English) | Full technical plan, research findings, risk register |
 | [`docs/PLAN.ko.md`](docs/PLAN.ko.md) | 개발 계획서 (한국어) | 전체 기술 계획, 조사 결과, 리스크 목록 |
 | [`docs/plan-page.html`](docs/plan-page.html) | Rendered brief | Standalone HTML version of the project brief |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 아키텍처 | **The system as built**: crate graph and its dependency rule, the wire/type/agent paths, four trust boundaries, deliberate absences, the five verification layers |
+| [`docs/COMPONENTS.md`](docs/COMPONENTS.md) | 커버리지 원장 | What is landed **and measured**, with the missing half of every partial row stated |
+| [`docs/PLAN-MOE.md`](docs/PLAN-MOE.md) | MoE 컨트롤 플레인 | Stream F: CORBA as a control plane, forbidden in the data plane |
+| [`docs/PLAN-SERVICES.md`](docs/PLAN-SERVICES.md) | 핵심 서비스 | The CosNaming / CosEvent / Trading / IFR / LifeCycle suite |
+| [`docs/PLAN-DEFERRED.md`](docs/PLAN-DEFERRED.md) | 보류 설계 | Eight excluded services, each with the trigger that would un-defer it |
+| [`docs/decisions/`](docs/decisions/) | 결정 기록 | D001 encoding_rs · D002 TLS · D003 embeddings/storage · D004 observability |
 
 ## Running the spike / 스파이크 실행
 
 ```bash
 brew install omniorb          # interop fixture only — never linked or shipped
-cargo test --workspace        # 17 unit tests: CDR alignment, GIOP framing, IOR
-./spikes/run_checks.sh        # full Phase 0 harness
+cargo test --workspace        # ~790 tests: CDR, GIOP, registry, POA, bridge, generation
+./spikes/run_checks.sh        # the full harness; its exit code is the verdict
 ```
 
-`cargo tree` shows zero external dependencies: the wire implementation is written against the published OMG specification alone. omniORB (LGPL/GPL) is used only as a separate-process wire peer and as an `omniidl` conformance oracle — no linking, no vendoring, no redistribution.
+The harness takes a machine-wide lock: two runs at once kill each other's
+fixtures and produce failures that are about the scheduling rather than the
+code, which cost two diagnoses before the lock existed.
 
-`cargo tree`에 외부 의존성이 없습니다. 와이어 구현은 공개 OMG 명세만 보고 작성했습니다. omniORB(LGPL/GPL)는 별도 프로세스 피어와 `omniidl` 적합성 채점기로만 사용하며, 링크·벤더링·재배포하지 않습니다.
+`cargo tree` shows **two** external crates — `encoding_rs` for EUC-KR (behind the default-on `euc-kr` feature, disclosed in `NOTICE` under decision D001) and its `cfg-if`. The wire implementation itself is written against the published OMG specification alone. omniORB (LGPL/GPL) is used only as a separate-process wire peer and as an `omniidl` conformance oracle — no linking, no vendoring, no redistribution.
+
+`cargo tree`에 외부 크레이트는 **둘**입니다 — EUC-KR용 `encoding_rs`(기본 켜짐 `euc-kr` 기능 뒤, 결정 D001로 `NOTICE`에 공개)와 그 `cfg-if`. 와이어 구현 자체는 공개 OMG 명세만 보고 작성했습니다. omniORB(LGPL/GPL)는 별도 프로세스 피어와 `omniidl` 적합성 채점기로만 사용하며, 링크·벤더링·재배포하지 않습니다.
 
 ## References / 참고 자료
 
