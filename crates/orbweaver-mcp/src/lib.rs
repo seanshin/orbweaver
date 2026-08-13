@@ -37,7 +37,7 @@ pub mod promote;
 pub mod rpc;
 pub mod session;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use orbweaver_dynamic::json::Json;
 use orbweaver_dynamic::{anyjson, invoke};
@@ -264,10 +264,14 @@ fn s(text: impl Into<String>) -> Json {
 
 /// `search_interfaces(query)` — exposed interfaces matching `query`.
 ///
-/// Matches the repository id, the interface's own name, its operation names,
-/// and the SIDL prose an author wrote about it. Substring and case-insensitive:
-/// an agent that knows the domain word rarely knows the spelling in the IDL,
-/// and §2.2 exists so the domain word is written down somewhere.
+/// Matches the repository id, the interface's own name, its operation *and
+/// attribute* names, and the SIDL `ai_desc` prose at every level — interface,
+/// operation and attribute. Case-insensitive, whole-query substring first
+/// (the original behavior, kept so nothing an agent could find yesterday is
+/// lost today), then word-level: every query word must be found, where words
+/// and identifier compounds are interchangeable — `round trip` finds
+/// `roundtrip`, `blobsum` finds `blob_sum`, `track manager` finds
+/// `TrackManager`. See [`query_matches`] for why the word rule is conjunctive.
 ///
 /// Not semantic search. §4.6 wants embeddings, and this is not them — a lexical
 /// match is what can be built without a model in the loop, and calling it
@@ -281,6 +285,7 @@ fn search_interfaces(
     limit: usize,
 ) -> Json {
     let needle = query.trim().to_lowercase();
+    let words = query_words(&needle);
     let mut hits: Vec<Json> = Vec::new();
     let mut matched = 0usize;
 
@@ -289,13 +294,35 @@ fn search_interfaces(
         let desc =
             registry.annotations(id).and_then(|a| a.get("ai_desc")).cloned().unwrap_or_default();
 
-        let haystack = format!(
-            "{id} {desc} {}",
-            iface.operations.keys().cloned().collect::<Vec<_>>().join(" ")
-        )
-        .to_lowercase();
+        // The lexical haystack. Attribute names and per-operation /
+        // per-attribute ai_desc prose are indexed deliberately: an attribute
+        // is as much of the contract as an operation, and the prose is where
+        // the domain word lives when no identifier carries it — search-v1
+        // measured both absences as indexing gaps, not vocabulary gaps.
+        // Other annotation keys (ai_authz, ai_effect) stay out: they are
+        // policy metadata, not vocabulary (search-v1 line 61 pins this).
+        let mut haystack = format!("{id} {desc}");
+        for (name, sig) in &iface.operations {
+            haystack.push(' ');
+            haystack.push_str(name);
+            if let Some(d) = sig.annotations.get("ai_desc") {
+                haystack.push(' ');
+                haystack.push_str(d);
+            }
+        }
+        for (name, attr) in &iface.attributes {
+            haystack.push(' ');
+            haystack.push_str(name);
+            if let Some(d) = attr.annotations.get("ai_desc") {
+                haystack.push(' ');
+                haystack.push_str(d);
+            }
+        }
 
-        if !needle.is_empty() && !haystack.contains(&needle) {
+        let hit = needle.is_empty()
+            || haystack.to_lowercase().contains(&needle)
+            || query_matches(&index_atoms(&haystack), &words);
+        if !hit {
             continue;
         }
         matched += 1;
@@ -317,6 +344,136 @@ fn search_interfaces(
         // Named so an agent can tell "nothing matched" from "there is more".
         ("truncated", Json::Bool(matched > limit)),
     ])
+}
+
+/// The word-level view of a haystack that [`query_matches`] searches.
+///
+/// Every identifier contributes two spellings: itself with underscores
+/// squeezed out (`blob_sum` → `blobsum`) and each of its parts after `_` and
+/// lowerCamelCase splitting (`blob`, `sum`; `TrackManager` → `track`,
+/// `manager`). Lowercased throughout. Pure text in, set out — no I/O, no
+/// regex, no state.
+fn index_atoms(text: &str) -> BTreeSet<String> {
+    let mut atoms = BTreeSet::new();
+    for token in text.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
+        if token.is_empty() {
+            continue;
+        }
+        let mut joined = String::new();
+        for part in split_identifier(token) {
+            joined.push_str(&part);
+            atoms.insert(part);
+        }
+        if !joined.is_empty() {
+            atoms.insert(joined);
+        }
+    }
+    atoms
+}
+
+/// One identifier's lowercase parts: split on `_` and at lowerCamelCase
+/// boundaries — `getTemperature` → `get`, `temperature`; `IDLType` → `idl`,
+/// `type`.
+fn split_identifier(token: &str) -> Vec<String> {
+    let chars: Vec<char> = token.chars().collect();
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    for (i, &c) in chars.iter().enumerate() {
+        if c == '_' {
+            if !current.is_empty() {
+                parts.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
+        // A boundary sits before an uppercase that ends a lowercase run
+        // (`blobSum`) or starts one (`IDLType`'s T).
+        let boundary = c.is_uppercase()
+            && i > 0
+            && (chars[i - 1].is_lowercase()
+                || chars[i - 1].is_numeric()
+                || chars.get(i + 1).is_some_and(|n| n.is_lowercase()));
+        if boundary && !current.is_empty() {
+            parts.push(std::mem::take(&mut current));
+        }
+        current.extend(c.to_lowercase());
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    parts
+}
+
+/// A query's words: separator-split tokens, each with underscores squeezed
+/// out and lowercased, so `blob_sum`, `blobSum` and `blobsum` ask for the
+/// same thing.
+fn query_words(query: &str) -> Vec<String> {
+    query
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|t| !t.is_empty())
+        .map(|t| split_identifier(t).concat())
+        .collect()
+}
+
+/// Word-level match: true iff *every* query word is accounted for in `atoms`.
+///
+/// A word is accounted for when it is an atom, when it splits into a
+/// concatenation of atoms (`blobsum` against `blob_sum`), or when a run of
+/// consecutive query words concatenates into one (`round trip` against
+/// `roundtrip`).
+///
+/// The rule is conjunctive on purpose. A disjunctive matcher scores better on
+/// search-v1's synonym class only the way a broken clock reads right:
+/// "user login password reset" (negative, line 61) contains the real
+/// operation name `reset`, and any matcher loose enough to lift synonym hits
+/// by matching on one shared word returns Sensor for it and fails the
+/// negative gate. A looser matcher that hits synonyms by hitting everything
+/// is worse than an honest low rate — what conjunction leaves unmatched is
+/// embedding headroom, not matcher tuning.
+fn query_matches(atoms: &BTreeSet<String>, words: &[String]) -> bool {
+    if words.is_empty() {
+        // A pure-punctuation query has no words; only the caller's substring
+        // path may match it. Matching everything here would be over-matching.
+        return false;
+    }
+    // covered[i]: words[..i] are all accounted for.
+    let mut covered = vec![false; words.len() + 1];
+    covered[0] = true;
+    for i in 0..words.len() {
+        if !covered[i] {
+            continue;
+        }
+        let mut run = String::new();
+        for (j, word) in words.iter().enumerate().skip(i) {
+            run.push_str(word);
+            if segments_into_atoms(atoms, &run) {
+                covered[j + 1] = true;
+            }
+        }
+    }
+    covered[words.len()]
+}
+
+/// Can `text` be written as a concatenation of one or more atoms?
+///
+/// Whole atoms only — `set` does not match `reset`, because word-level
+/// substring matching is exactly the over-matching [`query_matches`] refuses.
+fn segments_into_atoms(atoms: &BTreeSet<String>, text: &str) -> bool {
+    if atoms.contains(text) {
+        return true; // the common case, without the walk
+    }
+    let mut ok = vec![false; text.len() + 1];
+    ok[0] = true;
+    for i in 0..text.len() {
+        if !ok[i] || !text.is_char_boundary(i) {
+            continue;
+        }
+        for atom in atoms {
+            if text[i..].starts_with(atom.as_str()) {
+                ok[i + atom.len()] = true;
+            }
+        }
+    }
+    ok[text.len()]
 }
 
 /// `describe_interface(id)` — the contract, as far as policy allows.
@@ -589,6 +746,63 @@ mod tests {
         let Some(Json::Array(list)) = hits.get("interfaces") else { panic!() };
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].get("id").and_then(Json::as_str), Some("IDL:bank/Ledger:1.0"));
+    }
+
+    /// The two indexing gaps the search-v1 baseline recorded: attribute names
+    /// and operation/attribute-level ai_desc prose were not in the haystack.
+    #[test]
+    fn search_indexes_attributes_and_nested_prose() {
+        let r = registry(
+            "module m { interface Sensor { \
+             //@ ai_desc: current reading of the probe\n \
+             readonly attribute double temperature; \
+             //@ ai_desc: cheapest liveness check\n \
+             long ping(); }; };",
+        );
+        let e = Exposure::nothing().allow_interface("IDL:m/Sensor:1.0");
+        for q in ["temperature", "liveness", "probe"] {
+            let hits = search_interfaces(&r, &e, &CapabilityTable::new("t"), q, 10);
+            let Some(Json::Array(list)) = hits.get("interfaces") else { panic!("{hits}") };
+            assert_eq!(list.len(), 1, "{q:?} should match via the widened haystack");
+        }
+    }
+
+    /// Both directions of the compound rule: a multi-word query finds a
+    /// compound identifier, and a compound query finds multi-word prose.
+    #[test]
+    fn words_and_compounds_are_interchangeable() {
+        let compound = index_atoms("Echo roundtrip");
+        for q in ["round trip", "roundtrip"] {
+            assert!(query_matches(&compound, &query_words(q)), "{q:?}");
+        }
+        let prose = index_atoms("makes a full round trip");
+        assert!(query_matches(&prose, &query_words("roundtrip")));
+        assert!(!query_matches(&prose, &query_words("trippy")));
+    }
+
+    /// Underscore stripping and lowerCamelCase splitting name the same word.
+    #[test]
+    fn underscores_and_camel_case_are_the_same_word() {
+        let atoms = index_atoms("blob_sum TrackManager");
+        for q in
+            ["blob sum", "blobsum", "blob_sum", "sum", "track manager", "trackmanager", "manager"]
+        {
+            assert!(query_matches(&atoms, &query_words(q)), "{q:?}");
+        }
+    }
+
+    /// The over-match guard. One real word must not carry a whole query:
+    /// search-v1 line 61 ("user login password reset", negative) contains the
+    /// live operation name `reset`, and a matcher that returns Sensor for it
+    /// has bought its synonym rate by failing the negative gate.
+    #[test]
+    fn one_shared_word_does_not_carry_a_whole_query() {
+        let atoms = index_atoms("Sensor reset publish temperature label");
+        assert!(!query_matches(&atoms, &query_words("user login password reset")));
+        // No substring semantics at word level: "set" is not "reset".
+        assert!(!query_matches(&atoms, &query_words("set")));
+        // A pure-punctuation query has no words and never word-matches.
+        assert!(!query_matches(&atoms, &query_words("--- ;;;")));
     }
 
     /// A silently truncated list is how an agent concludes something does not
