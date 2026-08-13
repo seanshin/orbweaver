@@ -11,6 +11,10 @@ rust-version.workspace = true
 orbweaver-cdr = { path = "../orbweaver-cdr" }
 orbweaver-giop = { path = "../orbweaver-giop", default-features = false }
 orbweaver-registry = { path = "../orbweaver-registry" }
+# The residency state machine's states and commands (PLAN-MOE §3 F3). This
+# direction is the cycle-free one: orbweaver-trading depends on nothing of
+# ours, deliberately, and the POA is where a loader has to live.
+orbweaver-trading = { path = "../orbweaver-trading" }
 
 orbweaver-idl = { path = "../orbweaver-idl" }
 

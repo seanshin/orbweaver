@@ -197,6 +197,7 @@ dependencies = [
  "orbweaver-giop",
  "orbweaver-idl",
  "orbweaver-registry",
+ "orbweaver-trading",
 ]
 
 [[package]]

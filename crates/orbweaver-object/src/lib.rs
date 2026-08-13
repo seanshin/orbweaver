@@ -26,6 +26,8 @@ use orbweaver_giop::server::{Completion, Request, SystemException};
 use orbweaver_giop::{IiopProfile, Ior, Version};
 use orbweaver_registry::Registry;
 
+pub mod residency;
+
 /// Repository id every CORBA object answers to.
 pub const OBJECT_ID: &str = "IDL:omg.org/CORBA/Object:1.0";
 
