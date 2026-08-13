@@ -1205,6 +1205,36 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
   grep '^skipped' /tmp/orbweaver-gen.log | sed 's/^/  note /'
   if (cd "$GEN_OUT" && CARGO_TARGET_DIR="$ROOT/target" cargo build -q 2>/tmp/orbweaver-genc.log); then
     echo "  ok   every generated stub compiles outside the workspace"
+    # A plain build proves neither of the declarations the emitted modules
+    # carry: forbid(unsafe_code) and deny(missing_docs) only bite with
+    # -D warnings, and generated code held to a lower standard than
+    # hand-written code is generated code nobody will trust.
+    if (cd "$GEN_OUT" && CARGO_TARGET_DIR="$ROOT/target" \
+          RUSTFLAGS="-D warnings" cargo build -q 2>/tmp/orbweaver-gend.log); then
+      echo "  ok   and under -D warnings: no unsafe, no undocumented item"
+    else
+      echo "  FAIL generated code does not survive its own lint declarations"
+      head -5 /tmp/orbweaver-gend.log | sed 's/^/       /'
+      gen_fail=1
+    fi
+    # The serving direction. Everything above measures a generated *client*
+    # against a stock ORB; this measures a stock ORB's client against a
+    # generated *skeleton*, which is the half nothing had ever checked.
+    if python3 -c 'import omniORB' >/dev/null 2>&1; then
+      skel=$(cargo test -q -p orbweaver-gen --test skeleton_wire -- --nocapture \
+             omniorb_python_drives_the_generated_skeleton 2>&1)
+      if printf '%s' "$skel" | grep -q "^OK$"; then
+        echo "  ok   omniORB's python client drove a GENERATED skeleton: narrow, attributes,"
+        echo "       a oneway then a twoway on one connection, both user exceptions by class"
+      else
+        echo "  FAIL omniORB's python client could not drive the generated skeleton"
+        printf '%s' "$skel" | tail -5 | sed 's/^/       /'
+        gen_fail=1
+      fi
+    else
+      echo "  SKIPPED  omniORBpy absent — the serving direction is unmeasured, not passing"
+      skipped=$((skipped+1))
+    fi
     if start_server; then
       so=$("$ROOT/target/debug/static-oracle" spikes/echo.ior spikes/echo.idl 2>&1)
       if printf '%s' "$so" | grep -q "static generation: PASS"; then
