@@ -68,3 +68,7 @@ path = "src/bin/spike_cancel.rs"
 [[bin]]
 name = "spike-events"
 path = "src/bin/spike_events.rs"
+
+[[bin]]
+name = "spike-concurrent"
+path = "src/bin/spike_concurrent.rs"

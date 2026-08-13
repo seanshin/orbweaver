@@ -28,10 +28,13 @@
 //!
 //! PASS is a printed `IOR:` string whose object key is `Echo` (the dummy
 //! bound below — host 192.0.2.1 is TEST-NET, deliberately undialable:
-//! naming stores references, it does not call them). Two serving limits the
-//! harness must respect: one connection is served at a time, so the python
-//! client must run while no other client holds a connection; and the
-//! `--hold` process is stopped by killing it — there is no remote shutdown.
+//! naming stores references, it does not call them). One serving limit the
+//! harness must respect: the `--hold` process is stopped by killing it —
+//! there is no remote shutdown. The python client no longer has to be the
+//! only client: `Server` serves its connections concurrently (up to
+//! `max_connections`), which `spike-concurrent` measures against this same
+//! servant. What it does not get is parallel dispatch — one servant, one
+//! mutex, one operation at a time.
 
 use orbweaver_giop::Error;
 use orbweaver_giop::naming::{NameComponent, NamingContext, read_name};

@@ -49,11 +49,15 @@
 //! EOF
 //! ```
 //!
-//! PASS is at least one received ulong. Serving limit the harness must
-//! respect: our server handles **one connection at a time**, so the python
-//! client must be the only client while it runs — which also means each
-//! `for_consumers()`/`obtain_push_supplier()` chain above rides one
-//! connection, exactly what omniORB does by default.
+//! PASS is at least one received ulong. The python client no longer has to
+//! be the only client: `Server` serves its connections concurrently, so the
+//! `for_consumers()`/`obtain_push_supplier()` chain above may ride one
+//! connection or several, and other clients may hold sessions alongside it —
+//! `spike-concurrent` measures that overlap, and
+//! `concurrent_suppliers_and_outbound_delivery_do_not_deadlock` proves it
+//! against this channel's outbound pushes. The serving limit that remains is
+//! dispatch: one servant behind one mutex, one operation at a time, so a slow
+//! consumer's push still holds the next operation up.
 //!
 //! Measured at landing (2026-08-13, omniORBpy 4.3.4): the snippet
 //! printed `received: [57, 58]` then `PASS` — an ORB we did not write
