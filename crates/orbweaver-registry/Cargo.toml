@@ -26,3 +26,7 @@ path = "src/bin/spike_evolution.rs"
 [[bin]]
 name = "idl-diff"
 path = "src/bin/idl_diff.rs"
+
+[[bin]]
+name = "spike-ifr"
+path = "src/bin/spike_ifr.rs"

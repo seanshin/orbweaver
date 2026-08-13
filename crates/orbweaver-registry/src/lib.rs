@@ -23,6 +23,7 @@
 #![deny(missing_docs)]
 
 pub mod diff;
+pub mod ifr;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
