@@ -1060,6 +1060,34 @@ else
   fail_total=$((fail_total+1))
 fi
 
+# ── The guard's dry-run: a policy preview that costs nothing ────────────────
+hr "dry-run — the exposure read before it is deployed"
+# No --ior and no peer, which is the whole point: this answers before a
+# deployment exists. Two properties, both cheap. The report is well-formed and
+# carries the summary an operator reads; and every audit line it leaves says
+# DRYRUN, so a question can never be counted as a call — a hypothetical in the
+# promotion statistics would promote a path nobody ever used.
+dr_audit=/tmp/orbweaver-dryrun.audit
+dr=$(cargo run -q -p orbweaver-mcp --bin orbweaver-mcp-server -- \
+     --idl spikes/echo.idl --expose IDL:spike/Echo:1.0 \
+     --as harness --dry-run 2>"$dr_audit")
+dr_rc=$?
+allowed=$(printf '%s' "$dr" | python3 -c \
+  'import json,sys; print(json.load(sys.stdin)["summary"]["allow"])' 2>/dev/null)
+scoped=$(printf '%s' "$dr" | python3 -c \
+  'import json,sys; print(json.load(sys.stdin)["summary"]["need_scope"])' 2>/dev/null)
+# `grep -c` prints its count AND exits 1 when the count is zero, so a
+# `|| echo 0` appends a second line and the comparison below sees "0\n0".
+# Count with awk, which has one exit status and one answer.
+stray=$(awk '!/^DRYRUN-/ {n++} END {print n+0}' "$dr_audit" 2>/dev/null)
+if [ "$dr_rc" -eq 0 ] && [ "$allowed" = "10" ] && [ "$scoped" = "1" ] && [ "$stray" -eq 0 ]; then
+  echo "  ok   11 operations previewed with no target dialled: 10 allow, 1 need_scope"
+  echo "  ok   every audit line is a DRYRUN line — no question counted as a call"
+else
+  echo "  FAIL the dry-run preview did not hold (allow=$allowed need_scope=$scoped stray=$stray)"
+  fail_total=$((fail_total+1))
+fi
+
 # ── Stream E: concurrent connections ─────────────────────────────────────────
 hr "concurrency — many clients at once, and a cap that says no out loud"
 # Every service above documented "one client at a time" as a limit its harness
@@ -1146,6 +1174,23 @@ fi
 kill "$IFR_PID" >/dev/null 2>&1 || true
 wait "$IFR_PID" 2>/dev/null || true
 [ "$ifr_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
+# ── Remote IFR ingestion: describing and calling with no IDL file ───────────
+hr "remote IFR ingestion — a contract taken off the wire"
+# Self-consistency first: our client against our facade proves the walk, the
+# refusals and the TypeCode-driven call, and proves nothing about the
+# specification. The JacORB leg is what makes it a claim — and it earned its
+# place immediately, since JacORB's base_interfaces are Java class names and
+# its version field is ":1.0", both of which our client refuses to guess from.
+ing=$(cargo run -q --bin spike-ingest 2>&1)
+if printf '%s' "$ing" | grep -q "ingest: PASS"; then
+  echo "  ok   self-consistency: the walk, the refusals, and a call built from"
+  echo "       ingested metadata with no .idl file opened"
+else
+  echo "  FAIL ingestion self-consistency"
+  printf '%s' "$ing" | grep -i FAIL | head -3 | sed 's/^/       /'
+  fail_total=$((fail_total+1))
+fi
 
 # ── F7: the event channel, both directions ──────────────────────────────────
 hr "event channel — our supplier and consumer, then omniORB's consumer"
@@ -1287,6 +1332,40 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
     else
       echo "  SKIPPED  omniORBpy absent — the serving direction is unmeasured, not passing"
       skipped=$((skipped+1))
+    fi
+    # A generated servant's system exceptions, read by class by an ORB we did
+    # not write. This is where the transposed completion status was caught:
+    # every local comparison used the same enum on both sides and agreed with
+    # itself, so only a foreign reader could disagree.
+    if python3 -c 'import omniORB' >/dev/null 2>&1; then
+      flt=$(cargo test -q -p orbweaver-gen --test servant_faults -- --nocapture \
+            omniorb_python 2>&1)
+      if printf '%s' "$flt" | grep -q "CORBA.NO_PERMISSION" \
+         && printf '%s' "$flt" | grep -q "COMPLETED_NO"; then
+        echo "  ok   omniORB caught a servant's system exceptions by class, and read"
+        echo "       did_not_run() as COMPLETED_NO — §4.11.4's ordinal, retry-safe"
+      else
+        echo "  FAIL omniORB did not see the servant's system exceptions as sent"
+        printf '%s\n' "$flt" | tail -5 | sed 's/^/       /'
+        gen_fail=1
+      fi
+    else
+      echo "  SKIPPED  omniORBpy absent — the servant-fault claims are unmeasured"
+      skipped=$((skipped+1))
+    fi
+    # §8's rule in the direction nothing checked: a skeleton's reply bytes
+    # against the dynamic path's. No fixture — ours on one end, the reference
+    # implementation on the other.
+    ora=$(cargo test -q -p orbweaver-gen --test skeleton_oracle -- --nocapture 2>&1)
+    if printf '%s' "$ora" | grep -q "FAILED"; then
+      echo "  FAIL a generated skeleton's replies are not the dynamic path's bytes"
+      printf '%s\n' "$ora" | grep -A4 "disagree" | head -8 | sed 's/^/       /'
+      gen_fail=1
+    else
+      n_cmp=$(printf '%s' "$ora" | grep -o '[0-9]* comparison' | grep -o '[0-9]*' \
+              | awk '{s+=$1} END {print s+0}')
+      echo "  ok   server-side static equals dynamic: $n_cmp reply comparison(s), both"
+      echo "       byte orders, three GIOP versions, two reply origins"
     fi
     if start_server; then
       so=$("$ROOT/target/debug/static-oracle" spikes/echo.ior spikes/echo.idl 2>&1)
