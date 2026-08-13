@@ -1,6 +1,6 @@
 # Orbweaver — Development Plan
 
-> Version 0.6 · 2026-08-13 · **Phases 0–3.5 complete; Phase 5 half landed** — see [`PHASE0.md`](PHASE0.md) · [`PHASE1.md`](PHASE1.md) · [`PHASE2.md`](PHASE2.md) · [`PHASE3.md`](PHASE3.md) · [`PHASE5.md`](PHASE5.md)
+> Version 0.7 · 2026-08-13 · **Phases 0–3.5 complete; Phase 4 substantially landed; Phase 5 half landed** — see [`PHASE0.md`](PHASE0.md) · [`PHASE1.md`](PHASE1.md) · [`PHASE2.md`](PHASE2.md) · [`PHASE3.md`](PHASE3.md) · [`PHASE5.md`](PHASE5.md)
 > 한국어판: [`PLAN.ko.md`](PLAN.ko.md)
 
 **Changes from v0.5** — §7 rewritten from a serial weekly roadmap into **landed work plus parallel streams**. The serial plan was written for one thread of work; execution ran ahead of it (Phases 0–3.5 done, Phase 5 half done, Phase 4 untouched) and the remaining items no longer depend on each other in a line. Each remaining stream now states its own batch unit, its own oracle and its codification target, so it can run as an independent batch → oracle → repair → codify loop (§5.1), and cross-stream integration points are named explicitly. No scope was added or removed; this is a re-ordering of what was already planned, plus honest completion status.
@@ -584,8 +584,22 @@ Two rules carry over unchanged from the operating model:
 | Phase 3.5 — capability handles (2 wk) | Complete, landed **with** the bridge as required: session-scoped, expiring, entropy-backed; transcript-searched leak test | `PHASE3.md` |
 | Phase 5 — identity (8 wk) | **Half landed.** CSIv2 wire (SAS, GSSUP, mech lists) unit-tested both byte orders; delegation default-deny with recorded reasons; credential hygiene structural; `@ai_authz` scopes enforced. Measured: neither fixture advertises CSIv2 at all | `PHASE5.md` |
 
-Not started from the original plan: Phase 4 (static generation, promotion),
-Phase 6 (productionization), and the model-in-the-loop stages S1–S3.
+| Phase 4 — static generation, promotion (was not started at v0.6) | **Substantially landed.** Rust client stubs with the §8 static-equals-dynamic oracle against both peers; **server skeletons** driven by omniORB's own python client (narrow, attributes, `out` parameters, a oneway then a twoway on one connection, user exceptions by class); the promotion gate I4 live-verified. Remaining: a servant cannot raise a system exception, no server-side static-equals-dynamic oracle, no Python target | `COMPONENTS.md`, harness stream-B group |
+
+Not started from the original plan: Phase 6 (productionization) and the
+model-in-the-loop stages S1–S3.
+
+**Landed since v0.6, by stream** — the streams below are written as scope, not
+as status, so the status is here and the measurements are in
+[`COMPONENTS.md`](COMPONENTS.md), which is refreshed after every wave:
+**B** stubs + skeletons; **C** SSLIOP behind an off-by-default feature, peer
+proof measured BLOCKED (brew's omniORBpy ships no `sslTP` binding);
+**D** search v2 and D003-A's vector union (the synonym class remains
+UNMEASURED — no key here), D004 drafted PROPOSED; **E** concurrent connections
+with a cap and a `CloseConnection` refusal; **F** the residency machine, the
+trading wire surface, the interceptor chain, the event channel and tenancy;
+plus the CosNaming server, the read-only IFR facade, and a contract/property
+crate whose fuzz found that recursive types could not be marshalled at all.
 
 ### 7.3 The remaining work, as parallel streams
 
@@ -665,8 +679,14 @@ produces), and **oracle** (what verifies the whole batch deterministically).
 - **What:** the carried-forward list, now mostly landed: ~~`LocateRequest`~~,
   ~~`CancelRequest`/`CloseConnection` send~~, ~~multi-profile failover~~,
   ~~`TAG_ALTERNATE_IIOP_ADDRESS`~~ (all measured against both peers,
-  2026-08-13/14). Remaining: fragment *reception* validated independently,
-  request multiplexing, connection pooling, `#pragma prefix`.
+  2026-08-13/14), ~~concurrent connections~~ (one servant behind one mutex,
+  cap 64, refusal spoken as §9.4.7's `CloseConnection`). Remaining: fragment
+  *reception* validated independently, request multiplexing, connection
+  pooling, `#pragma prefix`, and the limit concurrency did **not** remove —
+  **dispatch is still serialized**, so a slow operation delays every client
+  even though it no longer excludes them. Lifting that means `Dispatch: Sync`
+  and interior mutability in every servant, which is a cross-crate batch and
+  should not be smuggled into a giop-only one.
 - **Depends on:** nothing. Pure `orbweaver-giop` work.
 - **Batch unit:** one capability across **both peers and all three GIOP
   versions** at once.
@@ -684,7 +704,7 @@ independent by construction.
 |---|---|---|
 | **I1. Generated stubs are guarded** ✅ | B × C | Static stubs go through the same `Exposure`/`Delegation`/audit path as dynamic calls. A stub that bypasses the guard recreates the §4.7 bypass in compiled form. Checked by the transcript-leak test running against a static client. **Verified**: stubs are generic over `Invoker`; `Guarded` applies exposure, `ai_authz` scopes and `destructive` approval per operation, refuses as `NO_PERMISSION` before anything is sent, and its audit log is leak-checked live against omniORB. |
 | **I2. Pipeline output is exposed safely** ✅ | A × D | S5 registration feeds the catalog with **exposure off by default**; a generated interface becoming agent-visible requires the same explicit allowlist as a hand-written one. **Verified**: `pipeline::register` re-checks every item at the gate (a forged `Valid` is refused), grants nothing — the exposable list is a menu in `exposure.todo.tsv`, every row `exposed=no` — and the proof runs a real `Bridge` over the registered batch: invisible under `Exposure::nothing()`, one `allow_interface` exposes exactly one interface, the neighbour stays dark. Durable store (§6) remains future work; `register` is its seam. |
-| **I3. Search does not launder annotations** | A × D | The embedding index treats `ai_desc` as data (R11); injection cases from the negative corpus are part of the frozen query benchmark. |
+| **I3. Search does not launder annotations** ● | A × D | The embedding index treats `ai_desc` as data (R11); injection cases from the negative corpus are part of the frozen query benchmark. **Partly verified**: the injection class holds 5/5 in both the frozen v1 set and the widened v2 set, lexically and with a vector index attached, and the discipline earned its keep — D003-A's first run leaked a JSON-shaped injection query past the 0.60 gate at 0.617 because `interface_text` was embedding repository-id boilerplate as content, which is now a pinned bench test. **Not verified**: the same class against a real embedding model, because no API key exists here; the harness reports that arm SKIPPED rather than passing. |
 | **I4. Promotion respects identity** ● | B × C | A promoted static path carries the same `Caller` assertion behaviour as the dynamic path it replaced. **Gate landed and live-verified**: `verify_promotion` fed both paths' real outcomes against a stock ORB in the gen-corpus oracle — the static audit line captured from a real `Guarded`, a caller-less rebuild of the same call refused as `IdentityDropped` with results identical, and `PromotionPolicy` recommending the observed traffic. The dynamic path's audit line is still *reconstructed* from `Bridge::caller` session state in the guard's format, because the dynamic bridge path emits no audit lines yet; capture replaces reconstruction when it does. |
 
 ### 7.5 Batch discipline for parallel execution
