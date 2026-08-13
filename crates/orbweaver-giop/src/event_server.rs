@@ -1197,10 +1197,13 @@ impl Dispatch for PushConsumerServant {
 /// the two halves of CosNaming: one place knows each operation's wire shape,
 /// so the client and the server cannot drift apart.
 ///
-/// Note the serving limit these callers must respect:
-/// [`crate::server::Server`] handles one connection at a time, so reaching a
-/// different object on the same channel means dropping the current
-/// [`Connection`] and dialling the new reference.
+/// Reaching a different object on the same channel means dialling that
+/// object's own reference: an object key is per-reference, not per-connection.
+/// Holding the old [`Connection`] open while the new one is dialled is fine —
+/// [`crate::server::Server`] serves its connections concurrently — so whether
+/// to drop it is the caller's convenience, not a limit. (It was a limit until
+/// the server grew a thread per connection; every caller written before that
+/// hangs up between hops, which is still correct.)
 pub mod client {
     use super::*;
 
@@ -1299,15 +1302,20 @@ mod tests {
 
     /// A channel served on loopback.
     ///
-    /// `Server` handles one connection at a time, so the tests dial each
-    /// sub-object in turn and drop the previous connection first — the F6
-    /// pattern. Shutdown raises the stop flag before the last client drops,
-    /// so the serve loop observes it after the connection ends instead of
-    /// blocking in accept.
+    /// `Server` serves its connections concurrently, so holding several at
+    /// once is allowed; most tests here still dial each sub-object in turn
+    /// and drop the previous connection because that is what a client does,
+    /// not because the server requires it —
+    /// `concurrent_suppliers_and_outbound_delivery_do_not_deadlock` is the
+    /// one that deliberately holds them at the same time. Shutdown raises the
+    /// stop flag and the serve loop notices it without needing a client to
+    /// arrive; `shutdown` still takes the last client so the test's own
+    /// ordering stays explicit.
     struct Served {
         channel: Ior,
         handle: ChannelHandle,
         delivery: Option<Delivery>,
+        stats: crate::server::ServerStats,
         stop: Arc<AtomicBool>,
         thread: Option<std::thread::JoinHandle<()>>,
     }
@@ -1329,12 +1337,13 @@ mod tests {
             let mut channel = EventChannelServer::new("127.0.0.1", port, b"EventChannel".to_vec());
             let ior = channel.channel_ior();
             let handle = channel.handle();
+            let stats = server.stats();
             let stop = Arc::new(AtomicBool::new(false));
             let flag = stop.clone();
             let thread = std::thread::spawn(move || {
-                server.serve(&mut channel, || flag.load(Ordering::SeqCst)).unwrap();
+                server.serve(&mut channel, move || flag.load(Ordering::SeqCst)).unwrap();
             });
-            Served { channel: ior, handle, delivery: None, stop, thread: Some(thread) }
+            Served { channel: ior, handle, delivery: None, stats, stop, thread: Some(thread) }
         }
 
         /// Starts delivery against the already-serving channel's shared state.
@@ -1410,13 +1419,10 @@ mod tests {
             Consumer { ior, sink, stop, thread: Some(thread) }
         }
 
-        /// Stops the servant thread. The flag is only observed between
-        /// connections, so a nudge connection unblocks the accept it is
-        /// sitting in.
+        /// Stops the servant thread. The accept loop polls the flag, so no
+        /// nudge connection is needed to unblock it any more.
         fn shutdown(mut self) {
             self.stop.store(true, Ordering::SeqCst);
-            let p = self.ior.primary().unwrap().clone();
-            let _ = std::net::TcpStream::connect(format!("{}:{}", p.host, p.port));
             let _ = self.thread.take().unwrap().join();
         }
     }
@@ -1671,6 +1677,87 @@ mod tests {
             served.shutdown(conn);
             consumer.shutdown();
         }
+    }
+
+    /// A sleeping, deadline-bounded rendezvous: `true` when all `n` parties
+    /// arrived, `false` when they did not. A spin here would be the harness
+    /// rule's wait loop that does not wait.
+    fn all_arrived(n: usize, count: &std::sync::atomic::AtomicUsize, within: Duration) -> bool {
+        count.fetch_add(1, Ordering::SeqCst);
+        let deadline = Instant::now() + within;
+        while count.load(Ordering::SeqCst) < n {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        true
+    }
+
+    /// Rule 1 of the module docs — no lock may be held across an outbound
+    /// call — against a server that now serves its connections concurrently.
+    ///
+    /// Several suppliers hold their own sessions on the channel and push *in*
+    /// while the delivery thread pushes *out* to a consumer that is itself a
+    /// server in this process. Before this batch the arrangement was
+    /// impossible to even set up: one connection was served at a time, so the
+    /// suppliers had to take turns. The deadline is what makes a resurrected
+    /// deadlock a failed test rather than a hung suite.
+    ///
+    /// What is proved is that inbound serving and outbound delivery overlap
+    /// without deadlocking. What is *not* proved, and must not be read in, is
+    /// parallel dispatch: the channel servant still handles one operation at
+    /// a time behind the server's mutex.
+    #[test]
+    fn concurrent_suppliers_and_outbound_delivery_do_not_deadlock() {
+        const S: usize = 4;
+        const EACH: u32 = 5;
+        let served = Served::start();
+        let consumer = Consumer::start(b"ConcurrentConsumer");
+        served.consumer_proxy(&consumer.ior);
+
+        let arrived = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for s in 0..S {
+                let served = &served;
+                let arrived = &arrived;
+                scope.spawn(move || {
+                    // Three hops, each on its own connection, run by every
+                    // supplier at the same time.
+                    let mut proxy = served.supplier_proxy();
+                    assert!(all_arrived(S, arrived, T), "supplier {s} never overlapped the others");
+                    for i in 0..EACH {
+                        client::push(&mut proxy, &TypeCode::ULong, move |e| {
+                            e.put_u32(s as u32 * 100 + i)
+                        })
+                        .unwrap();
+                    }
+                });
+            }
+        });
+
+        let want = u64::from(EACH) * S as u64;
+        assert!(
+            served.handle.wait_until(T, |st| st.delivered == want),
+            "delivery stalled under concurrency: {:?}",
+            served.handle.stats()
+        );
+        let got = consumer.sink.snapshot();
+        assert_eq!(got.len() as u64, want, "every concurrently pushed event must arrive");
+        let mut values: Vec<u32> = got.iter().map(ulong_value).collect();
+        values.sort_unstable();
+        let expected: Vec<u32> =
+            (0..S).flat_map(|s| (0..EACH).map(move |i| s as u32 * 100 + i)).collect();
+        assert_eq!(values, expected, "an event was lost or duplicated");
+        assert!(
+            served.stats.peak_active() >= S as u64,
+            "the suppliers did not actually overlap: peak was {}",
+            served.stats.peak_active()
+        );
+
+        let last = served.channel_conn();
+        served.shutdown(last);
+        consumer.shutdown();
     }
 
     /// The bounded queue, measured with the drain paused so the accounting

@@ -490,13 +490,17 @@ mod tests {
         }
     }
 
-    /// A NamingServer served on loopback. `Server` handles one connection at
-    /// a time, so tests use clients strictly sequentially and must call
-    /// [`Served::shutdown`] with the *last* client still open: the stop flag
-    /// is raised before that client drops, so the serve loop is guaranteed
-    /// to observe it after the connection ends instead of blocking in accept.
+    /// A NamingServer served on loopback.
+    ///
+    /// `Server` serves its connections concurrently, so nothing here has to
+    /// take turns; most tests still use one client at a time because that is
+    /// what they are testing, and
+    /// [`Served::shutdown`] still takes the last client to keep each test's
+    /// ordering explicit. The stop flag no longer needs a connection to
+    /// arrive before it is noticed — the accept loop polls it.
     struct Served {
         root: Ior,
+        stats: crate::server::ServerStats,
         stop: Arc<AtomicBool>,
         thread: Option<std::thread::JoinHandle<()>>,
     }
@@ -507,12 +511,13 @@ mod tests {
             let port = server.local_addr().unwrap().port();
             let mut ns = NamingServer::new("127.0.0.1", port, b"NameService".to_vec());
             let root = ns.root_ior();
+            let stats = server.stats();
             let stop = Arc::new(AtomicBool::new(false));
             let flag = stop.clone();
             let thread = std::thread::spawn(move || {
-                server.serve(&mut ns, || flag.load(Ordering::SeqCst)).unwrap();
+                server.serve(&mut ns, move || flag.load(Ordering::SeqCst)).unwrap();
             });
-            Served { root, stop, thread: Some(thread) }
+            Served { root, stats, stop, thread: Some(thread) }
         }
 
         fn client(&self) -> NamingContext {
@@ -749,6 +754,61 @@ mod tests {
             other => panic!("expected BAD_OPERATION for destroy, got {other:?}"),
         }
         served.shutdown(ctx);
+    }
+
+    /// The limit this servant's docs used to name, gone: several clients hold
+    /// naming sessions at the same time and every one of them is answered.
+    ///
+    /// Each client binds its own name while the others are connected, then
+    /// waits at a deadline-bounded rendezvous before resolving what its
+    /// neighbours bound — so a server that served one connection at a time
+    /// would fail here on the deadline rather than hang. The naming tree is
+    /// one servant behind one mutex, which is what makes the concurrent binds
+    /// safe without the servant locking anything itself.
+    #[test]
+    fn concurrent_clients_bind_and_resolve_without_taking_turns() {
+        const N: usize = 5;
+        let served = Served::start();
+        let arrived = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for i in 0..N {
+                let served = &served;
+                let arrived = &arrived;
+                scope.spawn(move || {
+                    let mut ctx = served.client();
+                    let mine = format!("client{i}");
+                    ctx.bind(&[nc(&mine)], &dummy(mine.as_bytes())).unwrap();
+
+                    // Everybody is connected and bound before anybody reads.
+                    arrived.fetch_add(1, Ordering::SeqCst);
+                    let deadline = std::time::Instant::now() + T;
+                    while arrived.load(Ordering::SeqCst) < N {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "client {i} waited out the others: the server is still serializing"
+                        );
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+
+                    for other in 0..N {
+                        let name = format!("client{other}");
+                        let got = ctx.resolve(&[nc(&name)]).unwrap();
+                        assert_eq!(
+                            got.primary().unwrap().object_key,
+                            name.as_bytes(),
+                            "client {i} resolving {name}"
+                        );
+                    }
+                });
+            }
+        });
+        assert!(
+            served.stats.peak_active() >= N as u64,
+            "the clients did not actually overlap: peak was {}",
+            served.stats.peak_active()
+        );
+        let last = served.client();
+        served.shutdown(last);
     }
 
     /// The narrow `dispatch` entry point cannot carry a user exception, so it

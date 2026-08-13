@@ -20,10 +20,83 @@
 //! §9.4.3.1). And 1.0/1.1 put `service_context` *first* in both request and
 //! reply headers, so a version-blind encoder produces a message the peer
 //! misparses rather than rejects.
+//!
+//! # Serving more than one client at a time
+//!
+//! [`Server`] used to accept one connection, serve it to completion, and only
+//! then accept the next. Every service built on it — the naming server, the
+//! event channel, the IFR facade, the MoE expert service — carried a sentence
+//! telling its harness that the foreign client had to be the *only* client
+//! while it ran, and a deployment where two agents hold sessions at once was
+//! simply impossible. [`Server::serve`] now spawns a thread per accepted
+//! connection, inside a [`std::thread::scope`] so nothing outlives the call.
+//!
+//! ## How the servant is shared, and what that does not buy
+//!
+//! **One servant, behind one mutex.** [`Dispatch`] is `&mut self`-shaped, and
+//! the servants in this workspace hold the *authoritative* state of the
+//! service they front — the naming tree, the channel's proxy tables, the
+//! repository. Giving each connection its own copy would fork that state, so
+//! the servant stays single and every connection thread takes the same lock
+//! for the duration of one message. The alternative — requiring
+//! `Dispatch: Sync` with interior mutability per servant — buys more, and
+//! costs a rewrite of every servant in three crates that this footprint may
+//! not touch; it stays available as a later batch, because nothing here
+//! depends on the lock being where it is.
+//!
+//! What the mutex buys is exactly one thing: **connections are concurrent**.
+//! Ten clients may be connected, mid-session, holding their own sockets and
+//! their own GIOP state, and each is answered.
+//!
+//! What it does **not** buy, said plainly because the difference is easy to
+//! oversell: **dispatch is still serialized**. A servant that blocks for a
+//! second inside `dispatch` blocks every other client for that second. That
+//! is a different limit from the one being removed — "only one client may be
+//! connected" is gone; "only one operation runs at a time" is not — and a
+//! slow servant is still a slow service. The lock is taken per message, not
+//! per connection, so an *idle* connection costs nobody anything.
+//!
+//! One re-entrancy is forbidden by that choice: a servant that, from inside
+//! `dispatch`, calls back into **its own** server waits for a lock its own
+//! caller holds. It does not wedge the server — the inner call is bounded by
+//! the client read timeout [`crate::Connection`] sets, fails, and serving
+//! continues — but it cannot succeed. Calling *another* server in the same
+//! process, which is what the event channel's delivery loop does, is fine and
+//! is proved by test; see `event_server`'s rule that no lock may be held
+//! across an outbound call, which this module's lock obeys by being released
+//! before the reply is even written.
+//!
+//! ## The cap
+//!
+//! Thread-per-connection with no bound is a one-line resource exhaustion, so
+//! at most [`Server::max_connections`] connections are served at once
+//! ([`DEFAULT_MAX_CONNECTIONS`] by default). Over the cap a connection is
+//! **accepted, told `CloseConnection`, and closed** — refused, not queued.
+//! §9.4.7 makes that goodbye mean "your requests were not processed, re-send
+//! them elsewhere", which is the true statement and one a client can act on;
+//! queueing would leave it blocked with no way to know why, and never
+//! accepting at all would leave it stuck in the listen backlog looking
+//! identical to a hung server. Every refusal is counted in
+//! [`ServerStats::refused`] and logged with the cap that caused it — the
+//! harness rule about unmeasured things applies to dropped clients too.
+//!
+//! ## Shutdown
+//!
+//! `stop` is polled by the accept loop and by every connection thread, so a
+//! raised flag ends the whole server within [`STOP_POLL`] rather than when
+//! the next message happens to arrive — the honest limit the old loop
+//! documented. Threads waiting for a peer's next message wake to check it;
+//! each ends with an orderly `CloseConnection`. `serve` returns only after
+//! every connection thread has finished, so a returned `serve` means no
+//! thread is left behind. A peer that starts a message and then stalls is
+//! bounded too, by [`Server::set_message_timeout`].
 
 use orbweaver_cdr::{Decoder, Encoder, Endian};
 use std::io::Write;
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::{
     DEFAULT_MAX_MESSAGE_SIZE, Error, HEADER_LEN, MAGIC, MsgType, RawMessage, ReplyStatus, Result,
@@ -396,6 +469,14 @@ pub enum DispatchBody {
 }
 
 /// What a servant does with an invocation.
+///
+/// One servant answers every connection: [`Server::serve`] holds it behind a
+/// mutex and takes that mutex for the duration of one message, so an
+/// implementation still sees `&mut self` and still runs one operation at a
+/// time. Two consequences worth stating where they will be read: a servant
+/// needs no locking of its own, and a servant that blocks — a long
+/// computation, an outbound call — blocks every other client for as long as
+/// it blocks. See the module docs.
 pub trait Dispatch {
     /// Handles `request`, writing the reply body into `out`.
     ///
@@ -440,16 +521,145 @@ pub trait Dispatch {
     }
 }
 
-/// A single-threaded, one-connection-at-a-time GIOP server.
+/// How many connections one [`Server`] serves at once before refusing.
 ///
-/// Enough to prove the serving half interoperates. Concurrency, a POA and
-/// servant lifecycle are later work.
+/// Sixty-four is a bound, not a capacity estimate: it is far above the
+/// handful of agents and fixtures anything here has ever held open, and far
+/// below the point where a thread per connection costs real memory. Raise it
+/// with [`Server::set_max_connections`] when the deployment knows better.
+pub const DEFAULT_MAX_CONNECTIONS: usize = 64;
+
+/// How long a connection thread waits for its peer's next message before
+/// re-checking the stop flag, and how long the accept loop sleeps between
+/// polls. This is the granularity of shutdown, not of service: a message that
+/// arrives is served the moment it arrives.
+pub const STOP_POLL: Duration = Duration::from_millis(50);
+
+/// How long a peer that has started a message may stall before its connection
+/// is dropped. It bounds *within* a message; an idle connection between
+/// messages is not affected and may idle forever.
+pub const DEFAULT_MESSAGE_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Default)]
+struct Counters {
+    accepted: AtomicU64,
+    refused: AtomicU64,
+    active: AtomicU64,
+    peak: AtomicU64,
+}
+
+/// A live view of one [`Server`]'s connection counters.
+///
+/// Cloning shares the counters, so a caller can hold this after moving the
+/// server into its serving thread — which is how every fixture here is
+/// arranged. The point is the cap being *observable*: a refused client that
+/// is only logged is invisible to a harness, and an unmeasured refusal is a
+/// failure by the same rule that makes an unmeasured check one.
+#[derive(Debug, Clone, Default)]
+pub struct ServerStats {
+    counters: Arc<Counters>,
+}
+
+impl ServerStats {
+    /// Connections admitted and served since the server was bound.
+    pub fn accepted(&self) -> u64 {
+        self.counters.accepted.load(Ordering::Relaxed)
+    }
+
+    /// Connections refused because the cap was already reached.
+    pub fn refused(&self) -> u64 {
+        self.counters.refused.load(Ordering::Relaxed)
+    }
+
+    /// Connections being served right now.
+    pub fn active(&self) -> u64 {
+        self.counters.active.load(Ordering::Relaxed)
+    }
+
+    /// The high-water mark of [`ServerStats::active`] — the measured overlap.
+    pub fn peak_active(&self) -> u64 {
+        self.counters.peak.load(Ordering::Relaxed)
+    }
+
+    /// Takes a slot if the cap allows, counting the outcome either way.
+    fn admit(&self, cap: usize) -> Option<Slot> {
+        let cap = cap as u64;
+        let mut active = self.counters.active.load(Ordering::Acquire);
+        loop {
+            if active >= cap {
+                self.counters.refused.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+            match self.counters.active.compare_exchange_weak(
+                active,
+                active + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    self.counters.accepted.fetch_add(1, Ordering::Relaxed);
+                    self.counters.peak.fetch_max(active + 1, Ordering::Relaxed);
+                    return Some(Slot { stats: self.clone() });
+                }
+                Err(observed) => active = observed,
+            }
+        }
+    }
+}
+
+/// One admitted connection's slot, returned to the cap on drop — including
+/// the drop that unwinding a panicking servant performs, which is why this is
+/// a guard and not a pair of counter calls.
+#[derive(Debug)]
+struct Slot {
+    stats: ServerStats,
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.stats.counters.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// What waiting for a peer's next message ended in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Waiting {
+    /// Bytes are there; read the message.
+    Ready,
+    /// The peer hung up.
+    PeerGone,
+    /// The stop flag went up while we waited.
+    Stopped,
+}
+
+/// Takes the shared servant, recovering a poisoned lock rather than
+/// propagating it.
+///
+/// A servant that panicked mid-dispatch poisons the mutex. Refusing to serve
+/// anyone afterwards would turn one bad request into a dead service for every
+/// other client — the opposite of the rule the accept loop has always
+/// followed. The panic itself is not swallowed: it still ends the connection
+/// that caused it and still surfaces from [`Server::serve`] when the scope
+/// joins.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// A GIOP server that serves its connections concurrently, one thread each,
+/// bounded by [`Server::max_connections`].
+///
+/// A POA and servant lifecycle remain later work; what is here is one servant
+/// (see [`Dispatch`]) answering every client that dials it. Read the module
+/// docs for what the sharing does and does not buy before assuming the second.
 #[derive(Debug)]
 pub struct Server {
     listener: TcpListener,
     object_key: Vec<u8>,
     max_message_size: usize,
     fragment_threshold: usize,
+    max_connections: usize,
+    message_timeout: Duration,
+    stats: ServerStats,
 }
 
 impl Server {
@@ -460,7 +670,35 @@ impl Server {
             object_key,
             max_message_size: DEFAULT_MAX_MESSAGE_SIZE,
             fragment_threshold: crate::DEFAULT_FRAGMENT_THRESHOLD,
+            max_connections: DEFAULT_MAX_CONNECTIONS,
+            message_timeout: DEFAULT_MESSAGE_TIMEOUT,
+            stats: ServerStats::default(),
         })
+    }
+
+    /// A handle on this server's connection counters, clonable and readable
+    /// while the server is serving.
+    pub fn stats(&self) -> ServerStats {
+        self.stats.clone()
+    }
+
+    /// How many connections are served at once before further ones are
+    /// refused with a `CloseConnection`.
+    pub fn max_connections(&self) -> usize {
+        self.max_connections
+    }
+
+    /// Overrides the cap. Zero would refuse everything, so it is clamped to
+    /// one: a server that serves nobody is a configuration mistake, not a
+    /// policy anyone means to express.
+    pub fn set_max_connections(&mut self, n: usize) {
+        self.max_connections = n.max(1);
+    }
+
+    /// Overrides how long a peer may stall *inside* a message before its
+    /// connection is dropped. See [`DEFAULT_MESSAGE_TIMEOUT`].
+    pub fn set_message_timeout(&mut self, timeout: Duration) {
+        self.message_timeout = timeout;
     }
 
     /// The address actually bound, after any port-zero assignment.
@@ -498,51 +736,123 @@ impl Server {
         })
     }
 
-    /// Serves connections until `stop` returns true.
+    /// Serves connections concurrently until `stop` returns true.
     ///
-    /// `stop` is observed between accepts and between messages on a live
-    /// connection. A stop that lands mid-connection ends it with an orderly
-    /// `CloseConnection` (§9.4.10) rather than a bare TCP close, so the peer
-    /// knows its unanswered requests were not processed and may re-send them
-    /// elsewhere. Honest limit: a connection idle inside a blocking read
-    /// only notices the flag when its next message arrives.
-    pub fn serve<D, S>(&self, dispatch: &mut D, mut stop: S) -> Result<()>
+    /// Each accepted connection gets a thread; `dispatch` is shared between
+    /// them behind a mutex taken per message, so connections overlap and
+    /// operations do not (module docs). Over [`Server::max_connections`] a
+    /// connection is refused with a `CloseConnection` and counted in
+    /// [`ServerStats::refused`].
+    ///
+    /// `stop` is polled by the accept loop and by every connection thread at
+    /// [`STOP_POLL`]. A stop that lands mid-connection ends it with an
+    /// orderly `CloseConnection` (§9.4.10) rather than a bare TCP close, so
+    /// the peer knows its unanswered requests were not processed and may
+    /// re-send them elsewhere. `serve` returns only once every connection
+    /// thread has ended, so nothing it started outlives it.
+    ///
+    /// A servant that panics still ends the server, exactly as it did when
+    /// there was one loop: the panic surfaces from `serve` when the scope
+    /// joins. What does *not* happen is the other connections dying with it —
+    /// a poisoned servant mutex is recovered rather than propagated, because
+    /// one bad request must not take the service down.
+    pub fn serve<D, S>(&self, dispatch: &mut D, stop: S) -> Result<()>
     where
-        D: Dispatch,
-        S: FnMut() -> bool,
+        D: Dispatch + Send,
+        S: Fn() -> bool + Sync,
     {
-        for incoming in self.listener.incoming() {
-            if stop() {
-                return Ok(());
-            }
-            match incoming {
-                Ok(stream) => {
-                    // One bad client must not take the server down.
-                    if let Err(e) = self.serve_connection_until(stream, dispatch, &mut stop) {
-                        eprintln!("orbweaver: connection ended: {e}");
-                    }
+        let servant = Mutex::new(dispatch);
+        let stop = &stop;
+        let outcome = std::thread::scope(|scope| -> Result<()> {
+            // Polled rather than blocking, so a raised flag is noticed
+            // without a client having to arrive to unblock the accept. The
+            // poll sleeps: a spin here is the harness rule's wait loop that
+            // does not wait, in server form.
+            self.listener.set_nonblocking(true)?;
+            loop {
+                if stop() {
+                    return Ok(());
                 }
-                Err(e) => eprintln!("orbweaver: accept failed: {e}"),
+                match self.listener.accept() {
+                    Ok((stream, peer)) => {
+                        // macOS hands the accepted socket the listener's
+                        // non-blocking flag; read_message needs a blocking
+                        // one, and inheritance is per-platform, so this is
+                        // set rather than assumed. A failure here costs this
+                        // one connection and is *not* returned: leaving the
+                        // loop with live threads and no raised flag would
+                        // hang the scope's join for as long as they last.
+                        if let Err(e) = stream.set_nonblocking(false) {
+                            eprintln!(
+                                "orbweaver: dropping {peer}: not restorable to blocking: {e}"
+                            );
+                            continue;
+                        }
+                        match self.stats.admit(self.max_connections) {
+                            Some(slot) => {
+                                let servant = &servant;
+                                scope.spawn(move || {
+                                    let _slot = slot;
+                                    // One bad client must not take the
+                                    // server down.
+                                    if let Err(e) =
+                                        self.serve_connection_until(stream, servant, &stop)
+                                    {
+                                        eprintln!("orbweaver: connection ended: {e}");
+                                    }
+                                });
+                            }
+                            None => self.refuse(stream, peer),
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(STOP_POLL);
+                    }
+                    Err(e) => eprintln!("orbweaver: accept failed: {e}"),
+                }
             }
-            if stop() {
-                return Ok(());
-            }
+        });
+        // Hand the listener back the way it was found, so a second serve on
+        // the same server — or a direct accept in a test — is unsurprised.
+        let _ = self.listener.set_nonblocking(false);
+        outcome
+    }
+
+    /// Turns a connection away because the cap is full.
+    ///
+    /// §9.4.7: the goodbye means "not processed, safe to re-send elsewhere",
+    /// which is exactly true here and is more than a TCP reset would say.
+    fn refuse(&self, mut s: TcpStream, peer: SocketAddr) {
+        eprintln!(
+            "orbweaver: refusing {peer}: {} connections already served (cap {}), {} refused so far",
+            self.stats.active(),
+            self.max_connections,
+            self.stats.refused(),
+        );
+        if let Ok(bye) = encode_close_connection(Version::max_supported(), Endian::native()) {
+            let _ = s.write_all(&bye);
         }
-        Ok(())
+        let _ = s.shutdown(std::net::Shutdown::Both);
     }
 
-    /// Handles one connection to completion.
+    /// Handles one connection to completion, on this thread.
+    ///
+    /// The servant is exclusively this connection's for the call, which is
+    /// what makes this usable for a hand-rolled accept loop; [`Server::serve`]
+    /// shares one servant across many of these instead.
     pub fn serve_connection<D: Dispatch>(&self, s: TcpStream, d: &mut D) -> Result<()> {
-        self.serve_connection_until(s, d, &mut || false)
+        let servant = Mutex::new(d);
+        self.serve_connection_until(s, &servant, &|| false)
     }
 
-    /// As [`Server::serve_connection`], ending with an orderly
-    /// `CloseConnection` when `stop` reports true between messages.
+    /// As [`Server::serve_connection`], taking the shared servant per message
+    /// and ending with an orderly `CloseConnection` when `stop` reports true
+    /// between messages.
     fn serve_connection_until<D: Dispatch>(
         &self,
         mut s: TcpStream,
-        d: &mut D,
-        stop: &mut dyn FnMut() -> bool,
+        servant: &Mutex<&mut D>,
+        stop: &dyn Fn() -> bool,
     ) -> Result<()> {
         s.set_nodelay(true)?;
         // The version and byte order to stamp on a CloseConnection we send:
@@ -556,6 +866,15 @@ impl Server {
                 let out = encode_close_connection(wire_version, wire_endian)?;
                 s.write_all(&out)?;
                 return Ok(());
+            }
+            match self.await_message(&s, stop)? {
+                Waiting::Ready => {}
+                Waiting::PeerGone => return Ok(()),
+                Waiting::Stopped => {
+                    let out = encode_close_connection(wire_version, wire_endian)?;
+                    s.write_all(&out)?;
+                    return Ok(());
+                }
             }
             let msg = match read_message(&mut s, self.max_message_size) {
                 Ok(m) => m,
@@ -580,7 +899,7 @@ impl Server {
             match msg.msg_type {
                 MsgType::LocateRequest => {
                     let lr = decode_locate_request(msg)?;
-                    let status = if d.knows(&lr.object_key) {
+                    let status = if lock(servant).knows(&lr.object_key) {
                         LocateStatus::ObjectHere
                     } else {
                         LocateStatus::UnknownObject
@@ -590,7 +909,14 @@ impl Server {
                 }
                 MsgType::Request => {
                     let req = decode_request(msg)?;
-                    let reply = self.handle_request(&req, d)?;
+                    // The lock spans knows/forward/dispatch — one request is
+                    // one indivisible look at the servant — and is released
+                    // before the reply is written, so a slow *socket* holds
+                    // nobody up. Only a slow servant does.
+                    let reply = {
+                        let mut servant = lock(servant);
+                        self.handle_request(&req, &mut **servant)?
+                    };
                     if let Some(bytes) = reply {
                         for piece in fragment_message(bytes, self.fragment_threshold)? {
                             s.write_all(&piece)?;
@@ -677,6 +1003,50 @@ impl Server {
             }
             Err(ex) => self.reply_exception(req, &ex),
         }
+    }
+
+    /// Waits for the peer's next message, waking often enough to notice
+    /// `stop`.
+    ///
+    /// The wait is a one-byte `peek` under a short read timeout, not a timed
+    /// `read`: a timeout that fired in the middle of `read_message` would
+    /// have consumed bytes it cannot put back, and the connection's framing
+    /// would be gone. Peeking leaves every byte where it was, so the message
+    /// is then read with the timeout that bounds a *stalled* peer instead.
+    fn await_message(&self, s: &TcpStream, stop: &dyn Fn() -> bool) -> Result<Waiting> {
+        s.set_read_timeout(Some(STOP_POLL))?;
+        let mut probe = [0u8; 1];
+        let waiting = loop {
+            match s.peek(&mut probe) {
+                Ok(0) => break Waiting::PeerGone,
+                Ok(_) => break Waiting::Ready,
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    // The poll expired with nothing to read. Platforms
+                    // disagree about which of the two kinds that is.
+                    if stop() {
+                        break Waiting::Stopped;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                    ) =>
+                {
+                    break Waiting::PeerGone;
+                }
+                Err(e) => return Err(Error::Io(e)),
+            }
+        };
+        // Whatever comes next is read with the stall bound, not the poll one.
+        s.set_read_timeout(Some(self.message_timeout))?;
+        Ok(waiting)
     }
 
     fn reply_exception(&self, req: &Request, ex: &SystemException) -> Result<Option<Vec<u8>>> {
@@ -982,6 +1352,486 @@ mod tests {
         assert!(!conn.is_usable(), "a cleanly closed connection must not be reused");
         drop(conn);
         t.join().unwrap();
+    }
+
+    // ── concurrency ──────────────────────────────────────────────────────────
+    //
+    // Every test below bounds itself twice: the clients' sockets carry a read
+    // timeout, and every rendezvous carries a deadline. Serialization must
+    // make these tests FAIL, and a failure that arrives as a hang is a test
+    // nobody can read.
+
+    use std::sync::Condvar;
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+
+    /// The deadline every wait in these tests answers to. Generous enough to
+    /// survive a loaded CI box, short enough that a genuine deadlock is a
+    /// failed test rather than a killed job.
+    const DEADLINE: Duration = Duration::from_secs(10);
+
+    /// A rendezvous for `n` parties, with a deadline.
+    ///
+    /// `arrive` returns false rather than blocking forever when the others do
+    /// not turn up, which is what turns "the server serialized us" from a
+    /// hung test into a failing one.
+    struct Gate {
+        n: usize,
+        arrived: Mutex<usize>,
+        wake: Condvar,
+    }
+
+    impl Gate {
+        fn new(n: usize) -> Self {
+            Gate { n, arrived: Mutex::new(0), wake: Condvar::new() }
+        }
+
+        fn arrive(&self, within: Duration) -> bool {
+            let mut arrived = lock(&self.arrived);
+            *arrived += 1;
+            if *arrived >= self.n {
+                self.wake.notify_all();
+                return true;
+            }
+            let (_guard, timed_out) = self
+                .wake
+                .wait_timeout_while(arrived, within, |a| *a < self.n)
+                .unwrap_or_else(|e| e.into_inner());
+            !timed_out.timed_out()
+        }
+    }
+
+    /// A server on loopback, serving `servant`, with its counters readable
+    /// after the server itself has moved into the serving thread.
+    struct Loopback {
+        addr: std::net::SocketAddr,
+        stats: ServerStats,
+        stop: Arc<AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    fn serving<D: Dispatch + Send + 'static>(mut servant: D, cap: usize) -> Loopback {
+        let mut server = Server::bind("127.0.0.1:0", b"k".to_vec()).unwrap();
+        server.set_max_connections(cap);
+        let addr = server.local_addr().unwrap();
+        let stats = server.stats();
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            server.serve(&mut servant, move || flag.load(Ordering::SeqCst)).unwrap();
+        });
+        Loopback { addr, stats, stop, thread: Some(thread) }
+    }
+
+    impl Loopback {
+        /// A client socket that times out rather than waiting forever.
+        fn client(&self) -> TcpStream {
+            let c = TcpStream::connect(self.addr).unwrap();
+            c.set_read_timeout(Some(DEADLINE)).unwrap();
+            c
+        }
+
+        /// Waits, sleeping, for the counters to say `want`.
+        fn wait_until(&self, want: impl Fn(&ServerStats) -> bool) -> bool {
+            let deadline = std::time::Instant::now() + DEADLINE;
+            while std::time::Instant::now() < deadline {
+                if want(&self.stats) {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            want(&self.stats)
+        }
+
+        fn shutdown(mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+            self.thread.take().unwrap().join().unwrap();
+        }
+    }
+
+    fn ior_at(addr: std::net::SocketAddr, key: &[u8]) -> crate::Ior {
+        crate::Ior {
+            type_id: "IDL:spike/Echo:1.0".into(),
+            profiles: vec![crate::IiopProfile {
+                version: Version::V1_2,
+                host: addr.ip().to_string(),
+                port: addr.port(),
+                object_key: key.to_vec(),
+                components: Vec::new(),
+            }],
+        }
+    }
+
+    /// The limit this batch exists to remove: N clients, each mid-session at
+    /// the same time.
+    ///
+    /// Each client completes a full request/reply, then waits at a gate every
+    /// one of them must reach, then completes a second. Under a
+    /// one-connection-at-a-time server the second client's *first* reply
+    /// never arrives while the first client holds its socket, so the gate
+    /// times out and the read times out — the test fails, twice over, rather
+    /// than hanging.
+    ///
+    /// The overlap is also read off the server itself: the high-water mark of
+    /// live connections must reach N. Note what is *not* claimed — the
+    /// servant still runs one dispatch at a time, so this measures concurrent
+    /// *sessions*, which is the limit that was removed.
+    #[test]
+    fn n_clients_hold_sessions_at_once_in_both_byte_orders() {
+        const N: usize = 6;
+        for endian in [Endian::Big, Endian::Little] {
+            let served = serving(Pong, DEFAULT_MAX_CONNECTIONS);
+            let gate = Arc::new(Gate::new(N));
+            let clients: Vec<_> = (0..N)
+                .map(|i| {
+                    let mut c = served.client();
+                    let gate = Arc::clone(&gate);
+                    std::thread::spawn(move || {
+                        let why = format!("client {i} {endian:?}");
+                        c.write_all(&ping_wire(Version::V1_2, endian, 1)).unwrap();
+                        expect_pong(&mut c, 1, &why);
+                        let all_here = gate.arrive(DEADLINE);
+                        c.write_all(&ping_wire(Version::V1_2, endian, 2)).unwrap();
+                        expect_pong(&mut c, 2, &why);
+                        all_here
+                    })
+                })
+                .collect();
+            for (i, t) in clients.into_iter().enumerate() {
+                assert!(t.join().unwrap(), "client {i} ({endian:?}) waited out the gate alone");
+            }
+            assert!(
+                served.stats.peak_active() >= N as u64,
+                "{endian:?}: peak concurrency was {}, wanted {N}",
+                served.stats.peak_active()
+            );
+            assert_eq!(served.stats.refused(), 0, "{endian:?}: nothing should have been refused");
+            served.shutdown();
+        }
+    }
+
+    /// The cap is a bound, and a bound nobody can see is not one. Over it, a
+    /// connection is refused with §9.4.7's goodbye — "not processed, re-send
+    /// elsewhere" — counted, and the clients already inside keep working.
+    #[test]
+    fn over_the_cap_a_connection_is_refused_with_a_goodbye_and_counted() {
+        let served = serving(Pong, 2);
+        let mut a = served.client();
+        a.write_all(&ping_wire(Version::V1_2, Endian::Big, 1)).unwrap();
+        expect_pong(&mut a, 1, "first client under the cap");
+        let mut b = served.client();
+        b.write_all(&ping_wire(Version::V1_2, Endian::Big, 1)).unwrap();
+        expect_pong(&mut b, 1, "second client under the cap");
+        assert!(served.wait_until(|s| s.active() == 2), "both clients should be counted live");
+
+        // The third only reads: a refusal that raced the peer's own write
+        // could be answered by a reset instead, and the point being measured
+        // here is the goodbye.
+        let mut over = served.client();
+        let msg = read_message(&mut over, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+        assert_eq!(msg.msg_type, MsgType::CloseConnection, "over the cap must be told, not queued");
+        assert_eq!(served.stats.refused(), 1);
+        assert_eq!(served.stats.accepted(), 2, "a refused connection is not an accepted one");
+
+        // The cap turned somebody away; it did not disturb anybody.
+        a.write_all(&ping_wire(Version::V1_2, Endian::Big, 2)).unwrap();
+        expect_pong(&mut a, 2, "after a refusal the admitted clients continue");
+        b.write_all(&ping_wire(Version::V1_2, Endian::Big, 2)).unwrap();
+        expect_pong(&mut b, 2, "after a refusal the admitted clients continue");
+
+        // A slot freed is a slot reusable.
+        drop(a);
+        assert!(served.wait_until(|s| s.active() == 1), "the dropped client must free its slot");
+        let mut c = served.client();
+        c.write_all(&ping_wire(Version::V1_2, Endian::Big, 3)).unwrap();
+        expect_pong(&mut c, 3, "a freed slot admits the next client");
+        assert_eq!(served.stats.refused(), 1, "no second refusal");
+        drop((b, c, over));
+        served.shutdown();
+    }
+
+    /// A servant counting oneways, plus a `ping` to fence them: the reply to
+    /// the ping proves the oneway ahead of it on the same connection was
+    /// consumed.
+    struct Counting {
+        hits: Arc<AtomicU64>,
+    }
+
+    impl Dispatch for Counting {
+        fn dispatch(
+            &mut self,
+            req: &Request,
+            out: &mut Encoder,
+        ) -> std::result::Result<(), SystemException> {
+            match req.operation.as_str() {
+                "bump" => {
+                    self.hits.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+                "ping" => {
+                    out.put_i32(42);
+                    Ok(())
+                }
+                _ => Err(SystemException::bad_operation()),
+            }
+        }
+    }
+
+    /// Oneways under concurrency: no reply is owed, so nothing correlates
+    /// them, which is exactly why they are worth counting. Every one sent by
+    /// every client must land, in both byte orders.
+    #[test]
+    fn oneways_from_concurrent_clients_all_land() {
+        const N: usize = 5;
+        const EACH: usize = 4;
+        for endian in [Endian::Big, Endian::Little] {
+            let hits = Arc::new(AtomicU64::new(0));
+            let served = serving(Counting { hits: Arc::clone(&hits) }, DEFAULT_MAX_CONNECTIONS);
+            let gate = Arc::new(Gate::new(N));
+            let clients: Vec<_> = (0..N)
+                .map(|i| {
+                    let mut c = served.client();
+                    let gate = Arc::clone(&gate);
+                    std::thread::spawn(move || {
+                        let why = format!("oneway client {i} {endian:?}");
+                        assert!(gate.arrive(DEADLINE), "{why}: clients did not overlap");
+                        for id in 0..EACH as u32 {
+                            let fire = encode_request(
+                                Version::V1_2,
+                                endian,
+                                id,
+                                b"k",
+                                "bump",
+                                false,
+                                |_| {},
+                            )
+                            .unwrap();
+                            c.write_all(&fire).unwrap();
+                        }
+                        // The fence: its reply cannot precede the oneways
+                        // queued ahead of it on this connection.
+                        c.write_all(&ping_wire(Version::V1_2, endian, 99)).unwrap();
+                        expect_pong(&mut c, 99, &why);
+                    })
+                })
+                .collect();
+            for t in clients {
+                t.join().unwrap();
+            }
+            assert_eq!(
+                hits.load(Ordering::SeqCst),
+                (N * EACH) as u64,
+                "{endian:?}: a oneway went missing under concurrency"
+            );
+            served.shutdown();
+        }
+    }
+
+    /// A client that writes half a request and vanishes is the ordinary
+    /// failure of a killed process. It must cost exactly its own connection.
+    #[test]
+    fn a_client_that_vanishes_mid_request_does_not_disturb_the_others() {
+        let served = serving(Pong, DEFAULT_MAX_CONNECTIONS);
+        let mut steady = served.client();
+        steady.write_all(&ping_wire(Version::V1_2, Endian::Big, 1)).unwrap();
+        expect_pong(&mut steady, 1, "before the casualty");
+
+        // Half a header, then gone — the server is mid-message when the
+        // socket dies.
+        let truncated = &ping_wire(Version::V1_2, Endian::Big, 7)[..6];
+        let mut doomed = served.client();
+        doomed.write_all(truncated).unwrap();
+        drop(doomed);
+
+        steady.write_all(&ping_wire(Version::V1_2, Endian::Big, 2)).unwrap();
+        expect_pong(&mut steady, 2, "a neighbour's half-request must not be felt");
+
+        let mut fresh = served.client();
+        fresh.write_all(&ping_wire(Version::V1_2, Endian::Little, 3)).unwrap();
+        expect_pong(&mut fresh, 3, "the server still admits new clients afterwards");
+        assert!(served.wait_until(|s| s.active() == 2), "the dead connection must be reaped");
+        served.shutdown();
+    }
+
+    /// A servant that makes an outbound call from inside `dispatch` — the
+    /// event channel's shape, and the hazard concurrency could have
+    /// resurrected.
+    struct Relay {
+        target: crate::Ior,
+    }
+
+    impl Dispatch for Relay {
+        fn dispatch(
+            &mut self,
+            req: &Request,
+            out: &mut Encoder,
+        ) -> std::result::Result<(), SystemException> {
+            if req.operation != "relay" {
+                return Err(SystemException::bad_operation());
+            }
+            let relayed = (|| -> Result<i32> {
+                let mut conn = crate::Connection::connect(&self.target, DEADLINE)?;
+                let reply = conn.invoke_nullary("ping")?;
+                reply.body()?.get_i32().map_err(Error::Cdr)
+            })();
+            match relayed {
+                Ok(v) => {
+                    out.put_i32(v);
+                    Ok(())
+                }
+                Err(e) => {
+                    eprintln!("relay failed: {e}");
+                    Err(SystemException::unknown_user_exception())
+                }
+            }
+        }
+    }
+
+    /// `event_server`'s rule 1 — no lock may be held across an outbound call —
+    /// against the new concurrency.
+    ///
+    /// The delivery side of a channel invokes *out* while the serving side is
+    /// answering requests *in*. With one servant behind one mutex, that is
+    /// only safe because the mutex belongs to one server: a servant calling a
+    /// second server in the same process must complete, under load, from
+    /// several clients at once. That is what this asserts; the deadline is
+    /// what makes a resurrected deadlock a failure instead of a hung suite.
+    #[test]
+    fn an_outbound_call_from_inside_dispatch_does_not_deadlock() {
+        const N: usize = 4;
+        let inner = serving(Pong, DEFAULT_MAX_CONNECTIONS);
+        let outer = serving(Relay { target: ior_at(inner.addr, b"k") }, DEFAULT_MAX_CONNECTIONS);
+        let gate = Arc::new(Gate::new(N));
+        let clients: Vec<_> = (0..N)
+            .map(|i| {
+                let mut c = outer.client();
+                let gate = Arc::clone(&gate);
+                std::thread::spawn(move || {
+                    assert!(gate.arrive(DEADLINE), "relay client {i} never overlapped");
+                    let wire =
+                        encode_request(Version::V1_2, Endian::Big, 1, b"k", "relay", true, |_| {})
+                            .unwrap();
+                    c.write_all(&wire).unwrap();
+                    let msg = read_message(&mut c, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+                    let reply = crate::decode_reply(msg).unwrap();
+                    assert_eq!(reply.status, ReplyStatus::NoException, "relay {i}");
+                    assert_eq!(reply.body().unwrap().get_i32().unwrap(), 42, "relay {i}");
+                })
+            })
+            .collect();
+        for t in clients {
+            t.join().unwrap();
+        }
+        outer.shutdown();
+        inner.shutdown();
+    }
+
+    /// A servant whose outbound call comes back to its own server.
+    struct SelfCaller {
+        own: crate::Ior,
+        timeout: Duration,
+    }
+
+    impl Dispatch for SelfCaller {
+        fn dispatch(
+            &mut self,
+            req: &Request,
+            out: &mut Encoder,
+        ) -> std::result::Result<(), SystemException> {
+            match req.operation.as_str() {
+                "ping" => {
+                    out.put_i32(42);
+                    Ok(())
+                }
+                "call_myself" => {
+                    let attempt = (|| -> Result<()> {
+                        let mut conn = crate::Connection::connect(&self.own, self.timeout)?;
+                        conn.invoke_nullary("ping")?;
+                        Ok(())
+                    })();
+                    // The re-entrant call cannot succeed: this dispatch holds
+                    // the servant lock its own request would need.
+                    out.put_bool(attempt.is_err());
+                    Ok(())
+                }
+                _ => Err(SystemException::bad_operation()),
+            }
+        }
+    }
+
+    /// The re-entrancy one-servant-behind-one-mutex forbids, stated as a test
+    /// so it cannot be quietly believed to work.
+    ///
+    /// A servant calling back into its *own* server from inside `dispatch`
+    /// waits for a lock its own caller holds. What must be true is that this
+    /// fails on the caller's timeout and leaves the server serving — a
+    /// bounded failure, not a wedged process. The channel's outbound pushes
+    /// go to *other* servers, which is the case above and is unaffected.
+    #[test]
+    fn a_servant_calling_its_own_server_fails_by_timeout_without_wedging_it() {
+        let server = Server::bind("127.0.0.1:0", b"k".to_vec()).unwrap();
+        let addr = server.local_addr().unwrap();
+        let stats = server.stats();
+        let mut servant =
+            SelfCaller { own: ior_at(addr, b"k"), timeout: Duration::from_millis(300) };
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            server.serve(&mut servant, move || flag.load(Ordering::SeqCst)).unwrap();
+        });
+
+        let mut c = TcpStream::connect(addr).unwrap();
+        c.set_read_timeout(Some(DEADLINE)).unwrap();
+        let wire = encode_request(Version::V1_2, Endian::Big, 1, b"k", "call_myself", true, |_| {})
+            .unwrap();
+        c.write_all(&wire).unwrap();
+        let msg = read_message(&mut c, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+        let reply = crate::decode_reply(msg).unwrap();
+        assert_eq!(reply.status, ReplyStatus::NoException);
+        assert!(
+            reply.body().unwrap().get_bool().unwrap(),
+            "a re-entrant self-call must fail, not succeed"
+        );
+
+        // And the server is still a server.
+        let mut after = TcpStream::connect(addr).unwrap();
+        after.set_read_timeout(Some(DEADLINE)).unwrap();
+        after.write_all(&ping_wire(Version::V1_2, Endian::Big, 2)).unwrap();
+        expect_pong(&mut after, 2, "the server survives a refused re-entrant call");
+        assert!(stats.accepted() >= 2);
+
+        drop((c, after));
+        stop.store(true, Ordering::SeqCst);
+        thread.join().unwrap();
+    }
+
+    /// Shutdown must not depend on the clients cooperating.
+    ///
+    /// A connection that is open and idle used to hold the serving thread
+    /// inside a blocking read until its peer said something. `serve` now
+    /// returns — having said goodbye — while that client is still connected,
+    /// and it returns only after every thread it spawned has ended.
+    #[test]
+    fn a_stopped_server_ends_its_threads_while_a_client_is_still_connected() {
+        let mut served = serving(Pong, DEFAULT_MAX_CONNECTIONS);
+        let mut idle = served.client();
+        idle.write_all(&ping_wire(Version::V1_2, Endian::Big, 1)).unwrap();
+        expect_pong(&mut idle, 1, "before the stop");
+
+        served.stop.store(true, Ordering::SeqCst);
+        let thread = served.thread.take().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            thread.join().unwrap();
+            let _ = tx.send(());
+        });
+        assert!(
+            rx.recv_timeout(DEADLINE).is_ok(),
+            "serve must return with an idle client still connected"
+        );
+
+        let bye = read_message(&mut idle, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+        assert_eq!(bye.msg_type, MsgType::CloseConnection, "the idle client is told, not dropped");
+        assert_eq!(served.stats.active(), 0, "no connection thread outlived serve");
     }
 
     #[test]
