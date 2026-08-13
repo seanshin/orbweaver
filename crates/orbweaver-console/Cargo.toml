@@ -1,0 +1,25 @@
+[package]
+name = "orbweaver-console"
+description = "The operator's three questions — catalog, contract diff, traces — rendered as static HTML or plain text"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# No web framework, no template engine, no serialiser. The console renders what
+# other crates already decided, and every one of those crates is in this
+# workspace: `cargo tree` stays at two external crates (cfg-if, encoding_rs),
+# which is the same bar D004 held observability to.
+[dependencies]
+orbweaver-registry = { path = "../orbweaver-registry" }
+orbweaver-mcp = { path = "../orbweaver-mcp" }
+orbweaver-dynamic = { path = "../orbweaver-dynamic" }
+orbweaver-idl = { path = "../orbweaver-idl" }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "orbweaver-console"
+path = "src/bin/orbweaver_console.rs"

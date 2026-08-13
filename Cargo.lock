@@ -134,6 +134,16 @@ name = "orbweaver-cdr"
 version = "0.1.0"
 
 [[package]]
+name = "orbweaver-console"
+version = "0.1.0"
+dependencies = [
+ "orbweaver-dynamic",
+ "orbweaver-idl",
+ "orbweaver-mcp",
+ "orbweaver-registry",
+]
+
+[[package]]
 name = "orbweaver-dynamic"
 version = "0.1.0"
 dependencies = [

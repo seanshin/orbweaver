@@ -1,0 +1,7 @@
+{"ts":"2026-08-14T09:12:03Z","session":"s-7f21","caller":"alice@example.test","target":"IDL:bank/Account:1.0","operation":"balance","decision":"allow","stage":"-","path":"static","outcome":"ok"}
+{"ts":"2026-08-14T09:12:04Z","session":"s-7f21","caller":"alice@example.test","target":"IDL:bank/Account:1.0","operation":"deposit","decision":"allow","stage":"-","path":"dynamic","outcome":"ok"}
+{"ts":"2026-08-14T09:12:06Z","session":"s-7f21","caller":"alice@example.test","target":"IDL:bank/Account:1.0","operation":"close","decision":"refuse","stage":"safety.approval","path":"dynamic","outcome":"IDL:omg.org/CORBA/NO_PERMISSION:1.0"}
+{"ts":"2026-08-14T09:12:09Z","session":"s-7f21","caller":"alice@example.test","target":"IDL:bank/Ledger:1.0","operation":"total","decision":"dryrun-refuse","stage":"authz.exposure","path":"dynamic","outcome":"ok"}
+{"ts":"2026-08-14T09:31:40Z","session":"s-9c04","caller":"-","target":"IDL:bank/Account:1.0","operation":"deposit","decision":"refuse","stage":"authz.scopes","path":"dynamic","outcome":"IDL:omg.org/CORBA/NO_PERMISSION:1.0"}
+{"ts":"2026-08-14T09:31:52Z","session":"s-9c04","caller":"carol@example.test","target":"IDL:bank/Account:1.0","operation":"balance","decision":"dryrun-allow","stage":"-","path":"dynamic","outcome":"ok"}
+{"ts":"2026-08-14T10:02:11Z","session":null,"target":"IDL:bank/Ledger:1.0","operation":"total","decision":"allow","path":"static","outcome":"ok"}

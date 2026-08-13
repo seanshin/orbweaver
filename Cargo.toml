@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/orbweaver-cdr",
+    "crates/orbweaver-console",
     "crates/orbweaver-dynamic",
     "crates/orbweaver-forge",
     "crates/orbweaver-gen",
