@@ -4,19 +4,36 @@
 //! skeleton is its mirror: it turns a GIOP request back into a Rust call. For
 //! each interface it emits
 //!
-//! * `<I>UserException` — one variant per exception named in a `raises`
-//!   clause, and the `write` that puts the body §9.4.3.1 describes: repository
-//!   id first, then the members;
+//! * `<I>Fault` — everything the servant can fail with: a `System` variant
+//!   carrying a [`rt::SystemException`](crate::rt::SystemException), plus one
+//!   variant per exception named in a `raises` clause. Its `write` puts the
+//!   body §9.4.3.1 describes — repository id first, then the members — and
+//!   says which reply status the bytes travel under;
 //! * `<I>Servant` — a trait with one method per operation and per attribute
 //!   accessor, taking **decoded Rust arguments** and returning
-//!   `Result<Ret, <I>UserException>`. No `Encoder`, no `Decoder`, no operation
-//!   names: a servant that never sees the wire cannot get the wire wrong;
+//!   `Result<Ret, <I>Fault>`. No `Encoder`, no `Decoder`, no operation names:
+//!   a servant that never sees the wire cannot get the wire wrong;
 //! * `<I>Skeleton<S>` — the [`rt::Dispatch`](crate::rt::Dispatch)
 //!   implementation that decodes, calls the trait, and encodes.
 //!
 //! Both halves are generated from the same [`OpShape`](crate::OpShape), so the
 //! arguments a caller passes and the arguments a servant receives are the same
 //! list by construction rather than by review.
+//!
+//! # Why the error type is not the user exceptions alone
+//!
+//! It was, for one batch, and the consequence was that an interface with no
+//! `raises` clause got an **uninhabited** error type: a servant for it could
+//! not fail. That is wrong for every real servant. The hand-written servants
+//! in this workspace — naming, event, IFR, expert, tenant — answer unknown
+//! keys with `OBJECT_NOT_EXIST`, refusals with `NO_PERMISSION`, bad arguments
+//! with `BAD_PARAM` and a minor code, and "not right now" with `TRANSIENT`,
+//! and *none* of that vocabulary is declarable in IDL. A generated skeleton
+//! that cannot express it is one that can never replace a hand-written one.
+//!
+//! The completion status a system exception carries is the servant's decision
+//! and not the generator's: see [`rt::Raising`](crate::rt::Raising) for why
+//! there is no default for it.
 //!
 //! # The three things a skeleton generator gets wrong
 //!
@@ -25,7 +42,9 @@
 //! whole extra message, and the peer, which is not waiting for one, reads it as
 //! the header of the next reply. Every later request on that connection is then
 //! answered with the wrong bytes. A oneway arm here therefore writes nothing
-//! into the reply encoder, and drops a raise it has no way to carry.
+//! into the reply encoder, and drops a fault it has no way to carry — through
+//! [`rt::oneway_fault_dropped`](crate::rt::oneway_fault_dropped), so the drop
+//! is a logged decision rather than a `let _ =` nobody can debug.
 //!
 //! **Attributes.** `readonly attribute T x` is *one* operation, `_get_x`. A
 //! generator that emits accessors from a single template gives it a `_set_x`
@@ -95,7 +114,7 @@ fn raises_of(registry: &Registry, ops: &BTreeMap<String, OperationSig>, root: &s
         .collect()
 }
 
-/// Generates the servant trait, its user-exception type and the dispatcher.
+/// Generates the servant trait, its fault type and the dispatcher.
 pub(crate) fn emit_skeleton(registry: &Registry, id: &str, root: &str) -> Result<String, String> {
     if registry.interface(id).is_none() {
         return Err("not an interface".to_owned());
@@ -105,66 +124,129 @@ pub(crate) fn emit_skeleton(registry: &Registry, id: &str, root: &str) -> Result
     let raises = raises_of(registry, &ops, root);
 
     let mut s = String::new();
-    emit_user_exception(&mut s, &name, id, &raises);
+    emit_fault(&mut s, &name, id, &raises);
     emit_trait(&mut s, registry, &name, id, &ops, &attrs, root)?;
     emit_dispatch(&mut s, registry, &name, id, &ops, &attrs, root)?;
     Ok(s)
 }
 
-fn emit_user_exception(s: &mut String, name: &str, id: &str, raises: &[Raise]) {
-    let ty = format!("{name}UserException");
-    doc(s, &format!("The user exceptions `{id}` may raise."));
+/// The servant's error type: a system exception, or one of the declared user
+/// exceptions.
+fn emit_fault(s: &mut String, name: &str, id: &str, raises: &[Raise]) {
+    let ty = format!("{name}Fault");
+    doc(s, &format!("Everything a servant for `{id}` can fail with."));
+    doc(s, "");
+    doc(s, "`System` is always here, whatever the contract declares: an unknown");
+    doc(s, "key is `OBJECT_NOT_EXIST`, a refused call is `NO_PERMISSION`, a");
+    doc(s, "temporary refusal is `TRANSIENT`, and IDL has no way to declare any");
+    doc(s, "of them. Build one with `rt::raise::*`, which does not produce a");
+    doc(s, "`SystemException` until the completion status is stated — the field");
+    doc(s, "that tells the caller whether a retry is safe, and the one thing a");
+    doc(s, "generator cannot know for a servant.");
     doc(s, "");
     if raises.is_empty() {
-        doc(s, "This interface names no `raises` clause, so there is nothing a");
-        doc(s, "servant method can raise and this type has no values. A system");
-        doc(s, "exception is still possible: the skeleton produces `BAD_OPERATION`");
-        doc(s, "for a name this interface does not have and `MARSHAL` for a body");
-        doc(s, "that does not decode.");
+        doc(s, "This interface names no `raises` clause, so `System` is the only");
+        doc(s, "variant. It is still an inhabited type: a servant that cannot fail");
+        doc(s, "is not a servant anybody can write.");
     } else {
-        doc(s, "One variant per exception named in a `raises` clause of this");
-        doc(s, "interface or of one it inherits. `write` puts the body §9.4.3.1");
-        doc(s, "describes — repository id first, then the members — which is");
-        doc(s, "exactly what the client side reads back out of");
+        doc(s, "The remaining variants are the exceptions named in a `raises`");
+        doc(s, "clause of this interface or of one it inherits. `write` puts the");
+        doc(s, "body §9.4.3.1 describes — repository id first, then the members —");
+        doc(s, "which is exactly what the client side reads back out of");
         doc(s, "`rt::GiopError::UserException`.");
     }
-    let _ = writeln!(s, "#[derive(Debug, Clone, PartialEq)]");
+    let _ = writeln!(s, "#[derive(Debug, Clone)]");
     let _ = writeln!(s, "pub enum {ty} {{");
+    let _ = writeln!(s, "    /// A CORBA system exception, with the completion status the");
+    let _ = writeln!(s, "    /// servant chose. Travels as a `SystemException` reply.");
+    let _ = writeln!(s, "    System(rt::SystemException),");
     for r in raises {
         let _ = writeln!(s, "    /// IDL exception `{}`.", r.id);
         let _ = writeln!(s, "    {}({}),", r.variant, r.ty);
     }
     let _ = writeln!(s, "}}");
 
-    let _ = writeln!(s, "impl {ty} {{");
-    let _ = writeln!(s, "    /// The repository id that travels first in the exception body.");
-    let _ = writeln!(s, "    pub fn id(&self) -> &'static str {{");
-    if raises.is_empty() {
-        let _ = writeln!(s, "        match *self {{}}");
-    } else {
-        let _ = writeln!(s, "        match self {{");
-        for r in raises {
-            let _ = writeln!(s, "            Self::{}(_) => \"{}\",", r.variant, r.id);
-        }
-        let _ = writeln!(s, "        }}");
-    }
+    // `?` and `.into()` on a raise, which is how a servant body reads when the
+    // failure comes from a helper rather than from the operation itself.
+    let _ = writeln!(s, "impl From<rt::SystemException> for {ty} {{");
+    let _ = writeln!(s, "    fn from(__ex: rt::SystemException) -> Self {{");
+    let _ = writeln!(s, "        Self::System(__ex)");
     let _ = writeln!(s, "    }}");
-    let _ = writeln!(s, "    /// Writes the exception body: repository id, then the members.");
+    let _ = writeln!(s, "}}");
+
+    // Hand-written rather than derived: `rt::SystemException` has no
+    // `PartialEq`, and a servant's own tests want to compare faults. Comparing
+    // the three fields that travel is the whole of what a system exception is.
+    let _ = writeln!(s, "impl PartialEq for {ty} {{");
+    let _ = writeln!(s, "    fn eq(&self, __other: &Self) -> bool {{");
+    let _ = writeln!(s, "        match (self, __other) {{");
+    let _ = writeln!(s, "            (Self::System(__a), Self::System(__b)) => {{");
+    let _ = writeln!(s, "                __a.id == __b.id");
+    let _ = writeln!(s, "                    && __a.minor == __b.minor");
+    let _ = writeln!(s, "                    && __a.completed == __b.completed");
+    let _ = writeln!(s, "            }}");
+    for r in raises {
+        let _ = writeln!(
+            s,
+            "            (Self::{v}(__a), Self::{v}(__b)) => __a == __b,",
+            v = r.variant
+        );
+    }
+    if !raises.is_empty() {
+        let _ = writeln!(s, "            _ => false,");
+    }
+    let _ = writeln!(s, "        }}");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "}}");
+
+    let _ = writeln!(s, "impl {ty} {{");
+    let _ = writeln!(s, "    /// The repository id of the user exception this fault carries, or");
+    let _ = writeln!(s, "    /// `None` for a system exception, which carries its own.");
+    let _ = writeln!(s, "    pub fn user_id(&self) -> Option<&'static str> {{");
+    let _ = writeln!(s, "        match self {{");
+    let _ = writeln!(s, "            Self::System(_) => None,");
+    for r in raises {
+        let _ = writeln!(s, "            Self::{}(_) => Some(\"{}\"),", r.variant, r.id);
+    }
+    let _ = writeln!(s, "        }}");
+    let _ = writeln!(s, "    }}");
+    for line in [
+        "Writes this fault into the reply body and says which reply status the",
+        "bytes travel under.",
+        "",
+        "A system exception writes nothing and comes back as `Err`: it is not a",
+        "body under a status, it *replaces* the reply (§9.4.3.1), so the",
+        "dispatcher hands it to the server to encode instead. That is also why",
+        "nothing may be written before the fault is known — the whole buffer",
+        "travels under one status.",
+    ] {
+        if line.is_empty() {
+            let _ = writeln!(s, "    ///");
+        } else {
+            let _ = writeln!(s, "    /// {line}");
+        }
+    }
     let _ = writeln!(
         s,
-        "    pub fn write(&self, __out: &mut rt::Encoder) -> Result<(), rt::GiopError> {{"
+        "    pub fn write(&self, __out: &mut rt::Encoder) \
+         -> Result<rt::DispatchBody, rt::SystemException> {{"
     );
     if raises.is_empty() {
         let _ = writeln!(s, "        let _ = __out;");
-        let _ = writeln!(s, "        match *self {{}}");
-    } else {
-        let _ = writeln!(s, "        __out.put_str(self.id());");
-        let _ = writeln!(s, "        match self {{");
-        for r in raises {
-            let _ = writeln!(s, "            Self::{}(__v) => __v.put(__out),", r.variant);
-        }
-        let _ = writeln!(s, "        }}");
     }
+    let _ = writeln!(s, "        match self {{");
+    let _ = writeln!(s, "            Self::System(__ex) => Err(__ex.clone()),");
+    for r in raises {
+        let _ = writeln!(s, "            Self::{}(__v) => {{", r.variant);
+        let _ = writeln!(s, "                __out.put_str(\"{}\");", r.id);
+        let _ = writeln!(
+            s,
+            "                __v.put(__out).map_err(|_| rt::SystemException::marshal())?;"
+        );
+        let _ = writeln!(s, "                Ok(rt::DispatchBody::UserException)");
+        let _ = writeln!(s, "            }}");
+    }
+    let _ = writeln!(s, "        }}");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
 }
@@ -196,7 +278,7 @@ fn emit_trait(
     attrs: &BTreeMap<String, orbweaver_registry::AttributeSig>,
     root: &str,
 ) -> Result<(), String> {
-    let exc = format!("{name}UserException");
+    let exc = format!("{name}Fault");
     if let Some(desc) = registry.annotations(id).and_then(|a| a.get("ai_desc")) {
         doc(s, desc);
         doc(s, "");
@@ -207,6 +289,11 @@ fn emit_trait(
     doc(s, "Rust arguments. Nothing here mentions GIOP: the wire is entirely the");
     doc(s, &format!("business of `{name}Skeleton`, which adapts this trait to"));
     doc(s, "`rt::Dispatch`.");
+    doc(s, "");
+    doc(s, &format!("Every method may fail with a `{exc}`: a declared user exception,"));
+    doc(s, "or a system exception built with `rt::raise::*` — the vocabulary");
+    doc(s, "(`OBJECT_NOT_EXIST`, `NO_PERMISSION`, `BAD_PARAM`, `TRANSIENT`) that");
+    doc(s, "no contract declares and every servant needs.");
     let _ = writeln!(s, "pub trait {name}Servant {{");
     for (wire, rust, sig) in methods(ops, attrs) {
         let shape = op_shape(&sig, root)?;
@@ -214,8 +301,9 @@ fn emit_trait(
         op_doc(&mut docs, &wire, &sig.annotations);
         if sig.oneway {
             doc(&mut docs, "");
-            doc(&mut docs, "`oneway`: the caller is not waiting, so neither a result nor a raise");
-            doc(&mut docs, "can reach it. Returning `Err` here is dropped, deliberately.");
+            doc(&mut docs, "`oneway`: the caller is not waiting, so neither a result nor a fault");
+            doc(&mut docs, "can reach it. Returning `Err` here is dropped — deliberately, and");
+            doc(&mut docs, "logged, because a oneway that fails invisibly is undebuggable.");
         }
         for line in docs.lines() {
             let _ = writeln!(s, "    {line}");
@@ -257,6 +345,11 @@ fn emit_dispatch(
     doc(s, "* every other name with `BAD_OPERATION`, including the `_set_` of a");
     doc(s, "  readonly attribute;");
     doc(s, "* a body that does not decode with `MARSHAL`.");
+    doc(s, "");
+    doc(s, &format!("A `{name}Fault::System` the servant raises is passed through"));
+    doc(s, "unchanged — repository id, minor code and completion status — so the");
+    doc(s, "servant's answer about whether a retry is safe is the one the client");
+    doc(s, "receives.");
     let _ = writeln!(s, "pub struct {skel}<S: {servant}> {{");
     let _ = writeln!(s, "    /// The implementation invocations are delivered to.");
     let _ = writeln!(s, "    pub servant: S,");
@@ -300,11 +393,17 @@ fn emit_dispatch(
                 "// oneway (§9.4.1): no reply may be written, at all. An empty one",
                 "// is a whole extra message, which the peer — not waiting for it —",
                 "// would read as the header of the next reply. The servant's",
-                "// verdict has no way back, so it is dropped here.",
+                "// verdict has no way back, so it is dropped — and logged, so the",
+                "// drop is a decision somebody can see rather than a silence.",
             ] {
                 let _ = writeln!(s, "                {line}");
             }
-            let _ = writeln!(s, "                let _ = {call};");
+            let _ = writeln!(s, "                if let Err(__f) = {call} {{");
+            let _ = writeln!(
+                s,
+                "                    rt::oneway_fault_dropped(\"{id}\", \"{wire}\", &__f);"
+            );
+            let _ = writeln!(s, "                }}");
             let _ = writeln!(s, "                Ok(rt::DispatchBody::Return)");
             let _ = writeln!(s, "            }}");
             continue;
@@ -327,15 +426,10 @@ fn emit_dispatch(
         let _ = writeln!(s, "                    }}");
         // Nothing was written before the label was known: the whole buffer
         // travels under one reply status, so a half-written result followed by
-        // an exception body would be neither.
-        let _ = writeln!(s, "                    Err(__ex) => {{");
-        let _ = writeln!(
-            s,
-            "                        __ex.write(__out).map_err(|_| \
-             rt::SystemException::marshal())?;"
-        );
-        let _ = writeln!(s, "                        Ok(rt::DispatchBody::UserException)");
-        let _ = writeln!(s, "                    }}");
+        // an exception body would be neither. `write` decides that status —
+        // a user exception body under `USER_EXCEPTION`, or nothing at all and
+        // an `Err` the server turns into a `SystemException` reply.
+        let _ = writeln!(s, "                    Err(__f) => __f.write(__out),");
         let _ = writeln!(s, "                }}");
         let _ = writeln!(s, "            }}");
     }
@@ -422,7 +516,14 @@ mod tests {
             .next()
             .expect("bounded by the next arm");
         assert!(!arm.contains("put(__out)"), "a oneway may write no reply:\n{arm}");
-        assert!(arm.contains("let _ = self.servant.fire(n)"), "{arm}");
+        assert!(arm.contains("if let Err(__f) = self.servant.fire(n)"), "{arm}");
+        // Dropped, but not in silence: §9.4.1 leaves the fault nowhere to go,
+        // and a `let _ =` would make an undebuggable server out of a correct
+        // protocol decision.
+        assert!(
+            arm.contains("rt::oneway_fault_dropped(\"IDL:m/I:1.0\", \"fire\", &__f)"),
+            "a dropped oneway fault must be reported:\n{arm}"
+        );
         // The twoway next to it must still write one, or the check above would
         // pass on a generator that never writes replies at all.
         let ping = g.source.split("\"ping\" => {").nth(1).expect("a ping arm");
@@ -461,20 +562,50 @@ mod tests {
             "module m { exception NotFound { string key; }; exception Busy {}; \
              interface I { string get(in string key) raises (NotFound, Busy); }; };",
         );
-        assert!(g.source.contains("pub enum IUserException {"), "{}", g.source);
+        assert!(g.source.contains("pub enum IFault {"), "{}", g.source);
         assert!(g.source.contains("NotFound(crate::g::m::NotFound),"), "{}", g.source);
         assert!(g.source.contains("Busy(crate::g::m::Busy),"), "{}", g.source);
-        assert!(g.source.contains("__out.put_str(self.id());"), "{}", g.source);
-        assert!(g.source.contains("Self::NotFound(_) => \"IDL:m/NotFound:1.0\","), "{}", g.source);
+        assert!(g.source.contains("__out.put_str(\"IDL:m/NotFound:1.0\");"), "{}", g.source);
+        assert!(
+            g.source.contains("Self::NotFound(_) => Some(\"IDL:m/NotFound:1.0\"),"),
+            "{}",
+            g.source
+        );
         assert!(g.source.contains("Ok(rt::DispatchBody::UserException)"), "{}", g.source);
     }
 
+    /// The gap this batch closed. An interface with no `raises` clause used to
+    /// get an *uninhabited* error type, so its servant could not fail at all —
+    /// no `OBJECT_NOT_EXIST` for an unknown key, no `NO_PERMISSION` for a
+    /// refusal. The `System` variant is unconditional for exactly that reason.
     #[test]
-    fn an_interface_that_raises_nothing_gets_an_empty_exception_type() {
+    fn an_interface_that_raises_nothing_can_still_fail_with_a_system_exception() {
         let g = generate("module m { interface I { long ping(); }; };");
-        let decl = g.source.split("pub enum IUserException {").nth(1).expect("the enum");
-        assert!(decl.trim_start().starts_with('}'), "no variants may be emitted:\n{decl}");
-        assert!(g.source.contains("match *self {}"), "{}", g.source);
+        let decl = g.source.split("pub enum IFault {").nth(1).expect("the enum");
+        let body = decl.split('}').next().expect("the variant list");
+        assert!(body.contains("System(rt::SystemException),"), "{body}");
+        assert_eq!(
+            body.matches("    System(").count() + body.matches("(crate::g::").count(),
+            1,
+            "no user variants may be emitted:\n{body}"
+        );
+        assert!(!g.source.contains("match *self {}"), "the type must be inhabited:\n{}", g.source);
+        assert!(g.source.contains("Result<i32, IFault>"), "{}", g.source);
+        // And the fault still knows how to become a reply: a system exception
+        // replaces the reply rather than filling one in.
+        assert!(g.source.contains("Self::System(__ex) => Err(__ex.clone()),"), "{}", g.source);
+    }
+
+    /// A servant hands `write` whatever it failed with and gets back the reply
+    /// status those bytes travel under — one line at the call site, so the two
+    /// cases cannot be labelled differently by two arms of the generator.
+    #[test]
+    fn a_fault_decides_the_reply_status_and_the_arm_is_one_line() {
+        let g =
+            generate("module m { exception Busy {}; interface I { long f() raises (Busy); }; };");
+        let arm = g.source.split("\"f\" => {").nth(1).expect("the f arm");
+        assert!(arm.contains("Err(__f) => __f.write(__out),"), "{arm}");
+        assert!(g.source.contains("impl From<rt::SystemException> for IFault"), "{}", g.source);
     }
 
     #[test]
