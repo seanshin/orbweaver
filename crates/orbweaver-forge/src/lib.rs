@@ -27,6 +27,8 @@
 
 #![deny(missing_docs)]
 
+pub mod pipeline;
+
 use std::collections::BTreeMap;
 
 use orbweaver_dynamic::json::Json;
