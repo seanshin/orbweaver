@@ -948,6 +948,57 @@ fi
 pkill -f "spike-names" >/dev/null 2>&1 || true
 [ "$ns_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
+# ── IFR facade: the registry served as CORBA::Repository ────────────────────
+hr "interface repository — our registry read by omniORB's own IR client"
+# The claim worth measuring is not that our client agrees with our server; it
+# is that a client written against the OMG IR IDL, which we did not write and
+# cannot influence, decodes our FullInterfaceDescription and reads the
+# enumerators by name. Ordinals that are merely self-consistent would pass a
+# self-test and fail here.
+ifr_fail=0
+IFR_IOR=/tmp/orbweaver-ifr.ior
+ifr=$(cargo run -q --bin spike-ifr -- "$IFR_IOR" 2>&1)
+if printf '%s' "$ifr" | grep -q "ifr-facade: PASS"; then
+  echo "  ok   our client against our facade: lookup_id, describe_interface, is_a, refusals"
+else
+  echo "  FAIL IFR facade self-consistency"
+  printf '%s' "$ifr" | grep FAIL | head -3 | sed 's/^/       /'
+  ifr_fail=1
+fi
+rm -f "$IFR_IOR" /tmp/orbweaver-ifr-hold.log
+cargo run -q --bin spike-ifr -- "$IFR_IOR" --hold >/tmp/orbweaver-ifr-hold.log 2>&1 &
+IFR_PID=$!
+ifr_up=0
+for _ in $(seq 1 60); do
+  grep -qs READY /tmp/orbweaver-ifr-hold.log && { ifr_up=1; break; }
+  sleep 0.2
+done
+if [ "$ifr_up" -eq 1 ]; then
+  ifr_out=$(python3 -c "import sys, CORBA, omniORB.ir_idl
+orb = CORBA.ORB_init(sys.argv)
+r = orb.string_to_object(open('$IFR_IOR').read().strip())._narrow(CORBA.Repository)
+d = r.lookup_id('IDL:gc10/Both:1.0')._narrow(CORBA.InterfaceDef).describe_interface()
+print(d.name, [o.name for o in d.operations], [a.name for a in d.attributes])
+try:
+    r.create_module('IDL:x:1.0', 'x', '1.0')
+    print('WRITE ACCEPTED')
+except CORBA.NO_PERMISSION:
+    print('refused')" 2>&1)
+  case "$ifr_out" in
+    "Both ['touch', 'value'] ['id', 'name']"*refused*)
+      echo "  ok   omniORB's IR client decoded our FullInterfaceDescription and was refused a write" ;;
+    *ImportError*|*ModuleNotFoundError*)
+      echo "  SKIPPED  omniORBpy IR stubs absent — the cross-ORB half is unmeasured, not passing"
+      skipped=$((skipped+1)) ;;
+    *) echo "  FAIL cross-ORB IR client: $(printf '%s' "$ifr_out" | tr '\n' ' ')"; ifr_fail=1 ;;
+  esac
+else
+  echo "  FAIL the holding IFR facade never came up"; ifr_fail=1
+fi
+kill "$IFR_PID" >/dev/null 2>&1 || true
+wait "$IFR_PID" 2>/dev/null || true
+[ "$ifr_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
 # ── F7: the event channel, both directions ──────────────────────────────────
 hr "event channel — our supplier and consumer, then omniORB's consumer"
 # The push model served by us. Two things are measured that a self-test alone
