@@ -1,0 +1,52 @@
+# Repository ids for corpus/pragma/, as measured from omniidl.
+#
+# `#pragma prefix`, `#pragma version` and `#pragma ID` decide what a repository
+# id *is*, and a repository id is identity on the wire — `_is_a`, the IFR
+# facade, remote ingestion's matching, an IOR's type_id and the guard's
+# per-interface exposure all key on it. Against a deployment whose IDL carries
+# a prefix, a compiler that discards the pragma disagrees about the identity of
+# every type while looking perfectly correct locally.
+#
+# These rows are not our opinion. Each is what omniidl 4.3.4 derived on
+# 2026-08-14, read out of `omniidl -bpython -C<dir>`'s generated Python:
+#
+#   omniidl -bpython -C"$out" "$f" && grep -rhoE '"IDL:[^"]*"' "$out" \
+#     | tr -d '"' | grep -v '^IDL:omg.org/' | sort -u
+#
+# Ours come from `cargo run -q --bin repository-ids -- corpus/pragma/*.idl`,
+# which prints this same shape. Where the two disagree we are wrong, with one
+# recorded exception: p02/p05 follow omniidl against the specification's
+# wording — see corpus/divergences.tsv.
+#
+# Columns: file <TAB> qualified IDL name <TAB> repository id
+#
+# omniidl이 실제로 도출한 값이다. 우리 값과 다르면 우리가 틀린 것이며, 규격 문언과
+# omniidl이 갈리는 지점(p02, p05)은 배포된 컴파일러를 따르고 divergences.tsv에
+# 기록한다. 저장소 식별자는 와이어상의 정체성이므로 접두사를 버리면 로컬에서는
+# 멀쩡해 보이면서 모든 타입의 정체성이 어긋난다.
+
+p01-prefix-file-scope.idl	p01::Account	IDL:acme.com/p01/Account:1.0
+p02-prefix-inside-module.idl	p02::Ledger	IDL:acme.com/Ledger:1.0
+p03-prefix-nested-modules.idl	p03::inner::Probe	IDL:acme.com/p03/inner/Probe:1.0
+p04-prefix-reset-by-second.idl	p04a::One	IDL:first.example/p04a/One:1.0
+p04-prefix-reset-by-second.idl	p04b::Two	IDL:second.example/p04b/Two:1.0
+p05-prefix-does-not-escape.idl	p05a::Inside	IDL:inner.example/Inside:1.0
+p05-prefix-does-not-escape.idl	p05b::Outside	IDL:p05b/Outside:1.0
+p06-version-on-interface.idl	p06::Versioned	IDL:p06/Versioned:2.3
+p07-version-on-types.idl	p07::Colour	IDL:p07/Colour:4.2
+p07-version-on-types.idl	p07::Failed	IDL:p07/Failed:5.6
+p07-version-on-types.idl	p07::Record	IDL:p07/Record:3.1
+p08-id-on-interface.idl	p08::Tagged	IDL:legacy.example/Tagged:9.9
+p09-id-contradicts-prefix.idl	p09::Contra	IDL:totally.different/Elsewhere:7.2
+p10-inheritance-across-prefixes.idl	p10base::Root	IDL:base.example/p10base/Root:1.0
+p10-inheritance-across-prefixes.idl	p10derived::Leaf	IDL:derived.example/p10derived/Leaf:1.0
+p11-empty-prefix-resets.idl	p11a::One	IDL:acme.com/p11a/One:1.0
+p11-empty-prefix-resets.idl	p11b::Two	IDL:p11b/Two:1.0
+p12-id-on-types.idl	p12::Batch	IDL:vendor.example/Batch:2.0
+p12-id-on-types.idl	p12::Payload	IDL:vendor.example/Payload:2.0
+p13-prefix-and-version.idl	p13::Both	IDL:acme.com/p13/Both:5.4
+p14-no-pragma-control.idl	p14::Datum	IDL:p14/Datum:1.0
+p14-no-pragma-control.idl	p14::Plain	IDL:p14/Plain:1.0
+p15-prefix-top-level-interface.idl	P15Toplevel	IDL:acme.com/P15Toplevel:1.0
+p16-prefix-exception-and-raises.idl	p16::Doer	IDL:acme.com/p16/Doer:1.0
+p16-prefix-exception-and-raises.idl	p16::Refused	IDL:acme.com/p16/Refused:1.0

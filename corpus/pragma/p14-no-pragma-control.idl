@@ -1,0 +1,11 @@
+// The control. No pragma anywhere, so every id must be exactly what this
+// project produced before pragmas were implemented at all.
+module p14 {
+    interface Plain {
+        void a();
+    };
+
+    struct Datum {
+        long value_;
+    };
+};

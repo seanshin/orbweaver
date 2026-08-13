@@ -1,0 +1,17 @@
+// `#pragma prefix ""` goes back to no prefix rather than prepending an empty
+// segment — the difference between `IDL:p11b/Two:1.0` and `IDL:/p11b/Two:1.0`.
+#pragma prefix "acme.com"
+
+module p11a {
+    interface One {
+        void a();
+    };
+};
+
+#pragma prefix ""
+
+module p11b {
+    interface Two {
+        void b();
+    };
+};

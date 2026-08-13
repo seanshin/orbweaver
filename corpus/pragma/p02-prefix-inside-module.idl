@@ -1,0 +1,8 @@
+// A prefix written inside a module. Where the pragma sits and where the
+// prefix lands in the id are different questions; the oracle answers both.
+module p02 {
+#pragma prefix "acme.com"
+    interface Ledger {
+        long total();
+    };
+};

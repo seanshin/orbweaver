@@ -5,6 +5,21 @@
 //! carries its semantics in `//@ key: value` comments instead
 //! (`docs/PHASE0.md`, assumption C). Discarding comments would discard the
 //! meaning layer the whole project is built on.
+//!
+//! # `#pragma` is not a comment either
+//!
+//! The three identity pragmas — `prefix`, `version` and `ID` — decide what a
+//! repository id *is*, and a repository id is identity on the wire. Skipping
+//! them, which this lexer did until the pragma batch, made us disagree with
+//! every deployment that uses a prefix while looking perfectly correct
+//! locally. They are lifted out here into [`Pragma`] and attached to the
+//! following token, the same mechanism SIDL annotations use, so the parser
+//! sees them in source order without the grammar having to admit `#`.
+//!
+//! Every other `#` directive is still skipped: `#include`, `#define`, the
+//! preprocessor's `# 12 "file.idl"` line markers, and any `#pragma` whose name
+//! we do not recognise ([`Pragma::Other`], kept so a reader can see it was
+//! seen and ignored rather than mistaken for a comment).
 
 use std::fmt;
 
@@ -37,6 +52,47 @@ pub struct Annotation {
     /// Everything after the first colon, trimmed.
     pub value: String,
     /// Where the comment was.
+    pub span: Span,
+}
+
+/// A `#pragma` that participates in repository-id derivation.
+///
+/// Only the three the specification gives identity meaning to are modelled.
+/// Everything else keeps its text in [`Pragma::Other`] and has no effect —
+/// see the module docs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pragma {
+    /// `#pragma prefix "P"`. `None` is the `""` form, which resets the prefix
+    /// to none rather than prepending an empty segment.
+    Prefix(Option<String>),
+    /// `#pragma version <name> <major>.<minor>`, naming an already-declared
+    /// item in scope.
+    Version {
+        /// The item named, as written — possibly a scoped name.
+        name: String,
+        /// Major version.
+        major: u32,
+        /// Minor version.
+        minor: u32,
+    },
+    /// `#pragma ID <name> "IDL:..."`, an explicit id that overrides derivation.
+    Id {
+        /// The item named, as written — possibly a scoped name.
+        name: String,
+        /// The id, verbatim. Not validated here: an id we do not recognise is
+        /// still what the author means to put on the wire.
+        id: String,
+    },
+    /// A `#pragma` we recognise as a pragma and nothing more.
+    Other(String),
+}
+
+/// A pragma together with where it was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PragmaAt {
+    /// What it says.
+    pub pragma: Pragma,
+    /// Where it was written, for diagnostics.
     pub span: Span,
 }
 
@@ -87,6 +143,14 @@ pub struct Token {
     /// declaration keeps the annotations written above it even after the
     /// parser reorders anything.
     pub annotations: Vec<Annotation>,
+    /// Identity pragmas written between the previous token and this one.
+    ///
+    /// Attached the same way annotations are, and for the same reason: the
+    /// parser needs them *in source order relative to declarations*, because
+    /// `#pragma prefix` is positional. A scope's closing `}` carries the
+    /// pragmas written just before it, which is how a `#pragma ID` naming an
+    /// item at the very end of a module is still seen.
+    pub pragmas: Vec<PragmaAt>,
     /// Whether an identifier was written with a leading `_`.
     ///
     /// The underscore is not part of the name, but it is the *only* thing that
@@ -200,6 +264,104 @@ pub fn is_keyword(name: &str) -> bool {
     KEYWORDS.iter().any(|k| k.eq_ignore_ascii_case(name))
 }
 
+/// `s` without the leading word `w`, or `None` if it does not start with it.
+///
+/// The word must be followed by whitespace or end, so `prefixed` is not
+/// `prefix`.
+fn strip_word<'s>(s: &'s str, w: &str) -> Option<&'s str> {
+    let rest = s.strip_prefix(w)?;
+    if rest.is_empty() || rest.starts_with(char::is_whitespace) {
+        Some(rest.trim_start())
+    } else {
+        None
+    }
+}
+
+/// The first whitespace-delimited word and what follows it.
+fn next_word(s: &str) -> Option<(&str, &str)> {
+    let s = s.trim_start();
+    if s.is_empty() {
+        return None;
+    }
+    Some(match s.find(char::is_whitespace) {
+        Some(i) => (&s[..i], s[i..].trim_start()),
+        None => (s, ""),
+    })
+}
+
+/// A `"…"` literal at the front of `s`, and what follows it.
+///
+/// No escape processing: repository ids and prefixes are `[A-Za-z0-9._/:-]`
+/// in every real file, and inventing an escape rule the oracle may not share
+/// would put a wrong id on the wire rather than an error on the screen.
+fn quoted(s: &str) -> Option<(String, &str)> {
+    let s = s.trim_start();
+    let body = s.strip_prefix('"')?;
+    let end = body.find('"')?;
+    Some((body[..end].to_owned(), body[end + 1..].trim_start()))
+}
+
+/// Turns the text after `#pragma` into a [`Pragma`].
+///
+/// The three identity spellings are matched **case-sensitively, exactly as the
+/// specification writes them** — `prefix`, `version`, `ID`. Accepting `#pragma
+/// id` as well would be friendly and wrong: if a deployed compiler ignores it,
+/// being lenient here means we put an id on the wire that nobody else agrees
+/// with, which is the failure mode this whole batch exists to close. An
+/// unrecognised spelling becomes [`Pragma::Other`] and has no effect.
+fn parse_pragma(rest: &str, span: Span) -> Result<Option<Pragma>, LexError> {
+    let bad = |message: String| LexError { message, span };
+    if let Some(arg) = strip_word(rest, "prefix") {
+        let (text, tail) = quoted(arg).ok_or_else(|| {
+            bad("#pragma prefix needs a quoted string, e.g. `#pragma prefix \"acme.com\"`".into())
+        })?;
+        if !tail.is_empty() {
+            return Err(bad(format!(
+                "#pragma prefix takes one string; drop the trailing {tail:?}"
+            )));
+        }
+        return Ok(Some(Pragma::Prefix(if text.is_empty() { None } else { Some(text) })));
+    }
+    if let Some(arg) = strip_word(rest, "ID") {
+        let (name, tail) = next_word(arg).ok_or_else(|| {
+            bad("#pragma ID needs a name and an id, e.g. `#pragma ID Account \
+                 \"IDL:acme.com/bank/Account:1.0\"`"
+                .into())
+        })?;
+        let (id, tail) = quoted(tail).ok_or_else(|| {
+            bad(format!(
+                "#pragma ID {name} needs a quoted id, e.g. \"IDL:acme.com/bank/{name}:1.0\""
+            ))
+        })?;
+        if !tail.is_empty() {
+            return Err(bad(format!("#pragma ID takes a name and one string; drop {tail:?}")));
+        }
+        return Ok(Some(Pragma::Id { name: name.to_owned(), id }));
+    }
+    if let Some(arg) = strip_word(rest, "version") {
+        let (name, tail) = next_word(arg).ok_or_else(|| {
+            bad("#pragma version needs a name and a version, e.g. `#pragma version Account 2.1`"
+                .into())
+        })?;
+        let (v, tail) = next_word(tail).ok_or_else(|| {
+            bad(format!("#pragma version {name} needs a <major>.<minor> version, e.g. 2.1"))
+        })?;
+        if !tail.is_empty() {
+            return Err(bad(format!(
+                "#pragma version takes a name and one version; drop {tail:?}"
+            )));
+        }
+        let malformed =
+            || bad(format!("#pragma version {name} {v:?}: a version is <major>.<minor>, e.g. 2.1"));
+        let (major, minor) = v.split_once('.').ok_or_else(malformed)?;
+        let major: u32 = major.parse().map_err(|_| malformed())?;
+        let minor: u32 = minor.parse().map_err(|_| malformed())?;
+        return Ok(Some(Pragma::Version { name: name.to_owned(), major, minor }));
+    }
+    let rest = rest.trim();
+    if rest.is_empty() { Ok(None) } else { Ok(Some(Pragma::Other(rest.to_owned()))) }
+}
+
 /// Punctuation recognised by the grammar, longest first so `>>` beats `>`.
 const PUNCT: &[&str] = &[
     "::", "<<", ">>", "{", "}", "[", "]", "(", ")", "<", ">", ",", ";", ":", "=", "|", "^", "&",
@@ -213,12 +375,13 @@ pub struct Lexer<'a> {
     line: u32,
     col: u32,
     pending: Vec<Annotation>,
+    pending_pragmas: Vec<PragmaAt>,
 }
 
 impl<'a> Lexer<'a> {
     /// A lexer over `src`.
     pub fn new(src: &'a str) -> Self {
-        Self { src, pos: 0, line: 1, col: 1, pending: Vec::new() }
+        Self { src, pos: 0, line: 1, col: 1, pending: Vec::new(), pending_pragmas: Vec::new() }
     }
 
     /// Tokenizes the whole input.
@@ -268,19 +431,48 @@ impl<'a> Lexer<'a> {
                 Some('/') if self.peek_at(1) == Some('*') => self.block_comment()?,
                 // Preprocessor directives. Full preprocessing is a separate
                 // problem; a line beginning with # is skipped so that files
-                // carrying #include or #pragma still tokenize rather than
-                // failing on the first line.
-                Some('#') if self.col == 1 => {
-                    while let Some(c) = self.peek() {
-                        if c == '\n' {
-                            break;
-                        }
-                        self.bump();
-                    }
-                }
+                // carrying #include still tokenize rather than failing on the
+                // first line — except `#pragma`, which is lifted out because
+                // it decides repository ids.
+                Some('#') if self.at_line_start() => self.directive()?,
                 _ => return Ok(()),
             }
         }
+    }
+
+    /// Whether nothing but blanks stands between here and the line's start.
+    ///
+    /// Not `col == 1`: the C preprocessor allows a directive to be indented,
+    /// so `    #pragma prefix "acme.com"` inside a module is a legal line that
+    /// omniidl honours. Requiring column 1 made such a file a lex error, which
+    /// is at least loud — but the file is valid, and rejecting valid IDL is
+    /// still being wrong about it.
+    fn at_line_start(&self) -> bool {
+        self.src[..self.pos]
+            .rsplit('\n')
+            .next()
+            .is_none_or(|line| line.chars().all(|c| c == ' ' || c == '\t'))
+    }
+
+    /// Consumes a `#` line, keeping it if it is an identity pragma.
+    fn directive(&mut self) -> Result<(), LexError> {
+        let (sl, sc, start) = (self.line, self.col, self.pos);
+        self.bump(); // '#'
+        while let Some(c) = self.peek() {
+            if c == '\n' {
+                break;
+            }
+            self.bump();
+        }
+        let span = self.here(start, sl, sc);
+        // Everything after the '#', which may be separated from the directive
+        // name by whitespace: `#  pragma prefix "x"` is one directive.
+        let body = self.src[start + 1..self.pos].trim();
+        let Some(rest) = strip_word(body, "pragma") else { return Ok(()) };
+        if let Some(pragma) = parse_pragma(rest, span)? {
+            self.pending_pragmas.push(PragmaAt { pragma, span });
+        }
+        Ok(())
     }
 
     fn line_comment(&mut self) {
@@ -334,6 +526,7 @@ impl<'a> Lexer<'a> {
     fn next_token(&mut self) -> Result<Token, LexError> {
         self.skip_trivia()?;
         let annotations = std::mem::take(&mut self.pending);
+        let pragmas = std::mem::take(&mut self.pending_pragmas);
         let (sl, sc, start) = (self.line, self.col, self.pos);
 
         let Some(c) = self.peek() else {
@@ -341,6 +534,7 @@ impl<'a> Lexer<'a> {
                 tok: Tok::Eof,
                 span: self.here(start, sl, sc),
                 annotations,
+                pragmas,
                 escaped: false,
             });
         };
@@ -392,7 +586,13 @@ impl<'a> Lexer<'a> {
             });
         };
 
-        Ok(Token { tok, span: self.here(start, sl, sc), annotations, escaped: escaped_ident })
+        Ok(Token {
+            tok,
+            span: self.here(start, sl, sc),
+            annotations,
+            pragmas,
+            escaped: escaped_ident,
+        })
     }
 
     fn number(&mut self, start: usize, sl: u32, sc: u32) -> Result<Tok, LexError> {
@@ -675,6 +875,96 @@ mod tests {
             toks("#include <orb.idl>\n#pragma prefix \"x\"\nlong x;"),
             vec![Tok::Ident("long".into()), Tok::Ident("x".into()), Tok::Punct(";"), Tok::Eof]
         );
+    }
+
+    /// The identity pragmas ride on the following token, the way annotations
+    /// do, because `#pragma prefix` is positional and the parser needs them in
+    /// source order without the grammar admitting `#`.
+    #[test]
+    fn identity_pragmas_attach_to_the_next_token() {
+        let out = Lexer::new(
+            "#pragma prefix \"acme.com\"\n\
+             #pragma version Account 2.3\n\
+             #pragma ID Account \"IDL:x/Y:1.0\"\n\
+             module m;",
+        )
+        .tokenize()
+        .unwrap();
+        assert_eq!(out[0].tok, Tok::Ident("module".into()));
+        assert_eq!(
+            out[0].pragmas.iter().map(|p| p.pragma.clone()).collect::<Vec<_>>(),
+            vec![
+                Pragma::Prefix(Some("acme.com".into())),
+                Pragma::Version { name: "Account".into(), major: 2, minor: 3 },
+                Pragma::Id { name: "Account".into(), id: "IDL:x/Y:1.0".into() },
+            ]
+        );
+    }
+
+    /// `""` is a reset, not an empty leading segment: the difference between
+    /// `IDL:m/I:1.0` and `IDL:/m/I:1.0`.
+    #[test]
+    fn an_empty_prefix_is_a_reset() {
+        let out = Lexer::new("#pragma prefix \"\"\nlong x;").tokenize().unwrap();
+        assert_eq!(out[0].pragmas[0].pragma, Pragma::Prefix(None));
+    }
+
+    /// Whitespace between `#` and the directive, and before the `#`, are both
+    /// legal C preprocessor. A pragma indented inside a module is exactly how
+    /// a real file writes one, and it must not lose its identity or be
+    /// rejected outright.
+    #[test]
+    fn a_spaced_or_indented_hash_is_still_a_pragma() {
+        for src in [
+            "#  pragma prefix \"acme.com\"\nlong x;",
+            "module m {\n    #pragma prefix \"acme.com\"\nlong x;",
+            "\t#pragma prefix \"acme.com\"\nlong x;",
+        ] {
+            let out = Lexer::new(src).tokenize().unwrap();
+            let found = out.iter().flat_map(|t| &t.pragmas).map(|p| &p.pragma).collect::<Vec<_>>();
+            assert_eq!(found, vec![&Pragma::Prefix(Some("acme.com".into()))], "{src:?}");
+        }
+    }
+
+    /// A `#` that is not at the start of a line is not a directive, and the
+    /// grammar has no use for it either.
+    #[test]
+    fn a_hash_mid_line_is_still_an_error() {
+        assert!(Lexer::new("long x; #pragma prefix \"a\"").tokenize().is_err());
+    }
+
+    /// Anything else keeps its text and has no effect — including `#pragma id`
+    /// in the wrong case, which we refuse to guess at (see `parse_pragma`).
+    #[test]
+    fn unrecognised_pragmas_are_kept_and_inert() {
+        let out = Lexer::new("#pragma sendtop\n#pragma id Account \"IDL:x:1.0\"\nlong x;")
+            .tokenize()
+            .unwrap();
+        assert_eq!(out[0].pragmas[0].pragma, Pragma::Other("sendtop".into()));
+        assert!(matches!(out[0].pragmas[1].pragma, Pragma::Other(_)));
+    }
+
+    /// Line markers the preprocessor emits are not pragmas and never were.
+    #[test]
+    fn preprocessor_line_markers_are_still_skipped() {
+        let out = Lexer::new("# 12 \"bank.idl\"\nlong x;").tokenize().unwrap();
+        assert!(out[0].pragmas.is_empty());
+    }
+
+    /// A malformed identity pragma is an error, not a shrug: silently ignoring
+    /// it puts an id on the wire that the author did not write.
+    #[test]
+    fn a_malformed_identity_pragma_is_reported() {
+        for src in [
+            "#pragma prefix acme.com\nlong x;",
+            "#pragma prefix\nlong x;",
+            "#pragma ID Account\nlong x;",
+            "#pragma version Account\nlong x;",
+            "#pragma version Account two.three\nlong x;",
+        ] {
+            let e = Lexer::new(src).tokenize().unwrap_err();
+            assert!(e.message.contains("#pragma"), "{src:?} -> {}", e.message);
+        }
     }
 
     #[test]

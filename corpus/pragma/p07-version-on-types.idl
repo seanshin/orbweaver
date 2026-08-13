@@ -1,0 +1,18 @@
+// The same on data types, whose ids travel inside every TypeCode we encode.
+module p07 {
+    struct Record {
+        long serial;
+    };
+#pragma version Record 3.1
+
+    enum Colour {
+        RED,
+        GREEN
+    };
+#pragma version Colour 4.2
+
+    exception Failed {
+        long code;
+    };
+#pragma version Failed 5.6
+};

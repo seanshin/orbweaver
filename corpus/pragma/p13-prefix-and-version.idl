@@ -1,0 +1,9 @@
+// Prefix and version on the same item: both parts of the id move.
+#pragma prefix "acme.com"
+
+module p13 {
+    interface Both {
+        void a();
+    };
+#pragma version Both 5.4
+};

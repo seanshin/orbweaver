@@ -1,0 +1,8 @@
+// `#pragma ID` gives an id outright. Nothing about the module path or the
+// prefix is consulted afterwards.
+module p08 {
+    interface Tagged {
+        void a();
+    };
+#pragma ID Tagged "IDL:legacy.example/Tagged:9.9"
+};

@@ -14,6 +14,18 @@
 #
 # Columns: file <TAB> oracle <TAB> that oracle's verdict <TAB> why we accept it
 #
+# One value in the oracle column is not a compiler: `spec` records a place where
+# a deployed compiler and the published specification disagree, rather than two
+# compilers disagreeing with each other. `differential.sh` never runs an oracle
+# by that name, so such a row is inert there — it does not exempt anything and
+# is not reported stale. It is here because it is the same kind of finding and
+# belongs in the same file, and because the verdict is the same either way:
+# interop is with deployed compilers, not with a document.
+#
+# `spec`은 컴파일러가 아니라 규격 문언과 배포 컴파일러가 갈리는 지점을 기록하는
+# 값이다. differential.sh는 그 이름의 오라클을 실행하지 않으므로 면제도 아니고
+# 미발생 경고도 뜨지 않는다. 상호운용 대상은 문서가 아니라 배포된 컴파일러다.
+#
 # 파일별 알려진 오라클 불일치. 규격이 엄격한 곳에서 특정 컴파일러가 느슨한 경우처럼
 # 실재하고 영구적인 불일치를 사유와 함께 기록한다. 등록은 실패 면제일 뿐 보고 면제가
 # 아니며, 더 이상 발생하지 않는 등록도 함께 지적된다.
@@ -22,3 +34,5 @@ n02-identifier-clash.idl	jacorb_idl	accept	CORBA 3.4 §7.2.3 makes identifier co
 n10-operation-name-clash.idl	jacorb_idl	accept	The same rule in its operation-name shape (`Blob blob()`). JacORB 3.9 does not enforce it; omniidl does. Same verdict, same reason.
 n12-enum-member-case-clash.idl	jacorb_idl	accept	The same non-enforcement (n02, n10), in the shape it took in a real external document: docs/CORBAMoEArchitecture.md §7 wrote `Residency residency`, and JacORB 3.9 would have built it while omniidl and our front end refuse. That is the divergence's danger stated as a case, not a hypothesis — same verdict, same reason. (Its sibling defect n11, `struct Context`, diverges nowhere: JacORB does reject keyword collisions.)
 12-any-typecode.idl	jacorb_idl	reject	JacORB 3.9 cannot resolve the fully-qualified `::CORBA::TypeCode`; it reports `Undefined name: gc12.Bag.CORBA.TypeCode`, having looked the absolute scope up relative to the enclosing one. omniidl resolves it, and CLAUDE.md requires the qualified spelling because the unqualified one is itself a case clash. The file stays as written.
+p02-prefix-inside-module.idl	spec	IDL:acme.com/Ledger:1.0	CORBA 3.4 §14.7.5.1 describes `#pragma prefix` as a prefix: the string is inserted between `IDL:` and the scoped name, which reads as `IDL:acme.com/p02/Ledger:1.0`. omniidl 4.3.4 instead *replaces* the accumulated scope path with the pragma's string, dropping the enclosing module: measured `IDL:acme.com/Ledger:1.0` on 2026-08-14 via `omniidl -bpython`. At file scope the two readings coincide, which is why the difference stays hidden until a real file puts the pragma inside a module. We follow omniidl — a repository id is identity on the wire, and being right about a document while disagreeing with the ORB on the other end is the failure this batch exists to close.
+p05-prefix-does-not-escape.idl	spec	IDL:inner.example/Inside:1.0	The same divergence in the shape that also pins the scoping rule: `p05a::Inside`, declared after a prefix pragma inside `module p05a`, is `IDL:inner.example/Inside:1.0` and not `IDL:inner.example/p05a/Inside:1.0`. The rest of the file measures what both readings agree on — the prefix does not survive the closing brace, so `p05b::Outside` is plain `IDL:p05b/Outside:1.0`.

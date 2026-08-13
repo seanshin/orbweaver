@@ -1,0 +1,10 @@
+// An explicit id that contradicts everything the derivation would produce —
+// different prefix, different scope, different version. The explicit id wins.
+#pragma prefix "acme.com"
+
+module p09 {
+    interface Contra {
+        void a();
+    };
+#pragma ID Contra "IDL:totally.different/Elsewhere:7.2"
+};

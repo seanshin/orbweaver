@@ -1,0 +1,9 @@
+// The measured defect, as a case: a prefix at file scope belongs at the front
+// of the id, before the module path.
+#pragma prefix "acme.com"
+
+module p01 {
+    interface Account {
+        long balance();
+    };
+};

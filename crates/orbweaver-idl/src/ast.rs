@@ -1,5 +1,7 @@
 //! The IDL syntax tree, with SIDL annotations attached to what they describe.
 
+use std::collections::BTreeMap;
+
 use crate::lex::{Annotation, Span};
 
 /// A parsed IDL file.
@@ -7,6 +9,19 @@ use crate::lex::{Annotation, Span};
 pub struct Spec {
     /// Top-level definitions, in source order.
     pub definitions: Vec<Definition>,
+    /// Repository ids that `#pragma prefix`, `#pragma version` or `#pragma ID`
+    /// made **differ** from the plain `IDL:<scoped/path>:1.0` derivation,
+    /// keyed by qualified IDL name (`bank::Account`).
+    ///
+    /// Only the differences are recorded, and that is load-bearing: a file
+    /// with no identity pragma leaves this map empty, so every consumer that
+    /// falls back to the derivation is bit-for-bit unchanged. A map listing
+    /// every declaration would make "no prefix means no change" a property to
+    /// be tested rather than one that holds by construction.
+    ///
+    /// The scoping rules are resolved by the parser, where source order is
+    /// available; see [`crate::parse`] for what is and is not implemented.
+    pub repository_ids: BTreeMap<String, String>,
 }
 
 /// Anything that can appear at file or module scope.
