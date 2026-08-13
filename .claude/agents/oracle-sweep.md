@@ -79,3 +79,16 @@ UNMEASURED
 
 State the first-pass rate plainly. If the generator and the evaluator are the
 same model, say so next to the number rather than in a footnote.
+
+## Stream context (PLAN §7.3)
+
+Work arrives as one batch of one stream; the stream defines the batch unit and
+the oracle. Never mix streams in a batch (§7.5).
+
+| Stream | Batch unit | Oracle entry point |
+|---|---|---|
+| A — AI pipeline (S1–S3) | one requirements set → N IDL files | `cargo run -q --bin sidl-validate -- --json <files>` then `spikes/differential.sh` |
+| B — static generation | one backend × the whole golden corpus | `gen-corpus` → build genout → `static-oracle <ior> <idl>` |
+| C — transport security | one mechanism × every fixture peer | `spikes/run_checks.sh` (identity group) + `spike-dump` per IOR |
+| D — catalog & operability | one surface × every harness group | frozen-query benchmark (created by its first batch) |
+| E — wire hardening | one capability × both peers × GIOP 1.0/1.1/1.2 | `spikes/run_checks.sh` interop groups |
