@@ -282,6 +282,18 @@ pub enum Error {
     Desynchronized,
     /// `LOCATION_FORWARD` chain exceeded [`MAX_FORWARD_HOPS`].
     TooManyForwards,
+    /// No profile in the IOR advertised a TLS endpoint (`TAG_SSL_SEC_TRANS`),
+    /// so [`Connection::connect_tls`] had nothing to dial. Distinct from
+    /// [`Error::AllEndpointsFailed`] on purpose: "the target offers no TLS"
+    /// and "the target's TLS endpoints are down" call for different fixes.
+    #[cfg(feature = "ssliop")]
+    NoTlsEndpoint,
+    /// The TLS client could not be set up: rejected configuration or a
+    /// profile host that is not a valid server name. Handshake and
+    /// certificate failures surface as [`Error::Io`] instead, because rustls
+    /// reports them through the socket I/O that carried the handshake.
+    #[cfg(feature = "ssliop")]
+    Tls(rustls::Error),
 }
 
 impl fmt::Display for Error {
@@ -317,6 +329,12 @@ impl fmt::Display for Error {
                 write!(f, "connection is desynchronized and must be discarded")
             }
             Error::TooManyForwards => write!(f, "too many LOCATION_FORWARD hops"),
+            #[cfg(feature = "ssliop")]
+            Error::NoTlsEndpoint => {
+                write!(f, "no profile in the IOR advertises a TLS endpoint (TAG_SSL_SEC_TRANS)")
+            }
+            #[cfg(feature = "ssliop")]
+            Error::Tls(e) => write!(f, "tls: {e}"),
         }
     }
 }
@@ -1128,6 +1146,62 @@ impl Invoker for Connection {
     }
 }
 
+/// The transport under a [`Connection`]: cleartext TCP, or TLS over it.
+///
+/// Private, and an enum rather than a boxed trait object on purpose: these
+/// are the only transports v1 speaks, and the match keeps the plain arm
+/// exactly the code it was before TLS existed — every read/write site above
+/// this type is transport-blind and identical in both builds. Poisoning,
+/// framing and timeout behaviour all live in [`Connection`] and see only
+/// `Read + Write`, so they cannot differ between the arms.
+enum Stream {
+    /// Cleartext TCP, the only arm a default build compiles.
+    Plain(TcpStream),
+    /// TLS over TCP, dialed from a `TAG_SSL_SEC_TRANS` advertisement. Boxed
+    /// because rustls's connection state is large and this arm must not tax
+    /// the plain one's size.
+    #[cfg(feature = "ssliop")]
+    Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
+}
+
+impl Read for Stream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Stream::Plain(s) => s.read(buf),
+            #[cfg(feature = "ssliop")]
+            Stream::Tls(s) => s.read(buf),
+        }
+    }
+}
+
+impl Write for Stream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Stream::Plain(s) => s.write(buf),
+            #[cfg(feature = "ssliop")]
+            Stream::Tls(s) => s.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Stream::Plain(s) => s.flush(),
+            #[cfg(feature = "ssliop")]
+            Stream::Tls(s) => s.flush(),
+        }
+    }
+}
+
+impl fmt::Debug for Stream {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Stream::Plain(s) => f.debug_tuple("Plain").field(s).finish(),
+            #[cfg(feature = "ssliop")]
+            Stream::Tls(s) => f.debug_tuple("Tls").field(&s.sock).finish(),
+        }
+    }
+}
+
 /// A synchronous, single-connection invoker.
 ///
 /// Deliberately minimal, but no longer optimistic: it negotiates the version
@@ -1138,7 +1212,7 @@ impl Invoker for Connection {
 /// Connection pooling and request multiplexing remain stream-E work.
 #[derive(Debug)]
 pub struct Connection {
-    stream: TcpStream,
+    stream: Stream,
     object_key: Vec<u8>,
     version: Version,
     endian: Endian,
@@ -1156,6 +1230,12 @@ pub struct Connection {
     fragment_threshold: usize,
     /// Largest number of fragments any one reply arrived in.
     max_reply_fragments: usize,
+    /// The TLS policy this connection was dialed with, if any. Kept so a
+    /// `LOCATION_FORWARD` is followed at the same security level: a
+    /// connection whose caller demanded TLS must never chase a redirect back
+    /// down to cleartext.
+    #[cfg(feature = "ssliop")]
+    tls_config: Option<std::sync::Arc<rustls::ClientConfig>>,
 }
 
 impl Connection {
@@ -1173,6 +1253,14 @@ impl Connection {
     /// The GIOP version is still negotiated per profile, because each profile
     /// advertises its own IIOP version — an alternate address inherits its
     /// profile's version, being only another route to the same profile.
+    ///
+    /// This dials cleartext endpoints only, even when a profile also
+    /// advertises `TAG_SSL_SEC_TRANS`: a caller that asked for cleartext gets
+    /// cleartext. Upgrading silently would be worse than useless — without a
+    /// caller-supplied verification policy there is nothing to verify the
+    /// peer against, and an unverified TLS session only *looks* safer.
+    /// Dialing the advertised TLS endpoint is `Connection::connect_tls`
+    /// (feature `ssliop`), which takes that policy explicitly.
     pub fn connect(ior: &Ior, timeout: Duration) -> Result<Self> {
         let mut tried = 0usize;
         let mut last: Option<Error> = None;
@@ -1197,13 +1285,101 @@ impl Connection {
         Self::connect_endpoint(p, &p.host, p.port, timeout)
     }
 
+    /// Connects to the TLS endpoint(s) an IOR advertises, verifying the peer
+    /// per `tls_config`.
+    ///
+    /// The failover order is [`Connection::connect`]'s — profiles in IOR
+    /// order — restricted to profiles that advertise `TAG_SSL_SEC_TRANS`,
+    /// each dialed at its [`ssliop::ssl_endpoint`]. When no profile
+    /// advertises one this returns [`Error::NoTlsEndpoint`] rather than
+    /// falling back to cleartext, for the same reason [`Connection::connect`]
+    /// never upgrades: the transport the caller asked for is the transport
+    /// they get.
+    ///
+    /// The server name presented for SNI and certificate verification is the
+    /// profile's host — the SSLIOP component carries only a port precisely
+    /// because the TLS listener is another port of the server the profile
+    /// already names. Trust is the caller's to configure: which roots to
+    /// accept and whether to present a client certificate are deployment
+    /// policy, so they arrive in `tls_config` instead of being decided here.
+    ///
+    /// A `LOCATION_FORWARD` received over this connection is followed with
+    /// the same `tls_config`, never downgraded to cleartext.
+    ///
+    /// # What this has been measured against
+    ///
+    /// An in-process rustls peer only (`tests/ssliop_tls.rs`). No
+    /// SSLIOP-speaking ORB — omniORB's sslTP, JacORB's SSL transport — has
+    /// been exercised yet; that fixture is a future batch. What is verified
+    /// today is the TLS layer and GIOP framing pass-through, not peer
+    /// interop.
+    #[cfg(feature = "ssliop")]
+    pub fn connect_tls(
+        ior: &Ior,
+        timeout: Duration,
+        tls_config: std::sync::Arc<rustls::ClientConfig>,
+    ) -> Result<Self> {
+        let mut tried = 0usize;
+        let mut last: Option<Error> = None;
+        for p in &ior.profiles {
+            let Some((host, port)) = ssliop::ssl_endpoint(p) else { continue };
+            tried += 1;
+            match Self::connect_tls_endpoint(p, &host, port, timeout, &tls_config) {
+                Ok(conn) => return Ok(conn),
+                Err(e) => last = Some(e),
+            }
+        }
+        match last {
+            Some(e) => Err(Error::AllEndpointsFailed { tried, last: Box::new(e) }),
+            None if ior.profiles.is_empty() => Err(Error::NoIiopProfile),
+            None => Err(Error::NoTlsEndpoint),
+        }
+    }
+
+    /// Dials one profile's advertised TLS endpoint and completes the
+    /// handshake.
+    #[cfg(feature = "ssliop")]
+    fn connect_tls_endpoint(
+        p: &IiopProfile,
+        host: &str,
+        port: u16,
+        timeout: Duration,
+        config: &std::sync::Arc<rustls::ClientConfig>,
+    ) -> Result<Self> {
+        let mut tcp = dial_configured(host, port, timeout)?;
+        let name = rustls::pki_types::ServerName::try_from(host.to_owned()).map_err(|_| {
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("profile host {host:?} is not a valid TLS server name"),
+            ))
+        })?;
+        let mut tls = rustls::ClientConnection::new(std::sync::Arc::clone(config), name)
+            .map_err(Error::Tls)?;
+        // Complete the handshake here, so a refusal — wrong CA, a peer that
+        // is not speaking TLS at all — fails the *connect*, bounded by the
+        // socket timeouts set above, instead of surfacing as a framing error
+        // on the first request. rustls reports handshake and certificate
+        // failures through the I/O that carried them, hence `Error::Io`.
+        while tls.is_handshaking() {
+            tls.complete_io(&mut tcp)?;
+        }
+        let mut conn =
+            Self::from_stream(p, Stream::Tls(Box::new(rustls::StreamOwned::new(tls, tcp))));
+        conn.tls_config = Some(std::sync::Arc::clone(config));
+        Ok(conn)
+    }
+
     /// Connects to one endpoint, taking everything except the address —
     /// version, object key, components — from the profile it belongs to.
     fn connect_endpoint(p: &IiopProfile, host: &str, port: u16, timeout: Duration) -> Result<Self> {
-        let stream = dial(host, port, timeout)?;
-        stream.set_read_timeout(Some(timeout))?;
-        stream.set_write_timeout(Some(timeout))?;
-        stream.set_nodelay(true)?;
+        Ok(Self::from_stream(p, Stream::Plain(dial_configured(host, port, timeout)?)))
+    }
+
+    /// Builds the connection state over an established transport, taking
+    /// everything except the transport — version, object key, codeset
+    /// negotiation — from the profile. Shared by the plain and TLS paths so
+    /// the two cannot drift apart in anything but the transport itself.
+    fn from_stream(p: &IiopProfile, stream: Stream) -> Self {
         // Negotiate from TAG_CODE_SETS if the peer published one. Absent it,
         // §7.10.2.5 makes the transmission codeset ISO-8859-1 and forbids
         // pretending otherwise, so no context is sent and strings are Latin-1.
@@ -1220,7 +1396,7 @@ impl Connection {
         }
         let codeset_context_pending = char_converter.is_some();
 
-        Ok(Self {
+        Self {
             stream,
             object_key: p.object_key.clone(),
             version: Version::negotiate(p.version),
@@ -1232,7 +1408,9 @@ impl Connection {
             codeset_context_pending,
             fragment_threshold: DEFAULT_FRAGMENT_THRESHOLD,
             max_reply_fragments: 1,
-        })
+            #[cfg(feature = "ssliop")]
+            tls_config: None,
+        }
     }
 
     /// The converter for `char`/`string` data on this connection.
@@ -1398,7 +1576,16 @@ impl Connection {
                 Outcome::Forwarded(ior) => {
                     // A forwarded reference is a full IOR and may itself name
                     // several endpoints, so it gets the same failover as the
-                    // original connect did.
+                    // original connect did — over the same transport: a TLS
+                    // connection follows the forward with the policy it was
+                    // dialed with, and fails rather than downgrade to
+                    // cleartext if the new IOR advertises no TLS endpoint.
+                    #[cfg(feature = "ssliop")]
+                    let next = match &self.tls_config {
+                        Some(cfg) => Self::connect_tls(&ior, Duration::from_secs(10), cfg.clone())?,
+                        None => Self::connect(&ior, Duration::from_secs(10))?,
+                    };
+                    #[cfg(not(feature = "ssliop"))]
                     let next = Self::connect(&ior, Duration::from_secs(10))?;
                     let endian = self.endian;
                     *self = next;
@@ -1533,6 +1720,19 @@ impl Connection {
 enum Outcome {
     Done(Reply),
     Forwarded(Ior),
+}
+
+/// [`dial`], plus the socket options every connection gets: both timeouts,
+/// and Nagle off. One function so the plain and TLS paths cannot diverge in
+/// socket behaviour — for TLS the timeouts also bound the handshake, which is
+/// what turns "the peer never answered the ClientHello" into an error instead
+/// of a hang.
+fn dial_configured(host: &str, port: u16, timeout: Duration) -> Result<TcpStream> {
+    let stream = dial(host, port, timeout)?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
+    stream.set_nodelay(true)?;
+    Ok(stream)
 }
 
 /// Resolves and connects with a real timeout.

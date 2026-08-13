@@ -11,6 +11,12 @@ rust-version.workspace = true
 orbweaver-cdr = { path = "../orbweaver-cdr" }
 # See NOTICE and docs/decisions/D001: data we cannot originate.
 encoding_rs = { version = "0.8", optional = true }
+# See NOTICE and docs/decisions/D002: logic whose failure modes our oracles
+# cannot detect (cryptography) is depended on, not written. rustls is taken
+# under the MIT arm of its triple licence; its default features bring the
+# aws-lc-rs provider D002 names. Its `pki_types` re-export also covers the
+# tests' PEM loading, so this is the only crate the feature adds.
+rustls = { version = "0.23", optional = true }
 
 [lints]
 workspace = true
@@ -29,6 +35,10 @@ path = "src/bin/spike_dump.rs"
 # --no-default-features removes both the support and the obligation.
 default = ["euc-kr"]
 euc-kr = ["dep:encoding_rs"]
+# Dial-TLS for SSLIOP endpoints. OFF by default, per docs/decisions/D002: a
+# default build must carry no cryptography dependency and no attribution
+# obligation beyond encoding_rs's. run_checks.sh tests that promise.
+ssliop = ["dep:rustls"]
 
 
 [[bin]]
