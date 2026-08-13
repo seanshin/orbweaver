@@ -151,3 +151,40 @@ policy, R13) cannot be assembled. The only constructor is
 `Bridge::connect_static`, and the interface id comes from the capability table,
 never from the stub: a stub asserting its own interface id would be asserting
 its own permissions.
+
+---
+
+# Batch 3: the promotion engine, and I4's regression gate
+
+Stream B's third batch, produced by a parallel worktree agent and landed
+through the serial merge gate. **383 workspace tests.**
+
+## Promotion is a recommendation, and the gate is the decision
+
+`CallStats` counts per-(interface, operation) outcomes at the bridge — recorded
+against what the capability handle names, never what the caller asserted, and
+only for calls that passed policy, because a refused call says nothing about
+how hot an operation is. `PromotionPolicy::recommend()` is count-based with no
+clock on purpose: a recommendation that depends on wall time cannot be
+reproduced, and a gate that cannot be reproduced cannot be tested.
+
+## `IdentityDropped` is checked before the results are compared
+
+`verify_promotion()` refuses a promotion in this order: malformed audit
+(unmeasured is never a pass), **identity dropped**, operation mismatch, result
+mismatch. The order is the point — a promotion that keeps the answer
+byte-for-byte and loses the caller is §4.8's confused deputy returning through
+an optimization, and it must not be reachable by having correct results. The
+gate parses the guard's existing audit format rather than inventing one: two
+formats for one fact eventually disagree.
+
+승격 검증은 **결과 비교보다 신원 비교가 먼저**다. 답을 그대로 지키면서 호출자를
+잃는 승격이 §4.8의 혼동된 대리인이 최적화를 타고 돌아오는 경로이며, 결과가 정확하다는
+이유로 그 경로가 열려서는 안 된다.
+
+## Scope
+
+Verified at gate level with fakes (the Recorder pattern from guard.rs). The
+live half of I4 — running a recommended promotion's static stub and dynamic
+path against a real peer and feeding both audits through this gate — belongs
+to the gen-corpus oracle and is not yet wired; the module says so.
