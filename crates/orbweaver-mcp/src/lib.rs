@@ -38,6 +38,7 @@
 
 #![deny(missing_docs)]
 
+pub mod embed;
 pub mod guard;
 pub mod handles;
 pub mod identity;
@@ -53,6 +54,7 @@ use orbweaver_dynamic::{anyjson, invoke};
 use orbweaver_giop::Connection;
 use orbweaver_registry::{Entry, ParamDirection, Registry};
 
+use embed::{VectorIndex, Via};
 use handles::CapabilityTable;
 use identity::Caller;
 use policy::{Approval, Denied, Exposure};
@@ -122,6 +124,12 @@ pub struct Bridge<'a> {
     /// Every policy decision this session's dynamic path has made, in
     /// [`guard::Guarded`]'s exact line format — one formatter writes both.
     audit: Vec<String>,
+    /// The optional semantic half of `search_interfaces` (D003 part A).
+    ///
+    /// `None` is the default and the shipped configuration until a cache is
+    /// built, and it is exactly today's lexical behaviour — asserted, not
+    /// assumed, by `no_index_is_byte_identical_to_the_lexical_document`.
+    vectors: Option<VectorIndex>,
 }
 
 impl<'a> Bridge<'a> {
@@ -134,7 +142,25 @@ impl<'a> Bridge<'a> {
             caller: None,
             stats: promote::CallStats::default(),
             audit: Vec::new(),
+            vectors: None,
         }
+    }
+
+    /// Attaches a vector index, turning `search_interfaces` from lexical-only
+    /// into lexical ∪ semantic (D003 part A).
+    ///
+    /// Additive by construction: a lexical hit is still a hit and still ranks
+    /// first, so the exact class cannot regress by attaching an index — only
+    /// the negative and injection classes are at risk, and that risk is the
+    /// threshold's, which is why it is measurable and configurable.
+    pub fn with_vectors(mut self, index: VectorIndex) -> Self {
+        self.vectors = Some(index);
+        self
+    }
+
+    /// The vector index this session searches with, if any.
+    pub fn vector_index(&self) -> Option<&VectorIndex> {
+        self.vectors.as_ref()
     }
 
     /// Uses a capability table the caller already has, for a bridge that keeps
@@ -170,7 +196,14 @@ impl<'a> Bridge<'a> {
 
     /// `search_interfaces(query)`.
     pub fn search(&self, query: &str, limit: usize) -> Json {
-        search_interfaces(self.registry, &self.exposure, &self.handles, query, limit)
+        search_interfaces(
+            self.registry,
+            &self.exposure,
+            &self.handles,
+            query,
+            limit,
+            self.vectors.as_ref(),
+        )
     }
 
     /// `describe_interface(id)`.
@@ -336,21 +369,36 @@ fn s(text: impl Into<String>) -> Json {
 /// `roundtrip`, `blobsum` finds `blob_sum`, `track manager` finds
 /// `TrackManager`. See [`query_matches`] for why the word rule is conjunctive.
 ///
-/// Not semantic search. §4.6 wants embeddings, and this is not them — a lexical
-/// match is what can be built without a model in the loop, and calling it
-/// semantic would overstate it. Results are capped, and the count of what was
-/// left out is reported rather than dropped silently.
+/// With no `vectors` index this is **not** semantic search — a lexical match is
+/// what can be built without a model in the loop, and calling it semantic would
+/// overstate it. With one (D003 part A), the result is the *union* of the
+/// lexical hits and the vector hits at or above the index's threshold, ordered
+/// by score, and each hit carries a `via` field naming which path found it.
+///
+/// The union is one-directional on purpose. A lexical hit scores `1.0` — the
+/// strongest evidence available, an author's own word — so a vector hit can
+/// only *extend* the list, never displace or outrank a lexical one. That is
+/// what makes the exact class unable to regress when an index is attached: the
+/// only classes an index can break are negative and injection, by matching
+/// something it should not, and that is a threshold error the benchmark sees.
+///
+/// Results are capped, and the count of what was left out is reported rather
+/// than dropped silently.
 fn search_interfaces(
     registry: &Registry,
     exposure: &Exposure,
     table: &CapabilityTable,
     query: &str,
     limit: usize,
+    vectors: Option<&VectorIndex>,
 ) -> Json {
     let needle = query.trim().to_lowercase();
     let words = query_words(&needle);
-    let mut hits: Vec<Json> = Vec::new();
-    let mut matched = 0usize;
+    // Absent from the cache is not "distance zero": it means this query was
+    // never embedded, so the vector half simply does not run and the caller
+    // reports it unmeasured. See `VectorIndex::query_vector`.
+    let query_vector = vectors.and_then(|ix| ix.query_vector(query));
+    let mut candidates: Vec<(f64, Via, &String)> = Vec::new();
 
     for id in exposure.interfaces() {
         let Some(iface) = registry.interface(id) else { continue };
@@ -382,23 +430,51 @@ fn search_interfaces(
             }
         }
 
-        let hit = needle.is_empty()
+        let lexical = needle.is_empty()
             || haystack.to_lowercase().contains(&needle)
             || query_matches(&index_atoms(&haystack), &words);
-        if !hit {
-            continue;
+        let similarity = match (vectors, query_vector) {
+            (Some(ix), Some(qv)) => ix.score(qv, id).filter(|s| *s >= ix.threshold()),
+            _ => None,
+        };
+        match (lexical, similarity) {
+            (true, Some(_)) => candidates.push((1.0, Via::Both, id)),
+            (true, None) => candidates.push((1.0, Via::Lexical, id)),
+            (false, Some(score)) => candidates.push((score, Via::Vector, id)),
+            (false, None) => {}
         }
-        matched += 1;
-        if hits.len() < limit {
-            hits.push(obj([
-                ("id", s(id)),
-                ("description", s(desc)),
-                ("operations", Json::Number(iface.operations.len().to_string())),
-                // The bootstrap: an agent cannot construct a handle and has to
-                // be given one. Only this session's, and only live ones.
-                ("handles", Json::Array(table.handles_for(id).into_iter().map(s).collect())),
-            ]));
+    }
+
+    // Stable, and only when there is something to reorder: with no index every
+    // score is 1.0, so this leaves the exposure's own (sorted) order exactly as
+    // it was — the byte-identical guarantee, by construction rather than by
+    // coincidence.
+    if vectors.is_some() {
+        candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
+    }
+
+    let matched = candidates.len();
+    let mut hits: Vec<Json> = Vec::new();
+    for (score, via, id) in candidates.into_iter().take(limit) {
+        let Some(iface) = registry.interface(id) else { continue };
+        let desc =
+            registry.annotations(id).and_then(|a| a.get("ai_desc")).cloned().unwrap_or_default();
+        let mut fields = vec![
+            ("id", s(id)),
+            ("description", s(desc)),
+            ("operations", Json::Number(iface.operations.len().to_string())),
+            // The bootstrap: an agent cannot construct a handle and has to
+            // be given one. Only this session's, and only live ones.
+            ("handles", Json::Array(table.handles_for(id).into_iter().map(s).collect())),
+        ];
+        // Only when an index is configured: an unconditional `via` would change
+        // every document this tool has ever produced for a distinction that
+        // does not exist without one.
+        if vectors.is_some() {
+            fields.push(("via", s(via.name())));
+            fields.push(("score", Json::Number(format!("{score:.4}"))));
         }
+        hits.push(obj(fields));
     }
 
     obj([
@@ -789,7 +865,7 @@ mod tests {
     fn search_returns_only_what_is_exposed() {
         let r = registry(IDL);
         let e = Exposure::nothing().allow_interface("IDL:bank/Account:1.0");
-        let hits = search_interfaces(&r, &e, &CapabilityTable::new("t"), "", 10);
+        let hits = search_interfaces(&r, &e, &CapabilityTable::new("t"), "", 10, None);
         let Some(Json::Array(list)) = hits.get("interfaces") else { panic!("{hits}") };
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].get("id").and_then(Json::as_str), Some("IDL:bank/Account:1.0"));
@@ -805,7 +881,7 @@ mod tests {
         let e = Exposure::nothing()
             .allow_interface("IDL:bank/Account:1.0")
             .allow_interface("IDL:bank/Ledger:1.0");
-        let hits = search_interfaces(&r, &e, &CapabilityTable::new("t"), "aggregate", 10);
+        let hits = search_interfaces(&r, &e, &CapabilityTable::new("t"), "aggregate", 10, None);
         let Some(Json::Array(list)) = hits.get("interfaces") else { panic!() };
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].get("id").and_then(Json::as_str), Some("IDL:bank/Ledger:1.0"));
@@ -824,7 +900,7 @@ mod tests {
         );
         let e = Exposure::nothing().allow_interface("IDL:m/Sensor:1.0");
         for q in ["temperature", "liveness", "probe"] {
-            let hits = search_interfaces(&r, &e, &CapabilityTable::new("t"), q, 10);
+            let hits = search_interfaces(&r, &e, &CapabilityTable::new("t"), q, 10, None);
             let Some(Json::Array(list)) = hits.get("interfaces") else { panic!("{hits}") };
             assert_eq!(list.len(), 1, "{q:?} should match via the widened haystack");
         }
@@ -882,9 +958,202 @@ mod tests {
         for i in 0..20 {
             e = e.allow_interface(format!("IDL:big/I{i}:1.0"));
         }
-        let hits = search_interfaces(&r, &e, &CapabilityTable::new("t"), "", 5);
+        let hits = search_interfaces(&r, &e, &CapabilityTable::new("t"), "", 5, None);
         assert_eq!(hits.get("matched"), Some(&Json::Number("20".into())));
         assert_eq!(hits.get("truncated"), Some(&Json::Bool(true)));
+    }
+
+    // ---- the vector half (D003 part A) --------------------------------------
+
+    /// A tiny catalog with two interfaces that share no vocabulary, plus a
+    /// hand-written cache: unit vectors are used so every cosine in these
+    /// tests is a number a reader can verify by eye rather than trust.
+    fn vector_fixture() -> (Registry, Exposure, embed::Vectors) {
+        let r = registry(
+            "module vf { \
+             //@ ai_desc: A customer deposit account\n \
+             interface Account { long long balance(); }; \
+             //@ ai_desc: Aggregate ledger over all accounts\n \
+             interface Ledger { long long total(); }; };",
+        );
+        let e = Exposure::nothing()
+            .allow_interface("IDL:vf/Account:1.0")
+            .allow_interface("IDL:vf/Ledger:1.0");
+        let v = embed::Vectors::from_entries([
+            ("IDL:vf/Account:1.0".to_owned(), vec![1.0, 0.0, 0.0]),
+            ("IDL:vf/Ledger:1.0".to_owned(), vec![0.0, 1.0, 0.0]),
+            // Points squarely at Account (cos 1.0) and away from Ledger (0.0).
+            ("remaining funds".to_owned(), vec![1.0, 0.0, 0.0]),
+            // Half-way between the two: cos ≈ 0.707 to each.
+            (
+                "money and books".to_owned(),
+                vec![std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2, 0.0],
+            ),
+            // Orthogonal to everything in the catalog: cos 0.0 to both.
+            ("quaternion rotation".to_owned(), vec![0.0, 0.0, 1.0]),
+        ])
+        .expect("builds");
+        (r, e, v)
+    }
+
+    /// The regression guard the whole feature is conditional on: with no index
+    /// configured, the document is byte-for-byte what the lexical search has
+    /// always produced — no `via`, no `score`, same order, same fields.
+    ///
+    /// A golden literal rather than a comparison against another call: the
+    /// second call would be the same code, and two runs of the same bug agree.
+    #[test]
+    fn no_index_is_byte_identical_to_the_lexical_document() {
+        let (r, e, _) = vector_fixture();
+        let doc = search_interfaces(&r, &e, &CapabilityTable::new("t"), "balance", 10, None);
+        assert_eq!(
+            doc.to_string(),
+            "{\"interfaces\":[{\"description\":\"A customer deposit account\",\
+             \"handles\":[],\"id\":\"IDL:vf/Account:1.0\",\"operations\":1}],\
+             \"matched\":1,\"truncated\":false}"
+        );
+        // And the same for a query nothing answers.
+        let doc = search_interfaces(&r, &e, &CapabilityTable::new("t"), "quaternion", 10, None);
+        assert_eq!(doc.to_string(), "{\"interfaces\":[],\"matched\":0,\"truncated\":false}");
+    }
+
+    /// The point of `via`: a hit an author's own words explain, a hit only the
+    /// vectors explain, and a hit both explain are three different things to an
+    /// agent deciding how much to trust the list.
+    #[test]
+    fn each_hit_records_which_path_found_it() {
+        let (r, e, v) = vector_fixture();
+        let ix = embed::VectorIndex::new(v);
+        let table = CapabilityTable::new("t");
+
+        // "remaining funds": no shared token with either interface, but the
+        // cache points it at Account. Vector-only.
+        let doc = search_interfaces(&r, &e, &table, "remaining funds", 10, Some(&ix));
+        let Some(Json::Array(list)) = doc.get("interfaces") else { panic!("{doc}") };
+        assert_eq!(list.len(), 1, "{doc}");
+        assert_eq!(list[0].get("id").and_then(Json::as_str), Some("IDL:vf/Account:1.0"));
+        assert_eq!(list[0].get("via").and_then(Json::as_str), Some("vector"));
+        assert_eq!(list[0].get("score"), Some(&Json::Number("1.0000".into())));
+
+        // A lexical hit whose query was never embedded stays lexical, and says so.
+        let doc = search_interfaces(&r, &e, &table, "balance", 10, Some(&ix));
+        let Some(Json::Array(list)) = doc.get("interfaces") else { panic!("{doc}") };
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].get("via").and_then(Json::as_str), Some("lexical"));
+    }
+
+    /// Both paths agreeing is its own answer — reporting it as merely lexical
+    /// would hide the corroboration, and as merely vector would hide the name.
+    #[test]
+    fn agreement_between_the_two_paths_is_reported_as_both() {
+        let (r, e, _) = vector_fixture();
+        let v = embed::Vectors::from_entries([
+            ("IDL:vf/Account:1.0".to_owned(), vec![1.0, 0.0]),
+            ("account".to_owned(), vec![1.0, 0.0]),
+        ])
+        .expect("builds");
+        let ix = embed::VectorIndex::new(v);
+        let doc = search_interfaces(&r, &e, &CapabilityTable::new("t"), "account", 10, Some(&ix));
+        let Some(Json::Array(list)) = doc.get("interfaces") else { panic!("{doc}") };
+        // "account" also hits Ledger lexically (its prose says "accounts"),
+        // which is the distinction under test: corroborated versus name-only.
+        assert_eq!(list.len(), 2, "{doc}");
+        assert_eq!(list[0].get("id").and_then(Json::as_str), Some("IDL:vf/Account:1.0"));
+        assert_eq!(list[0].get("via").and_then(Json::as_str), Some("both"));
+        assert_eq!(list[1].get("id").and_then(Json::as_str), Some("IDL:vf/Ledger:1.0"));
+        assert_eq!(list[1].get("via").and_then(Json::as_str), Some("lexical"));
+    }
+
+    /// The negative gate in miniature. A neighbour below the cutoff is not a
+    /// hit, and raising the cutoff is how an over-matching index is corrected —
+    /// so both sides of the boundary are pinned here.
+    #[test]
+    fn the_threshold_is_what_keeps_a_neighbour_from_being_a_hit() {
+        let (r, e, v) = vector_fixture();
+        let table = CapabilityTable::new("t");
+
+        // 0.7071 to both, so the 0.60 default admits them and 0.80 does not.
+        let ix = embed::VectorIndex::new(v.clone());
+        let doc = search_interfaces(&r, &e, &table, "money and books", 10, Some(&ix));
+        assert_eq!(doc.get("matched"), Some(&Json::Number("2".into())), "{doc}");
+
+        let strict = embed::VectorIndex::new(v.clone()).with_threshold(0.80);
+        let doc = search_interfaces(&r, &e, &table, "money and books", 10, Some(&strict));
+        assert_eq!(doc.get("matched"), Some(&Json::Number("0".into())), "{doc}");
+
+        // Orthogonal to the whole catalog: no threshold in [0,1] admits it.
+        let doc = search_interfaces(&r, &e, &table, "quaternion rotation", 10, Some(&ix));
+        assert_eq!(doc.get("matched"), Some(&Json::Number("0".into())), "{doc}");
+    }
+
+    /// An index cannot cost the exact class a hit: a lexical match scores 1.0,
+    /// above every cosine, so vector hits extend the tail and never the head.
+    #[test]
+    fn lexical_hits_outrank_vector_hits() {
+        let (r, e, _) = vector_fixture();
+        let v = embed::Vectors::from_entries([
+            // Ledger is the lexical answer; Account is a 0.9 neighbour.
+            ("IDL:vf/Account:1.0".to_owned(), vec![1.0, 0.0]),
+            ("IDL:vf/Ledger:1.0".to_owned(), vec![0.0, 1.0]),
+            ("aggregate".to_owned(), vec![0.9, 0.4359]),
+        ])
+        .expect("builds");
+        let ix = embed::VectorIndex::new(v);
+        let doc = search_interfaces(&r, &e, &CapabilityTable::new("t"), "aggregate", 10, Some(&ix));
+        let Some(Json::Array(list)) = doc.get("interfaces") else { panic!("{doc}") };
+        assert_eq!(list.len(), 2, "{doc}");
+        assert_eq!(list[0].get("id").and_then(Json::as_str), Some("IDL:vf/Ledger:1.0"));
+        assert_eq!(list[0].get("via").and_then(Json::as_str), Some("lexical"));
+        assert_eq!(list[1].get("id").and_then(Json::as_str), Some("IDL:vf/Account:1.0"));
+        assert_eq!(list[1].get("via").and_then(Json::as_str), Some("vector"));
+    }
+
+    /// A query nobody embedded is *unmeasured*, not "distance zero": search
+    /// degrades to lexical rather than returning a confident empty answer.
+    #[test]
+    fn an_unembedded_query_degrades_to_lexical_rather_than_to_nothing() {
+        let (r, e, v) = vector_fixture();
+        let ix = embed::VectorIndex::new(v);
+        assert!(ix.query_vector("never embedded at all").is_none());
+        let doc = search_interfaces(&r, &e, &CapabilityTable::new("t"), "ledger", 10, Some(&ix));
+        let Some(Json::Array(list)) = doc.get("interfaces") else { panic!("{doc}") };
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].get("via").and_then(Json::as_str), Some("lexical"));
+    }
+
+    /// An interface with no cached vector is simply not a vector candidate —
+    /// a catalog that grew since the cache was built must not become invisible.
+    #[test]
+    fn an_interface_missing_from_the_cache_still_matches_lexically() {
+        let (r, e, _) = vector_fixture();
+        let v = embed::Vectors::from_entries([
+            ("IDL:vf/Account:1.0".to_owned(), vec![1.0, 0.0]),
+            ("total".to_owned(), vec![1.0, 0.0]),
+        ])
+        .expect("builds");
+        let ix = embed::VectorIndex::new(v);
+        // Ledger has no cached vector; `total` is its operation name.
+        let doc = search_interfaces(&r, &e, &CapabilityTable::new("t"), "total", 10, Some(&ix));
+        let Some(Json::Array(list)) = doc.get("interfaces") else { panic!("{doc}") };
+        let ids: Vec<&str> =
+            list.iter().filter_map(|i| i.get("id").and_then(Json::as_str)).collect();
+        assert!(ids.contains(&"IDL:vf/Ledger:1.0"), "{doc}");
+    }
+
+    /// The bridge seam, not just the free function: attaching an index through
+    /// the public API is what a host actually does.
+    #[test]
+    fn the_bridge_carries_the_index_into_search() {
+        let (r, e, v) = vector_fixture();
+        let plain = Bridge::new(&r, e.clone(), "t");
+        assert!(plain.vector_index().is_none());
+        let lexical_only = plain.search("remaining funds", 10).to_string();
+        assert_eq!(lexical_only, "{\"interfaces\":[],\"matched\":0,\"truncated\":false}");
+
+        let semantic = Bridge::new(&r, e, "t").with_vectors(embed::VectorIndex::new(v));
+        assert!(semantic.vector_index().is_some());
+        let doc = semantic.search("remaining funds", 10);
+        assert_eq!(doc.get("matched"), Some(&Json::Number("1".into())), "{doc}");
     }
 
     #[test]
