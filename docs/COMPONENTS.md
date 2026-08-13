@@ -31,7 +31,7 @@ Anything requiring a new dependency class needs a decision document first
 |---|---|---|
 | Catalog storage (PostgreSQL + pgvector) | ❌ | in-process Registry + `exposure.todo.tsv` are the stated seams; **D003 drafted (PROPOSED)**: defer until a pilot demands durability, adoption path pre-cleared (tokio-postgres + pgvector, licences verified) |
 | Embeddings / semantic search | ❌ | frozen benchmark holds the 0/10 headroom baseline; **D003 drafted (PROPOSED)**: external-command wrapper (no new crates), awaiting approval |
-| Observability (OpenTelemetry) | ❌ | interceptor seam unbuilt; **needs D004 (otel dependency licence review)** |
+| Observability (OpenTelemetry) | ❌ | interceptor seam unbuilt; **D004 drafted (PROPOSED)**: first-party JSON-lines sink behind a sink trait on F4's chain (zero crates), `tracing` (MIT, verified) and OTLP pre-cleared with triggers, awaiting approval |
 | Deployment (Docker/K8s, IOR rewriting) | ❌ | R7 mitigation designed in PLAN, nothing built; CI runners are the only containers used |
 | Naming (CosNaming client) | ✅ | corbaname/corbaloc + omniNames in harness |
 | MCP transport | ✅ | stdio JSON-RPC; no real MCP client driven yet (stated in PHASE3) |

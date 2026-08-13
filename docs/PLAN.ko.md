@@ -555,6 +555,9 @@ CDR은 태그가 아니라 위치로 인코딩한다. protobuf에서 직관을 �
 > 명세되어 있다 (2026-08-14 검토·채택).
 > CORBA 기본 서비스(Naming·Event·Trading·LifeCycle·IFR 파사드)는
 > [`PLAN-SERVICES.md`](PLAN-SERVICES.md)에 서비스 스위트로 계획되어 있다 (2026-08-14).
+> 그 스위트가 의도적으로 제외한 것(Notification·OTS·Time·PSS·동시성 제어·
+> Collections·연합·CSIv2 너머의 보안 서비스)은 유예 해제 방아쇠와 함께
+> [`PLAN-DEFERRED.md`](PLAN-DEFERRED.md)에 스케치되어 있다 (2026-08-13).
 
 각 스트림은 **무엇을**(v0.5에서 범위 불변), **의존성**(명시 없으면 오늘 충족),
 **일괄 단위**(루프 1회가 만드는 것), **오라클**(배치 전체를 결정론적으로 검증하는
