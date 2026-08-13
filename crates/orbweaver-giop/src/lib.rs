@@ -31,6 +31,7 @@
 
 pub mod codeset;
 pub mod csiv2;
+pub mod event_server;
 pub mod naming;
 pub mod naming_server;
 pub mod server;
