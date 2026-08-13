@@ -36,6 +36,9 @@ pub const BAD_OPERATION: &str = "IDL:omg.org/CORBA/BAD_OPERATION:1.0";
 pub const MARSHAL: &str = "IDL:omg.org/CORBA/MARSHAL:1.0";
 /// Repository ID for an object key we do not recognise.
 pub const OBJECT_NOT_EXIST: &str = "IDL:omg.org/CORBA/OBJECT_NOT_EXIST:1.0";
+/// Repository ID for a failure with no more precise description — including a
+/// user exception reaching a caller that cannot carry one.
+pub const UNKNOWN: &str = "IDL:omg.org/CORBA/UNKNOWN:1.0";
 
 /// Whether an operation had run when it failed (§9.4.3.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +77,14 @@ impl SystemException {
     /// An `OBJECT_NOT_EXIST` for an unrecognised object key.
     pub fn object_not_exist() -> Self {
         Self { id: OBJECT_NOT_EXIST.into(), minor: 0, completed: Completion::No }
+    }
+
+    /// The standard mapping for a user exception that reached a caller unable
+    /// to carry one: `UNKNOWN` with the OMG minor for "unlisted user
+    /// exception" (OMGVMCID | 1). The operation did run — it raised — so
+    /// completion is `Yes`.
+    pub fn unknown_user_exception() -> Self {
+        Self { id: UNKNOWN.into(), minor: 0x4f4d_0001, completed: Completion::Yes }
     }
 }
 
@@ -371,6 +382,19 @@ pub fn encode_close_connection(version: Version, endian: Endian) -> Result<Vec<u
     e.finish().map_err(Error::Cdr)
 }
 
+/// What the bytes a dispatch wrote into `out` are, which decides the reply
+/// status they travel under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchBody {
+    /// A result; the reply goes out `NO_EXCEPTION`.
+    Return,
+    /// A user exception — repository id first, then the members — going out
+    /// `USER_EXCEPTION` (§9.4.3.1). The body shape is exactly what the client
+    /// side hands back through [`crate::Error::UserException`], whose
+    /// `reply.body()` starts at that repository id.
+    UserException,
+}
+
 /// What a servant does with an invocation.
 pub trait Dispatch {
     /// Handles `request`, writing the reply body into `out`.
@@ -383,6 +407,21 @@ pub trait Dispatch {
         request: &Request,
         out: &mut Encoder,
     ) -> std::result::Result<(), SystemException>;
+
+    /// As [`Dispatch::dispatch`], but able to label what it wrote a user
+    /// exception. This is the method [`Server`] actually calls; the default
+    /// delegates to `dispatch`, so a servant with no user exceptions
+    /// implements only that and nothing changes for it.
+    ///
+    /// An override must not write into `out` before it knows which label the
+    /// bytes get — the whole buffer travels under a single reply status.
+    fn dispatch_body(
+        &mut self,
+        request: &Request,
+        out: &mut Encoder,
+    ) -> std::result::Result<DispatchBody, SystemException> {
+        self.dispatch(request, out).map(|()| DispatchBody::Return)
+    }
 
     /// Whether this servant answers to `object_key`. Defaults to accepting
     /// everything, which is right for a single-servant process.
@@ -620,19 +659,21 @@ impl Server {
             reply_header_len
         };
         let mut out = Encoder::continuing_at(req.endian, body_start);
-        match d.dispatch(req, &mut out) {
-            Ok(()) => {
+        match d.dispatch_body(req, &mut out) {
+            Ok(kind) => {
                 if !req.expect_reply {
-                    return Ok(None); // oneway: no reply at all
+                    // A oneway can carry neither a result nor a raised user
+                    // exception; dropping both is what the spec requires.
+                    return Ok(None);
                 }
+                let status = match kind {
+                    DispatchBody::Return => ReplyStatus::NoException,
+                    DispatchBody::UserException => ReplyStatus::UserException,
+                };
                 let body = out.finish().map_err(Error::Cdr)?;
-                Ok(Some(encode_reply(
-                    req.version,
-                    req.endian,
-                    req.request_id,
-                    ReplyStatus::NoException,
-                    |e| e.put_bytes(&body),
-                )?))
+                Ok(Some(encode_reply(req.version, req.endian, req.request_id, status, |e| {
+                    e.put_bytes(&body)
+                })?))
             }
             Err(ex) => self.reply_exception(req, &ex),
         }
