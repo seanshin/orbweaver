@@ -24,11 +24,23 @@ use orbweaver_giop::{Connection, Error, Ior};
 /// listener yields a port the OS just proved free — the refusal is then
 /// attributable to nothing listening, not to a guess about the environment.
 fn provably_dead_port() -> Result<u16, String> {
-    let listener =
-        std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|e| format!("bind: {e}"))?;
-    let port = listener.local_addr().map_err(|e| format!("local_addr: {e}"))?.port();
-    drop(listener);
-    Ok(port)
+    // NOT an ephemeral port. The first version bound port 0, took what the OS
+    // gave and dropped it — and CI refuted that too: when the destination port
+    // lies inside the kernel's ephemeral range and is free, `connect()` can
+    // pick the same number as its *source* port and succeed against itself
+    // (TCP simultaneous open; observed on the Linux runner as "a provably-free
+    // port answered"). A port below the ephemeral floor (32768 on Linux,
+    // 49152 on macOS) can never equal the kernel-chosen source port, so a
+    // refusal there is attributable to nothing listening — the property this
+    // function exists to provide. The bind proves the port is free; the low
+    // number proves the connect cannot be to ourselves.
+    for port in 2048..5000u16 {
+        if let Ok(listener) = std::net::TcpListener::bind(("127.0.0.1", port)) {
+            drop(listener);
+            return Ok(port);
+        }
+    }
+    Err("no free low port on loopback".into())
 }
 
 const OK: &str = "ok  ";
