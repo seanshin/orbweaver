@@ -188,3 +188,34 @@ Verified at gate level with fakes (the Recorder pattern from guard.rs). The
 live half of I4 — running a recommended promotion's static stub and dynamic
 path against a real peer and feeding both audits through this gate — belongs
 to the gen-corpus oracle and is not yet wired; the module says so.
+
+---
+
+# Batch 4: I4's live half — the gate meets a real peer
+
+```
+── promotion respects identity (I4) ──
+  ok   I4: a live promotion passes the gate when identity is preserved
+  ok   I4: the gate refuses a promotion that lost the caller, results identical
+  ok   I4: after 3 recorded live calls the policy recommends (IDL:spike/Echo:1.0, add)
+```
+
+The same `add(40, 2)` runs down both paths against a live omniORB: the dynamic
+invoker's real `Outcome`, and the generated stub through
+`Bridge::connect_static` on behalf of alice, its audit line **captured** from
+the real `Guarded`. Both feed `promote::verify_promotion`.
+
+The negative control is what makes it a check rather than a demonstration: the
+same static call rebuilt without a caller still receives 42 from the peer —
+the wire is happy — and the gate refuses with `IdentityDropped`. An identical
+answer with a missing caller is precisely what the gate exists to make
+unshippable.
+
+One seam stays named: the dynamic bridge path emits no audit lines yet, so its
+line is *reconstructed* from `Bridge::caller` session state in the guard's
+exact format. Capture replaces reconstruction when Bridge emits real lines —
+which is a running batch as this is written. PLAN §7.4 I4: ●.
+
+음성 대조군이 시연을 검사로 만든다: 호출자 없이 재구성한 같은 호출이 피어에게서
+똑같이 42를 받는데도 게이트가 `IdentityDropped`로 거부한다. 답이 같고 호출자만
+사라진 승격이야말로 게이트가 출하 불가능하게 만들어야 하는 것이다.
