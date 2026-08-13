@@ -22,5 +22,9 @@ orbweaver-idl = { path = "../orbweaver-idl" }
 name = "spike-server"
 path = "src/bin/spike_server.rs"
 
+[[bin]]
+name = "spike-experts"
+path = "src/bin/spike_experts.rs"
+
 [lints]
 workspace = true

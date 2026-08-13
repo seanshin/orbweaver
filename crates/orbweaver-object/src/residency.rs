@@ -283,6 +283,27 @@ impl ExpertLoader {
         Ok(())
     }
 
+    /// Forgets `id` entirely, returning the residency it was last in — the
+    /// deregistration side of [`register`](ExpertLoader::register), which the
+    /// IDL `ExpertRegistry::deregister` needs so a deregistered expert does
+    /// not keep answering `status`.
+    ///
+    /// Unconditional, and the return value is why: a RESIDENT or ACTIVE
+    /// expert being forgotten means accelerator memory was still held, and
+    /// the caller has to know that. Refusing instead would be worse — the
+    /// eviction that would make it OFFLOADED is guarded on memory pressure,
+    /// so an expert could become undeletable simply because the machine was
+    /// not under load. Deciding whether to wait for an inflight call is the
+    /// caller's (see `ExpertService::deregister`), not this method's.
+    ///
+    /// One thing it does not do: a forgotten id disappears from the residency
+    /// map, so [`reconcile`](ExpertLoader::reconcile) will never deactivate it
+    /// again. Callers pairing the two must reconcile *before* forgetting, or
+    /// deactivate the id themselves.
+    pub fn forget(&mut self, id: &str) -> Option<Residency> {
+        self.experts.remove(id).map(|e| e.state)
+    }
+
     /// Where `id`'s weights are, or `None` if it is not registered — the IDL
     /// `ExpertLoader::status`, with the unregistered case honest instead of
     /// answering OFFLOADED for an expert nobody has ever heard of.
@@ -744,6 +765,24 @@ mod tests {
         assert!(!l.is_pinned("expert-ghost"));
         assert!(!l.unpin("expert-ghost"));
         assert_eq!(l.inflight("expert-ghost"), 0);
+    }
+
+    /// `forget` is the inverse of `register`: the id is gone from every
+    /// answer, and it reports the state the weights were in so a caller can
+    /// see that memory was still held.
+    #[test]
+    fn forgetting_an_expert_removes_it_and_reports_what_it_was() {
+        let mut l = parked(Residency::Resident);
+        assert!(l.pin("expert-a"));
+        assert_eq!(l.forget("expert-a"), Some(Residency::Resident), "memory was still held");
+        assert_eq!(l.status("expert-a"), None);
+        assert_eq!(l.lifespan("expert-a"), None);
+        assert!(!l.is_pinned("expert-a"), "the pin went with it");
+        assert!(l.states().is_empty());
+        assert_eq!(l.forget("expert-a"), None, "a second forget reports absence");
+        // …and the id is registrable again, from the start of the cycle.
+        l.register("expert-a", Lifespan::Transient).expect("registers");
+        assert_eq!(l.status("expert-a"), Some(Residency::Offloaded));
     }
 
     #[test]

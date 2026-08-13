@@ -948,6 +948,22 @@ fi
 pkill -f "spike-names" >/dev/null 2>&1 || true
 [ "$ns_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
+# ── The MoE control plane, one turn on the wire ─────────────────────────────
+hr "expert service — registry, policy and residency through GIOP"
+# F1+F2+F3 joined: register and heartbeat over the wire, run the loading
+# policy over the offers it produced, and drive the residency machine with the
+# decisions. Measured because the interesting failures are between the parts —
+# an offer store that lags the state machine returns an empty decision list
+# under memory pressure and nothing fails.
+ex=$(cargo run -q --bin spike-experts 2>&1)
+if printf '%s' "$ex" | grep -q "expert-service: PASS"; then
+  echo "  ok   register/heartbeat/oneway prefetch/guarded evict/policy, one control loop"
+else
+  echo "  FAIL expert service"
+  printf '%s' "$ex" | grep -i "FAIL" | head -3 | sed 's/^/       /'
+  fail_total=$((fail_total+1))
+fi
+
 # ── IFR facade: the registry served as CORBA::Repository ────────────────────
 hr "interface repository — our registry read by omniORB's own IR client"
 # The claim worth measuring is not that our client agrees with our server; it

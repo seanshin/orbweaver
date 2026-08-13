@@ -49,27 +49,69 @@ Not doing (until a consumer appears): real `BindingIterator` lifecycles,
 `bind_context`/`destroy` (refused loudly), federation across naming domains
 (F5's tenancy work will name the requirement if it materializes).
 
-## 3. CosTrading / 트레이딩 — ◐ decision engine landed, wire deferred
+## 3. CosTrading / 트레이딩 — ✅ engine and project-contract wire both landed
 
 | | |
 |---|---|
 | Standard | `CosTrading` (Lookup, Register, Admin, Link, Proxy) |
 | Consumer | stream F loading/placement (PLAN-MOE §6), later the catalog |
-| Today (F2, 2026-08-14) | `orbweaver-trading`: offers, constraint-query subset, loading policy, deterministic trace replay — 37 tests |
+| Engine (F2, 2026-08-14) | `orbweaver-trading`: offers, constraint-query subset, loading policy, deterministic trace replay — 37 tests |
+| Wire (2026-08-15) | `orbweaver-object::expert_service`: `moe::ExpertRegistry` + `moe::ExpertLoader` from `corpus/golden/22`, on our POA-side `Server` — 17 tests plus `spike-experts` |
 
 **The honest choice about the standard module:** OMG CosTrading is enormous
 (five interfaces, federated links, proxy offers, dynamic properties). Nothing
 in stream F consumes more than property-constrained lookup over registered
 offers, which the engine already does with S4-style positioned query errors.
-The **wire surface lands after F3** as the *project* contract
+The wire surface therefore landed as the *project* contract
 (`moe::ExpertRegistry` from `corpus/golden/22`), served on our POA like F6;
-the standard `CosTrading::Lookup::query` facade is deferred until a foreign
-trading client is named — the IFR-facade rule (§7) applied to Trading.
-Deferral is recorded here so it is a decision, not a drift.
+the standard `CosTrading::Lookup::query` facade is still deferred until a
+foreign trading client is named — the IFR-facade rule (§7) applied to
+Trading. Deferral is recorded here so it is a decision, not a drift.
+
+What the servant is, precisely: **one servant, two objects.** Registering an
+expert has to create it in the offer store *and* in F3's residency machine,
+and nothing could keep two servants' halves in step; but the contract declares
+two interfaces and a client narrows to one, so they stay distinct object keys
+with distinct repository ids. The join is `apply_policy(free_memory)` — a
+heartbeat updates the offer, the §6 policy decides over the store, and its
+`Decision`s drive the loader — and that is the whole reason the batch was
+worth doing as one piece.
+
+Two consequences worth stating rather than discovering later. **No operation
+declares `raises`**, so every refusal is a system exception chosen to be
+actionable (`BAD_PARAM` unknown, `BAD_INV_ORDER` no such edge, `NO_PERMISSION`
+pinned, `TRANSIENT` the window may differ); inventing a user exception would
+emit bytes the generated client has no branch for. And **`moe::Capability`
+carries no `specialization` and no `latency_p50`**, so a constraint query on
+either cannot be satisfied by an offer that arrived over this contract — a
+contract gap for F1, not a default to guess at here.
+
+Not measured, and not claimed: only our own client has called this. No foreign
+MoE peer exists, so unlike §2 there is no "their client, our server" direction
+to report.
 
 표준 CosTrading 모듈 전체는 소비자가 없다 — 스트림 F가 쓰는 것은 속성 제약
-조회뿐이며 그것은 착지되었다. 와이어 표면은 F3 이후 프로젝트 계약으로, 표준
-파사드는 외부 트레이딩 클라이언트가 명명될 때. 유예는 표류가 아니라 결정이다.
+조회뿐이며 그것은 착지되었다. 와이어 표면은 프로젝트 계약(`corpus/golden/22`의
+`moe::ExpertRegistry`/`ExpertLoader`)으로 착지했고, 표준 파사드는 외부 트레이딩
+클라이언트가 명명될 때까지 계속 유예된다. 유예는 표류가 아니라 결정이다.
+
+서번트의 정체: **서번트 하나, 오브젝트 둘.** 등록은 오퍼 스토어와 F3 상주
+머신 양쪽을 동시에 만들어야 하므로 소유자가 하나여야 하지만, 계약이 인터페이스
+두 개를 선언하므로 오브젝트 키와 리포지터리 ID는 분리된다. 접점은
+`apply_policy(free_memory)` — 하트비트가 오퍼를 갱신하고, §6 정책이 스토어
+위에서 결정하고, 그 `Decision`이 로더를 구동한다. 이것이 이 배치를 한 덩어리로
+묶은 이유다.
+
+기록해 둘 두 가지. **어떤 연산도 `raises`를 선언하지 않으므로** 모든 거부는
+시스템 예외이며, 행동 가능하도록 골랐다(`BAD_PARAM` 미등록, `BAD_INV_ORDER`
+없는 간선, `NO_PERMISSION` 핀, `TRANSIENT` 다음 윈도우 재시도). 사용자 예외를
+발명하면 생성된 클라이언트가 해석할 분기가 없는 바이트가 나간다. 그리고
+**`moe::Capability`에는 `specialization`도 `latency_p50`도 없다** — 이 계약으로
+들어온 오퍼는 그 속성 제약 조회를 만족시킬 수 없으며, 이는 여기서 기본값으로
+때울 문제가 아니라 F1의 계약 문제다.
+
+측정되지 않았고 주장하지도 않는 것: 우리 클라이언트만 호출했다. 외부 MoE 피어가
+없으므로 §2와 달리 "그들의 클라이언트, 우리의 서버" 방향은 보고할 것이 없다.
 
 ## 4. CosEvent / 이벤트 — ❌ → F7, oracle design settled by measurement
 
