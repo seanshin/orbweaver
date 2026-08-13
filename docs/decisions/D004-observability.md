@@ -1,13 +1,39 @@
 # D004 — Observability: tracing and OTLP, which dependency, if any
 
-**STATUS: PROPOSED** — written 2026-08-13. Nothing is adopted before a human
-approves. `PLAN.md` §6 names **OpenTelemetry via interceptors**, and
-`docs/COMPONENTS.md` records two rows waiting on this document: *Observability
-(OpenTelemetry)* — ❌, "interceptor seam unbuilt; needs D004" — and
-`orbweaver-console` — ❌, "after OTel decision".
-**상태: 제안** — 2026-08-13 작성. 사람이 승인하기 전에는 아무것도 채택되지 않는다.
-`PLAN.md` §6이 "인터셉터 경유 OpenTelemetry"를 지명하며, `COMPONENTS.md`의 두 행
-(관측, `orbweaver-console`)이 이 문서에 막혀 있다.
+**STATUS: APPROVED** — proposed 2026-08-13, approved 2026-08-14 by the user
+("승인, 진행"). Policy is now the three tiers below: **tier 1 is adopted**
+(a first-party span record on F4's telemetry stage behind `TelemetrySink`,
+JSON lines, no Cargo dependency — `cargo tree` stays at two external crates),
+and tiers 2 and 3 are **pre-cleared with named triggers, not adopted**. The
+two `COMPONENTS.md` rows this document blocked — *Observability* and
+`orbweaver-console` — are unblocked by tier 1 alone.
+**상태: 승인됨** — 2026-08-13 제안, 2026-08-14 승인. 1단계(의존성 0, 1st-party
+스팬 레코드)를 채택하고, 2·3단계는 트리거와 함께 사전 승인만 해둔다. 이 문서에
+막혀 있던 두 행(관측, 콘솔)은 1단계만으로 풀린다.
+
+### The record shape, fixed here so two batches can agree / 레코드 형태
+
+One JSON object per line, written in `orbweaver_dynamic::json`'s writer, keys
+in this order. Fixed in the decision rather than in whichever crate lands
+first, because the emitter and the console are separate batches and a format
+settled by whoever committed earliest is a format nobody agreed to.
+
+| key | meaning |
+|---|---|
+| `ts` | RFC 3339 UTC, from the caller — **there is no clock in the interceptor chain** and this decision does not add one; the sink takes the time it is given, which keeps trace replay deterministic (`PLAN-DEFERRED.md` §3) |
+| `session` | the MCP session id, so lines join to the audit ledger |
+| `caller` | principal or `-`; **never a credential**, structurally, per `identity::audit_line`'s discipline |
+| `target` | repository id |
+| `operation` | operation name |
+| `decision` | `allow` \| `refuse` \| `dryrun-allow` \| `dryrun-refuse` — the same vocabulary the audit line uses, so the two cannot disagree about what happened |
+| `stage` | the interceptor stage that refused, or `-` |
+| `path` | `static` \| `dynamic`, which is what the promotion policy reasons about |
+| `outcome` | `ok`, or the system-exception repository id |
+
+No duration field. Adding one needs a clock, the residency machine's
+no-clock discipline is what makes replay deterministic, and a duration
+nobody can reproduce is worse than an absent one. When a batch needs timing
+it takes the clock as an argument and says so.
 
 **Verified 2026-08-13** against shipped artifacts where feasible: crate
 tarballs from `static.crates.io` (tracing 0.1.44, tracing-core 0.1.36,
