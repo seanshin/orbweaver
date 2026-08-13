@@ -36,6 +36,12 @@ omniORB.log
 !.env.example
 *.pem
 *.key
+# Test-only, self-originated TLS fixtures (see spikes/tls/README.md): these
+# are not secrets — the CA key is deleted at generation and nothing trusts
+# them outside our own tests — and the blanket *.pem rule above silently
+# swallowed them out of a landed batch once already.
+!spikes/tls/*.pem
+!spikes/tls/*.key
 
 # Editors / OS
 .DS_Store
