@@ -593,6 +593,10 @@ Phase 6 (productionization), and the model-in-the-loop stages S1–S3.
 > in [`PLAN-MOE.md`](PLAN-MOE.md), reviewed and adopted 2026-08-14.
 > The core CORBA services (Naming, Event, Trading, LifeCycle, IFR facade) are
 > planned as a suite in [`PLAN-SERVICES.md`](PLAN-SERVICES.md) (2026-08-14).
+> What that suite deliberately excludes (Notification, OTS, Time, PSS,
+> Concurrency, Collections, federation, the Security Service beyond CSIv2) is
+> sketched with its un-defer trigger in
+> [`PLAN-DEFERRED.md`](PLAN-DEFERRED.md) (2026-08-13).
 
 Every stream lists: **what** (unchanged scope from v0.5), **depends on**
 (all satisfied today unless named), **batch unit** (what one loop iteration

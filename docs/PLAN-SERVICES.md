@@ -130,7 +130,12 @@ loudly — the registry is populated from IDL through S4, never over the wire.
 
 ## 8. Exclusions, with reasons / 명시적 제외
 
-Absorbed from PLAN-MOE §4 and extended:
+Absorbed from PLAN-MOE §4 and extended. Each row is sketched — what it is, the
+concrete trigger that would un-defer it, and the v1 we would build — in
+[`PLAN-DEFERRED.md`](PLAN-DEFERRED.md) (2026-08-13), so "excluded" means
+"designed enough to resume" rather than "forgotten".
+아래 각 행은 [`PLAN-DEFERRED.md`](PLAN-DEFERRED.md)에 방아쇠와 v1 스케치까지
+펼쳐져 있다 — 제외가 "잊음"이 아니라 "재개 가능"을 뜻하도록.
 
 | Service | Why not |
 |---|---|
