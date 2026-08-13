@@ -70,10 +70,29 @@ pub(crate) fn ident(name: &str) -> String {
     }
 }
 
-/// `IDL:a/b/C:1.0` → `["a", "b", "C"]`.
+/// The scope path for a repository id, as Rust module segments.
 ///
-/// The inversion of `repository_id()`, faithful because `#pragma prefix` is not
-/// yet honoured anywhere in this project — stated in the registry's own docs.
+/// **Not** the inversion of `repository_id()`, and it used to be. Under a
+/// `#pragma prefix` the leading segments of an id are *identity*, not scope: an
+/// id does not say how many of them are prefix, so splitting on `/` invents a
+/// module. `IDL:acme.com/p01/Account:1.0` inverted naively emits
+/// `pub mod acme.com`, which is not valid Rust — measured, not supposed.
+///
+/// So the answer comes from the registry, which recorded the qualified name
+/// when it loaded the IDL, and the split is only the fallback for an id that
+/// was never loaded from IDL at all — an ingested one, where the id genuinely
+/// is all anybody knows. `names` is that table.
+pub(crate) fn path_of_with(names: &NameTable, id: &str) -> Vec<String> {
+    if let Some(qualified) = names.get(id) {
+        return qualified.split("::").map(str::to_owned).collect();
+    }
+    path_of(id)
+}
+
+/// The fallback split, for ids with no recorded name.
+///
+/// Correct exactly when the id carries no prefix, which is why every caller
+/// that can reach a registry goes through [`path_of_with`] instead.
 pub(crate) fn path_of(id: &str) -> Vec<String> {
     id.trim_start_matches("IDL:")
         .rsplit_once(':')
@@ -83,13 +102,46 @@ pub(crate) fn path_of(id: &str) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn rust_path(id: &str, root: &str) -> String {
-    let segs: Vec<String> = path_of(id).iter().map(|s| ident(s)).collect();
+/// Repository id → qualified IDL name, taken from the registry at emit time.
+///
+/// Threaded rather than looked up on demand because `rust_type` runs deep in
+/// type emission where no registry is in scope, and a *partly* prefix-aware
+/// generator is worse than one that is not: the module would be named from the
+/// qualified name and the cross-references from the id, so the two would
+/// disagree and nothing would compile.
+pub(crate) type NameTable = std::collections::BTreeMap<String, String>;
+
+/// Builds the table from everything the registry has a recorded name for.
+/// What every emission function needs and neither half can derive alone: the
+/// crate root the generated paths hang from, and the qualified names only the
+/// registry knows.
+pub(crate) struct Cx<'a> {
+    pub root: &'a str,
+    pub names: NameTable,
+}
+
+impl Cx<'_> {
+    /// The scope path for an id, registry-recorded where possible.
+    pub fn path_of(&self, id: &str) -> Vec<String> {
+        path_of_with(&self.names, id)
+    }
+}
+
+pub(crate) fn name_table(registry: &Registry) -> NameTable {
+    registry
+        .ids()
+        .filter_map(|id| registry.qualified_name(id).map(|q| (id.clone(), q.to_owned())))
+        .collect()
+}
+
+pub(crate) fn rust_path(id: &str, cx: &Cx<'_>) -> String {
+    let segs: Vec<String> = cx.path_of(id).iter().map(|s| ident(s)).collect();
+    let root = cx.root;
     format!("crate::{root}::{}", segs.join("::"))
 }
 
 /// The Rust type for a `TypeCode`, or the reason there is none.
-pub(crate) fn rust_type(tc: &TypeCode, root: &str) -> Result<String, String> {
+pub(crate) fn rust_type(tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
     Ok(match tc {
         TypeCode::Boolean => "bool".into(),
         TypeCode::Octet | TypeCode::Char => "u8".into(),
@@ -108,16 +160,16 @@ pub(crate) fn rust_type(tc: &TypeCode, root: &str) -> Result<String, String> {
         TypeCode::Any => "orbweaver_gen::rt::AnyVal".into(),
         TypeCode::Void | TypeCode::Null => "()".into(),
         TypeCode::ObjRef { .. } => "orbweaver_gen::rt::ObjRef".into(),
-        TypeCode::Sequence { element, .. } => format!("Vec<{}>", rust_type(element, root)?),
+        TypeCode::Sequence { element, .. } => format!("Vec<{}>", rust_type(element, cx)?),
         TypeCode::Array { element, length } => {
-            format!("[{}; {length}]", rust_type(element, root)?)
+            format!("[{}; {length}]", rust_type(element, cx)?)
         }
         TypeCode::Struct { id, .. }
         | TypeCode::Union { id, .. }
         | TypeCode::Enum { id, .. }
         | TypeCode::Except { id, .. }
-        | TypeCode::Alias { id, .. } => rust_path(id, root),
-        TypeCode::Recursive(id) => rust_path(id, root),
+        | TypeCode::Alias { id, .. } => rust_path(id, cx),
+        TypeCode::Recursive(id) => rust_path(id, cx),
         TypeCode::Fixed { digits, scale } => {
             return Err(format!("fixed<{digits},{scale}> is deferred at wire level (§4.4)"));
         }
@@ -205,23 +257,23 @@ pub(crate) struct OpShape {
     pub rets: Vec<String>,
 }
 
-pub(crate) fn op_shape(sig: &OperationSig, root: &str) -> Result<OpShape, String> {
+pub(crate) fn op_shape(sig: &OperationSig, cx: &Cx<'_>) -> Result<OpShape, String> {
     let mut args = String::new();
     let mut ins = Vec::new();
     for p in &sig.params {
         if matches!(p.direction, ParamDirection::In | ParamDirection::InOut) {
-            let ty = rust_type(&p.tc, root)?;
+            let ty = rust_type(&p.tc, cx)?;
             let _ = write!(args, ", {}: {ty}", ident(&p.name));
             ins.push((ident(&p.name), ty));
         }
     }
     let mut rets: Vec<String> = Vec::new();
     if !matches!(sig.returns, TypeCode::Void) {
-        rets.push(rust_type(&sig.returns, root)?);
+        rets.push(rust_type(&sig.returns, cx)?);
     }
     for p in &sig.params {
         if matches!(p.direction, ParamDirection::Out | ParamDirection::InOut) {
-            rets.push(rust_type(&p.tc, root)?);
+            rets.push(rust_type(&p.tc, cx)?);
         }
     }
     let ret_ty = match rets.len() {
@@ -412,6 +464,9 @@ fn interface_representable(registry: &Registry, id: &str) -> Result<(), String> 
 
 /// Generates one loaded registry as a Rust module body.
 pub fn emit(registry: &Registry, root: &str) -> Generated {
+    // The context is built here, once, because this is the only place that has
+    // both halves: the caller's chosen root and the registry's recorded names.
+    let cx = &Cx { root, names: name_table(registry) };
     let mut out = Generated::default();
 
     // Group items under their module path.
@@ -421,17 +476,17 @@ pub fn emit(registry: &Registry, root: &str) -> Generated {
     };
 
     for id in registry.ids() {
-        let path = path_of(id);
+        let path = cx.path_of(id);
         let (module, _name) = path.split_at(path.len() - 1);
         let code = match registry.get(id) {
             Some(Entry::Type(tc)) => {
-                representable(tc, &mut Vec::new()).and_then(|()| emit_type(id, tc, root))
+                representable(tc, &mut Vec::new()).and_then(|()| emit_type(id, tc, cx))
             }
             // One contract, both halves: the caller's stub and the servant's
             // skeleton are emitted together, from the same resolved members.
             Some(Entry::Interface(_)) => interface_representable(registry, id).and_then(|()| {
-                let stub = emit_interface(registry, id, root)?;
-                let skel = skeleton::emit_skeleton(registry, id, root)?;
+                let stub = emit_interface(registry, id, cx)?;
+                let skel = skeleton::emit_skeleton(registry, id, cx)?;
                 Ok(format!("{stub}\n{skel}"))
             }),
             Some(Entry::Const { .. }) => {
@@ -518,7 +573,7 @@ fn write_modules(
     }
 }
 
-fn emit_type(id: &str, tc: &TypeCode, root: &str) -> Result<String, String> {
+fn emit_type(id: &str, tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
     match tc {
         TypeCode::Struct { name, members, .. } | TypeCode::Except { name, members, .. } => {
             let mut s = String::new();
@@ -528,7 +583,7 @@ fn emit_type(id: &str, tc: &TypeCode, root: &str) -> Result<String, String> {
             let _ = writeln!(s, "pub struct {} {{", ident(name));
             for (i, m) in members.iter().enumerate() {
                 let _ = writeln!(s, "    /// IDL member `{}`, marshalled {}.", m.name, nth(i));
-                let _ = writeln!(s, "    pub {}: {},", ident(&m.name), rust_type(&m.tc, root)?);
+                let _ = writeln!(s, "    pub {}: {},", ident(&m.name), rust_type(&m.tc, cx)?);
             }
             let _ = writeln!(s, "}}");
             let (ep, dp) = if members.is_empty() { ("_e", "_d") } else { ("e", "d") };
@@ -592,12 +647,12 @@ fn emit_type(id: &str, tc: &TypeCode, root: &str) -> Result<String, String> {
             Ok(s)
         }
         TypeCode::Union { name, discriminator, cases, default_index, .. } => {
-            emit_union(id, name, discriminator, cases, *default_index, root)
+            emit_union(id, name, discriminator, cases, *default_index, cx)
         }
         TypeCode::Alias { name, aliased, .. } => Ok(format!(
             "/// IDL typedef `{id}`.\npub type {} = {};",
             ident(name),
-            rust_type(aliased, root)?
+            rust_type(aliased, cx)?
         )),
         // A bare ObjRef entry is a forward-declared interface that was never
         // given a body in this file; the type alias keeps references to it
@@ -606,7 +661,7 @@ fn emit_type(id: &str, tc: &TypeCode, root: &str) -> Result<String, String> {
             "/// IDL interface `{id}` (reference type).\npub type {}Ref = rt::ObjRef;",
             ident(name)
         )),
-        other => Err(match rust_type(other, root) {
+        other => Err(match rust_type(other, cx) {
             Err(why) => why,
             Ok(_) => format!("unexpected top-level type {other:?}"),
         }),
@@ -627,7 +682,7 @@ fn emit_union(
     disc_tc: &TypeCode,
     cases: &[UnionCase],
     default_index: i32,
-    root: &str,
+    cx: &Cx<'_>,
 ) -> Result<String, String> {
     let disc = disc_of(disc_tc)?;
 
@@ -659,7 +714,7 @@ fn emit_union(
     let _ = writeln!(s, "#[derive(Debug, Clone, PartialEq)]");
     let _ = writeln!(s, "pub enum {} {{", ident(name));
     for b in &branches {
-        let ty = rust_type(b.tc, root)?;
+        let ty = rust_type(b.tc, cx)?;
         if b.is_default {
             let _ = writeln!(
                 s,
@@ -752,11 +807,11 @@ fn emit_union(
     Ok(s)
 }
 
-fn emit_interface(registry: &Registry, id: &str, root: &str) -> Result<String, String> {
+fn emit_interface(registry: &Registry, id: &str, cx: &Cx<'_>) -> Result<String, String> {
     if registry.interface(id).is_none() {
         return Err("not an interface".to_owned());
     }
-    let name = path_of(id).last().cloned().unwrap_or_default();
+    let name = cx.path_of(id).last().cloned().unwrap_or_default();
 
     let mut s = String::new();
     if let Some(desc) = registry.annotations(id).and_then(|a| a.get("ai_desc")) {
@@ -784,13 +839,13 @@ fn emit_interface(registry: &Registry, id: &str, root: &str) -> Result<String, S
     // than the dynamic invoker would fail the oracle before it failed a user.
     let (ops, attrs) = resolved_members(registry, id);
     for (op_name, sig) in &ops {
-        emit_operation(&mut s, op_name, op_name, sig, root)?;
+        emit_operation(&mut s, op_name, op_name, sig, cx)?;
     }
     for (attr, a) in &attrs {
-        emit_operation(&mut s, &format!("_get_{attr}"), attr, &getter_sig(a), root)?;
+        emit_operation(&mut s, &format!("_get_{attr}"), attr, &getter_sig(a), cx)?;
         if !a.readonly {
             let setter = setter_sig(a);
-            emit_operation(&mut s, &format!("_set_{attr}"), &format!("set_{attr}"), &setter, root)?;
+            emit_operation(&mut s, &format!("_set_{attr}"), &format!("set_{attr}"), &setter, cx)?;
         }
     }
     let _ = writeln!(s, "}}");
@@ -802,11 +857,11 @@ fn emit_operation(
     wire_name: &str,
     rust_name: &str,
     sig: &OperationSig,
-    root: &str,
+    cx: &Cx<'_>,
 ) -> Result<(), String> {
     // One shape, read by both halves: the parameters here are exactly the
     // parameters the servant trait receives.
-    let shape = op_shape(sig, root)?;
+    let shape = op_shape(sig, cx)?;
     let (params, ins, ret_ty) = (&shape.args, &shape.ins, &shape.ret_ty);
 
     let mut docs = String::new();
@@ -873,6 +928,28 @@ fn emit_operation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A prefixed id must not become a module path. `#pragma prefix` puts
+    /// identity in the leading segments, and inverting the id emitted
+    /// `pub mod acme.com`, which is not valid Rust — measured with gen-corpus
+    /// before this was fixed, not supposed.
+    ///
+    /// The wire string must keep the full id, because that is what the peer
+    /// says; only the Rust scope comes from the qualified name.
+    #[test]
+    fn a_prefixed_id_names_a_module_by_its_scope_not_by_its_identity() {
+        let out = generate(
+            "#pragma prefix \"acme.com\"\nmodule p01 { interface Account { long balance(); }; };",
+        );
+        let code = out.source;
+        assert!(code.contains("pub mod p01"), "{code}");
+        assert!(!code.contains("acme.com {"), "a prefix segment became a module: {code}");
+        assert!(!code.contains("mod acme"), "a prefix segment became a module: {code}");
+        assert!(
+            code.contains("IDL:acme.com/p01/Account:1.0"),
+            "the wire id lost its prefix: {code}"
+        );
+    }
 
     fn generate(src: &str) -> Generated {
         let spec = orbweaver_idl::parse(src).expect("parses");

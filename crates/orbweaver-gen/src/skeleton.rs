@@ -69,7 +69,7 @@ use std::fmt::Write as _;
 use orbweaver_registry::{OperationSig, Registry};
 
 use crate::{
-    doc, getter_sig, ident, op_doc, op_shape, path_of, resolved_members, rust_path, setter_sig,
+    Cx, doc, getter_sig, ident, op_doc, op_shape, resolved_members, rust_path, setter_sig,
 };
 
 /// One exception an interface can raise, as the generated enum sees it.
@@ -84,7 +84,7 @@ struct Raise {
 
 /// Every exception reachable through a `raises` clause of this interface or a
 /// base of it, de-duplicated and given non-clashing variant names.
-fn raises_of(registry: &Registry, ops: &BTreeMap<String, OperationSig>, root: &str) -> Vec<Raise> {
+fn raises_of(registry: &Registry, ops: &BTreeMap<String, OperationSig>, cx: &Cx<'_>) -> Vec<Raise> {
     let mut ids: Vec<String> = Vec::new();
     for sig in ops.values() {
         for ex in &sig.raises {
@@ -99,34 +99,34 @@ fn raises_of(registry: &Registry, ops: &BTreeMap<String, OperationSig>, root: &s
     // for it, so the common case still reads as the IDL does.
     let mut short: BTreeMap<String, usize> = BTreeMap::new();
     for id in &ids {
-        let last = path_of(id).last().cloned().unwrap_or_default();
+        let last = cx.path_of(id).last().cloned().unwrap_or_default();
         *short.entry(last).or_insert(0) += 1;
     }
     ids.iter()
         .map(|id| {
-            let path = path_of(id);
+            let path = cx.path_of(id);
             let last = path.last().cloned().unwrap_or_default();
             let variant =
                 if short.get(&last).copied().unwrap_or(0) > 1 { path.join("_") } else { last };
-            Raise { id: id.clone(), variant: ident(&variant), ty: rust_path(id, root) }
+            Raise { id: id.clone(), variant: ident(&variant), ty: rust_path(id, cx) }
         })
         .filter(|r| registry.get(&r.id).is_some())
         .collect()
 }
 
 /// Generates the servant trait, its fault type and the dispatcher.
-pub(crate) fn emit_skeleton(registry: &Registry, id: &str, root: &str) -> Result<String, String> {
+pub(crate) fn emit_skeleton(registry: &Registry, id: &str, cx: &Cx<'_>) -> Result<String, String> {
     if registry.interface(id).is_none() {
         return Err("not an interface".to_owned());
     }
-    let name = ident(&path_of(id).last().cloned().unwrap_or_default());
+    let name = ident(&cx.path_of(id).last().cloned().unwrap_or_default());
     let (ops, attrs) = resolved_members(registry, id);
-    let raises = raises_of(registry, &ops, root);
+    let raises = raises_of(registry, &ops, cx);
 
     let mut s = String::new();
     emit_fault(&mut s, &name, id, &raises);
-    emit_trait(&mut s, registry, &name, id, &ops, &attrs, root)?;
-    emit_dispatch(&mut s, registry, &name, id, &ops, &attrs, root)?;
+    emit_trait(&mut s, registry, &name, id, &ops, &attrs, cx)?;
+    emit_dispatch(&mut s, registry, &name, id, &ops, &attrs, cx)?;
     Ok(s)
 }
 
@@ -276,7 +276,7 @@ fn emit_trait(
     id: &str,
     ops: &BTreeMap<String, OperationSig>,
     attrs: &BTreeMap<String, orbweaver_registry::AttributeSig>,
-    root: &str,
+    cx: &Cx<'_>,
 ) -> Result<(), String> {
     let exc = format!("{name}Fault");
     if let Some(desc) = registry.annotations(id).and_then(|a| a.get("ai_desc")) {
@@ -296,7 +296,7 @@ fn emit_trait(
     doc(s, "no contract declares and every servant needs.");
     let _ = writeln!(s, "pub trait {name}Servant {{");
     for (wire, rust, sig) in methods(ops, attrs) {
-        let shape = op_shape(&sig, root)?;
+        let shape = op_shape(&sig, cx)?;
         let mut docs = String::new();
         op_doc(&mut docs, &wire, &sig.annotations);
         if sig.oneway {
@@ -328,7 +328,7 @@ fn emit_dispatch(
     id: &str,
     ops: &BTreeMap<String, OperationSig>,
     attrs: &BTreeMap<String, orbweaver_registry::AttributeSig>,
-    root: &str,
+    cx: &Cx<'_>,
 ) -> Result<(), String> {
     let servant = format!("{name}Servant");
     let skel = format!("{name}Skeleton");
@@ -374,7 +374,7 @@ fn emit_dispatch(
     let _ = writeln!(s, "        match __req.operation.as_str() {{");
 
     for (wire, rust, sig) in methods(ops, attrs) {
-        let shape = op_shape(&sig, root)?;
+        let shape = op_shape(&sig, cx)?;
         let _ = writeln!(s, "            \"{wire}\" => {{");
         for (arg, ty) in &shape.ins {
             let _ = writeln!(
