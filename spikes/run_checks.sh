@@ -728,6 +728,45 @@ else
   printf '%s' "$sb" | tail -4 | sed 's/^/       /'
   fail_total=$((fail_total+1))
 fi
+# v2 widens the index (attributes, nested ai_desc, compound descriptions). v1
+# stays frozen above so the two numbers keep meaning different things.
+sb2=$(cargo run -q -p orbweaver-mcp --bin search-bench -- \
+      corpus/queries/search-v2.tsv corpus/golden/*.idl spikes/echo.idl 2>&1)
+if [ $? -eq 0 ] && printf '%s' "$sb2" | grep -q "search-bench: PASS"; then
+  printf '%s' "$sb2" | grep "search-bench: PASS" | sed 's/^/  ok   v2 /'
+else
+  echo "  FAIL the widened search set did not hold"
+  printf '%s' "$sb2" | tail -4 | sed 's/^/       /'
+  fail_total=$((fail_total+1))
+fi
+# D003's arm: embeddings arrive through a process boundary or not at all. With
+# no key the vector half is UNMEASURED — never green, and never faked with the
+# offline stand-in, which is a plumbing check and cannot close a vocabulary gap.
+if [ -n "${VOYAGE_API_KEY:-}" ]; then
+  et=/tmp/orbweaver-texts.tsv; vf=/tmp/orbweaver-vectors.txt
+  if cargo run -q -p orbweaver-mcp --bin search-bench -- --emit-texts "$et" \
+       corpus/queries/search-v2.tsv corpus/golden/*.idl spikes/echo.idl >/dev/null 2>&1 \
+     && vecs=$(cut -f2 "$et" | ./spikes/embed.sh 2>&1); then
+    { echo "orbweaver-vectors 1"
+      paste <(cut -f1 "$et") <(printf '%s\n' "$vecs" | sed 's/^\[//; s/\]$//')
+    } > "$vf"
+    sbv=$(cargo run -q -p orbweaver-mcp --bin search-bench -- --vectors "$vf" \
+          corpus/queries/search-v2.tsv corpus/golden/*.idl spikes/echo.idl 2>&1)
+    if [ $? -eq 0 ]; then
+      printf '%s' "$sbv" | grep "search-bench: PASS" | sed 's/^/  ok   vector /'
+    else
+      echo "  FAIL vector search regressed a gate"
+      printf '%s' "$sbv" | tail -4 | sed 's/^/       /'
+      fail_total=$((fail_total+1))
+    fi
+  else
+    echo "  FAIL embed.sh failed with a key present — that is a broken wrapper, not an absence"
+    fail_total=$((fail_total+1))
+  fi
+else
+  echo "  SKIPPED  VOYAGE_API_KEY absent — the synonym class is unmeasured, not passing"
+  skipped=$((skipped+1))
+fi
 
 # ── Wire hardening: stream E ─────────────────────────────────────────────────
 hr "wire hardening — LocateRequest send, both peers, all three versions"
