@@ -28,6 +28,9 @@
 //! of a real generator is not, and nothing below pretends otherwise.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
+use orbweaver_registry::Registry;
 
 use crate::{Severity, validate};
 
@@ -281,4 +284,147 @@ pub fn run_batch(
         max_rounds,
         causes,
     }
+}
+
+/// The name of the worksheet [`register`] writes into its output directory.
+pub const EXPOSURE_TODO_FILE: &str = "exposure.todo.tsv";
+
+/// What S5 produced: a loaded catalog and the list of what *could* be exposed
+/// — none of which *is*.
+///
+/// `docs/PLAN.md` §7.4 I2: registration feeds the catalog with exposure off by
+/// default. Nothing here builds an `Exposure`; a generated interface becomes
+/// agent-visible only when an operator constructs one and allowlists the id,
+/// which is the same explicit step a hand-written interface requires.
+#[derive(Debug)]
+pub struct Registration {
+    /// Every valid item's IDL, loaded into one in-process catalog.
+    pub registry: Registry,
+    /// The repository ids an operator could choose to expose — interfaces
+    /// only, as [`orbweaver_mcp::exposable_interfaces`] defines the term.
+    /// This is a menu, never a grant.
+    pub exposable: Vec<String>,
+}
+
+/// Why S5 refused to register.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegisterError {
+    /// An item the report marks valid carries no IDL, so there is nothing
+    /// whose validity could be re-checked — refused rather than trusted.
+    MissingIdl {
+        /// The item's id.
+        id: String,
+    },
+    /// The S5 re-check rejected an item the report marks valid. S4 already
+    /// passed it, but registration is a gate, not a formality: a report is
+    /// data anyone can construct, and the catalog trusts no one's word.
+    Rejected {
+        /// The item's id.
+        id: String,
+        /// The repair prompt the re-check produced, so the refusal carries
+        /// the same actionable text a generator would have received.
+        repair_prompt: String,
+    },
+    /// The registry itself refused the load (for example, two items declaring
+    /// conflicting definitions under one repository id).
+    Registry {
+        /// The item whose load failed.
+        id: String,
+        /// The registry's own message.
+        message: String,
+    },
+    /// The exposure worksheet could not be written. Not ignorable: a
+    /// registration whose worksheet is missing leaves no record of what is
+    /// waiting for a human decision.
+    Io {
+        /// The path that failed.
+        path: PathBuf,
+        /// The I/O error, verbatim.
+        message: String,
+    },
+}
+
+impl std::fmt::Display for RegisterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RegisterError::MissingIdl { id } => {
+                write!(f, "{id}: marked valid but the report carries no IDL for it")
+            }
+            RegisterError::Rejected { id, repair_prompt } => {
+                write!(f, "{id}: the S5 re-check rejected it:\n{repair_prompt}")
+            }
+            RegisterError::Registry { id, message } => {
+                write!(f, "{id}: the registry refused the load: {message}")
+            }
+            RegisterError::Io { path, message } => write!(f, "{}: {message}", path.display()),
+        }
+    }
+}
+
+impl std::error::Error for RegisterError {}
+
+/// S5 — register a validated batch, with exposure **off** by default.
+///
+/// Loads every [`ItemStatus::Valid`] item's IDL into one [`Registry`], after
+/// re-running [`validate`] on each file. S4 already passed them, but the
+/// re-check is deliberate: registration is a gate, not a formality, and a
+/// `BatchReport` is plain data whose `Valid` markings this function refuses
+/// to take on faith. Any re-check failure aborts the whole registration —
+/// a catalog holding "most of a batch" would misreport what was registered.
+///
+/// The catalog comes back with **nothing exposed**. Alongside it, the
+/// function writes [`EXPOSURE_TODO_FILE`] into `out_dir`: one line per
+/// exposable interface, every one `exposed=no`, for a human to turn into
+/// allowlist entries. §7.4 I2 is the reason the default is no — a projection
+/// that exposes by default exposes the day someone adds a file.
+///
+/// Honesty note: "register" here means an in-process [`Registry`] plus a
+/// human-readable worksheet. The durable catalog store (`docs/PLAN.md` §6,
+/// PostgreSQL + pgvector) is future work; this function is the seam where it
+/// plugs in, and nothing below pretends the rows persist.
+pub fn register(report: &BatchReport, out_dir: &Path) -> Result<Registration, RegisterError> {
+    let mut registry = Registry::new();
+    for item in report.items.iter().filter(|i| i.status == ItemStatus::Valid) {
+        let Some(idl) = &item.idl else {
+            return Err(RegisterError::MissingIdl { id: item.id.clone() });
+        };
+        let recheck = validate(idl);
+        if !recheck.is_ok() {
+            return Err(RegisterError::Rejected {
+                id: item.id.clone(),
+                repair_prompt: recheck.repair_prompt(),
+            });
+        }
+        // `validate` just accepted it, so `check` succeeds; matched anyway so
+        // a future divergence between the two is a loud error, not a panic.
+        let spec = orbweaver_idl::check(idl).map_err(|diags| RegisterError::Rejected {
+            id: item.id.clone(),
+            repair_prompt: diags.iter().map(|d| d.message.clone()).collect::<Vec<_>>().join("\n"),
+        })?;
+        registry
+            .load(&spec)
+            .map_err(|e| RegisterError::Registry { id: item.id.clone(), message: e.message })?;
+    }
+
+    let exposable = orbweaver_mcp::exposable_interfaces(&registry);
+
+    let path = out_dir.join(EXPOSURE_TODO_FILE);
+    let io = |e: std::io::Error| RegisterError::Io { path: path.clone(), message: e.to_string() };
+    std::fs::create_dir_all(out_dir).map_err(io)?;
+    let mut worksheet = String::from(
+        "# S5 exposure worksheet — docs/PLAN.md \u{a7}7.4 I2.\n\
+         # Every interface below is registered and NOT exposed. The default is no\n\
+         # because a projection that exposes by default exposes the day someone adds\n\
+         # a file; a generated interface becomes agent-visible only when a human\n\
+         # turns its exposed=no into an explicit allowlist entry (Exposure::\n\
+         # allow_interface or allow_operation), exactly like a hand-written one.\n\
+         # Nothing reads this file automatically; it is a worksheet, not a policy.\n\
+         # columns: repository-id\texposed\tnote\n",
+    );
+    for id in &exposable {
+        worksheet.push_str(&format!("{id}\texposed=no\tawaiting a human allowlist decision\n"));
+    }
+    std::fs::write(&path, worksheet).map_err(io)?;
+
+    Ok(Registration { registry, exposable })
 }

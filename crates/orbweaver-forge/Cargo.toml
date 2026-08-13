@@ -12,6 +12,10 @@ orbweaver-idl = { path = "../orbweaver-idl" }
 orbweaver-registry = { path = "../orbweaver-registry" }
 orbweaver-dynamic = { path = "../orbweaver-dynamic" }
 orbweaver-giop = { path = "../orbweaver-giop", default-features = false }
+# Cycle-free: orbweaver-mcp depends only on cdr/giop/registry/dynamic/idl,
+# never on forge. S5 uses its `exposable_interfaces` so "what could be
+# exposed" has exactly one definition, and the I2 tests drive its Bridge.
+orbweaver-mcp = { path = "../orbweaver-mcp" }
 
 [lints]
 workspace = true
