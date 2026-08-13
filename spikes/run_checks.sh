@@ -130,6 +130,32 @@ else
   fail_total=$((fail_total+1))
 fi
 
+hr "ssliop feature — the D002 dependency promise"
+ssl_fail=0
+# A default build must carry no cryptography dependency at all.
+deft=$(cargo tree -p orbweaver-giop 2>/dev/null)
+if printf '%s' "$deft" | grep -qiE "rustls|aws-lc"; then
+  echo "  FAIL the default build pulls a TLS/crypto crate; NOTICE and D002 are wrong"; ssl_fail=1
+else
+  echo "  ok   default cargo tree carries no rustls/aws-lc, as NOTICE states"
+fi
+# And the feature must actually deliver what D002 approved.
+feat=$(cargo tree -p orbweaver-giop --features ssliop 2>/dev/null)
+if printf '%s' "$feat" | grep -q "rustls" && printf '%s' "$feat" | grep -q "aws-lc-rs"; then
+  echo "  ok   --features ssliop pulls rustls with the aws-lc-rs provider D002 names"
+else
+  echo "  FAIL --features ssliop does not resolve to rustls + aws-lc-rs"; ssl_fail=1
+fi
+# In-process TLS tests: certificate verification on, framing pass-through,
+# clean refusal of a non-TLS peer. Peer interop (omniORB sslTP) is a future
+# batch and is deliberately NOT claimed here.
+if RUSTFLAGS="-D warnings" cargo test -p orbweaver-giop --features ssliop --quiet >/dev/null 2>&1; then
+  echo "  ok   ssliop build tests green against the in-process rustls peer, warning-free"
+else
+  echo "  FAIL the ssliop build does not build cleanly or does not test"; ssl_fail=1
+fi
+[ "$ssl_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
 hr "orbweaver-idl — our parser against the oracle"
 # The acceptance criterion is agreement, not taste: omniidl accepts every
 # golden file and rejects every negative one, so anywhere we differ we are
