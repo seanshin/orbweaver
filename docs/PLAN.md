@@ -591,6 +591,8 @@ Phase 6 (productionization), and the model-in-the-loop stages S1–S3.
 
 > Stream F (the MoE control plane, our first application domain) is specified
 > in [`PLAN-MOE.md`](PLAN-MOE.md), reviewed and adopted 2026-08-14.
+> The core CORBA services (Naming, Event, Trading, LifeCycle, IFR facade) are
+> planned as a suite in [`PLAN-SERVICES.md`](PLAN-SERVICES.md) (2026-08-14).
 
 Every stream lists: **what** (unchanged scope from v0.5), **depends on**
 (all satisfied today unless named), **batch unit** (what one loop iteration
