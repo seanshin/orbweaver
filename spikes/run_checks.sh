@@ -609,6 +609,21 @@ if [ "$cc_rc" -ne 0 ]; then
 else
   echo "  ok   $(printf '%s\n' "$cc_out" | tail -2 | head -1)"
 fi
+# Panic freedom. Rust rules out the memory-corruption half of "wire parsing is
+# the classic memory-safety hazard" at compile time and rules out nothing about
+# panics — a slice index or an unwrap reachable from a peer's bytes ends the
+# process just as surely, and `unsafe_code = "forbid"` does not cover it.
+# Reported with its reach, because a fuzz that bounces off the header check
+# every time is green and worthless and the exit code cannot tell you which.
+wf_out=$(cargo run -q --release -p orbweaver-test --bin wire-fuzz -- --cases 20000 2>&1)
+if printf '%s' "$wf_out" | grep -q "wire-fuzz: PASS"; then
+  echo "  ok   $(printf '%s' "$wf_out" | head -1 | sed 's/^wire-fuzz: //')"
+  echo "  ok   $(printf '%s' "$wf_out" | sed -n 2p | sed 's/^ *//')"
+else
+  printf '%s' "$wf_out" | grep "FAIL" | head -3 | sed 's/^/       /'
+  echo "  FAIL a decoder panicked on bytes a peer can send"
+  fail_total=$((fail_total+1))
+fi
 
 # ── Dynamic invocation: calling with nothing generated ───────────────────────
 hr "dynamic invocation — calls built from IDL text alone"

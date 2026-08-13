@@ -25,3 +25,7 @@ workspace = true
 [[bin]]
 name = "contract-check"
 path = "src/bin/contract_check.rs"
+
+[[bin]]
+name = "wire-fuzz"
+path = "src/bin/wire_fuzz.rs"
