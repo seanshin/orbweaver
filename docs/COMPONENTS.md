@@ -36,7 +36,7 @@ Anything requiring a new dependency class needs a decision document first
 | Naming (CosNaming client) | ✅ | corbaname/corbaloc + omniNames in harness |
 | MCP transport | ✅ | stdio JSON-RPC; no real MCP client driven yet (stated in PHASE3) |
 | CosNaming **server** | ✅ | F6 landed 2026-08-14: full context surface + NamingContextExt, both oracle directions measured — omniORB's client decoded our NotFound bytes. Suite plan: PLAN-SERVICES §2 |
-| Event/Notification (CosEvent) | ❌ | PLAN-SERVICES §4: F7 push-model channel, oracle settled by measurement (no omnievents formula; omniORBpy's CosEventComm stubs act as the independent peer) |
+| Event/Notification (CosEvent) | ✅ push model | F7 landed: `EventChannel`/both admins/both proxies served on our POA, `any` relayed verbatim, bounded queue (64, drop-oldest), dead consumers disconnected after 3 consecutive failures with **drops counted, never silent**. omniORBpy 4.3.4's `PushConsumer` attaches to our channel and decodes what we push (harness group). Pull model refused `BAD_OPERATION` with a reason — it inverts flow control into the unbounded buffer the queue exists to avoid; `destroy` refused (F6 precedent). Notification service: `docs/PLAN-DEFERRED.md` |
 | Trading (decision engine) | ✅ | `orbweaver-trading` (2026-08-14, 37 tests): offers, §4.3 constraint queries, §6 loading policy over deterministic traces. Wire surface (IDL binding) still open — PLAN-MOE F3+ |
 | LifeCycle / Property | ❌ | PLAN-MOE **F5** (`ModelFactory`, per-tenant manifest) |
 | Transaction / Time / PSS | — | **declared out of scope with reasons** (PLAN-MOE §4) — honest absence over decorative interfaces |

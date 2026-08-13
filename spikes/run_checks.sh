@@ -909,6 +909,48 @@ fi
 pkill -f "spike-names" >/dev/null 2>&1 || true
 [ "$ns_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
+# ── F7: the event channel, both directions ──────────────────────────────────
+hr "event channel — our supplier and consumer, then omniORB's consumer"
+# The push model served by us. Two things are measured that a self-test alone
+# cannot establish: that an ORB we did not write can narrow and attach to the
+# channel, and that a consumer which dies mid-stream is disconnected with its
+# drops counted. A channel that loses events quietly is worse than one that
+# refuses them.
+ev_fail=0
+EV_IOR=/tmp/orbweaver-events.ior
+ev=$(cargo run -q --bin spike-events -- "$EV_IOR" 2>&1)
+if printf '%s' "$ev" | grep -q "event-channel: PASS"; then
+  echo "  ok   our client against our channel: connect both sides, 20 in order, dead consumer disconnected"
+  echo "  ok   $(printf '%s' "$ev" | grep 'drop report' | sed 's/^ *//')"
+else
+  echo "  FAIL event channel self-consistency"
+  printf '%s' "$ev" | grep FAIL | head -3 | sed 's/^/       /'
+  ev_fail=1
+fi
+rm -f "$EV_IOR" /tmp/orbweaver-events-hold.log
+cargo run -q --bin spike-events -- "$EV_IOR" --hold >/tmp/orbweaver-events-hold.log 2>&1 &
+EV_PID=$!
+ev_up=0
+for _ in $(seq 1 60); do
+  grep -qs HOLDING /tmp/orbweaver-events-hold.log && { ev_up=1; break; }
+  sleep 0.2
+done
+if [ "$ev_up" -eq 1 ]; then
+  ev_out=$(python3 spikes/event_consumer.py "$EV_IOR" 2>&1)
+  case "$ev_out" in
+    *PASS*) echo "  ok   omniORB's PushConsumer received events from OUR channel" ;;
+    *ModuleNotFoundError*|*ImportError*)
+      echo "  SKIPPED  omniORBpy CosEventComm stubs absent — the cross-ORB half is unmeasured, not passing"
+      skipped=$((skipped+1)) ;;
+    *) echo "  FAIL cross-ORB consumer: $(printf '%s' "$ev_out" | tail -2 | tr '\n' ' ')"; ev_fail=1 ;;
+  esac
+else
+  echo "  FAIL the holding event channel never came up"; ev_fail=1
+fi
+kill "$EV_PID" >/dev/null 2>&1 || true
+wait "$EV_PID" 2>/dev/null || true
+[ "$ev_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
 # ── Identity: what the peers actually advertise ──────────────────────────────
 hr "identity propagation — what a real target says about security"
 # §4.8 predicts that many legacy targets have no authentication at all, and that
