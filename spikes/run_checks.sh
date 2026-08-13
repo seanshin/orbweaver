@@ -885,6 +885,7 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
         echo "  ok   the generated stub calls omniORB: 10/10 cases, both byte orders"
         echo "  ok   I1: the same stub through the guard — exposure, ai_authz scope and audit bind it"
         echo "  ok   I1: a refused call never reaches the wire; the audit holds nothing dialable"
+        printf '%s' "$so" | grep "I4:" | sed 's/^  ok   /  ok   /' | head -3
       else
         echo "  FAIL static did not equal dynamic"
         printf '%s' "$so" | grep "FAIL" | head -3 | sed 's/^/       /'
