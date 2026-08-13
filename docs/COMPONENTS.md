@@ -14,7 +14,7 @@ Anything requiring a new dependency class needs a decision document first
 | `orbweaver-giop` | ✅ | GIOP 1.0–1.2 both directions, codesets, fragmentation, locate, failover, SSLIOP (`ssliop` feature) | multiplexing, pooling (stream E) |
 | `orbweaver-idl` | ✅ | IDL 4.2 front end, SIDL comments, full oracle agreement | pluggable back ends beyond gen's use |
 | `orbweaver-registry` | ◐ | registry from IDL, TypeCodes vs two peers, §5.3 differ | **remote IFR ingestion** (planned scope, unstarted) |
-| `orbweaver-object` (poa) | ✅ | references, identity, POA, LOCATION_FORWARD emit | — |
+| `orbweaver-object` (poa) | ✅ | references, identity, POA, LOCATION_FORWARD emit, **expert residency state machine + ExpertLoader** (F3, 2026-08-14) | — |
 | `orbweaver-dynamic` | ✅ | value marshalling, DII-shaped invoke, AnyJSON, first-party JSON | DynAny mutation API (fuzz seed exists via Value) |
 | `orbweaver-forge` | ◐ | S4 gate, §5.1 orchestrator, real-model batch (20/20), S5 exposure-off registration (I2 ✅) | **S1 ingest, S3 annotate as distinct stages** (today S2's prompt does both) |
 | `orbweaver-mcp` | ✅ | triad, stdio transport, capability handles, default-deny, `ai_authz`, promotion+I4 | embeddings behind search (needs D003) |
