@@ -76,6 +76,21 @@ pub enum Denied {
         /// What the contract says it does, if it says.
         effect: String,
     },
+    /// A stage of [`crate::interceptor::Chain`] outside the built-in gates
+    /// refused the call — a deployment's rate limiter, quota or safety filter.
+    ///
+    /// The variant exists so that a stage nobody here wrote refuses in the
+    /// same currency as one that is: the same `Denied`, so it reaches the
+    /// caller as the same `ToolError` and the audit log as the same line.
+    /// A chain whose extensions had to invent their own refusal type would
+    /// have two refusal paths, and only one of them audited.
+    Intercepted {
+        /// Which stage refused, since the audit line's fixed format has
+        /// nowhere else to put it.
+        stage: String,
+        /// What that stage says about it.
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for Denied {
@@ -104,6 +119,9 @@ impl std::fmt::Display for Denied {
                 "{id}.{operation} is marked {effect} and needs an explicit approval before it \
                  can be called"
             ),
+            Denied::Intercepted { stage, reason } => {
+                write!(f, "the {stage} stage refused this call: {reason}")
+            }
         }
     }
 }
@@ -165,6 +183,14 @@ impl Exposure {
     /// interface reports the interface, never "no such operation", because the
     /// second answer would confirm or deny the existence of operations on
     /// something the caller was not permitted to see.
+    ///
+    /// This is one composition of the rules; [`crate::interceptor::Chain`] is
+    /// the other, stage by stage, and it is what a call actually runs through.
+    /// Both call the same primitives — nothing is decided twice — and
+    /// `the_chain_and_check_call_answer_alike` pins them to the same verdict
+    /// case by case. This one stays because a *question* about a call
+    /// (`Bridge::check`) must be answerable without auditing and counting an
+    /// invocation that never happened.
     pub fn check_call(
         &self,
         registry: &Registry,
@@ -223,7 +249,10 @@ impl Exposure {
 /// An operation with no `ai_authz` requires none. That is not a loophole — it
 /// is what an unannotated legacy contract looks like, and S4 already reports
 /// the absence as advice so it is visible rather than silent.
-fn required_scopes(registry: &Registry, id: &str, operation: &str) -> Vec<String> {
+///
+/// [`crate::interceptor::ScopeInterceptor`] reads the requirement through this
+/// same function: one implementation of the rule, two compositions of it.
+pub(crate) fn required_scopes(registry: &Registry, id: &str, operation: &str) -> Vec<String> {
     let Some((_, sig)) = registry.resolve_operation(id, operation) else { return Vec::new() };
     sig.annotations
         .get("ai_authz")
@@ -236,7 +265,10 @@ fn required_scopes(registry: &Registry, id: &str, operation: &str) -> Vec<String
 /// `idempotent` and `read_only` do not. Anything else that is written there is
 /// treated as needing approval: a value nobody anticipated is not a reason to
 /// let a call through, and the failure direction has to be the safe one.
-fn destructive_effect(registry: &Registry, id: &str, operation: &str) -> Option<String> {
+///
+/// [`crate::interceptor::ApprovalInterceptor`] reads it through this same
+/// function, for the same reason [`required_scopes`] gives.
+pub(crate) fn destructive_effect(registry: &Registry, id: &str, operation: &str) -> Option<String> {
     let (_, sig) = registry.resolve_operation(id, operation)?;
     let effect = sig.annotations.get("ai_effect")?;
     match effect.trim() {

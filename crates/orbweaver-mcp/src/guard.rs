@@ -13,13 +13,21 @@
 //! A refusal surfaces as CORBA `NO_PERMISSION` — what a native guard would
 //! raise, so a stub's caller handles policy the way it already handles the
 //! target's own refusals. The *why* goes to the audit log, where §4.8 wants it.
+//!
+//! Since F4 the checks themselves live in [`crate::interceptor`]: this file
+//! holds the `Invoker` surface and the `NO_PERMISSION` translation, and the
+//! four things it used to do inline are §4.5's stack, in order, extensible by a
+//! deployment. What `check` does now is build a [`CallContext`] and run the
+//! chain.
 
 use orbweaver_cdr::{Encoder, Endian};
 use orbweaver_giop::{Connection, Error as GiopError, Invoker, Reply};
 use orbweaver_registry::Registry;
 
 use crate::identity::Caller;
+use crate::interceptor::{CallContext, Chain};
 use crate::policy::{Approval, Exposure};
+use crate::promote::CallStats;
 
 /// The repository id `NO_PERMISSION` travels under.
 pub const NO_PERMISSION: &str = "IDL:omg.org/CORBA/NO_PERMISSION:1.0";
@@ -28,11 +36,12 @@ pub const NO_PERMISSION: &str = "IDL:omg.org/CORBA/NO_PERMISSION:1.0";
 /// `ALLOW caller=<principal> target=<id> operation=<op>`, with
 /// ` why=<reason>` appended on a `REFUSE`. An absent caller is `<nobody>`.
 ///
-/// The single place the format lives. [`Guarded`] writes its decisions
-/// through it and so does [`crate::Bridge`], which is what makes the static
-/// and dynamic paths' lines for the same call *equal as strings* rather than
-/// merely similar — the property §7.4 I4's gate compares, and the reason
-/// `crate::promote`'s parser needs no second format. Change it here or
+/// The single place the format lives. Since F4 there is a single place it is
+/// *called* from too — [`crate::interceptor::AuditInterceptor`], the §4.5 audit
+/// stage, which both [`Guarded`] and [`crate::Bridge`] run. That is what makes
+/// the static and dynamic paths' lines for the same call *equal as strings*
+/// rather than merely similar — the property §7.4 I4's gate compares, and the
+/// reason `crate::promote`'s parser needs no second format. Change it here or
 /// nowhere.
 ///
 /// Like [`crate::identity::audit_line`], a line names the principal and the
@@ -63,14 +72,20 @@ pub(crate) fn audit_entry(
 pub struct Guarded<'r, C: Invoker = Connection> {
     conn: C,
     registry: &'r Registry,
-    exposure: Exposure,
     caller: Option<Caller>,
     /// The repository id the handle named. From the capability table, never
     /// from the stub: a stub asserting its own interface id would be asserting
     /// its own permissions.
     id: String,
     approval: Approval,
-    audit: Vec<String>,
+    /// §4.5's stack, holding the exposure, the audit lines and the counters.
+    chain: Chain,
+}
+
+/// The refusal a stub sees. The reason is not in it, deliberately: it is in the
+/// audit log, which is where §4.8 wants it.
+fn no_permission() -> GiopError {
+    GiopError::SystemException { id: NO_PERMISSION.to_owned(), minor: 0, completed: 0 }
 }
 
 impl<'r, C: Invoker> Guarded<'r, C> {
@@ -82,7 +97,7 @@ impl<'r, C: Invoker> Guarded<'r, C> {
         id: String,
         approval: Approval,
     ) -> Self {
-        Self { conn, registry, exposure, caller, id, approval, audit: Vec::new() }
+        Self { conn, registry, caller, id, approval, chain: Chain::standard(exposure) }
     }
 
     /// Every decision this guard has made, oldest first.
@@ -92,44 +107,26 @@ impl<'r, C: Invoker> Guarded<'r, C> {
     /// same reason: there is nothing here a line *could* leak, because the
     /// guard never holds a credential.
     pub fn audit(&self) -> &[String] {
-        &self.audit
+        self.chain.audit()
     }
 
-    fn check(&mut self, operation: &str) -> Result<(), GiopError> {
-        match self.exposure.check_call(
-            self.registry,
-            &self.id,
-            operation,
-            self.approval,
-            self.caller.as_ref(),
-        ) {
-            Ok(()) => {
-                self.audit.push(audit_entry(
-                    "ALLOW",
-                    self.caller.as_ref(),
-                    &self.id,
-                    operation,
-                    None,
-                ));
-                Ok(())
-            }
-            Err(denied) => {
-                self.audit.push(audit_entry(
-                    "REFUSE",
-                    self.caller.as_ref(),
-                    &self.id,
-                    operation,
-                    Some(&denied.to_string()),
-                ));
-                // The shape a native CORBA guard would answer with; the reason
-                // stays in the audit log, which is where §4.8 wants it.
-                Err(GiopError::SystemException {
-                    id: NO_PERMISSION.to_owned(),
-                    minor: 0,
-                    completed: 0,
-                })
-            }
-        }
+    /// What the guard's telemetry stage counted.
+    ///
+    /// Honest shortfall: these counters are the *static* path's, they live and
+    /// die with this `Guarded`, and nothing merges them back into the session's
+    /// (`Bridge::stats`). PLAN-MOE **IF2** asks for one store; one store across
+    /// two objects with independent lifetimes needs a shared one, which needs
+    /// either interior mutability or a store passed in at assembly. Neither is
+    /// here yet, and pretending the numbers add up would be worse than saying
+    /// they do not.
+    pub fn stats(&self) -> &CallStats {
+        self.chain.stats()
+    }
+
+    /// The chain this guard runs, for a deployment that adds a stage. The
+    /// built-ins are already in it; see [`Chain::insert_after`].
+    pub fn chain_mut(&mut self) -> &mut Chain {
+        &mut self.chain
     }
 }
 
@@ -143,8 +140,22 @@ impl<'r, C: Invoker> Invoker for Guarded<'r, C> {
         operation: &str,
         write_args: F,
     ) -> Result<Reply, GiopError> {
-        self.check(operation)?;
-        self.conn.invoke(operation, write_args)
+        // Built by hand rather than by a helper method: the context borrows
+        // three fields of `self` while the chain borrows a fourth mutably, and
+        // a method returning the context would borrow all of `self`.
+        let ctx = CallContext {
+            registry: self.registry,
+            caller: self.caller.as_ref(),
+            target: self.id.as_str(),
+            operation,
+            approval: self.approval,
+        };
+        if self.chain.run(&ctx).is_err() {
+            return Err(no_permission());
+        }
+        let reply = self.conn.invoke(operation, write_args);
+        self.chain.completed(&ctx, reply.is_ok());
+        reply
     }
 
     fn invoke_oneway<F: Fn(&mut Encoder)>(
@@ -152,16 +163,29 @@ impl<'r, C: Invoker> Invoker for Guarded<'r, C> {
         operation: &str,
         write_args: F,
     ) -> Result<(), GiopError> {
-        // Checked like a twoway: a oneway that skipped the gate would make
+        // Gated like a twoway: a oneway that skipped the chain would make
         // "fire and forget" the way around the guard.
-        self.check(operation)?;
-        self.conn.invoke_oneway(operation, write_args)
+        let ctx = CallContext {
+            registry: self.registry,
+            caller: self.caller.as_ref(),
+            target: self.id.as_str(),
+            operation,
+            approval: self.approval,
+        };
+        if self.chain.run(&ctx).is_err() {
+            return Err(no_permission());
+        }
+        let sent = self.conn.invoke_oneway(operation, write_args);
+        self.chain.completed(&ctx, sent.is_ok());
+        sent
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::interceptor::{Interceptor, Outcome};
+    use crate::policy::Denied;
 
     /// An invoker that records what reached it, for proving what did not.
     struct Recorder {
@@ -298,6 +322,53 @@ mod tests {
         let mut g = guarded(&reg, Exposure::nothing(), None, Approval::default());
         assert!(g.invoke_oneway("balance", |_| {}).is_err());
         assert!(g.conn.reached.is_empty());
+    }
+
+    /// F4's extensibility claim, at the level a deployment would make it: a
+    /// stage the guard knows nothing about goes into §4.5's empty quota seat
+    /// on a live `Guarded`, and the property I1 exists for still holds for it
+    /// — a refused call does not reach the transport, and it is refused as
+    /// `NO_PERMISSION` like any other, through the built-in stages that were
+    /// not touched.
+    #[test]
+    fn a_deployment_can_add_a_stage_the_guard_knows_nothing_about() {
+        struct RateLimiter {
+            seen: usize,
+        }
+        impl Interceptor for RateLimiter {
+            fn before(&mut self, _ctx: &CallContext<'_>) -> Outcome {
+                self.seen += 1;
+                if self.seen > 2 {
+                    return Outcome::Refuse(Denied::Intercepted {
+                        stage: "quota.rate_limit".to_owned(),
+                        reason: "2 calls per window".to_owned(),
+                    });
+                }
+                Outcome::Proceed
+            }
+        }
+
+        let reg = registry();
+        let exposure = Exposure::nothing().allow_interface("IDL:bank/Account:1.0");
+        let mut g = guarded(&reg, exposure, Some(Caller::new("alice")), Approval::default());
+        assert!(g.chain_mut().insert_after(
+            crate::interceptor::STAGE_SCOPES,
+            "quota.rate_limit",
+            RateLimiter { seen: 0 }
+        ));
+
+        for _ in 0..2 {
+            let _ = g.invoke("balance", |_| {});
+        }
+        let err = g.invoke("balance", |_| {}).unwrap_err();
+        assert!(
+            matches!(&err, GiopError::SystemException { id, .. } if id == NO_PERMISSION),
+            "{err}"
+        );
+        assert_eq!(g.conn.reached, vec!["balance", "balance"], "the third never reached the wire");
+        assert_eq!(g.audit().len(), 3);
+        assert!(g.audit()[2].starts_with("REFUSE caller=alice"), "{}", g.audit()[2]);
+        assert!(g.audit()[2].contains("quota.rate_limit"), "{}", g.audit()[2]);
     }
 
     #[test]
