@@ -22,16 +22,25 @@
 //! everything depending on it is skipped the same way. The generator's report
 //! counts skips separately from failures: a deferred wire type is a decision,
 //! not a defect.
+//!
+//! # Both halves of one contract
+//!
+//! Every interface produces a **client stub** (here) and a **server skeleton**
+//! ([`skeleton`]). They are generated from the same [`OpShape`], so the
+//! argument list a caller passes and the argument list a servant receives
+//! cannot drift apart: there is one place that decides what an operation looks
+//! like in Rust, and both sides read it.
 
 #![deny(missing_docs)]
 
 pub mod rt;
+pub mod skeleton;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use orbweaver_giop::typecode::{TypeCode, UnionCase};
-use orbweaver_registry::{Entry, OperationSig, ParamDirection, Registry};
+use orbweaver_registry::{AttributeSig, Entry, OperationSig, ParamDirection, Registry};
 
 /// What one file's generation produced.
 #[derive(Debug, Default)]
@@ -52,7 +61,7 @@ const KEYWORDS: &[&str] = &[
     "await", "self", "super",
 ];
 
-fn ident(name: &str) -> String {
+pub(crate) fn ident(name: &str) -> String {
     // `self`/`super`/`crate` cannot be raw identifiers; suffix those instead.
     match name {
         "self" | "super" | "crate" => format!("{name}_"),
@@ -65,7 +74,7 @@ fn ident(name: &str) -> String {
 ///
 /// The inversion of `repository_id()`, faithful because `#pragma prefix` is not
 /// yet honoured anywhere in this project — stated in the registry's own docs.
-fn path_of(id: &str) -> Vec<String> {
+pub(crate) fn path_of(id: &str) -> Vec<String> {
     id.trim_start_matches("IDL:")
         .rsplit_once(':')
         .map_or(id, |(p, _)| p)
@@ -74,13 +83,13 @@ fn path_of(id: &str) -> Vec<String> {
         .collect()
 }
 
-fn rust_path(id: &str, root: &str) -> String {
+pub(crate) fn rust_path(id: &str, root: &str) -> String {
     let segs: Vec<String> = path_of(id).iter().map(|s| ident(s)).collect();
     format!("crate::{root}::{}", segs.join("::"))
 }
 
 /// The Rust type for a `TypeCode`, or the reason there is none.
-fn rust_type(tc: &TypeCode, root: &str) -> Result<String, String> {
+pub(crate) fn rust_type(tc: &TypeCode, root: &str) -> Result<String, String> {
     Ok(match tc {
         TypeCode::Boolean => "bool".into(),
         TypeCode::Octet | TypeCode::Char => "u8".into(),
@@ -114,6 +123,157 @@ fn rust_type(tc: &TypeCode, root: &str) -> Result<String, String> {
         }
         other => return Err(format!("no static mapping for {other:?}")),
     })
+}
+
+/// `first`, `second`, … — the wire position of a member, for its doc comment.
+///
+/// Declaration order *is* the wire order, and the §5.3 differ proved on the
+/// wire that swapping two members of the same size is a silent breaking change
+/// omniORB decodes without complaint. Saying the position out loud in the
+/// generated documentation is cheap; discovering it from a wrong answer is not.
+pub(crate) fn nth(i: usize) -> String {
+    const NAMES: &[&str] = &[
+        "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth",
+        "tenth",
+    ];
+    match NAMES.get(i) {
+        Some(name) => (*name).to_owned(),
+        None => format!("at position {}", i + 1),
+    }
+}
+
+/// Writes `text` as a `///` block, one line per line.
+///
+/// Generated code is held to `#![deny(missing_docs)]` exactly as this crate is
+/// — a generator that exempts its own output from the project's rules is a
+/// generator that will be told to stop emitting the rules.
+pub(crate) fn doc(out: &mut String, text: &str) {
+    for line in text.lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            let _ = writeln!(out, "///");
+        } else {
+            let _ = writeln!(out, "/// {line}");
+        }
+    }
+}
+
+/// The documentation for one operation: `ai_desc` when the contract has one,
+/// and an honest sentence when it does not.
+pub(crate) fn op_doc(out: &mut String, wire_name: &str, annotations: &BTreeMap<String, String>) {
+    match annotations.get("ai_desc") {
+        Some(desc) => {
+            doc(out, desc);
+            doc(out, "");
+            doc(out, &format!("`{wire_name}` on the wire."));
+        }
+        None => doc(
+            out,
+            &format!("`{wire_name}`. The contract carries no `ai_desc` for this operation."),
+        ),
+    }
+}
+
+/// What one operation looks like in Rust, decided once for both sides.
+///
+/// The client stub and the server skeleton read the same shape, so the
+/// arguments a caller passes and the arguments a servant receives cannot drift
+/// apart — the divergence a two-template generator produces first and notices
+/// last.
+pub(crate) struct OpShape {
+    /// `, name: Type` fragments for a Rust parameter list, in declaration
+    /// order: `in` and `inout`, which are what travels in the request.
+    pub args: String,
+    /// The same parameters as (ident, type), for code that needs them apart.
+    pub ins: Vec<(String, String)>,
+    /// The Rust return type: `()`, one type, or a tuple.
+    pub ret_ty: String,
+    /// Everything the reply carries, in reply order (§7.9.1): the declared
+    /// result first when it is not `void`, then `out` and `inout` values in
+    /// declaration order.
+    pub rets: Vec<String>,
+}
+
+pub(crate) fn op_shape(sig: &OperationSig, root: &str) -> Result<OpShape, String> {
+    let mut args = String::new();
+    let mut ins = Vec::new();
+    for p in &sig.params {
+        if matches!(p.direction, ParamDirection::In | ParamDirection::InOut) {
+            let ty = rust_type(&p.tc, root)?;
+            let _ = write!(args, ", {}: {ty}", ident(&p.name));
+            ins.push((ident(&p.name), ty));
+        }
+    }
+    let mut rets: Vec<String> = Vec::new();
+    if !matches!(sig.returns, TypeCode::Void) {
+        rets.push(rust_type(&sig.returns, root)?);
+    }
+    for p in &sig.params {
+        if matches!(p.direction, ParamDirection::Out | ParamDirection::InOut) {
+            rets.push(rust_type(&p.tc, root)?);
+        }
+    }
+    let ret_ty = match rets.len() {
+        0 => "()".to_owned(),
+        1 => rets[0].clone(),
+        _ => format!("({})", rets.join(", ")),
+    };
+    Ok(OpShape { args, ins, ret_ty, rets })
+}
+
+/// Every operation and attribute an interface answers for, inherited ones
+/// included.
+///
+/// Inheritance was already resolved for operations and, until this batch, not
+/// for attributes — an asymmetry that would have shipped a skeleton refusing
+/// `_get_` on an inherited attribute with `BAD_OPERATION`. One helper now
+/// answers for both, so the two cannot diverge again.
+pub(crate) fn resolved_members(
+    registry: &Registry,
+    id: &str,
+) -> (BTreeMap<String, OperationSig>, BTreeMap<String, AttributeSig>) {
+    let mut ops: BTreeMap<String, OperationSig> = BTreeMap::new();
+    let mut attrs: BTreeMap<String, AttributeSig> = BTreeMap::new();
+    let mut ids = vec![id.to_owned()];
+    ids.extend(registry.ancestors(id));
+    for iid in &ids {
+        if let Some(i) = registry.interface(iid) {
+            for (name, sig) in &i.operations {
+                ops.entry(name.clone()).or_insert_with(|| sig.clone());
+            }
+            for (name, a) in &i.attributes {
+                attrs.entry(name.clone()).or_insert_with(|| a.clone());
+            }
+        }
+    }
+    (ops, attrs)
+}
+
+/// The synthetic signature of an attribute's `_get_`.
+pub(crate) fn getter_sig(a: &AttributeSig) -> OperationSig {
+    OperationSig {
+        returns: a.tc.clone(),
+        params: Vec::new(),
+        raises: Vec::new(),
+        oneway: false,
+        annotations: a.annotations.clone(),
+    }
+}
+
+/// The synthetic signature of an attribute's `_set_`.
+pub(crate) fn setter_sig(a: &AttributeSig) -> OperationSig {
+    OperationSig {
+        returns: TypeCode::Void,
+        params: vec![orbweaver_registry::ParamSig {
+            name: "value".into(),
+            direction: ParamDirection::In,
+            tc: a.tc.clone(),
+            annotations: BTreeMap::new(),
+        }],
+        raises: Vec::new(),
+        oneway: false,
+        annotations: a.annotations.clone(),
+    }
 }
 
 /// The discriminator: how to write it, read it, and spell one of its values.
@@ -206,16 +366,34 @@ fn representable(tc: &TypeCode, visiting: &mut Vec<String>) -> Result<(), String
 }
 
 fn interface_representable(registry: &Registry, id: &str) -> Result<(), String> {
-    let Some(iface) = registry.interface(id) else { return Ok(()) };
-    for (name, sig) in &iface.operations {
+    if registry.interface(id).is_none() {
+        return Ok(());
+    }
+    // Inherited members too: both halves generate the resolved set, so the
+    // representability check has to cover the resolved set or it would clear an
+    // interface whose base contributes a deferred type.
+    let (operations, attributes) = resolved_members(registry, id);
+    for (name, sig) in &operations {
         representable(&sig.returns, &mut Vec::new())
             .map_err(|why| format!("operation {name} returns: {why}"))?;
         for p in &sig.params {
             representable(&p.tc, &mut Vec::new())
                 .map_err(|why| format!("operation {name}, parameter {}: {why}", p.name))?;
         }
+        // The skeleton marshals raised exceptions, so a `fixed` reachable only
+        // through a `raises` clause has to cascade the skip too — otherwise the
+        // interface generates and the exception type it names never does.
+        for ex in &sig.raises {
+            let Some(tc) = registry.typecode(ex) else {
+                return Err(format!(
+                    "operation {name} raises {ex}, which the registry has no type for"
+                ));
+            };
+            representable(tc, &mut Vec::new())
+                .map_err(|why| format!("operation {name} raises {ex}: {why}"))?;
+        }
     }
-    for (name, a) in &iface.attributes {
+    for (name, a) in &attributes {
         representable(&a.tc, &mut Vec::new()).map_err(|why| format!("attribute {name}: {why}"))?;
     }
     Ok(())
@@ -238,8 +416,13 @@ pub fn emit(registry: &Registry, root: &str) -> Generated {
             Some(Entry::Type(tc)) => {
                 representable(tc, &mut Vec::new()).and_then(|()| emit_type(id, tc, root))
             }
-            Some(Entry::Interface(_)) => interface_representable(registry, id)
-                .and_then(|()| emit_interface(registry, id, root)),
+            // One contract, both halves: the caller's stub and the servant's
+            // skeleton are emitted together, from the same resolved members.
+            Some(Entry::Interface(_)) => interface_representable(registry, id).and_then(|()| {
+                let stub = emit_interface(registry, id, root)?;
+                let skel = skeleton::emit_skeleton(registry, id, root)?;
+                Ok(format!("{stub}\n{skel}"))
+            }),
             Some(Entry::Const { .. }) => {
                 Err("constants are not generated yet: the registry records the type but not the \
                  value"
@@ -257,13 +440,33 @@ pub fn emit(registry: &Registry, root: &str) -> Generated {
     }
 
     let mut src = String::new();
-    let _ = writeln!(src, "// Generated by orbweaver-gen. Names and order only; every");
-    let _ = writeln!(src, "// marshalling decision is a call into orbweaver_gen::rt.");
+    let _ = writeln!(src, "//! Generated by orbweaver-gen from the registry.");
+    let _ = writeln!(src, "//!");
+    let _ = writeln!(src, "//! Names and order only; every marshalling decision is a call into");
+    let _ = writeln!(src, "//! `orbweaver_gen::rt`, so the wire knowledge exists once.");
+    let _ = writeln!(src, "//!");
+    let _ = writeln!(src, "//! Each interface yields a client stub, a servant trait and a");
+    let _ = writeln!(src, "//! skeleton that adapts the trait to `orbweaver_gen::rt::Dispatch`.");
+    // A formatter between the generator and the reader makes "what did this
+    // template change do" unanswerable: the diff fills with rewrapping and the
+    // one changed line hides in it. Generated output is reviewed against the
+    // generator, so it declares its own layout final. rustc never sees this —
+    // nothing sets the `rustfmt` cfg — so it costs the consumer nothing.
+    let _ = writeln!(src, "#![cfg_attr(rustfmt, rustfmt::skip)]");
+    // The generated file is held to the same two rules as everything under
+    // `crates/`: no unsafe, and no undocumented public item. A generator whose
+    // output is exempt from the project's rules teaches that the rules are
+    // negotiable — and the output is the part a consumer actually reads.
+    let _ = writeln!(src, "#![forbid(unsafe_code)]");
+    let _ = writeln!(src, "#![deny(missing_docs)]");
+    let _ = writeln!(src, "#![allow(non_camel_case_types, non_snake_case, dead_code)]");
+    let _ = writeln!(src);
     for (id, why) in &out.skipped {
         let _ = writeln!(src, "// skipped {id}: {why}");
     }
-    let _ = writeln!(src, "#![allow(non_camel_case_types, non_snake_case, dead_code)]");
-    let _ = writeln!(src);
+    if !out.skipped.is_empty() {
+        let _ = writeln!(src);
+    }
     write_modules(&mut src, &by_module, &[], 0);
     out.source = src;
     out
@@ -294,6 +497,7 @@ fn write_modules(
     children.sort();
     children.dedup();
     for child in children {
+        let _ = writeln!(src, "{pad}/// IDL module `{child}`.");
         let _ = writeln!(src, "{pad}pub mod {} {{", ident(child));
         let _ = writeln!(src, "{pad}    use orbweaver_gen::rt::{{self, Cdr}};");
         let mut next = at.to_vec();
@@ -311,7 +515,8 @@ fn emit_type(id: &str, tc: &TypeCode, root: &str) -> Result<String, String> {
             let _ = writeln!(s, "/// IDL {kind} `{id}`.");
             let _ = writeln!(s, "#[derive(Debug, Clone, PartialEq)]");
             let _ = writeln!(s, "pub struct {} {{", ident(name));
-            for m in members {
+            for (i, m) in members.iter().enumerate() {
+                let _ = writeln!(s, "    /// IDL member `{}`, marshalled {}.", m.name, nth(i));
                 let _ = writeln!(s, "    pub {}: {},", ident(&m.name), rust_type(&m.tc, root)?);
             }
             let _ = writeln!(s, "}}");
@@ -345,6 +550,7 @@ fn emit_type(id: &str, tc: &TypeCode, root: &str) -> Result<String, String> {
             let _ = writeln!(s, "#[derive(Debug, Clone, Copy, PartialEq, Eq)]");
             let _ = writeln!(s, "pub enum {} {{", ident(name));
             for (i, m) in members.iter().enumerate() {
+                let _ = writeln!(s, "    /// IDL enumerator `{m}`; ordinal {i} on the wire.");
                 let _ = writeln!(s, "    {} = {i},", ident(m));
             }
             let _ = writeln!(s, "}}");
@@ -443,9 +649,31 @@ fn emit_union(
     let _ = writeln!(s, "pub enum {} {{", ident(name));
     for b in &branches {
         let ty = rust_type(b.tc, root)?;
+        if b.is_default {
+            let _ = writeln!(
+                s,
+                "    /// IDL `default` branch `{}`; `d` is the discriminator",
+                b.member
+            );
+            let _ = writeln!(s, "    /// that selected it, which no label implies.");
+        } else if b.labels.len() > 1 {
+            let _ = writeln!(
+                s,
+                "    /// IDL case `{}`, selected by {}; `d` records which.",
+                b.member,
+                b.labels.join(" or ")
+            );
+        } else {
+            let _ = writeln!(s, "    /// IDL case `{}`, selected by {}.", b.member, b.labels[0]);
+        }
         if b.is_default || b.labels.len() > 1 {
             // The discriminator is not implied by the variant, so it is carried.
-            let _ = writeln!(s, "    {} {{ d: {}, v: {} }},", ident(b.member), disc.ty, ty);
+            let _ = writeln!(s, "    {} {{", ident(b.member));
+            let _ = writeln!(s, "        /// The discriminator value that selected this branch.");
+            let _ = writeln!(s, "        d: {},", disc.ty);
+            let _ = writeln!(s, "        /// The branch value.");
+            let _ = writeln!(s, "        v: {ty},");
+            let _ = writeln!(s, "    }},");
         } else {
             let _ = writeln!(s, "    {}({}),", ident(b.member), ty);
         }
@@ -514,10 +742,16 @@ fn emit_union(
 }
 
 fn emit_interface(registry: &Registry, id: &str, root: &str) -> Result<String, String> {
-    let iface = registry.interface(id).ok_or("not an interface")?;
+    if registry.interface(id).is_none() {
+        return Err("not an interface".to_owned());
+    }
     let name = path_of(id).last().cloned().unwrap_or_default();
 
     let mut s = String::new();
+    if let Some(desc) = registry.annotations(id).and_then(|a| a.get("ai_desc")) {
+        doc(&mut s, desc);
+        doc(&mut s, "");
+    }
     let _ = writeln!(s, "/// Client stub for `{id}`.");
     let _ = writeln!(s, "///");
     let _ = writeln!(s, "/// Static twin of the dynamic path; §8 requires their bytes to be");
@@ -535,43 +769,16 @@ fn emit_interface(registry: &Registry, id: &str, root: &str) -> Result<String, S
     let _ = writeln!(s, "    /// A stub over an open invoker.");
     let _ = writeln!(s, "    pub fn new(conn: C) -> Self {{ Self {{ conn }} }}");
 
-    // Operations, inherited ones included: a stub less capable than the
-    // dynamic invoker would fail the oracle before it failed a user.
-    let mut ops: BTreeMap<String, OperationSig> = BTreeMap::new();
-    let mut ids = vec![id.to_owned()];
-    ids.extend(registry.ancestors(id));
-    for iid in &ids {
-        if let Some(i) = registry.interface(iid) {
-            for (op_name, sig) in &i.operations {
-                ops.entry(op_name.clone()).or_insert_with(|| sig.clone());
-            }
-        }
-    }
+    // Operations and attributes, inherited ones included: a stub less capable
+    // than the dynamic invoker would fail the oracle before it failed a user.
+    let (ops, attrs) = resolved_members(registry, id);
     for (op_name, sig) in &ops {
         emit_operation(&mut s, op_name, op_name, sig, root)?;
     }
-    for (attr, a) in &iface.attributes {
-        let getter = OperationSig {
-            returns: a.tc.clone(),
-            params: Vec::new(),
-            raises: Vec::new(),
-            oneway: false,
-            annotations: BTreeMap::new(),
-        };
-        emit_operation(&mut s, &format!("_get_{attr}"), attr, &getter, root)?;
+    for (attr, a) in &attrs {
+        emit_operation(&mut s, &format!("_get_{attr}"), attr, &getter_sig(a), root)?;
         if !a.readonly {
-            let setter = OperationSig {
-                returns: TypeCode::Void,
-                params: vec![orbweaver_registry::ParamSig {
-                    name: "value".into(),
-                    direction: ParamDirection::In,
-                    tc: a.tc.clone(),
-                    annotations: BTreeMap::new(),
-                }],
-                raises: Vec::new(),
-                oneway: false,
-                annotations: BTreeMap::new(),
-            };
+            let setter = setter_sig(a);
             emit_operation(&mut s, &format!("_set_{attr}"), &format!("set_{attr}"), &setter, root)?;
         }
     }
@@ -586,37 +793,16 @@ fn emit_operation(
     sig: &OperationSig,
     root: &str,
 ) -> Result<(), String> {
-    let mut params = String::new();
-    let mut ins: Vec<&str> = Vec::new();
-    for p in &sig.params {
-        match p.direction {
-            ParamDirection::In | ParamDirection::InOut => {
-                let _ = write!(params, ", {}: {}", ident(&p.name), rust_type(&p.tc, root)?);
-                ins.push(&p.name);
-            }
-            ParamDirection::Out => {}
-        }
-    }
-    // The return: the declared result, then out/inout values in declaration
-    // order (§7.9.1's reply layout, surfaced as a tuple).
-    let mut rets: Vec<String> = Vec::new();
-    if !matches!(sig.returns, TypeCode::Void) {
-        rets.push(rust_type(&sig.returns, root)?);
-    }
-    let mut out_reads: Vec<String> = Vec::new();
-    for p in &sig.params {
-        if matches!(p.direction, ParamDirection::Out | ParamDirection::InOut) {
-            rets.push(rust_type(&p.tc, root)?);
-            out_reads.push(p.name.clone());
-        }
-    }
-    let ret_ty = match rets.len() {
-        0 => "()".to_owned(),
-        1 => rets[0].clone(),
-        _ => format!("({})", rets.join(", ")),
-    };
+    // One shape, read by both halves: the parameters here are exactly the
+    // parameters the servant trait receives.
+    let shape = op_shape(sig, root)?;
+    let (params, ins, ret_ty) = (&shape.args, &shape.ins, &shape.ret_ty);
 
-    let _ = writeln!(s, "    /// `{wire_name}`.");
+    let mut docs = String::new();
+    op_doc(&mut docs, wire_name, &sig.annotations);
+    for line in docs.lines() {
+        let _ = writeln!(s, "    {line}");
+    }
     let _ = writeln!(
         s,
         "    pub fn {}(&mut self{params}) -> Result<{ret_ty}, rt::GiopError> {{",
@@ -627,8 +813,8 @@ fn emit_operation(
     // No arguments, nothing that can fail, no probe.
     if !ins.is_empty() {
         let _ = writeln!(s, "        let mut __probe = rt::Encoder::new(self.conn.endian());");
-        for p in &ins {
-            let _ = writeln!(s, "        {}.put(&mut __probe)?;", ident(p));
+        for (p, _) in ins {
+            let _ = writeln!(s, "        {p}.put(&mut __probe)?;");
         }
         let _ = writeln!(s, "        __probe.finish().map_err(rt::GiopError::Cdr)?;");
     }
@@ -637,29 +823,25 @@ fn emit_operation(
     let closure_arg = "|__e|";
     if sig.oneway {
         let _ = writeln!(s, "        self.conn.invoke_oneway(\"{wire_name}\", {closure_arg} {{");
-        for p in &ins {
-            let _ = writeln!(s, "            let _ = {}.put(__e);", ident(p));
+        for (p, _) in ins {
+            let _ = writeln!(s, "            let _ = {p}.put(__e);");
         }
         let _ = writeln!(s, "        }})");
         let _ = writeln!(s, "    }}");
         return Ok(());
     }
     let _ = writeln!(s, "        let __reply = self.conn.invoke(\"{wire_name}\", {closure_arg} {{");
-    for p in &ins {
-        let _ = writeln!(s, "            let _ = {}.put(__e);", ident(p));
+    for (p, _) in ins {
+        let _ = writeln!(s, "            let _ = {p}.put(__e);");
     }
     let _ = writeln!(s, "        }})?;");
     let mut reads: Vec<String> = Vec::new();
-    if !matches!(sig.returns, TypeCode::Void) || !out_reads.is_empty() {
+    if !shape.rets.is_empty() {
         let _ = writeln!(s, "        let mut __body = __reply.body()?;");
     }
-    if !matches!(sig.returns, TypeCode::Void) {
-        let _ = writeln!(s, "        let __ret = Cdr::get(&mut __body)?;");
-        reads.push("__ret".into());
-    }
-    for (i, name) in out_reads.iter().enumerate() {
-        let _ = writeln!(s, "        let __out_{i} = Cdr::get(&mut __body)?; // out {name}");
-        reads.push(format!("__out_{i}"));
+    for i in 0..shape.rets.len() {
+        let _ = writeln!(s, "        let __r{i} = Cdr::get(&mut __body)?;");
+        reads.push(format!("__r{i}"));
     }
     match reads.len() {
         0 => {
@@ -704,8 +886,10 @@ mod tests {
              default: boolean b; }; };",
         );
         assert!(g.source.contains("one(i32)"), "{}", g.source);
-        assert!(g.source.contains("s { d: i32, v: String }"), "{}", g.source);
-        assert!(g.source.contains("b { d: i32, v: bool }"), "{}", g.source);
+        let s_branch = g.source.split("s {").nth(1).expect("the multi-label branch");
+        assert!(s_branch.contains("d: i32,") && s_branch.contains("v: String,"), "{s_branch}");
+        let b_branch = g.source.split("b {").nth(1).expect("the default branch");
+        assert!(b_branch.contains("d: i32,") && b_branch.contains("v: bool,"), "{b_branch}");
         assert!(g.source.contains("2i32 | 3i32 =>"), "{}", g.source);
         assert!(!g.source.contains("Unlisted_"), "a union with a default has no unlisted arm");
     }

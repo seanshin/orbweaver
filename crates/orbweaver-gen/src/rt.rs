@@ -9,7 +9,15 @@ use orbweaver_giop::Version;
 use orbweaver_giop::codeset::{CodeSetId, WideCodec};
 
 pub use orbweaver_cdr::{Decoder, Encoder, Endian};
+pub use orbweaver_giop::server::{Dispatch, DispatchBody, Request, Server, SystemException};
 pub use orbweaver_giop::{Connection, Error as GiopError, Invoker, Ior, Reply};
+
+/// Repository id every CORBA object answers `_is_a` to.
+///
+/// A generated skeleton answers `_is_a` from the registry's inheritance chain
+/// plus this; an ORB probes with it before it will narrow, so a skeleton that
+/// does not know it is one that cannot be narrowed to.
+pub const OBJECT_ID: &str = "IDL:omg.org/CORBA/Object:1.0";
 
 /// The marshalling contract every generated type implements.
 ///

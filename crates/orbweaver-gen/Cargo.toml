@@ -14,6 +14,15 @@ orbweaver-dynamic = { path = "../orbweaver-dynamic" }
 orbweaver-registry = { path = "../orbweaver-registry" }
 orbweaver-idl = { path = "../orbweaver-idl" }
 
+# The same crates, again: an integration test links the crate under test plus
+# its dev-dependencies, never its dependencies. The wire test drives a generated
+# skeleton over real GIOP, so it needs the framing surface directly.
+[dev-dependencies]
+orbweaver-cdr = { path = "../orbweaver-cdr" }
+orbweaver-giop = { path = "../orbweaver-giop", default-features = false }
+orbweaver-idl = { path = "../orbweaver-idl" }
+orbweaver-registry = { path = "../orbweaver-registry" }
+
 [lints]
 workspace = true
 
