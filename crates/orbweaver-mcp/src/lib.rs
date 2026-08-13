@@ -33,6 +33,7 @@ pub mod guard;
 pub mod handles;
 pub mod identity;
 pub mod policy;
+pub mod promote;
 pub mod rpc;
 pub mod session;
 
