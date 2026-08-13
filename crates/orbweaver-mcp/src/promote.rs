@@ -33,7 +33,10 @@
 //! Honestly stated, per the operating model:
 //!
 //! - **Wiring into the bridge.** Landed since this note was written:
-//!   `Bridge::invoke` records every call into its [`CallStats`], and it now
+//!   `Bridge::invoke` records every call into its [`CallStats`] — since F4
+//!   through [`crate::interceptor::TelemetryInterceptor`], the §4.5 stage that
+//!   owns the counters, so that the chain's telemetry and this module's
+//!   promotion statistics are one store and not two (PLAN-MOE **IF2**) — and it
 //!   writes its audit lines through the same formatter the guard uses — so
 //!   the dynamic line this gate parses can be *captured* from
 //!   `Bridge::audit()` rather than reconstructed from session state. The
@@ -68,6 +71,17 @@ impl CallStats {
     /// An empty history.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An empty history, in a constant.
+    ///
+    /// [`crate::interceptor::Chain::stats`] hands out a reference and has to
+    /// have something to point at when a chain carries no telemetry stage.
+    /// Returning `Option` there would push the same empty case onto every
+    /// caller of `Bridge::stats`, which reads a history for a session that has
+    /// made no calls in exactly the same way.
+    pub const fn empty() -> Self {
+        Self { counts: BTreeMap::new() }
     }
 
     /// Records one call of `operation` on the interface `id` names.

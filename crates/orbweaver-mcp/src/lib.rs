@@ -27,8 +27,9 @@
 //! decisions from annotation text except `ai_effect`, which is matched against
 //! a closed set.
 //!
-//! Every policy decision the dynamic path makes is recorded as an audit line
-//! (§4.8), written through the same formatter [`guard::Guarded`] uses, so for
+//! Every policy decision the dynamic path makes is made by the same
+//! [`interceptor::Chain`] the static path runs — §4.5's stack, in order — and
+//! recorded as an audit line (§4.8) by that chain's audit stage, so for
 //! the same (caller, target, operation) the two paths' lines are equal as
 //! strings — not merely equivalent. That closes §7.4 I4's last seam: the
 //! gen-corpus oracle no longer has to *reconstruct* the dynamic audit line
@@ -41,6 +42,7 @@
 pub mod guard;
 pub mod handles;
 pub mod identity;
+pub mod interceptor;
 pub mod policy;
 pub mod promote;
 pub mod rpc;
@@ -109,19 +111,24 @@ impl From<orbweaver_dynamic::Error> for ToolError {
 /// of a confused deputy (§4.8, R13). Here it cannot be expressed.
 pub struct Bridge<'a> {
     registry: &'a Registry,
+    /// What this session may reach. The gate's copy of it lives in the
+    /// [`interceptor::ExposureInterceptor`]; this one answers
+    /// [`Bridge::exposure`] and the deterministic [`Bridge::check`] question.
+    /// Both are snapshots taken in [`Bridge::new`] and neither is mutable
+    /// afterwards, so they cannot drift apart.
     exposure: Exposure,
     handles: CapabilityTable,
-    /// Per-operation call statistics, feeding the promotion policy (§7.3
-    /// stream B): a hot, stable dynamic path is a candidate for a static stub,
-    /// and the counts that justify that have to come from the real gate.
-    stats: promote::CallStats,
+    /// §4.5's interceptor stack: the gates that decide a call, the telemetry
+    /// stage that counts it (§7.3 stream B's promotion statistics — a hot,
+    /// stable dynamic path is a candidate for a static stub, and the counts
+    /// that justify that have to come from the real gate), and the audit stage
+    /// that records the decision. Every policy decision this session's dynamic
+    /// path makes is made here.
+    chain: interceptor::Chain,
     /// Who this session's calls are on behalf of, when the host authenticated
     /// somebody. `None` is a session nobody is signed into, and operations
     /// whose contract names an `ai_authz` scope will refuse it.
     caller: Option<Caller>,
-    /// Every policy decision this session's dynamic path has made, in
-    /// [`guard::Guarded`]'s exact line format — one formatter writes both.
-    audit: Vec<String>,
 }
 
 impl<'a> Bridge<'a> {
@@ -129,11 +136,10 @@ impl<'a> Bridge<'a> {
     pub fn new(registry: &'a Registry, exposure: Exposure, session: impl Into<String>) -> Self {
         Self {
             registry,
+            chain: interceptor::Chain::standard(exposure.clone()),
             exposure,
             handles: CapabilityTable::new(session),
             caller: None,
-            stats: promote::CallStats::default(),
-            audit: Vec::new(),
         }
     }
 
@@ -166,6 +172,13 @@ impl<'a> Bridge<'a> {
     /// What this session may reach.
     pub fn exposure(&self) -> &Exposure {
         &self.exposure
+    }
+
+    /// The interceptor chain this session's calls run through, for a
+    /// deployment that adds a stage — §4.5's quota seat is empty and this is
+    /// how it gets filled, without touching a built-in.
+    pub fn chain_mut(&mut self) -> &mut interceptor::Chain {
+        &mut self.chain
     }
 
     /// `search_interfaces(query)`.
@@ -240,80 +253,72 @@ impl<'a> Bridge<'a> {
         args: &Json,
         approval: Approval,
     ) -> Result<Json, ToolError> {
-        // The policy decision is recorded the moment it is made — before
-        // anything touches the wire, which is the same point in the call
-        // where [`guard::Guarded`] records its own. `invoke_operation` runs
-        // the identical deterministic check again on its way in; the answer
-        // cannot differ, and keeping the check inside it keeps that function
-        // safe to call on its own.
-        let result = match check_handle(
-            self.registry,
-            &self.exposure,
-            &self.handles,
-            handle,
+        // Resolving the handle is what produces the target the chain gates on,
+        // so the capability table answers upstream of every stage. A forged or
+        // expired handle is refused here, and the chain is told so that the
+        // decision is recorded by the same audit stage as every other one —
+        // named by the handle, since it never resolved to a target, and
+        // counted by nobody, since there is no path to count it against.
+        let Some(id) = self.handles.type_of(handle).map(str::to_owned) else {
+            let refused = ToolError::UnknownHandle(handle.to_owned());
+            let ctx = interceptor::CallContext {
+                registry: self.registry,
+                caller: self.caller.as_ref(),
+                target: handle,
+                operation,
+                approval,
+            };
+            self.chain.unresolved(&ctx, &refused.to_string());
+            return Err(refused);
+        };
+        // §4.5's stack, the same one [`guard::Guarded`] runs, over the target
+        // the *table* named rather than anything the caller asserted.
+        // `invoke_operation` runs the identical deterministic check again on
+        // its way in; the answer cannot differ (the chain and
+        // `Exposure::check_call` are pinned to each other by test), and
+        // keeping the check inside it keeps that function safe to call on its
+        // own.
+        let ctx = interceptor::CallContext {
+            registry: self.registry,
+            caller: self.caller.as_ref(),
+            target: id.as_str(),
             operation,
             approval,
-            self.caller.as_ref(),
-        ) {
-            Ok(id) => {
-                self.audit.push(guard::audit_entry(
-                    "ALLOW",
-                    self.caller.as_ref(),
-                    &id,
-                    operation,
-                    None,
-                ));
-                invoke_operation(
-                    conn,
-                    self.registry,
-                    &self.exposure,
-                    &mut self.handles,
-                    handle,
-                    operation,
-                    args,
-                    approval,
-                    self.caller.as_ref(),
-                )
-            }
-            Err(refused) => {
-                // The line names what the handle names when it names anything
-                // — the same authority the check used — and the handle itself
-                // for a forged or expired one, so the attempt is on record
-                // without inventing a target it never resolved to.
-                let target = self.handles.type_of(handle).unwrap_or(handle).to_owned();
-                self.audit.push(guard::audit_entry(
-                    "REFUSE",
-                    self.caller.as_ref(),
-                    &target,
-                    operation,
-                    Some(&refused.to_string()),
-                ));
-                Err(refused)
-            }
         };
-        // Recorded against what the handle names, not what the caller asserted,
-        // and only for calls that got past the policy: a refused call says
-        // nothing about how hot the operation is.
-        if let Some(id) = self.handles.type_of(handle) {
-            let id = id.to_owned();
-            self.stats.record(&id, operation, result.is_ok());
-        }
+        // A refusal has already unwound through the chain by the time `run`
+        // returns, audit line and counter included.
+        self.chain.run(&ctx)?;
+        let result = invoke_operation(
+            conn,
+            self.registry,
+            &self.exposure,
+            &mut self.handles,
+            handle,
+            operation,
+            args,
+            approval,
+            self.caller.as_ref(),
+        );
+        // The decision was ALLOW whatever became of the call; the counters
+        // record what became of it. Both happen here, in the one unwinding.
+        self.chain.completed(&ctx, result.is_ok());
         result
     }
 
     /// Every decision this session's dynamic path has made, oldest first —
-    /// the mirror of [`guard::Guarded::audit`], produced by the same
-    /// formatter, so for the same (caller, target, operation) the two return
-    /// string-equal lines. Lines name the principal and the operation and
-    /// never credential material, the same rule as
+    /// the mirror of [`guard::Guarded::audit`], written by the same audit
+    /// stage of the same chain, so for the same (caller, target, operation)
+    /// the two return string-equal lines. Lines name the principal and the
+    /// operation and never credential material, the same rule as
     /// [`identity::audit_line`].
     pub fn audit(&self) -> &[String] {
-        &self.audit
+        self.chain.audit()
     }
 
-    /// The call statistics the promotion policy reads.
+    /// The call statistics the promotion policy reads, kept by the chain's
+    /// telemetry stage (PLAN-MOE **IF2**: one store, not two).
     pub fn stats(&self) -> &promote::CallStats {
-        &self.stats
+        self.chain.stats()
     }
 }
 
@@ -1059,6 +1064,31 @@ mod tests {
             b.audit()[1]
         );
         assert!(b.audit()[1].contains("no live reference"), "{}", b.audit()[1]);
+    }
+
+    /// What the telemetry stage counts on the dynamic path, pinned because it
+    /// is the promotion policy's only input and the F4 port moved where the
+    /// counting happens. A call the policy refused is a *failed* call — a path
+    /// that gets refused is not one to freeze into compiled code — but a
+    /// handle that resolved to nothing counts as nothing at all, or a made-up
+    /// handle would be a way to write into the promotion statistics.
+    #[test]
+    fn refusals_are_counted_and_unresolved_handles_are_not() {
+        let r = registry(AUDIT_IDL);
+        let (_listener, ior) = dummy_target();
+        let mut conn = Connection::connect(&ior, Duration::from_secs(5)).expect("dials");
+        let mut b = Bridge::new(&r, Exposure::nothing(), "s").on_behalf_of(Caller::new("alice"));
+        let h = b.handles().issue_checked(&ior).expect("issued");
+
+        let _ = b.invoke(&mut conn, h.as_str(), "balance", &empty_args(), Approval::default());
+        assert_eq!(b.stats().calls("IDL:bank/Account:1.0", "balance"), 1);
+        assert_eq!(b.stats().failures("IDL:bank/Account:1.0", "balance"), 1);
+
+        let forged = "cap_00000000000000000000000000000000";
+        let _ = b.invoke(&mut conn, forged, "balance", &empty_args(), Approval::default());
+        assert_eq!(b.stats().calls(forged, "balance"), 0, "a forged handle named no path");
+        assert_eq!(b.stats().calls("IDL:bank/Account:1.0", "balance"), 1, "and touched no other");
+        assert_eq!(b.audit().len(), 2, "both decisions are still on record");
     }
 
     /// An invoker that swallows what reaches it, so a real `Guarded` can run
