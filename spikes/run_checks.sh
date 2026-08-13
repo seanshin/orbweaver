@@ -809,6 +809,55 @@ else
 fi
 [ "$fo_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
+# ── Wire hardening: stream E — CancelRequest is survivable ───────────────────
+hr "wire hardening — CancelRequest against both peers"
+# §9.4.4 is advisory. Measured: omniORB ignores a 1.2 cancel but CLOSES the
+# connection on a 1.0/1.1 one — so the assertion is coherence, not tolerance:
+# ignored, or refused with a clean client-side failure and a working fresh
+# connection. Desynchronization is the only failure.
+can_fail=0
+if start_server; then
+  cv=$(cargo run -q --bin spike-cancel -- spikes/echo.ior 2>&1)
+  if printf '%s' "$cv" | grep -q "cancel: PASS"; then
+    echo "  ok   omniORB: cancel ignored at 1.2, refused cleanly at 1.0/1.1, never desynchronized"
+  else
+    echo "  FAIL cancel against omniORB"
+    printf '%s' "$cv" | grep FAIL | head -3 | sed 's/^/       /'
+    can_fail=1
+  fi
+else
+  can_fail=1
+fi
+cleanup
+if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
+  pkill -f "classes Server" >/dev/null 2>&1 || true
+  rm -f "$ROOT/spikes/jacorb.ior"
+  ( cd "$ROOT/spikes/jacorb" && exec "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Server ../jacorb.ior \
+      >/tmp/orbweaver-jcan.log 2>&1 & )
+  jc=0
+  for _ in $(seq 1 150); do
+    [ -s "$ROOT/spikes/jacorb.ior" ] && { sleep 0.5; jc=1; break; }
+    sleep 0.1
+  done
+  if [ "$jc" -eq 1 ]; then
+    cv=$(cargo run -q --bin spike-cancel -- spikes/jacorb.ior 2>&1)
+    if printf '%s' "$cv" | grep -q "cancel: PASS"; then
+      echo "  ok   JacORB: coherent too — the second peer's cancel policy measured"
+    else
+      echo "  FAIL cancel against JacORB"
+      printf '%s' "$cv" | grep FAIL | head -3 | sed 's/^/       /'
+      can_fail=1
+    fi
+  else
+    echo "  FAIL JacORB server did not publish an IOR"; can_fail=1
+  fi
+  pkill -f "classes Server" >/dev/null 2>&1 || true
+else
+  echo "  SKIPPED  JacORB half — fixture absent"
+  skipped=$((skipped+1))
+fi
+[ "$can_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
 # ── Identity: what the peers actually advertise ──────────────────────────────
 hr "identity propagation — what a real target says about security"
 # §4.8 predicts that many legacy targets have no authentication at all, and that
