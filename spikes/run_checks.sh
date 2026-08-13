@@ -1088,6 +1088,55 @@ else
   fail_total=$((fail_total+1))
 fi
 
+# ── D004 + console: the emitter into the reader ─────────────────────────────
+hr "observability — real span records through the real console"
+# The two halves were built in separate batches against the record table in
+# the approved decision, never against each other. That is what fixing the
+# shape in the decision buys, and it is worth nothing unless somebody runs one
+# into the other, so the harness does — and it does it with no target dialled,
+# because --dry-run asks the real chain and reaches no peer.
+obs_fail=0
+OBS_JSONL=/tmp/orbweaver-obs.jsonl
+OBS_HTML=/tmp/orbweaver-obs.html
+rm -f "$OBS_JSONL" "$OBS_HTML" "$OBS_JSONL.2"
+cargo run -q -p orbweaver-mcp --bin orbweaver-mcp-server -- \
+  --idl spikes/echo.idl --expose IDL:spike/Echo:1.0 --as alice --session s-harness \
+  --trace "$OBS_JSONL" --trace-ts 2026-08-14T09:00:00Z --dry-run >/dev/null 2>&1
+if [ ! -s "$OBS_JSONL" ]; then
+  echo "  FAIL no span records were emitted"; obs_fail=1
+else
+  # Replay: same calls, same bytes. The record carries no clock, and this is
+  # what makes that claim checkable rather than merely documented.
+  cargo run -q -p orbweaver-mcp --bin orbweaver-mcp-server -- \
+    --idl spikes/echo.idl --expose IDL:spike/Echo:1.0 --as alice --session s-harness \
+    --trace "$OBS_JSONL.2" --trace-ts 2026-08-14T09:00:00Z --dry-run >/dev/null 2>&1
+  if cmp -s "$OBS_JSONL" "$OBS_JSONL.2"; then
+    echo "  ok   $(wc -l < "$OBS_JSONL" | tr -d ' ') span records, and the trace replays byte-identically"
+  else
+    echo "  FAIL the trace did not replay byte-identically"; obs_fail=1
+  fi
+  obs=$(cargo run -q -p orbweaver-console --bin orbweaver-console -- \
+        traces "$OBS_JSONL" 2>&1)
+  case "$obs" in
+    *"0 unclassified, 0 unreadable lines"*)
+      echo "  ok   the console read every record the emitter wrote: $(printf '%s' "$obs" | sed -n 2p | sed 's/^ *//')" ;;
+    *) echo "  FAIL the console could not read the emitter's records"
+       printf '%s' "$obs" | head -3 | sed 's/^/       /'; obs_fail=1 ;;
+  esac
+  # The operator's page must not attack the operator: a repository id is chosen
+  # by whoever we ingested it from.
+  printf '%s\n' '{"ts":"2026-01-01T00:00:00Z","session":"s","caller":"x","target":"IDL:evil/<script>alert(1)</script>:1.0","operation":"go","decision":"dryrun-refuse","stage":"authz.exposure","path":"dynamic","outcome":"-"}' >> "$OBS_JSONL"
+  cargo run -q -p orbweaver-console --bin orbweaver-console -- \
+    traces "$OBS_JSONL" --html "$OBS_HTML" >/dev/null 2>&1
+  page=$(cat "$OBS_HTML" 2>/dev/null)
+  case "$page" in
+    *"<script"*|*"<img"*) echo "  FAIL markup from a trace field rendered as markup"; obs_fail=1 ;;
+    *"&lt;script&gt;"*)    echo "  ok   a hostile repository id renders inert, and is not dropped" ;;
+    *) echo "  FAIL the payload was dropped rather than escaped"; obs_fail=1 ;;
+  esac
+fi
+[ "$obs_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
 # ── Stream E: concurrent connections ─────────────────────────────────────────
 hr "concurrency — many clients at once, and a cap that says no out loud"
 # Every service above documented "one client at a time" as a limit its harness
