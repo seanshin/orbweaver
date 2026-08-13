@@ -32,6 +32,7 @@
 pub mod codeset;
 pub mod csiv2;
 pub mod naming;
+pub mod naming_server;
 pub mod server;
 pub mod ssliop;
 pub mod typecode;

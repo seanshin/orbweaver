@@ -16,7 +16,7 @@
 //! Spec: OMG CORBA 3.4 Part 2, §7.6.10 (object URLs), and the CosNaming
 //! service definition.
 
-use orbweaver_cdr::{Encoder, Endian};
+use orbweaver_cdr::{Decoder, Encoder, Endian};
 
 use crate::{Connection, Error, IiopProfile, Ior, Result, Version};
 use std::time::Duration;
@@ -368,18 +368,110 @@ impl NamingContext {
         Ior::read_from(&mut b)
     }
 
+    /// `NamingContext::bind` — publishes `obj` under `name`.
+    ///
+    /// Never overwrites: a taken name raises `AlreadyBound`, surfaced as
+    /// [`Error::UserException`]. Overwriting is [`NamingContext::rebind`].
+    pub fn bind(&mut self, name: &[NameComponent], obj: &Ior) -> Result<()> {
+        let path = name.to_vec();
+        let obj = obj.clone();
+        self.conn.invoke("bind", move |e| {
+            write_name(e, &path);
+            // A marshalling failure poisons `e` and surfaces from the invoke.
+            let _ = obj.write_to(e);
+        })?;
+        Ok(())
+    }
+
+    /// `NamingContext::rebind` — as [`NamingContext::bind`], but replaces an
+    /// existing *object* binding. A name bound to a context raises `NotFound`
+    /// with `why = not_object`; replacing contexts is `rebind_context`'s job.
+    pub fn rebind(&mut self, name: &[NameComponent], obj: &Ior) -> Result<()> {
+        let path = name.to_vec();
+        let obj = obj.clone();
+        self.conn.invoke("rebind", move |e| {
+            write_name(e, &path);
+            let _ = obj.write_to(e);
+        })?;
+        Ok(())
+    }
+
+    /// `NamingContext::unbind` — removes the binding under `name`.
+    pub fn unbind(&mut self, name: &[NameComponent]) -> Result<()> {
+        let path = name.to_vec();
+        self.conn.invoke("unbind", move |e| write_name(e, &path))?;
+        Ok(())
+    }
+
+    /// `NamingContext::bind_new_context` — creates a context, binds it under
+    /// `name`, and returns its reference.
+    pub fn bind_new_context(&mut self, name: &[NameComponent]) -> Result<Ior> {
+        let path = name.to_vec();
+        let reply = self.conn.invoke("bind_new_context", move |e| write_name(e, &path))?;
+        let mut b = reply.body()?;
+        Ior::read_from(&mut b)
+    }
+
+    /// `NamingContext::list` — up to `how_many` bindings, plus the
+    /// `BindingIterator` reference holding the remainder. A nil iterator
+    /// (check with [`Ior::is_nil`]) means the server will report no more.
+    pub fn list(&mut self, how_many: u32) -> Result<(Vec<Binding>, Ior)> {
+        let reply = self.conn.invoke("list", move |e| e.put_u32(how_many))?;
+        let mut b = reply.body()?;
+        let n = b.get_u32()?;
+        // Each binding costs at least a name length and a binding type.
+        let n = b.validate_count(n, 8)?;
+        let mut bindings = Vec::with_capacity(n);
+        for _ in 0..n {
+            let name = read_name(&mut b)?;
+            let binding_type = b.get_u32()?;
+            bindings.push(Binding { name, is_context: binding_type == 1 });
+        }
+        let iterator = Ior::read_from(&mut b)?;
+        Ok((bindings, iterator))
+    }
+
     /// The underlying connection, for callers that need its knobs.
     pub fn connection(&mut self) -> &mut Connection {
         &mut self.conn
     }
 }
 
-fn write_name(e: &mut Encoder, name: &[NameComponent]) {
+/// One entry reported by `NamingContext::list`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Binding {
+    /// The binding's name, relative to the listed context.
+    pub name: Vec<NameComponent>,
+    /// `true` for `BindingType::ncontext`, `false` for `nobject`.
+    pub is_context: bool,
+}
+
+/// Marshals a CosNaming `Name`: a sequence of `NameComponent`, each an `id`
+/// string followed by a `kind` string.
+///
+/// This and [`read_name`] are the only places that know the wire shape of a
+/// `Name` — the client, the server and the spikes all call them, so the two
+/// halves cannot drift apart (the Phase 3 `wstring` lesson).
+pub fn write_name(e: &mut Encoder, name: &[NameComponent]) {
     e.put_u32(name.len() as u32);
     for c in name {
         e.put_str(&c.id);
         e.put_str(&c.kind);
     }
+}
+
+/// Unmarshals a CosNaming `Name` — the inverse of [`write_name`].
+pub fn read_name(d: &mut Decoder<'_>) -> Result<Vec<NameComponent>> {
+    let n = d.get_u32()?;
+    // Each component costs at least two 4-byte string lengths.
+    let n = d.validate_count(n, 8)?;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let id = String::from_utf8_lossy(d.get_string_bytes()?).into_owned();
+        let kind = String::from_utf8_lossy(d.get_string_bytes()?).into_owned();
+        out.push(NameComponent { id, kind });
+    }
+    Ok(out)
 }
 
 /// Emits the stringified form of a name, escaping the separators.
@@ -532,6 +624,28 @@ mod tests {
                 assert!(name.is_empty());
             }
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// The one wire shape shared by client and server. Both byte orders,
+    /// because a name encoder that only works native-endian passes every
+    /// local test and fails in the field.
+    #[test]
+    fn names_round_trip_on_the_wire_in_both_byte_orders() {
+        let name = [
+            NameComponent { id: "a".into(), kind: "config".into() },
+            NameComponent::new("plain"),
+            NameComponent { id: "함정".into(), kind: String::new() },
+        ];
+        for endian in [Endian::Big, Endian::Little] {
+            for case in [&name[..], &[]] {
+                let mut e = Encoder::new(endian);
+                write_name(&mut e, case);
+                let bytes = e.finish().unwrap();
+                let mut d = Decoder::new(&bytes, endian);
+                assert_eq!(read_name(&mut d).unwrap(), case, "{endian:?}");
+                assert!(d.is_empty(), "{endian:?}: trailing bytes after the name");
+            }
         }
     }
 
