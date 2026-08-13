@@ -593,6 +593,23 @@ s4_tot=$(ls corpus/negative/*.idl | wc -l | tr -d ' ')
 echo "  ok   $s4_cov of $s4_tot rejections carry an actionable fix (a missing separator has no unambiguous one)"
 [ "$s4_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
+# ── Contract and property gate ───────────────────────────────────────────────
+hr "contract-check — seeded round-trip property plus annotation contract advice"
+# Two gates with deliberately different force. A byte-instability in the
+# marshalling core is a defect and fails the run; an annotation finding is
+# advice about meaning, which no deterministic checker can promote to a verdict
+# without inventing a policy the project has not decided. S4 gates syntax and
+# semantics; this gates what the annotations claim.
+cc_out=$(cargo run -q -p orbweaver-test --bin contract-check -- corpus/golden/*.idl 2>&1)
+cc_rc=$?
+if [ "$cc_rc" -ne 0 ]; then
+  printf '%s\n' "$cc_out" | grep -i "defect\|error" | head -3 | sed 's/^/       /'
+  echo "  FAIL byte instability in the marshalling core"
+  fail_total=$((fail_total+1))
+else
+  echo "  ok   $(printf '%s\n' "$cc_out" | tail -2 | head -1)"
+fi
+
 # ── Dynamic invocation: calling with nothing generated ───────────────────────
 hr "dynamic invocation — calls built from IDL text alone"
 # The whole AI path rests on this: invoke_operation gets a name and a bag of

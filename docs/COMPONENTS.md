@@ -22,7 +22,7 @@ Anything requiring a new dependency class needs a decision document first
 | `orbweaver-capability` | ✅ | lives inside mcp (`handles.rs`) rather than its own crate — a location choice, not a gap | expiry policy configuration surface |
 | `orbweaver-identity` | ◐ | CSIv2 wire, delegation policy, hygiene, `Caller` seam | **OAuth2/JWT → Caller exchange; credential store; SSLIOP peer proof** — measured BLOCKED: brew's omniORBpy ships no sslTP binding (C++ SSL transport present in the keg, python half unbuilt); unblock path in `spikes/tls/PEER-STATUS.md` |
 | `orbweaver-gen` | ◐ | Rust client stubs, oracle static=dynamic, I1/I4 | **server skeletons, scaffolds, Python/other targets** |
-| `orbweaver-test` | ❌ → wave 3.5 | nothing | **contract/property tests from annotations; corpus-wide fuzz** — agent launched with this review |
+| `orbweaver-test` | ✅ | seeded round-trip property over 66 golden types × 32 cases × 2 orders × 8 alignment phases (**0 defects**, findings replay from `seed=`), annotation contract advice, `contract-check` in the harness | quota/safety contract rules once a policy exists to check against; recursive types and `fixed` report as `prop/unmeasured` rather than passing |
 | `orbweaver-console` | ❌ | nothing | catalog browser, diff viewer, traces — after OTel decision |
 
 ## Services (PLAN §6) / 서비스
