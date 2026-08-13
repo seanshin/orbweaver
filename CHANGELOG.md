@@ -15,9 +15,10 @@ specification pipeline split into stages that can be measured one at a time.
 
 ### ⚠ Wire behaviour changed / 와이어 동작 변경
 
-Two defects were found and fixed that change the bytes we put on the wire.
-Both were found by an ORB we did not write, which is the only layer that could
-have found them.
+Four defects, in three groups, that change the bytes we put on the wire or
+what we accept from a peer. Two of the three groups were found by a reader we
+did not write — a foreign ORB, and the specification itself where no peer
+could serve as one.
 
 - **`completion_status` was transposed.** `COMPLETED_YES` is ordinal 0 per
   §4.11.4 (confirmed against omniORB before changing anything); our
