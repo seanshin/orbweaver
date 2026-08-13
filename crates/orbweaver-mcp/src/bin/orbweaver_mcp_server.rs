@@ -4,7 +4,8 @@
 //! orbweaver-mcp-server --idl <file.idl>... --ior <file> \
 //!                      [--expose <IDL:module/Iface:1.0[.operation]>]... \
 //!                      [--as <principal>] [--scope <scope>]... \
-//!                      [--dry-run [<IDL:module/Iface:1.0>]]
+//!                      [--dry-run [<IDL:module/Iface:1.0>]] \
+//!                      [--trace <path>|-] [--trace-ts <rfc3339>]
 //! ```
 //!
 //! Exposure is **default-deny**: with no `--expose`, the server starts, answers
@@ -18,6 +19,23 @@
 //! without serving anything. No target is dialled and `--ior` is not required,
 //! because the question is asked before there is a deployment to point at. It
 //! is the instrument for signing an exposure off; see `orbweaver_mcp::dryrun`.
+//!
+//! # `--trace`: one JSON line per decision
+//!
+//! D004 tier 1. `--trace <path>` appends span records to a file, `--trace -`
+//! writes them to stderr, and without the flag nothing is emitted and nothing is
+//! built. The record shape is fixed in `docs/decisions/D004-observability.md`
+//! and implemented in `orbweaver_mcp::telemetry`; it is a machine-read trace,
+//! not a second audit format — the audit lines still go to stderr as they did.
+//!
+//! **`--trace-ts` exists because this process has no clock.** The `ts` field
+//! comes from the caller, which here is the command line: whatever `--trace-ts`
+//! says is what every line of the run carries, and without it every line reads
+//! `"ts":"-"`. That is the honest rendering of a process that never reads a
+//! clock, and it is what makes two runs of the same session byte-identical —
+//! the property the harness diffs against. A server that stamped lines from
+//! `SystemTime::now()` would produce a trace nobody could replay, which is the
+//! discipline D004's table cites (`PLAN-DEFERRED.md` §3).
 //!
 //! # stdout is the protocol
 //!
@@ -35,7 +53,27 @@ use orbweaver_mcp::Bridge;
 use orbweaver_mcp::identity::Caller;
 use orbweaver_mcp::policy::{Approval, Exposure};
 use orbweaver_mcp::session::Session;
+use orbweaver_mcp::telemetry::{CallPath, JsonLines, Timestamp, Trace};
 use orbweaver_registry::Registry;
+
+/// D004's trace for this run: `-` is stderr, anything else is a file.
+///
+/// Opened for **append**. A trace is a ledger and truncating one on start would
+/// lose the run somebody is asking about — and the harness appends across
+/// several invocations on purpose.
+fn trace_for(to: &str, ts: Option<&str>, session: &str) -> Result<Trace, String> {
+    let sink: Box<dyn Write> = if to == "-" {
+        Box::new(std::io::stderr())
+    } else {
+        match std::fs::OpenOptions::new().create(true).append(true).open(to) {
+            Ok(f) => Box::new(f),
+            Err(e) => return Err(format!("{to}: {e}")),
+        }
+    };
+    // No clock is read here or anywhere below. `--trace-ts` or `-`.
+    let ts = ts.map_or_else(Timestamp::unstamped, Timestamp::new);
+    Ok(Trace::new(session, CallPath::Dynamic, ts, JsonLines::new(sink)))
+}
 
 fn main() -> std::process::ExitCode {
     let mut idls: Vec<String> = Vec::new();
@@ -46,6 +84,8 @@ fn main() -> std::process::ExitCode {
     let mut scopes: Vec<String> = Vec::new();
     let mut dry_run = false;
     let mut dry_run_only: Option<String> = None;
+    let mut trace_to: Option<String> = None;
+    let mut trace_ts: Option<String> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -64,11 +104,13 @@ fn main() -> std::process::ExitCode {
                 dry_run = true;
                 Ok(())
             }
+            "--trace" => next("--trace").map(|v| trace_to = Some(v)),
+            "--trace-ts" => next("--trace-ts").map(|v| trace_ts = Some(v)),
             "-h" | "--help" => {
                 eprintln!(
                     "usage: orbweaver-mcp-server --idl <file.idl>... --ior <file> \
                      [--expose <id[.operation]>]... [--as <principal>] [--scope <scope>]... \
-                     [--dry-run[=<id>]]"
+                     [--dry-run[=<id>]] [--trace <path>|-] [--trace-ts <rfc3339>]"
                 );
                 return std::process::ExitCode::SUCCESS;
             }
@@ -162,9 +204,26 @@ fn main() -> std::process::ExitCode {
         // The approval is the one a session starts with — an operator asking
         // "what needs a human?" wants the answer for a session that has not
         // been handed one.
-        let mut bridge = Bridge::new(&registry, exposure, session_id);
+        let mut bridge = Bridge::new(&registry, exposure, session_id.clone());
         if let Some(caller) = caller {
             bridge.set_caller(caller);
+        }
+        // A dry run is traced too, under its own decision tokens: the questions
+        // an operator asked before a deployment are exactly what somebody wants
+        // to read back afterwards. Nothing is dialled and nothing is counted.
+        if let Some(to) = &trace_to {
+            match trace_for(to, trace_ts.as_deref(), &session_id) {
+                Ok(trace) => {
+                    if !bridge.chain_mut().trace(trace) {
+                        eprintln!("no telemetry stage to trace: nothing would be emitted");
+                        return std::process::ExitCode::from(2);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    return std::process::ExitCode::from(2);
+                }
+            }
         }
         let report = match &dry_run_only {
             Some(id) => bridge.dry_run_interface(id, Approval::default()),
@@ -205,7 +264,21 @@ fn main() -> std::process::ExitCode {
         }
     };
 
-    let mut session = Session::new(&registry, exposure, conn, session_id);
+    let mut session = Session::new(&registry, exposure, conn, session_id.clone());
+    if let Some(trace_to) = &trace_to {
+        match trace_for(trace_to, trace_ts.as_deref(), &session_id) {
+            Ok(trace) => {
+                if !session.bridge().chain_mut().trace(trace) {
+                    eprintln!("no telemetry stage to trace: nothing would be emitted");
+                    return std::process::ExitCode::from(2);
+                }
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                return std::process::ExitCode::from(2);
+            }
+        }
+    }
     if let Some(caller) = caller {
         // Without this the audit log says `<nobody>` for every call the
         // process makes, and every `ai_authz` scope refuses. `--as` is a host

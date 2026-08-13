@@ -27,7 +27,7 @@
 //! | 1 | 인증·인가 | [`STAGE_EXPOSURE`], [`STAGE_SCOPES`] | the default-deny allowlist and `ai_authz` |
 //! | 2 | 쿼터·레이트 리밋 | [`SEAT_QUOTA`] | **none** |
 //! | 3 | 안전 필터 | [`STAGE_APPROVAL`], [`SEAT_SAFETY_CONTENT`] | the destructive-effect approval only |
-//! | 4 | 텔레메트리 | [`STAGE_TELEMETRY`] | call counts into [`CallStats`] |
+//! | 4 | 텔레메트리 | [`STAGE_TELEMETRY`] | call counts into [`CallStats`], and D004's span records |
 //! | 5 | 감사 로그 | [`STAGE_AUDIT`] | the one audit formatter |
 //!
 //! The empty seats are named rather than omitted, because **a named empty seat
@@ -49,10 +49,12 @@
 //!   needs the decoded arguments, and this chain deliberately runs before them
 //!   (see below).
 //! - **Telemetry is half-occupied.** §4.5 asks for 지연·토큰·비용 — latency,
-//!   tokens, cost. [`TelemetryInterceptor`] records counts, and nothing else,
-//!   for the reason [`crate::promote`] gives at length: there is no clock in
-//!   scope, and a count-based history is the one that recommends the same
-//!   promotion twice.
+//!   tokens, cost. [`TelemetryInterceptor`] records counts and, since D004 tier
+//!   1, one [`crate::telemetry`] span record per decision. Neither is a
+//!   latency: there is no clock in scope, this batch did not add one, and a
+//!   count-based history is the one that recommends the same promotion twice.
+//!   D004's record takes its `ts` from the caller for exactly that reason, so a
+//!   replay of the same calls produces byte-identical lines.
 //!
 //! # Registration order is not acting order
 //!
@@ -123,6 +125,7 @@ use crate::guard::{
 use crate::identity::Caller;
 use crate::policy::{Approval, Denied, Exposure, destructive_effect, required_scopes};
 use crate::promote::CallStats;
+use crate::telemetry::{ABSENT, Decision, OUTCOME_OK, OUTCOME_REFUSED, Trace};
 
 /// §4.5 #1, the allowlist half: is this interface, and this operation on it,
 /// exposed at all?
@@ -318,6 +321,25 @@ pub trait Interceptor {
     /// What this stage recorded. Default: nothing.
     fn record(&self) -> Record<'_> {
         Record::Nothing
+    }
+
+    /// Offers this stage a [`Trace`] to emit span records into (D004 tier 1).
+    ///
+    /// Returning `Some` hands it back untaken, which is the default: only the
+    /// telemetry stage takes one. The offer travels by value rather than by
+    /// downcast for the same reason [`Record`] exists — a boxed stage reached
+    /// through `dyn Any` would have to be `'static`, and a sink writing to a
+    /// borrowed buffer is exactly what a test wants.
+    fn attach_trace(&mut self, trace: Trace) -> Option<Trace> {
+        Some(trace)
+    }
+
+    /// The trace this stage is emitting into, for a host that restamps it.
+    ///
+    /// `None` from every stage but the telemetry one, and from that one until a
+    /// trace is attached.
+    fn trace_mut(&mut self) -> Option<&mut Trace> {
+        None
     }
 }
 
@@ -518,6 +540,32 @@ impl Chain {
             .unwrap_or(&[])
     }
 
+    /// Puts a [`Trace`] on the telemetry stage, so that every decision this
+    /// chain makes also leaves a D004 span record.
+    ///
+    /// Returns **`false`** when the chain has no telemetry stage — reachable
+    /// only through [`Chain::empty`] plus insertions — and the trace is dropped
+    /// rather than silently held somewhere it would never be read from. D004:
+    /// *absence is reported, never greened.* A caller that ignores this answer
+    /// is a harness reporting a group it did not measure.
+    ///
+    /// Installing a second trace replaces the first, which is how a host swaps
+    /// a `Discard` for a real sink at run time.
+    pub fn trace(&mut self, trace: crate::telemetry::Trace) -> bool {
+        let mut pending = Some(trace);
+        for stage in &mut self.stages {
+            let Some(offer) = pending.take() else { return true };
+            pending = stage.interceptor.attach_trace(offer);
+        }
+        pending.is_none()
+    }
+
+    /// The trace the telemetry stage is emitting into, for a host that restamps
+    /// it — the only way `ts` ever advances, since nothing here reads a clock.
+    pub fn trace_mut(&mut self) -> Option<&mut crate::telemetry::Trace> {
+        self.stages.iter_mut().find_map(|s| s.interceptor.trace_mut())
+    }
+
     /// The counters the chain's telemetry stage kept. Empty when there is no
     /// such stage.
     pub fn stats(&self) -> &CallStats {
@@ -632,20 +680,63 @@ impl Interceptor for ApprovalInterceptor {
 /// failure, because a path that is refused is not one to freeze into compiled
 /// code; an unresolved handle counts as nothing at all, because it named no
 /// path.
+///
+/// # The second thing it keeps, since D004
+///
+/// With a [`Trace`] attached ([`Chain::trace`]), every decision also leaves one
+/// JSON line — `docs/decisions/D004-observability.md` tier 1, whose record shape
+/// is fixed in that document and implemented in [`crate::telemetry`]. The two
+/// are deliberately different instruments over the same events:
+///
+/// | what happened | counted | `decision` | `stage` | `outcome` |
+/// |---|---|---|---|---|
+/// | allowed, completed | call, success | `allow` | `-` | `ok` |
+/// | allowed, failed | call, failure | `allow` | `-` | `-` |
+/// | refused by a stage | call, failure | `refuse` | the stage | `NO_PERMISSION` |
+/// | handle never resolved | **nothing** | `refuse` | `-` | `-` |
+/// | dry run, would allow | **nothing** | `dryrun-allow` | `-` | `-` |
+/// | dry run, would refuse | **nothing** | `dryrun-refuse` | the stage | `-` |
+///
+/// Two rows carry `-` where D004's table offers "the system-exception
+/// repository id", and both are honest gaps rather than choices. The chain is
+/// told `ok: false` and never *which* exception (see [`CallResult::Completed`]),
+/// and an unresolved handle is refused by the capability table upstream of every
+/// stage, so naming `NO_PERMISSION` there would claim the policy refused
+/// something it never saw. Filling either in means widening [`CallResult`],
+/// which is a change to this trait's shape and belongs to a batch that says so.
+///
+/// The last three rows are the property [`crate::promote`] depends on: **a
+/// hypothetical is traced and never counted.** A dry run that touched
+/// [`CallStats`] would recommend freezing into a compiled stub a path nobody
+/// invoked.
 #[derive(Debug, Default)]
 pub struct TelemetryInterceptor {
     stats: CallStats,
+    /// D004's sink, or `None` for a stage that counts and says nothing — which
+    /// is the shipped default and costs one `Option` check per decision.
+    trace: Option<Trace>,
 }
 
 impl TelemetryInterceptor {
-    /// A stage with an empty history.
+    /// A stage with an empty history and no trace.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The same stage, emitting D004 span records into `trace`.
+    pub fn tracing_into(mut self, trace: Trace) -> Self {
+        self.trace = Some(trace);
+        self
     }
 
     /// What it has counted.
     pub fn stats(&self) -> &CallStats {
         &self.stats
+    }
+
+    /// The trace it emits into, if one is attached.
+    pub fn trace(&self) -> Option<&Trace> {
+        self.trace.as_ref()
     }
 }
 
@@ -657,16 +748,30 @@ impl Interceptor for TelemetryInterceptor {
     }
 
     fn after(&mut self, ctx: &CallContext<'_>, result: &CallResult<'_>) {
-        match result {
-            CallResult::Completed { ok } => self.stats.record(ctx.target, ctx.operation, *ok),
-            CallResult::Refused { .. } => self.stats.record(ctx.target, ctx.operation, false),
+        // The counters first and unconditionally: the trace is an addition to
+        // this stage and must not become a condition of it. A `None` trace is
+        // the shipped configuration.
+        let (decision, stage, outcome) = match result {
+            CallResult::Completed { ok } => {
+                self.stats.record(ctx.target, ctx.operation, *ok);
+                (Decision::Allow, None, if *ok { OUTCOME_OK } else { ABSENT })
+            }
+            CallResult::Refused { stage, .. } => {
+                self.stats.record(ctx.target, ctx.operation, false);
+                (Decision::Refuse, Some(*stage), OUTCOME_REFUSED)
+            }
             // No target was resolved, so there is nothing to count against —
-            // see [`Chain::unresolved`].
-            CallResult::Unresolved { .. } => {}
+            // see [`Chain::unresolved`]. It is still *traced*: the decision
+            // happened, and a console that could not see it would be missing
+            // precisely the calls somebody forged a handle for.
+            CallResult::Unresolved { .. } => (Decision::Refuse, None, ABSENT),
+        };
+        if let Some(trace) = self.trace.as_mut() {
+            trace.record(ctx, decision, stage, outcome);
         }
     }
 
-    /// Deliberately nothing, and written out rather than left to the default.
+    /// Traced, never counted, and written out rather than left to the default.
     ///
     /// [`CallStats`] is the promotion policy's only input (§7.3 stream B). A
     /// hypothetical counted as a call would recommend freezing into a compiled
@@ -680,10 +785,33 @@ impl Interceptor for TelemetryInterceptor {
     /// [`Chain`], and nothing reads it — the audit line already names the
     /// caller, target and operation of every question asked, and it is
     /// greppable by its own decision token.
-    fn considered(&mut self, _ctx: &CallContext<'_>, _dry: &DryRun) {}
+    ///
+    /// Since D004 it is also *traced*, under `dryrun-allow` / `dryrun-refuse`.
+    /// That does not weaken the paragraph above: the trace is a record of a
+    /// question and the counters are a record of calls, which is the same
+    /// separation the audit line's own decision token draws. `outcome` is
+    /// [`ABSENT`] because a call that did not happen has none — a hypothetical
+    /// with an outcome would be a prediction wearing a measurement's clothes.
+    fn considered(&mut self, ctx: &CallContext<'_>, dry: &DryRun) {
+        let Some(trace) = self.trace.as_mut() else { return };
+        let (decision, stage) = match dry.refusal() {
+            None => (Decision::DryRunAllow, None),
+            Some((stage, _)) => (Decision::DryRunRefuse, Some(stage)),
+        };
+        trace.record(ctx, decision, stage, ABSENT);
+    }
 
     fn record(&self) -> Record<'_> {
         Record::Counters(&self.stats)
+    }
+
+    fn attach_trace(&mut self, trace: Trace) -> Option<Trace> {
+        self.trace = Some(trace);
+        None
+    }
+
+    fn trace_mut(&mut self) -> Option<&mut Trace> {
+        self.trace.as_mut()
     }
 }
 
@@ -1133,6 +1261,174 @@ mod tests {
         let before: Vec<_> = chain.stages().collect();
         assert!(!chain.insert_after("no.such.stage", "x", ScopeInterceptor));
         assert_eq!(chain.stages().collect::<Vec<_>>(), before);
+    }
+
+    // --- D004 tier 1: the span record on this stage ---
+
+    /// A sink that keeps whole lines, so the assertions are about what a
+    /// console would actually read rather than about a struct.
+    #[derive(Default)]
+    struct Captured(Rc<RefCell<Vec<String>>>);
+
+    impl crate::telemetry::TelemetrySink for Captured {
+        fn emit(&mut self, record: &crate::telemetry::SpanRecord<'_>) {
+            self.0.borrow_mut().push(record.to_line());
+        }
+    }
+
+    fn traced(exposure: Exposure, lines: &Rc<RefCell<Vec<String>>>) -> Chain {
+        use crate::telemetry::{CallPath, Timestamp};
+        let mut chain = Chain::standard(exposure);
+        assert!(
+            chain.trace(Trace::new(
+                "s-1",
+                CallPath::Dynamic,
+                // Supplied, never read from a clock: see the module docs.
+                Timestamp::new("2026-08-14T09:00:00Z"),
+                Captured(Rc::clone(lines)),
+            )),
+            "the standard stack always has a telemetry stage to take it"
+        );
+        chain
+    }
+
+    /// Every decided call leaves exactly one record, and the four decisions are
+    /// distinguishable — which is the whole of what `orbweaver-console` is being
+    /// built against.
+    #[test]
+    fn every_decision_leaves_exactly_one_span_record() {
+        let reg = registry(IDL);
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let mut chain = traced(Exposure::nothing().allow_operation(ACCOUNT, "balance"), &lines);
+
+        // 1. allowed and completed.
+        let allowed = ctx(&reg, None, "balance", Approval::default());
+        chain.run(&allowed).expect("exposed");
+        chain.completed(&allowed, true);
+        // 2. refused, by a named stage.
+        let refused = ctx(&reg, None, "close", Approval::default());
+        chain.run(&refused).unwrap_err();
+        // 3. and 4. both dry-run variants.
+        chain.dry_run(&allowed);
+        chain.dry_run(&refused);
+        // 5. a handle that never resolved.
+        let forged = CallContext {
+            registry: &reg,
+            caller: None,
+            target: "cap_00000000000000000000000000000000",
+            operation: "balance",
+            approval: Approval::default(),
+        };
+        chain.unresolved(&forged, "no live reference is held under that handle");
+
+        let lines = lines.borrow().clone();
+        assert_eq!(lines.len(), 5, "one record per decision: {lines:#?}");
+        let field = |line: &str, key: &str| {
+            orbweaver_dynamic::json::Json::parse(line)
+                .unwrap_or_else(|e| panic!("{e}: {line}"))
+                .get(key)
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .unwrap_or_else(|| panic!("no {key} in {line}"))
+        };
+        let decisions: Vec<String> = lines.iter().map(|l| field(l, "decision")).collect();
+        assert_eq!(decisions, ["allow", "refuse", "dryrun-allow", "dryrun-refuse", "refuse"]);
+        assert_eq!(field(&lines[0], "outcome"), "ok");
+        assert_eq!(field(&lines[1], "stage"), STAGE_EXPOSURE, "the refusing stage is named");
+        assert_eq!(field(&lines[1], "outcome"), crate::guard::NO_PERMISSION);
+        assert_eq!(field(&lines[3], "stage"), STAGE_EXPOSURE);
+        assert_eq!(field(&lines[4], "target"), "cap_00000000000000000000000000000000");
+        assert_eq!(field(&lines[4], "stage"), "-", "no stage refused an unresolved handle");
+    }
+
+    /// The property [`crate::promote`] depends on, asserted on both halves at
+    /// once: a dry run **is** traced and **is not** counted.
+    #[test]
+    fn a_dry_run_is_traced_and_still_counts_nothing() {
+        let reg = registry(IDL);
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let mut chain = traced(Exposure::nothing().allow_interface(ACCOUNT), &lines);
+        let call = ctx(&reg, None, "balance", Approval::default());
+
+        for _ in 0..3 {
+            chain.dry_run(&call);
+        }
+        assert_eq!(lines.borrow().len(), 3, "the questions are on the record");
+        assert!(lines.borrow().iter().all(|l| l.contains("\"decision\":\"dryrun-allow\"")));
+        assert!(
+            lines.borrow().iter().all(|l| l.contains("\"outcome\":\"-\"")),
+            "a call that did not happen has no outcome"
+        );
+        assert_eq!(chain.stats().calls(ACCOUNT, "balance"), 0, "a hypothetical is not a call");
+        assert_eq!(chain.stats().failures(ACCOUNT, "balance"), 0);
+    }
+
+    /// The no-clock discipline, measured rather than asserted: the same calls
+    /// twice produce byte-identical bytes, because the only time in a record is
+    /// the one the caller supplied.
+    #[test]
+    fn two_runs_of_the_same_calls_produce_byte_identical_traces() {
+        use crate::telemetry::{CallPath, JsonLines, Timestamp};
+
+        /// An `io::Write` the test can still read after the chain has taken
+        /// ownership of it.
+        struct SharedBytes(Rc<RefCell<Vec<u8>>>);
+
+        impl std::io::Write for SharedBytes {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.borrow_mut().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        fn session(reg: &Registry) -> Vec<u8> {
+            let bytes = Rc::new(RefCell::new(Vec::new()));
+            let mut chain =
+                Chain::standard(Exposure::nothing().allow_operation(ACCOUNT, "balance"));
+            assert!(chain.trace(Trace::new(
+                "s-1",
+                CallPath::Dynamic,
+                Timestamp::new("2026-08-14T09:00:00Z"),
+                JsonLines::new(SharedBytes(Rc::clone(&bytes))),
+            )));
+            let allowed = ctx(reg, None, "balance", Approval::default());
+            let refused = ctx(reg, None, "close", Approval::default());
+            chain.run(&allowed).expect("exposed");
+            chain.completed(&allowed, true);
+            chain.run(&refused).unwrap_err();
+            chain.dry_run(&allowed);
+            chain.dry_run(&refused);
+            // Read back through the shared handle: the chain owns the writer.
+            let out = bytes.borrow().clone();
+            drop(chain);
+            out
+        }
+
+        let reg = registry(IDL);
+        let first = session(&reg);
+        let second = session(&reg);
+        assert!(!first.is_empty());
+        assert_eq!(first, second, "a replay must be byte-identical");
+        assert_eq!(String::from_utf8(first).expect("utf-8").lines().count(), 4);
+    }
+
+    /// D004: absence is reported, never greened. A chain with no telemetry
+    /// stage cannot take a trace and says so, rather than accepting one that
+    /// would never emit.
+    #[test]
+    fn a_chain_without_a_telemetry_stage_refuses_the_trace() {
+        use crate::telemetry::{CallPath, Discard, Timestamp};
+        let mut chain = Chain::empty();
+        chain.push(STAGE_SCOPES, ScopeInterceptor);
+        assert!(!chain.trace(Trace::new(
+            "s-1",
+            CallPath::Dynamic,
+            Timestamp::unstamped(),
+            Discard
+        )));
+        assert!(chain.trace_mut().is_none());
     }
 
     #[test]

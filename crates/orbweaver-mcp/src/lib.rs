@@ -49,6 +49,7 @@ pub mod policy;
 pub mod promote;
 pub mod rpc;
 pub mod session;
+pub mod telemetry;
 
 use std::collections::{BTreeMap, BTreeSet};
 
