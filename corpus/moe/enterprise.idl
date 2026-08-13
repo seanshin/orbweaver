@@ -1,0 +1,64 @@
+// REVIEW FINDINGS (2026-08-14), fixed here and reported in PLAN-MOE.md:
+//   1. `Context` is an OMG IDL keyword (the context clause) — both omniidl and
+//      our front end reject it. Renamed to CallContext.
+//   2. `Residency residency` is the case-insensitive identifier clash that is
+//      this project's codified dominant failure. Member renamed to `state`.
+// Enterprise model composition (§9.5 of docs/CORBAMoEArchitecture.md),
+// extracted for oracle validation. Depends on moe.idl's module; kept
+// self-contained here by re-declaring the base module (single-file oracles).
+module moe {
+  typedef sequence<octet> Tensor;
+  typedef string          CapabilityId;
+  struct Activation { Tensor data; string dtype; string shape; };
+  struct CallContext    { string request_id; string trace_id; unsigned long step; };
+  struct Capability { CapabilityId id; float cost; };
+  interface Expert {
+    Capability describe();
+    Activation process(in Activation x, in CallContext ctx);
+  };
+
+  module enterprise {
+
+    struct Manifest {
+      string                         tenant_id;
+      string                         base_model;
+      sequence< ::moe::CapabilityId> experts;
+      string                         policy_domain;
+      string                         version;
+      string                         residency_region;
+    };
+
+    //@ ai_desc: A tenant expert: shared base by reference, owned delta only
+    interface EnterpriseExpert : ::moe::Expert {
+      string        get_tenant_id();
+      ::moe::Expert base();
+      ::moe::Tensor adapter_delta();
+    };
+
+    //@ ai_desc: Governance as a first-class object
+    interface PolicyDomain {
+      //@ ai_effect: read_only
+      boolean authorize(in string principal, in ::moe::CapabilityId target);
+      //@ ai_effect: read_only
+      boolean check_residency(in string placement_node);
+      void    audit(in ::moe::CallContext ctx, in string event);
+    };
+
+    //@ ai_desc: The composed enterprise model: base + experts + policy
+    interface ComposedModel {
+      Manifest          get_manifest();
+      ::moe::Activation infer(in ::moe::Activation x, in ::moe::CallContext ctx);
+      void              bind_expert(in EnterpriseExpert e);
+      void              set_policy(in PolicyDomain p);
+    };
+
+    //@ ai_desc: CosLifeCycle-style factory for tenant model instances
+    interface ModelFactory {
+      ComposedModel create(in Manifest m);
+      ComposedModel clone_model(in ComposedModel src, in string new_version);
+      //@ ai_effect: destructive
+      void          retire(in ComposedModel m);
+      void          deploy(in ComposedModel m);
+    };
+  };
+};

@@ -1,0 +1,67 @@
+// REVIEW FINDINGS (2026-08-14), fixed here and reported in PLAN-MOE.md:
+//   1. `Context` is an OMG IDL keyword (the context clause) — both omniidl and
+//      our front end reject it. Renamed to CallContext.
+//   2. `Residency residency` is the case-insensitive identifier clash that is
+//      this project's codified dominant failure. Member renamed to `state`.
+// MoE control plane contract, extracted verbatim (§7) from
+// docs/CORBAMoEArchitecture.md for validation against the S4 gate and the
+// differential oracles. Stream F batch 1 promotes these into corpus/golden
+// once every oracle agrees.
+module moe {
+
+  typedef sequence<octet> Tensor;      // reference-carrying; never inlined
+  typedef string          CapabilityId;
+
+  enum Residency { OFFLOADED, PREFETCHING, RESIDENT, ACTIVE };
+
+  struct Activation { Tensor data; string dtype; string shape; };
+  struct CallContext    { string request_id; string trace_id; unsigned long step; };
+
+  struct Capability {
+    CapabilityId id;
+    float        cost;
+    float        latency_p99_ms;
+    float        load;
+    Residency    state;
+    unsigned long long mem_footprint;
+    float        route_freq;
+    string       placement_node;
+    string       contract_version;
+  };
+
+  struct GateSignal  { Tensor affinity; unsigned short top_k; };
+  struct Constraints { CapabilityId required; float max_latency_ms; float max_cost; };
+
+  //@ ai_desc: An expert weight block or submodel, addressable and loadable
+  interface Expert {
+    //@ ai_desc: The capability contract this expert registers under
+    //@ ai_effect: read_only
+    Capability describe();
+    Activation process(in Activation x, in CallContext ctx);
+    Expert     delegate(in Capability need);
+  };
+  typedef sequence<Expert> ExpertSeq;
+
+  //@ ai_desc: Control-plane gate: selects and dispatches to experts
+  interface Router {
+    ExpertSeq  select(in GateSignal g, in Constraints qos);
+    Activation dispatch(in Activation x, in CallContext ctx);
+  };
+
+  //@ ai_desc: Offer registry the trading service reads
+  interface ExpertRegistry {
+    void register_expert(in Expert e, in Capability cap);
+    void deregister(in Expert e);
+    void heartbeat(in Expert e, in Capability updated_cap);
+  };
+
+  //@ ai_desc: POA-backed loader: residency transitions, never per token
+  interface ExpertLoader {
+    //@ ai_effect: idempotent
+    oneway void prefetch(in CapabilityId id);
+    void  evict(in CapabilityId id);
+    void  pin(in CapabilityId id);
+    //@ ai_effect: read_only
+    Residency status(in CapabilityId id);
+  };
+};
