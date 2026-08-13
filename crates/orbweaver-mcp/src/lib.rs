@@ -102,6 +102,10 @@ pub struct Bridge<'a> {
     registry: &'a Registry,
     exposure: Exposure,
     handles: CapabilityTable,
+    /// Per-operation call statistics, feeding the promotion policy (§7.3
+    /// stream B): a hot, stable dynamic path is a candidate for a static stub,
+    /// and the counts that justify that have to come from the real gate.
+    stats: promote::CallStats,
     /// Who this session's calls are on behalf of, when the host authenticated
     /// somebody. `None` is a session nobody is signed into, and operations
     /// whose contract names an `ai_authz` scope will refuse it.
@@ -111,7 +115,13 @@ pub struct Bridge<'a> {
 impl<'a> Bridge<'a> {
     /// A session over `registry`, exposing exactly what `exposure` allows.
     pub fn new(registry: &'a Registry, exposure: Exposure, session: impl Into<String>) -> Self {
-        Self { registry, exposure, handles: CapabilityTable::new(session), caller: None }
+        Self {
+            registry,
+            exposure,
+            handles: CapabilityTable::new(session),
+            caller: None,
+            stats: promote::CallStats::default(),
+        }
     }
 
     /// Uses a capability table the caller already has, for a bridge that keeps
@@ -217,7 +227,7 @@ impl<'a> Bridge<'a> {
         args: &Json,
         approval: Approval,
     ) -> Result<Json, ToolError> {
-        invoke_operation(
+        let result = invoke_operation(
             conn,
             self.registry,
             &self.exposure,
@@ -227,7 +237,20 @@ impl<'a> Bridge<'a> {
             args,
             approval,
             self.caller.as_ref(),
-        )
+        );
+        // Recorded against what the handle names, not what the caller asserted,
+        // and only for calls that got past the policy: a refused call says
+        // nothing about how hot the operation is.
+        if let Some(id) = self.handles.type_of(handle) {
+            let id = id.to_owned();
+            self.stats.record(&id, operation, result.is_ok());
+        }
+        result
+    }
+
+    /// The call statistics the promotion policy reads.
+    pub fn stats(&self) -> &promote::CallStats {
+        &self.stats
     }
 }
 
