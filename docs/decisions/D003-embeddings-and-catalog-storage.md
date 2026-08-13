@@ -1,6 +1,12 @@
 # D003 — Embeddings and catalog storage: which dependencies, if any
 
-**STATUS: PROPOSED** — drafted 2026-08-13. Nothing below is adopted until a
+**STATUS: APPROVED** — proposed 2026-08-14, approved the same day by the
+user ("승인, 진행"). Both halves are now policy: (A) embeddings arrive through
+an external command wrapper, no Cargo dependency, judged against the frozen
+benchmark; (B) the durable store stays deferred, with the pre-cleared
+adoption path on record for the batch that a pilot requirement will trigger.
+**상태: 승인됨** — 2026-08-14 제안·승인. (A) 임베딩은 외부 명령 래퍼로, Cargo
+의존성 없이, 동결 벤치마크로 판정. (B) 영속 저장소는 보류하되 채택 경로는 기록.
 human approves. Two coupled questions, one document, because they gate the same
 two service rows in `docs/COMPONENTS.md` and would share a store if both land.
 **상태: 제안** — 2026-08-13 작성. 사람이 승인하기 전에는 아무것도 채택되지
