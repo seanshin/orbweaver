@@ -1,0 +1,9 @@
+// `Residency residency` — the project's codified dominant failure (a member
+// clashing case-insensitively with its type), this time found in a REAL
+// external architecture document: docs/CORBAMoEArchitecture.md §7, whose IDL
+// did not compile as written (PLAN-MOE §1). The rule catches outside authors
+// exactly as it catches generators. Corrected in corpus/golden/22 (→ `state`).
+module n12 {
+  enum Residency { OFFLOADED, PREFETCHING, RESIDENT, ACTIVE };
+  struct Capability { Residency residency; };
+};

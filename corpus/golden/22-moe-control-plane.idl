@@ -1,12 +1,12 @@
-// REVIEW FINDINGS (2026-08-14), fixed here and reported in PLAN-MOE.md:
-//   1. `Context` is an OMG IDL keyword (the context clause) — both omniidl and
-//      our front end reject it. Renamed to CallContext.
-//   2. `Residency residency` is the case-insensitive identifier clash that is
-//      this project's codified dominant failure. Member renamed to `state`.
-// MoE control plane contract, extracted verbatim (§7) from
-// docs/CORBAMoEArchitecture.md for validation against the S4 gate and the
-// differential oracles. Stream F batch 1 promotes these into corpus/golden
-// once every oracle agrees.
+// 22 — operations returning interfaces (Expert delegate), oneway, and a
+// sequence of object references (ExpertSeq) as a return type — none of which
+// 01–21 combine. Adopted from a real external design, docs/CORBAMoEArchitecture.md
+// §7, after the two corrections in PLAN-MOE §1 (Context → CallContext,
+// residency → state); the original defects are corpus/negative/n11 and n12.
+// Parameters the document named `e` are `ex` here: gen-corpus binds its
+// encoder closure argument as `e`, and this batch's compile oracle caught the
+// generated stub shadowing it (`e.put(e)`) — a generator hygiene bug, filed
+// for a crate-side fix; until then a param spelled `e` cannot be golden.
 module moe {
 
   typedef sequence<octet> Tensor;      // reference-carrying; never inlined
@@ -50,9 +50,9 @@ module moe {
 
   //@ ai_desc: Offer registry the trading service reads
   interface ExpertRegistry {
-    void register_expert(in Expert e, in Capability cap);
-    void deregister(in Expert e);
-    void heartbeat(in Expert e, in Capability updated_cap);
+    void register_expert(in Expert ex, in Capability cap);
+    void deregister(in Expert ex);
+    void heartbeat(in Expert ex, in Capability updated_cap);
   };
 
   //@ ai_desc: POA-backed loader: residency transitions, never per token
