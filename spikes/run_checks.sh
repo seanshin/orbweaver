@@ -797,6 +797,12 @@ if start_server; then
   else
     echo "  note omniORB advertises: $csi"
   fi
+  ssl=$(cargo run -q --bin spike-dump -- spikes/echo.ior 2>/dev/null | grep '^ssliop')
+  if printf '%s' "$ssl" | grep -q "no TAG_SSL_SEC_TRANS"; then
+    echo "  ok   and no TAG_SSL_SEC_TRANS either — TLS work (D002) starts from a measured baseline"
+  else
+    echo "  note omniORB ssliop: $ssl"
+  fi
 else
   id_fail=1
 fi
