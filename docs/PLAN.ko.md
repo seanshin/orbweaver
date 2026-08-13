@@ -612,10 +612,10 @@ CDR은 태그가 아니라 위치로 인코딩한다. protobuf에서 직관을 �
 
 #### 스트림 E — 와이어 견고화 (이월되어 온 알려진 공백의 묶음)
 
-- **무엇:** 매 단계 보고서가 이월해 온 목록: 단편 *수신*의 독립 검증,
-  `LocateRequest`/`CancelRequest`/`CloseConnection` 송신 경로, 요청 다중화,
-  연결 풀링, 다중 프로파일 페일오버, `TAG_ALTERNATE_IIOP_ADDRESS`,
-  `#pragma prefix`.
+- **무엇:** 이월 목록 대부분 착지: ~~`LocateRequest`~~, ~~`CancelRequest`/
+  `CloseConnection` 송신~~, ~~다중 프로파일 페일오버~~,
+  ~~`TAG_ALTERNATE_IIOP_ADDRESS`~~ (전부 두 피어로 실측, 2026-08-13/14).
+  잔여: 단편 *수신*의 독립 검증, 요청 다중화, 연결 풀링, `#pragma prefix`.
 - **의존성:** 없음. 순수 `orbweaver-giop` 작업.
 - **일괄 단위:** 능력 하나를 **두 피어 × GIOP 세 버전**에 한 번에.
 - **오라클:** 상호운용 하네스. 독립 피어 검증이 없는 능력은 매번 보고서에

@@ -658,10 +658,11 @@ produces), and **oracle** (what verifies the whole batch deterministically).
 
 #### Stream E — Wire hardening (carried-forward known gaps, now grouped)
 
-- **What:** the list every phase report has carried forward: fragment
-  *reception* validated independently, `LocateRequest`/`CancelRequest`/
-  `CloseConnection` send paths, request multiplexing, connection pooling,
-  multi-profile failover, `TAG_ALTERNATE_IIOP_ADDRESS`, `#pragma prefix`.
+- **What:** the carried-forward list, now mostly landed: ~~`LocateRequest`~~,
+  ~~`CancelRequest`/`CloseConnection` send~~, ~~multi-profile failover~~,
+  ~~`TAG_ALTERNATE_IIOP_ADDRESS`~~ (all measured against both peers,
+  2026-08-13/14). Remaining: fragment *reception* validated independently,
+  request multiplexing, connection pooling, `#pragma prefix`.
 - **Depends on:** nothing. Pure `orbweaver-giop` work.
 - **Batch unit:** one capability across **both peers and all three GIOP
   versions** at once.

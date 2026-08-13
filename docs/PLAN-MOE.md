@@ -78,11 +78,11 @@ latency claims are oracle-checked against **deterministic routing traces**, not
 against live accelerators this repo does not have — stated now so nobody
 reports an unmeasurable number later.
 
-- **F1 — contracts into the corpus.** Unit: `corpus/moe/*.idl` → golden corpus
+- **F1 — contracts into the corpus.** ✅ *landed 2026-08-14: golden 22/23, negative n11/n12, a fourth divergences entry, and a generator-hygiene bug (closure shadowed by a parameter named `e`) caught and fixed.* Unit: `corpus/moe/*.idl` → golden corpus
   + negative cases minted from the original `Context`/`residency` defects.
   Oracle: S4 + differential (three front ends) + gen-corpus compile.
   *Status: validation half already measured green (above).*
-- **F2 — Trading Service** (`orbweaver-trading`). Offer store (Capability
+- **F2 — Trading Service** ✅ *decision engine landed 2026-08-14 (`orbweaver-trading`, 37 tests); wire surface deferred to after F3 — see PLAN-SERVICES §3.* Original scope: Offer store (Capability
   properties), constraint-query subset (`specialization == 'math' AND
   latency_p99 < 200`), deterministic ordering. Oracle: property-query tests
   over fixture offers; the §6 loading policy (`score = route_freq ×
@@ -108,6 +108,12 @@ handles at the MCP face, never IORs (transcript-leak test reused). **IF2**
 F4's telemetry and stream B's promotion stats are one store, not two.
 
 ## 4. Core CORBA services coverage / CORBA 필수 서비스 커버리지
+
+> Deepened into a dedicated suite plan: [`PLAN-SERVICES.md`](PLAN-SERVICES.md)
+> (2026-08-14). The table below is the audit snapshot; the suite plan is the
+> living document. F6 landed 2026-08-14 with both oracle directions measured.
+> 이 표는 실사 시점의 스냅숏이며, 서비스 스위트의 살아있는 계획은
+> `PLAN-SERVICES.md`다. F6은 양방향 오라클 실측과 함께 착지했다.
 
 Requested review (2026-08-14): does the plan actually cover the classic
 service suite the architecture leans on? Audit of PLAN v0.6 + this supplement:
