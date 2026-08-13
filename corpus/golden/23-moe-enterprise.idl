@@ -1,11 +1,7 @@
-// REVIEW FINDINGS (2026-08-14), fixed here and reported in PLAN-MOE.md:
-//   1. `Context` is an OMG IDL keyword (the context clause) — both omniidl and
-//      our front end reject it. Renamed to CallContext.
-//   2. `Residency residency` is the case-insensitive identifier clash that is
-//      this project's codified dominant failure. Member renamed to `state`.
-// Enterprise model composition (§9.5 of docs/CORBAMoEArchitecture.md),
-// extracted for oracle validation. Depends on moe.idl's module; kept
-// self-contained here by re-declaring the base module (single-file oracles).
+// 23 — interface inheritance across nested modules (enterprise::EnterpriseExpert
+// : ::moe::Expert) with absolutely-scoped cross-module member and return types.
+// Adopted from docs/CORBAMoEArchitecture.md §9.5 via PLAN-MOE §1's corrections;
+// self-contained: single-file oracles need the base module re-declared here.
 module moe {
   typedef sequence<octet> Tensor;
   typedef string          CapabilityId;
@@ -48,7 +44,7 @@ module moe {
     interface ComposedModel {
       Manifest          get_manifest();
       ::moe::Activation infer(in ::moe::Activation x, in ::moe::CallContext ctx);
-      void              bind_expert(in EnterpriseExpert e);
+      void              bind_expert(in EnterpriseExpert ex);  // `e` shadows gen-corpus's encoder binding, see 22's header
       void              set_policy(in PolicyDomain p);
     };
 

@@ -1,0 +1,6 @@
+// A struct named Context: `context` is an OMG IDL keyword (the context
+// clause), and keyword collisions are case-insensitive. Found in a REAL
+// external architecture document — docs/CORBAMoEArchitecture.md §7, whose IDL
+// did not compile as written (PLAN-MOE §1). The corrected contract is
+// corpus/golden/22-moe-control-plane.idl (Context → CallContext).
+module n11 { struct Context { string request_id; string trace_id; unsigned long step; }; };
