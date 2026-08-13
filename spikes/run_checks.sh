@@ -858,6 +858,40 @@ else
 fi
 [ "$can_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
+# ── F6: the first-party CosNaming server ─────────────────────────────────────
+hr "naming server — our client, then an independent ORB, against OUR server"
+# Every naming claim so far ran our client against omniNames. This is the
+# other direction: bind/resolve/unbind/nested contexts served by us, and the
+# user-exception bytes confirmed by omniORB's client rather than only our own.
+ns_fail=0
+NS_IOR=/tmp/orbweaver-names.ior
+ns=$(cargo run -q --bin spike-names -- "$NS_IOR" 2>&1)
+if printf '%s' "$ns" | grep -q "naming-server: PASS"; then
+  echo "  ok   our client against our server: bind/resolve/unbind/AlreadyBound/NotFound/nested"
+else
+  echo "  FAIL naming server self-consistency"
+  printf '%s' "$ns" | grep FAIL | head -3 | sed 's/^/       /'
+  ns_fail=1
+fi
+rm -f "$NS_IOR" /tmp/orbweaver-names-hold.log
+( exec cargo run -q --bin spike-names -- "$NS_IOR" --hold >/tmp/orbweaver-names-hold.log 2>&1 & )
+ns_up=0
+for _ in $(seq 1 60); do
+  grep -qs HOLDING /tmp/orbweaver-names-hold.log && { ns_up=1; break; }
+  sleep 0.2
+done
+if [ "$ns_up" -eq 1 ]; then
+  oracle=$(python3 -c "import sys; from omniORB import CORBA; import CosNaming; orb = CORBA.ORB_init(sys.argv); nc = orb.string_to_object(open('$NS_IOR').read().strip())._narrow(CosNaming.NamingContextExt); print(orb.object_to_string(nc.resolve_str('spike/Echo')))" 2>&1)
+  case "$oracle" in
+    IOR:*) echo "  ok   omniORB's client resolved spike/Echo against OUR naming server" ;;
+    *) echo "  FAIL cross-ORB resolve: $oracle"; ns_fail=1 ;;
+  esac
+else
+  echo "  FAIL the holding naming server never came up"; ns_fail=1
+fi
+pkill -f "spike-names" >/dev/null 2>&1 || true
+[ "$ns_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
 # ── Identity: what the peers actually advertise ──────────────────────────────
 hr "identity propagation — what a real target says about security"
 # §4.8 predicts that many legacy targets have no authentication at all, and that
