@@ -24,6 +24,35 @@ use crate::policy::{Approval, Exposure};
 /// The repository id `NO_PERMISSION` travels under.
 pub const NO_PERMISSION: &str = "IDL:omg.org/CORBA/NO_PERMISSION:1.0";
 
+/// One audit line, in **the** format:
+/// `ALLOW caller=<principal> target=<id> operation=<op>`, with
+/// ` why=<reason>` appended on a `REFUSE`. An absent caller is `<nobody>`.
+///
+/// The single place the format lives. [`Guarded`] writes its decisions
+/// through it and so does [`crate::Bridge`], which is what makes the static
+/// and dynamic paths' lines for the same call *equal as strings* rather than
+/// merely similar — the property §7.4 I4's gate compares, and the reason
+/// `crate::promote`'s parser needs no second format. Change it here or
+/// nowhere.
+///
+/// Like [`crate::identity::audit_line`], a line names the principal and the
+/// operation and can carry no credential material: nothing here holds one.
+pub(crate) fn audit_entry(
+    decision: &str,
+    caller: Option<&Caller>,
+    target: &str,
+    operation: &str,
+    why: Option<&str>,
+) -> String {
+    let caller = caller.map_or("<nobody>", |c| c.principal.as_str());
+    let mut line = format!("{decision} caller={caller} target={target} operation={operation}");
+    if let Some(why) = why {
+        line.push_str(" why=");
+        line.push_str(why);
+    }
+    line
+}
+
 /// An invoker that checks policy per operation and records every decision.
 ///
 /// Owns its policy context rather than borrowing the bridge, so holding one
@@ -67,7 +96,6 @@ impl<'r, C: Invoker> Guarded<'r, C> {
     }
 
     fn check(&mut self, operation: &str) -> Result<(), GiopError> {
-        let caller = self.caller.as_ref().map_or("<nobody>", |c| c.principal.as_str());
         match self.exposure.check_call(
             self.registry,
             &self.id,
@@ -76,16 +104,22 @@ impl<'r, C: Invoker> Guarded<'r, C> {
             self.caller.as_ref(),
         ) {
             Ok(()) => {
-                self.audit.push(format!(
-                    "ALLOW caller={caller} target={} operation={operation}",
-                    self.id
+                self.audit.push(audit_entry(
+                    "ALLOW",
+                    self.caller.as_ref(),
+                    &self.id,
+                    operation,
+                    None,
                 ));
                 Ok(())
             }
             Err(denied) => {
-                self.audit.push(format!(
-                    "REFUSE caller={caller} target={} operation={operation} why={denied}",
-                    self.id
+                self.audit.push(audit_entry(
+                    "REFUSE",
+                    self.caller.as_ref(),
+                    &self.id,
+                    operation,
+                    Some(&denied.to_string()),
                 ));
                 // The shape a native CORBA guard would answer with; the reason
                 // stays in the audit log, which is where §4.8 wants it.

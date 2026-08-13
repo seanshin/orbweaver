@@ -26,6 +26,15 @@
 //! never treats it as anything else. It cannot — it produces JSON and makes no
 //! decisions from annotation text except `ai_effect`, which is matched against
 //! a closed set.
+//!
+//! Every policy decision the dynamic path makes is recorded as an audit line
+//! (§4.8), written through the same formatter [`guard::Guarded`] uses, so for
+//! the same (caller, target, operation) the two paths' lines are equal as
+//! strings — not merely equivalent. That closes §7.4 I4's last seam: the
+//! gen-corpus oracle no longer has to *reconstruct* the dynamic audit line
+//! from `Bridge::caller` session state and can *capture* it from
+//! [`Bridge::audit`]. Flipping the oracle from reconstruction to capture is a
+//! one-line change in `orbweaver-gen`, owned by a later batch.
 
 #![deny(missing_docs)]
 
@@ -110,6 +119,9 @@ pub struct Bridge<'a> {
     /// somebody. `None` is a session nobody is signed into, and operations
     /// whose contract names an `ai_authz` scope will refuse it.
     caller: Option<Caller>,
+    /// Every policy decision this session's dynamic path has made, in
+    /// [`guard::Guarded`]'s exact line format — one formatter writes both.
+    audit: Vec<String>,
 }
 
 impl<'a> Bridge<'a> {
@@ -121,6 +133,7 @@ impl<'a> Bridge<'a> {
             handles: CapabilityTable::new(session),
             caller: None,
             stats: promote::CallStats::default(),
+            audit: Vec::new(),
         }
     }
 
@@ -227,17 +240,57 @@ impl<'a> Bridge<'a> {
         args: &Json,
         approval: Approval,
     ) -> Result<Json, ToolError> {
-        let result = invoke_operation(
-            conn,
+        // The policy decision is recorded the moment it is made — before
+        // anything touches the wire, which is the same point in the call
+        // where [`guard::Guarded`] records its own. `invoke_operation` runs
+        // the identical deterministic check again on its way in; the answer
+        // cannot differ, and keeping the check inside it keeps that function
+        // safe to call on its own.
+        let result = match check_handle(
             self.registry,
             &self.exposure,
-            &mut self.handles,
+            &self.handles,
             handle,
             operation,
-            args,
             approval,
             self.caller.as_ref(),
-        );
+        ) {
+            Ok(id) => {
+                self.audit.push(guard::audit_entry(
+                    "ALLOW",
+                    self.caller.as_ref(),
+                    &id,
+                    operation,
+                    None,
+                ));
+                invoke_operation(
+                    conn,
+                    self.registry,
+                    &self.exposure,
+                    &mut self.handles,
+                    handle,
+                    operation,
+                    args,
+                    approval,
+                    self.caller.as_ref(),
+                )
+            }
+            Err(refused) => {
+                // The line names what the handle names when it names anything
+                // — the same authority the check used — and the handle itself
+                // for a forged or expired one, so the attempt is on record
+                // without inventing a target it never resolved to.
+                let target = self.handles.type_of(handle).unwrap_or(handle).to_owned();
+                self.audit.push(guard::audit_entry(
+                    "REFUSE",
+                    self.caller.as_ref(),
+                    &target,
+                    operation,
+                    Some(&refused.to_string()),
+                ));
+                Err(refused)
+            }
+        };
         // Recorded against what the handle names, not what the caller asserted,
         // and only for calls that got past the policy: a refused call says
         // nothing about how hot the operation is.
@@ -246,6 +299,16 @@ impl<'a> Bridge<'a> {
             self.stats.record(&id, operation, result.is_ok());
         }
         result
+    }
+
+    /// Every decision this session's dynamic path has made, oldest first —
+    /// the mirror of [`guard::Guarded::audit`], produced by the same
+    /// formatter, so for the same (caller, target, operation) the two return
+    /// string-equal lines. Lines name the principal and the operation and
+    /// never credential material, the same rule as
+    /// [`identity::audit_line`].
+    pub fn audit(&self) -> &[String] {
+        &self.audit
     }
 
     /// The call statistics the promotion policy reads.
@@ -886,5 +949,168 @@ mod tests {
     fn only_interfaces_are_exposable() {
         let r = registry("module m { struct S { long a; }; interface I { void f(); }; };");
         assert_eq!(exposable_interfaces(&r), vec!["IDL:m/I:1.0".to_owned()]);
+    }
+
+    // --- the dynamic path's audit lines: §7.4 I4's capture seam ---
+
+    use std::time::Duration;
+
+    use orbweaver_cdr::{Encoder, Endian};
+    use orbweaver_giop::{Error as GiopError, IiopProfile, Invoker, Ior, Reply, Version};
+
+    /// The contract the audit tests call against. `deposit` takes an argument
+    /// on purpose: invoking it *without* one passes the policy gate and then
+    /// fails at argument mapping, before anything touches the wire — the same
+    /// shape as guard.rs's tests, where the decision is recorded and the
+    /// transport then fails. No live target needed.
+    const AUDIT_IDL: &str = "module bank {
+        interface Account {
+          //@ ai_effect: read_only
+          long balance();
+          void deposit(in long cents);
+        };
+      };";
+
+    /// A TCP endpoint that accepts and answers nothing, and an IOR naming it.
+    /// `Connection::connect` performs no I/O beyond the dial, so this is a
+    /// real `Connection` — and the tests never send on it.
+    fn dummy_target() -> (std::net::TcpListener, Ior) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binds");
+        let port = listener.local_addr().expect("has an address").port();
+        let ior = Ior {
+            type_id: "IDL:bank/Account:1.0".into(),
+            profiles: vec![IiopProfile {
+                version: Version::V1_2,
+                host: "127.0.0.1".into(),
+                port,
+                object_key: b"acct-1".to_vec(),
+                components: Vec::new(),
+            }],
+        };
+        (listener, ior)
+    }
+
+    fn empty_args() -> Json {
+        Json::Object(Default::default())
+    }
+
+    #[test]
+    fn an_allowed_dynamic_call_leaves_an_allow_line_naming_the_caller() {
+        let r = registry(AUDIT_IDL);
+        let (_listener, ior) = dummy_target();
+        let mut conn = Connection::connect(&ior, Duration::from_secs(5)).expect("dials");
+        let mut b =
+            Bridge::new(&r, Exposure::nothing().allow_interface("IDL:bank/Account:1.0"), "s")
+                .on_behalf_of(Caller::new("alice"));
+        let h = b.handles().issue_checked(&ior).expect("issued");
+
+        let result = b.invoke(&mut conn, h.as_str(), "deposit", &empty_args(), Approval::default());
+        assert!(matches!(result, Err(ToolError::Mapping(_))), "{result:?}");
+        assert_eq!(
+            b.audit(),
+            ["ALLOW caller=alice target=IDL:bank/Account:1.0 operation=deposit"],
+            "the decision is recorded at the point the policy answered, wire or no wire"
+        );
+    }
+
+    #[test]
+    fn a_policy_refused_call_leaves_a_refuse_line_with_the_why() {
+        let r = registry(AUDIT_IDL);
+        let (_listener, ior) = dummy_target();
+        let mut conn = Connection::connect(&ior, Duration::from_secs(5)).expect("dials");
+        // Nothing is exposed, so the call is refused at the gate.
+        let mut b = Bridge::new(&r, Exposure::nothing(), "s").on_behalf_of(Caller::new("alice"));
+        let h = b.handles().issue_checked(&ior).expect("issued");
+
+        let result = b.invoke(&mut conn, h.as_str(), "balance", &empty_args(), Approval::default());
+        assert!(matches!(result, Err(ToolError::Denied(_))), "{result:?}");
+        assert_eq!(b.audit().len(), 1);
+        let line = &b.audit()[0];
+        assert!(
+            line.starts_with(
+                "REFUSE caller=alice target=IDL:bank/Account:1.0 operation=balance why="
+            ),
+            "{line}"
+        );
+        assert!(line.contains("not exposed"), "the why must carry the reason: {line}");
+    }
+
+    /// Order preserved, and a forged handle's refusal is on record too —
+    /// named by the handle, since it never resolved to a target.
+    #[test]
+    fn audit_lines_land_in_call_order() {
+        let r = registry(AUDIT_IDL);
+        let (_listener, ior) = dummy_target();
+        let mut conn = Connection::connect(&ior, Duration::from_secs(5)).expect("dials");
+        let mut b =
+            Bridge::new(&r, Exposure::nothing().allow_interface("IDL:bank/Account:1.0"), "s")
+                .on_behalf_of(Caller::new("alice"));
+        let h = b.handles().issue_checked(&ior).expect("issued");
+
+        let _ = b.invoke(&mut conn, h.as_str(), "deposit", &empty_args(), Approval::default());
+        let forged = "cap_00000000000000000000000000000000";
+        let _ = b.invoke(&mut conn, forged, "deposit", &empty_args(), Approval::default());
+
+        assert_eq!(b.audit().len(), 2);
+        assert!(b.audit()[0].starts_with("ALLOW "), "{}", b.audit()[0]);
+        assert!(
+            b.audit()[1].starts_with(&format!("REFUSE caller=alice target={forged} ")),
+            "{}",
+            b.audit()[1]
+        );
+        assert!(b.audit()[1].contains("no live reference"), "{}", b.audit()[1]);
+    }
+
+    /// An invoker that swallows what reaches it, so a real `Guarded` can run
+    /// without a wire; guard.rs's Recorder pattern, rebuilt because test
+    /// modules do not share fakes.
+    struct Sink;
+
+    impl Invoker for Sink {
+        fn endian(&self) -> Endian {
+            Endian::Big
+        }
+        fn invoke<F: Fn(&mut Encoder)>(
+            &mut self,
+            _operation: &str,
+            _write_args: F,
+        ) -> Result<Reply, GiopError> {
+            Err(GiopError::ConnectionClosed)
+        }
+        fn invoke_oneway<F: Fn(&mut Encoder)>(
+            &mut self,
+            _operation: &str,
+            _write_args: F,
+        ) -> Result<(), GiopError> {
+            Ok(())
+        }
+    }
+
+    /// I4's seam, closed: for the same (caller, target, operation) the
+    /// dynamic path's ALLOW line and the static path's are **equal as
+    /// strings** — which is what lets the gen-corpus oracle capture the
+    /// dynamic line instead of reconstructing it.
+    #[test]
+    fn the_dynamic_and_static_paths_write_the_same_allow_line() {
+        let r = registry(AUDIT_IDL);
+        let exposure = Exposure::nothing().allow_interface("IDL:bank/Account:1.0");
+
+        let (_listener, ior) = dummy_target();
+        let mut conn = Connection::connect(&ior, Duration::from_secs(5)).expect("dials");
+        let mut b = Bridge::new(&r, exposure.clone(), "dynamic").on_behalf_of(Caller::new("alice"));
+        let h = b.handles().issue_checked(&ior).expect("issued");
+        let _ = b.invoke(&mut conn, h.as_str(), "deposit", &empty_args(), Approval::default());
+
+        let mut g: guard::Guarded<'_, Sink> = guard::Guarded::assemble(
+            Sink,
+            &r,
+            exposure,
+            Some(Caller::new("alice")),
+            "IDL:bank/Account:1.0".to_owned(),
+            Approval::default(),
+        );
+        let _ = g.invoke("deposit", |_| {});
+
+        assert_eq!(b.audit()[0], g.audit()[0], "one formatter, one format, string equality");
     }
 }
