@@ -20,16 +20,30 @@ skipped=0
 # in the main tree, both times producing "Connection refused" against a peer
 # that had been alive a moment earlier, and both times costing a diagnosis.
 #
-# Killing by captured PID would fix the fixtures and not the shared /tmp
-# paths, and the paths are threaded through 46 places. A machine-wide lock
-# fixes both classes at once and does it in ten lines, so it goes first; the
-# PID work is a separate batch with a separate risk.
+# Two fixes, because they cover different attackers. The lock stops a second
+# harness; `fkill` below stops this harness from killing a fixture somebody
+# started by hand in another checkout, which the lock cannot see. Neither
+# touches the shared /tmp log paths, which are threaded through 46 places and
+# are only a hazard for two concurrent harnesses — the case the lock removes.
 #
 # Refuse rather than queue: a harness that silently waits looks identical to a
 # harness that hung, and the person who started the second one wants to know
 # the first is running.
 LOCK=/tmp/orbweaver-harness.lock
 if ! mkdir "$LOCK" 2>/dev/null; then
+  holder=$(cat "$LOCK/owner" 2>/dev/null || echo "unknown")
+  # A holder that is gone is a crashed run, not a running one. Taking the lock
+  # over is safe and refusing would make one killed harness wedge the machine
+  # until somebody read this file — the failure mode of every lock that only
+  # ever waits.
+  holder_pid=$(printf '%s' "$holder" | awk '{print $2}')
+  if [ -n "$holder_pid" ] && ! ps -p "$holder_pid" >/dev/null 2>&1; then
+    echo "note: taking over a stale lock from a run that is no longer alive ($holder)"
+    rm -rf "$LOCK"
+    mkdir "$LOCK" 2>/dev/null || true
+  fi
+fi
+if [ ! -d "$LOCK" ] || [ -s "$LOCK/owner" ]; then
   holder=$(cat "$LOCK/owner" 2>/dev/null || echo "unknown")
   echo "another harness is running (started by $holder)."
   echo "the fixtures are killed by pattern and the logs share /tmp paths, so two"
@@ -38,18 +52,51 @@ if ! mkdir "$LOCK" 2>/dev/null; then
   exit 2
 fi
 printf 'pid %s in %s at %s\n' "$$" "$ROOT" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >"$LOCK/owner"
-trap 'rm -rf "$LOCK"' EXIT
+# NOT a `trap ... EXIT` of its own: `cleanup` claims EXIT further down, and a
+# second trap on the same signal REPLACES the first rather than adding to it.
+# Releasing the lock is therefore folded into `cleanup`. This is not
+# hypothetical tidiness — the first version of this lock did use its own trap,
+# every run leaked a stale lock, and the next run refused to start.
 
 hr() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 need() { command -v "$1" >/dev/null 2>&1 || { echo "missing tool: $1"; exit 2; }; }
+
+# ── Kill this run's fixtures, and only this run's ────────────────────────────
+# `pkill -f echo_server.py` matches by command line, which is every checkout on
+# the machine. The lock above stops two harnesses colliding; this stops a
+# harness from killing a fixture a developer started by hand in another tree,
+# which the lock cannot see.
+#
+# Scoped by process group: every fixture is started by this script, so it
+# inherits this script's group. When the group cannot be read — a runner that
+# reparents children, a `ps` without `pgid` — the fall-back is the old
+# behaviour with a printed note, because a harness that silently stops killing
+# fixtures leaks them into the next group and fails somewhere unrelated. A
+# noisy wide kill beats a quiet leak.
+own_pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
+fkill() {
+  local pat="$1" pid pgid hit=0 seen=0
+  for pid in $(pgrep -f "$pat" 2>/dev/null); do
+    seen=1
+    pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
+    if [ -n "$own_pgid" ] && [ "$pgid" = "$own_pgid" ]; then
+      kill "$pid" 2>/dev/null && hit=1
+    fi
+  done
+  if [ "$seen" = 1 ] && [ "$hit" = 0 ]; then
+    echo "  note fixture $pat is running outside this process group; killing it wide" >&2
+    pkill -f "$pat" >/dev/null 2>&1 || true
+  fi
+  return 0
+}
 need omniidl
 need cargo
 
 # Kills the fixture and waits for it to actually be gone. Signalling is
 # asynchronous, so returning early lets the next fixture race a dying process.
 cleanup() {
-  pkill -f echo_server.py >/dev/null 2>&1 || true
-  pkill -f evolution_server.py >/dev/null 2>&1 || true
+  fkill echo_server.py
+  fkill evolution_server.py
   for _ in $(seq 1 50); do
     pgrep -f "echo_server.py|evolution_server.py" >/dev/null 2>&1 || return 0
     sleep 0.1
@@ -71,7 +118,8 @@ start_evolution_server() {
     /tmp/orbweaver-evolution.log
   return 1
 }
-trap cleanup EXIT
+release_lock() { rm -rf "$LOCK"; }
+trap 'cleanup; release_lock' EXIT
 
 # Waits for the fixture to actually publish an IOR.
 #
@@ -112,7 +160,7 @@ JH_CHECK=${JAVA_HOME_21:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Conten
 JCP_CHECK="lib/jacorb.jar:lib/jacorb-omgapi.jar:lib/jboss-rmi-api.jar:lib/slf4j-api-1.7.36.jar:classes"
 
 start_rust_server() {
-  pkill -f spike-server >/dev/null 2>&1 || true
+  fkill spike-server
   rm -f "$ROOT/spikes/server.ior"
   ( cd "$ROOT" && exec cargo run -q --bin spike-server -- spikes/server.ior 127.0.0.1 0 \
       >/tmp/orbweaver-srv.log 2>&1 & )
@@ -324,7 +372,7 @@ if start_rust_server; then
 else
   fail_total=$((fail_total+1))
 fi
-pkill -f spike-server >/dev/null 2>&1 || true
+fkill spike-server
 
 # ── Fragmentation ────────────────────────────────────────────────────────────
 hr "GIOP fragmentation"
@@ -334,7 +382,7 @@ hr "GIOP fragmentation"
 # in one direction only — we fragment, they reassemble — and the receiver is
 # covered by round-trip against our own (peer-validated) emitter. Stated here
 # rather than implied by a green line.
-pkill -f spike-server >/dev/null 2>&1 || true
+fkill spike-server
 rm -f "$ROOT/spikes/server.ior"
 ( cd "$ROOT" && ORBWEAVER_FRAGMENT_THRESHOLD=4096 exec cargo run -q --bin spike-server -- \
     spikes/server.ior 127.0.0.1 0 >/tmp/orbweaver-frag.log 2>&1 & )
@@ -368,7 +416,7 @@ else
   echo "       GIOP fragments, so it is covered by round-trip against our own emitter"
   [ "$ffail" -eq 0 ] || fail_total=$((fail_total+1))
 fi
-pkill -f spike-server >/dev/null 2>&1 || true
+fkill spike-server
 
 # ── Object model ─────────────────────────────────────────────────────────────
 hr "object model — references, identity, LOCATION_FORWARD"
@@ -392,7 +440,7 @@ cleanup
 # have succeeded anyway cannot be mistaken for proof.
 fwd_fail=0
 for peer in omni jacorb; do
-  pkill -f spike-server >/dev/null 2>&1 || true
+  fkill spike-server
   rm -f "$ROOT/spikes/server.ior"
   ( cd "$ROOT" && ORBWEAVER_FORWARD_PING=1 exec cargo run -q --bin spike-server -- \
       spikes/server.ior 127.0.0.1 0 >/tmp/orbweaver-fwd.log 2>&1 & )
@@ -422,7 +470,7 @@ for peer in omni jacorb; do
     fwd_fail=1
   fi
 done
-pkill -f spike-server >/dev/null 2>&1 || true
+fkill spike-server
 [ "$fwd_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
 # ── Registry: does IDL-derived type metadata match the wire? ────────────────
@@ -444,7 +492,7 @@ else
 fi
 cleanup
 if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
-  pkill -f "classes Server" >/dev/null 2>&1 || true
+  fkill "classes Server"
   rm -f "$ROOT/spikes/jacorb.ior"
   ( cd "$ROOT/spikes/jacorb" && exec "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Server ../jacorb.ior \
       >/tmp/orbweaver-jreg.log 2>&1 & )
@@ -463,7 +511,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   else
     echo "  FAIL JacORB server did not publish an IOR"; fail_total=$((fail_total+1))
   fi
-  pkill -f "classes Server" >/dev/null 2>&1 || true
+  fkill "classes Server"
 else
   echo "  SKIPPED  JacORB half — fixture absent"
   skipped=$((skipped+1))
@@ -471,8 +519,8 @@ fi
 
 # ── Naming: resolve a target the way a deployment does ───────────────────────
 hr "object-reference acquisition — corbaname: through a real naming service"
-pkill -f omniNames >/dev/null 2>&1 || true
-pkill -f register_name >/dev/null 2>&1 || true
+fkill omniNames
+fkill register_name
 sleep 0.5
 rm -rf /tmp/orbweaver-names && mkdir -p /tmp/orbweaver-names
 # Whether something is listening, without needing lsof. The probe used to be
@@ -529,8 +577,8 @@ else
     fi
   fi
 fi
-pkill -f register_name >/dev/null 2>&1 || true
-pkill -f omniNames >/dev/null 2>&1 || true
+fkill register_name
+fkill omniNames
 
 # ── Second peer: JacORB, both directions ─────────────────────────────────────
 hr "second peer — JacORB (independent implementation)"
@@ -562,10 +610,10 @@ else
   else
     jfail=1
   fi
-  pkill -f spike-server >/dev/null 2>&1 || true
+  fkill spike-server
 
   # Our Rust client -> JacORB server.
-  pkill -f "classes Server" >/dev/null 2>&1 || true
+  fkill "classes Server"
   rm -f "$ROOT/spikes/jacorb.ior"
   ( cd "$ROOT/spikes/jacorb" && exec "$JH/bin/java" -cp "$JCP" Server ../jacorb.ior >/tmp/orbweaver-jacorb.log 2>&1 & )
   jup=0
@@ -586,7 +634,7 @@ else
   else
     echo "  FAIL JacORB server did not publish an IOR"; jfail=1
   fi
-  pkill -f "classes Server" >/dev/null 2>&1 || true
+  fkill "classes Server"
   [ "$jfail" -eq 0 ] || fail_total=$((fail_total+1))
 fi
 
@@ -677,7 +725,7 @@ else
 fi
 cleanup
 if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
-  pkill -f "classes Server" >/dev/null 2>&1 || true
+  fkill "classes Server"
   rm -f "$ROOT/spikes/jacorb.ior"
   ( cd "$ROOT/spikes/jacorb" && exec "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Server ../jacorb.ior \
       >/tmp/orbweaver-jdyn.log 2>&1 & )
@@ -699,7 +747,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   else
     echo "  FAIL JacORB server did not publish an IOR"; dyn_fail=1
   fi
-  pkill -f "classes Server" >/dev/null 2>&1 || true
+  fkill "classes Server"
 else
   echo "  SKIPPED  JacORB half — fixture absent"
   skipped=$((skipped+1))
@@ -831,7 +879,7 @@ else
 fi
 cleanup
 if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
-  pkill -f "classes Server" >/dev/null 2>&1 || true
+  fkill "classes Server"
   rm -f "$ROOT/spikes/jacorb.ior"
   ( cd "$ROOT/spikes/jacorb" && exec "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Server ../jacorb.ior \
       >/tmp/orbweaver-jloc.log 2>&1 & )
@@ -852,7 +900,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   else
     echo "  FAIL JacORB server did not publish an IOR"; loc_fail=1
   fi
-  pkill -f "classes Server" >/dev/null 2>&1 || true
+  fkill "classes Server"
 else
   echo "  SKIPPED  JacORB half — fixture absent"
   skipped=$((skipped+1))
@@ -880,7 +928,7 @@ else
 fi
 cleanup
 if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
-  pkill -f "classes Server" >/dev/null 2>&1 || true
+  fkill "classes Server"
   rm -f "$ROOT/spikes/jacorb.ior"
   ( cd "$ROOT/spikes/jacorb" && exec "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Server ../jacorb.ior \
       >/tmp/orbweaver-jfo.log 2>&1 & )
@@ -901,7 +949,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   else
     echo "  FAIL JacORB server did not publish an IOR"; fo_fail=1
   fi
-  pkill -f "classes Server" >/dev/null 2>&1 || true
+  fkill "classes Server"
 else
   echo "  SKIPPED  JacORB half — fixture absent"
   skipped=$((skipped+1))
@@ -929,7 +977,7 @@ else
 fi
 cleanup
 if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
-  pkill -f "classes Server" >/dev/null 2>&1 || true
+  fkill "classes Server"
   rm -f "$ROOT/spikes/jacorb.ior"
   ( cd "$ROOT/spikes/jacorb" && exec "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Server ../jacorb.ior \
       >/tmp/orbweaver-jcan.log 2>&1 & )
@@ -950,7 +998,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   else
     echo "  FAIL JacORB server did not publish an IOR"; can_fail=1
   fi
-  pkill -f "classes Server" >/dev/null 2>&1 || true
+  fkill "classes Server"
 else
   echo "  SKIPPED  JacORB half — fixture absent"
   skipped=$((skipped+1))
@@ -988,7 +1036,7 @@ if [ "$ns_up" -eq 1 ]; then
 else
   echo "  FAIL the holding naming server never came up"; ns_fail=1
 fi
-pkill -f "spike-names" >/dev/null 2>&1 || true
+fkill "spike-names"
 [ "$ns_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
 # ── The MoE control plane, one turn on the wire ─────────────────────────────
@@ -1161,7 +1209,7 @@ else
 fi
 cleanup
 if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
-  pkill -f "classes Server" >/dev/null 2>&1 || true
+  fkill "classes Server"
   rm -f "$ROOT/spikes/jacorb.ior"
   ( cd "$ROOT/spikes/jacorb" && exec "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Server ../jacorb.ior \
       >/tmp/orbweaver-jcsi.log 2>&1 & )
@@ -1180,7 +1228,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   else
     echo "  FAIL JacORB server did not publish an IOR"; id_fail=1
   fi
-  pkill -f "classes Server" >/dev/null 2>&1 || true
+  fkill "classes Server"
 else
   echo "  SKIPPED  JacORB half — fixture absent"
   skipped=$((skipped+1))
