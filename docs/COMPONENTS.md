@@ -14,7 +14,7 @@ Anything requiring a new dependency class needs a decision document first
 | `orbweaver-giop` | ✅ | GIOP 1.0–1.2 both directions, codesets, fragmentation, locate, failover, SSLIOP (`ssliop` feature) | multiplexing, pooling (stream E) |
 | `orbweaver-idl` | ✅ | IDL 4.2 front end, SIDL comments, full oracle agreement | pluggable back ends beyond gen's use |
 | `orbweaver-registry` | ◐ | registry from IDL, TypeCodes vs two peers, §5.3 differ | **remote IFR ingestion** (planned scope, unstarted) |
-| `orbweaver-object` (poa) | ✅ | references, identity, POA, LOCATION_FORWARD emit, **expert residency state machine + ExpertLoader** (F3, 2026-08-14) | — |
+| `orbweaver-object` (poa) | ✅ | references, identity, POA, LOCATION_FORWARD emit, **expert residency state machine + ExpertLoader** (F3, 2026-08-14), **`moe::ExpertRegistry`/`ExpertLoader` served on the wire** (2026-08-15) | — |
 | `orbweaver-dynamic` | ✅ | value marshalling, DII-shaped invoke, AnyJSON, first-party JSON | DynAny mutation API (fuzz seed exists via Value) |
 | `orbweaver-forge` | ◐ | S4 gate, §5.1 orchestrator, real-model batch (20/20), S5 exposure-off registration (I2 ✅) | **S1 ingest, S3 annotate as distinct stages** (today S2's prompt does both) |
 | `orbweaver-mcp` | ✅ | triad, stdio transport, capability handles, default-deny, `ai_authz`, promotion+I4 | embeddings behind search (needs D003) |
@@ -37,7 +37,8 @@ Anything requiring a new dependency class needs a decision document first
 | MCP transport | ✅ | stdio JSON-RPC; no real MCP client driven yet (stated in PHASE3) |
 | CosNaming **server** | ✅ | F6 landed 2026-08-14: full context surface + NamingContextExt, both oracle directions measured — omniORB's client decoded our NotFound bytes. Suite plan: PLAN-SERVICES §2 |
 | Event/Notification (CosEvent) | ❌ | PLAN-SERVICES §4: F7 push-model channel, oracle settled by measurement (no omnievents formula; omniORBpy's CosEventComm stubs act as the independent peer) |
-| Trading (decision engine) | ✅ | `orbweaver-trading` (2026-08-14, 37 tests): offers, §4.3 constraint queries, §6 loading policy over deterministic traces. Wire surface (IDL binding) still open — PLAN-MOE F3+ |
+| Trading (decision engine) | ✅ | `orbweaver-trading` (2026-08-14, 37 tests): offers, §4.3 constraint queries, §6 loading policy over deterministic traces |
+| Trading **wire surface** | ✅ | 2026-08-15: `orbweaver-object::expert_service` serves `moe::ExpertRegistry`/`ExpertLoader` (corpus/golden/22) — the project contract, not the standard `CosTrading` facade (PLAN-SERVICES §3). Oracle is our own client (`spike-experts`); no foreign MoE peer exists to test the other direction, and none is claimed |
 | LifeCycle / Property | ❌ | PLAN-MOE **F5** (`ModelFactory`, per-tenant manifest) |
 | Transaction / Time / PSS | — | **declared out of scope with reasons** (PLAN-MOE §4) — honest absence over decorative interfaces |
 

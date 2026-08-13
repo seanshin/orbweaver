@@ -82,7 +82,7 @@ reports an unmeasurable number later.
   + negative cases minted from the original `Context`/`residency` defects.
   Oracle: S4 + differential (three front ends) + gen-corpus compile.
   *Status: validation half already measured green (above).*
-- **F2 — Trading Service** ✅ *decision engine landed 2026-08-14 (`orbweaver-trading`, 37 tests); wire surface deferred to after F3 — see PLAN-SERVICES §3.* Original scope: Offer store (Capability
+- **F2 — Trading Service** ✅ *decision engine landed 2026-08-14 (`orbweaver-trading`, 37 tests); the wire surface followed on 2026-08-15 as the project contract — `orbweaver-object::expert_service` serves `moe::ExpertRegistry`/`ExpertLoader` from `corpus/golden/22`, with `apply_policy` as the one place the store and F3's machine meet. The standard `CosTrading::Lookup` facade stays deferred: PLAN-SERVICES §3.* Original scope: Offer store (Capability
   properties), constraint-query subset (`specialization == 'math' AND
   latency_p99 < 200`), deterministic ordering. Oracle: property-query tests
   over fixture offers; the §6 loading policy (`score = route_freq ×
