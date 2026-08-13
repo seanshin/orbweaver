@@ -461,18 +461,22 @@ fn run(ior_path: &str, idl_path: &str) -> Result<u32, String> {
     let dynamic_outcome = dynamic_outcome.map_err(|e| e.to_string())?;
 
     // The dynamic session this promotion would replace, on behalf of alice.
-    // Honesty note: today the dynamic bridge path's caller fact lives in
-    // Bridge::caller and its policy check, not in an emitted ALLOW line, so
-    // the dynamic audit line here is reconstructed from that same session
-    // state rather than captured — in exactly the format guard.rs writes.
-    // Reconstructing it is exactly the seam verify_promotion protects; the
-    // day Bridge emits real audit lines, this reconstruction is replaced by
-    // capture.
-    let dynamic_bridge = Bridge::new(&registry, i4_exposure.clone(), "i4-dynamic")
+    // The audit line is CAPTURED, not reconstructed: since the bridge started
+    // emitting real ALLOW lines, the same call runs once through the bridge's
+    // own JSON path and the line is taken from Bridge::audit() — closing the
+    // seam this section used to carry as an honesty note.
+    let mut dynamic_bridge = Bridge::new(&registry, i4_exposure.clone(), "i4-dynamic")
         .on_behalf_of(Caller::new("alice@example.com"));
-    let dynamic_caller = dynamic_bridge.caller().map_or("<nobody>", |c| c.principal.as_str());
-    let dynamic_audit =
-        format!("ALLOW caller={dynamic_caller} target=IDL:spike/Echo:1.0 operation=add");
+    let dhandle = dynamic_bridge.handles().issue_checked(&ior).map_err(|e| e.to_string())?;
+    let dyn_json = orbweaver_dynamic::json::Json::parse(r#"{"a":40,"b":2}"#).expect("static json");
+    dynamic_bridge
+        .invoke(&mut dconn, dhandle.as_str(), "add", &dyn_json, Approval::default())
+        .map_err(|e| e.to_string())?;
+    let dynamic_audit = dynamic_bridge
+        .audit()
+        .last()
+        .cloned()
+        .ok_or("the dynamic bridge wrote no audit line")?;
 
     // The static path: the same operation through the generated stub over
     // connect_static, in a session on behalf of the same principal. Its audit
