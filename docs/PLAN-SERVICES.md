@@ -118,7 +118,7 @@ service-suite note: none of the services above invent their own authorization
 — a naming `bind` or channel `connect` at the MCP boundary passes the same
 `Exposure`/`Guarded` gate as any other operation (I1's rule, inherited).
 
-## 7. Interface Repository facade / IFR 파사드 — batch shape for an old line
+## 7. Interface Repository facade / IFR 파사드 — ✅ landed, both directions
 
 `orbweaver-registry` is the first-party IFR equivalent (stated since Phase 2).
 PLAN §7's old "optional read-only `CORBA::Repository` facade" line gets its
@@ -127,6 +127,31 @@ batch shape here: serve `_get_interface`-adjacent lookups (`lookup_id`,
 **after F6** (the facade is a named object that wants Naming), with omniORB's
 python IRObject client as the cross-ORB oracle. Write operations refused
 loudly — the registry is populated from IDL through S4, never over the wire.
+
+| | |
+|---|---|
+| Standard | `CORBA::Repository`, `Contained`, `IRObject`, `InterfaceDef` |
+| Consumers | a foreign DII client; integration's conformance harness |
+| Landed | `orbweaver-registry::ifr::RepositoryServer` + `spike-ifr` |
+| Served | `lookup_id`; `_get_id`/`_get_name`/`_get_absolute_name`/`_get_def_kind`; `describe_interface`, `_get_base_interfaces`, `is_a`; `_is_a`/`_non_existent` |
+
+It sits in `orbweaver-registry`, not `orbweaver-giop`: the facade needs the
+registry's facts, and the dependency edge runs registry → giop. One object key
+per registry entry, derived reversibly from the repository id, so a stored
+reference survives a restart and the server holds no per-reference state.
+
+Measured, both directions: our client round-trips the whole walk against our
+server (`spike-ifr`, 13 checks), and **omniORB's python client — narrowing via
+the `omniORB.ir_idl` stubs it ships — decoded our `FullInterfaceDescription`
+for `gc10::Both` and `tms::TrackManager`**, including parameter modes,
+`OP_ONEWAY`, a raised exception's members, a `tk_alias`→`tk_sequence`→
+`tk_struct` return type, and `CORBA.NO_PERMISSION` from `create_module`.
+
+Not doing (until a consumer appears): `Container::contents`/`lookup`,
+`Contained::describe`, `_get_defined_in`/`_get_containing_repository` — all
+`BAD_OPERATION`. Every mutating operation is `NO_PERMISSION` permanently, not
+pending: a writable IFR would be a second ingestion path with none of S4's
+gates on it.
 
 ## 8. Exclusions, with reasons / 명시적 제외
 
@@ -145,7 +170,10 @@ No service in this plan adds a Cargo dependency — pure spec implementation.
 Fixtures follow the sslTP-probe precedent: probe first, quote the measured
 output, a BLOCKED probe is a valid batch result. Probes on record: omniNames
 (present, used since Phase 1), omniORBpy CosNaming/CosEventComm stubs
-(present, measured), omniEvents (absent — recorded above), sslTP (absent —
+(present, measured), omniORBpy **IR stubs** (present as `omniORB.ir_idl` —
+`hasattr(CORBA, "Repository")` is `False` on a bare `import CORBA` and `True`
+after the extra import; that one line is what made §7's oracle possible),
+omniEvents (absent — recorded above), sslTP (absent —
 `spikes/tls/PEER-STATUS.md`).
 
 ## 10. Sequencing / 순서
@@ -154,7 +182,7 @@ output, a BLOCKED probe is a valid batch result. Probes on record: omniNames
 |---|---|---|
 | F6 Naming server | — | **landed 2026-08-14** |
 | F7 Event channel | F6 | the channel is a named object; discovery wants Naming |
-| IFR facade (§7) | F6 | same reason |
+| IFR facade (§7) | F6 | **landed** — same reason |
 | Trading wire (`ExpertRegistry` served) | F3 | the loader/state machine is its first caller |
 | F5 LifeCycle/Property | F2 ✅ + F4 | factories bind experts; policy rides the interceptor chain |
 | CosEvent → telemetry feedback | F4 + F7 | the §6 feedback loop closes only when both exist |
