@@ -107,7 +107,28 @@ Integration points (§7.4 style): **IF1** F2's selection must return capability
 handles at the MCP face, never IORs (transcript-leak test reused). **IF2**
 F4's telemetry and stream B's promotion stats are one store, not two.
 
-## 4. What this supplement does not claim / 이 보완이 주장하지 않는 것
+## 4. Core CORBA services coverage / CORBA 필수 서비스 커버리지
+
+Requested review (2026-08-14): does the plan actually cover the classic
+service suite the architecture leans on? Audit of PLAN v0.6 + this supplement:
+
+| Service | Today | Plan home | Gap closed by |
+|---|---|---|---|
+| **CosNaming** | client only (`naming.rs`, resolves against omniNames) | PLAN §4.4 | **F6 (new): first-party Naming *server*** — bind/rebind/resolve/unbind/list on our POA; oracle: omniORB's client resolving against **our** server, and ours against omniNames — both directions, like every other interop claim |
+| **Trading** | none | **F2** (this supplement) | offer store + constraint queries + §6 loading policy |
+| **Event / Notification** | **absent from every plan document — the review's finding** | **F7 (new): minimal CosEventChannel** — push-style supplier/consumer on our wire, at the granularity the control plane needs (residency transitions, telemetry batches; never per token); oracle: two-process channel with an omniORB-side consumer |
+| **LifeCycle** | none | **F5** (`ModelFactory` = GenericFactory pattern) |
+| **Property** | none | folded into **F5** (per-tenant `Manifest`/config; a separate CosProperty server is not justified before a second consumer exists) |
+| **Security** | CSIv2 wire + delegation + hygiene (PHASE5), guard chain (F4) | PLAN §4.8 | — |
+| **Transaction (OTS)** | none | **declared out of scope**: distributed transactions across legacy ORBs are a graveyard of partial implementations, nothing in the control plane needs atomicity across objects, and an honest absence beats a decorative `Current` interface |
+| **Time / PSS / Concurrency** | none | out of scope, same reasoning — adopt only when a consumer names a concrete need |
+
+F6/F7 follow the stream rules: one capability × both peers × measured both
+directions. 요청 검토의 결론: Naming은 서버 절반이, Event는 전부가 계획에
+없었다 — F6·F7로 편입하고, Transaction·Time·PSS는 사유와 함께 명시적 제외로
+선언한다. 장식용 인터페이스보다 정직한 부재가 낫다.
+
+## 5. What this supplement does not claim / 이 보완이 주장하지 않는 것
 
 No accelerator, no fused kernel, no RDMA exists in this repository; the data
 plane remains a named external. `Expert.process` payloads cross as references

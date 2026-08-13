@@ -35,6 +35,11 @@ Anything requiring a new dependency class needs a decision document first
 | Deployment (Docker/K8s, IOR rewriting) | ❌ | R7 mitigation designed in PLAN, nothing built; CI runners are the only containers used |
 | Naming (CosNaming client) | ✅ | corbaname/corbaloc + omniNames in harness |
 | MCP transport | ✅ | stdio JSON-RPC; no real MCP client driven yet (stated in PHASE3) |
+| CosNaming **server** | ❌ | client exists; first-party server is PLAN-MOE **F6** with a both-directions interop oracle |
+| Event/Notification (CosEvent) | ❌ | absent from every plan until the 2026-08-14 review; now PLAN-MOE **F7** (control-plane granularity only) |
+| Trading | ❌ | PLAN-MOE **F2** |
+| LifeCycle / Property | ❌ | PLAN-MOE **F5** (`ModelFactory`, per-tenant manifest) |
+| Transaction / Time / PSS | — | **declared out of scope with reasons** (PLAN-MOE §4) — honest absence over decorative interfaces |
 
 ## Reading this honestly / 정직한 독해
 
