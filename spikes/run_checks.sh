@@ -979,6 +979,24 @@ else
   fail_total=$((fail_total+1))
 fi
 
+# ── F5: tenancy, as an authorization property of the object key ─────────────
+hr "tenant service — LifeCycle and Property with the tenant in every key"
+# The isolation claims are the substance here, so the spike checks refusals as
+# hard as it checks successes: a foreign reference is refused BEFORE the
+# existence check, so a refusal cannot be used as an existence oracle. The one
+# crossing that is served — base(), the shared model — is counted and audited
+# rather than hidden, because the manifest's whole shape is "shared base by
+# reference" and a servant that pretended otherwise would be lying about the
+# design rather than enforcing it.
+tn=$(cargo run -q --bin spike-tenants 2>&1)
+if printf '%s' "$tn" | grep -q "tenant-service: PASS"; then
+  echo "  ok   two tenants, $(printf '%s' "$tn" | grep -c '  ok    ') checks: minting, refusals, retire, policy, per-tenant audit"
+else
+  echo "  FAIL tenant service"
+  printf '%s' "$tn" | grep -i "FAIL" | head -3 | sed 's/^/       /'
+  fail_total=$((fail_total+1))
+fi
+
 # ── IFR facade: the registry served as CORBA::Repository ────────────────────
 hr "interface repository — our registry read by omniORB's own IR client"
 # The claim worth measuring is not that our client agrees with our server; it
