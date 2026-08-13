@@ -1,0 +1,27 @@
+[package]
+name = "orbweaver-test"
+description = "S7: contract and property tests derived from the registry — seeded CDR round-trip fuzzing, and SIDL meaning checks that advise rather than gate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+orbweaver-cdr = { path = "../orbweaver-cdr" }
+orbweaver-giop = { path = "../orbweaver-giop", default-features = false }
+orbweaver-dynamic = { path = "../orbweaver-dynamic" }
+orbweaver-registry = { path = "../orbweaver-registry" }
+orbweaver-idl = { path = "../orbweaver-idl" }
+# The reporting vocabulary, not a second one. S4 already defines what a finding
+# is and how it prints; a second Finding type would mean a caller consuming
+# both had to normalise them, and the two would drift on the day one grew a
+# field. Cycle-free: nothing in forge's tree depends on this crate.
+orbweaver-forge = { path = "../orbweaver-forge" }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "contract-check"
+path = "src/bin/contract_check.rs"

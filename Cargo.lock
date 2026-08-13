@@ -210,6 +210,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbweaver-test"
+version = "0.1.0"
+dependencies = [
+ "orbweaver-cdr",
+ "orbweaver-dynamic",
+ "orbweaver-forge",
+ "orbweaver-giop",
+ "orbweaver-idl",
+ "orbweaver-registry",
+]
+
+[[package]]
 name = "orbweaver-trading"
 version = "0.1.0"
 

@@ -10,6 +10,7 @@ members = [
     "crates/orbweaver-mcp",
     "crates/orbweaver-object",
     "crates/orbweaver-registry",
+    "crates/orbweaver-test",
     "crates/orbweaver-trading",
 ]
 
