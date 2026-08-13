@@ -14,10 +14,20 @@ module tms {
   exception NoSuchTrack { long id; };
   exception Overloaded  { long retry_after_ms; };
   interface TrackManager {
+    //@ ai_effect: read_only
     TrackSeq  snapshot();
+    //@ ai_effect: read_only
     Track     get(in long id) raises (NoSuchTrack);
+    //@ ai_effect: destructive
+    //@ ai_authz: tms.track.write
     long      create(in Track t) raises (Overloaded);
+    //@ ai_effect: idempotent
+    //@ ai_authz: tms.track.write
     void      update(in Track t) raises (NoSuchTrack);
+    // Deletion behind a oneway: no reply, so no way to learn it failed. If
+    // any operation in this file deserves its own scope, it is this one.
+    //@ ai_effect: destructive
+    //@ ai_authz: tms.track.delete
     oneway void drop(in long id);
     readonly attribute long count;
   };

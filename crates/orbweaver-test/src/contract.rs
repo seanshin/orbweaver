@@ -490,14 +490,61 @@ fn mutating_verb(name: &str) -> Option<&'static str> {
 }
 
 /// How an operation hands an object reference to its caller, if it does.
+///
+/// The search descends into constructed types. `sequence<Expert>` hands out as
+/// many bearer addresses as it has elements, and the caller who receives them
+/// can dial every one; a rule that only looked at the outermost `TypeCode`
+/// would report `Expert delegate()` and stay silent about `ExpertSeq select()`,
+/// which is the more generous of the two. This was found by reading our own
+/// corpus against the rule rather than by a failing test: `moe::Router::select`
+/// went unreported for exactly that reason.
 fn escaping_reference(registry: &Registry, sig: &OperationSig) -> Option<String> {
-    if is_reference(registry, &sig.returns) {
-        return Some("as its return value".into());
+    if let Some(path) = reference_within(registry, &sig.returns, 0) {
+        return Some(match path.as_str() {
+            "" => "as its return value".into(),
+            p => format!("in its return value, at {p}"),
+        });
     }
-    sig.params
-        .iter()
-        .find(|p| p.direction != ParamDirection::In && is_reference(registry, &p.tc))
-        .map(|p| format!("through the {:?} parameter", p.name))
+    sig.params.iter().filter(|p| p.direction != ParamDirection::In).find_map(|p| {
+        reference_within(registry, &p.tc, 0).map(|path| match path.as_str() {
+            "" => format!("through the {:?} parameter", p.name),
+            path => format!("through the {:?} parameter, at {path}", p.name),
+        })
+    })
+}
+
+/// Where inside a type a live object reference sits, as a readable path, or
+/// `None` if there is none. An empty path means the type *is* a reference.
+///
+/// `depth` bounds the walk. A recursive type is represented by
+/// [`TypeCode::Recursive`] rather than a cycle, so this cannot loop today, but
+/// the bound is kept because the rule is about what a caller receives and a
+/// reference twelve levels inside a reply is one the reader of this diagnostic
+/// could not act on anyway.
+fn reference_within(registry: &Registry, tc: &TypeCode, depth: usize) -> Option<String> {
+    const MAX_DEPTH: usize = 6;
+    if depth > MAX_DEPTH {
+        return None;
+    }
+    let nest = |inner: Option<String>, step: String| -> Option<String> {
+        inner.map(|p| if p.is_empty() { step.clone() } else { format!("{step}.{p}") })
+    };
+    match tc.resolve_alias() {
+        tc @ TypeCode::ObjRef { .. } => is_reference(registry, tc).then(String::new),
+        TypeCode::Sequence { element, .. } => {
+            nest(reference_within(registry, element, depth + 1), "each element".into())
+        }
+        TypeCode::Array { element, .. } => {
+            nest(reference_within(registry, element, depth + 1), "each element".into())
+        }
+        TypeCode::Struct { members, .. } | TypeCode::Except { members, .. } => members
+            .iter()
+            .find_map(|m| nest(reference_within(registry, &m.tc, depth + 1), m.name.clone())),
+        TypeCode::Union { cases, .. } => cases
+            .iter()
+            .find_map(|c| nest(reference_within(registry, &c.tc, depth + 1), c.name.clone())),
+        _ => None,
+    }
 }
 
 /// Whether the type is a **live object reference**, not merely something the
@@ -700,6 +747,65 @@ mod tests {
              }; };",
         );
         assert_eq!(r, ["contract/reference-escapes-without-authz"], "{r:?}");
+    }
+
+    /// A bearer address inside a sequence is still a bearer address, and the
+    /// sequence hands out as many as it holds. `moe::Router::select` went
+    /// unreported while `moe::Expert::delegate` was flagged, which is backwards:
+    /// the unreported one is the more generous of the two.
+    #[test]
+    fn a_reference_inside_a_constructed_type_still_escapes() {
+        let seq = contract_findings(&registry(
+            "module m { interface Target { long ping(); };
+               typedef sequence<Target> TargetSeq;
+               interface W {
+                 //@ ai_effect: read_only
+                 TargetSeq all();
+               };
+             };",
+        ));
+        assert_eq!(
+            seq.iter().map(|f| f.rule.as_str()).collect::<Vec<_>>(),
+            ["contract/reference-escapes-without-authz"]
+        );
+        assert!(
+            seq[0].message.contains("at each element"),
+            "the path must say where the reference sits: {}",
+            seq[0].message
+        );
+
+        // Through a struct member, and through an out parameter's struct.
+        let nested = contract_findings(&registry(
+            "module m { interface Target { long ping(); };
+               struct Handle { string note; Target typed; };
+               interface W {
+                 //@ ai_effect: read_only
+                 Handle describe(in string name);
+               };
+             };",
+        ));
+        assert!(
+            nested[0].message.contains("at typed"),
+            "the member name is the path: {}",
+            nested[0].message
+        );
+    }
+
+    /// The walk must not resurrect the valuetype false positive one level down:
+    /// a sequence of data is data however deeply it is wrapped.
+    #[test]
+    fn a_sequence_of_valuetypes_is_not_a_sequence_of_capabilities() {
+        let r = rules(
+            "module m {
+               valuetype Money { public long units; };
+               typedef sequence<Money> MoneySeq;
+               interface Wallet {
+                 //@ ai_effect: read_only
+                 MoneySeq history();
+               };
+             };",
+        );
+        assert!(r.is_empty(), "{r:?}");
     }
 
     #[test]

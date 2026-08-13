@@ -1,10 +1,16 @@
 // 09 — user exceptions with and without members; multiple raises.
+// The annotations are not this file's subject; they are here because
+// contract-check reported `clear` as reachable by any caller who reaches the
+// bridge, and a corpus that models the wrong thing teaches the wrong thing.
 module gc09 {
   exception NotFound { string key; };
   exception Denied   { string reason; long code; };
   exception Empty    {};
   interface Store {
+    //@ ai_effect: read_only
     string get(in string key) raises (NotFound, Denied);
+    //@ ai_effect: destructive
+    //@ ai_authz: gc09.store.clear
     void   clear() raises (Empty);
   };
 };

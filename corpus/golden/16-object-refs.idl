@@ -3,8 +3,17 @@ module gc16 {
   interface Target { long ping(); };
   struct Handle { Object generic; Target typed; string note; };
   interface Registry {
+    //@ ai_effect: read_only
+    //@ ai_authz: gc16.registry.resolve
     Target lookup(in string name);
+    //@ ai_effect: destructive
+    //@ ai_authz: gc16.registry.bind
     void   bind(in string name, in Target ref);
+    // The reference here is a struct member rather than the return type, and
+    // it is exactly as dialable. contract-check missed this one until the
+    // rule learned to look inside constructed types.
+    //@ ai_effect: read_only
+    //@ ai_authz: gc16.registry.resolve
     Handle describe(in string name);
   };
 };

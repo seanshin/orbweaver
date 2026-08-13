@@ -107,8 +107,12 @@ disclosed BSD-3-Clause.
   and `struct Version { unsigned long version; }` are all illegal. This is
   natural naming in every other language, which is exactly why it is the
   dominant generation failure. *가장 흔한 실패 원인.*
-  Run `python3 spikes/idl_lint.py <files>` before the oracle — it catches this
-  class with an actionable message. Documenting the rule does not prevent it:
+  Run `cargo run -q --bin sidl-validate -- <files>` before the oracle — it
+  catches this class with an actionable message. (The regex lint
+  `spikes/idl_lint.py` this rule used to name retired in Phase 2 batch 2, when
+  semantic analysis subsumed it; the instruction outlived the file by several
+  phases, which is its own small lesson about codifying a command instead of a
+  capability.) Documenting the rule does not prevent it:
   it has since caught two corpus files and two fixtures, one written by someone
   who had just described the rule in that same file's header.
 - `TypeCode` must be qualified as `::CORBA::TypeCode`.

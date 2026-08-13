@@ -3,7 +3,14 @@ module gc11 {
   interface Sensor {
     readonly attribute double temperature;
     attribute string label;
+    // Oneway and destructive is the worst pairing a contract can carry: the
+    // caller learns nothing about whether it happened, so the scope is the
+    // only thing standing between a stray call and lost state.
+    //@ ai_effect: destructive
+    //@ ai_authz: gc11.sensor.reset
     oneway void reset();
+    //@ ai_effect: idempotent
+    //@ ai_authz: gc11.sensor.publish
     oneway void publish(in string topic, in string payload);
   };
 };

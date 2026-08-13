@@ -26,8 +26,15 @@ module moe {
 
     //@ ai_desc: A tenant expert: shared base by reference, owned delta only
     interface EnterpriseExpert : ::moe::Expert {
+      //@ ai_effect: read_only
       string        get_tenant_id();
+      // The shared base is another tenant's neighbour: handing back its
+      // reference crosses the tenancy boundary the manifest draws.
+      //@ ai_effect: read_only
+      //@ ai_authz: moe.enterprise.base.read
       ::moe::Expert base();
+      //@ ai_effect: read_only
+      //@ ai_authz: moe.enterprise.weights.read
       ::moe::Tensor adapter_delta();
     };
 
@@ -44,16 +51,32 @@ module moe {
     interface ComposedModel {
       Manifest          get_manifest();
       ::moe::Activation infer(in ::moe::Activation x, in ::moe::CallContext ctx);
+      //@ ai_effect: destructive
+      //@ ai_authz: moe.enterprise.model.compose
       void              bind_expert(in EnterpriseExpert ex);  // `e` shadows gen-corpus's encoder binding, see 22's header
+      // Governance is the thing being changed here, so this needs a scope of
+      // its own: whoever can set the policy can lift every other gate.
+      //@ ai_effect: destructive
+      //@ ai_authz: moe.enterprise.policy.write
       void              set_policy(in PolicyDomain p);
     };
 
     //@ ai_desc: CosLifeCycle-style factory for tenant model instances
     interface ModelFactory {
-      ComposedModel create(in Manifest m);
-      ComposedModel clone_model(in ComposedModel src, in string new_version);
       //@ ai_effect: destructive
+      //@ ai_authz: moe.enterprise.model.create
+      ComposedModel create(in Manifest m);
+      //@ ai_effect: destructive
+      //@ ai_authz: moe.enterprise.model.create
+      ComposedModel clone_model(in ComposedModel src, in string new_version);
+      // Approval and authorization are different gates: `destructive` asks a
+      // human, `ai_authz` decides who may ask. This operation used to carry
+      // only the first, which contract-check reported.
+      //@ ai_effect: destructive
+      //@ ai_authz: moe.enterprise.model.retire
       void          retire(in ComposedModel m);
+      //@ ai_effect: destructive
+      //@ ai_authz: moe.enterprise.model.deploy
       void          deploy(in ComposedModel m);
     };
   };

@@ -39,28 +39,49 @@ module moe {
     //@ ai_effect: read_only
     Capability describe();
     Activation process(in Activation x, in CallContext ctx);
+    //@ ai_effect: read_only
+    //@ ai_authz: moe.expert.delegate
     Expert     delegate(in Capability need);
   };
   typedef sequence<Expert> ExpertSeq;
 
   //@ ai_desc: Control-plane gate: selects and dispatches to experts
   interface Router {
+    // Hands back a whole sequence of dialable experts. Reading nothing and
+    // widening reach by N addresses at once is precisely the case §4.7's
+    // bearer-address rule exists for.
+    //@ ai_effect: read_only
+    //@ ai_authz: moe.router.select
     ExpertSeq  select(in GateSignal g, in Constraints qos);
     Activation dispatch(in Activation x, in CallContext ctx);
   };
 
   //@ ai_desc: Offer registry the trading service reads
   interface ExpertRegistry {
+    //@ ai_effect: destructive
+    //@ ai_authz: moe.registry.write
     void register_expert(in Expert e, in Capability cap);
+    //@ ai_effect: destructive
+    //@ ai_authz: moe.registry.write
     void deregister(in Expert e);
+    //@ ai_effect: idempotent
+    //@ ai_authz: moe.registry.write
     void heartbeat(in Expert e, in Capability updated_cap);
   };
 
   //@ ai_desc: POA-backed loader: residency transitions, never per token
   interface ExpertLoader {
     //@ ai_effect: idempotent
+    //@ ai_authz: moe.loader.residency
     oneway void prefetch(in CapabilityId id);
+    // Evicting a resident expert is destructive to everything routed to it,
+    // and the name carries no verb the checker's heuristic recognises — the
+    // annotation is the only thing that says so.
+    //@ ai_effect: destructive
+    //@ ai_authz: moe.loader.residency
     void  evict(in CapabilityId id);
+    //@ ai_effect: idempotent
+    //@ ai_authz: moe.loader.residency
     void  pin(in CapabilityId id);
     //@ ai_effect: read_only
     Residency status(in CapabilityId id);

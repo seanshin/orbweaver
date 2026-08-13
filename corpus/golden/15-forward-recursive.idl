@@ -4,6 +4,10 @@ module gc15 {
   typedef sequence<Node> NodeSeq;
   interface Node {
     readonly attribute string label;
+    // Reads nothing and hands out every child as a dialable address; the
+    // scope is for what the references can do, not for what this call does.
+    //@ ai_effect: read_only
+    //@ ai_authz: gc15.node.walk
     NodeSeq children();
   };
   struct Tree;
