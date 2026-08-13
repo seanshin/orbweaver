@@ -632,7 +632,9 @@ fn emit_operation(
         }
         let _ = writeln!(s, "        __probe.finish().map_err(rt::GiopError::Cdr)?;");
     }
-    let closure_arg = if ins.is_empty() { "|__e|" } else { "|__e|" };
+    // __e starts with an underscore, so an argless operation whose closure
+    // never touches it raises no unused-variable warning — one spelling serves.
+    let closure_arg = "|__e|";
     if sig.oneway {
         let _ = writeln!(s, "        self.conn.invoke_oneway(\"{wire_name}\", {closure_arg} {{");
         for p in &ins {
