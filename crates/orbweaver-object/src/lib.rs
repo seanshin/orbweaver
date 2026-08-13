@@ -28,6 +28,7 @@ use orbweaver_registry::Registry;
 
 pub mod expert_service;
 pub mod residency;
+pub mod tenant_service;
 
 /// Repository id every CORBA object answers to.
 pub const OBJECT_ID: &str = "IDL:omg.org/CORBA/Object:1.0";

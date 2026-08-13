@@ -26,5 +26,9 @@ path = "src/bin/spike_server.rs"
 name = "spike-experts"
 path = "src/bin/spike_experts.rs"
 
+[[bin]]
+name = "spike-tenants"
+path = "src/bin/spike_tenants.rs"
+
 [lints]
 workspace = true
