@@ -10,7 +10,7 @@
 [![Phase 2: IDL + registry + objects](https://img.shields.io/badge/Phase%202-IDL%20%C2%B7%20registry%20%C2%B7%20objects-1D4C5C.svg)](docs/PHASE2.md)
 [![Spec: OMG IDL 4.2](https://img.shields.io/badge/spec-OMG%20IDL%204.2-1D4C5C.svg)](https://www.omg.org/spec/IDL/4.2/)
 
-> **Status / 상태** — Phase 0 verdict **GO**; Phase 1 (wire core) and Phase 2 (IDL front end, type registry, object model, contract evolution) complete. A from-scratch MIT ORB interoperates with omniORB 4.3.4 and JacORB 3.9 **in both directions** at GIOP 1.0/1.1/1.2. Measurements: [`docs/PHASE0.md`](docs/PHASE0.md) · [`docs/PHASE1.md`](docs/PHASE1.md) · [`docs/PHASE2.md`](docs/PHASE2.md). Full plan: [`docs/PLAN.md`](docs/PLAN.md) (English) · [`docs/PLAN.ko.md`](docs/PLAN.ko.md) (한국어).
+> **Status / 상태** — **v0.1.0 released** (2026-08-13). Phases 0–3.5 complete, Phase 5 half landed, and the remainder runs as parallel streams (PLAN §7.3); the first real-model pipeline batch measured 20/20 first-pass. Phase 0 verdict **GO**; Phase 1 (wire core) and Phase 2 (IDL front end, type registry, object model, contract evolution) complete. A from-scratch MIT ORB interoperates with omniORB 4.3.4 and JacORB 3.9 **in both directions** at GIOP 1.0/1.1/1.2. Measurements: [`docs/PHASE0.md`](docs/PHASE0.md) · [`docs/PHASE1.md`](docs/PHASE1.md) · [`docs/PHASE2.md`](docs/PHASE2.md). Full plan: [`docs/PLAN.md`](docs/PLAN.md) (English) · [`docs/PLAN.ko.md`](docs/PLAN.ko.md) (한국어).
 > Phase 0 판정 **GO**. Phase 1(와이어 코어)과 Phase 2(IDL 프론트엔드·타입 레지스트리·객체 모델·계약 진화) 완료. 밑바닥부터 만든 MIT ORB가 omniORB 4.3.4 및 JacORB 3.9와 **양방향으로** GIOP 1.0·1.1·1.2에서 상호운용됩니다.
 
 ## Phase 0 results / 검증 결과

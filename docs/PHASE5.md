@@ -122,3 +122,46 @@ JWT into a principal — the `Caller` type is the seam it will attach to — and
 matching scopes against `@ai_authz`. The `Approval` the MCP bridge still hardcodes
 to "not approved" is the same seam: a host that authenticates its caller can now
 produce a `Caller`, and that is what the approval channel will carry.
+
+---
+
+# Batch 2: SSLIOP groundwork, and D002 decided
+
+Stream C's second batch (parallel wave 2), plus the decision that unblocks the
+third.
+
+## See the endpoint before deciding how to dial it
+
+`orbweaver-giop/src/ssliop.rs` parses `TAG_SSL_SEC_TRANS` (ComponentId 20):
+`target_supports`/`target_requires` (the same `CSI::AssociationOptions` bits as
+csiv2 — reused, not redefined) and the SSL port, which replaces the cleartext
+port at the same host. Absence is `None` and not an error — the measured
+common case — but an *unreadable* component is `Some(Err)`, because silently
+ignoring it would downgrade to cleartext. Port 0 is handled as the deployed
+convention ("same port") and labeled convention, not spec. `spike-dump` prints
+the advertisement per IOR, and the harness records the baseline: **neither
+fixture advertises TAG_SSL_SEC_TRANS**, so TLS work starts from a measured
+fact.
+
+읽을 수 없는 컴포넌트는 `Some(Err)`다 — 조용히 무시하면 평문으로 강등되기 때문이다.
+포트 0은 규격이 아니라 배포 관례로 처리하고 그렇게 표기했다.
+
+## D002: crypto is depended on for honesty, not licensing
+
+Approved 2026-08-13 ("승인, 진행"): rustls under the **MIT arm** of its
+`Apache-2.0 OR ISC OR MIT` triple licence, default provider aws-lc-rs, behind
+an off-by-default `ssliop` feature, disclosed in NOTICE with the same testable
+promise as encoding_rs.
+
+The argument that matters: first-party TLS is ruled out **by honesty, not by
+licensing**. GIOP we implement ourselves because our oracles catch a wrong
+implementation — a broken handshake, by contrast, interops perfectly and our
+oracle would never see it. Crypto whose failure modes our oracles cannot
+detect is depended on, not written. Verified from shipped crate tarballs: the
+advertising-clause OpenSSL/SSLeay text is gone from both candidate providers
+as shipped; the residual provenance risk (upstream's Apache-2.0 assertion over
+1995–1998 SSLeay-era files) is named in D002 as relied-upon, not verified.
+
+**직접 만들지 않는 이유는 라이선스가 아니라 정직성이다.** 깨진 핸드셰이크는 완벽히
+상호운용되므로 우리 오라클이 결코 보지 못한다 — 오라클이 실패를 감지할 수 없는
+로직은 의존하지, 작성하지 않는다.
