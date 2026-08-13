@@ -1,12 +1,19 @@
 # Phase 4 / Stream B — static generation
 
-Stream B of `docs/PLAN.md` §7.3, first batch. The batch unit the plan names:
-one backend target across the **whole golden corpus** at once — generate every
-stub, compile every stub, run against the fixture — with §8's oracle, *static
-result equals dynamic result*.
+Stream B of `docs/PLAN.md` §7.3, in five batches. The batch unit the plan
+names: one backend target across the **whole golden corpus** at once — generate
+every stub, compile every stub, run against the fixture — with §8's oracle,
+*static result equals dynamic result*.
 
-계획 §7.3의 스트림 B, 1차 배치. 일괄 단위는 계획이 명시한 대로 "백엔드 타깃 하나 ×
-golden 말뭉치 전체"이고, 오라클은 §8의 *정적 결과 = 동적 결과*다.
+Batches 1–4 measure the calling half (stubs, I1's guard boundary, promotion and
+I4's live gate). Batch 5 measures the answering half (skeletons, servant
+faults, and §8's oracle in the serving direction), and is where the transposed
+completion status was found — by an ORB we did not write, because no local
+comparison could have seen it.
+
+계획 §7.3의 스트림 B, 다섯 배치. 배치 1–4는 부르는 쪽(스텁·가드 경계·승격), 배치
+5는 답하는 쪽(스켈레톤·서번트 예외·서빙 방향 오라클)을 측정한다. 완료 상태 전치가
+발견된 곳이 배치 5이며, 우리가 쓰지 않은 ORB만이 그것을 볼 수 있었다.
 
 ---
 
@@ -219,3 +226,110 @@ which is a running batch as this is written. PLAN §7.4 I4: ●.
 음성 대조군이 시연을 검사로 만든다: 호출자 없이 재구성한 같은 호출이 피어에게서
 똑같이 42를 받는데도 게이트가 `IdentityDropped`로 거부한다. 답이 같고 호출자만
 사라진 승격이야말로 게이트가 출하 불가능하게 만들어야 하는 것이다.
+
+---
+
+# Batch 5: the serving direction — skeletons, faults, and an oracle for the answer
+
+Batches 1–4 measured generated **clients**. Everything a generated *server*
+does was unmeasured, which mattered more than it sounds: every CORBA service
+this project serves — naming, event, IFR, expert, tenancy — is a hand-written
+servant, so "no hand-written stubs" was true of the calling half and merely
+unexamined on the answering half.
+
+배치 1–4는 생성된 **클라이언트**만 측정했다. 우리가 제공하는 CORBA 서비스는 전부
+손으로 쓴 서번트였으므로, "손으로 쓴 스텁 없이"는 부르는 쪽에서만 참이었다.
+
+## Three things a skeleton gets wrong, tested as three things
+
+- **oneway** — the arm writes nothing at all. A skeleton that writes an empty
+  reply to a oneway breaks the message framing for every later request on that
+  connection, so the test sends a twoway *after* the oneway across all three
+  GIOP versions and both byte orders and checks the answer, rather than
+  checking the absence.
+- **attributes** — `_get_x`/`_set_x` are operations on the wire; a readonly
+  attribute generates no setter and refuses `_set_x`. Getting this wrong was
+  live: attributes were not inherited by the client stub either, so a skeleton
+  would have answered an inherited `_get_` with `BAD_OPERATION`.
+- **alignment origin** — and here the honest finding is that the hazard is
+  *latent* on the reply side: `Server` always hands over origin 24, which is
+  already 8-aligned, so a zero-origin bug is invisible there. The test also
+  dispatches at origin 20. On the request side it needs no contrivance, since
+  GIOP 1.0/1.1 do not align the request body.
+
+## A servant that cannot fail is not a servant
+
+The first skeleton design gave the trait an error type of "the user exceptions
+this interface declares", which for an interface with no `raises` clause is
+**uninhabited**: such a servant could not fail at all. Every hand-written
+servant we have needs `OBJECT_NOT_EXIST` for an unknown key, `NO_PERMISSION`
+for a refusal, `TRANSIENT` for a temporary one — so a generated servant that
+cannot express them can never replace one.
+
+The fix is one enum rather than two channels, because the reply status is
+exactly what must not be decided in two places. The part worth keeping is how
+the completion status is obtained: `rt::raise::*` returns a `#[must_use]
+Raising` with no `From`, no `Default`, and no method that yields a
+`SystemException` without naming the status — `did_not_run()`,
+`ran_to_completion()`, `may_have_run()`. A generator-picked default here is how
+a retry loop corrupts state, and the negative control is a test where one
+servant answers `COMPLETED_NO` for one raise and `COMPLETED_MAYBE` for another.
+
+**서번트가 실패할 수 없으면 서번트가 아니다.** 완료 상태는 생성기가 고르는 상수가
+아니라 서번트가 이름 붙여야 하는 값이다 — 여기서 기본값을 조용히 넣는 것이 재시도
+루프가 상태를 망가뜨리는 경로다.
+
+## The finding: a transposed enum that only a foreign ORB could see
+
+Driving the generated servant with omniORB's own python client is what caught
+it. `§4.11.4` declares `enum completion_status { COMPLETED_YES, COMPLETED_NO,
+COMPLETED_MAYBE }`, so YES is ordinal 0; `orbweaver_giop::server::Completion`
+had `No = 0, Yes = 1`. **A servant reporting "it did not run" reached every
+foreign ORB as "it ran"** — a call refused before it started looked like a
+mutation that had happened, and a client that could safely have re-sent
+concluded it must not.
+
+`MAYBE` is 2 either way, which is why only two of the three were wrong. Nothing
+local caught it because every local comparison used the same enum on both
+sides — including `giop`'s own test, which asserted the encoded byte equalled
+`Completion::No as u32` and therefore moved with the bug. It now asserts the
+literal ordinal, and the harness reads the value back through omniORB on every
+run.
+
+The batch that found it did **not** fix it: the defect was in another crate and
+outside the stated footprint, so it was pinned *as measured* with a comment
+telling the fixer what to change. That is the discipline working — a batch that
+reaches outside its footprint to fix what it finds also lands unreviewed
+changes to five servants' wire output.
+
+**로컬 검사는 전부 같은 enum을 양쪽에 놓고 비교했으므로 버그와 함께 움직였다.**
+우리가 쓰지 않은 ORB만이 이견을 낼 수 있었다.
+
+## §8's rule in the direction nothing checked
+
+The client oracle is "static bytes equal dynamic bytes". The serving direction
+had no equivalent, so a skeleton could encode a reply correctly by accident.
+`tests/skeleton_oracle.rs` drives each operation's reply through the generated
+skeleton and compares the bytes against `orbweaver_dynamic::encode` of the same
+values — 204 comparisons over three GIOP versions × two byte orders × two reply
+origins, including user-exception bodies.
+
+What it cannot compare is **named rather than skipped**, and a test fails if a
+contract grows a member on neither list: oneway operations have no reply on
+either side; a `SystemException` body is written by `giop` rather than by the
+skeleton, so there is no generated encoding to hold to a dynamic one; and the
+wide codec is pinned on both sides, so a `wstring` would compare equal where
+the paths should differ — asserted absent rather than assumed.
+
+## Scope / 범위
+
+Landed: client stubs, server skeletons, user and system exceptions, the
+promotion gate with I4's live half, and both directions of §8's oracle.
+
+Not landed, and stated so the absence does not read as completeness: a
+generated skeleton has **no object keys**, so one servant per process — the
+naming server's multi-context shape is not yet generatable, which is the gate
+on replacing our hand-written servants with generated ones. No
+`LOCATION_FORWARD`. A oneway fault is dropped, since §9.4.1 leaves nowhere to
+put it, though it is now logged rather than discarded silently. Python and
+other target languages remain unwritten.
