@@ -32,11 +32,13 @@
 //!
 //! Honestly stated, per the operating model:
 //!
-//! - **Wiring into the bridge.** `Bridge::invoke` does not record into a
-//!   [`CallStats`] yet; `lib.rs` is off-limits to this batch because another
-//!   stream is working in it. [`CallStats::record`] is public so the
-//!   integration step is one line at the end of `Bridge::invoke`:
-//!   `self.stats.record(&id, operation, result.is_ok());`
+//! - **Wiring into the bridge.** Landed since this note was written:
+//!   `Bridge::invoke` records every call into its [`CallStats`], and it now
+//!   writes its audit lines through the same formatter the guard uses — so
+//!   the dynamic line this gate parses can be *captured* from
+//!   `Bridge::audit()` rather than reconstructed from session state. The
+//!   gen-corpus oracle's I4 section still reconstructs; flipping it to
+//!   capture is a one-line change in `orbweaver-gen` owned by a later batch.
 //! - **The live static-vs-dynamic comparison.** [`verify_promotion`] compares
 //!   two outcomes it is handed; producing those outcomes by running the
 //!   generated stub and the dynamic invoker against a real peer, both byte
@@ -512,5 +514,53 @@ mod tests {
             ),
             "{err}"
         );
+    }
+
+    /// The capture seam, closed at this end: the dynamic line fed to the gate
+    /// is one a real `Bridge` *emitted* — taken from `Bridge::audit()`, not a
+    /// string reconstructed from session state — and it parses and gates
+    /// against a real `Guarded`'s line for the same call. This is what lets
+    /// the gen-corpus oracle's I4 section replace reconstruction with capture.
+    #[test]
+    fn a_bridge_emitted_dynamic_line_parses_and_gates_unchanged() {
+        use orbweaver_giop::{Connection, IiopProfile, Ior, Version};
+
+        use crate::Bridge;
+
+        let reg = registry();
+        let exposure = Exposure::nothing().allow_interface("IDL:bank/Account:1.0");
+
+        // A real Connection to a listener that answers nothing. The call is
+        // given an argument `balance()` does not take, so it passes the
+        // policy gate — writing the ALLOW line — and fails at mapping before
+        // anything touches the wire.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binds");
+        let ior = Ior {
+            type_id: "IDL:bank/Account:1.0".into(),
+            profiles: vec![IiopProfile {
+                version: Version::V1_2,
+                host: "127.0.0.1".into(),
+                port: listener.local_addr().expect("has an address").port(),
+                object_key: b"acct-1".to_vec(),
+                components: Vec::new(),
+            }],
+        };
+        let mut conn = Connection::connect(&ior, std::time::Duration::from_secs(5)).expect("dials");
+
+        let mut bridge =
+            Bridge::new(&reg, exposure, "i4-capture").on_behalf_of(Caller::new("alice"));
+        let handle = bridge.handles().issue_checked(&ior).expect("issued");
+        let args = orbweaver_dynamic::json::Json::Object(BTreeMap::from([(
+            "bogus".to_owned(),
+            orbweaver_dynamic::json::Json::Number("1".into()),
+        )]));
+        let _ = bridge.invoke(&mut conn, handle.as_str(), "balance", &args, Approval::default());
+        let dynamic_audit =
+            bridge.audit().last().cloned().expect("the bridge recorded its decision");
+
+        let static_audit = static_audit_line(&reg, Some(Caller::new("alice")));
+        let out = outcome(orbweaver_dynamic::Value::Long(42));
+        verify_promotion(&out, &out.clone(), &dynamic_audit, &static_audit)
+            .expect("a captured dynamic line must parse and gate exactly like the format it is");
     }
 }

@@ -179,12 +179,17 @@ impl<'a> Session<'a> {
                 let approval = Approval::default();
                 // The handle and the policy are checked before the connection
                 // is looked at, so a forged handle gets the same answer whether
-                // or not a target is attached.
-                if let Err(e) = self.bridge.check(handle, op, approval) {
-                    return rpc::result(id, rpc::tool_error(e.to_string()));
-                }
+                // or not a target is attached. With a target the check runs
+                // inside `Bridge::invoke` — the same check, and the point that
+                // now writes the audit line; without one it runs here so the
+                // refusal still answers first.
                 let Some(conn) = self.conn.as_mut() else {
-                    return rpc::result(id, rpc::tool_error("this session has no target to call"));
+                    return match self.bridge.check(handle, op, approval) {
+                        Err(e) => rpc::result(id, rpc::tool_error(e.to_string())),
+                        Ok(_) => {
+                            rpc::result(id, rpc::tool_error("this session has no target to call"))
+                        }
+                    };
                 };
                 match self.bridge.invoke(conn, handle, op, &call_args, approval) {
                     Ok(v) => rpc::result(id, rpc::tool_content(&v)),
@@ -374,5 +379,76 @@ b","method":"nope"}"#,
     #[test]
     fn a_blank_line_is_ignored() {
         assert_eq!(run(Exposure::nothing(), &["", "   "]), vec![None, None]);
+    }
+
+    /// The dispatch path leaves audit lines: `tools/call` funnels through
+    /// `Bridge::invoke`, which records every policy decision. A session
+    /// nobody is signed into logs `caller=<nobody>`, and a refusal carries
+    /// its why — no reconstruction, these are the lines the bridge wrote.
+    #[test]
+    fn a_tools_call_leaves_audit_lines_and_an_unsigned_session_is_nobody() {
+        use orbweaver_giop::{Connection, IiopProfile, Ior, Version};
+
+        let reg: &'static Registry = Box::leak(Box::new(registry_with_deposit()));
+        // A real Connection to a listener that answers nothing; the calls
+        // below are chosen so nothing ever touches the wire (a missing
+        // argument fails after the policy gate, a refusal fails at it).
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binds");
+        let ior = Ior {
+            type_id: "IDL:bank/Account:1.0".into(),
+            profiles: vec![IiopProfile {
+                version: Version::V1_2,
+                host: "127.0.0.1".into(),
+                port: listener.local_addr().expect("has an address").port(),
+                object_key: b"acct-1".to_vec(),
+                components: Vec::new(),
+            }],
+        };
+        let conn = Connection::connect(&ior, std::time::Duration::from_secs(5)).expect("dials");
+
+        let exposure = Exposure::nothing().allow_operation("IDL:bank/Account:1.0", "deposit");
+        let mut session = Session::new(reg, exposure, conn, "test");
+        let h = session.bridge().handles().issue_checked(&ior).expect("issued");
+
+        session.handle_line(r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#);
+        // Allowed by policy, then refused at argument mapping: the ALLOW
+        // line records the decision regardless.
+        session.handle_line(&format!(
+            r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"invoke_operation","arguments":{{"handle":"{h}","operation":"deposit"}}}}}}"#
+        ));
+        // Not among the allowed operations: refused, with the why on record.
+        session.handle_line(&format!(
+            r#"{{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"invoke_operation","arguments":{{"handle":"{h}","operation":"balance"}}}}}}"#
+        ));
+
+        let audit = session.bridge().audit().to_vec();
+        assert_eq!(
+            audit[0], "ALLOW caller=<nobody> target=IDL:bank/Account:1.0 operation=deposit",
+            "{audit:?}"
+        );
+        assert!(
+            audit[1].starts_with(
+                "REFUSE caller=<nobody> target=IDL:bank/Account:1.0 operation=balance why="
+            ),
+            "{}",
+            audit[1]
+        );
+        assert_eq!(audit.len(), 2);
+    }
+
+    fn registry_with_deposit() -> Registry {
+        let spec = orbweaver_idl::parse(
+            "module bank {
+               interface Account {
+                 //@ ai_effect: read_only
+                 long balance();
+                 void deposit(in long cents);
+               };
+             };",
+        )
+        .expect("parses");
+        let mut r = Registry::new();
+        r.load(&spec).expect("loads");
+        r
     }
 }
