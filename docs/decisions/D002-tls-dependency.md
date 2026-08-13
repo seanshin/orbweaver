@@ -1,9 +1,12 @@
 # D002 — TLS for SSLIOP: which implementation, if any
 
-**Status:** PROPOSED 2026-08-13. Nothing is adopted; no Cargo.toml changes.
-A human approves this, or does not.
-**상태:** 2026-08-13 제안. 아직 아무것도 채택하지 않았고 Cargo.toml 변경도 없다.
-승인은 사람이 한다.
+**STATUS: APPROVED** — proposed 2026-08-13, approved 2026-08-13 by the user
+("승인, 진행"). The recommendation below is now policy: rustls under the MIT
+arm of its triple licence, aws-lc-rs as provider, behind the off-by-default
+`ssliop` feature, disclosed in NOTICE.
+**상태: 승인됨** — 2026-08-13 제안, 같은 날 사용자가 승인("승인, 진행"). 아래 권고가
+정책이 된다: rustls(3중 라이선스의 MIT 갈래), 제공자 aws-lc-rs, 기본 꺼짐 `ssliop`
+피처 뒤, NOTICE에 공개.
 
 **Verified 2026-08-13** against the licence files shipped inside the actual
 crate tarballs from `static.crates.io` (rustls 0.23.43, ring 0.17.14,

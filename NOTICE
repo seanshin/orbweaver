@@ -70,3 +70,13 @@ interoperability test fixtures and conformance oracles: separate processes
 reached over TCP using the published GIOP specification, and external programs
 whose text output is read. No part of them is imported, linked, vendored or
 redistributed, and `cargo tree` does not contain them.
+
+## rustls / aws-lc-rs (only when built with the `ssliop` feature)
+
+Per docs/decisions/D002 (approved 2026-08-13): the `ssliop` feature, OFF by
+default, adds `rustls` (used under the MIT arm of its Apache-2.0 OR ISC OR MIT
+triple licence) and its default crypto provider `aws-lc-rs` (ISC/Apache-2.0 as
+shipped; BoringSSL/OpenSSL lineage relicensed upstream — see D002 for what was
+verified and what is relied upon). A default build carries neither crate and
+none of these obligations; `spikes/run_checks.sh` tests that promise the same
+way it tests the encoding_rs one.
