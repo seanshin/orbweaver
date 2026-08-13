@@ -670,6 +670,22 @@ fi
 cleanup
 [ "$stdio_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
+# ── Search baseline: stream D ────────────────────────────────────────────────
+hr "search baseline — frozen queries against the lexical index"
+# §8's benchmark discipline: the query set is versioned and never edited to
+# make a run pass. exact/negative/injection are gates; synonym is the measured
+# headroom the embedding batch will be judged against, with no pass/fail here.
+sb=$(cargo run -q -p orbweaver-mcp --bin search-bench -- \
+     corpus/queries/search-v1.tsv corpus/golden/*.idl spikes/echo.idl 2>&1)
+sb_rc=$?
+if [ "$sb_rc" -eq 0 ] && printf '%s' "$sb" | grep -q "search-bench: PASS"; then
+  printf '%s' "$sb" | grep "search-bench: PASS" | sed 's/^/  ok   /'
+else
+  echo "  FAIL the frozen search baseline did not hold"
+  printf '%s' "$sb" | tail -4 | sed 's/^/       /'
+  fail_total=$((fail_total+1))
+fi
+
 # ── Wire hardening: stream E ─────────────────────────────────────────────────
 hr "wire hardening — LocateRequest send, both peers, all three versions"
 # Carried forward since Phase 2: the server side has answered locates, but
