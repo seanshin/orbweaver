@@ -117,11 +117,22 @@ pub const UNKNOWN: &str = "IDL:omg.org/CORBA/UNKNOWN:1.0";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum Completion {
-    /// The operation did not run.
-    No = 0,
     /// The operation ran to completion but the reply was lost.
-    Yes = 1,
-    /// Cannot be determined.
+    ///
+    /// Ordinal 0, and the order of this enum is **not** a style choice: the
+    /// specification declares `enum completion_status { COMPLETED_YES,
+    /// COMPLETED_NO, COMPLETED_MAYBE }`, so YES is zero. We had NO at zero,
+    /// which meant a servant reporting "it did not run" reached every foreign
+    /// ORB as "it ran" — the two values that decide whether a caller may
+    /// safely retry, transposed. MAYBE is 2 either way, which is why nothing
+    /// caught it: our own client compared against the same enum and agreed
+    /// with itself. Measured against omniORB before the fix
+    /// (`CORBA.COMPLETED_YES` is 0) rather than read off the specification
+    /// alone.
+    Yes = 0,
+    /// The operation did not run, so a retry is safe.
+    No = 1,
+    /// Cannot be determined; a retry may or may not duplicate the effect.
     Maybe = 2,
 }
 
@@ -1132,7 +1143,14 @@ mod tests {
         let mut b = reply.body().unwrap();
         assert_eq!(b.get_string().unwrap(), BAD_OPERATION);
         assert_eq!(b.get_u32().unwrap(), 0);
-        assert_eq!(b.get_u32().unwrap(), Completion::No as u32);
+        // The literal ordinal, not `Completion::No as u32`. Comparing the
+        // symbol against itself is what let the enum sit transposed —
+        // COMPLETED_NO written as 0 — through every local test: both sides of
+        // the assertion moved together, and only an ORB we did not write could
+        // disagree. §4.11.4 fixes COMPLETED_YES at 0, so NO is 1.
+        assert_eq!(b.get_u32().unwrap(), 1, "COMPLETED_NO is §4.11.4's ordinal 1");
+        assert_eq!(Completion::Yes as u32, 0);
+        assert_eq!(Completion::Maybe as u32, 2);
     }
 
     /// A 1.2-only status must not be emitted to a 1.0/1.1 peer, which has no

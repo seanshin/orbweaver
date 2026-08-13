@@ -359,31 +359,30 @@ fn omniorb_python_sees_the_faults_by_class() {
     assert_completion_is_read_as_measured(&output);
 }
 
-/// What omniORB makes of the completion status we sent — asserted in the form
-/// it actually has, which is **not** the form it should have.
+/// What omniORB makes of the completion status we sent.
 ///
 /// §4.11.4 declares `enum completion_status { COMPLETED_YES, COMPLETED_NO,
 /// COMPLETED_MAYBE }`, so COMPLETED_YES is ordinal 0 and COMPLETED_NO is 1.
-/// `orbweaver_giop::server::Completion` numbers them `No = 0, Yes = 1`, which
-/// is the transposition of the first two. `MAYBE` is 2 either way, which is
-/// why only two of the three are wrong and why it went unnoticed: our own
-/// client compares against the same enum and agrees with itself.
+/// This test was written while `orbweaver_giop::server::Completion` numbered
+/// them the other way — `No = 0, Yes = 1`, a transposition of exactly the two
+/// values that decide whether a caller may retry — and it pinned that as
+/// *measured* rather than as correct, because the defect was in another crate.
+/// The renumbering has since landed, so these expectations now read the way a
+/// foreign ORB should see them, and this test is what catches the
+/// transposition coming back.
 ///
-/// The consequence is exactly the one the completion status exists to prevent:
-/// a servant that says `did_not_run()` reaches a foreign ORB as "it ran", and
-/// a client that would have safely re-sent instead concludes it must not. A
-/// mutation refused before it started looks, to omniORB, like a mutation that
-/// happened.
+/// MAYBE is 2 either way, which is why only two of the three were ever wrong,
+/// and why nothing local caught it: our client compared against the same enum
+/// and agreed with itself. It took an ORB we did not write to disagree.
 ///
-/// The defect is in `orbweaver-giop`, outside this batch's footprint, so it is
-/// **measured and reported here rather than fixed**. Fixing it flips these two
-/// words and fails this assertion loudly, which is the point: the fixer reads
-/// this comment, changes the expectation to `COMPLETED_NO`, and the transposed
-/// era ends with a diff that says so.
+/// 재시도 안전성을 결정하는 두 값이 뒤바뀌어 있었다. 우리 클라이언트는 같은
+/// enum으로 비교하므로 스스로와는 늘 일치했고, 외부 ORB만이 이견을 낼 수 있었다.
 fn assert_completion_is_read_as_measured(output: &str) {
     for (what, reads_as) in [
-        ("CORBA.OBJECT_NOT_EXIST", "COMPLETED_YES"),
-        ("CORBA.BAD_PARAM", "COMPLETED_YES"),
+        // The servant said did_not_run() for both, and that is now what a
+        // foreign ORB reads.
+        ("CORBA.OBJECT_NOT_EXIST", "COMPLETED_NO"),
+        ("CORBA.BAD_PARAM", "COMPLETED_NO"),
         ("CORBA.TRANSIENT", "COMPLETED_MAYBE"),
     ] {
         let line = output
@@ -392,10 +391,10 @@ fn assert_completion_is_read_as_measured(output: &str) {
             .unwrap_or_else(|| panic!("no {what} line:\n{output}"));
         assert!(
             line.ends_with(reads_as),
-            "omniORB read the completion status of {what} as {line:?}, not {reads_as:?}. If \
-             `orbweaver_giop::server::Completion` has just been renumbered to §4.11.4's order \
-             (COMPLETED_YES = 0, COMPLETED_NO = 1), this expectation is the thing to update — \
-             see the doc comment on this function."
+            "omniORB read the completion status of {what} as {line:?}, not {reads_as:?}. \
+             `Completion` follows §4.11.4 (COMPLETED_YES = 0, COMPLETED_NO = 1, MAYBE = 2); a \
+             change that reorders it transposes retry safety and fails here, which is this \
+             test's whole job."
         );
     }
 }
@@ -438,11 +437,10 @@ fn omniorb_python_sees_a_refusal_as_no_permission() {
         output.contains("CORBA.NO_PERMISSION minor 0"),
         "omniORB did not report the refusal by class:\n{output}"
     );
-    // See `assert_completion_is_read_as_measured`: our `did_not_run()` reaches
-    // omniORB as COMPLETED_YES, because the two enumerators are transposed one
-    // crate below this one.
+    // did_not_run() now reaches omniORB as COMPLETED_NO, which is what makes a
+    // refused call safely re-sendable by a client we did not write.
     assert!(
-        output.contains("CORBA.NO_PERMISSION minor 0 completed COMPLETED_YES"),
+        output.contains("CORBA.NO_PERMISSION minor 0 completed COMPLETED_NO"),
         "the completion status omniORB read has changed:\n{output}"
     );
     assert!(output.contains("OK"), "{output}");
