@@ -28,6 +28,7 @@ pub mod gc24 {
     }
 
     /// A gauge whose skeleton exercises oneway, attributes and alignment
+    ///
     /// Client stub for `IDL:gc24/Gauge:1.0`.
     ///
     /// Static twin of the dynamic path; §8 requires their bytes to be
@@ -45,6 +46,7 @@ pub mod gc24 {
         /// A stub over an open invoker.
         pub fn new(conn: C) -> Self { Self { conn } }
         /// Records one sample and returns the reading it produced
+        ///
         /// `record` on the wire.
         pub fn record(&mut self, sample: f64, unit: String) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, rt::GiopError> {
             let mut __probe = rt::Encoder::new(self.conn.endian());
@@ -60,12 +62,14 @@ pub mod gc24 {
             Ok(__r0)
         }
         /// whether it happened, so the scope is all that guards it
+        ///
         /// `reset` on the wire.
         pub fn reset(&mut self) -> Result<(), rt::GiopError> {
             self.conn.invoke_oneway("reset", |__e| {
             })
         }
         /// Multiplies every stored sample and answers how many changed
+        ///
         /// `scale_all` on the wire.
         pub fn scale_all(&mut self, e: f64) -> Result<i32, rt::GiopError> {
             let mut __probe = rt::Encoder::new(self.conn.endian());
@@ -79,6 +83,7 @@ pub mod gc24 {
             Ok(__r0)
         }
         /// Splits the latest reading into its parts
+        ///
         /// `split` on the wire.
         pub fn split(&mut self) -> Result<(f64, String), rt::GiopError> {
             let __reply = self.conn.invoke("split", |__e| {
@@ -89,6 +94,7 @@ pub mod gc24 {
             Ok((__r0, __r1))
         }
         /// Human-readable label for this gauge
+        ///
         /// `_get_label` on the wire.
         pub fn label(&mut self) -> Result<String, rt::GiopError> {
             let __reply = self.conn.invoke("_get_label", |__e| {
@@ -98,6 +104,7 @@ pub mod gc24 {
             Ok(__r0)
         }
         /// Human-readable label for this gauge
+        ///
         /// `_set_label` on the wire.
         pub fn set_label(&mut self, value: String) -> Result<(), rt::GiopError> {
             let mut __probe = rt::Encoder::new(self.conn.endian());
@@ -110,6 +117,7 @@ pub mod gc24 {
             Ok(())
         }
         /// The most recent reading, or a zeroed one before any sample
+        ///
         /// `_get_latest` on the wire.
         pub fn latest(&mut self) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, rt::GiopError> {
             let __reply = self.conn.invoke("_get_latest", |__e| {
@@ -120,77 +128,148 @@ pub mod gc24 {
         }
     }
     
-    /// The user exceptions `IDL:gc24/Gauge:1.0` may raise.
-    /// One variant per exception named in a `raises` clause of this
-    /// interface or of one it inherits. `write` puts the body §9.4.3.1
-    /// describes — repository id first, then the members — which is
-    /// exactly what the client side reads back out of
+    /// Everything a servant for `IDL:gc24/Gauge:1.0` can fail with.
+    ///
+    /// `System` is always here, whatever the contract declares: an unknown
+    /// key is `OBJECT_NOT_EXIST`, a refused call is `NO_PERMISSION`, a
+    /// temporary refusal is `TRANSIENT`, and IDL has no way to declare any
+    /// of them. Build one with `rt::raise::*`, which does not produce a
+    /// `SystemException` until the completion status is stated — the field
+    /// that tells the caller whether a retry is safe, and the one thing a
+    /// generator cannot know for a servant.
+    ///
+    /// The remaining variants are the exceptions named in a `raises`
+    /// clause of this interface or of one it inherits. `write` puts the
+    /// body §9.4.3.1 describes — repository id first, then the members —
+    /// which is exactly what the client side reads back out of
     /// `rt::GiopError::UserException`.
-    #[derive(Debug, Clone, PartialEq)]
-    pub enum GaugeUserException {
+    #[derive(Debug, Clone)]
+    pub enum GaugeFault {
+        /// A CORBA system exception, with the completion status the
+        /// servant chose. Travels as a `SystemException` reply.
+        System(rt::SystemException),
         /// IDL exception `IDL:gc24/Busy:1.0`.
         Busy(crate::emitted::f_24_skeleton_surface::gc24::Busy),
         /// IDL exception `IDL:gc24/Rejected:1.0`.
         Rejected(crate::emitted::f_24_skeleton_surface::gc24::Rejected),
     }
-    impl GaugeUserException {
-        /// The repository id that travels first in the exception body.
-        pub fn id(&self) -> &'static str {
-            match self {
-                Self::Busy(_) => "IDL:gc24/Busy:1.0",
-                Self::Rejected(_) => "IDL:gc24/Rejected:1.0",
+    impl From<rt::SystemException> for GaugeFault {
+        fn from(__ex: rt::SystemException) -> Self {
+            Self::System(__ex)
+        }
+    }
+    impl PartialEq for GaugeFault {
+        fn eq(&self, __other: &Self) -> bool {
+            match (self, __other) {
+                (Self::System(__a), Self::System(__b)) => {
+                    __a.id == __b.id
+                        && __a.minor == __b.minor
+                        && __a.completed == __b.completed
+                }
+                (Self::Busy(__a), Self::Busy(__b)) => __a == __b,
+                (Self::Rejected(__a), Self::Rejected(__b)) => __a == __b,
+                _ => false,
             }
         }
-        /// Writes the exception body: repository id, then the members.
-        pub fn write(&self, __out: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-            __out.put_str(self.id());
+    }
+    impl GaugeFault {
+        /// The repository id of the user exception this fault carries, or
+        /// `None` for a system exception, which carries its own.
+        pub fn user_id(&self) -> Option<&'static str> {
             match self {
-                Self::Busy(__v) => __v.put(__out),
-                Self::Rejected(__v) => __v.put(__out),
+                Self::System(_) => None,
+                Self::Busy(_) => Some("IDL:gc24/Busy:1.0"),
+                Self::Rejected(_) => Some("IDL:gc24/Rejected:1.0"),
+            }
+        }
+        /// Writes this fault into the reply body and says which reply status the
+        /// bytes travel under.
+        ///
+        /// A system exception writes nothing and comes back as `Err`: it is not a
+        /// body under a status, it *replaces* the reply (§9.4.3.1), so the
+        /// dispatcher hands it to the server to encode instead. That is also why
+        /// nothing may be written before the fault is known — the whole buffer
+        /// travels under one status.
+        pub fn write(&self, __out: &mut rt::Encoder) -> Result<rt::DispatchBody, rt::SystemException> {
+            match self {
+                Self::System(__ex) => Err(__ex.clone()),
+                Self::Busy(__v) => {
+                    __out.put_str("IDL:gc24/Busy:1.0");
+                    __v.put(__out).map_err(|_| rt::SystemException::marshal())?;
+                    Ok(rt::DispatchBody::UserException)
+                }
+                Self::Rejected(__v) => {
+                    __out.put_str("IDL:gc24/Rejected:1.0");
+                    __v.put(__out).map_err(|_| rt::SystemException::marshal())?;
+                    Ok(rt::DispatchBody::UserException)
+                }
             }
         }
     }
     /// A gauge whose skeleton exercises oneway, attributes and alignment
+    ///
     /// What a servant for `IDL:gc24/Gauge:1.0` must implement.
+    ///
     /// One method per operation and per attribute accessor, taking decoded
     /// Rust arguments. Nothing here mentions GIOP: the wire is entirely the
     /// business of `GaugeSkeleton`, which adapts this trait to
     /// `rt::Dispatch`.
+    ///
+    /// Every method may fail with a `GaugeFault`: a declared user exception,
+    /// or a system exception built with `rt::raise::*` — the vocabulary
+    /// (`OBJECT_NOT_EXIST`, `NO_PERMISSION`, `BAD_PARAM`, `TRANSIENT`) that
+    /// no contract declares and every servant needs.
     pub trait GaugeServant {
         /// Records one sample and returns the reading it produced
+        ///
         /// `record` on the wire.
-        fn record(&mut self, sample: f64, unit: String) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeUserException>;
+        fn record(&mut self, sample: f64, unit: String) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault>;
         /// whether it happened, so the scope is all that guards it
+        ///
         /// `reset` on the wire.
-        /// `oneway`: the caller is not waiting, so neither a result nor a raise
-        /// can reach it. Returning `Err` here is dropped, deliberately.
-        fn reset(&mut self) -> Result<(), GaugeUserException>;
+        ///
+        /// `oneway`: the caller is not waiting, so neither a result nor a fault
+        /// can reach it. Returning `Err` here is dropped — deliberately, and
+        /// logged, because a oneway that fails invisibly is undebuggable.
+        fn reset(&mut self) -> Result<(), GaugeFault>;
         /// Multiplies every stored sample and answers how many changed
+        ///
         /// `scale_all` on the wire.
-        fn scale_all(&mut self, e: f64) -> Result<i32, GaugeUserException>;
+        fn scale_all(&mut self, e: f64) -> Result<i32, GaugeFault>;
         /// Splits the latest reading into its parts
+        ///
         /// `split` on the wire.
-        fn split(&mut self) -> Result<(f64, String), GaugeUserException>;
+        fn split(&mut self) -> Result<(f64, String), GaugeFault>;
         /// Human-readable label for this gauge
+        ///
         /// `_get_label` on the wire.
-        fn label(&mut self) -> Result<String, GaugeUserException>;
+        fn label(&mut self) -> Result<String, GaugeFault>;
         /// Human-readable label for this gauge
+        ///
         /// `_set_label` on the wire.
-        fn set_label(&mut self, value: String) -> Result<(), GaugeUserException>;
+        fn set_label(&mut self, value: String) -> Result<(), GaugeFault>;
         /// The most recent reading, or a zeroed one before any sample
+        ///
         /// `_get_latest` on the wire.
-        fn latest(&mut self) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeUserException>;
+        fn latest(&mut self) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault>;
     }
     /// Serves `IDL:gc24/Gauge:1.0`: decodes the request, calls the servant, encodes the reply.
+    ///
     /// Hand it to `rt::Server::serve` in place of a hand-written
     /// `rt::Dispatch`. What it answers, beyond the contract's own
     /// operations:
+    ///
     /// * `_is_a`, from the inheritance chain the registry resolved, because
     ///   an ORB probes with it before it will narrow;
     /// * `_non_existent`, with `false`;
     /// * every other name with `BAD_OPERATION`, including the `_set_` of a
     ///   readonly attribute;
     /// * a body that does not decode with `MARSHAL`.
+    ///
+    /// A `GaugeFault::System` the servant raises is passed through
+    /// unchanged — repository id, minor code and completion status — so the
+    /// servant's answer about whether a retry is safe is the one the client
+    /// receives.
     pub struct GaugeSkeleton<S: GaugeServant> {
         /// The implementation invocations are delivered to.
         pub servant: S,
@@ -217,18 +296,18 @@ pub mod gc24 {
                             __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
                             Ok(rt::DispatchBody::Return)
                         }
-                        Err(__ex) => {
-                            __ex.write(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::UserException)
-                        }
+                        Err(__f) => __f.write(__out),
                     }
                 }
                 "reset" => {
                     // oneway (§9.4.1): no reply may be written, at all. An empty one
                     // is a whole extra message, which the peer — not waiting for it —
                     // would read as the header of the next reply. The servant's
-                    // verdict has no way back, so it is dropped here.
-                    let _ = self.servant.reset();
+                    // verdict has no way back, so it is dropped — and logged, so the
+                    // drop is a decision somebody can see rather than a silence.
+                    if let Err(__f) = self.servant.reset() {
+                        rt::oneway_fault_dropped("IDL:gc24/Gauge:1.0", "reset", &__f);
+                    }
                     Ok(rt::DispatchBody::Return)
                 }
                 "scale_all" => {
@@ -239,10 +318,7 @@ pub mod gc24 {
                             __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
                             Ok(rt::DispatchBody::Return)
                         }
-                        Err(__ex) => {
-                            __ex.write(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::UserException)
-                        }
+                        Err(__f) => __f.write(__out),
                     }
                 }
                 "split" => {
@@ -252,10 +328,7 @@ pub mod gc24 {
                             __r1.put(__out).map_err(|_| rt::SystemException::marshal())?;
                             Ok(rt::DispatchBody::Return)
                         }
-                        Err(__ex) => {
-                            __ex.write(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::UserException)
-                        }
+                        Err(__f) => __f.write(__out),
                     }
                 }
                 "_get_label" => {
@@ -264,10 +337,7 @@ pub mod gc24 {
                             __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
                             Ok(rt::DispatchBody::Return)
                         }
-                        Err(__ex) => {
-                            __ex.write(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::UserException)
-                        }
+                        Err(__f) => __f.write(__out),
                     }
                 }
                 "_set_label" => {
@@ -277,10 +347,7 @@ pub mod gc24 {
                         Ok(()) => {
                             Ok(rt::DispatchBody::Return)
                         }
-                        Err(__ex) => {
-                            __ex.write(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::UserException)
-                        }
+                        Err(__f) => __f.write(__out),
                     }
                 }
                 "_get_latest" => {
@@ -289,10 +356,7 @@ pub mod gc24 {
                             __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
                             Ok(rt::DispatchBody::Return)
                         }
-                        Err(__ex) => {
-                            __ex.write(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::UserException)
-                        }
+                        Err(__f) => __f.write(__out),
                     }
                 }
                 "_is_a" => {

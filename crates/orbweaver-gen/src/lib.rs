@@ -147,7 +147,18 @@ pub(crate) fn nth(i: usize) -> String {
 /// Generated code is held to `#![deny(missing_docs)]` exactly as this crate is
 /// — a generator that exempts its own output from the project's rules is a
 /// generator that will be told to stop emitting the rules.
+///
+/// An empty `text` is a paragraph break, and it has to be special-cased
+/// because `"".lines()` yields nothing at all: every `doc(s, "")` in this
+/// crate silently emitted *nothing*, which is why generated documentation used
+/// to run its paragraphs together. Rustdoc merely rendered that badly; clippy
+/// calls it what it is — a list item continued by a paragraph that meant to be
+/// separate — and generated code is held to the same lints as everything else.
 pub(crate) fn doc(out: &mut String, text: &str) {
+    if text.is_empty() {
+        let _ = writeln!(out, "///");
+        return;
+    }
     for line in text.lines() {
         let line = line.trim_end();
         if line.is_empty() {

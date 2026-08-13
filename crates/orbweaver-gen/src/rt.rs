@@ -9,7 +9,10 @@ use orbweaver_giop::Version;
 use orbweaver_giop::codeset::{CodeSetId, WideCodec};
 
 pub use orbweaver_cdr::{Decoder, Encoder, Endian};
-pub use orbweaver_giop::server::{Dispatch, DispatchBody, Request, Server, SystemException};
+pub use orbweaver_giop::server::{
+    BAD_OPERATION, Completion, Dispatch, DispatchBody, MARSHAL, OBJECT_NOT_EXIST, Request, Server,
+    SystemException, UNKNOWN,
+};
 pub use orbweaver_giop::{Connection, Error as GiopError, Invoker, Ior, Reply};
 
 /// Repository id every CORBA object answers `_is_a` to.
@@ -18,6 +21,200 @@ pub use orbweaver_giop::{Connection, Error as GiopError, Invoker, Ior, Reply};
 /// plus this; an ORB probes with it before it will narrow, so a skeleton that
 /// does not know it is one that cannot be narrowed to.
 pub const OBJECT_ID: &str = "IDL:omg.org/CORBA/Object:1.0";
+
+/// Repository id: the servant refused the call. Not "try again later" — a
+/// refusal that a retry cannot change.
+pub const NO_PERMISSION: &str = "IDL:omg.org/CORBA/NO_PERMISSION:1.0";
+/// Repository id: an argument was outside what the operation accepts, where
+/// the contract has no `raises` clause to say so more precisely.
+pub const BAD_PARAM: &str = "IDL:omg.org/CORBA/BAD_PARAM:1.0";
+/// Repository id: refused *now*. §9 makes this the one refusal that invites a
+/// retry, which is why it is worth distinguishing from `NO_PERMISSION`.
+pub const TRANSIENT: &str = "IDL:omg.org/CORBA/TRANSIENT:1.0";
+/// Repository id: the call is legal but not in this state — evicting what was
+/// never loaded, using a session that was closed.
+pub const BAD_INV_ORDER: &str = "IDL:omg.org/CORBA/BAD_INV_ORDER:1.0";
+/// Repository id: the operation exists in the contract and this servant does
+/// not implement it. Distinct from `BAD_OPERATION`, which means the name is
+/// not in the contract at all.
+pub const NO_IMPLEMENT: &str = "IDL:omg.org/CORBA/NO_IMPLEMENT:1.0";
+/// Repository id: the servant broke. The honest answer when the failure is
+/// ours and the caller can do nothing about it.
+pub const INTERNAL: &str = "IDL:omg.org/CORBA/INTERNAL:1.0";
+
+/// OMG's vendor minor code space (§4.11.3). A minor code in it means the same
+/// thing to every ORB; a minor code outside it means whatever its vendor says.
+pub const OMG_VMCID: u32 = 0x4f4d_0000;
+
+/// A system exception under construction: it knows what went wrong and still
+/// needs the one thing only the servant knows.
+///
+/// # Why this is not a constructor
+///
+/// A `SystemException` carries a completion status (§9.4.3.2), and it is the
+/// field a client's retry logic reads: `COMPLETED_NO` says the operation did
+/// not run and re-sending is safe, `COMPLETED_MAYBE` says nobody can tell.
+/// Whether a refusal happened before or after the state changed is knowledge
+/// the *servant* has and the generator does not, so there is no default that
+/// is right — a generator-chosen `COMPLETED_NO` on a raise that fired halfway
+/// through a mutation is how a well-behaved retry loop corrupts state.
+///
+/// So this type exists and `SystemException` is not reachable from it without
+/// naming the status: [`Raising::did_not_run`], [`Raising::ran_to_completion`]
+/// or [`Raising::may_have_run`]. There is no `From`, no `Default`, and the
+/// `#[must_use]` makes a forgotten one a warning rather than a silent
+/// discard.
+///
+/// ```text
+/// return Err(rt::raise::no_permission().did_not_run().into());
+/// return Err(rt::raise::bad_param().omg_minor(3).did_not_run().into());
+/// ```
+///
+/// # What a foreign ORB currently reads
+///
+/// Measured, not assumed, and currently wrong one layer down. §4.11.4 declares
+/// `enum completion_status { COMPLETED_YES, COMPLETED_NO, COMPLETED_MAYBE }`,
+/// so `COMPLETED_YES` is ordinal 0. [`Completion`] numbers it `No = 0,
+/// Yes = 1`, which transposes the first two, and omniORB's Python client reads
+/// a `did_not_run()` raise from a generated skeleton as `CORBA.COMPLETED_YES`
+/// — the exact inversion of "safe to re-send". `MAYBE` is 2 either way.
+///
+/// The defect is in `orbweaver-giop`, not here, and is left to that crate's
+/// owner rather than fixed in passing; `tests/servant_faults.rs` pins the
+/// behaviour as measured so the fix cannot land silently. Until then a
+/// servant's *choice* is carried faithfully by everything in this crate, and
+/// two of its three values are renumbered on the way out.
+#[derive(Debug, Clone)]
+#[must_use = "a raise is not a system exception until its completion status is stated; \
+              call .did_not_run(), .ran_to_completion() or .may_have_run()"]
+pub struct Raising {
+    id: String,
+    minor: u32,
+}
+
+impl Raising {
+    /// Attaches a vendor minor code.
+    pub fn minor(mut self, minor: u32) -> Self {
+        self.minor = minor;
+        self
+    }
+
+    /// Attaches a minor code in OMG's own space ([`OMG_VMCID`]), which is the
+    /// half of the code that makes it portable between ORBs.
+    pub fn omg_minor(self, minor: u16) -> Self {
+        let m = OMG_VMCID | u32::from(minor);
+        self.minor(m)
+    }
+
+    /// `COMPLETED_NO`: the operation did not run. Nothing was touched and the
+    /// client may re-send this call somewhere else without repeating an
+    /// effect. Correct for a refusal decided before any state changed.
+    pub fn did_not_run(self) -> SystemException {
+        self.with_completion(Completion::No)
+    }
+
+    /// `COMPLETED_YES`: the operation ran to completion and only the answer is
+    /// lost. A retry would repeat whatever it did.
+    pub fn ran_to_completion(self) -> SystemException {
+        self.with_completion(Completion::Yes)
+    }
+
+    /// `COMPLETED_MAYBE`: it cannot be determined. The right answer whenever a
+    /// failure lands in the middle of a mutation — it is worse for the client
+    /// to be told "safe to retry" wrongly than to be told nobody knows.
+    pub fn may_have_run(self) -> SystemException {
+        self.with_completion(Completion::Maybe)
+    }
+
+    /// The same decision made from a value, for a servant whose completion
+    /// status is itself computed.
+    pub fn with_completion(self, completed: Completion) -> SystemException {
+        SystemException { id: self.id, minor: self.minor, completed }
+    }
+}
+
+/// The system exceptions a servant raises.
+///
+/// A `raises` clause gives an interface its *user* exceptions; this is the
+/// other half, the vocabulary every servant needs and no contract declares —
+/// an unknown key is `OBJECT_NOT_EXIST`, a refused call is `NO_PERMISSION`, a
+/// temporary refusal is `TRANSIENT`. Each returns a [`Raising`], which becomes
+/// a [`SystemException`] only once the completion status is stated; see that
+/// type for why there is no default.
+pub mod raise {
+    use super::{Raising, SystemException};
+
+    fn at(id: &str) -> Raising {
+        Raising { id: id.to_owned(), minor: 0 }
+    }
+
+    /// The object key names nothing this servant holds.
+    pub fn object_not_exist() -> Raising {
+        at(super::OBJECT_NOT_EXIST)
+    }
+
+    /// The caller may not make this call, and retrying will not change that.
+    pub fn no_permission() -> Raising {
+        at(super::NO_PERMISSION)
+    }
+
+    /// An argument is outside what the operation accepts. Usually worth a
+    /// minor code, since the caller cannot see which argument otherwise.
+    pub fn bad_param() -> Raising {
+        at(super::BAD_PARAM)
+    }
+
+    /// Refused now; a retry may well succeed.
+    pub fn transient() -> Raising {
+        at(super::TRANSIENT)
+    }
+
+    /// Legal call, wrong state.
+    pub fn bad_inv_order() -> Raising {
+        at(super::BAD_INV_ORDER)
+    }
+
+    /// In the contract, not in this servant.
+    pub fn no_implement() -> Raising {
+        at(super::NO_IMPLEMENT)
+    }
+
+    /// The servant broke, and the caller can do nothing about it.
+    pub fn internal() -> Raising {
+        at(super::INTERNAL)
+    }
+
+    /// Any other standard system exception, by repository id.
+    ///
+    /// The set above is what the servants in this workspace actually raise,
+    /// not the whole of §4.11; this is the door for the rest of it rather
+    /// than a reason to grow the list to thirty constructors.
+    pub fn other(id: impl Into<String>) -> Raising {
+        Raising { id: id.into(), minor: 0 }
+    }
+
+    /// The standard mapping for a user exception reaching a caller that cannot
+    /// carry one: `UNKNOWN` with OMG minor 1, completion `YES` because the
+    /// operation did run — it raised.
+    pub fn unknown_user_exception() -> SystemException {
+        SystemException::unknown_user_exception()
+    }
+}
+
+/// Reports a fault a `oneway` had nowhere to put.
+///
+/// §9.4.1: a request with `response_expected` false gets no reply *at all*, so
+/// a servant's `Err` on a oneway has no message to travel in. Dropping it is
+/// what the specification requires; dropping it **silently** is not, and a
+/// server whose oneway operations fail invisibly is a server nobody can debug.
+/// The generated oneway arm therefore calls this instead of `let _ =`, which
+/// is the difference between a decision and an omission.
+pub fn oneway_fault_dropped(interface: &str, operation: &str, fault: &dyn std::fmt::Debug) {
+    eprintln!(
+        "orbweaver: {interface}::{operation} is oneway (§9.4.1): no reply may be sent, so the \
+         servant's {fault:?} was dropped"
+    );
+}
 
 /// The marshalling contract every generated type implements.
 ///
@@ -282,6 +479,31 @@ mod tests {
         );
         let tc = TypeCode::ObjRef { id: "IDL:m/I:1.0".into(), name: "I".into() };
         same_bytes_as_dynamic(&ObjRef(None), &tc, &Value::ObjRef(None));
+    }
+
+    /// The completion status is the servant's decision, and the three ways of
+    /// making it must reach the exception unchanged — this is the field a
+    /// client's retry logic reads, so a builder that quietly normalised it
+    /// would be worse than no builder.
+    #[test]
+    fn a_raise_carries_the_completion_status_the_servant_chose() {
+        assert_eq!(raise::no_permission().did_not_run().completed, Completion::No);
+        assert_eq!(raise::transient().may_have_run().completed, Completion::Maybe);
+        assert_eq!(raise::internal().ran_to_completion().completed, Completion::Yes);
+        assert_eq!(
+            raise::object_not_exist().with_completion(Completion::Maybe).completed,
+            Completion::Maybe
+        );
+    }
+
+    #[test]
+    fn a_raise_carries_its_repository_id_and_minor_code() {
+        let ex = raise::bad_param().omg_minor(3).did_not_run();
+        assert_eq!(ex.id, BAD_PARAM);
+        assert_eq!(ex.minor, 0x4f4d_0003, "the OMG vendor space is the high half");
+        let ex = raise::other("IDL:omg.org/CORBA/NO_RESOURCES:1.0").minor(42).may_have_run();
+        assert_eq!(ex.id, "IDL:omg.org/CORBA/NO_RESOURCES:1.0");
+        assert_eq!(ex.minor, 42);
     }
 
     #[test]

@@ -14,3 +14,4 @@
 //! test binary with it.
 
 pub mod f_24_skeleton_surface;
+pub mod f_25_servant_faults;

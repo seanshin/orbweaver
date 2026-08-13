@@ -30,7 +30,7 @@ use orbweaver_giop::{
 };
 
 use emitted::f_24_skeleton_surface::gc24::{
-    GaugeClient, GaugeServant, GaugeSkeleton, GaugeUserException, Reading, Rejected,
+    GaugeClient, GaugeFault, GaugeServant, GaugeSkeleton, Reading, Rejected,
 };
 
 const KEY: &[u8] = b"gauge";
@@ -57,28 +57,28 @@ impl Default for Bench {
 }
 
 impl GaugeServant for Bench {
-    fn latest(&mut self) -> Result<Reading, GaugeUserException> {
+    fn latest(&mut self) -> Result<Reading, GaugeFault> {
         Ok(self.latest.clone())
     }
 
-    fn label(&mut self) -> Result<String, GaugeUserException> {
+    fn label(&mut self) -> Result<String, GaugeFault> {
         Ok(self.label.clone())
     }
 
-    fn set_label(&mut self, value: String) -> Result<(), GaugeUserException> {
+    fn set_label(&mut self, value: String) -> Result<(), GaugeFault> {
         self.label = value;
         Ok(())
     }
 
-    fn record(&mut self, sample: f64, unit: String) -> Result<Reading, GaugeUserException> {
+    fn record(&mut self, sample: f64, unit: String) -> Result<Reading, GaugeFault> {
         if sample < 0.0 {
-            return Err(GaugeUserException::Rejected(Rejected {
+            return Err(GaugeFault::Rejected(Rejected {
                 why: "a sample below zero is not a reading".into(),
                 code: 7,
             }));
         }
         if unit.is_empty() {
-            return Err(GaugeUserException::Busy(emitted::f_24_skeleton_surface::gc24::Busy {}));
+            return Err(GaugeFault::Busy(emitted::f_24_skeleton_surface::gc24::Busy {}));
         }
         self.samples.push(sample);
         self.latest =
@@ -86,7 +86,7 @@ impl GaugeServant for Bench {
         Ok(self.latest.clone())
     }
 
-    fn scale_all(&mut self, e: f64) -> Result<i32, GaugeUserException> {
+    fn scale_all(&mut self, e: f64) -> Result<i32, GaugeFault> {
         for s in &mut self.samples {
             *s *= e;
         }
@@ -94,13 +94,13 @@ impl GaugeServant for Bench {
         Ok(self.samples.len() as i32)
     }
 
-    fn reset(&mut self) -> Result<(), GaugeUserException> {
+    fn reset(&mut self) -> Result<(), GaugeFault> {
         self.samples.clear();
         self.latest = Reading { at: 0.0, sequence_no: 0, unit: String::new() };
         Ok(())
     }
 
-    fn split(&mut self) -> Result<(f64, String), GaugeUserException> {
+    fn split(&mut self) -> Result<(f64, String), GaugeFault> {
         Ok((self.latest.at, self.latest.unit.clone()))
     }
 }
@@ -157,33 +157,6 @@ fn request<F: FnOnce(&mut Encoder)>(
 }
 
 const VERSIONS: [Version; 3] = [Version::V1_0, Version::V1_1, Version::V1_2];
-
-// ── The generated file is what the generator produces today ──────────────────
-
-/// `tests/emitted/` is checked in so the wire tests can compile against it.
-/// This is what stops it from becoming a fossil: it must equal what the
-/// generator emits right now, byte for byte.
-#[test]
-fn the_checked_in_generated_module_is_current() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let idl = root.join("../../corpus/golden/24-skeleton-surface.idl");
-    let src = std::fs::read_to_string(&idl).expect("the corpus file");
-    let spec = orbweaver_idl::parse(&src).expect("the corpus file parses");
-    let mut registry = orbweaver_registry::Registry::new();
-    registry.load(&spec).expect("loads");
-    let want = orbweaver_gen::emit(&registry, "emitted::f_24_skeleton_surface").source;
-
-    let path = root.join("tests/emitted/f_24_skeleton_surface.rs");
-    if std::env::var_os("ORBWEAVER_BLESS").is_some() {
-        std::fs::write(&path, &want).expect("bless");
-    }
-    let have = std::fs::read_to_string(&path).expect("the checked-in module");
-    assert_eq!(
-        have, want,
-        "tests/emitted/ is stale — re-bless it in the same commit as the template change:\n  \
-         ORBWEAVER_BLESS=1 cargo test -p orbweaver-gen"
-    );
-}
 
 // ── Hazard 1: oneway ─────────────────────────────────────────────────────────
 

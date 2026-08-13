@@ -1,0 +1,45 @@
+// 25 — the failures a servant has and a contract cannot declare. Added with
+// the batch that gave the servant trait a system-exception error type.
+//
+// Not one `raises` clause in the file, deliberately. Every operation here
+// fails in a way IDL has no syntax for:
+//
+//   * `fetch` on a key that is not there — OBJECT_NOT_EXIST;
+//   * `store` from a caller the servant refuses — NO_PERMISSION, which unlike
+//     TRANSIENT does not invite a retry;
+//   * `store` with an empty key — BAD_PARAM, with a minor code, because a
+//     caller cannot see *which* argument otherwise;
+//   * `rotate` while a rotation is already running — TRANSIENT, and the one
+//     case here whose completion status is COMPLETED_MAYBE: the refusal lands
+//     after the generation counter moved, so "safe to retry" would be a lie.
+//
+// The point of the file is that a skeleton generated from it must still be
+// able to express all four. When the servant trait's error type was the user
+// exceptions alone, this contract produced an *uninhabited* error type and a
+// servant that could not fail — which is why the file exists.
+module fault25 {
+  //@ ai_desc: A key-value vault whose every failure is a system exception
+  interface Vault {
+    //@ ai_desc: Reads one entry; an absent key is OBJECT_NOT_EXIST
+    //@ ai_effect: read_only
+    string fetch(in string key);
+
+    //@ ai_desc: Writes one entry; refused callers get NO_PERMISSION, an empty key BAD_PARAM
+    //@ ai_effect: destructive
+    //@ ai_authz: fault25.vault.write
+    void store(in string key, in string text);
+
+    //@ ai_desc: Rotates to the next generation; refuses mid-rotation with TRANSIENT
+    //@ ai_effect: destructive
+    //@ ai_authz: fault25.vault.rotate
+    long rotate(in long wanted);
+
+    //@ ai_desc: Fires and forgets; a fault here has no reply to travel in
+    //@ ai_effect: destructive
+    oneway void forget(in string key);
+
+    //@ ai_desc: How many entries the vault holds
+    //@ ai_effect: read_only
+    readonly attribute long depth;
+  };
+};
