@@ -25,13 +25,18 @@
 //!
 //! # What this module does not claim
 //!
-//! It parses and re-encodes the advertisement. It does **not** perform a TLS
-//! handshake: the workspace has no TLS dependency, deliberately — which
-//! implementation an MIT-only project may depend on is a licensing decision,
-//! recorded as `docs/decisions/D002-tls-dependency.md`, not something to slip
-//! in with a parser. Until that decision is approved, the honest capability is
-//! "we can *see* SSLIOP endpoints", and `spike-dump` prints them so the claim
-//! is measured on real IORs rather than assumed.
+//! It parses and re-encodes the advertisement; the handshake itself lives in
+//! `Connection::connect_tls`, behind the off-by-default `ssliop` feature. Per
+//! `docs/decisions/D002-tls-dependency.md` (approved 2026-08-13) that feature
+//! depends on rustls rather than shipping first-party TLS, because no oracle
+//! we can run detects cryptographic mistakes — a default build carries no TLS
+//! dependency at all.
+//!
+//! Honesty about what has been measured: the TLS path has been exercised
+//! against an in-process rustls peer only. No SSLIOP-speaking ORB (omniORB's
+//! sslTP, JacORB's SSL transport) has been dialed yet — that fixture is a
+//! future batch — so today's verified claim is "the TLS layer works and GIOP
+//! passes through it unchanged", not peer interop.
 
 use orbweaver_cdr::{Decoder, Encoder, Endian};
 
