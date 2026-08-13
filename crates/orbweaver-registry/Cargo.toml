@@ -30,3 +30,7 @@ path = "src/bin/idl_diff.rs"
 [[bin]]
 name = "spike-ifr"
 path = "src/bin/spike_ifr.rs"
+
+[[bin]]
+name = "spike-ingest"
+path = "src/bin/spike_ingest.rs"

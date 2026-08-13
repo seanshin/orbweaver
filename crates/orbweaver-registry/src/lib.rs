@@ -13,6 +13,14 @@
 //! one, and `_is_a` answered from our own inheritance graph is both faster and
 //! available when the target is unreachable (§4.7).
 //!
+//! When a deployment *does* run one — and has no IDL files left anywhere —
+//! [`ingest`] populates a registry by calling it. Those entries are marked:
+//! see [`Origin`], [`Registry::is_ingested`] and [`Registry::touches_ingested`].
+//! The marking is not decoration. An entry that came off the wire has not been
+//! through S4, carries no SIDL annotations for the guard to key on, and was
+//! written by a peer we do not control, so every downstream gate needs to be
+//! able to tell the two apart.
+//!
 //! # Scope
 //!
 //! Derives what the wire needs. `#pragma prefix` and explicit `typeid` are not
@@ -24,6 +32,7 @@
 
 pub mod diff;
 pub mod ifr;
+pub mod ingest;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -123,6 +132,59 @@ pub struct AttributeSig {
     pub annotations: BTreeMap<String, String>,
 }
 
+/// Where a registered entry came from.
+///
+/// The distinction is a trust boundary, not bookkeeping. An [`Origin::Idl`]
+/// entry was parsed from IDL text this project holds, which means it passed
+/// S4's gate and may carry SIDL annotations. An [`Origin::Ingested`] entry was
+/// described to us over the wire by a peer we do not control: it passed no
+/// gate, carries no annotations, and is exactly the "tool poisoning via remote
+/// metadata" vector in PLAN §9.0. Anything deciding what an agent may see or
+/// call has to be able to ask which it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Origin {
+    /// Declared in IDL we hold, and therefore through S4.
+    Idl,
+    /// Described by a remote Interface Repository, named by the source label
+    /// the ingestion ran under.
+    Ingested(String),
+}
+
+/// Why [`Registry::define_ingested`] refused to register an entry.
+///
+/// Both variants are refusals to *overwrite*. The registry never lets a remote
+/// description displace something already registered, because the interesting
+/// attack is not a malformed reply — it is a well-formed one that quietly
+/// replaces a locally-defined contract with a compatible-looking remote one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DefineError {
+    /// The repository id is already registered, with this provenance.
+    IdInUse(Origin),
+    /// The qualified IDL name is already bound to a different repository id —
+    /// the same clash one version digit away (`IDL:a/B:1.0` against
+    /// `IDL:a/B:2.0`, both of which are `a::B`).
+    NameInUse(RepositoryId),
+}
+
+impl std::fmt::Display for DefineError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DefineError::IdInUse(Origin::Idl) => {
+                write!(
+                    f,
+                    "already defined locally from IDL; a remote description may not replace it"
+                )
+            }
+            DefineError::IdInUse(Origin::Ingested(src)) => {
+                write!(f, "already ingested from {src:?}; a second source may not replace it")
+            }
+            DefineError::NameInUse(id) => write!(f, "its qualified name is already bound to {id}"),
+        }
+    }
+}
+
+impl std::error::Error for DefineError {}
+
 /// The registry.
 #[derive(Debug, Clone, Default)]
 pub struct Registry {
@@ -131,6 +193,11 @@ pub struct Registry {
     by_name: HashMap<String, RepositoryId>,
     /// SIDL annotations attached to a registered entry.
     annotations: BTreeMap<RepositoryId, BTreeMap<String, String>>,
+    /// Ids whose provenance is a remote IFR, mapped to the source label.
+    /// Absent means the entry came from IDL — the safe default, since a bug
+    /// that forgot to mark something would then under-report trust rather
+    /// than over-report it.
+    ingested: BTreeMap<RepositoryId, String>,
 }
 
 impl Registry {
@@ -154,6 +221,76 @@ impl Registry {
     /// Every registered repository id, in sorted order.
     pub fn ids(&self) -> impl Iterator<Item = &RepositoryId> {
         self.entries.keys()
+    }
+
+    /// Registers `entry` under `id` with a remote provenance, or refuses.
+    ///
+    /// This is the *only* way an entry enters the registry without IDL behind
+    /// it, and it is deliberately a refusal rather than an insert: an id that
+    /// is already registered is never replaced, whatever its provenance. The
+    /// asymmetry is the point — [`Registry::load`] may overwrite an ingested
+    /// entry (local IDL is authoritative and clears the mark), and ingestion
+    /// may never overwrite anything.
+    pub fn define_ingested(
+        &mut self,
+        id: RepositoryId,
+        entry: Entry,
+        source: &str,
+    ) -> std::result::Result<(), DefineError> {
+        if let Some(origin) = self.origin(&id) {
+            return Err(DefineError::IdInUse(origin));
+        }
+        if let Some(name) = qualified_of_id(&id) {
+            if let Some(held) = self.by_name.get(&name)
+                && *held != id
+            {
+                return Err(DefineError::NameInUse(held.clone()));
+            }
+            self.by_name.insert(name, id.clone());
+        }
+        self.ingested.insert(id.clone(), source.to_owned());
+        self.entries.insert(id, entry);
+        Ok(())
+    }
+
+    /// Registers an entry derived from IDL, clearing any ingested mark.
+    fn define_local(&mut self, id: RepositoryId, entry: Entry) {
+        self.ingested.remove(&id);
+        self.entries.insert(id, entry);
+    }
+
+    /// Where the entry registered under `id` came from, or `None` if nothing
+    /// is registered there.
+    pub fn origin(&self, id: &str) -> Option<Origin> {
+        if !self.entries.contains_key(id) {
+            return None;
+        }
+        Some(match self.ingested.get(id) {
+            Some(source) => Origin::Ingested(source.clone()),
+            None => Origin::Idl,
+        })
+    }
+
+    /// Whether `id` was described to us by a remote Interface Repository.
+    pub fn is_ingested(&self, id: &str) -> bool {
+        self.ingested.contains_key(id)
+    }
+
+    /// Every ingested repository id, in sorted order.
+    pub fn ingested_ids(&self) -> impl Iterator<Item = &RepositoryId> {
+        self.ingested.keys()
+    }
+
+    /// Whether `id` or anything it inherits from came off the wire.
+    ///
+    /// This, not [`Registry::is_ingested`], is the question an exposure gate
+    /// asks. Provenance is contagious upwards through inheritance: a locally
+    /// defined interface is unaffected by what derives from it, but an entry
+    /// with an ingested ancestor has operations in its callable surface that
+    /// a remote peer chose — `resolve_operation` walks bases, so an ingested
+    /// base is an ingested part of the contract.
+    pub fn touches_ingested(&self, id: &str) -> bool {
+        self.is_ingested(id) || self.ancestors(id).iter().any(|a| self.is_ingested(a))
     }
 
     /// Looks an entry up by repository id.
@@ -259,6 +396,20 @@ impl Registry {
 /// Builds `IDL:a/b/C:1.0` from a qualified path.
 pub fn repository_id(path: &[String]) -> RepositoryId {
     format!("IDL:{}:1.0", path.join("/"))
+}
+
+/// The inverse: `IDL:a/b/C:1.0` becomes `a::b::C`.
+///
+/// `None` for anything not in the `IDL:` format, because the mapping is only
+/// defined for that one — inventing a qualified name for an `RMI:` or a `DCE:`
+/// id would put a lookup key in the table that nothing can ever match.
+pub fn qualified_of_id(id: &str) -> Option<String> {
+    let rest = id.strip_prefix("IDL:")?;
+    let (path, _version) = rest.rsplit_once(':')?;
+    if path.is_empty() {
+        return None;
+    }
+    Some(path.replace('/', "::"))
 }
 
 /// The qualified IDL name, e.g. `spike::Echo`.
@@ -404,7 +555,7 @@ impl Builder<'_> {
                         Some(Entry::Interface(prev)) if !prev.forward_only
                     ) && entry.forward_only;
                     if !keep {
-                        self.reg.entries.insert(id, Entry::Interface(entry));
+                        self.reg.define_local(id, Entry::Interface(entry));
                     }
                     if let Some(body) = &i.body {
                         let nested: Vec<Definition> = body
@@ -420,12 +571,12 @@ impl Builder<'_> {
                 Definition::Const(c) => {
                     let tc = self.type_of(path, &c.ty);
                     self.register_annotations(&id, &c.annotations);
-                    self.reg.entries.insert(id, Entry::Const { tc });
+                    self.reg.define_local(id, Entry::Const { tc });
                 }
                 other => {
                     if let Some(tc) = self.derive(&p) {
                         self.register_annotations(&id, annotations_of(other));
-                        self.reg.entries.insert(id, Entry::Type(tc));
+                        self.reg.define_local(id, Entry::Type(tc));
                     }
                 }
             }
