@@ -30,8 +30,8 @@ Anything requiring a new dependency class needs a decision document first
 | Service | Status | Note |
 |---|---|---|
 | Catalog storage (PostgreSQL + pgvector) | ❌ | in-process Registry + `exposure.todo.tsv` are the stated seams; **D003 drafted (PROPOSED)**: defer until a pilot demands durability, adoption path pre-cleared (tokio-postgres + pgvector, licences verified) |
-| Embeddings / semantic search | ❌ | frozen benchmark holds the 0/10 headroom baseline; **D003 drafted (PROPOSED)**: external-command wrapper (no new crates), awaiting approval |
-| Observability (OpenTelemetry) | ❌ | interceptor seam unbuilt; **D004 drafted (PROPOSED)**: first-party JSON-lines sink behind a sink trait on F4's chain (zero crates), `tracing` (MIT, verified) and OTLP pre-cleared with triggers, awaiting approval |
+| Embeddings / semantic search | ◐ | D003-A landed: wrapper, cache format and lexical∪vector union built and tested; the **synonym class is still UNMEASURED** because no key exists here. The frozen v1 set keeps the 0/10 headroom baseline beside v2's widened 28/28 |
+| Observability (OpenTelemetry) | ❌ | the seam now exists — F4's `TelemetryInterceptor`, counts only — and nothing is emitted through it. **D004 drafted (PROPOSED)**: first-party JSON-lines sink behind a sink trait on F4's chain (zero crates), `tracing` (MIT, verified) and OTLP pre-cleared with triggers, awaiting approval |
 | Deployment (Docker/K8s, IOR rewriting) | ❌ | R7 mitigation designed in PLAN, nothing built; CI runners are the only containers used |
 | Naming (CosNaming client) | ✅ | corbaname/corbaloc + omniNames in harness |
 | MCP transport | ✅ | stdio JSON-RPC; no real MCP client driven yet (stated in PHASE3) |
@@ -41,7 +41,7 @@ Anything requiring a new dependency class needs a decision document first
 | Interface Repository (read-only facade) | ✅ | `orbweaver-registry::ifr`: `lookup_id`, the `Contained` getters, `describe_interface`, `is_a`, `_get_base_interfaces`, served on our POA with keys derived from the repository id (no per-reference state, references survive a restart). **omniORB's own IR client** narrows it and prints enumerators by *name* (`PARAM_IN`, `OP_ONEWAY`, `dk_Interface`), so the ordinals are right rather than self-consistent. Writes refused `NO_PERMISSION` before target resolution — the registry is populated from IDL through S4, and a writable IFR would be a second, ungated ingestion path |
 | Trading **wire surface** | ✅ | `orbweaver-object::expert_service` serves `moe::ExpertRegistry`/`ExpertLoader` (corpus/golden/22) — the project contract, not the standard `CosTrading` facade (PLAN-SERVICES §3). Oracle is our own client (`spike-experts`); no foreign MoE peer exists to test the other direction, and none is claimed |
 | LifeCycle / Property | ❌ | PLAN-MOE **F5** (`ModelFactory`, per-tenant manifest) |
-| Transaction / Time / PSS | — | **declared out of scope with reasons** (PLAN-MOE §4) — honest absence over decorative interfaces |
+| Transaction / Time / PSS / Concurrency / CosCollections / Notification / federated naming / full Security Service | — | **excluded and designed**: `docs/PLAN-DEFERRED.md` gives each a chapter with the concrete trigger that would un-defer it and a v1 sketch, so "excluded" means "designed enough to resume" rather than "forgotten". Honest absence over decorative interfaces |
 
 ## Reading this honestly / 정직한 독해
 

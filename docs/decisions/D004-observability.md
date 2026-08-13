@@ -280,12 +280,13 @@ the arrival.
 ## The insertion point / 삽입 지점
 
 Whatever is adopted, it goes in one place: **PLAN-MOE F4's interceptor chain**
-(authn → quota → safety → **telemetry** → audit). At the time of writing,
-`crates/orbweaver-mcp/src/interceptor.rs` **does not exist in this worktree**
-(measured: the crate's `src/` holds `guard.rs`, `handles.rs`, `identity.rs`,
-`lib.rs`, `policy.rs`, `promote.rs`, `rpc.rs`, `session.rs`). It may be landing
-in a parallel batch; either way it is the seam this decision targets, and the
-requirement on it is the same in both worlds:
+(authn → quota → safety → **telemetry** → audit). At the time this decision was
+drafted `crates/orbweaver-mcp/src/interceptor.rs` did not exist and the
+document said so; the parallel F4 batch landed it before D004 was merged, and
+`TelemetryInterceptor` is now the named stage. The requirement on it is
+unchanged, and the first bullet is now a live constraint rather than a
+precaution — F4's stage records counts through no external type, which is what
+keeps this decision reversible:
 
 - **The telemetry stage takes a sink trait, not a crate type.** If the stage's
   signature names `tracing::Span` or an OTel type, the dependency stops being
@@ -300,8 +301,9 @@ requirement on it is the same in both worlds:
   (`apply()` takes a slice per window; there is nowhere to hang a callback)
   is the shape to copy, not to weaken.
 
-무엇을 채택하든 자리는 하나 — F4 인터셉터 체인의 telemetry 단계다. 집필 시점
-`crates/orbweaver-mcp/src/interceptor.rs`는 **이 워크트리에 없다**(실측). 요구는
+무엇을 채택하든 자리는 하나 — F4 인터셉터 체인의 telemetry 단계다. 집필 시점에는
+`crates/orbweaver-mcp/src/interceptor.rs`가 없었고 그렇게 기록했으나, 병렬 F4
+배치가 D004 병합 전에 착륙시켰다 — `TelemetryInterceptor`가 그 단계다. 요구는
 동일하다: 단계의 시그니처는 크레이트 타입이 아니라 **1st-party 싱크 트레이트**를
 받는다(그렇지 않으면 의존성이 되돌릴 수 없게 되고 D004는 결정이기를 그친다),
 부재는 *미측정*으로 보고하며, 입도는 컨트롤 플레인 — 토큰당 절대 금지 — 이다.
@@ -393,8 +395,7 @@ scope); whether a **real OTel Collector runs on this machine** — deliberately
 not probed, because measuring the fixture belongs to the batch that needs it,
 the same line D003 drew for `CREATE EXTENSION vector`; the **runtime cost** of
 any option (no benchmark was run; every number here is a crate count, not a
-microsecond); whether `interceptor.rs` **exists in a parallel batch** (this
-worktree only, this commit, today); and the **semantic-convention** attribute
+microsecond); and the **semantic-convention** attribute
 names a first-party emitter would have to use — a real design cost for option
 D that this survey did not price.
 
@@ -405,8 +406,7 @@ D001이 "마지막 말이 아니다"라고 한 바로 그 계층), `tracing-open
 statsd/Prometheus 계열(범위 밖), 이 머신의 **콜렉터 실제 기동 여부**(일부러
 측정하지 않았다 — 픽스처 측정은 그것을 필요로 하는 배치의 몫, D003이 `CREATE
 EXTENSION vector`에 그은 것과 같은 선), 각 후보의 **런타임 비용**(벤치마크 없음 —
-모든 숫자는 크레이트 개수이지 마이크로초가 아니다), `interceptor.rs`의 **병렬
-배치 존재 여부**(이 워크트리·이 커밋·오늘), 그리고 후보 D가 따라야 할 **시맨틱
+모든 숫자는 크레이트 개수이지 마이크로초가 아니다), 그리고 후보 D가 따라야 할 **시맨틱
 컨벤션** 속성 이름들(실재하는 설계 비용인데 이 조사는 값을 매기지 않았다).
 
 ## What is NOT decided by this / 이 문서가 결정하지 않는 것
