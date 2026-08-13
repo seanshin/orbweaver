@@ -1,0 +1,76 @@
+// Parking facility control.
+//
+// Floor levels are signed so basement levels (B1 -> -1, B2 -> -2) are
+// expressible in the same domain as above-ground levels; an unrecognised
+// level is reported through UnknownFloor rather than by a sentinel value.
+// Plate numbers are wide strings because Korean registration plates contain
+// Hangul; no length or format constraint is imposed here.
+
+module ParkingFacility {
+
+  // Permission required to operate a barrier gate.
+  const string GATE_OPERATE_PERMISSION = "gate:operate";
+
+  typedef long FloorLevel;
+  typedef string GateIdentifier;
+  typedef wstring VehiclePlate;
+
+  // Status of a barrier gate. The requirement distinguishes open from
+  // not-open; the transitional and fault states are kept distinct rather
+  // than folded into either.
+  enum GateState {
+    GATE_CLOSED,
+    GATE_OPENING,
+    GATE_OPEN,
+    GATE_CLOSING,
+    GATE_FAULT
+  };
+
+  // Remaining-capacity report for one floor.
+  struct FloorOccupancy {
+    FloorLevel level;
+    unsigned long remaining_spaces;   // free parking spaces on that floor
+  };
+
+  // A barrier gate whose status can be read and which can be opened.
+  struct BarrierGate {
+    GateIdentifier gate_id;
+    GateState state;
+  };
+
+  // The vehicle presented at the entry gate.
+  struct VehicleEntry {
+    VehiclePlate plate_number;
+  };
+
+  // Raised when the queried floor is not known to the system.
+  exception UnknownFloor {
+    FloorLevel level;
+  };
+
+  // Raised when the entry gate is already open. Distinct from UnknownFloor.
+  exception GateAlreadyOpen {
+    GateIdentifier gate_id;
+    GateState state;
+  };
+
+  // Raised when the caller does not hold the required permission.
+  exception PermissionDenied {
+    string required_permission;
+  };
+
+  interface ParkingControl {
+
+    // Remaining space count for a single floor.
+    FloorOccupancy get_floor_occupancy(in FloorLevel level)
+      raises (UnknownFloor);
+
+    // Current status of the addressed barrier gate.
+    BarrierGate get_gate_status(in GateIdentifier target_gate);
+
+    // Open the entry gate for the given vehicle.
+    // Restricted to operators holding GATE_OPERATE_PERMISSION.
+    void open_entry_gate(in VehicleEntry vehicle)
+      raises (GateAlreadyOpen, PermissionDenied);
+  };
+};

@@ -1,0 +1,120 @@
+// Parking facility control.
+//
+// Floor levels are signed so basement levels (B1 -> -1, B2 -> -2) are
+// expressible in the same domain as above-ground levels; an unrecognised
+// level is reported through UnknownFloor rather than by a sentinel value.
+// Plate numbers are wide strings because Korean registration plates contain
+// Hangul; no length or format constraint is imposed here.
+
+module ParkingFacility {
+
+  // Permission required to operate a barrier gate.
+  //@ ai_desc: Scope name a caller must hold to operate a barrier gate; the value expected by ai_authz on gate-operating operations.
+  const string GATE_OPERATE_PERMISSION = "gate:operate";
+
+  //@ ai_desc: A parking floor, signed so that basement levels are negative (B1 is -1, B2 is -2) and above-ground levels are positive.
+  //@ ai_unit: floor_level
+  typedef long FloorLevel;
+
+  //@ ai_desc: Opaque identifier naming one barrier gate within the facility.
+  typedef string GateIdentifier;
+
+  //@ ai_desc: A vehicle registration plate as printed, in wide characters because Korean plates contain Hangul.
+  //@ ai_pii: high
+  typedef wstring VehiclePlate;
+
+  // Status of a barrier gate. The requirement distinguishes open from
+  // not-open; the transitional and fault states are kept distinct rather
+  // than folded into either.
+  //@ ai_desc: The state of a barrier gate, keeping the two transitional states and the fault state distinct from open and closed.
+  enum GateState {
+    GATE_CLOSED,
+    GATE_OPENING,
+    GATE_OPEN,
+    GATE_CLOSING,
+    GATE_FAULT
+  };
+
+  // Remaining-capacity report for one floor.
+  //@ ai_desc: How much free parking capacity one floor currently has.
+  struct FloorOccupancy {
+    //@ ai_desc: The floor this report describes.
+    //@ ai_unit: floor_level
+    FloorLevel level;
+    //@ ai_desc: Number of unoccupied parking spaces on that floor at the time of the report.
+    //@ ai_unit: spaces
+    unsigned long remaining_spaces;   // free parking spaces on that floor
+  };
+
+  // A barrier gate whose status can be read and which can be opened.
+  //@ ai_desc: A barrier gate paired with its current state.
+  struct BarrierGate {
+    //@ ai_desc: Identifier of the gate being reported.
+    GateIdentifier gate_id;
+    //@ ai_desc: The gate's state at the time of the report.
+    GateState state;
+  };
+
+  // The vehicle presented at the entry gate.
+  //@ ai_desc: The vehicle presented at the entry gate, identified by its registration plate.
+  struct VehicleEntry {
+    //@ ai_desc: Registration plate of the vehicle requesting entry.
+    //@ ai_pii: high
+    VehiclePlate plate_number;
+  };
+
+  // Raised when the queried floor is not known to the system.
+  //@ ai_desc: Raised when the requested floor level is not one the facility knows about.
+  exception UnknownFloor {
+    //@ ai_desc: The floor level that was not recognised.
+    //@ ai_unit: floor_level
+    FloorLevel level;
+  };
+
+  // Raised when the entry gate is already open. Distinct from UnknownFloor.
+  //@ ai_desc: Raised when an open request arrives for a gate that is already open, so no state change was made.
+  exception GateAlreadyOpen {
+    //@ ai_desc: Identifier of the gate that was already open.
+    GateIdentifier gate_id;
+    //@ ai_desc: The gate's state when the request was rejected.
+    GateState state;
+  };
+
+  // Raised when the caller does not hold the required permission.
+  //@ ai_desc: Raised when the caller does not hold the permission the operation requires.
+  exception PermissionDenied {
+    //@ ai_desc: Name of the permission the caller was missing.
+    string required_permission;
+  };
+
+  //@ ai_desc: Read-and-control interface for one parking facility: floor occupancy, gate status, and entry-gate operation.
+  interface ParkingControl {
+
+    // Remaining space count for a single floor.
+    //@ ai_desc: Returns the number of free parking spaces on one floor of the facility.
+    //@ ai_effect: read_only
+    //@ ai_idempotent: true
+    //@ ai_precond: The floor level must be one the facility knows, otherwise UnknownFloor is raised.
+    //@ ai_example: get_floor_occupancy(-1) reports free spaces on basement level B1.
+    FloorOccupancy get_floor_occupancy(in FloorLevel level)
+      raises (UnknownFloor);
+
+    // Current status of the addressed barrier gate.
+    //@ ai_desc: Returns the current state of the named barrier gate without altering it.
+    //@ ai_effect: read_only
+    //@ ai_idempotent: true
+    //@ ai_example: get_gate_status("entry-north") reports whether that gate is closed, moving, open or in fault.
+    BarrierGate get_gate_status(in GateIdentifier target_gate);
+
+    // Open the entry gate for the given vehicle.
+    // Restricted to operators holding GATE_OPERATE_PERMISSION.
+    //@ ai_desc: Opens the entry barrier gate to admit the identified vehicle into the facility.
+    //@ ai_effect: destructive
+    //@ ai_authz: gate:operate
+    //@ ai_pii: high
+    //@ ai_idempotent: false
+    //@ ai_precond: The gate must not already be open, otherwise GateAlreadyOpen is raised; the caller must hold GATE_OPERATE_PERMISSION, otherwise PermissionDenied is raised.
+    void open_entry_gate(in VehicleEntry vehicle)
+      raises (GateAlreadyOpen, PermissionDenied);
+  };
+};

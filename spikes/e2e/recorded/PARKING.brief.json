@@ -1,0 +1,133 @@
+{
+  "constraints": [
+    "Opening a barrier gate is restricted to operators holding the gate:operate permission.",
+    "The unknown-floor condition and the already-open-gate condition must be signalled as two distinguishable exceptions, not one shared error.",
+    "Opening the entry gate requires a vehicle plate number to be supplied.",
+    "Queries (floor occupancy, gate status) carry no stated permission requirement, unlike gate opening."
+  ],
+  "entities": [
+    {
+      "description": "The remaining-capacity report for one floor of the parking facility.",
+      "fields": [
+        {
+          "name": "level",
+          "pii": "none",
+          "shape": "floor identifier as the requirement names it — a floor the caller can ask about, and which may be unknown to the system"
+        },
+        {
+          "name": "remaining_spaces",
+          "pii": "none",
+          "shape": "count of parking spaces still free on that floor",
+          "unit": "parking spaces"
+        }
+      ],
+      "name": "FloorOccupancy"
+    },
+    {
+      "description": "A barrier gate at the facility, whose status can be read and which can be opened.",
+      "fields": [
+        {
+          "name": "gate_id",
+          "pii": "none",
+          "shape": "identifier of the gate as the requirement leaves it unspecified"
+        },
+        {
+          "name": "state",
+          "pii": "none",
+          "shape": "gate status — the requirement distinguishes at least open from not-open"
+        }
+      ],
+      "name": "BarrierGate"
+    },
+    {
+      "description": "The vehicle presented at the entry gate, identified by its plate number.",
+      "fields": [
+        {
+          "name": "plate_number",
+          "pii": "high",
+          "shape": "vehicle registration plate number as printed on the vehicle"
+        }
+      ],
+      "name": "VehicleEntry"
+    }
+  ],
+  "open_questions": [
+    "The requirement does not say how floors are identified — a signed level number that can be negative for basements (B1, B2), or a string label. This decides whether 'unknown floor' means out-of-range or unrecognised label.",
+    "It does not say whether floor occupancy is queried one floor at a time or returned for all floors at once; the summary phrase '층별' could mean either.",
+    "It does not say how gates are addressed for the status query, nor how many gates exist — the open operation names only the entry gate, but the status query says 'barrier gate status' without restricting it to entry.",
+    "It does not say whether there is a corresponding exit gate or a close operation. No close/exit operation was invented here.",
+    "It does not state what the open operation returns — nothing, a ticket/entry record, or an assigned floor or space.",
+    "It does not say whether re-opening an already-open gate is an error only for the entry gate or for any gate, nor whether an already-closed gate is likewise a distinct condition.",
+    "It does not state the plate-number format, character set (Korean plates contain Hangul), or maximum length.",
+    "It does not say whether the caller's identity/permission arrives as an operation parameter, a service context, or an out-of-band security layer — this materially changes the operation signature.",
+    "It does not state whether the total capacity per floor, or only the remaining count, is exposed.",
+    "It does not say whether opening the gate should be retry-safe; the effect is left 'unspecified' because a second call is explicitly an error condition rather than a silent no-op, which is not the same as idempotent."
+  ],
+  "operations": [
+    {
+      "authz": null,
+      "effect": "read_only",
+      "entity": "FloorOccupancy",
+      "errors": [
+        "unknown floor — reported as its own distinct exception"
+      ],
+      "inputs": [
+        {
+          "name": "level",
+          "pii": "none",
+          "shape": "floor identifier to query"
+        }
+      ],
+      "name": "get_floor_occupancy",
+      "outputs": [
+        {
+          "name": "occupancy",
+          "pii": "none",
+          "shape": "remaining parking space count for that floor",
+          "unit": "parking spaces"
+        }
+      ]
+    },
+    {
+      "authz": null,
+      "effect": "read_only",
+      "entity": "BarrierGate",
+      "errors": [],
+      "inputs": [
+        {
+          "name": "target_gate",
+          "pii": "none",
+          "shape": "which gate to read, as the requirement does not say how gates are addressed"
+        }
+      ],
+      "name": "get_gate_status",
+      "outputs": [
+        {
+          "name": "status",
+          "pii": "none",
+          "shape": "current status of that barrier gate"
+        }
+      ]
+    },
+    {
+      "authz": "gate:operate",
+      "effect": "unspecified",
+      "entity": "BarrierGate",
+      "errors": [
+        "gate already open — reported as its own distinct exception, separate from the unknown-floor exception",
+        "caller lacks the gate:operate permission"
+      ],
+      "inputs": [
+        {
+          "name": "plate_number",
+          "pii": "high",
+          "shape": "vehicle plate number the entry is granted for"
+        }
+      ],
+      "name": "open_entry_gate",
+      "outputs": []
+    }
+  ],
+  "requirement": "주차장 관제. 층별 잔여 주차면 수와 차단기 상태를 조회하고, 차량번호를 지정해 입차 차단기를 연다. 차단기 개방은 gate:operate 권한을 가진 운영자만 할 수 있다. 알 수 없는 층과 이미 열려 있는 차단기는 각각 구분해 예외로 알린다.",
+  "summary": "A parking-facility control interface for querying per-floor remaining space counts and barrier-gate status, and for opening the entry gate for a specified vehicle plate number."
+}
