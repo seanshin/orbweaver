@@ -81,9 +81,21 @@ fn the_coverage_gaps_over_the_corpus_are_the_known_ones() {
     }
     let recursive = gaps.iter().filter(|g| g.contains("prop/unmeasured")).count();
     let unsupported = gaps.iter().filter(|g| g.contains("prop/unsupported-type")).count();
-    assert!(
-        recursive > 0,
-        "corpus/golden/15-forward-recursive.idl must produce an unmeasured-arm note"
+    // The recursive gap closed: markers now resolve against the enclosing type
+    // the path is standing on, so `corpus/golden/15`'s trees are generated with
+    // children and round-trip like anything else. It is asserted at zero rather
+    // than removed, because the class can come back — a cycle whose marker
+    // names a type that is not enclosing is still unresolvable, and this is
+    // where that would show up.
+    assert_eq!(
+        recursive,
+        0,
+        "a recursive arm is unmeasured again:\n  {}",
+        gaps.iter()
+            .filter(|g| g.contains("prop/unmeasured"))
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n  ")
     );
     assert!(
         unsupported > 0,

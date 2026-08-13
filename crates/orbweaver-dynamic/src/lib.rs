@@ -126,6 +126,24 @@ pub type Result<T> = std::result::Result<T, Error>;
 struct Path<'a> {
     parent: Option<&'a Path<'a>>,
     step: Step<'a>,
+    /// The constructed type this node entered, when it entered one.
+    ///
+    /// This is how a recursive type is marshalled at all. The registry cannot
+    /// hold a cycle, so it represents one as [`TypeCode::Recursive`] carrying
+    /// only the repository id of the type it points back at. A marshaller that
+    /// looks at the `TypeCode` alone therefore has nothing to encode against —
+    /// which is what ours did, refusing every non-empty recursive value with
+    /// "expected a value of type an indirection". The path already runs from
+    /// the root to the current member, so the enclosing types are exactly what
+    /// it is standing on: recording them here turns the marker back into the
+    /// type it names, for the cost of one pointer per node.
+    ///
+    /// The *wire* has no indirection in it. CDR indirections appear when a
+    /// `TypeCode` is itself marshalled inside an `any`; a recursive **value**
+    /// is plain nested structs, and its depth is decided by the sequence
+    /// lengths, not by the type. So resolving the marker and continuing inline
+    /// is the whole of it.
+    open: Option<&'a TypeCode>,
 }
 
 #[derive(Clone, Copy)]
@@ -137,15 +155,44 @@ enum Step<'a> {
 
 impl<'a> Path<'a> {
     fn root() -> Self {
-        Path { parent: None, step: Step::Root }
+        Path { parent: None, step: Step::Root, open: None }
     }
 
     fn member(&'a self, name: &'a str) -> Self {
-        Path { parent: Some(self), step: Step::Member(name) }
+        Path { parent: Some(self), step: Step::Member(name), open: None }
     }
 
     fn index(&'a self, i: usize) -> Self {
-        Path { parent: Some(self), step: Step::Index(i) }
+        Path { parent: Some(self), step: Step::Index(i), open: None }
+    }
+
+    /// A node recording that marshalling is now inside `tc`.
+    ///
+    /// [`Step::Root`] because this is bookkeeping, not a step a reader took:
+    /// it renders as nothing, so error paths read exactly as they did before.
+    fn entering(&'a self, tc: &'a TypeCode) -> Self {
+        Path { parent: Some(self), step: Step::Root, open: Some(tc) }
+    }
+
+    /// The enclosing type `id` names, innermost first.
+    fn resolve(&self, id: &str) -> Option<&'a TypeCode> {
+        if let Some(tc) = self.open
+            && type_id_of(tc) == Some(id)
+        {
+            return Some(tc);
+        }
+        self.parent?.resolve(id)
+    }
+
+    /// How many constructed types this path is currently inside.
+    ///
+    /// The bound this feeds is a wire-safety measure, not a style limit: on
+    /// decode the nesting depth comes from the byte stream, so a crafted
+    /// message could otherwise drive our own recursion until the stack ends.
+    /// A parser that a peer can crash is the hazard this project chose Rust
+    /// for, and `unsafe_code = "forbid"` does not cover stack exhaustion.
+    fn depth(&self) -> usize {
+        usize::from(self.open.is_some()) + self.parent.map_or(0, Path::depth)
     }
 
     fn render(&self) -> String {
@@ -286,6 +333,50 @@ fn cdr<T>(p: &Path<'_>, r: std::result::Result<T, orbweaver_cdr::Error>) -> Resu
     r.map_err(|e| Error { path: p.render(), message: e.to_string() })
 }
 
+/// The repository id of a constructed type, which is what a
+/// [`TypeCode::Recursive`] marker names.
+fn type_id_of(tc: &TypeCode) -> Option<&str> {
+    match tc {
+        TypeCode::Struct { id, .. }
+        | TypeCode::Except { id, .. }
+        | TypeCode::Union { id, .. }
+        | TypeCode::Alias { id, .. }
+        | TypeCode::Enum { id, .. }
+        | TypeCode::ObjRef { id, .. } => Some(id),
+        _ => None,
+    }
+}
+
+/// How deep a chain of constructed types either direction will follow.
+///
+/// Reached only through a recursive type: nothing else nests this far. On
+/// decode the depth is chosen by the sender, so this is the bound that keeps a
+/// hostile message from exhausting the stack; on encode it bounds a value we
+/// built ourselves, where hitting it means a bug rather than an attack. Both
+/// report the same way, because a marshaller that treats its own overflow as
+/// impossible is how the first one gets found in production.
+const MAX_NESTING: usize = 64;
+
+/// The type a recursive marker names, or an error naming what went wrong.
+fn open_recursive<'a>(id: &str, p: &Path<'a>) -> Result<&'a TypeCode> {
+    if p.depth() >= MAX_NESTING {
+        return p.fail(format!(
+            "recursive type {id} nests deeper than {MAX_NESTING} levels; refusing to follow it"
+        ));
+    }
+    match p.resolve(id) {
+        Some(tc) => Ok(tc),
+        // Reachable when a `Recursive` marker is marshalled outside the type
+        // it points at — a TypeCode assembled by hand, or a fragment lifted
+        // out of its parent. Saying which id could not be resolved is the
+        // difference between a fixable report and a shrug.
+        None => p.fail(format!(
+            "recursive type {id} is not inside the type it names, so the cycle cannot be \
+             resolved; marshal the whole type rather than the fragment"
+        )),
+    }
+}
+
 fn encode_at(
     e: &mut Encoder,
     tc: &TypeCode,
@@ -293,7 +384,21 @@ fn encode_at(
     p: &Path<'_>,
     wide: WideCodec,
 ) -> Result<()> {
+    // An alias is transparent to the bytes and *not* transparent to a cycle:
+    // the registry's marker for `typedef sequence<Tree> TreeSeq; struct Tree {
+    // TreeSeq kids; }` names TreeSeq, not Tree. Recording the alias before
+    // seeing through it is what lets that marker resolve; `resolved()` still
+    // decides every byte.
+    if let TypeCode::Alias { aliased, .. } = tc {
+        let here = p.entering(tc);
+        return encode_at(e, aliased, v, &here, wide);
+    }
     match (resolved(tc), v) {
+        (TypeCode::Recursive(id), _) => {
+            let target = open_recursive(id, p)?;
+            let entered = p.entering(target);
+            encode_at(e, target, v, &entered, wide)
+        }
         (TypeCode::Null | TypeCode::Void, _) => Ok(()),
         (TypeCode::Boolean, Value::Bool(x)) => {
             e.put_bool(*x);
@@ -405,7 +510,10 @@ fn encode_at(
                         gname
                     ));
                 }
-                encode_at(e, &m.tc, gval, &p.member(&m.name), wide)?;
+                // `entering` before descending, so a `Recursive` marker
+                // anywhere below can find this type again.
+                let here = p.entering(resolved(tc));
+                encode_at(e, &m.tc, gval, &here.member(&m.name), wide)?;
             }
             Ok(())
         }
@@ -416,12 +524,13 @@ fn encode_at(
         ) => {
             encode_at(e, discriminator, d, &p.member("_d"), wide)?;
             let case = select_case(discriminator, cases, *default_index, d, p, name, wide)?;
+            let here = p.entering(resolved(tc));
             match (case, value) {
                 (None, None) => Ok(()),
                 (None, Some(_)) => p.fail(format!(
                     "the selected branch of {name} has no member, but a value was given"
                 )),
-                (Some(c), Some(val)) => encode_at(e, &c.tc, val, &p.member(&c.name), wide),
+                (Some(c), Some(val)) => encode_at(e, &c.tc, val, &here.member(&c.name), wide),
                 (Some(c), None) => p.fail(format!("branch {:?} of {name} needs a value", c.name)),
             }
         }
@@ -535,7 +644,16 @@ fn select_case<'c>(
 }
 
 fn decode_at(d: &mut Decoder<'_>, tc: &TypeCode, p: &Path<'_>, wide: WideCodec) -> Result<Value> {
+    if let TypeCode::Alias { aliased, .. } = tc {
+        let here = p.entering(tc);
+        return decode_at(d, aliased, &here, wide);
+    }
     Ok(match resolved(tc) {
+        TypeCode::Recursive(id) => {
+            let target = open_recursive(id, p)?;
+            let entered = p.entering(target);
+            return decode_at(d, target, &entered, wide);
+        }
         TypeCode::Null | TypeCode::Void => Value::Struct(Vec::new()),
         TypeCode::Boolean => Value::Bool(cdr(p, d.get_bool())?),
         TypeCode::Octet => Value::Octet(cdr(p, d.get_u8())?),
@@ -578,17 +696,19 @@ fn decode_at(d: &mut Decoder<'_>, tc: &TypeCode, p: &Path<'_>, wide: WideCodec) 
             }
         }
         TypeCode::Struct { members, .. } | TypeCode::Except { members, .. } => {
+            let here = p.entering(resolved(tc));
             let mut out = Vec::with_capacity(members.len());
             for m in members {
-                out.push((m.name.clone(), decode_at(d, &m.tc, &p.member(&m.name), wide)?));
+                out.push((m.name.clone(), decode_at(d, &m.tc, &here.member(&m.name), wide)?));
             }
             Value::Struct(out)
         }
         TypeCode::Union { discriminator, cases, default_index, name, .. } => {
             let disc = decode_at(d, discriminator, &p.member("_d"), wide)?;
             let case = select_case(discriminator, cases, *default_index, &disc, p, name, wide)?;
+            let here = p.entering(resolved(tc));
             let value = match case {
-                Some(c) => Some(Box::new(decode_at(d, &c.tc, &p.member(&c.name), wide)?)),
+                Some(c) => Some(Box::new(decode_at(d, &c.tc, &here.member(&c.name), wide)?)),
                 None => None,
             };
             Value::Union { discriminator: Box::new(disc), value }
@@ -912,5 +1032,135 @@ mod tests {
     fn a_nil_object_reference_round_trips_as_nil() {
         let tc = TypeCode::ObjRef { id: "IDL:m/I:1.0".into(), name: "I".into() };
         round_trip(&tc, &Value::ObjRef(None));
+    }
+
+    /// `struct Tree { string label; sequence<Tree> kids; }`, the shape
+    /// `corpus/golden/15` has carried since Phase 1.
+    fn tree() -> TypeCode {
+        TypeCode::Struct {
+            id: "IDL:gc15/Tree:1.0".into(),
+            name: "Tree".into(),
+            members: vec![
+                Member { name: "label".into(), tc: TypeCode::String(0) },
+                Member {
+                    name: "kids".into(),
+                    tc: TypeCode::Sequence {
+                        element: Box::new(TypeCode::Recursive("IDL:gc15/Tree:1.0".into())),
+                        bound: 0,
+                    },
+                },
+            ],
+        }
+    }
+
+    fn node(label: &str, kids: Vec<Value>) -> Value {
+        Value::Struct(vec![
+            ("label".into(), Value::String(label.into())),
+            ("kids".into(), Value::List(kids)),
+        ])
+    }
+
+    /// The gap this arm was written for. Until the marker could be resolved,
+    /// every non-empty recursive value was refused with "expected a value of
+    /// type an indirection" — and nothing noticed, because the generator that
+    /// would have produced one could only produce the empty case.
+    #[test]
+    fn a_recursive_struct_round_trips_at_depth() {
+        round_trip(&tree(), &node("root", vec![]));
+        round_trip(&tree(), &node("root", vec![node("a", vec![]), node("b", vec![])]));
+        round_trip(
+            &tree(),
+            &node("root", vec![node("a", vec![node("a1", vec![node("a11", vec![])])])]),
+        );
+    }
+
+    /// The cycle can name the typedef rather than the struct, and that spelling
+    /// is what `corpus/golden/15` actually produces when `TreeSeq` is the type
+    /// being marshalled.
+    #[test]
+    fn a_cycle_through_a_typedef_resolves_to_the_alias() {
+        let tc = TypeCode::Alias {
+            id: "IDL:gc15/TreeSeq:1.0".into(),
+            name: "TreeSeq".into(),
+            aliased: Box::new(TypeCode::Sequence {
+                element: Box::new(TypeCode::Struct {
+                    id: "IDL:gc15/Tree:1.0".into(),
+                    name: "Tree".into(),
+                    members: vec![
+                        Member { name: "label".into(), tc: TypeCode::String(0) },
+                        Member {
+                            name: "kids".into(),
+                            tc: TypeCode::Recursive("IDL:gc15/TreeSeq:1.0".into()),
+                        },
+                    ],
+                }),
+                bound: 0,
+            }),
+        };
+        let leaf = Value::Struct(vec![
+            ("label".into(), Value::String("leaf".into())),
+            ("kids".into(), Value::List(vec![])),
+        ]);
+        let branch = Value::Struct(vec![
+            ("label".into(), Value::String("branch".into())),
+            ("kids".into(), Value::List(vec![leaf.clone()])),
+        ]);
+        round_trip(&tc, &Value::List(vec![branch, leaf]));
+    }
+
+    /// A marker outside the type it names is a diagnosable mistake, not a
+    /// panic and not a silent empty value.
+    #[test]
+    fn an_unresolvable_marker_says_which_id_it_could_not_find() {
+        let tc = TypeCode::Recursive("IDL:gc15/Tree:1.0".into());
+        let mut e = Encoder::new(Endian::Big);
+        let err = encode(&mut e, &tc, &Value::String("x".into())).expect_err("must refuse");
+        assert!(err.message.contains("IDL:gc15/Tree:1.0"), "{err}");
+        assert!(err.message.contains("cannot be resolved"), "{err}");
+    }
+
+    /// Depth on decode is chosen by the sender, so the bound is a wire-safety
+    /// property: a message that nests past it is refused with a message, not
+    /// followed until the stack ends.
+    #[test]
+    fn nesting_past_the_bound_is_refused_rather_than_followed() {
+        let tc = tree();
+        let mut deep = node("leaf", vec![]);
+        for _ in 0..MAX_NESTING + 4 {
+            deep = node("x", vec![deep]);
+        }
+        let mut e = Encoder::new(Endian::Big);
+        let err = encode(&mut e, &tc, &deep).expect_err("must refuse");
+        assert!(err.message.contains(&MAX_NESTING.to_string()), "{err}");
+
+        // The decode half is the one a peer controls, so it is measured
+        // against a stream our own encoder would refuse to produce: a Tree is
+        // a string then a sequence count, so nesting is just that pair
+        // repeated. Hand-building it is the only way to ask the decoder the
+        // question an attacker would.
+        let mut hostile = Encoder::new(Endian::Big);
+        for _ in 0..MAX_NESTING + 4 {
+            hostile.put_string_bytes(b"x");
+            hostile.put_u32(1); // one child, one level deeper
+        }
+        hostile.put_string_bytes(b"leaf");
+        hostile.put_u32(0);
+        let bytes = hostile.finish().expect("finish");
+        let mut d = Decoder::new(&bytes, Endian::Big);
+        let err = decode(&mut d, &tc).expect_err("the decoder must refuse it too");
+        assert!(err.message.contains(&MAX_NESTING.to_string()), "{err}");
+
+        // And a stream inside the bound still decodes, so the refusal is the
+        // depth and not the shape.
+        let mut ok = Encoder::new(Endian::Big);
+        for _ in 0..8 {
+            ok.put_string_bytes(b"x");
+            ok.put_u32(1);
+        }
+        ok.put_string_bytes(b"leaf");
+        ok.put_u32(0);
+        let bytes = ok.finish().expect("finish");
+        let mut d = Decoder::new(&bytes, Endian::Big);
+        decode(&mut d, &tc).expect("eight levels is inside the bound");
     }
 }

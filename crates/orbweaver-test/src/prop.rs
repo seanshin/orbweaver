@@ -159,7 +159,8 @@ pub fn roundtrip_property_seeded(tc: &TypeCode, cases: usize, root: u64) -> Vec<
         return out;
     }
 
-    let mut sampler = Sampler { rng: Rng::new(root), gaps: BTreeSet::new(), depth: 0 };
+    let mut sampler =
+        Sampler { rng: Rng::new(root), gaps: BTreeSet::new(), depth: 0, open: Vec::new() };
     if sampler.sample(tc).is_none() {
         return vec![finding(
             "prop/unsupported-type",
@@ -181,7 +182,8 @@ pub fn roundtrip_property_seeded(tc: &TypeCode, cases: usize, root: u64) -> Vec<
     for index in 0..cases {
         let seed = case_seed(root, index as u64);
         let phase = index % 8;
-        let mut sampler = Sampler { rng: Rng::new(seed), gaps: BTreeSet::new(), depth: 0 };
+        let mut sampler =
+            Sampler { rng: Rng::new(seed), gaps: BTreeSet::new(), depth: 0, open: Vec::new() };
         let Some(value) = sampler.sample(tc) else { continue };
         gaps.append(&mut sampler.gaps);
         for endian in [Endian::Big, Endian::Little] {
@@ -213,7 +215,8 @@ pub fn roundtrip_property_seeded(tc: &TypeCode, cases: usize, root: u64) -> Vec<
 /// The reproduction entry point: a finding reports a seed, and this takes the
 /// seed back to the failure without the batch that found it.
 pub fn roundtrip_case(tc: &TypeCode, seed: u64) -> Vec<Finding> {
-    let mut sampler = Sampler { rng: Rng::new(seed), gaps: BTreeSet::new(), depth: 0 };
+    let mut sampler =
+        Sampler { rng: Rng::new(seed), gaps: BTreeSet::new(), depth: 0, open: Vec::new() };
     let Some(value) = sampler.sample(tc) else { return Vec::new() };
     let mut out = Vec::new();
     for phase in 0..8 {
@@ -227,7 +230,7 @@ pub fn roundtrip_case(tc: &TypeCode, seed: u64) -> Vec<Finding> {
 /// The sample value a seed produces for a type, for a caller that wants to see
 /// it rather than round-trip it.
 pub fn sample(tc: &TypeCode, seed: u64) -> Option<Value> {
-    Sampler { rng: Rng::new(seed), gaps: BTreeSet::new(), depth: 0 }.sample(tc)
+    Sampler { rng: Rng::new(seed), gaps: BTreeSet::new(), depth: 0, open: Vec::new() }.sample(tc)
 }
 
 /// Encode → decode → encode, once, at one byte order and one alignment phase.
@@ -343,6 +346,18 @@ struct Sampler {
     /// Arms the generator could not reach, phrased for a reader.
     gaps: BTreeSet<String>,
     depth: u32,
+    /// Repository ids of the constructed types this sample is currently inside,
+    /// with the `TypeCode` each one names.
+    ///
+    /// This is what lets a recursive arm be generated at all. The registry
+    /// represents a cycle as [`TypeCode::Recursive`] holding only an id —
+    /// honest, because a recursive type has no finite expansion — so a
+    /// generator that reads the `TypeCode` alone can only produce the empty
+    /// case, which is what it did: every `TreeSeq` came out empty and the
+    /// recursive arm of the marshaller was never executed by anything.
+    /// Resolving the id against the enclosing type under way gives a finite
+    /// expansion after all, bounded by [`MAX_DEPTH`] rather than by the type.
+    open: Vec<(String, TypeCode)>,
 }
 
 impl Sampler {
@@ -350,7 +365,16 @@ impl Sampler {
     /// all.
     fn sample(&mut self, tc: &TypeCode) -> Option<Value> {
         Some(match tc {
-            TypeCode::Alias { aliased, .. } => self.sample(aliased)?,
+            // Pushed like a struct: a cycle can name the typedef rather than
+            // the type it wraps — `typedef sequence<Tree> TreeSeq` inside
+            // `struct Tree` produces a marker naming TreeSeq — and a sampler
+            // that saw through aliases could never resolve that one.
+            TypeCode::Alias { id, aliased, .. } => {
+                self.open.push((id.clone(), tc.clone()));
+                let v = self.sample(aliased);
+                self.open.pop();
+                v?
+            }
 
             // Void marshals to nothing and decodes to an empty struct, which is
             // a stable round trip and a vacuous one. Included so that a `void`
@@ -392,14 +416,22 @@ impl Sampler {
                 Value::Enum(members.get(i)?.clone())
             }
 
-            TypeCode::Struct { members, .. } | TypeCode::Except { members, .. } => {
+            TypeCode::Struct { id, members, .. } | TypeCode::Except { id, members, .. } => {
+                self.open.push((id.clone(), tc.clone()));
                 let mut out = Vec::with_capacity(members.len());
                 for m in members {
                     self.depth += 1;
                     let v = self.sample(&m.tc);
                     self.depth -= 1;
-                    out.push((m.name.clone(), v?));
+                    match v {
+                        Some(v) => out.push((m.name.clone(), v)),
+                        None => {
+                            self.open.pop();
+                            return None;
+                        }
+                    }
                 }
+                self.open.pop();
                 Value::Struct(out)
             }
 
@@ -479,10 +511,19 @@ impl Sampler {
             // Neither is marshalled in v1 (§4.4), and `TypeCode`/`Principal`
             // have no `Value` at all. Saying so beats generating something the
             // encoder will reject and calling it a failure.
-            TypeCode::Fixed { .. }
-            | TypeCode::TypeCode
-            | TypeCode::Principal
-            | TypeCode::Recursive(_) => return None,
+            // The recursive arm, resolved against the type it names rather than
+            // abandoned. Depth is what terminates this, not the type: at
+            // MAX_DEPTH the enclosing sequence has already been forced empty,
+            // so the expansion is finite even though the type is not.
+            TypeCode::Recursive(id) => {
+                let open = self.open.iter().rev().find(|(k, _)| k == id)?.1.clone();
+                if self.depth >= MAX_DEPTH {
+                    return None;
+                }
+                self.sample(&open)?
+            }
+
+            TypeCode::Fixed { .. } | TypeCode::TypeCode | TypeCode::Principal => return None,
         })
     }
 
@@ -494,10 +535,18 @@ impl Sampler {
     fn can_sample(&self, tc: &TypeCode) -> bool {
         match tc {
             TypeCode::Alias { aliased, .. } => self.can_sample(aliased),
-            TypeCode::Fixed { .. }
-            | TypeCode::TypeCode
-            | TypeCode::Principal
-            | TypeCode::Recursive(_) => false,
+            TypeCode::Fixed { .. } | TypeCode::TypeCode | TypeCode::Principal => false,
+            // Samplable exactly when the type it names is under way and there
+            // is depth left to expand it into. `depth + 1` because the caller
+            // asking this question is a sequence, and its elements are sampled
+            // one level below it: asking at the sequence's own depth would let
+            // the guard pass and the element then fail, which does not produce
+            // an empty sequence — it produces no value at all, and the whole
+            // enclosing type reports as unsamplable. That is exactly the bug
+            // this arm was written to fix, one level up.
+            TypeCode::Recursive(id) => {
+                self.depth + 1 < MAX_DEPTH && self.open.iter().any(|(k, _)| k == id)
+            }
             TypeCode::Struct { members, .. } | TypeCode::Except { members, .. } => {
                 members.iter().all(|m| self.can_sample(&m.tc))
             }
@@ -514,10 +563,16 @@ impl Sampler {
     fn gap_reason(&self, element: &TypeCode) -> Option<String> {
         match element {
             TypeCode::Alias { aliased, .. } => self.gap_reason(aliased),
-            TypeCode::Recursive(id) => Some(format!(
+            // Only a gap when the cycle cannot be resolved at all. A recursive
+            // arm that ran and then stopped at MAX_DEPTH left a real tree on
+            // the wire; reporting that as unmeasured would be the report
+            // lying in the safe direction, which is still lying.
+            TypeCode::Recursive(id) if !self.open.iter().any(|(k, _)| k == id) => Some(format!(
                 "every generated sequence of {id} is empty because the type is recursive and \
-                 has no finite expansion; the recursive arm is unmeasured"
+                 the type it names is not under construction here, so the cycle cannot be \
+                 resolved; the recursive arm is unmeasured"
             )),
+            TypeCode::Recursive(_) => None,
             _ if !self.can_sample(element) => Some(format!(
                 "every generated sequence of {} is empty because {}",
                 describe(element),
@@ -745,7 +800,8 @@ fn why_unsupported(tc: &TypeCode) -> &'static str {
         TypeCode::Struct { members, .. } | TypeCode::Except { members, .. } => members
             .iter()
             .find(|m| {
-                !Sampler { rng: Rng::new(1), gaps: BTreeSet::new(), depth: 0 }.can_sample(&m.tc)
+                !Sampler { rng: Rng::new(1), gaps: BTreeSet::new(), depth: 0, open: Vec::new() }
+                    .can_sample(&m.tc)
             })
             .map(|m| why_unsupported(&m.tc))
             .unwrap_or("a member cannot be sampled"),
@@ -943,10 +999,52 @@ mod tests {
         assert!(reached.len() >= 3, "labelled and default branches: {reached:?}");
     }
 
-    /// A recursive type generates empty sequences and *says so*. An unmeasured
-    /// arm reported as covered is the harness failure `CLAUDE.md` warns about.
+    /// The recursive arm is now generated, so the property actually exercises
+    /// it. Before this, every `TreeSeq` came out empty: the round trip passed
+    /// on values that contained no recursion at all, and the marshaller's
+    /// recursive path — which turned out not to exist — was reported as a gap
+    /// rather than run.
     #[test]
-    fn a_recursive_type_reports_its_unmeasured_arm() {
+    fn a_resolvable_cycle_is_generated_rather_than_reported() {
+        let tree = TypeCode::Struct {
+            id: "IDL:m/Tree:1.0".into(),
+            name: "Tree".into(),
+            members: vec![
+                orbweaver_giop::typecode::Member { name: "label".into(), tc: TypeCode::String(0) },
+                orbweaver_giop::typecode::Member {
+                    name: "kids".into(),
+                    tc: TypeCode::Sequence {
+                        element: Box::new(TypeCode::Recursive("IDL:m/Tree:1.0".into())),
+                        bound: 0,
+                    },
+                },
+            ],
+        };
+        let findings = roundtrip_property(&tree, 32);
+        assert!(findings.is_empty(), "{findings:?}");
+
+        // And at least one of those cases actually had a child, over the fixed
+        // batch seed — otherwise this test would pass on the old behaviour.
+        let grew = (0..32u64).any(|i| {
+            let v = sample(&tree, case_seed(DEFAULT_SEED, i));
+            matches!(v, Some(Value::Struct(ref m)) if matches!(&m[1].1, Value::List(k) if !k.is_empty()))
+        });
+        assert!(grew, "no generated tree had a child; the recursive arm is still unmeasured");
+    }
+
+    /// A cycle that cannot be resolved still generates empty sequences and
+    /// still *says so*. An unmeasured arm reported as covered is the harness
+    /// failure `CLAUDE.md` warns about.
+    ///
+    /// This test used to assert that of *every* recursive type, which was the
+    /// old behaviour and not a property worth having: the marker below names an
+    /// id no enclosing type has, so nothing can expand it, whereas a marker
+    /// naming its own enclosing type now expands and is covered by
+    /// `a_resolvable_cycle_is_generated_rather_than_reported`. The distinction
+    /// is the point — one is a limit of the type, the other was a limit of the
+    /// generator.
+    #[test]
+    fn an_unresolvable_cycle_reports_its_unmeasured_arm() {
         let tc = tc_struct(
             "Tree",
             vec![
@@ -954,7 +1052,7 @@ mod tests {
                 (
                     "kids",
                     TypeCode::Sequence {
-                        element: Box::new(TypeCode::Recursive("IDL:m/Tree:1.0".into())),
+                        element: Box::new(TypeCode::Recursive("IDL:m/Elsewhere:1.0".into())),
                         bound: 0,
                     },
                 ),
