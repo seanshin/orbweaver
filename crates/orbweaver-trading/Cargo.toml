@@ -1,0 +1,15 @@
+[package]
+name = "orbweaver-trading"
+description = "Trading service: the MoE offer store, constraint queries, and the loading policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# No dependencies, deliberately: an offer store, a query parser and a scoring
+# policy are plain Rust. PLAN-MOE §3 F2 names orbweaver-registry/giop/cdr as
+# permitted, but nothing here needs the wire — the IDL binding is F3's batch.
+
+[lints]
+workspace = true
