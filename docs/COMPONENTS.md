@@ -20,7 +20,7 @@ Anything requiring a new dependency class needs a decision document first
 | `orbweaver-mcp` | ✅ | triad, stdio transport, capability handles, default-deny, `ai_authz`, promotion+I4 | embeddings behind search (needs D003) |
 | `orbweaver-guard` | ◐ | authz scopes, destructive approval, audit (Guarded; Bridge emission in flight) | **dry-run mode**; interceptor chain as a formal seam |
 | `orbweaver-capability` | ✅ | lives inside mcp (`handles.rs`) rather than its own crate — a location choice, not a gap | expiry policy configuration surface |
-| `orbweaver-identity` | ◐ | CSIv2 wire, delegation policy, hygiene, `Caller` seam | **OAuth2/JWT → Caller exchange; credential store; SSLIOP peer proof (wave 3 probing)** |
+| `orbweaver-identity` | ◐ | CSIv2 wire, delegation policy, hygiene, `Caller` seam | **OAuth2/JWT → Caller exchange; credential store; SSLIOP peer proof** — measured BLOCKED: brew's omniORBpy ships no sslTP binding (C++ SSL transport present in the keg, python half unbuilt); unblock path in `spikes/tls/PEER-STATUS.md` |
 | `orbweaver-gen` | ◐ | Rust client stubs, oracle static=dynamic, I1/I4 | **server skeletons, scaffolds, Python/other targets** |
 | `orbweaver-test` | ❌ → wave 3.5 | nothing | **contract/property tests from annotations; corpus-wide fuzz** — agent launched with this review |
 | `orbweaver-console` | ❌ | nothing | catalog browser, diff viewer, traces — after OTel decision |
