@@ -1,7 +1,8 @@
 //! `forge-pipeline` — the §5.1 batch loop over a requirements directory.
 //!
 //! ```text
-//! forge-pipeline --requirements <dir> --generator <command> --out <dir> [--max-rounds N]
+//! forge-pipeline --requirements <dir> --generator <command> --out <dir>
+//!                [--max-rounds N] [--register]
 //! ```
 //!
 //! Every `.txt` file in the requirements directory is one item (id = file
@@ -16,6 +17,13 @@
 //! and its stdout is the IDL, written to `<out>/<id>.idl` each round
 //! (overwritten on repair). Exit status: 0 all items valid, 1 some are not,
 //! 2 could not run at all.
+//!
+//! `--register` runs S5 after a batch in which every item is valid: the
+//! generated files are loaded into a registry (re-checked at the gate) and
+//! `<out>/exposure.todo.tsv` lists every exposable interface, all
+//! `exposed=no` — exposure is a human allowlist decision, never a pipeline
+//! side effect (`docs/PLAN.md` §7.4 I2). The registration is in-process; the
+//! durable catalog store (PLAN §6) is future work and S5 is its seam.
 //!
 //! The model is deliberately an external concern. A shell script wrapping an
 //! LLM CLI plugs in later without touching this crate:
@@ -36,7 +44,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use orbweaver_forge::pipeline::{Generator, ItemStatus, run_batch};
+use orbweaver_forge::pipeline::{Generator, ItemStatus, register, run_batch};
 
 /// A generator that shells out: `<command> <requirement-file> [<repair-file>]`.
 ///
@@ -93,7 +101,7 @@ impl Generator for CommandGenerator {
 
 fn usage() -> &'static str {
     "usage: forge-pipeline --requirements <dir> --generator <command> --out <dir> \
-     [--max-rounds N]"
+     [--max-rounds N] [--register]"
 }
 
 fn main() -> ExitCode {
@@ -101,6 +109,7 @@ fn main() -> ExitCode {
     let mut generator_cmd: Option<String> = None;
     let mut out_dir: Option<PathBuf> = None;
     let mut max_rounds = 3usize;
+    let mut do_register = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -113,6 +122,10 @@ fn main() -> ExitCode {
             "--max-rounds" => value("--max-rounds").and_then(|v| {
                 v.parse().map(|n| max_rounds = n).map_err(|_| format!("--max-rounds: {v:?}"))
             }),
+            "--register" => {
+                do_register = true;
+                Ok(())
+            }
             "-h" | "--help" => {
                 println!("{}", usage());
                 return ExitCode::SUCCESS;
@@ -175,7 +188,7 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
 
-    let mut generator = CommandGenerator { command, out_dir, by_text };
+    let mut generator = CommandGenerator { command, out_dir: out_dir.clone(), by_text };
     let report = run_batch(&mut generator, &requirements, max_rounds);
 
     // The §5.1 summary: batch size, first-pass rate and round count stated
@@ -188,5 +201,37 @@ fn main() -> ExitCode {
         }
     }
 
-    if report.all_valid() { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+    if !report.all_valid() {
+        if do_register {
+            println!("S5: skipped — registration requires every item valid");
+        }
+        return ExitCode::FAILURE;
+    }
+    if do_register {
+        // S5. In-process registry plus a worksheet; the durable catalog
+        // (PLAN §6) is future work, and this call is its seam.
+        match register(&report, &out_dir) {
+            Ok(registration) => {
+                println!(
+                    "S5: registered {} item(s); {} exposable interface(s), every one exposed=no",
+                    report.items.len(),
+                    registration.exposable.len()
+                );
+                println!(
+                    "S5: allowlist worksheet: {}",
+                    out_dir.join(orbweaver_forge::pipeline::EXPOSURE_TODO_FILE).display()
+                );
+            }
+            Err(e) => {
+                eprintln!("S5 register: {e}");
+                // A gate refusal means an item was not valid after all (1);
+                // an unwritable worksheet means S5 could not run (2).
+                return match e {
+                    orbweaver_forge::pipeline::RegisterError::Io { .. } => ExitCode::from(2),
+                    _ => ExitCode::FAILURE,
+                };
+            }
+        }
+    }
+    ExitCode::SUCCESS
 }
