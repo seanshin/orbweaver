@@ -356,6 +356,21 @@ pub fn encode_message_error(endian: Endian) -> Result<Vec<u8>> {
     e.finish().map_err(Error::Cdr)
 }
 
+/// Encodes a `CloseConnection`.
+///
+/// §9.4.10: no body at all. Sent by a server shutting down in an orderly
+/// way; §9.4.7 then entitles the client to conclude that its unanswered
+/// requests were never processed and to re-send them elsewhere — which a
+/// bare TCP close does not, leaving the client to guess about completion.
+/// (GIOP 1.2 also permits a *client* to send this; our client just closes
+/// its socket instead, which 1.2 equally allows.)
+pub fn encode_close_connection(version: Version, endian: Endian) -> Result<Vec<u8>> {
+    let mut e = Encoder::new(endian);
+    let size_at = message_header(&mut e, version, endian, MsgType::CloseConnection);
+    e.patch_u32(size_at, 0);
+    e.finish().map_err(Error::Cdr)
+}
+
 /// What a servant does with an invocation.
 pub trait Dispatch {
     /// Handles `request`, writing the reply body into `out`.
@@ -444,7 +459,14 @@ impl Server {
         })
     }
 
-    /// Serves connections until `stop` returns true between accepts.
+    /// Serves connections until `stop` returns true.
+    ///
+    /// `stop` is observed between accepts and between messages on a live
+    /// connection. A stop that lands mid-connection ends it with an orderly
+    /// `CloseConnection` (§9.4.10) rather than a bare TCP close, so the peer
+    /// knows its unanswered requests were not processed and may re-send them
+    /// elsewhere. Honest limit: a connection idle inside a blocking read
+    /// only notices the flag when its next message arrives.
     pub fn serve<D, S>(&self, dispatch: &mut D, mut stop: S) -> Result<()>
     where
         D: Dispatch,
@@ -457,7 +479,7 @@ impl Server {
             match incoming {
                 Ok(stream) => {
                     // One bad client must not take the server down.
-                    if let Err(e) = self.serve_connection(stream, dispatch) {
+                    if let Err(e) = self.serve_connection_until(stream, dispatch, &mut stop) {
                         eprintln!("orbweaver: connection ended: {e}");
                     }
                 }
@@ -471,9 +493,31 @@ impl Server {
     }
 
     /// Handles one connection to completion.
-    pub fn serve_connection<D: Dispatch>(&self, mut s: TcpStream, d: &mut D) -> Result<()> {
+    pub fn serve_connection<D: Dispatch>(&self, s: TcpStream, d: &mut D) -> Result<()> {
+        self.serve_connection_until(s, d, &mut || false)
+    }
+
+    /// As [`Server::serve_connection`], ending with an orderly
+    /// `CloseConnection` when `stop` reports true between messages.
+    fn serve_connection_until<D: Dispatch>(
+        &self,
+        mut s: TcpStream,
+        d: &mut D,
+        stop: &mut dyn FnMut() -> bool,
+    ) -> Result<()> {
         s.set_nodelay(true)?;
+        // The version and byte order to stamp on a CloseConnection we send:
+        // whatever the peer last spoke, defaulting to our best before its
+        // first message. (The body is empty, so the endian flag is the only
+        // byte it affects.)
+        let mut wire_version = Version::max_supported();
+        let mut wire_endian = Endian::native();
         loop {
+            if stop() {
+                let out = encode_close_connection(wire_version, wire_endian)?;
+                s.write_all(&out)?;
+                return Ok(());
+            }
             let msg = match read_message(&mut s, self.max_message_size) {
                 Ok(m) => m,
                 Err(Error::Io(e))
@@ -492,6 +536,8 @@ impl Server {
                 }
             };
 
+            wire_version = msg.version;
+            wire_endian = msg.endian;
             match msg.msg_type {
                 MsgType::LocateRequest => {
                     let lr = decode_locate_request(msg)?;
@@ -513,8 +559,21 @@ impl Server {
                     }
                 }
                 MsgType::CancelRequest => {
-                    // Nothing is queued, since requests are handled inline.
-                    // Reading it and moving on is the correct no-op.
+                    // §9.4.4 makes cancellation advisory and permits ignoring
+                    // it, and requests here are handled inline before the next
+                    // read, so there is never a queued request to abandon:
+                    // consuming the message IS the correct handling, not a
+                    // stub. Log-worthy, never an error — a malformed one is
+                    // ignored too, since ignoring is what we would do with a
+                    // well-formed one.
+                    let mut d = Decoder::new(&msg.bytes, msg.endian);
+                    if d.seek_to(HEADER_LEN).is_ok()
+                        && let Ok(id) = d.get_u32()
+                    {
+                        eprintln!(
+                            "orbweaver: peer cancelled request {id}; nothing is queued, ignoring"
+                        );
+                    }
                 }
                 MsgType::CloseConnection => return Ok(()),
                 other => {
@@ -722,6 +781,149 @@ mod tests {
         assert_eq!(wire.len(), HEADER_LEN);
         assert_eq!(wire[7], MsgType::MessageError as u8);
         assert_eq!(&wire[8..12], &[0, 0, 0, 0], "no body");
+    }
+
+    #[test]
+    fn close_connection_is_a_bare_header() {
+        for version in [Version::V1_0, Version::V1_1, Version::V1_2] {
+            let wire = encode_close_connection(version, Endian::Big).unwrap();
+            assert_eq!(wire.len(), HEADER_LEN, "{version}: §9.4.10 allows no body");
+            assert_eq!(wire[7], MsgType::CloseConnection as u8);
+            assert_eq!(&wire[8..12], &[0, 0, 0, 0], "message_size must be zero");
+        }
+    }
+
+    /// A servant for the loopback tests: answers `ping` with 42.
+    struct Pong;
+    impl Dispatch for Pong {
+        fn dispatch(
+            &mut self,
+            req: &Request,
+            out: &mut Encoder,
+        ) -> std::result::Result<(), SystemException> {
+            match req.operation.as_str() {
+                "ping" => {
+                    out.put_i32(42);
+                    Ok(())
+                }
+                _ => Err(SystemException::bad_operation()),
+            }
+        }
+    }
+
+    fn ping_wire(version: Version, endian: Endian, id: u32) -> Vec<u8> {
+        encode_request(version, endian, id, b"k", "ping", true, |_| {}).unwrap()
+    }
+
+    fn expect_pong(s: &mut TcpStream, id: u32, why: &str) {
+        let msg = read_message(s, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+        let reply = crate::decode_reply(msg).unwrap();
+        assert_eq!(reply.request_id, id, "{why}");
+        assert_eq!(reply.status, ReplyStatus::NoException, "{why}");
+        assert_eq!(reply.body().unwrap().get_i32().unwrap(), 42, "{why}");
+    }
+
+    /// §9.4.4 permits ignoring a CancelRequest; what must not happen is the
+    /// stream losing its framing over one. A cancel between two requests —
+    /// for an id that was never issued, matching what a client can actually
+    /// send — must leave the following request answered as if it were not
+    /// there.
+    #[test]
+    fn a_cancel_request_mid_stream_does_not_disturb_the_following_request() {
+        for version in [Version::V1_0, Version::V1_1, Version::V1_2] {
+            for endian in [Endian::Big, Endian::Little] {
+                let server = Server::bind("127.0.0.1:0", b"k".to_vec()).unwrap();
+                let addr = server.local_addr().unwrap();
+                let t = std::thread::spawn(move || {
+                    let (s, _) = server.listener.accept().unwrap();
+                    server.serve_connection(s, &mut Pong).unwrap();
+                });
+
+                let mut c = TcpStream::connect(addr).unwrap();
+                c.write_all(&ping_wire(version, endian, 1)).unwrap();
+                expect_pong(&mut c, 1, "before the cancel");
+
+                c.write_all(&crate::encode_cancel_request(version, endian, 9999).unwrap()).unwrap();
+                c.write_all(&ping_wire(version, endian, 2)).unwrap();
+                expect_pong(&mut c, 2, "the request after a cancel must be undisturbed");
+
+                drop(c); // hang up; the server thread must end cleanly
+                t.join().unwrap();
+            }
+        }
+    }
+
+    /// The serving half of an orderly shutdown: when the stop flag is raised
+    /// mid-connection, the peer's last sight of us is a CloseConnection, not
+    /// a bare TCP close it must guess about.
+    #[test]
+    fn a_stopped_server_says_goodbye_with_close_connection() {
+        for version in [Version::V1_0, Version::V1_1, Version::V1_2] {
+            let server = Server::bind("127.0.0.1:0", b"k".to_vec()).unwrap();
+            let addr = server.local_addr().unwrap();
+            let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let served = flag.clone();
+            let t = std::thread::spawn(move || {
+                server
+                    .serve(&mut Pong, || served.load(std::sync::atomic::Ordering::SeqCst))
+                    .unwrap();
+            });
+
+            let mut c = TcpStream::connect(addr).unwrap();
+            c.write_all(&ping_wire(version, Endian::Big, 1)).unwrap();
+            expect_pong(&mut c, 1, "before the stop");
+
+            // Raise the flag, then send one more request: the server checks
+            // the flag between messages, so it answers this one and *then*
+            // says goodbye — deterministically, with no sleep to tune.
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            c.write_all(&ping_wire(version, Endian::Big, 2)).unwrap();
+            expect_pong(&mut c, 2, "a stop must not eat an already-sent request");
+
+            let bye = read_message(&mut c, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+            assert_eq!(bye.msg_type, MsgType::CloseConnection, "{version}");
+            assert_eq!(bye.bytes.len(), HEADER_LEN, "{version}: no body");
+            assert_eq!(bye.version, version, "stamped with the version the peer spoke");
+            t.join().unwrap();
+        }
+    }
+
+    /// The two halves of §9.4.7 against each other: our server's close bytes
+    /// through our client's handling. The client must classify them as a
+    /// clean close — request not processed, safe to re-send — and refuse to
+    /// reuse the connection.
+    #[test]
+    fn our_close_bytes_read_as_safe_to_retry_by_our_own_client() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let t = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            // Read the client's request, then answer with the orderly
+            // shutdown bytes instead of a Reply.
+            let req = read_message(&mut s, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+            let out = encode_close_connection(req.version, req.endian).unwrap();
+            s.write_all(&out).unwrap();
+            // Hold the socket open until the client hangs up, so the close
+            // bytes cannot be raced away by a TCP reset.
+            let _ = read_message(&mut s, DEFAULT_MAX_MESSAGE_SIZE);
+        });
+
+        let ior = crate::Ior {
+            type_id: "IDL:spike/Echo:1.0".into(),
+            profiles: vec![crate::IiopProfile {
+                version: Version::V1_2,
+                host: "127.0.0.1".into(),
+                port,
+                object_key: b"k".to_vec(),
+                components: Vec::new(),
+            }],
+        };
+        let mut conn = crate::Connection::connect(&ior, std::time::Duration::from_secs(5)).unwrap();
+        let err = conn.invoke_nullary("ping").unwrap_err();
+        assert!(matches!(err, Error::ConnectionClosed), "got {err}");
+        assert!(!conn.is_usable(), "a cleanly closed connection must not be reused");
+        drop(conn);
+        t.join().unwrap();
     }
 
     #[test]

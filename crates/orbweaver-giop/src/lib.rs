@@ -656,6 +656,28 @@ pub fn encode_locate_request(
     e.finish().map_err(Error::Cdr)
 }
 
+/// Encodes a `CancelRequest` for `version` (§9.4.4).
+///
+/// The body is just the `request_id` being abandoned; unlike every other
+/// header in this file the layout is identical in 1.0, 1.1 and 1.2. The
+/// message is advisory — the target MAY ignore it, and no reply ever
+/// correlates with it — so the sender learns nothing about whether the
+/// cancellation took effect.
+pub fn encode_cancel_request(version: Version, endian: Endian, request_id: u32) -> Result<Vec<u8>> {
+    let mut e = Encoder::new(endian);
+    e.put_bytes(MAGIC);
+    e.put_u8(version.major);
+    e.put_u8(version.minor);
+    e.put_u8(if endian == Endian::Little { 1 } else { 0 });
+    e.put_u8(MsgType::CancelRequest as u8);
+    let size_at = e.len();
+    e.put_u32(0);
+    e.put_u32(request_id);
+    let size = (e.len() - HEADER_LEN) as u32;
+    e.patch_u32(size_at, size);
+    e.finish().map_err(Error::Cdr)
+}
+
 /// What a `LocateReply` said about the object.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocateResult {
@@ -1531,6 +1553,37 @@ impl Connection {
         Ok(result)
     }
 
+    /// Sends a raw §9.4.4 `CancelRequest` for `request_id`.
+    ///
+    /// Advisory by specification: the target MAY ignore it, and no reply
+    /// ever correlates with it, so a successful return means only that the
+    /// bytes were written — the same promise as [`Connection::invoke_oneway`].
+    ///
+    /// Honesty note on what this can be used for: this connection holds at
+    /// most one request in flight and blocks until its reply arrives, so
+    /// from the public API there is never an id mid-flight to cancel. The
+    /// property that *is* measurable — and that `spike-cancel` measures
+    /// against real ORBs — is what the peer does next: it either ignores
+    /// the message (the next invoke on this connection still works) or
+    /// refuses it and closes, in which case the next invoke must fail
+    /// cleanly on a poisoned connection. A wrapper shaped like
+    /// `cancel_last()` would pretend to a capability the invoker does not
+    /// have, which is why the raw message is exposed instead.
+    ///
+    /// Measured peer behaviour: omniORB 4.3.4 ignores a GIOP 1.2
+    /// `CancelRequest` but closes the connection on a 1.0 or 1.1 one, even
+    /// as the first message on a fresh connection — so below 1.2, expect
+    /// the invoke after a cancel to return an error and plan to reconnect.
+    pub fn cancel(&mut self, request_id: u32) -> Result<()> {
+        if self.poisoned {
+            return Err(Error::Desynchronized);
+        }
+        let msg = encode_cancel_request(self.version, self.endian, request_id)?;
+        self.stream.write_all(&msg).inspect_err(|_| self.poisoned = true)?;
+        self.stream.flush().inspect_err(|_| self.poisoned = true)?;
+        Ok(())
+    }
+
     /// Invokes a `oneway` operation: sends the request and does not wait.
     ///
     /// Not `invoke` with a flag, because the two differ in what the caller may
@@ -1634,10 +1687,15 @@ impl Connection {
             write_args,
         )?;
         self.codeset_context_pending = false;
+        // A failed write poisons too: a partially-written request leaves the
+        // *outbound* half of the stream unframeable, exactly as unread bytes
+        // do the inbound half. This was the one send path that did not poison
+        // — found when a peer that closes on CancelRequest (omniORB below
+        // GIOP 1.2) made the next write the first thing to fail.
         for piece in fragment_message(msg, self.fragment_threshold)? {
-            self.stream.write_all(&piece)?;
+            self.stream.write_all(&piece).inspect_err(|_| self.poisoned = true)?;
         }
-        self.stream.flush()?;
+        self.stream.flush().inspect_err(|_| self.poisoned = true)?;
 
         // Exactly one message answers one request. This was written as a loop,
         // which said the opposite — that some messages could be skipped and the
@@ -1863,6 +1921,27 @@ mod tests {
                 let lr = crate::server::decode_locate_request(raw).expect("decodes");
                 assert_eq!(lr.request_id, 77, "{version} {endian:?}");
                 assert_eq!(lr.object_key, b"the-key", "{version} {endian:?}");
+            }
+        }
+    }
+
+    /// §9.4.4: a CancelRequest is a header plus the abandoned request id and
+    /// nothing else, in every version — the one header this file encodes that
+    /// is not version-conditional, which is worth pinning precisely because
+    /// everything around it is.
+    #[test]
+    fn cancel_request_is_a_header_plus_the_abandoned_id() {
+        for version in [Version::V1_0, Version::V1_1, Version::V1_2] {
+            for endian in [Endian::Big, Endian::Little] {
+                let msg = encode_cancel_request(version, endian, 9999).expect("encodes");
+                assert_eq!(msg.len(), HEADER_LEN + 4, "{version} {endian:?}");
+                let raw =
+                    read_message(&mut msg.as_slice(), DEFAULT_MAX_MESSAGE_SIZE).expect("frames");
+                assert_eq!(raw.msg_type, MsgType::CancelRequest);
+                assert_eq!(raw.version, version);
+                let mut d = Decoder::new(&raw.bytes, raw.endian);
+                d.seek_to(HEADER_LEN).unwrap();
+                assert_eq!(d.get_u32().unwrap(), 9999, "{version} {endian:?}");
             }
         }
     }
