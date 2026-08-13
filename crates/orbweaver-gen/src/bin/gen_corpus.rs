@@ -407,6 +407,143 @@ fn run(ior_path: &str, idl_path: &str) -> Result<u32, String> {
         println!("  {OK} the audit log contains no host, object key or IOR");
     }
 
+    // ── I4: promotion respects identity, against the live peer ─────────────
+    // PLAN §7.4 I4: a promoted static path carries the same Caller assertion
+    // behaviour as the dynamic path it replaced. verify_promotion is already
+    // unit-verified with fakes; this section is its live half — both paths'
+    // real outcomes against the same stock ORB, and the static path's real
+    // Guarded audit line, fed through the gate.
+    println!("── promotion respects identity (I4) ──");
+    use std::collections::BTreeMap;
+
+    use orbweaver_dynamic::invoke::Outcome;
+    use orbweaver_mcp::promote::{self, CallStats, PromotionPolicy, PromotionRegression};
+
+    let mut check = |what: &str, pass: bool| {
+        if pass {
+            println!("  {OK} {what}");
+        } else {
+            println!("  {NO} {what}");
+            fails += 1;
+        }
+    };
+
+    // ping/add carry no ai_authz, so the no-caller session below still
+    // succeeds at the wire — which is what makes the negative control real:
+    // the wire answers 42 either way, and only the gate can tell the caller
+    // was lost.
+    let i4_exposure = Exposure::nothing()
+        .allow_operation("IDL:spike/Echo:1.0", "ping")
+        .allow_operation("IDL:spike/Echo:1.0", "add");
+
+    // Bridge::stats() fills only through Bridge::invoke — the JSON tool path.
+    // Every I4 call bypasses it (invoke::invoke on a raw connection, and
+    // Guarded stubs from connect_static), so the traffic is recorded into a
+    // local CallStats; wiring the static path into the bridge's own stats
+    // belongs to lib.rs's owner, not to this oracle.
+    let mut stats = CallStats::new();
+
+    // The dynamic path: the reference implementation, add(40, 2) through the
+    // same invoke() the bridge's JSON path uses, over a fresh plain connection.
+    let mut dconn =
+        Connection::connect(&ior, Duration::from_secs(5)).map_err(|e| e.to_string())?;
+    let mut dargs = BTreeMap::new();
+    dargs.insert("a".to_owned(), Value::Long(40));
+    dargs.insert("b".to_owned(), Value::Long(2));
+    let dynamic_outcome = orbweaver_dynamic::invoke::invoke(
+        &mut dconn,
+        &registry,
+        "IDL:spike/Echo:1.0",
+        "add",
+        &dargs,
+    );
+    stats.record("IDL:spike/Echo:1.0", "add", dynamic_outcome.is_ok());
+    let dynamic_outcome = dynamic_outcome.map_err(|e| e.to_string())?;
+
+    // The dynamic session this promotion would replace, on behalf of alice.
+    // Honesty note: today the dynamic bridge path's caller fact lives in
+    // Bridge::caller and its policy check, not in an emitted ALLOW line, so
+    // the dynamic audit line here is reconstructed from that same session
+    // state rather than captured — in exactly the format guard.rs writes.
+    // Reconstructing it is exactly the seam verify_promotion protects; the
+    // day Bridge emits real audit lines, this reconstruction is replaced by
+    // capture.
+    let dynamic_bridge = Bridge::new(&registry, i4_exposure.clone(), "i4-dynamic")
+        .on_behalf_of(Caller::new("alice@example.com"));
+    let dynamic_caller = dynamic_bridge.caller().map_or("<nobody>", |c| c.principal.as_str());
+    let dynamic_audit =
+        format!("ALLOW caller={dynamic_caller} target=IDL:spike/Echo:1.0 operation=add");
+
+    // The static path: the same operation through the generated stub over
+    // connect_static, in a session on behalf of the same principal. Its audit
+    // line is the one the guard actually wrote, taken via .audit().
+    let mut alice = Bridge::new(&registry, i4_exposure.clone(), "i4-static")
+        .on_behalf_of(Caller::new("alice@example.com"));
+    let ah = alice.handles().issue_checked(&ior).map_err(|e| e.to_string())?;
+    let ag = alice
+        .connect_static(ah.as_str(), Approval::default(), Duration::from_secs(5))
+        .map_err(|e| e.to_string())?;
+    let mut aclient = EchoClient::new(ag);
+    let kept = aclient.add(40, 2);
+    stats.record("IDL:spike/Echo:1.0", "add", kept.is_ok());
+    let kept = kept.map_err(|e| e.to_string())?;
+    // The stub answers a bare i32; the gate compares Outcomes, so lift it
+    // into the dynamic shape: returns Value::Long, no out or inout outputs.
+    let static_outcome = Outcome { returns: Value::Long(kept), outputs: BTreeMap::new() };
+    let static_audit =
+        aclient.conn.audit().last().cloned().ok_or("the guard wrote no audit line")?;
+
+    let verdict = promote::verify_promotion(
+        &dynamic_outcome,
+        &static_outcome,
+        &dynamic_audit,
+        &static_audit,
+    );
+    check("I4: a live promotion passes the gate when identity is preserved", verdict.is_ok());
+    if let Err(e) = &verdict {
+        println!("       {e}");
+    }
+
+    // The same promotion rebuilt without a caller — the optimization that
+    // forgot on_behalf_of. The wire still answers 42; the gate must refuse
+    // anyway, and must say why by name.
+    let mut nobody = Bridge::new(&registry, i4_exposure, "i4-nobody");
+    let nh = nobody.handles().issue_checked(&ior).map_err(|e| e.to_string())?;
+    let ng = nobody
+        .connect_static(nh.as_str(), Approval::default(), Duration::from_secs(5))
+        .map_err(|e| e.to_string())?;
+    let mut nclient = EchoClient::new(ng);
+    let lost = nclient.add(40, 2);
+    stats.record("IDL:spike/Echo:1.0", "add", lost.is_ok());
+    let lost = lost.map_err(|e| e.to_string())?;
+    let lost_outcome = Outcome { returns: Value::Long(lost), outputs: BTreeMap::new() };
+    let lost_audit =
+        nclient.conn.audit().last().cloned().ok_or("the guard wrote no audit line")?;
+    let refused = promote::verify_promotion(
+        &dynamic_outcome,
+        &lost_outcome,
+        &dynamic_audit,
+        &lost_audit,
+    );
+    check(
+        "I4: the gate refuses a promotion that lost the caller, results identical",
+        lost_outcome == dynamic_outcome
+            && matches!(&refused,
+                Err(PromotionRegression::IdentityDropped { static_caller, .. })
+                    if static_caller == "<nobody>"),
+    );
+
+    // And the recommendation plumbing sees the same real traffic: three add
+    // calls were recorded around the wire calls above.
+    let policy = PromotionPolicy { min_calls: 3, max_failure_rate: 0.0 };
+    check(
+        "I4: after 3 recorded live calls the policy recommends (IDL:spike/Echo:1.0, add)",
+        policy
+            .recommend(&stats)
+            .iter()
+            .any(|c| c.id == "IDL:spike/Echo:1.0" && c.operation == "add"),
+    );
+
     Ok(fails)
 }
 "####;
