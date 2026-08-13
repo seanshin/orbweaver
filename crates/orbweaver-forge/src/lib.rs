@@ -24,10 +24,28 @@
 //! (`spikes/differential.sh`) are a separate check with a separate purpose:
 //! they tell us whether *we* are right. This gate tells a generator whether its
 //! output is, and has to run in-process, in milliseconds, thousands of times.
+//!
+//! # The rest of the crate
+//!
+//! S4 is the gate; the stages around it each own a producer and a gate of their
+//! own, so a failure can be attributed to the stage that caused it:
+//!
+//! | Module | Stage | In → out | Its own gate |
+//! |---|---|---|---|
+//! | [`ingest`] | S1 | requirement text → [`ingest::Brief`] | is it a brief S2 can work from |
+//! | [`synthesize`] | S2 | brief → `.idl` | [`validate`], plus: is anything callable, did the brief survive |
+//! | [`annotate`] | S3 | `.idl` → SIDL | is every operation annotated, is every mutating operation scoped |
+//! | [`pipeline`] | — | the §5.1 loop over any one of them, and over all of them | — |
+//!
+//! Each is runnable alone, because a pipeline that only runs end to end can
+//! tell you the output is wrong and not which stage was wrong.
 
 #![deny(missing_docs)]
 
+pub mod annotate;
+pub mod ingest;
 pub mod pipeline;
+pub mod synthesize;
 
 use std::collections::BTreeMap;
 

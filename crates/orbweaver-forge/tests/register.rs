@@ -1,7 +1,7 @@
 //! §7.4 I2, proven: pipeline output is exposed safely.
 //!
 //! S5 registration feeds the catalog with exposure **off** by default. These
-//! tests drive a real batch through `run_batch` with a scripted generator
+//! tests drive a real batch through `run_batch` with a scripted S2 stage
 //! (the same deterministic-fake pattern as `tests/pipeline.rs`), register it,
 //! and then stand where an agent stands: a `Bridge` over the resulting
 //! registry with `Exposure::nothing()` must show *nothing* — search empty,
@@ -14,9 +14,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use orbweaver_dynamic::json::Json;
+use orbweaver_forge::Report;
 use orbweaver_forge::pipeline::{
-    BatchReport, EXPOSURE_TODO_FILE, Generator, ItemReport, ItemStatus, RegisterError, register,
-    run_batch,
+    BatchReport, EXPOSURE_TODO_FILE, ItemReport, ItemStatus, RegisterError, Stage, StageId,
+    gate_for, register, run_batch,
 };
 use orbweaver_mcp::Bridge;
 use orbweaver_mcp::policy::Exposure;
@@ -47,12 +48,20 @@ struct Mapped {
     by_requirement: HashMap<String, String>,
 }
 
-impl Generator for Mapped {
-    fn generate(&mut self, requirement: &str, _repair: Option<&str>) -> Result<String, String> {
+impl Stage for Mapped {
+    fn id(&self) -> StageId {
+        StageId::Synthesize
+    }
+
+    fn produce(&mut self, requirement: &str, _repair: Option<&str>) -> Result<String, String> {
         self.by_requirement
             .get(requirement)
             .cloned()
             .ok_or_else(|| format!("unscripted requirement {requirement:?}"))
+    }
+
+    fn gate(&self, input: &str, output: &str) -> Report {
+        gate_for(StageId::Synthesize, input, output)
     }
 }
 
@@ -61,13 +70,13 @@ fn generated_batch() -> BatchReport {
         ("ledger".to_owned(), "an aggregate ledger".to_owned()),
         ("thermostat".to_owned(), "a room thermostat".to_owned()),
     ];
-    let mut generator = Mapped {
+    let mut stage = Mapped {
         by_requirement: HashMap::from([
             ("an aggregate ledger".to_owned(), LEDGER.to_owned()),
             ("a room thermostat".to_owned(), THERMOSTAT.to_owned()),
         ]),
     };
-    let report = run_batch(&mut generator, &reqs, 3);
+    let report = run_batch(&mut stage, &reqs, 3);
     assert!(report.all_valid(), "{report}");
     report
 }
@@ -148,11 +157,12 @@ fn the_worksheet_lists_every_exposable_interface_as_unexposed() {
 #[test]
 fn a_report_that_lies_about_validity_is_refused_at_the_gate() {
     let forged = BatchReport {
+        stage: StageId::Validate,
         items: vec![ItemReport {
             id: "forged".into(),
             status: ItemStatus::Valid,
             rounds: 1,
-            idl: Some(CLASH.into()),
+            output: Some(CLASH.into()),
         }],
         first_pass_valid: 1,
         rounds_used: 1,
@@ -171,11 +181,12 @@ fn a_report_that_lies_about_validity_is_refused_at_the_gate() {
 #[test]
 fn a_valid_marking_without_idl_is_refused() {
     let forged = BatchReport {
+        stage: StageId::Validate,
         items: vec![ItemReport {
             id: "empty".into(),
             status: ItemStatus::Valid,
             rounds: 1,
-            idl: None,
+            output: None,
         }],
         first_pass_valid: 1,
         rounds_used: 1,
@@ -191,18 +202,19 @@ fn a_valid_marking_without_idl_is_refused() {
 #[test]
 fn only_valid_items_reach_the_catalog() {
     let report = BatchReport {
+        stage: StageId::Validate,
         items: vec![
             ItemReport {
                 id: "good".into(),
                 status: ItemStatus::Valid,
                 rounds: 1,
-                idl: Some(THERMOSTAT.into()),
+                output: Some(THERMOSTAT.into()),
             },
             ItemReport {
                 id: "bad".into(),
                 status: ItemStatus::Invalid { repair_prompt: "still broken".into() },
                 rounds: 3,
-                idl: Some(CLASH.into()),
+                output: Some(CLASH.into()),
             },
         ],
         first_pass_valid: 1,

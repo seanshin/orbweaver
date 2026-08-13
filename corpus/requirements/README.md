@@ -9,10 +9,24 @@ one pass with no compiler feedback, then every file goes through the omniidl
 oracle. First-pass rate is the headline number; the self-repair loop is then
 allowed up to three rounds.
 
+**Method, amended 2026-08-13 — there is no longer one first-pass rate.** The
+pipeline now runs the stages PLAN §5 names, each with its own producer and its
+own gate, so this benchmark produces **one first-pass rate and one round count
+per stage**: S1 ingest (requirement → brief), S2 synthesize (brief → IDL), S3
+annotate (IDL → SIDL), S4 the gate. Quoting a single number for the run hides
+which stage was wrong, which is the whole reason the stages are separate — the
+first split run measured 90% / 95% / 100% / 100%, and the same underlying rule
+(case-insensitive identifier clashes) fired at *two different stages* with two
+different fixes. Requirements are still fixed before anything is generated and
+the oracle is still not consulted mid-pass. Runs are recorded under
+`docs/pipeline-runs/`.
+
 **Known limitation.** In this Phase 0 run the generator and the evaluator are
 the same model, so the number is indicative, not a clean benchmark. PLAN §8
 requires a frozen benchmark with a hold-out subset and an independent harness
-before this figure is used to gate anything.
+before this figure is used to gate anything. That limitation is unchanged by
+the stage split; what changed is that `omniidl` and `contract-check` (a peer
+crate's rules, not the pipeline's) now cross-check every batch.
 
 | # | 요구사항 |
 |---|---|
