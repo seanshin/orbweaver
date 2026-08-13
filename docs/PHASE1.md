@@ -902,3 +902,45 @@ Phase 1 scope from `docs/PLAN.md` §7 and remains open:
 - **A second interop peer.** TAO is not in homebrew and needs a source build;
   JacORB needs a JDK, now installed. Until a second peer exists, every interop
   result carries the Phase 0 caveat: it proves compatibility with omniORB.
+
+---
+
+# Stream E batch 1: LocateRequest, sent at last
+
+Carried forward on every phase report since Phase 2: the server side has
+answered `LocateRequest` all along, but nothing here had ever **sent** one.
+The batch unit is PLAN §7.3's — one capability, both peers, all three GIOP
+versions — and both answers are measured, because a locate that can only
+produce "here" has not been tested against anything.
+
+```
+wire hardening — LocateRequest send, both peers, all three versions
+  ok   omniORB: OBJECT_HERE for the real key, UNKNOWN for a corrupted one, GIOP 1.0/1.1/1.2
+  ok   JacORB agrees on all six answers — a second, independent locate responder
+```
+
+`Connection::locate()` asks about the connection's own object;
+`locate_key(&[u8])` exists so the harness can prove the **negative** answer —
+the bogus key is the real one with every byte inverted, same length and shape,
+so the refusal cannot be an artifact of a malformed probe. An unmeasured
+refusal is not a refusal.
+
+Two wire details the unit tests pin, both version asymmetries:
+
+- **GIOP 1.2 wraps the key in `TargetAddress`** (`KeyAddr`, discriminant 0);
+  1.0/1.1 carry the bare sequence. The client encoder is checked against the
+  server decoder we have had since Phase 2 — two halves of one rule, agreeing
+  before any peer is asked.
+- **A `LocateReply` body is never 8-aligned**, even in 1.2, unlike a `Reply`
+  (§9.4.6). A decoder borrowing the `Reply` rule reads a forwarded IOR four
+  bytes late. `LOC_SYSTEM_EXCEPTION` (status 4) surfaces as the system
+  exception it carries.
+
+서버 쪽은 Phase 2부터 locate에 답해 왔지만 **보내는** 쪽은 이월 목록에만 있었다.
+음의 답도 측정한다 — 가짜 키는 진짜 키의 전 바이트를 뒤집은 것이라 길이와 모양이
+같고, 거부가 형식 오류의 부산물일 수 없다. 측정되지 않은 거부는 거부가 아니다.
+
+Remaining on the stream-E list: `CancelRequest`/`CloseConnection` send,
+request multiplexing, connection pooling, multi-profile failover,
+`TAG_ALTERNATE_IIOP_ADDRESS`, `#pragma prefix`, and independent validation of
+fragment reception.

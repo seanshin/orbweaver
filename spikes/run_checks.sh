@@ -670,6 +670,54 @@ fi
 cleanup
 [ "$stdio_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
+# ── Wire hardening: stream E ─────────────────────────────────────────────────
+hr "wire hardening — LocateRequest send, both peers, all three versions"
+# Carried forward since Phase 2: the server side has answered locates, but
+# nothing here had ever SENT one. Both answers are measured, because a locate
+# that can only produce "here" has not been tested against anything.
+loc_fail=0
+if start_server; then
+  lv=$(cargo run -q --bin spike-locate -- spikes/echo.ior 2>&1)
+  if printf '%s' "$lv" | grep -q "locate: PASS"; then
+    echo "  ok   omniORB: OBJECT_HERE for the real key, UNKNOWN for a corrupted one, GIOP 1.0/1.1/1.2"
+  else
+    echo "  FAIL locate against omniORB"
+    printf '%s' "$lv" | grep FAIL | head -3 | sed 's/^/       /'
+    loc_fail=1
+  fi
+else
+  loc_fail=1
+fi
+cleanup
+if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
+  pkill -f "classes Server" >/dev/null 2>&1 || true
+  rm -f "$ROOT/spikes/jacorb.ior"
+  ( cd "$ROOT/spikes/jacorb" && exec "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Server ../jacorb.ior \
+      >/tmp/orbweaver-jloc.log 2>&1 & )
+  jl=0
+  for _ in $(seq 1 150); do
+    [ -s "$ROOT/spikes/jacorb.ior" ] && { sleep 0.5; jl=1; break; }
+    sleep 0.1
+  done
+  if [ "$jl" -eq 1 ]; then
+    lv=$(cargo run -q --bin spike-locate -- spikes/jacorb.ior 2>&1)
+    if printf '%s' "$lv" | grep -q "locate: PASS"; then
+      echo "  ok   JacORB agrees on all six answers — a second, independent locate responder"
+    else
+      echo "  FAIL locate against JacORB"
+      printf '%s' "$lv" | grep FAIL | head -3 | sed 's/^/       /'
+      loc_fail=1
+    fi
+  else
+    echo "  FAIL JacORB server did not publish an IOR"; loc_fail=1
+  fi
+  pkill -f "classes Server" >/dev/null 2>&1 || true
+else
+  echo "  SKIPPED  JacORB half — fixture absent"
+  skipped=$((skipped+1))
+fi
+[ "$loc_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
 # ── Identity: what the peers actually advertise ──────────────────────────────
 hr "identity propagation — what a real target says about security"
 # §4.8 predicts that many legacy targets have no authentication at all, and that

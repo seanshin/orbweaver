@@ -1,10 +1,10 @@
 //! GIOP messages, IIOP transport, and IOR handling.
 //!
-//! Implements GIOP 1.0, 1.1 and 1.2 request/reply on the client side, with the
-//! version-conditional header layouts each one requires. Fragmentation,
-//! `LocateRequest`, codeset negotiation and the serving half are Phase 1 work
-//! still outstanding; where they are absent this code fails loudly rather than
-//! misparsing.
+//! Implements GIOP 1.0, 1.1 and 1.2 on both sides: request/reply and
+//! locate/locate-reply, fragmentation in both directions, codeset negotiation
+//! and the serving half. Request multiplexing, connection pooling and
+//! multi-profile failover remain stream-E work (PLAN §7.3); where something is
+//! absent this code fails loudly rather than misparsing.
 //!
 //! # Two rules that govern everything here
 //!
@@ -548,6 +548,78 @@ where
         &[],
         write_body,
     )
+}
+
+/// Encodes a `LocateRequest` for `version`.
+///
+/// 1.0 and 1.1 carry a bare `object_key`; 1.2 wraps it in a `TargetAddress`
+/// union whose `KeyAddr` arm is discriminant 0 — the same asymmetry the
+/// server-side decoder handles, expressed from the other end.
+pub fn encode_locate_request(
+    version: Version,
+    endian: Endian,
+    request_id: u32,
+    object_key: &[u8],
+) -> Result<Vec<u8>> {
+    let mut e = Encoder::new(endian);
+    e.put_bytes(b"GIOP");
+    e.put_u8(version.major);
+    e.put_u8(version.minor);
+    e.put_u8(if endian == Endian::Little { 1 } else { 0 });
+    e.put_u8(MsgType::LocateRequest as u8);
+    let size_at = e.len();
+    e.put_u32(0);
+    e.put_u32(request_id);
+    if version.is_1_2_layout() {
+        e.put_u16(0); // TargetAddress: KeyAddr
+    }
+    e.put_octet_seq(object_key);
+    let size = (e.len() - HEADER_LEN) as u32;
+    e.patch_u32(size_at, size);
+    e.finish().map_err(Error::Cdr)
+}
+
+/// What a `LocateReply` said about the object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LocateResult {
+    /// The target does not know the object at all.
+    Unknown,
+    /// The object is there; invoking will work.
+    Here,
+    /// The object lives elsewhere; the reply carried its new address.
+    Forward(Box<Ior>),
+}
+
+/// Decodes a `LocateReply`.
+///
+/// §9.4.6's asymmetry, from the reading side: a `LocateReply` body follows the
+/// header with **no** 8-byte alignment even in GIOP 1.2, unlike a `Reply`.
+/// Applying the `Reply` rule here misreads every `OBJECT_FORWARD` body.
+pub fn decode_locate_reply(msg: RawMessage) -> Result<(u32, LocateResult)> {
+    if msg.msg_type != MsgType::LocateReply {
+        return Err(Error::UnexpectedMessage(msg.msg_type));
+    }
+    let mut d = Decoder::new(&msg.bytes, msg.endian);
+    d.seek_to(HEADER_LEN)?;
+    let request_id = d.get_u32()?;
+    let status = d.get_u32()?;
+    let result = match status {
+        0 => LocateResult::Unknown,
+        1 => LocateResult::Here,
+        // 3 is OBJECT_FORWARD_PERM (1.2): the permanence hint changes what a
+        // client may cache, not what it must do next, so both carry the IOR.
+        2 | 3 => LocateResult::Forward(Box::new(Ior::read_from(&mut d)?)),
+        // LOC_SYSTEM_EXCEPTION (1.2): the body is the standard exception shape.
+        4 => {
+            return Err(Error::SystemException {
+                id: d.get_string()?,
+                minor: d.get_u32()?,
+                completed: d.get_u32()?,
+            });
+        }
+        other => return Err(Error::BadReplyStatus(other)),
+    };
+    Ok((request_id, result))
 }
 
 /// As [`encode_request`], but attaching service contexts.
@@ -1151,6 +1223,46 @@ impl Connection {
         self.endian
     }
 
+    /// Asks the target whether it knows this connection's object, without
+    /// invoking anything (§9.4.5 `LocateRequest`).
+    ///
+    /// What `_non_existent` answers at the object layer, this answers at the
+    /// message layer — and unlike an invocation it cannot have side effects,
+    /// which is what makes it safe to use as a probe.
+    pub fn locate(&mut self) -> Result<LocateResult> {
+        let key = self.object_key.clone();
+        self.locate_key(&key)
+    }
+
+    /// As [`Connection::locate`], probing an arbitrary object key.
+    ///
+    /// Exists so a harness can prove the *negative* answer: a locate that can
+    /// only ever probe the key it connected with can never show that a bogus
+    /// key is refused, and an unmeasured refusal is not a refusal.
+    pub fn locate_key(&mut self, object_key: &[u8]) -> Result<LocateResult> {
+        if self.poisoned {
+            return Err(Error::Desynchronized);
+        }
+        let id = self.next_request_id();
+        let msg = encode_locate_request(self.version, self.endian, id, object_key)?;
+        self.stream.write_all(&msg).inspect_err(|_| self.poisoned = true)?;
+        self.stream.flush().inspect_err(|_| self.poisoned = true)?;
+
+        let raw = match read_message(&mut self.stream, self.max_message_size) {
+            Ok(m) => m,
+            Err(e) => {
+                self.poisoned = true;
+                return Err(e);
+            }
+        };
+        let (reply_id, result) = decode_locate_reply(raw).inspect_err(|_| self.poisoned = true)?;
+        if reply_id != id {
+            self.poisoned = true;
+            return Err(Error::Desynchronized);
+        }
+        Ok(result)
+    }
+
     /// Invokes a `oneway` operation: sends the request and does not wait.
     ///
     /// Not `invoke` with a flag, because the two differ in what the caller may
@@ -1443,6 +1555,108 @@ mod tests {
         assert_eq!(v11[5], 1);
         assert_eq!(&v10[6..], &v11[6..], "identical past the version octet");
         assert_eq!(&v11[21..24], &[0, 0, 0], "reserved octets are zero");
+    }
+
+    /// The client encoder against the server decoder, across every version
+    /// and both byte orders — two halves of one wire rule, checked against
+    /// each other before a peer ever is.
+    #[test]
+    fn locate_requests_round_trip_through_the_server_decoder() {
+        for version in [Version::V1_0, Version::V1_1, Version::V1_2] {
+            for endian in [Endian::Big, Endian::Little] {
+                let msg = encode_locate_request(version, endian, 77, b"the-key").expect("encodes");
+                let raw =
+                    read_message(&mut msg.as_slice(), DEFAULT_MAX_MESSAGE_SIZE).expect("frames");
+                assert_eq!(raw.msg_type, MsgType::LocateRequest);
+                let lr = crate::server::decode_locate_request(raw).expect("decodes");
+                assert_eq!(lr.request_id, 77, "{version} {endian:?}");
+                assert_eq!(lr.object_key, b"the-key", "{version} {endian:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn locate_replies_decode_in_every_version() {
+        use crate::server::{LocateStatus, encode_locate_reply};
+        for version in [Version::V1_0, Version::V1_1, Version::V1_2] {
+            for endian in [Endian::Big, Endian::Little] {
+                for (status, want) in [
+                    (LocateStatus::UnknownObject, LocateResult::Unknown),
+                    (LocateStatus::ObjectHere, LocateResult::Here),
+                ] {
+                    let msg = encode_locate_reply(version, endian, 5, status).unwrap();
+                    let raw = read_message(&mut msg.as_slice(), DEFAULT_MAX_MESSAGE_SIZE)
+                        .expect("frames");
+                    let (id, got) = decode_locate_reply(raw).expect("decodes");
+                    assert_eq!(id, 5);
+                    assert_eq!(got, want, "{version} {endian:?}");
+                }
+            }
+        }
+    }
+
+    /// The §9.4.6 asymmetry: a 1.2 LocateReply body is NOT 8-aligned, so a
+    /// forwarded IOR starts immediately after the status word. A decoder that
+    /// borrowed the Reply alignment rule reads the IOR four bytes late.
+    #[test]
+    fn a_forwarded_locate_reply_carries_its_ior_unaligned() {
+        let ior = Ior {
+            type_id: "IDL:m/I:1.0".into(),
+            profiles: vec![IiopProfile {
+                version: Version::V1_2,
+                host: "h".into(),
+                port: 1,
+                object_key: b"k".to_vec(),
+                components: Vec::new(),
+            }],
+        };
+        for endian in [Endian::Big, Endian::Little] {
+            let mut e = Encoder::new(endian);
+            e.put_bytes(b"GIOP");
+            e.put_u8(1);
+            e.put_u8(2);
+            e.put_u8(if endian == Endian::Little { 1 } else { 0 });
+            e.put_u8(MsgType::LocateReply as u8);
+            let size_at = e.len();
+            e.put_u32(0);
+            e.put_u32(9); // request_id
+            e.put_u32(2); // OBJECT_FORWARD — body follows with no 8-alignment
+            ior.write_to(&mut e).unwrap();
+            let size = (e.len() - HEADER_LEN) as u32;
+            e.patch_u32(size_at, size);
+            let msg = e.finish().unwrap();
+            let raw = read_message(&mut msg.as_slice(), DEFAULT_MAX_MESSAGE_SIZE).expect("frames");
+            let (id, got) = decode_locate_reply(raw).expect("decodes");
+            assert_eq!(id, 9);
+            assert_eq!(got, LocateResult::Forward(Box::new(ior.clone())), "{endian:?}");
+        }
+    }
+
+    #[test]
+    fn a_locate_system_exception_surfaces_as_one() {
+        let mut e = Encoder::new(Endian::Big);
+        e.put_bytes(b"GIOP");
+        e.put_u8(1);
+        e.put_u8(2);
+        e.put_u8(0);
+        e.put_u8(MsgType::LocateReply as u8);
+        let size_at = e.len();
+        e.put_u32(0);
+        e.put_u32(3); // request_id
+        e.put_u32(4); // LOC_SYSTEM_EXCEPTION
+        e.put_str("IDL:omg.org/CORBA/OBJECT_NOT_EXIST:1.0");
+        e.put_u32(7);
+        e.put_u32(1);
+        let size = (e.len() - HEADER_LEN) as u32;
+        e.patch_u32(size_at, size);
+        let msg = e.finish().unwrap();
+        let raw = read_message(&mut msg.as_slice(), DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+        let err = decode_locate_reply(raw).unwrap_err();
+        assert!(
+            matches!(&err, Error::SystemException { id, minor: 7, .. }
+                if id.contains("OBJECT_NOT_EXIST")),
+            "{err}"
+        );
     }
 
     #[test]

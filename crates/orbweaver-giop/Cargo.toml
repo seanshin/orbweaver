@@ -38,3 +38,7 @@ path = "src/bin/spike_naming.rs"
 [[bin]]
 name = "spike-fragment"
 path = "src/bin/spike_fragment.rs"
+
+[[bin]]
+name = "spike-locate"
+path = "src/bin/spike_locate.rs"
