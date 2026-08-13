@@ -16,9 +16,9 @@ Anything requiring a new dependency class needs a decision document first
 | `orbweaver-registry` | ◐ | registry from IDL, TypeCodes vs two peers, §5.3 differ | **remote IFR ingestion** (planned scope, unstarted) |
 | `orbweaver-object` (poa) | ✅ | references, identity, POA, LOCATION_FORWARD emit | — |
 | `orbweaver-dynamic` | ✅ | value marshalling, DII-shaped invoke, AnyJSON, first-party JSON | DynAny mutation API (fuzz seed exists via Value) |
-| `orbweaver-forge` | ◐ | S4 gate, §5.1 orchestrator, real-model batch (20/20), S5 in flight (wave 3) | **S1 ingest, S3 annotate as distinct stages** (today S2's prompt does both) |
+| `orbweaver-forge` | ◐ | S4 gate, §5.1 orchestrator, real-model batch (20/20), S5 exposure-off registration (I2 ✅) | **S1 ingest, S3 annotate as distinct stages** (today S2's prompt does both) |
 | `orbweaver-mcp` | ✅ | triad, stdio transport, capability handles, default-deny, `ai_authz`, promotion+I4 | embeddings behind search (needs D003) |
-| `orbweaver-guard` | ◐ | authz scopes, destructive approval, audit (Guarded; Bridge emission in flight) | **dry-run mode**; interceptor chain as a formal seam |
+| `orbweaver-guard` | ◐ | authz scopes, destructive approval, audit emitted on BOTH paths (one formatter, string-equality pinned) | **dry-run mode**; formal interceptor chain (PLAN-MOE F4) |
 | `orbweaver-capability` | ✅ | lives inside mcp (`handles.rs`) rather than its own crate — a location choice, not a gap | expiry policy configuration surface |
 | `orbweaver-identity` | ◐ | CSIv2 wire, delegation policy, hygiene, `Caller` seam | **OAuth2/JWT → Caller exchange; credential store; SSLIOP peer proof** — measured BLOCKED: brew's omniORBpy ships no sslTP binding (C++ SSL transport present in the keg, python half unbuilt); unblock path in `spikes/tls/PEER-STATUS.md` |
 | `orbweaver-gen` | ◐ | Rust client stubs, oracle static=dynamic, I1/I4 | **server skeletons, scaffolds, Python/other targets** |
@@ -29,15 +29,15 @@ Anything requiring a new dependency class needs a decision document first
 
 | Service | Status | Note |
 |---|---|---|
-| Catalog storage (PostgreSQL + pgvector) | ❌ | in-process Registry + `exposure.todo.tsv` are the stated seams; **needs D003 (storage/embedding dependencies)** before any crate lands |
-| Embeddings / semantic search | ❌ | frozen benchmark holds the 0/10 headroom baseline; **same D003** |
+| Catalog storage (PostgreSQL + pgvector) | ❌ | in-process Registry + `exposure.todo.tsv` are the stated seams; **D003 drafted (PROPOSED)**: defer until a pilot demands durability, adoption path pre-cleared (tokio-postgres + pgvector, licences verified) |
+| Embeddings / semantic search | ❌ | frozen benchmark holds the 0/10 headroom baseline; **D003 drafted (PROPOSED)**: external-command wrapper (no new crates), awaiting approval |
 | Observability (OpenTelemetry) | ❌ | interceptor seam unbuilt; **needs D004 (otel dependency licence review)** |
 | Deployment (Docker/K8s, IOR rewriting) | ❌ | R7 mitigation designed in PLAN, nothing built; CI runners are the only containers used |
 | Naming (CosNaming client) | ✅ | corbaname/corbaloc + omniNames in harness |
 | MCP transport | ✅ | stdio JSON-RPC; no real MCP client driven yet (stated in PHASE3) |
 | CosNaming **server** | ❌ | client exists; first-party server is PLAN-MOE **F6** with a both-directions interop oracle |
 | Event/Notification (CosEvent) | ❌ | absent from every plan until the 2026-08-14 review; now PLAN-MOE **F7** (control-plane granularity only) |
-| Trading | ❌ | PLAN-MOE **F2** |
+| Trading (decision engine) | ✅ | `orbweaver-trading` (2026-08-14, 37 tests): offers, §4.3 constraint queries, §6 loading policy over deterministic traces. Wire surface (IDL binding) still open — PLAN-MOE F3+ |
 | LifeCycle / Property | ❌ | PLAN-MOE **F5** (`ModelFactory`, per-tenant manifest) |
 | Transaction / Time / PSS | — | **declared out of scope with reasons** (PLAN-MOE §4) — honest absence over decorative interfaces |
 
