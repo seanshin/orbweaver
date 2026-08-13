@@ -734,6 +734,55 @@ else
 fi
 [ "$loc_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
+# ── Wire hardening: stream E — multi-profile failover ────────────────────────
+hr "wire hardening — multi-profile failover, dead first profile"
+# Unit tests prove failover against listeners that accept but never speak
+# GIOP. This closes the peer half: a synthetic IOR whose first profile is the
+# real one with its port forced to 1 must still carry ping() -> 42, and an
+# all-dead IOR must report how many endpoints were tried.
+fo_fail=0
+if start_server; then
+  fv=$(cargo run -q --bin spike-failover -- spikes/echo.ior 2>&1)
+  if printf '%s' "$fv" | grep -q "failover: PASS"; then
+    echo "  ok   omniORB: a dead first profile does not cost the call; exhaustion counts endpoints"
+  else
+    echo "  FAIL failover against omniORB"
+    printf '%s' "$fv" | grep FAIL | head -3 | sed 's/^/       /'
+    fo_fail=1
+  fi
+else
+  fo_fail=1   # an unmeasured check is a failure, never a pass
+fi
+cleanup
+if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
+  pkill -f "classes Server" >/dev/null 2>&1 || true
+  rm -f "$ROOT/spikes/jacorb.ior"
+  ( cd "$ROOT/spikes/jacorb" && exec "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Server ../jacorb.ior \
+      >/tmp/orbweaver-jfo.log 2>&1 & )
+  jf=0
+  for _ in $(seq 1 150); do
+    [ -s "$ROOT/spikes/jacorb.ior" ] && { sleep 0.5; jf=1; break; }
+    sleep 0.1
+  done
+  if [ "$jf" -eq 1 ]; then
+    fv=$(cargo run -q --bin spike-failover -- spikes/jacorb.ior 2>&1)
+    if printf '%s' "$fv" | grep -q "failover: PASS"; then
+      echo "  ok   JacORB: same behaviour from the second, independent peer"
+    else
+      echo "  FAIL failover against JacORB"
+      printf '%s' "$fv" | grep FAIL | head -3 | sed 's/^/       /'
+      fo_fail=1
+    fi
+  else
+    echo "  FAIL JacORB server did not publish an IOR"; fo_fail=1
+  fi
+  pkill -f "classes Server" >/dev/null 2>&1 || true
+else
+  echo "  SKIPPED  JacORB half — fixture absent"
+  skipped=$((skipped+1))
+fi
+[ "$fo_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
 # ── Identity: what the peers actually advertise ──────────────────────────────
 hr "identity propagation — what a real target says about security"
 # §4.8 predicts that many legacy targets have no authentication at all, and that

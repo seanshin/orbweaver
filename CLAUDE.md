@@ -136,6 +136,11 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   assumption A failure; the protocol was correct the whole time.
 - **Never pipe into `grep -q`** when the producer matters. `grep -q` exits on
   first match and SIGPIPEs upstream. Capture to a variable, then match.
+- **A completed client `connect` does not mean the server can accept yet.**
+  On macOS loopback a non-blocking single `accept()` misses fresh connections
+  ~5% of the time (measured 25/500 in stream E batch 2). Accept-side checks
+  wait with a sleeping, deadline-bounded loop — the same class as the wait
+  rule above.
 - **An unmeasured check is a failure, never a pass.** If a fixture will not
   start, increment the failure counter. A harness that reports green on an
   unmeasured assumption is worse than no harness.
