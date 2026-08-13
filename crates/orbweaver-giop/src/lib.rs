@@ -1,10 +1,15 @@
 //! GIOP messages, IIOP transport, and IOR handling.
 //!
 //! Implements GIOP 1.0, 1.1 and 1.2 on both sides: request/reply and
-//! locate/locate-reply, fragmentation in both directions, codeset negotiation
-//! and the serving half. Request multiplexing, connection pooling and
-//! multi-profile failover remain stream-E work (PLAN §7.3); where something is
-//! absent this code fails loudly rather than misparsing.
+//! locate/locate-reply, fragmentation in both directions, codeset negotiation,
+//! multi-profile failover at connect time and the serving half. Request
+//! multiplexing and connection pooling remain stream-E work (PLAN §7.3); where
+//! something is absent this code fails loudly rather than misparsing.
+//!
+//! Failover is verified here only at the dial level — a refused endpoint moves
+//! the client to the next one. Whether a peer that *accepts* on a secondary
+//! address actually serves the object is a peer-level question, answered by
+//! the harness against real ORBs, not by unit tests.
 //!
 //! # Two rules that govern everything here
 //!
@@ -44,6 +49,14 @@ pub const HEADER_LEN: usize = 12;
 
 /// Profile tag for an IIOP profile inside an IOR.
 pub const TAG_INTERNET_IOP: u32 = 0;
+
+/// Component id for an alternate endpoint on an IIOP profile
+/// (IOP `TAG_ALTERNATE_IIOP_ADDRESS`, ComponentId 3).
+///
+/// The component body is a CDR encapsulation of `string host; unsigned short
+/// port;` — another way to reach the *same* profile, so it shares the
+/// profile's IIOP version and object key.
+pub const TAG_ALTERNATE_IIOP_ADDRESS: u32 = 3;
 
 /// Default ceiling on an inbound message body.
 ///
@@ -248,6 +261,18 @@ pub enum Error {
     Decode(&'static str),
     /// The IOR carried no IIOP profile to connect to.
     NoIiopProfile,
+    /// Every endpoint the IOR named was dialed and none accepted.
+    ///
+    /// Carries the count *and* the last endpoint's failure, because a caller
+    /// debugging a dead service needs the reason — refused and timed out call
+    /// for different fixes — not just how many addresses were tried.
+    AllEndpointsFailed {
+        /// How many host:port endpoints were dialed, counting each profile's
+        /// own address and every alternate.
+        tried: usize,
+        /// Why the last endpoint failed.
+        last: Box<Error>,
+    },
     /// The peer closed the connection cleanly. Per §9.4.7 the pending request
     /// was not processed and may be safely re-sent on a new connection.
     ConnectionClosed,
@@ -281,6 +306,9 @@ impl fmt::Display for Error {
             Error::BadIor(why) => write!(f, "bad IOR: {why}"),
             Error::Decode(why) => write!(f, "decode: {why}"),
             Error::NoIiopProfile => write!(f, "IOR has no IIOP profile"),
+            Error::AllEndpointsFailed { tried, last } => {
+                write!(f, "all {tried} endpoint(s) failed; last: {last}")
+            }
             Error::ConnectionClosed => {
                 write!(f, "peer closed the connection; the request was not processed")
             }
@@ -343,6 +371,27 @@ pub struct IiopProfile {
 }
 
 impl IiopProfile {
+    /// Every endpoint this profile names, in the order they must be dialed:
+    /// the profile's own host and port first, then each parseable
+    /// [`TAG_ALTERNATE_IIOP_ADDRESS`] component in component order.
+    ///
+    /// A malformed alternate component is skipped rather than failing the
+    /// profile. The component is a hint attached to an address that already
+    /// works on its own, and a bad hint must not kill a good address — the
+    /// same posture §9.7.2 takes toward components in general, which are to
+    /// be ignored when not understood, never treated as fatal.
+    pub fn endpoints(&self) -> Vec<(String, u16)> {
+        let mut out = vec![(self.host.clone(), self.port)];
+        for c in &self.components {
+            if c.tag == TAG_ALTERNATE_IIOP_ADDRESS
+                && let Ok(ep) = parse_alternate_address(&c.data)
+            {
+                out.push(ep);
+            }
+        }
+        out
+    }
+
     /// Encodes this profile as the encapsulation an IOR carries.
     pub fn encapsulate(&self, endian: Endian) -> Result<Encoder> {
         let mut e = Encoder::encapsulation(endian);
@@ -503,6 +552,15 @@ fn parse_iiop_profile(body: &[u8]) -> Result<IiopProfile> {
     }
 
     Ok(IiopProfile { version: Version { major, minor }, host, port, object_key, components })
+}
+
+/// Decodes a `TAG_ALTERNATE_IIOP_ADDRESS` body: a CDR encapsulation of
+/// `string host; unsigned short port;`.
+fn parse_alternate_address(data: &[u8]) -> Result<(String, u16)> {
+    let mut d = Decoder::encapsulation(data)?;
+    let host = String::from_utf8_lossy(d.get_string_bytes()?).into_owned();
+    let port = d.get_u16()?;
+    Ok((host, port))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1076,8 +1134,7 @@ impl Invoker for Connection {
 /// `CloseConnection` from a protocol error, and poisons itself rather than
 /// reusing a stream whose framing is in doubt.
 ///
-/// Connection pooling, request multiplexing and send-side fragmentation remain
-/// Phase 1 work.
+/// Connection pooling and request multiplexing remain stream-E work.
 #[derive(Debug)]
 pub struct Connection {
     stream: TcpStream,
@@ -1101,16 +1158,48 @@ pub struct Connection {
 }
 
 impl Connection {
-    /// Connects to the endpoint named by an IOR's first IIOP profile,
-    /// negotiating the GIOP version down to what that profile advertises.
+    /// Connects to an IOR, trying every endpoint it names until one answers.
+    ///
+    /// A deployed IOR routinely names several endpoints — a profile per
+    /// server address, plus `TAG_ALTERNATE_IIOP_ADDRESS` hints — precisely so
+    /// a client survives the first one being down. The dial order is the
+    /// IOR's own: each profile's host and port, then that profile's
+    /// alternates, then the next profile. A connect failure (refused, timed
+    /// out, unresolvable) moves to the next endpoint; only when every one has
+    /// failed does this return [`Error::AllEndpointsFailed`], which carries
+    /// the count and the last endpoint's reason.
+    ///
+    /// The GIOP version is still negotiated per profile, because each profile
+    /// advertises its own IIOP version — an alternate address inherits its
+    /// profile's version, being only another route to the same profile.
     pub fn connect(ior: &Ior, timeout: Duration) -> Result<Self> {
-        let p = ior.primary()?;
-        Self::connect_to(p, timeout)
+        let mut tried = 0usize;
+        let mut last: Option<Error> = None;
+        for p in &ior.profiles {
+            for (host, port) in p.endpoints() {
+                tried += 1;
+                match Self::connect_endpoint(p, &host, port, timeout) {
+                    Ok(conn) => return Ok(conn),
+                    Err(e) => last = Some(e),
+                }
+            }
+        }
+        match last {
+            Some(e) => Err(Error::AllEndpointsFailed { tried, last: Box::new(e) }),
+            // No endpoint was even tried: the IOR had no IIOP profile at all.
+            None => Err(Error::NoIiopProfile),
+        }
     }
 
-    /// Connects to a specific profile.
+    /// Connects to a specific profile's own address, with no failover.
     pub fn connect_to(p: &IiopProfile, timeout: Duration) -> Result<Self> {
-        let stream = dial(&p.host, p.port, timeout)?;
+        Self::connect_endpoint(p, &p.host, p.port, timeout)
+    }
+
+    /// Connects to one endpoint, taking everything except the address —
+    /// version, object key, components — from the profile it belongs to.
+    fn connect_endpoint(p: &IiopProfile, host: &str, port: u16, timeout: Duration) -> Result<Self> {
+        let stream = dial(host, port, timeout)?;
         stream.set_read_timeout(Some(timeout))?;
         stream.set_write_timeout(Some(timeout))?;
         stream.set_nodelay(true)?;
@@ -1306,8 +1395,10 @@ impl Connection {
             match self.invoke_once(operation, &write_args)? {
                 Outcome::Done(reply) => return Ok(reply),
                 Outcome::Forwarded(ior) => {
-                    let p = ior.primary()?;
-                    let next = Self::connect_to(p, Duration::from_secs(10))?;
+                    // A forwarded reference is a full IOR and may itself name
+                    // several endpoints, so it gets the same failover as the
+                    // original connect did.
+                    let next = Self::connect(&ior, Duration::from_secs(10))?;
                     let endian = self.endian;
                     *self = next;
                     self.endian = endian;
@@ -2002,6 +2093,231 @@ mod tests {
                 ),
             }
         }
+    }
+
+    // ── multi-profile failover ───────────────────────────────────────────────
+    //
+    // These tests need no ORB peer: Connection::connect performs no GIOP
+    // traffic after the TCP handshake — codeset negotiation reads only the
+    // profile's components, and the CodeSets context rides on the *first
+    // request* — so a bound-but-never-accepting TcpListener is a sufficient
+    // "live" endpoint. What a real peer does once bytes flow is the wire
+    // oracle's job at integration, not this file's.
+
+    fn profile_at(host: &str, port: u16, components: Vec<TaggedComponent>) -> IiopProfile {
+        IiopProfile {
+            version: Version::V1_2,
+            host: host.into(),
+            port,
+            object_key: b"k".to_vec(),
+            components,
+        }
+    }
+
+    fn failover_ior(profiles: Vec<IiopProfile>) -> Ior {
+        Ior { type_id: "IDL:spike/Echo:1.0".into(), profiles }
+    }
+
+    /// Builds a `TAG_ALTERNATE_IIOP_ADDRESS` body the way a server would:
+    /// an encapsulation of `string host; unsigned short port;`.
+    fn alternate_component(endian: Endian, host: &str, port: u16) -> TaggedComponent {
+        let mut e = Encoder::encapsulation(endian);
+        e.put_str(host);
+        e.put_u16(port);
+        TaggedComponent { tag: TAG_ALTERNATE_IIOP_ADDRESS, data: e.finish().unwrap() }
+    }
+
+    /// A loopback port nothing listens on, found by binding and releasing it.
+    /// Connecting to it is refused immediately — no timeout to wait out — so
+    /// a dead endpoint costs the test microseconds, not seconds.
+    fn refused_port() -> u16 {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        drop(l);
+        port
+    }
+
+    fn live_listener() -> (std::net::TcpListener, u16) {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        (l, port)
+    }
+
+    /// Whether a connection reaches `l`'s accept queue within `within`.
+    ///
+    /// This must be a wait, not a single probe: `connect_timeout` returning
+    /// on the client does **not** mean the server side is acceptable yet.
+    /// Measured on macOS loopback, an immediate non-blocking `accept()`
+    /// missed up to 25 of 500 freshly-completed connections — the same class
+    /// of phantom failure as CLAUDE.md's wait-loops-must-sleep rule, so the
+    /// loop sleeps. Negative callers pass a short window; since `connect()`
+    /// has already returned by the time they ask, any wrongly-dialed
+    /// connection was established before the window even opened.
+    fn connection_arrived(l: &std::net::TcpListener, within: Duration) -> bool {
+        l.set_nonblocking(true).unwrap();
+        let deadline = std::time::Instant::now() + within;
+        loop {
+            if l.accept().is_ok() {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn got_connection(l: &std::net::TcpListener) -> bool {
+        connection_arrived(l, Duration::from_secs(2))
+    }
+
+    fn no_connection(l: &std::net::TcpListener) -> bool {
+        !connection_arrived(l, Duration::from_millis(20))
+    }
+
+    #[test]
+    fn connect_fails_over_to_the_second_profile() {
+        let (listener, live) = live_listener();
+        let ior = failover_ior(vec![
+            profile_at("127.0.0.1", refused_port(), Vec::new()),
+            profile_at("127.0.0.1", live, Vec::new()),
+        ]);
+        let conn = Connection::connect(&ior, Duration::from_secs(5))
+            .expect("a dead first profile must not fail the connect");
+        assert!(conn.is_usable());
+        assert!(got_connection(&listener), "the connection must have landed on profile 2");
+    }
+
+    #[test]
+    fn exhausted_endpoints_report_the_count_and_the_last_reason() {
+        // Two profiles, the first carrying an alternate: three endpoints, all
+        // dead. The count proves every one was dialed; the boxed error keeps
+        // the last endpoint's reason, which is what a caller debugs with.
+        let ior = failover_ior(vec![
+            profile_at(
+                "127.0.0.1",
+                refused_port(),
+                vec![alternate_component(Endian::Little, "127.0.0.1", refused_port())],
+            ),
+            profile_at("127.0.0.1", refused_port(), Vec::new()),
+        ]);
+        let err = Connection::connect(&ior, Duration::from_secs(5)).unwrap_err();
+        match &err {
+            Error::AllEndpointsFailed { tried: 3, last } => {
+                assert!(matches!(**last, Error::Io(_)), "last reason must survive: {last}");
+            }
+            other => panic!("expected AllEndpointsFailed over 3 endpoints, got {other:?}"),
+        }
+        let msg = err.to_string();
+        assert!(msg.contains("3 endpoint"), "the message must state the count: {msg}");
+    }
+
+    #[test]
+    fn an_ior_without_profiles_still_says_so() {
+        // Zero endpoints is a different diagnosis from N dead ones, and
+        // "all 0 endpoints failed" would be a lie about having tried.
+        let err =
+            Connection::connect(&failover_ior(Vec::new()), Duration::from_secs(5)).unwrap_err();
+        assert!(matches!(err, Error::NoIiopProfile), "{err}");
+    }
+
+    #[test]
+    fn alternate_components_parse_in_both_byte_orders() {
+        // The encapsulation carries its own byte-order flag, so a big-endian
+        // server's component must decode on a little-endian client and vice
+        // versa — the classic failure that passes every native-endian test.
+        for endian in [Endian::Big, Endian::Little] {
+            let p = profile_at(
+                "primary.example",
+                2809,
+                vec![alternate_component(endian, "alternate.example", 2810)],
+            );
+            assert_eq!(
+                p.endpoints(),
+                vec![("primary.example".into(), 2809), ("alternate.example".into(), 2810)],
+                "{endian:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_alternate_address_rescues_a_dead_primary_endpoint() {
+        for endian in [Endian::Big, Endian::Little] {
+            let (listener, live) = live_listener();
+            let ior = failover_ior(vec![profile_at(
+                "127.0.0.1",
+                refused_port(),
+                vec![alternate_component(endian, "127.0.0.1", live)],
+            )]);
+            Connection::connect(&ior, Duration::from_secs(5))
+                .unwrap_or_else(|e| panic!("{endian:?} alternate must be dialed: {e}"));
+            assert!(got_connection(&listener), "{endian:?}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_alternate_is_skipped_and_the_profile_survives() {
+        // Truncate a well-formed component mid-host: it must vanish from the
+        // endpoint list without taking the profile's own good address along.
+        let mut broken = alternate_component(Endian::Little, "127.0.0.1", 2809);
+        broken.data.truncate(6);
+
+        let (listener, live) = live_listener();
+        let p = profile_at("127.0.0.1", live, vec![broken]);
+        assert_eq!(p.endpoints(), vec![("127.0.0.1".into(), live)]);
+
+        Connection::connect(&failover_ior(vec![p]), Duration::from_secs(5))
+            .expect("a bad hint must not kill a good address");
+        assert!(got_connection(&listener));
+    }
+
+    #[test]
+    fn endpoints_are_dialed_in_ior_order() {
+        // Within a profile, its own address comes before its alternates …
+        let (own, own_port) = live_listener();
+        let (alt, alt_port) = live_listener();
+        let ior = failover_ior(vec![profile_at(
+            "127.0.0.1",
+            own_port,
+            vec![alternate_component(Endian::Little, "127.0.0.1", alt_port)],
+        )]);
+        Connection::connect(&ior, Duration::from_secs(5)).unwrap();
+        assert!(got_connection(&own), "the profile's own address is dialed first");
+        assert!(no_connection(&alt), "the alternate must not be dialed when it is not needed");
+
+        // … and a profile's alternates come before the *next* profile.
+        let (alt2, alt2_port) = live_listener();
+        let (next, next_port) = live_listener();
+        let ior = failover_ior(vec![
+            profile_at(
+                "127.0.0.1",
+                refused_port(),
+                vec![alternate_component(Endian::Big, "127.0.0.1", alt2_port)],
+            ),
+            profile_at("127.0.0.1", next_port, Vec::new()),
+        ]);
+        Connection::connect(&ior, Duration::from_secs(5)).unwrap();
+        assert!(got_connection(&alt2), "profile 1's alternate outranks profile 2");
+        assert!(no_connection(&next), "profile 2 must not be dialed when it is not needed");
+    }
+
+    /// Failover must not disturb what single-profile callers relied on:
+    /// the negotiated version still comes from the profile that answered.
+    #[test]
+    fn the_answering_profiles_version_is_the_one_negotiated() {
+        let (_listener, live) = live_listener();
+        let mut old = profile_at("127.0.0.1", live, Vec::new());
+        old.version = Version::V1_1;
+        let ior = failover_ior(vec![
+            profile_at("127.0.0.1", refused_port(), Vec::new()), // advertises 1.2
+            old,
+        ]);
+        let conn = Connection::connect(&ior, Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            conn.version(),
+            Version::V1_1,
+            "the version belongs to the profile that answered, not the first one"
+        );
     }
 
     #[test]

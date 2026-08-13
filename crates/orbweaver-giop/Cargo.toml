@@ -42,3 +42,7 @@ path = "src/bin/spike_fragment.rs"
 [[bin]]
 name = "spike-locate"
 path = "src/bin/spike_locate.rs"
+
+[[bin]]
+name = "spike-failover"
+path = "src/bin/spike_failover.rs"
