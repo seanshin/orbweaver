@@ -225,7 +225,15 @@ has the two backwards.
 리포지터리 ID에서 버전을 파싱하고 있다. 읽기 전용 파사드가 두 방향을 거꾸로
 답하고 있는 셈이다.
 
-> **Acted on 2026-08-14, after this sweep and not re-measured by it.** `ifr.rs`
+> **Acted on 2026-08-14 and since re-measured by this same sweep**, which now
+> runs in `run_checks.sh`: IFR reports **probes 66 · dispatched 28 ·
+> `NO_PERMISSION` 38 · `BAD_OPERATION` 0**. The six absences this section found
+> are gone — not by serving everything, but by making a deferral answer
+> differently from an oversight, which is the distinction §2 says the wire
+> cannot make on its own. `BAD_OPERATION` still means "nobody decided", and it
+> now has no instances in this service.
+>
+> The original acting note follows. `ifr.rs`
 > now serves `_get_version` (the write half is still `NO_PERMISSION`), and the
 > ten operations it defers — `contents`, `lookup`, `lookup_name`,
 > `describe_contents`, `describe`, `_get_defined_in`,
@@ -350,8 +358,9 @@ explained by nothing. That is the number this document exists to produce.
 4. **`_get_version` answers `BAD_OPERATION` while `_set_version` answers
    `NO_PERMISSION`.** By `ifr.rs`'s own argument that is backwards: the write
    half says "the operation exists and the answer is no" and the read half says
-   "no such operation", on data the registry demonstrably holds. *Repaired
-   2026-08-14 — see the note in §5; the repair is not re-measured here.*
+   "no such operation", on data the registry demonstrably holds. *Repaired and
+   re-measured 2026-08-14: served, with the write half still `NO_PERMISSION`,
+   so the pair is no longer backwards.*
 5. **`corpus/golden/22` declares twelve operations and `PLAN-SERVICES.md` §3
    accounts for seven.** `moe::Router::select`/`dispatch` are declared in a
    landed contract, served by nothing, and named in no plan — not even in
