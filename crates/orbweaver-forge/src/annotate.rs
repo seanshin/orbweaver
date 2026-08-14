@@ -802,7 +802,11 @@ fn contract_shape(idl: &str) -> Option<BTreeMap<String, String>> {
                 )
             }
             Some(Entry::Type(tc)) => format!("type {tc:?}"),
-            Some(Entry::Const { tc }) => format!("const {tc:?}"),
+            // The value is part of the shape, not part of the annotations: an
+            // S3 pass that changed a constant's value while adding comments
+            // would be a change nobody reviewed, which is the whole thing this
+            // comparison exists to catch.
+            Some(Entry::Const { tc, value }) => format!("const {tc:?} = {value:?}"),
             None => continue,
         };
         out.insert(id.clone(), text);

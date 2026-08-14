@@ -111,13 +111,31 @@ pub fn diff(old: &Registry, new: &Registry) -> Vec<Change> {
                 diff_interface(id, a, b, &mut out)
             }
             (Some(Entry::Type(a)), Some(Entry::Type(b))) => diff_type(id, a, b, &mut out),
-            (Some(Entry::Const { tc: a }), Some(Entry::Const { tc: b })) if a != b => {
-                out.push(Change {
-                    id: id.clone(),
-                    what: "constant changed type".into(),
-                    why: "a constant's type is part of every expression that uses it",
-                    verdict: Verdict::Breaking,
-                });
+            (Some(Entry::Const { tc: a, value: va }), Some(Entry::Const { tc: b, value: vb })) => {
+                if a != b {
+                    out.push(Change {
+                        id: id.clone(),
+                        what: "constant changed type".into(),
+                        why: "a constant's type is part of every expression that uses it",
+                        verdict: Verdict::Breaking,
+                    });
+                }
+                // The value became visible when the registry started folding
+                // it, and it is a real compatibility question: a constant is
+                // *compiled into* callers, so a peer built against the old
+                // contract keeps sending the old value forever. Nothing on the
+                // wire is malformed — an authorization scope constant that
+                // changed spelling is a legal string the far side has no
+                // meaning for, which is what this verdict says.
+                if va != vb {
+                    out.push(Change {
+                        id: id.clone(),
+                        what: format!("constant value changed from {va:?} to {vb:?}"),
+                        why: "a constant is compiled into its callers, so peers built against \
+                              the old contract keep using the old value until they are rebuilt",
+                        verdict: Verdict::ConditionallyBreaking,
+                    });
+                }
             }
             (Some(_), Some(_)) => out.push(Change {
                 id: id.clone(),

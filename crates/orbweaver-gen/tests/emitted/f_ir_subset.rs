@@ -8,7 +8,7 @@
 #![cfg_attr(rustfmt, rustfmt::skip)]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
-#![allow(non_camel_case_types, non_snake_case, dead_code)]
+#![allow(non_camel_case_types, non_snake_case, non_upper_case_globals, dead_code)]
 
 /// IDL module `CORBA`.
 pub mod CORBA {
@@ -129,6 +129,16 @@ pub mod CORBA {
         /// `_get_name` on the wire.
         pub fn name(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::Identifier, rt::GiopError> {
             let __reply = self.conn.invoke("_get_name", |__e| {
+            })?;
+            let mut __body = __reply.body()?;
+            let __r0 = Cdr::get(&mut __body)?;
+            Ok(__r0)
+        }
+        /// The version part of the repository id, e.g. 1.0
+        ///
+        /// `_get_version` on the wire.
+        pub fn version(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, rt::GiopError> {
+            let __reply = self.conn.invoke("_get_version", |__e| {
             })?;
             let mut __body = __reply.body()?;
             let __r0 = Cdr::get(&mut __body)?;
@@ -392,6 +402,10 @@ pub mod CORBA {
         ///
         /// `_get_name` on the wire.
         fn name(&mut self, __at: &ContainedTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::Identifier, ContainedFault>;
+        /// The version part of the repository id, e.g. 1.0
+        ///
+        /// `_get_version` on the wire.
+        fn version(&mut self, __at: &ContainedTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, ContainedFault>;
     }
     /// One object of `IDL:omg.org/CORBA/Contained:1.0`, for a servant that keeps a value per object.
     ///
@@ -423,6 +437,10 @@ pub mod CORBA {
         ///
         /// `_get_name` on the wire.
         fn name(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::Identifier, ContainedFault>;
+        /// The version part of the repository id, e.g. 1.0
+        ///
+        /// `_get_version` on the wire.
+        fn version(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, ContainedFault>;
     }
     /// A map from oid to one `ContainedObject`, serving `IDL:omg.org/CORBA/Contained:1.0`.
     ///
@@ -495,6 +513,12 @@ pub mod CORBA {
         fn name(&mut self, __at: &ContainedTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::Identifier, ContainedFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.name(),
+                None => Err(ContainedFault::System(rt::raise::object_not_exist().did_not_run())),
+            }
+        }
+        fn version(&mut self, __at: &ContainedTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, ContainedFault> {
+            match self.objects.get_mut(__at.oid()) {
+                Some(__o) => __o.version(),
                 None => Err(ContainedFault::System(rt::raise::object_not_exist().did_not_run())),
             }
         }
@@ -594,6 +618,15 @@ pub mod CORBA {
                 }
                 "_get_name" => {
                     match self.servant.name(&__at) {
+                        Ok(__r0) => {
+                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
+                            Ok(rt::DispatchBody::Return)
+                        }
+                        Err(__f) => __f.write(__out),
+                    }
+                }
+                "_get_version" => {
+                    match self.servant.version(&__at) {
                         Ok(__r0) => {
                             __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
                             Ok(rt::DispatchBody::Return)
@@ -2275,6 +2308,16 @@ pub mod CORBA {
             let __r0 = Cdr::get(&mut __body)?;
             Ok(__r0)
         }
+        /// The version part of the repository id, e.g. 1.0
+        ///
+        /// `_get_version` on the wire.
+        pub fn version(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, rt::GiopError> {
+            let __reply = self.conn.invoke("_get_version", |__e| {
+            })?;
+            let mut __body = __reply.body()?;
+            let __r0 = Cdr::get(&mut __body)?;
+            Ok(__r0)
+        }
     }
     
     /// Everything a servant for `IDL:omg.org/CORBA/InterfaceDef:1.0` can fail with.
@@ -2549,6 +2592,10 @@ pub mod CORBA {
         ///
         /// `_get_name` on the wire.
         fn name(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::Identifier, InterfaceDefFault>;
+        /// The version part of the repository id, e.g. 1.0
+        ///
+        /// `_get_version` on the wire.
+        fn version(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, InterfaceDefFault>;
     }
     /// One object of `IDL:omg.org/CORBA/InterfaceDef:1.0`, for a servant that keeps a value per object.
     ///
@@ -2596,6 +2643,10 @@ pub mod CORBA {
         ///
         /// `_get_name` on the wire.
         fn name(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::Identifier, InterfaceDefFault>;
+        /// The version part of the repository id, e.g. 1.0
+        ///
+        /// `_get_version` on the wire.
+        fn version(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, InterfaceDefFault>;
     }
     /// A map from oid to one `InterfaceDefObject`, serving `IDL:omg.org/CORBA/InterfaceDef:1.0`.
     ///
@@ -2692,6 +2743,12 @@ pub mod CORBA {
         fn name(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::Identifier, InterfaceDefFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.name(),
+                None => Err(InterfaceDefFault::System(rt::raise::object_not_exist().did_not_run())),
+            }
+        }
+        fn version(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, InterfaceDefFault> {
+            match self.objects.get_mut(__at.oid()) {
+                Some(__o) => __o.version(),
                 None => Err(InterfaceDefFault::System(rt::raise::object_not_exist().did_not_run())),
             }
         }
@@ -2835,6 +2892,15 @@ pub mod CORBA {
                 }
                 "_get_name" => {
                     match self.servant.name(&__at) {
+                        Ok(__r0) => {
+                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
+                            Ok(rt::DispatchBody::Return)
+                        }
+                        Err(__f) => __f.write(__out),
+                    }
+                }
+                "_get_version" => {
+                    match self.servant.version(&__at) {
                         Ok(__r0) => {
                             __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
                             Ok(rt::DispatchBody::Return)

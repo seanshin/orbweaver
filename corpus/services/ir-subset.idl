@@ -88,6 +88,17 @@ module CORBA {
     //@ ai_desc: The fully scoped IDL name, leading colons included
     //@ ai_effect: read_only
     readonly attribute ScopedName absolute_name;
+
+    // Declared 2026-08-14, after `docs/SERVICES-COVERAGE.md` §5 drove all 44
+    // declared IR operations over the wire and found `_get_version` absent
+    // while its write half `_set_version` was refused NO_PERMISSION — the read
+    // and the write the wrong way round. It is `readonly` here, as `id` and
+    // `name` are, because this contract describes a read-only facade; the real
+    // IR declares all three read-write and `ifr.rs` refuses every `_set_` by
+    // name-shape either way (see `NOT_COMPARED`).
+    //@ ai_desc: The version part of the repository id, e.g. 1.0
+    //@ ai_effect: read_only
+    readonly attribute VersionSpec version;
   };
 
   // ── the description records `describe_interface` answers with ─────────────

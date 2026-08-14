@@ -120,7 +120,7 @@ const ABSENT: &str = "IDL:bank/Nope:1.0";
 /// arguments, and writing one made the generated skeleton answer `MARSHAL`
 /// where the hand-written one answered `NO_PERMISSION`. That divergence was a
 /// malformed request, not a defect; the real ordering difference it exposed is
-/// the last entry of `NOT_COMPARED`.
+/// the "malformed body under a refused operation" entry of `NOT_COMPARED`.
 const CREATE_ARGS: &[&str] = &["IDL:bank/New:1.0", "New", "1.0"];
 
 fn registry() -> Registry {
@@ -294,6 +294,13 @@ impl InterfaceDefServant for InterfaceDefFacade {
 
     fn absolute_name(&mut self, at: &InterfaceDefTarget<'_>) -> Result<String, InterfaceDefFault> {
         Ok(absolute_name_of(&self.registry, at.oid()))
+    }
+
+    /// The third element of the `Contained` triple, and the reason the contract
+    /// grew an attribute: `_get_version` was absent from `ifr.rs` while
+    /// `_set_version` was refused, on data every repository id carries.
+    fn version(&mut self, at: &InterfaceDefTarget<'_>) -> Result<String, InterfaceDefFault> {
+        Ok(contained_of(&self.registry, at.oid()).2)
     }
 
     fn base_interfaces(
@@ -475,6 +482,10 @@ impl ContainedServant for ContainedFacade {
     fn absolute_name(&mut self, at: &ContainedTarget<'_>) -> Result<String, ContainedFault> {
         Ok(absolute_name_of(&self.registry, at.oid()))
     }
+
+    fn version(&mut self, at: &ContainedTarget<'_>) -> Result<String, ContainedFault> {
+        Ok(contained_of(&self.registry, at.oid()).2)
+    }
 }
 
 // ── Harness ──────────────────────────────────────────────────────────────────
@@ -607,9 +618,14 @@ fn compared() -> Vec<Case> {
             v.push(case("interfacedef _is_a", key.clone(), "_is_a", &[want]));
         }
         v.push(case("interfacedef _non_existent", key.clone(), "_non_existent", &[]));
-        for op in
-            ["_get_def_kind", "_get_id", "_get_name", "_get_absolute_name", "_get_base_interfaces"]
-        {
+        for op in [
+            "_get_def_kind",
+            "_get_id",
+            "_get_name",
+            "_get_absolute_name",
+            "_get_version",
+            "_get_base_interfaces",
+        ] {
             v.push(case("interfacedef accessor", key.clone(), op, &[]));
         }
         for want in [ACCOUNT, PARTY, ABSENT, ifr::OBJECT_ID] {
@@ -630,7 +646,7 @@ fn compared() -> Vec<Case> {
     for id in [MONEY, CURRENCY, DENIED] {
         let key = entry_key(id);
         v.push(case("contained _non_existent", key.clone(), "_non_existent", &[]));
-        for op in ["_get_def_kind", "_get_id", "_get_name", "_get_absolute_name"] {
+        for op in ["_get_def_kind", "_get_id", "_get_name", "_get_absolute_name", "_get_version"] {
             v.push(case("contained accessor", key.clone(), op, &[]));
         }
         // `describe_interface` belongs to `InterfaceDef`. `ifr.rs` reaches its
@@ -691,7 +707,7 @@ fn the_comparison_is_not_vacuous() {
     let cases = compared();
     // Pinned, not bounded: a matrix that silently shrinks is a comparison
     // that silently weakens, and ">= 60" would not have noticed.
-    assert_eq!(cases.len(), 77, "the compared matrix changed size");
+    assert_eq!(cases.len(), 82, "the compared matrix changed size");
     let mut from_idl = generated();
     let (mut bodies, mut raised, mut unknown) = (0, 0, 0);
     let mut nonempty = 0;
@@ -903,8 +919,15 @@ fn the_three_skeletons_claim_disjoint_parts_of_one_key_space() {
 /// whose stated cause is repaired is work, not a limitation, and the way to
 /// tell the two apart is to write the cause down where it can be re-read.
 ///
-/// Of the four that remain, the first two are one root cause, which is worth
-/// saying once:
+/// It also got **one longer** on the same day, which is the other half of the
+/// point: `ifr.rs` now answers `NO_IMPLEMENT` for the operations it defers, so
+/// that a client can tell a deferral from an oversight without reading a
+/// document — and a generated skeleton cannot say anything particular about an
+/// operation its contract never declared. A new entry arriving because a
+/// servant got *better* is not a regression, and the way to know which it is
+/// is to write the cause down.
+///
+/// Of the five, the first two are one root cause, which is worth saying once:
 ///
 /// **`ifr.rs` varies the identity of an object with the object, inside one key
 /// space.** A key under `/ifr/` is an `InterfaceDef` or a `Contained` or a
@@ -916,10 +939,11 @@ fn the_three_skeletons_claim_disjoint_parts_of_one_key_space() {
 /// need an interface per entry kind in the contract, which the IR IDL does not
 /// have.
 ///
-/// The last two are not contract-level absences at all: both are *ordering*
+/// The next two are not contract-level absences at all: both are *ordering*
 /// and *name-shape* policies that `ifr.rs` applies before it looks at the
-/// contract, and IDL has no clause for either.
-const NOT_COMPARED: [(&str, &str); 4] = [
+/// contract, and IDL has no clause for either. The last one is the deferral
+/// answer described above.
+const NOT_COMPARED: [(&str, &str); 5] = [
     (
         "_is_a on a non-interface entry",
         "`ifr.rs` answers IDLType true for a struct/enum/alias entry and false for a \
@@ -954,6 +978,18 @@ const NOT_COMPARED: [(&str, &str); 4] = [
          must override `forward`-style, at the `Dispatch` level, or accept MARSHAL for a \
          request that was malformed anyway.",
     ),
+    (
+        "a deferred operation",
+        "`ifr.rs` answers NO_IMPLEMENT for the IR operations it has decided not to implement — \
+         `contents`, `lookup`, `lookup_name`, `describe_contents`, `describe`, \
+         `_get_defined_in`, `_get_containing_repository`, `get_canonical_typecode`, \
+         `get_primitive`, `_get_type` — so that a client can tell a deferral from an \
+         oversight without reading a document. `corpus/services/ir-subset.idl` declares none \
+         of them, so the generated skeleton answers BAD_OPERATION: the same root cause as \
+         `create_module` on a `Contained`, since what is not expressible is answering \
+         *anything particular* about an operation the contract never declared. Both answers \
+         are right for what each servant knows.",
+    ),
 ];
 
 /// Every named divergence must still be one.
@@ -964,11 +1000,24 @@ const NOT_COMPARED: [(&str, &str); 4] = [
 /// here and required to disagree.
 #[test]
 fn the_divergences_are_the_ones_named_and_they_still_diverge() {
-    assert_eq!(NOT_COMPARED.len(), 4);
+    assert_eq!(NOT_COMPARED.len(), 5);
     let mut hand = hand_written();
     let mut from_idl = generated();
     let key = entry_key(ACCOUNT);
     let big = Endian::Big;
+
+    // 0 — a deferred operation. The oracle distinguishes a deferral from an
+    // oversight on the wire; the generated skeleton only knows what the
+    // contract declares, and the contract declares neither.
+    for op in ["contents", "lookup_name", "get_primitive", "_get_type"] {
+        match (ask(&mut hand, big, ROOT, op, &["x"]), ask(&mut from_idl, big, ROOT, op, &["x"])) {
+            (Answer::Raised { id: a, .. }, Answer::Raised { id: b, .. }) => {
+                assert_eq!(a, ifr::NO_IMPLEMENT, "{op}: deferred, and the wire says so");
+                assert_eq!(b, rt::BAD_OPERATION, "{op}: the contract does not declare it");
+            }
+            other => panic!("{op}: both must refuse, differently: {other:?}"),
+        }
+    }
 
     // 1 and 2 — a non-interface entry.
     let money = entry_key(MONEY);

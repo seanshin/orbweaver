@@ -54,7 +54,7 @@ use orbweaver_giop::typecode::TypeCode;
 use orbweaver_giop::{Connection, Error};
 use orbweaver_registry::Registry;
 use orbweaver_registry::ifr::{
-    self, DefinitionKind, FullInterfaceDescription, INTERFACE_DEF_ID, NO_PERMISSION,
+    self, DefinitionKind, FullInterfaceDescription, INTERFACE_DEF_ID, NO_IMPLEMENT, NO_PERMISSION,
     RepositoryServer,
 };
 
@@ -160,8 +160,13 @@ fn run(ior_path: &str, idl_paths: &[&str], hold: bool) -> Fallible {
         expect_system(repo.invoke(op, |e| e.put_str("x")), NO_PERMISSION, op)?;
     }
     ok("create_interface / create_module / _set_id / destroy all refused NO_PERMISSION");
-    expect_system(repo.invoke_nullary("contents"), BAD_OPERATION, "contents")?;
-    ok("an unserved read operation is BAD_OPERATION, not a silent empty reply");
+    // Three refusals, three meanings — and the wire, not a document, is what
+    // separates them. `contents` is deferred (declared, deliberately not
+    // implemented); `no_such_operation` is nothing at all.
+    expect_system(repo.invoke_nullary("contents"), NO_IMPLEMENT, "contents")?;
+    expect_system(repo.invoke_nullary("lookup_name"), NO_IMPLEMENT, "lookup_name")?;
+    expect_system(repo.invoke_nullary("no_such_operation"), BAD_OPERATION, "no_such_operation")?;
+    ok("a deferred read is NO_IMPLEMENT and an unknown one is BAD_OPERATION, not one answer");
 
     // One connection is served at a time: hang up before dialing the
     // InterfaceDef the lookup handed back.
@@ -173,15 +178,22 @@ fn run(ior_path: &str, idl_paths: &[&str], hold: bool) -> Fallible {
     let name = def.invoke_nullary("_get_name")?.body()?.get_string()?;
     let absolute = def.invoke_nullary("_get_absolute_name")?.body()?.get_string()?;
     let kind = def.invoke_nullary("_get_def_kind")?.body()?.get_u32()?;
+    // `_get_version` is here because it was *absent* until 2026-08-14 while
+    // `_set_version` was refused NO_PERMISSION — the read and the write the
+    // wrong way round on data the id already carries.
+    let version = def.invoke_nullary("_get_version")?.body()?.get_string()?;
     require(
         id == SUBJECT
             && name == "Both"
             && absolute == "::gc10::Both"
+            && version == "1.0"
             && kind == DefinitionKind::Interface as u32,
         "the Contained accessors disagreed with the repository id",
     )?;
+    expect_system(def.invoke("_set_version", |e| e.put_str("2.0")), NO_PERMISSION, "_set_version")?;
     ok(&format!(
-        "_get_id/_get_name/_get_absolute_name/_get_def_kind → {id} {name} {absolute} dk_Interface"
+        "_get_id/_get_name/_get_absolute_name/_get_version/_get_def_kind → \
+         {id} {name} {absolute} {version} dk_Interface, and _set_version still refused"
     ));
 
     // ── describe_interface, decoded as a DII client would ──
