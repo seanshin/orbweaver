@@ -216,11 +216,20 @@ a comment in a corpus file.
 
 That is why the two are unimplemented, and the honest split is:
 
-- **`Router::select`** returns `ExpertSeq` — references, nothing else. It is
-  pure control plane, it is the operation the trading engine already answers
-  internally, and its absence is a **gap** rather than a decision.
+- **`Router::select`** returns `ExpertSeq` — references, nothing else — and its
+  absence is a **gap** rather than a decision, since the trading engine already
+  answers exactly that question internally.
+
+  **Corrected by D006, which measured what this section asserted.** `select` is
+  not free of the plane question: it *takes* a `GateSignal`, and a `GateSignal`
+  holds `Tensor affinity` — the gate's routing logits. So all three operations
+  touch a `Tensor`; only `select`'s **return** is references-only. The
+  operation this section filed as pure control plane is the one whose exposure
+  nobody had noticed, which is a fair illustration of why a rule that lives in
+  prose is not a rule.
 - **`Router::dispatch` and `Expert::process`** are the ones that would carry an
-  `Activation`. Serving them means either committing to the handle reading in a
+  `Activation` in *both* directions, which is the difference of degree that
+  still separates them from `select`. Serving them means either committing to the handle reading in a
   document that binds, or declaring them excluded. **Committing needs a
   decision**, because it constrains what a deployment may put in a `Tensor`,
   and a rule nobody can check is a rule that will be broken by whoever needs a
@@ -234,9 +243,10 @@ absence has a reason, which is what §8.1 of `PLAN-SERVICES` asks of every
 **`Router`가 어느 계획서에도 없던 이유.** 데이터 플레인 금지 규칙 아래에서
 `process`/`dispatch`가 합법인 것은 **`Tensor`가 핸들을 나른다는 독해** 아래에서
 뿐인데, 그 독해는 코퍼스 파일의 주석에만 있고 강제하는 것은 없다.
-`sequence<octet>`는 16바이트 핸들만큼이나 기꺼이 1메가바이트를 나른다. 반면
-`select`는 참조만 돌려주므로 순수 컨트롤 플레인이고, 그 부재는 결정이 아니라
-**공백**이다.
+`sequence<octet>`는 16바이트 핸들만큼이나 기꺼이 1메가바이트를 나른다. `select`의
+부재는 결정이 아니라 **공백**이지만, D006이 이 절을 정정했다 — `select`는 `Tensor
+affinity`를 담은 `GateSignal`을 **받으므로** 평면 질문에서 자유롭지 않다. 참조만인
+것은 **반환**뿐이다. 산문 속의 규칙은 규칙이 아니라는 예시이기도 하다.
 
 > **Open as a decision, and it corrects this section.** Whether the plane rule
 > can be stated as a predicate over a contract at all, and which of five
