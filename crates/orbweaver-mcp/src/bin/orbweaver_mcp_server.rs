@@ -3,6 +3,7 @@
 //! ```text
 //! orbweaver-mcp-server --idl <file.idl>... --ior <file> \
 //!                      [--expose <IDL:module/Iface:1.0[.operation]>]... \
+//!                      [--assume-effect <ai_effect value>] \
 //!                      [--as <principal>] [--scope <scope>]... \
 //!                      [--map-scope <token-scope>=<contract-scope>]... [--token-scope <s>]... \
 //!                      [--dry-run [<IDL:module/Iface:1.0>]] \
@@ -14,6 +15,34 @@
 //! Exposure is **default-deny**: with no `--expose`, the server starts, answers
 //! the handshake, and finds nothing. That is the correct behaviour and not a
 //! misconfiguration — an operator naming what an agent may reach is the point.
+//!
+//! # `--assume-effect`: what a contract's silence means, declared once
+//!
+//! An operation whose contract carries no `//@ ai_effect` is **refused**, and
+//! the refusal names the missing annotation. That is a change: it used to be
+//! allowed, because the gate asked the annotation map for a key and read
+//! `None` as *nothing to worry about*. The estate pilot measured what that is
+//! worth on a real legacy set — 76 of 76 operations allowed to a caller holding
+//! no scopes, `SHUTDOWN` and `purge` among them.
+//!
+//! Refusing per operation is correct and, on its own, unusable: seventy-six
+//! refusals an operator has to clear one at a time is a gate people automate
+//! away. `--assume-effect <value>` is the one declaration that replaces them —
+//! *for the operations that state nothing, assume this*. It runs through the
+//! same recognition a contract's own value does, so `--assume-effect read_only`
+//! allows them and `--assume-effect destructive` sends them to the approval
+//! queue. It never touches an operation whose contract **does** state an effect.
+//!
+//! Whatever is chosen, this process says at startup how many operations of the
+//! exposure carry no `ai_effect`, because the size of the silence is the fact
+//! the decision is about. Every dry-run document carries `unannotated_effect`
+//! at the top and marks each row that rests on the assumption
+//! (`effect_stated_by: "exposure"`), so a page of `allow` cannot be mistaken
+//! for a page of annotated contracts.
+//!
+//! 계약이 `ai_effect`를 말하지 않으면 **거부**하고, 무엇이 없는지 이름을 말한다.
+//! 연산마다 거부하는 것만으로는 쓸 수 없으므로, 침묵에 대한 가정은
+//! `--assume-effect`로 **한 번** 선언한다.
 //!
 //! # `--dry-run`: what would this exposure let an agent do?
 //!
@@ -136,7 +165,7 @@ use orbweaver_dynamic::json::Json;
 use orbweaver_giop::{Connection, Ior};
 use orbweaver_mcp::Bridge;
 use orbweaver_mcp::identity::Caller;
-use orbweaver_mcp::policy::{Approval, Exposure};
+use orbweaver_mcp::policy::{Approval, Exposure, Unannotated};
 use orbweaver_mcp::quota::{Quota, Renewal, Scope};
 use orbweaver_mcp::session::Session;
 use orbweaver_mcp::telemetry::{CallPath, JsonLines, Timestamp, Trace};
@@ -243,6 +272,7 @@ fn main() -> std::process::ExitCode {
     let mut quota_limit: Option<u64> = None;
     let mut quota_scope = "caller".to_owned();
     let mut audit_capacity: Option<usize> = None;
+    let mut assume_effect: Option<String> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -254,6 +284,17 @@ fn main() -> std::process::ExitCode {
             "--idl" => next("--idl").map(|v| idls.push(v)),
             "--ior" => next("--ior").map(|v| ior_path = Some(v)),
             "--expose" => next("--expose").map(|v| expose.push(v)),
+            // An empty value would be an assumption nobody could read back off
+            // a report, which is the one thing this flag exists to prevent.
+            "--assume-effect" => next("--assume-effect").and_then(|v| match v.trim() {
+                "" => Err("--assume-effect \"\": name an ai_effect value, such as read_only \
+                           or destructive"
+                    .to_owned()),
+                _ => {
+                    assume_effect = Some(v);
+                    Ok(())
+                }
+            }),
             "--session" => next("--session").map(|v| session_id = v),
             "--as" => next("--as").map(|v| principal = Some(v)),
             "--scope" => next("--scope").map(|v| scopes.push(v)),
@@ -299,7 +340,8 @@ fn main() -> std::process::ExitCode {
             "-h" | "--help" => {
                 eprintln!(
                     "usage: orbweaver-mcp-server --idl <file.idl>... --ior <file> \
-                     [--expose <id[.operation]>]... [--as <principal>] [--scope <scope>]... \
+                     [--expose <id[.operation]>]... [--assume-effect <value>] \
+                     [--as <principal>] [--scope <scope>]... \
                      [--map-scope <token>=<contract>]... [--token-scope <scope>]... \
                      [--dry-run[=<id>]] [--trace <path>|-] [--trace-ts <rfc3339>] \
                      [--quota <calls>] [--quota-scope <everything|caller|interface|operation>] \
@@ -381,11 +423,42 @@ fn main() -> std::process::ExitCode {
             _ => exposure = exposure.allow_interface(spec.clone()),
         }
     }
+    if let Some(effect) = &assume_effect {
+        exposure = exposure.assuming_unannotated(Unannotated::Assume(effect.clone()));
+    }
     if expose.is_empty() {
         eprintln!(
             "no --expose given: the catalog holds {} interface(s) and the agent will see none",
             orbweaver_mcp::exposable_interfaces(&registry).len()
         );
+    }
+    // The size of the silence, said out loud whichever way it is being handled.
+    // Without this an operator meets the new refusal one operation at a time and
+    // reads it as a permissions problem; with it, the first line of the run says
+    // how big the contract-annotation problem is. The estate pilot's RC-5 is
+    // exactly the case where nobody could see the number.
+    let silent = orbweaver_mcp::unannotated_operations(&registry, &exposure);
+    if !silent.is_empty() {
+        let sample: Vec<String> = silent
+            .iter()
+            .take(3)
+            .map(|(id, op)| format!("{}.{op}", id.rsplit('/').next().unwrap_or(id)))
+            .collect();
+        match &assume_effect {
+            None => eprintln!(
+                "{} exposed operation(s) carry no ai_effect and will be REFUSED ({}…): annotate \
+                 them, or declare what this exposure assumes with --assume-effect <value>",
+                silent.len(),
+                sample.join(", ")
+            ),
+            Some(effect) => eprintln!(
+                "--assume-effect {effect:?}: {} exposed operation(s) carry no ai_effect and will \
+                 be treated as {effect} ({}…). This is an assumption made here, not a statement \
+                 in any contract.",
+                silent.len(),
+                sample.join(", ")
+            ),
+        }
     }
 
     // Token scopes reach the caller only through the map, which is the whole

@@ -53,10 +53,17 @@ def note(msg):
 class Bridge:
     """The MCP server as a subprocess, spoken to one line at a time."""
 
-    def __init__(self, ior, idl, expose):
+    def __init__(self, ior, idl, expose, assume_effect=None):
         argv = [str(SERVER), "--idl", idl, "--ior", ior, "--as", PRINCIPAL]
         for e in expose:
             argv += ["--expose", e]
+        # An estate annotates nothing, so every operation now states no effect
+        # and the bridge refuses it — correctly. `--assume-effect` is the
+        # operator saying, once, what this estate's silence means. Without it
+        # session A cannot reach the servant at all and its finding (the
+        # *contract* stopped the call, not the guard) becomes unmeasurable.
+        if assume_effect:
+            argv += ["--assume-effect", assume_effect]
         self.frames = []
         self.p = subprocess.Popen(
             argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -110,8 +117,8 @@ def handle_for(b, rid):
 # ── session A: the one-flag exposure an operator writes first ────────────────
 
 def session_a(ior, idl):
-    print("\nsession A — --expose <interface>, no scopes held")
-    b = Bridge(ior, idl, [INTERFACE])
+    print("\nsession A — --expose <interface>, no scopes held, silence read as read_only")
+    b = Bridge(ior, idl, [INTERFACE], assume_effect="read_only")
     init = b.open()
     if init.get("result", {}).get("protocolVersion"):
         ok(f"initialize -> protocol {init['result']['protocolVersion']}")
@@ -202,7 +209,13 @@ def session_b(ior, idl):
     print("\nsession B — --expose <interface>.<operation> x3, the read-only slice")
     expose = [f"{INTERFACE}.{op}" for op in READ_ONLY_SLICE]
     note(f"the operator wrote {len(expose)} flags to allow {len(expose)} of 13 operations")
-    b = Bridge(ior, idl, expose)
+    # Session B needs the same declaration as A, and for the same reason: the
+    # slice is read-only by the operator's judgement, not by anything the
+    # contract says. Naming three operations does not annotate them. Its
+    # finding survives intact — `--assume-effect` states what a silence means,
+    # it does not expose anything, so `cancel` is still refused by the
+    # allowlist before anything is dialled.
+    b = Bridge(ior, idl, expose, assume_effect="read_only")
     b.open()
     handle, _ = handle_for(b, 2)
     if not handle:

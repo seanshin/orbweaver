@@ -18,6 +18,28 @@
 //! describable and still refused unless the caller presents an approval. The
 //! annotation comes from SIDL (§2.2), so the person who wrote the contract is
 //! the one who decides — not the person wiring up the bridge.
+//!
+//! # Silence is not consent
+//!
+//! The gate above keys on an annotation, and until the estate pilot
+//! (`docs/pipeline-runs/2026-08-14-estate.md`, RC-5) it asked for one with
+//! `annotations.get("ai_effect")?` — so a **misspelled** effect needed a human
+//! and a **missing** one did not. Measured over a thirteen-file legacy estate
+//! that exposed 76 of 76 operations to a caller holding no scopes at all,
+//! `SystemConsole.SHUTDOWN` and `AuditSink.purge` among them. That is not a
+//! quirk of that estate: an unannotated contract is what every legacy contract
+//! is, and the gate was reading *the contract has nothing to say* as *the
+//! contract says yes*.
+//!
+//! [`Effect`] makes the three answers three answers. `Harmless` and `Stated`
+//! are what the contract says; [`Effect::Unstated`] is the contract saying
+//! nothing, and nothing is not a permission. What happens to a silence is
+//! [`Unannotated`], which is a decision an **operator** takes once for an
+//! exposure — not one this crate takes for them by defaulting, and not one it
+//! extracts 76 times from whoever is clicking the approvals.
+//!
+//! 침묵은 승인이 아니다. 애너테이션이 **없는** 것과 **오타난** 것은 서로 다른
+//! 답이어야 하고, 지금까지는 우연히 반대 방향으로 달랐다.
 
 use std::collections::BTreeSet;
 
@@ -92,6 +114,35 @@ pub enum Denied {
         operation: String,
         /// What the contract says it does, if it says.
         effect: String,
+        /// Whether `effect` came from the **exposure's** [`Unannotated`]
+        /// assumption rather than from the contract. An operator reading an
+        /// approval request has to know whether the word `destructive` was
+        /// written by the person who owns the interface or by the person who
+        /// wired up the bridge.
+        assumed: bool,
+    },
+    /// The contract states no `ai_effect` for this operation and the exposure
+    /// declares no assumption for the silence.
+    ///
+    /// **The variant that used to be an `allow`.** It is deliberately not
+    /// [`Denied::NeedsApproval`]: an approval is a human saying yes to a
+    /// specific call, and nobody can say yes to a call whose effect nobody has
+    /// stated. Routing silences into the approval queue turns a legacy estate
+    /// into seventy-six approvals, which is the shape of gate people learn to
+    /// click through — and one `--approve` would then unlock the whole estate
+    /// at once.
+    ///
+    /// It is also deliberately not [`Denied::InterfaceNotExposed`] or
+    /// [`Denied::OperationNotExposed`]: the operator *did* expose it, and
+    /// answering "not exposed" would send them hunting through the allowlist
+    /// for a problem that is in the contract. The estate pilot recorded that
+    /// misdirection reaching production by another road (RC-4), which is why
+    /// this refusal names the annotation instead.
+    EffectUnstated {
+        /// Repository id.
+        id: String,
+        /// Operation name.
+        operation: String,
     },
     /// A stage of [`crate::interceptor::Chain`] outside the built-in gates
     /// refused the call — a deployment's rate limiter, quota or safety filter.
@@ -180,10 +231,27 @@ impl std::fmt::Display for Denied {
                 "{id}.{operation} requires the scope {required:?} and this session has no \
                  authenticated caller, so there is nobody to check it against"
             ),
-            Denied::NeedsApproval { id, operation, effect } => write!(
+            Denied::NeedsApproval { id, operation, effect, assumed: false } => write!(
                 f,
                 "{id}.{operation} is marked {effect} and needs an explicit approval before it \
                  can be called"
+            ),
+            // Who said the word matters to whoever is being asked to approve.
+            Denied::NeedsApproval { id, operation, effect, assumed: true } => write!(
+                f,
+                "{id}.{operation} states no ai_effect and this exposure assumes {effect} for the \
+                 operations that state none, so it needs an explicit approval before it can be \
+                 called"
+            ),
+            // Names the annotation, not the allowlist. A refusal that said only
+            // "no" would send an operator into a permissions config looking for
+            // a problem that is in the contract.
+            Denied::EffectUnstated { id, operation } => write!(
+                f,
+                "{id}.{operation} carries no ai_effect, so the contract does not say whether an \
+                 agent may call it without a human, and this bridge will not guess one. Annotate \
+                 the operation (`//@ ai_effect: read_only` or `//@ ai_effect: destructive`), or \
+                 declare what this exposure assumes for operations that state none"
             ),
             Denied::Intercepted { stage, reason } => {
                 write!(f, "the {stage} stage refused this call: {reason}")
@@ -208,12 +276,82 @@ impl std::fmt::Display for Denied {
 
 impl std::error::Error for Denied {}
 
-/// Which interfaces and operations an agent may reach.
+/// What the contract says an operation does — the input to the approval gate.
+///
+/// Three answers, because there are three facts. Until the estate pilot there
+/// were two, and the third was silently folded into "harmless".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Effect {
+    /// `ai_effect` names one of the values that need no human: `read_only`,
+    /// `readonly`, `idempotent`, `safe`.
+    ///
+    /// An attribute **getter** is also this, and by the IDL grammar rather than
+    /// by an annotation: `_get_x` reads `x`, which is a fact the contract
+    /// states in the language it is written in. That is a statement, not a
+    /// silence, so it is not [`Effect::Unstated`]. What a getter may *leak* is
+    /// the scope gate's question, and [`required_scopes`] guards both accessors
+    /// from the attribute's own `ai_authz`.
+    Harmless,
+    /// `ai_effect` names something else — stated by whoever wrote the contract
+    /// and not on the harmless list.
+    ///
+    /// Both `destructive` and a typo'd `destructve` land here, and both need a
+    /// human. A value nobody anticipated is not a reason to let a call through.
+    Stated(String),
+    /// **No `ai_effect` reaches this operation.** The contract does not say.
+    ///
+    /// Distinct from [`Effect::Stated`] on purpose, and in the direction that
+    /// costs something: a typo gets a human's yes because somebody was writing
+    /// annotations and got one wrong, while a silence gets sent back to the
+    /// contract because nobody has written anything for a human to say yes to.
+    Unstated,
+}
+
+/// What an exposure does with an operation whose contract states no
+/// `ai_effect` — [`Effect::Unstated`].
+///
+/// The operator's decision, taken **once** for an exposure. That is the whole
+/// design: failing closed per operation is correct and produces one approval
+/// per silence, and a gate that asks seventy-six times is a gate somebody
+/// automates away. One declaration, recorded in every report and every refusal
+/// that rests on it, is a decision that can be reviewed; seventy-six clicks are
+/// not.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Unannotated {
+    /// Refuse, naming the missing annotation ([`Denied::EffectUnstated`]).
+    ///
+    /// **The default, and the only safe one.** A bridge that shipped any other
+    /// default would be making a safety claim about contracts it has never
+    /// seen.
+    #[default]
+    Refuse,
+    /// Read a silence as if the contract had said this.
+    ///
+    /// The escape hatch for an estate nobody is going to annotate this quarter,
+    /// and it is deliberately an *effect value* rather than a boolean, so it
+    /// runs through the same recognition the contract's own value does:
+    /// `Assume("read_only")` allows the silences, `Assume("destructive")` sends
+    /// them to the approval queue. It never touches an operation whose contract
+    /// **does** state an effect — an assumption about silences cannot downgrade
+    /// something somebody wrote.
+    ///
+    /// Every document and every refusal that rests on one says so
+    /// (`assumed: true`, `effect_stated_by: "exposure"`,
+    /// `unannotated_effect` in a [`crate::dryrun::survey`]), because the
+    /// difference between "the contract says this is safe" and "we assumed it
+    /// was" is the whole of what an operator is signing.
+    Assume(String),
+}
+
+/// Which interfaces and operations an agent may reach, and what it does with
+/// the operations whose contracts say nothing.
 #[derive(Debug, Default, Clone)]
 pub struct Exposure {
     /// Keys are repository ids; the value is the set of allowed operations, or
     /// empty for "every operation this interface declares".
     allowed: std::collections::BTreeMap<String, BTreeSet<String>>,
+    /// What happens to an [`Effect::Unstated`] operation.
+    unannotated: Unannotated,
 }
 
 impl Exposure {
@@ -237,6 +375,26 @@ impl Exposure {
     pub fn allow_operation(mut self, id: impl Into<String>, operation: impl Into<String>) -> Self {
         self.allowed.entry(id.into()).or_default().insert(operation.into());
         self
+    }
+
+    /// Declares what this exposure assumes for operations whose contract states
+    /// no `ai_effect`. See [`Unannotated`]; the default is
+    /// [`Unannotated::Refuse`].
+    ///
+    /// This is the operator's single decision about an unannotated estate, and
+    /// it is why failing closed does not cost seventy-six approvals.
+    pub fn assuming_unannotated(mut self, policy: Unannotated) -> Self {
+        self.unannotated = policy;
+        self
+    }
+
+    /// The posture this exposure takes on operations that state no `ai_effect`.
+    ///
+    /// [`crate::interceptor::Chain::standard`] copies it into the approval
+    /// stage, and [`crate::dryrun::survey`] renders it, so a report and the
+    /// gate it predicts cannot disagree about what a silence means.
+    pub fn unannotated(&self) -> &Unannotated {
+        &self.unannotated
     }
 
     /// Whether an interface may be searched or described.
@@ -325,27 +483,94 @@ impl Exposure {
                 Some(_) => {}
             }
         }
-        if let Some(effect) = destructive_effect(registry, id, operation)
-            && !approval.destructive_approved
-        {
-            return Err(Denied::NeedsApproval {
-                id: id.to_owned(),
-                operation: operation.to_owned(),
-                effect,
-            });
+        if let Some(why) = effect_refusal(registry, &self.unannotated, id, operation, approval) {
+            return Err(why);
         }
         Ok(())
     }
 }
 
-/// The scopes `ai_authz` asks for, comma-separated in the annotation.
+/// The effect gate, in **one** place: what the contract states, what the
+/// operator assumed for the silences, and the approval in hand.
 ///
-/// An operation with no `ai_authz` requires none. That is not a loophole — it
-/// is what an unannotated legacy contract looks like, and S4 already reports
-/// the absence as advice so it is visible rather than silent.
+/// [`Exposure::check_call`] and [`crate::interceptor::ApprovalInterceptor`]
+/// both call this, for the reason [`required_scopes`] gives — one
+/// implementation of the rule, two compositions of it. A second copy is how
+/// the dry run and the live gate come to different conclusions.
+pub(crate) fn effect_refusal(
+    registry: &Registry,
+    unannotated: &Unannotated,
+    id: &str,
+    operation: &str,
+    approval: Approval,
+) -> Option<Denied> {
+    let (effect, assumed) = match stated_effect(registry, id, operation) {
+        Effect::Harmless => return None,
+        Effect::Stated(effect) => (effect, false),
+        // The silence. What happens to it is the operator's declaration, and
+        // the default declaration is to refuse and say which annotation is
+        // missing.
+        Effect::Unstated => match unannotated {
+            Unannotated::Refuse => {
+                return Some(Denied::EffectUnstated {
+                    id: id.to_owned(),
+                    operation: operation.to_owned(),
+                });
+            }
+            // Run through the same recognition the contract's own value gets,
+            // so `Assume("read_only")` and `//@ ai_effect: read_only` cannot
+            // mean different things.
+            Unannotated::Assume(assumed) if is_harmless(assumed) => return None,
+            Unannotated::Assume(assumed) => (assumed.clone(), true),
+        },
+    };
+    // An approval is a human saying yes to a call whose effect somebody stated.
+    // It is reachable here and unreachable above, which is the point: one
+    // `--approve` must not unlock every operation nobody has described.
+    (!approval.destructive_approved).then(|| Denied::NeedsApproval {
+        id: id.to_owned(),
+        operation: operation.to_owned(),
+        effect,
+        assumed,
+    })
+}
+
+/// The `ai_effect` values that need no human.
+fn is_harmless(value: &str) -> bool {
+    matches!(value.trim(), "read_only" | "readonly" | "idempotent" | "safe")
+}
+
+/// The scopes `ai_authz` asks for, comma-separated in the annotation.
 ///
 /// [`crate::interceptor::ScopeInterceptor`] reads the requirement through this
 /// same function: one implementation of the rule, two compositions of it.
+///
+/// # Why an absent `ai_authz` is *not* [`Effect::Unstated`]'s cause
+///
+/// This gate keys on an annotation too, and an operation with no `ai_authz`
+/// requires no scope — which reads like the same fail-open the effect gate had.
+/// It was examined with it and deliberately left alone, for two reasons that
+/// are about this gate specifically rather than about appetite:
+///
+/// 1. **There is nothing to fail closed *to*.** A scope refusal is actionable
+///    because it names the scope to grant. An absent `ai_authz` names none, so
+///    the only "closed" available is *refuse everything*, whose fix hint would
+///    be "add an `ai_authz`" — wrong advice for an operation whose author
+///    decided it needs none.
+/// 2. **The silence is no longer reachable un-vetted.** An operation nobody
+///    annotated at all is now stopped by [`effect_refusal`] before this
+///    question matters. What survives to here is an operation whose author
+///    *was* writing annotations and chose not to require a scope, which is a
+///    decision rather than an absence.
+///
+/// What remains, and is a finding rather than a fix: `//@ ai_effect: read_only`
+/// with no `ai_authz` is world-readable by anyone the exposure lets in, and on
+/// a balance-reading operation that is a real hole. It is a **contract-quality**
+/// problem, so the instrument for it is S4's advice and `contract-check`, not a
+/// gate that can only refuse.
+///
+/// 부재한 `ai_authz`는 같은 원인이 아니다 — 닫을 대상이 없고, 애초에 미주석
+/// 연산은 효과 게이트에서 이미 멈춘다.
 pub(crate) fn required_scopes(registry: &Registry, id: &str, operation: &str) -> Vec<String> {
     let annotations = match registry.resolve_operation(id, operation) {
         Some((_, sig)) => &sig.annotations,
@@ -384,6 +609,10 @@ pub(crate) fn declares_accessor(registry: &Registry, id: &str, operation: &str) 
 /// A `_set_` on a `readonly` attribute resolves to nothing here: the servant
 /// answers `BAD_OPERATION` and there is no annotation to honour, so treating
 /// it as gated would invent a control over a call that cannot happen.
+///
+/// The ancestor walk is [`crate::resolved_attributes`]'s and not a fourth copy
+/// of one — the estate pilot's RC-8 was a walk written out longhand in one
+/// place and omitted in another.
 fn attribute_annotations<'r>(
     registry: &'r Registry,
     id: &str,
@@ -393,45 +622,49 @@ fn attribute_annotations<'r>(
         Some(n) => (n, false),
         None => (operation.strip_prefix("_set_")?, true),
     };
-    let mut ids = vec![id.to_owned()];
-    ids.extend(registry.ancestors(id));
-    for candidate in ids {
-        if let Some(iface) = registry.interface(&candidate)
-            && let Some(attr) = iface.attributes.get(name)
-        {
-            if is_set && attr.readonly {
-                return None;
-            }
-            return Some(&attr.annotations);
-        }
+    let (_, _, attr) =
+        crate::resolved_attributes(registry, id).into_iter().find(|(n, _, _)| n == name)?;
+    if is_set && attr.readonly {
+        return None;
     }
-    None
+    Some(&attr.annotations)
 }
 
-/// The `ai_effect` value, when it is one that needs a human.
+/// What the contract says this operation does. **Never a policy decision** —
+/// [`effect_refusal`] is the only thing that turns this into a verdict, and
+/// [`crate::dryrun`] renders it into a report.
 ///
-/// `idempotent` and `read_only` do not. Anything else that is written there is
-/// treated as needing approval: a value nobody anticipated is not a reason to
-/// let a call through, and the failure direction has to be the safe one.
-///
-/// [`crate::interceptor::ApprovalInterceptor`] reads it through this same
-/// function, for the same reason [`required_scopes`] gives.
-pub(crate) fn destructive_effect(registry: &Registry, id: &str, operation: &str) -> Option<String> {
+/// Reads the resolved surface, so an operation inherited from a base is judged
+/// by the annotation its declaring interface carries.
+pub(crate) fn stated_effect(registry: &Registry, id: &str, operation: &str) -> Effect {
     let annotations = match registry.resolve_operation(id, operation) {
         Some((_, sig)) => &sig.annotations,
-        // Same gap as `required_scopes`, with one difference that matters: an
-        // `ai_effect` on an attribute describes **writing** it. Applying it to
-        // the getter as well made reading a `destructive` attribute demand a
-        // human approval, which is not what the annotation says and is the
-        // kind of gate people learn to click through. A scope is the other
-        // way round — it guards the value, so it guards both accessors.
-        None if operation.starts_with("_set_") => attribute_annotations(registry, id, operation)?,
-        None => return None,
+        // An `ai_effect` on an attribute describes **writing** it. Applying it
+        // to the getter as well made reading a `destructive` attribute demand a
+        // human approval, which is not what the annotation says and is the kind
+        // of gate people learn to click through. A scope is the other way round
+        // — it guards the value, so it guards both accessors.
+        None if operation.starts_with("_set_") => {
+            match attribute_annotations(registry, id, operation) {
+                Some(a) => a,
+                // A `_set_` on a `readonly` attribute, or on nothing at all.
+                // Neither reaches a servant, so there is no call for a contract
+                // to have described; the exposure gate and argument mapping are
+                // what answer it.
+                None => return Effect::Unstated,
+            }
+        }
+        // A getter is a read, stated by the grammar rather than by an
+        // annotation. See `Effect::Harmless`.
+        None if operation.starts_with("_get_") && declares_accessor(registry, id, operation) => {
+            return Effect::Harmless;
+        }
+        None => return Effect::Unstated,
     };
-    let effect = annotations.get("ai_effect")?;
-    match effect.trim() {
-        "read_only" | "readonly" | "idempotent" | "safe" => None,
-        other => Some(other.to_owned()),
+    match annotations.get("ai_effect") {
+        None => Effect::Unstated,
+        Some(v) if is_harmless(v) => Effect::Harmless,
+        Some(v) => Effect::Stated(v.trim().to_owned()),
     }
 }
 
@@ -497,10 +730,14 @@ mod tests {
              }; };",
         );
         assert_eq!(
-            destructive_effect(&r, "IDL:m/I:1.0", "_set_mode").as_deref(),
-            Some("destructive")
+            stated_effect(&r, "IDL:m/I:1.0", "_set_mode"),
+            Effect::Stated("destructive".into())
         );
-        assert_eq!(destructive_effect(&r, "IDL:m/I:1.0", "_get_mode"), None);
+        // A getter is a read by the grammar, so it is `Harmless` and **not**
+        // `Unstated`: refusing every attribute read of every legacy contract
+        // for want of an annotation IDL already implies would be a gate nobody
+        // could satisfy without rewriting the contract.
+        assert_eq!(stated_effect(&r, "IDL:m/I:1.0", "_get_mode"), Effect::Harmless);
         assert_eq!(required_scopes(&r, "IDL:m/I:1.0", "_get_mode"), ["m.mode"]);
         assert_eq!(required_scopes(&r, "IDL:m/I:1.0", "_set_mode"), ["m.mode"]);
     }
@@ -514,8 +751,26 @@ mod tests {
              }; };",
         );
         assert_eq!(
-            destructive_effect(&r, "IDL:m/I:1.0", "_set_mode").as_deref(),
-            Some("destructive")
+            stated_effect(&r, "IDL:m/I:1.0", "_set_mode"),
+            Effect::Stated("destructive".into())
+        );
+    }
+
+    /// A writable attribute nobody annotated is the estate's
+    /// `AuditSink._set_enabled` — the operation that turns an audit log off,
+    /// measured as `allow` to a caller holding no scopes. The getter beside it
+    /// stays allowed, because reading is what `_get_` means.
+    #[test]
+    fn an_unannotated_setter_is_refused_and_its_getter_is_not() {
+        let r = registry("module m { interface Sink { attribute boolean enabled; }; };");
+        let e = Exposure::nothing().allow_interface("IDL:m/Sink:1.0");
+        assert_eq!(stated_effect(&r, "IDL:m/Sink:1.0", "_set_enabled"), Effect::Unstated);
+        assert!(matches!(
+            e.check_call(&r, "IDL:m/Sink:1.0", "_set_enabled", Approval::default(), None),
+            Err(Denied::EffectUnstated { .. })
+        ));
+        assert!(
+            e.check_call(&r, "IDL:m/Sink:1.0", "_get_enabled", Approval::default(), None).is_ok()
         );
     }
 
@@ -556,11 +811,167 @@ mod tests {
         assert!(
             e.check_call(&r, "IDL:bank/Account:1.0", "balance", Approval::default(), None).is_ok()
         );
-        assert!(
-            e.check_call(&r, "IDL:bank/Account:1.0", "touch", Approval::default(), None).is_ok()
-        );
+        // `touch` carries no `ai_effect`, so allowlisting the interface is not
+        // enough to call it: an allowlist says *what an agent may reach* and an
+        // `ai_effect` says *what it does*, and this gate needs both. It used to
+        // pass here, which is the defect.
+        assert!(matches!(
+            e.check_call(&r, "IDL:bank/Account:1.0", "touch", Approval::default(), None),
+            Err(Denied::EffectUnstated { .. })
+        ));
         // And still covers nothing else.
         assert!(!e.exposes("IDL:bank/Ledger:1.0"));
+    }
+
+    /// **The estate defect, in one assertion.** `annotations.get("ai_effect")?`
+    /// read a missing key as permission, so a thirteen-file legacy estate
+    /// exposed 76 of 76 operations — `SystemConsole.SHUTDOWN`,
+    /// `AuditSink.purge`, `InvoiceService.void_invoice` — to a caller holding
+    /// no scopes at all.
+    ///
+    /// If this test ever reads `is_ok()` again, the bridge has gone back to
+    /// telling an autonomous agent that an operation nobody has described is
+    /// safe to call against somebody's production ORB.
+    #[test]
+    fn an_operation_the_contract_says_nothing_about_is_refused() {
+        let r = registry("module m { interface Console { void SHUTDOWN(in string reason); }; };");
+        let e = Exposure::nothing().allow_interface("IDL:m/Console:1.0");
+        let d = e.check_call(&r, "IDL:m/Console:1.0", "SHUTDOWN", Approval::default(), None);
+        assert!(matches!(d, Err(Denied::EffectUnstated { .. })), "{d:?}");
+    }
+
+    /// The refusal has to send the reader to the **contract**. An operator who
+    /// is told only "no" goes looking through a permissions config for a
+    /// problem that is an annotation problem — the misdirection the estate
+    /// recorded arriving by another road (RC-4).
+    #[test]
+    fn the_refusal_names_the_annotation_that_is_missing() {
+        let why =
+            Denied::EffectUnstated { id: "IDL:m/Console:1.0".into(), operation: "SHUTDOWN".into() }
+                .to_string();
+        assert!(why.contains("ai_effect"), "{why}");
+        assert!(why.contains("IDL:m/Console:1.0.SHUTDOWN"), "{why}");
+        // And it must not read as an exposure problem.
+        assert!(!why.contains("not exposed"), "{why}");
+    }
+
+    /// **Absent and unrecognised are different answers, deliberately.** They
+    /// already differed before this batch — by accident, and in the wrong
+    /// direction: a typo needed a human and a silence did not.
+    ///
+    /// The direction now: a typo reaches a human, because somebody was writing
+    /// annotations and got one wrong and there is a value for a person to read.
+    /// A silence goes back to the contract, because there is nothing to say yes
+    /// to.
+    #[test]
+    fn an_absent_effect_and_an_unrecognised_one_are_different_answers() {
+        let r = registry(
+            "module m { interface I {
+               //@ ai_effect: probably_fine
+               void typo();
+               void silent();
+             }; };",
+        );
+        let e = Exposure::nothing().allow_interface("IDL:m/I:1.0");
+        assert!(matches!(
+            e.check_call(&r, "IDL:m/I:1.0", "typo", Approval::default(), None),
+            Err(Denied::NeedsApproval { assumed: false, .. })
+        ));
+        assert!(matches!(
+            e.check_call(&r, "IDL:m/I:1.0", "silent", Approval::default(), None),
+            Err(Denied::EffectUnstated { .. })
+        ));
+    }
+
+    /// An approval is a human saying yes to a call somebody described. One
+    /// `--approve` must not unlock every operation nobody has described — that
+    /// is the fail-open default coming back through the approval flag.
+    #[test]
+    fn an_approval_in_hand_does_not_unlock_a_silence() {
+        let r = registry("module m { interface I { void wipe(); }; };");
+        let e = Exposure::nothing().allow_interface("IDL:m/I:1.0");
+        let approved = Approval { destructive_approved: true };
+        assert!(matches!(
+            e.check_call(&r, "IDL:m/I:1.0", "wipe", approved, None),
+            Err(Denied::EffectUnstated { .. })
+        ));
+    }
+
+    /// The operator's one declaration, and its limits. It covers the silences
+    /// and **only** the silences: an assumption about what nobody wrote cannot
+    /// downgrade what somebody did.
+    #[test]
+    fn an_assumption_covers_the_silences_and_only_the_silences() {
+        let r = registry(
+            "module m { interface I {
+               //@ ai_effect: destructive
+               void close();
+               void silent();
+             }; };",
+        );
+        let e = Exposure::nothing()
+            .allow_interface("IDL:m/I:1.0")
+            .assuming_unannotated(Unannotated::Assume("read_only".into()));
+        assert!(e.check_call(&r, "IDL:m/I:1.0", "silent", Approval::default(), None).is_ok());
+        assert!(matches!(
+            e.check_call(&r, "IDL:m/I:1.0", "close", Approval::default(), None),
+            Err(Denied::NeedsApproval { assumed: false, .. })
+        ));
+    }
+
+    /// The other useful setting, and the field that keeps it honest: an
+    /// approval request that rests on an assumption says so, because the
+    /// operator being asked has to know whether `destructive` is the interface
+    /// owner's word or the bridge operator's.
+    #[test]
+    fn an_assumed_destructive_needs_an_approval_and_says_whose_word_it_is() {
+        let r = registry("module m { interface I { void silent(); }; };");
+        let e = Exposure::nothing()
+            .allow_interface("IDL:m/I:1.0")
+            .assuming_unannotated(Unannotated::Assume("destructive".into()));
+        let d = e.check_call(&r, "IDL:m/I:1.0", "silent", Approval::default(), None);
+        assert!(matches!(d, Err(Denied::NeedsApproval { assumed: true, .. })), "{d:?}");
+        let why = d.unwrap_err().to_string();
+        assert!(why.contains("states no ai_effect"), "{why}");
+        assert!(why.contains("this exposure assumes"), "{why}");
+        // And an approval in hand clears it, unlike an unassumed silence: the
+        // operator has stated what they are approving.
+        assert!(
+            e.check_call(
+                &r,
+                "IDL:m/I:1.0",
+                "silent",
+                Approval { destructive_approved: true },
+                None
+            )
+            .is_ok()
+        );
+    }
+
+    /// `Unannotated::Refuse` is the default, and nothing in this crate may
+    /// quietly pick another one. A bridge that shipped any other default would
+    /// be making a safety claim about contracts it has never seen.
+    #[test]
+    fn the_default_posture_on_a_silence_is_refusal() {
+        assert_eq!(Unannotated::default(), Unannotated::Refuse);
+        assert_eq!(Exposure::nothing().unannotated(), &Unannotated::Refuse);
+    }
+
+    /// The neighbouring gate, examined with the effect gate and deliberately
+    /// **not** changed. See [`required_scopes`]'s docs for why: an absent
+    /// `ai_authz` names no scope, so the only "closed" available is *refuse
+    /// everything* with a fix hint that would be wrong.
+    ///
+    /// The pin is here so that the reasoning is a decision on the record rather
+    /// than an omission somebody re-derives as a bug.
+    #[test]
+    fn an_absent_ai_authz_still_requires_no_scope_and_that_is_deliberate() {
+        let r = registry("module m { interface I { //@ ai_effect: read_only\n long peek(); }; };");
+        assert!(required_scopes(&r, "IDL:m/I:1.0", "peek").is_empty());
+        // Reachable only because the author *did* annotate: a contract that
+        // says nothing at all never gets this far.
+        let e = Exposure::nothing().allow_interface("IDL:m/I:1.0");
+        assert!(e.check_call(&r, "IDL:m/I:1.0", "peek", Approval::default(), None).is_ok());
     }
 
     #[test]
@@ -624,8 +1035,12 @@ mod tests {
     /// scopes on the caller, matched here.
     #[test]
     fn an_ai_authz_scope_is_enforced_against_the_caller() {
+        // Annotated with an effect as well as a scope: the scope gate is what
+        // this test is about, and an operation the effect gate would stop for
+        // an unrelated reason would not exercise it to the end.
         let r = registry(
-            "module bank { interface Account { //@ ai_authz: accounts:write\n void close(); }; };",
+            "module bank { interface Account { //@ ai_authz: accounts:write\n \
+             //@ ai_effect: idempotent\n void close(); }; };",
         );
         let e = Exposure::nothing().allow_interface("IDL:bank/Account:1.0");
 
@@ -650,8 +1065,10 @@ mod tests {
     /// Several scopes, comma-separated, all required.
     #[test]
     fn every_listed_scope_is_required_not_any() {
-        let r =
-            registry("module m { interface I { //@ ai_authz: a:read, b:write\n void f(); }; };");
+        let r = registry(
+            "module m { interface I { //@ ai_authz: a:read, b:write\n \
+             //@ ai_effect: read_only\n void f(); }; };",
+        );
         let e = Exposure::nothing().allow_interface("IDL:m/I:1.0");
         let partial = Caller::new("x").with_scope("a:read");
         assert!(matches!(

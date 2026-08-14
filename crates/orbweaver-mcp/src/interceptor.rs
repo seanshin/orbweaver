@@ -198,7 +198,7 @@ use crate::guard::{
     DECISION_ALLOW, DECISION_DRY_RUN_ALLOW, DECISION_DRY_RUN_REFUSE, DECISION_REFUSE, audit_entry,
 };
 use crate::identity::Caller;
-use crate::policy::{Approval, Denied, Exposure, destructive_effect, required_scopes};
+use crate::policy::{Approval, Denied, Exposure, Unannotated, effect_refusal, required_scopes};
 use crate::promote::CallStats;
 use crate::telemetry::{ABSENT, Decision, OUTCOME_OK, Trace};
 
@@ -625,6 +625,18 @@ pub trait Interceptor {
     fn counters_mut(&mut self) -> Option<&mut CallStats> {
         None
     }
+
+    /// The posture this stage takes on operations whose contract states no
+    /// `ai_effect`. `None` from every stage but [`ApprovalInterceptor`].
+    ///
+    /// Exists so [`crate::dryrun::predict`] can render *whose* word an effect
+    /// is by reading the stage that will act on it, rather than from a copy of
+    /// the exposure handed to it separately. A report and the gate it predicts
+    /// cannot then disagree about what a silence means — the same rule the
+    /// module docs give for `Chain::walk`.
+    fn unannotated(&self) -> Option<&Unannotated> {
+        None
+    }
 }
 
 /// An ordered, extensible stack of [`Interceptor`]s.
@@ -667,6 +679,10 @@ impl Chain {
         chain.push(STAGE_AUDIT, AuditInterceptor::default());
         // §4.5 #4, just inside it: counts every decision the gates make.
         chain.push(STAGE_TELEMETRY, TelemetryInterceptor::default());
+        // The safety stage's posture on unannotated operations comes from the
+        // same exposure the allowlist does, taken before it moves, so the two
+        // cannot be configured apart.
+        let approval = ApprovalInterceptor::for_exposure(&exposure);
         // §4.5 #1, the two halves of authentication and authorization.
         chain.push(STAGE_EXPOSURE, ExposureInterceptor::new(exposure));
         chain.push(STAGE_SCOPES, ScopeInterceptor);
@@ -674,8 +690,18 @@ impl Chain {
         // `Chain::quota`. Not built in: the limit is a number only an operator
         // has, and both numbers a default could pick are wrong.
         // §4.5 #3, the contract half; SEAT_SAFETY_CONTENT's half is unoccupied.
-        chain.push(STAGE_APPROVAL, ApprovalInterceptor);
+        chain.push(STAGE_APPROVAL, approval);
         chain
+    }
+
+    /// The posture the chain's safety stage takes on operations whose contract
+    /// states no `ai_effect`, or `None` for a chain that has no such stage.
+    ///
+    /// Read off the stage itself. [`crate::dryrun::predict`] uses it to say
+    /// *whose* word an effect is, which is the difference between "the contract
+    /// says this is safe" and "somebody assumed it was".
+    pub fn unannotated(&self) -> Option<&Unannotated> {
+        self.stages.iter().find_map(|s| s.interceptor.unannotated())
     }
 
     /// Appends a stage at the innermost end — the last to gate, the first to
@@ -1022,25 +1048,59 @@ impl Interceptor for ScopeInterceptor {
 }
 
 /// §4.5 #3, the contract half of the safety seat: an operation whose
-/// `ai_effect` is not one of the harmless ones needs a human's approval.
+/// `ai_effect` is not one of the harmless ones needs a human's approval, and
+/// an operation whose contract states no `ai_effect` at all is refused unless
+/// the exposure declares what a silence means.
 ///
 /// It runs *after* [`ScopeInterceptor`] for the reason [`Exposure::check_call`]
 /// states: an unauthorised caller must not be told which operations would
 /// merely have needed an approval.
-pub struct ApprovalInterceptor;
+///
+/// **Build it from the exposure** ([`ApprovalInterceptor::for_exposure`], which
+/// is what [`Chain::standard`] does). A hand-built chain that pairs an
+/// `Exposure` carrying an [`Unannotated::Assume`] with a
+/// [`ApprovalInterceptor::default`] has an allowlist and a safety posture that
+/// disagree, and the posture is the one that acts.
+pub struct ApprovalInterceptor {
+    unannotated: Unannotated,
+}
+
+impl ApprovalInterceptor {
+    /// The gate for one posture on unannotated operations.
+    pub fn new(unannotated: Unannotated) -> Self {
+        Self { unannotated }
+    }
+
+    /// The gate for an exposure's own posture. The way to build one.
+    pub fn for_exposure(exposure: &Exposure) -> Self {
+        Self::new(exposure.unannotated().clone())
+    }
+}
+
+impl Default for ApprovalInterceptor {
+    /// [`Unannotated::Refuse`] — the safe default, and the one a chain built
+    /// without an exposure must take.
+    fn default() -> Self {
+        Self::new(Unannotated::default())
+    }
+}
 
 impl Interceptor for ApprovalInterceptor {
     fn before(&mut self, ctx: &CallContext<'_>) -> Outcome {
-        if let Some(effect) = destructive_effect(ctx.registry, ctx.target, ctx.operation)
-            && !ctx.approval.destructive_approved
-        {
-            return Outcome::Refuse(Denied::NeedsApproval {
-                id: ctx.target.to_owned(),
-                operation: ctx.operation.to_owned(),
-                effect,
-            });
+        match effect_refusal(
+            ctx.registry,
+            &self.unannotated,
+            ctx.target,
+            ctx.operation,
+            ctx.approval,
+        ) {
+            Some(why) => Outcome::Refuse(why),
+            None => Outcome::Proceed,
         }
-        Outcome::Proceed
+    }
+
+    fn unannotated(&self) -> Option<&Unannotated> {
+        Some(&self.unannotated)
     }
 }
 
@@ -1458,9 +1518,13 @@ mod tests {
           //@ ai_effect: read_only
           long balance();
           //@ ai_authz: accounts:write
+          //@ ai_effect: idempotent
           void deposit(in long cents);
           //@ ai_effect: destructive
           void close();
+          // Deliberately unannotated: the fixture keeps one operation whose
+          // contract says nothing, so the stack's fourth verdict
+          // (`Denied::EffectUnstated`) has something to act on here too.
           void touch();
         };
       };";

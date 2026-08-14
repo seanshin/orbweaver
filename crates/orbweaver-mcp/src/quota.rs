@@ -456,9 +456,19 @@ mod tests {
         interface Account {
           //@ ai_effect: read_only
           long balance();
+          //@ ai_effect: idempotent
           void touch();
           //@ ai_effect: destructive
           void close();
+        };
+        // The second interface is declared here rather than only named by
+        // `OTHER`. It used to be absent from the catalog and the budget cases
+        // still passed, because a target nothing knew about reached the quota
+        // stage regardless — the effect gate now stops one, which is how the
+        // gap in the fixture surfaced.
+        interface Ledger {
+          //@ ai_effect: read_only
+          long balance();
         };
       };";
 

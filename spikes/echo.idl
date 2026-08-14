@@ -24,6 +24,7 @@ module spike {
     Payload blob(in unsigned long size);
     //@ ai_desc: Sums the payload's octets modulo 2^31-1
     //@ ai_authz: echo:blob
+    //@ ai_effect: read_only
     long    blob_sum(in Payload b);
     wstring echo_wstring(in wstring w);
     Echo    get_self();

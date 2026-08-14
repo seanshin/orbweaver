@@ -320,18 +320,23 @@ fn interface_text(registry: &Registry, id: &str) -> String {
         text.push(' ');
         text.push_str(desc);
     }
-    if let Some(iface) = registry.interface(id) {
-        for (name, sig) in &iface.operations {
+    // The **resolved** surface, through the crate's one walk, because the
+    // lexical haystack this mirrors moved to it: an embedding built from the
+    // declarations and a haystack built from the surface would put the two
+    // paths on different evidence, which is the thing this function's contract
+    // with `search_interfaces` forbids.
+    if registry.interface(id).is_some() {
+        for (name, _, sig) in orbweaver_mcp::resolved_operations(registry, id) {
             text.push(' ');
-            text.push_str(name);
+            text.push_str(&name);
             if let Some(d) = sig.annotations.get("ai_desc") {
                 text.push(' ');
                 text.push_str(d);
             }
         }
-        for (name, attr) in &iface.attributes {
+        for (name, _, attr) in orbweaver_mcp::resolved_attributes(registry, id) {
             text.push(' ');
-            text.push_str(name);
+            text.push_str(&name);
             if let Some(d) = attr.annotations.get("ai_desc") {
                 text.push(' ');
                 text.push_str(d);

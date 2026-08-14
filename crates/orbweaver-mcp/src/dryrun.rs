@@ -104,7 +104,7 @@ use orbweaver_dynamic::json::Json;
 
 use crate::identity::Caller;
 use crate::interceptor::{CallContext, Chain, DryRun, StageOutcome};
-use crate::policy::{Approval, Denied, Exposure, destructive_effect};
+use crate::policy::{Approval, Denied, Effect, Exposure, Unannotated, stated_effect};
 use crate::{obj, s};
 
 /// The annotation a contract may use to name who can approve a destructive
@@ -146,6 +146,16 @@ pub enum Would {
     /// The contract marks the operation as needing a human, and no approval is
     /// in hand.
     NeedApproval,
+    /// **The contract does not say what the operation does.** No `ai_effect`
+    /// reaches it and the exposure declares no assumption for the silences.
+    ///
+    /// A row of its own because its fix is a third place: not the allowlist
+    /// (`not_exposed`), not a role (`need_scope`), not a person
+    /// (`need_approval`) — the **contract**, or one operator declaration about
+    /// what a silence means for this exposure. Folding it into `need_approval`
+    /// would have sent every one of a legacy estate's silences to a human who
+    /// has nothing to read before saying yes.
+    NeedEffect,
     /// A consumption budget is spent ([`crate::quota`]). **The one row that is
     /// not about permission**: nothing is missing from the caller and nothing
     /// has to be added to a role — the answer is about what has been used, and
@@ -159,12 +169,13 @@ pub enum Would {
 impl Would {
     /// Every variant, in the order a summary lists them. Fixed so that two
     /// surveys of the same exposure diff cleanly.
-    pub const ALL: [Would; 7] = [
+    pub const ALL: [Would; 8] = [
         Would::Allow,
         Would::NotExposed,
         Would::NeedAuthentication,
         Would::NeedScope,
         Would::NeedApproval,
+        Would::NeedEffect,
         Would::Exhausted,
         Would::Refuse,
     ];
@@ -183,6 +194,7 @@ impl Would {
             }
             Some(Denied::MissingScope { .. }) => Would::NeedScope,
             Some(Denied::NeedsApproval { .. }) => Would::NeedApproval,
+            Some(Denied::EffectUnstated { .. }) => Would::NeedEffect,
             Some(Denied::QuotaExhausted { .. }) => Would::Exhausted,
             Some(Denied::Intercepted { .. }) => Would::Refuse,
         }
@@ -196,6 +208,7 @@ impl Would {
             Would::NeedAuthentication => "need_authentication",
             Would::NeedScope => "need_scope",
             Would::NeedApproval => "need_approval",
+            Would::NeedEffect => "need_effect",
             Would::Exhausted => "exhausted",
             Would::Refuse => "refuse",
         }
@@ -218,6 +231,14 @@ pub struct Prediction {
     /// "allowed because you passed an approval" is not the same finding as
     /// "harmless".
     effect: Option<String>,
+    /// Whether `effect` was written by the **operator** (as this exposure's
+    /// [`crate::policy::Unannotated`] assumption) rather than by the contract.
+    ///
+    /// The field an operator signing an exposure off reads before anything
+    /// else: a page of `allow` rows resting on an assumption and a page resting
+    /// on annotations are the same page otherwise, and only one of them is a
+    /// statement about the software.
+    effect_assumed: bool,
     /// Who may approve, if the contract says. See [`AI_APPROVER`].
     approver: Option<String>,
     /// Whether the contract declares this operation at all.
@@ -302,6 +323,11 @@ impl Prediction {
         }
         if let Some(effect) = &self.effect {
             f.push(("effect", s(effect)));
+            // Only when it is not the contract's own word. A deployment on an
+            // annotated contract sees the document it always saw.
+            if self.effect_assumed {
+                f.push(("effect_stated_by", s("exposure")));
+            }
         }
         if let Some(approver) = &self.approver {
             f.push(("approver", s(approver)));
@@ -324,6 +350,9 @@ fn outcome_name(outcome: &StageOutcome) -> &'static str {
 /// included — so a deployment that has filled [`crate::interceptor::SEAT_QUOTA`]
 /// sees its own stage in the answer.
 pub fn predict(chain: &mut Chain, ctx: &CallContext<'_>) -> Prediction {
+    // Read off the chain's own approval stage rather than from a copy, so a
+    // report cannot describe a posture the gate is not taking.
+    let assumption = chain.unannotated().cloned();
     let dry = chain.dry_run(ctx);
     let refusal = dry.refusal().map(|(_, why)| why.clone());
     let would = Would::of(refusal.as_ref());
@@ -333,7 +362,18 @@ pub fn predict(chain: &mut Chain, ctx: &CallContext<'_>) -> Prediction {
         }
         _ => None,
     };
-    let effect = destructive_effect(ctx.registry, ctx.target, ctx.operation);
+    // What the row names as the effect, and who said it. An `Unstated` that the
+    // chain refused needs no value here — its `why` names the annotation that is
+    // missing, which is the actionable half. An `Unstated` the chain *allowed*
+    // needs one badly: that row is indistinguishable from a genuinely
+    // `read_only` one otherwise, and the difference is the whole of what an
+    // operator is signing.
+    let (effect, effect_assumed) =
+        match (stated_effect(ctx.registry, ctx.target, ctx.operation), &assumption) {
+            (Effect::Stated(e), _) => (Some(e), false),
+            (Effect::Unstated, Some(Unannotated::Assume(a))) => (Some(a.clone()), true),
+            _ => (None, false),
+        };
     let approver = ctx
         .registry
         .resolve_operation(ctx.target, ctx.operation)
@@ -351,6 +391,7 @@ pub fn predict(chain: &mut Chain, ctx: &CallContext<'_>) -> Prediction {
         dry,
         scope,
         effect,
+        effect_assumed,
         approver,
     }
 }
@@ -449,37 +490,44 @@ pub fn survey(
             Json::Array(caller.map(|c| c.scopes.as_slice()).unwrap_or(&[]).iter().map(s).collect()),
         ),
         ("approval", obj([("destructive_approved", Json::Bool(approval.destructive_approved))])),
+        // Stated once, at the top, because it conditions every row below it.
+        // `refuse` is the default posture; anything else is an operator's
+        // declaration about the operations whose contracts say nothing, and a
+        // page of `allow` rows means a different thing under each.
+        (
+            "unannotated_effect",
+            match exposure.unannotated() {
+                Unannotated::Refuse => s("refuse"),
+                Unannotated::Assume(effect) => s(effect),
+            },
+        ),
         ("interfaces", Json::Array(interfaces)),
         ("unknown_interfaces", Json::Array(unknown)),
         ("summary", summary(&totals)),
     ])
 }
 
-/// Every operation name the gate could be asked about for `id`: what the
-/// contract declares (inherited included), union what the exposure names.
+/// Every operation name the gate could be asked about for `id`: the resolved
+/// surface ([`crate::resolved_operations`]), union what the exposure names.
 /// Sorted, because a report an operator diffs must not reorder itself.
+///
+/// The ancestor walk used to be written out here, and *only* here — which is
+/// how the dry run came to judge thirteen operations of an object
+/// `describe_interface` showed eleven of (RC-8). It is now the crate's one
+/// walk, and `the_described_surface_is_the_surveyed_surface` holds this
+/// function and `describe_interface` to the same set.
 pub(crate) fn operations_of(registry: &Registry, exposure: &Exposure, id: &str) -> Vec<String> {
     let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let mut collect = |iface: &orbweaver_registry::InterfaceEntry| {
-        names.extend(iface.operations.keys().cloned());
-        // Attribute accessors are operations on the wire, and an exposure that
-        // names the interface makes them callable. Leaving them out of the
-        // survey meant an operator previewing a deployment saw `ping` and not
-        // `_get_balance`, while an agent could call both — which is exactly
-        // the surprise the dry run exists to remove.
-        for (attr, sig) in &iface.attributes {
-            names.insert(format!("_get_{attr}"));
-            if !sig.readonly {
-                names.insert(format!("_set_{attr}"));
-            }
-        }
-    };
-    if let Some(iface) = registry.interface(id) {
-        collect(iface);
-    }
-    for base in registry.ancestors(id) {
-        if let Some(iface) = registry.interface(&base) {
-            collect(iface);
+    names.extend(crate::resolved_operations(registry, id).into_iter().map(|(name, _, _)| name));
+    // Attribute accessors are operations on the wire, and an exposure that
+    // names the interface makes them callable. Leaving them out of the survey
+    // meant an operator previewing a deployment saw `ping` and not
+    // `_get_balance`, while an agent could call both — which is exactly the
+    // surprise the dry run exists to remove.
+    for (attr, _, sig) in crate::resolved_attributes(registry, id) {
+        names.insert(format!("_get_{attr}"));
+        if !sig.readonly {
+            names.insert(format!("_set_{attr}"));
         }
     }
     names.extend(exposure.allowed_operations(id).cloned());
@@ -517,10 +565,15 @@ mod tests {
           //@ ai_effect: read_only
           long balance();
           //@ ai_authz: accounts:write
+          //@ ai_effect: idempotent
           void deposit(in long cents);
           //@ ai_effect: destructive
           //@ ai_approver: the duty risk officer
           void close();
+          // Deliberately unannotated, and the fixture is better for it: one
+          // operation whose contract says nothing gives the survey a fourth
+          // verdict, so the document under test is one an operator could
+          // actually read something off.
           void touch();
         };
       };";
@@ -746,18 +799,34 @@ mod tests {
         assert_eq!(doc.get("stage").and_then(Json::as_str), Some(STAGE_EXPOSURE));
     }
 
-    /// An operation the contract does not declare: the gates check permission,
-    /// not existence, so a wholesale exposure lets the name through and the
-    /// call would then fail at argument mapping. The report says both facts
-    /// instead of inventing a verdict the gate did not give.
+    /// An operation the contract does not declare. The gates still check
+    /// *permission* rather than existence — `declared: false` is the report's
+    /// answer to "does this exist", and it is a separate field from the
+    /// verdict, so the two facts are never resolved into one.
+    ///
+    /// The verdict is `need_effect`, because a contract that does not declare
+    /// an operation is maximally silent about what it does. That answer is
+    /// **byte-identical to the one a declared-but-unannotated operation gets**,
+    /// which is the property this test exists to hold: a refusal must never
+    /// become an oracle for what exists behind it. It used to be `allow` for
+    /// both, which had the same non-oracle property and the wrong default.
     #[test]
-    fn an_unknown_operation_is_reported_undeclared_rather_than_refused() {
+    fn a_refusal_does_not_reveal_whether_the_operation_exists() {
         let reg = registry(IDL);
         let mut chain = Chain::standard(Exposure::nothing().allow_interface(ACCOUNT));
-        let p = predict(&mut chain, &ctx(&reg, None, "no_such_op", Approval::default()));
-        assert_eq!(p.would(), Would::Allow, "the gate has no opinion about existence");
-        assert!(!p.declared());
-        assert_eq!(p.to_json().get("declared"), Some(&Json::Bool(false)));
+        let invented = predict(&mut chain, &ctx(&reg, None, "no_such_op", Approval::default()));
+        // `touch` is declared and carries no `ai_effect`; `no_such_op` is not
+        // declared at all. The gate must not be able to tell a caller which.
+        let real = predict(&mut chain, &ctx(&reg, None, "touch", Approval::default()));
+        assert_eq!(invented.would(), Would::NeedEffect);
+        assert_eq!(real.would(), invented.would(), "the verdicts must be indistinguishable");
+        assert_eq!(real.stage(), invented.stage());
+
+        // Existence is still reported, as its own field, to the operator
+        // reading the document — never as the verdict.
+        assert!(!invented.declared());
+        assert!(real.declared());
+        assert_eq!(invented.to_json().get("declared"), Some(&Json::Bool(false)));
 
         // Named operation by operation, the same unknown name is hidden
         // instead — and then it is the exposure that answers, not the catalog.
@@ -887,7 +956,10 @@ mod tests {
                 allowed += 1;
             }
         }
-        assert_eq!(allowed, 4, "balance, deposit, touch and the undeclared name");
+        // `balance` and `deposit`: the two the contract describes and this
+        // caller may have. `close` needs a human, and `touch` and the invented
+        // name are silences the contract never described.
+        assert_eq!(allowed, 2, "balance and deposit");
         assert_eq!(g.stats().calls(ACCOUNT, "balance"), 0);
         assert_eq!(g.audit().len(), 5, "five questions, five lines, no calls");
     }
@@ -915,19 +987,30 @@ mod tests {
                 )
             })
             .collect();
+        // One of each verdict the contract can produce, which is what makes
+        // this document readable: an operator sees four different answers and
+        // four different things to do about them. A survey whose every row says
+        // the same word carries no signal whatever it says — the estate pilot
+        // measured 7,253 bytes of `allow` and called it the unusable gate.
         assert_eq!(
             seen,
             vec![
                 ("balance", "allow"),
                 ("close", "need_approval"),
                 ("deposit", "need_scope"),
-                ("touch", "allow"),
+                ("touch", "need_effect"),
             ]
         );
         assert_eq!(
             doc.get("summary").and_then(|x| x.get("allow")),
-            Some(&Json::Number("2".into()))
+            Some(&Json::Number("1".into()))
         );
+        assert_eq!(
+            doc.get("summary").and_then(|x| x.get("need_effect")),
+            Some(&Json::Number("1".into()))
+        );
+        // The posture every row above was judged under, stated once at the top.
+        assert_eq!(doc.get("unannotated_effect").and_then(Json::as_str), Some("refuse"));
         assert_eq!(
             doc.get("summary").and_then(|x| x.get("need_scope")),
             Some(&Json::Number("1".into()))

@@ -453,6 +453,7 @@ b","method":"nope"}"#,
                interface Account {
                  //@ ai_effect: read_only
                  long balance();
+                 //@ ai_effect: idempotent
                  void deposit(in long cents);
                };
              };",

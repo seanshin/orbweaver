@@ -58,12 +58,99 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbweaver_dynamic::json::Json;
 use orbweaver_dynamic::{anyjson, invoke};
 use orbweaver_giop::Connection;
-use orbweaver_registry::{Entry, ParamDirection, Registry};
+use orbweaver_registry::{AttributeSig, Entry, OperationSig, ParamDirection, Registry};
 
 use embed::{VectorIndex, Via};
 use handles::CapabilityTable;
 use identity::Caller;
 use policy::{Approval, Denied, Exposure};
+
+/// Every operation of `id`'s **resolved** surface — what it declares plus what
+/// it inherits — as `(name, declared_in, signature)`, sorted by name.
+///
+/// # Why this is public, and why it is one function
+///
+/// The estate pilot (`docs/pipeline-runs/2026-08-14-estate.md`, RC-8) measured
+/// three views of one live object disagreeing: `describe_interface` showed the
+/// agent **11** operations, the dry run judged **13**, and the servant answered
+/// **13**. The two missing ones were inherited from a base that ten of the
+/// estate's twelve interfaces share. So an agent could not *discover* an
+/// inherited operation, could *call* one, and a reviewer reading the
+/// description did not know it was there.
+///
+/// The cause was not a missing walk in one function. It was that a surface was
+/// described by walking `InterfaceEntry::operations` — the operations declared
+/// *here* — in four separate places, one of which ([`dryrun::operations_of`])
+/// had been taught to resolve inheritance and the other three had not. This is
+/// the one walk, it is public so that nothing inside or outside the crate has
+/// to write a fourth, and `the_described_surface_is_the_surveyed_surface` pins
+/// description and enforcement to the same set.
+///
+/// A name declared on `id` shadows the same name on a base, which is what a
+/// servant does; `declared_in` says which interface the surviving declaration
+/// came from, because inheritance is information an agent and a reviewer both
+/// want — not noise to flatten away.
+pub fn resolved_operations<'r>(
+    registry: &'r Registry,
+    id: &str,
+) -> Vec<(String, String, &'r OperationSig)> {
+    let mut out: BTreeMap<String, (String, &'r OperationSig)> = BTreeMap::new();
+    for candidate in surface_ids(registry, id) {
+        let Some(iface) = registry.interface(&candidate) else { continue };
+        for (name, sig) in &iface.operations {
+            out.entry(name.clone()).or_insert_with(|| (candidate.clone(), sig));
+        }
+    }
+    out.into_iter().map(|(name, (declared_in, sig))| (name, declared_in, sig)).collect()
+}
+
+/// Every attribute of `id`'s resolved surface, as `(name, declared_in,
+/// signature)`, sorted by name.
+///
+/// Attributes inherit exactly as operations do, and an inherited one is
+/// callable on the derived interface as `_get_`/`_set_` (§4.4) — so the same
+/// walk, for the same reason [`resolved_operations`] gives.
+pub fn resolved_attributes<'r>(
+    registry: &'r Registry,
+    id: &str,
+) -> Vec<(String, String, &'r AttributeSig)> {
+    let mut out: BTreeMap<String, (String, &'r AttributeSig)> = BTreeMap::new();
+    for candidate in surface_ids(registry, id) {
+        let Some(iface) = registry.interface(&candidate) else { continue };
+        for (name, sig) in &iface.attributes {
+            out.entry(name.clone()).or_insert_with(|| (candidate.clone(), sig));
+        }
+    }
+    out.into_iter().map(|(name, (declared_in, sig))| (name, declared_in, sig)).collect()
+}
+
+/// `id` first, then every ancestor in the registry's own order, so that a
+/// nearer declaration is met before a further one.
+fn surface_ids(registry: &Registry, id: &str) -> Vec<String> {
+    let mut ids = Vec::with_capacity(1);
+    ids.push(id.to_owned());
+    ids.extend(registry.ancestors(id));
+    ids
+}
+
+/// Every operation of the exposure whose contract states no `ai_effect`, as
+/// `(repository id, operation)`.
+///
+/// What an operator needs to see at startup and in a run record: the size of
+/// the silence they are either annotating or declaring an assumption about.
+/// Printing it is what turns "the bridge refused everything" into "this
+/// catalog has sixty-four unannotated operations".
+pub fn unannotated_operations(registry: &Registry, exposure: &Exposure) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for id in exposure.interfaces() {
+        for operation in dryrun::operations_of(registry, exposure, id) {
+            if policy::stated_effect(registry, id, &operation) == policy::Effect::Unstated {
+                out.push((id.clone(), operation));
+            }
+        }
+    }
+    out
+}
 
 /// Why a tool call did not produce a result.
 #[derive(Debug)]
@@ -574,7 +661,9 @@ fn search_interfaces(
     let mut candidates: Vec<(f64, Via, &String)> = Vec::new();
 
     for id in exposure.interfaces() {
-        let Some(iface) = registry.interface(id) else { continue };
+        if registry.interface(id).is_none() {
+            continue;
+        }
         let desc =
             registry.annotations(id).and_then(|a| a.get("ai_desc")).cloned().unwrap_or_default();
 
@@ -585,18 +674,23 @@ fn search_interfaces(
         // measured both absences as indexing gaps, not vocabulary gaps.
         // Other annotation keys (ai_authz, ai_effect) stay out: they are
         // policy metadata, not vocabulary (search-v1 line 61 pins this).
+        //
+        // The **resolved** surface, inherited operations and attributes
+        // included: an interface an agent can only name by an operation it
+        // inherits was unfindable, which is the same cause as RC-8 reaching
+        // search instead of describe. See [`resolved_operations`].
         let mut haystack = format!("{id} {desc}");
-        for (name, sig) in &iface.operations {
+        for (name, _, sig) in resolved_operations(registry, id) {
             haystack.push(' ');
-            haystack.push_str(name);
+            haystack.push_str(&name);
             if let Some(d) = sig.annotations.get("ai_desc") {
                 haystack.push(' ');
                 haystack.push_str(d);
             }
         }
-        for (name, attr) in &iface.attributes {
+        for (name, _, attr) in resolved_attributes(registry, id) {
             haystack.push(' ');
-            haystack.push_str(name);
+            haystack.push_str(&name);
             if let Some(d) = attr.annotations.get("ai_desc") {
                 haystack.push(' ');
                 haystack.push_str(d);
@@ -629,13 +723,19 @@ fn search_interfaces(
     let matched = candidates.len();
     let mut hits: Vec<Json> = Vec::new();
     for (score, via, id) in candidates.into_iter().take(limit) {
-        let Some(iface) = registry.interface(id) else { continue };
+        if registry.interface(id).is_none() {
+            continue;
+        }
         let desc =
             registry.annotations(id).and_then(|a| a.get("ai_desc")).cloned().unwrap_or_default();
         let mut fields = vec![
             ("id", s(id)),
             ("description", s(desc)),
-            ("operations", Json::Number(iface.operations.len().to_string())),
+            // The count of the surface an agent can reach, not of the
+            // declarations on one interface. A hit saying `operations: 11` for
+            // something that answers 13 is the same lie `describe_interface`
+            // used to tell, one screen earlier.
+            ("operations", Json::Number(resolved_operations(registry, id).len().to_string())),
             // The bootstrap: an agent cannot construct a handle and has to
             // be given one. Only this session's, and only live ones.
             ("handles", Json::Array(table.handles_for(id).into_iter().map(s).collect())),
@@ -794,19 +894,35 @@ fn segments_into_atoms(atoms: &BTreeSet<String>, text: &str) -> bool {
 /// forbidden: telling an agent about a call it may not make invites it to try,
 /// and the refusal would then have to explain itself in terms of something it
 /// should not have known about.
+///
+/// # The surface, not the declarations
+///
+/// What is listed is [`resolved_operations`] and [`resolved_attributes`] — the
+/// interface's own **and** everything it inherits — because that is the set a
+/// servant answers and the set the gate judges. Walking only what the
+/// interface declares showed an agent 11 operations of a 13-operation object
+/// (RC-8): it could not discover an inherited operation, it could call one, and
+/// the gate was judging calls the agent had never been shown. A description
+/// narrower than the reachable surface is not a safety margin — it is an agent
+/// planning against the wrong object.
+///
+/// Each row carries `declared_in`, so *where* an operation comes from stays
+/// visible. Inheritance is information; flattening it away would trade one
+/// missing fact for another.
 fn describe_interface(registry: &Registry, exposure: &Exposure, id: &str) -> Result<Json, Denied> {
     if !exposure.exposes(id) {
         return Err(Denied::InterfaceNotExposed(id.to_owned()));
     }
-    let Some(iface) = registry.interface(id) else {
+    if registry.interface(id).is_none() {
         return Err(Denied::InterfaceNotExposed(id.to_owned()));
-    };
+    }
 
     let mut ops = Vec::new();
-    for (name, sig) in &iface.operations {
-        if !exposure.exposes_operation(id, name) {
+    for (name, declared_in, sig) in resolved_operations(registry, id) {
+        if !exposure.exposes_operation(id, &name) {
             continue;
         }
+        let name = &name;
         let params: Vec<Json> = sig
             .params
             .iter()
@@ -828,6 +944,9 @@ fn describe_interface(registry: &Registry, exposure: &Exposure, id: &str) -> Res
             .collect();
         ops.push(obj([
             ("name", s(name)),
+            // Which interface the surviving declaration came from — `id` itself
+            // for one declared here, a base for one inherited.
+            ("declared_in", s(&declared_in)),
             ("returns", s(type_name(&sig.returns))),
             ("parameters", Json::Array(params)),
             ("oneway", Json::Bool(sig.oneway)),
@@ -837,9 +956,10 @@ fn describe_interface(registry: &Registry, exposure: &Exposure, id: &str) -> Res
     }
 
     let mut attrs = Vec::new();
-    for (name, a) in &iface.attributes {
+    for (name, declared_in, a) in resolved_attributes(registry, id) {
         attrs.push(obj([
-            ("name", s(name)),
+            ("name", s(&name)),
+            ("declared_in", s(&declared_in)),
             ("type", s(type_name(&a.tc))),
             ("readonly", Json::Bool(a.readonly)),
             ("annotations", annotations(&a.annotations)),
@@ -1030,6 +1150,7 @@ mod tests {
           };
           //@ ai_desc: Aggregate ledger over all accounts
           interface Ledger {
+            //@ ai_effect: read_only
             long long total();
           };
         };"#;
@@ -1134,6 +1255,144 @@ mod tests {
         let hits = search_interfaces(&r, &e, &CapabilityTable::new("t"), "", 5, None);
         assert_eq!(hits.get("matched"), Some(&Json::Number("20".into())));
         assert_eq!(hits.get("truncated"), Some(&Json::Bool(true)));
+    }
+
+    // ---- the resolved surface (estate RC-8) ---------------------------------
+
+    /// An inheriting interface, which is what a real estate is made of: ten of
+    /// the estate's twelve interfaces inherit a shared base, and one inherits
+    /// two levels. **A flat fixture cannot see this class at all**, which is
+    /// why it went unfound until a set of contracts existed to run against.
+    const INHERITING: &str = "module fleet {
+        //@ ai_desc: Everything in this estate answers for itself
+        interface Describable {
+          //@ ai_effect: read_only
+          //@ ai_desc: A one-line summary of this object
+          string describe();
+          //@ ai_effect: read_only
+          readonly attribute string label;
+        };
+        interface Routable : Describable {
+          //@ ai_effect: read_only
+          string route();
+        };
+        interface Dispatcher : Routable {
+          //@ ai_effect: idempotent
+          void assign(in string job);
+        };
+      };";
+
+    const DISPATCHER: &str = "IDL:fleet/Dispatcher:1.0";
+
+    /// **RC-8, pinned.** The agent was shown 11 operations of an object the
+    /// guard judged 13 of and the servant answered 13 of, so it successfully
+    /// invoked an operation its own description of the interface did not list.
+    ///
+    /// A description narrower than the reachable surface is not a safety
+    /// margin. An agent that cannot see an operation cannot reason about it,
+    /// and a reviewer reading the description does not know it is there.
+    #[test]
+    fn describe_lists_inherited_operations_and_says_where_each_comes_from() {
+        let r = registry(INHERITING);
+        let e = Exposure::nothing().allow_interface(DISPATCHER);
+        let doc = describe_interface(&r, &e, DISPATCHER).expect("exposed");
+        let Some(Json::Array(ops)) = doc.get("operations") else { panic!("{doc}") };
+        let seen: Vec<(&str, &str)> = ops
+            .iter()
+            .map(|o| {
+                (
+                    o.get("name").and_then(Json::as_str).unwrap_or(""),
+                    o.get("declared_in").and_then(Json::as_str).unwrap_or(""),
+                )
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                ("assign", DISPATCHER),
+                ("describe", "IDL:fleet/Describable:1.0"),
+                ("route", "IDL:fleet/Routable:1.0"),
+            ],
+            "{doc}"
+        );
+        // Attributes inherit the same way and were omitted the same way.
+        let Some(Json::Array(attrs)) = doc.get("attributes") else { panic!("{doc}") };
+        assert_eq!(attrs.len(), 1, "{doc}");
+        assert_eq!(attrs[0].get("name").and_then(Json::as_str), Some("label"));
+        assert_eq!(
+            attrs[0].get("declared_in").and_then(Json::as_str),
+            Some("IDL:fleet/Describable:1.0"),
+            "inheritance is information, not noise: {doc}"
+        );
+    }
+
+    /// **The property, not the instance.** RC-8 was not a missing walk in one
+    /// function — it was four functions describing a surface and one of them
+    /// resolving inheritance. Equality between what an agent is *shown* and
+    /// what the gate *judges* is what makes the whole class impossible, and a
+    /// test naming only `describe_interface` would let the next copy of the
+    /// walk drift the same way.
+    #[test]
+    fn the_described_surface_is_the_surveyed_surface() {
+        let r = registry(INHERITING);
+        let e = Exposure::nothing().allow_interface(DISPATCHER);
+
+        let doc = describe_interface(&r, &e, DISPATCHER).expect("exposed");
+        let Some(Json::Array(ops)) = doc.get("operations") else { panic!("{doc}") };
+        let described: BTreeSet<String> = ops
+            .iter()
+            .filter_map(|o| o.get("name").and_then(Json::as_str))
+            .map(str::to_owned)
+            .collect();
+
+        // What the gate would be asked about, minus the attribute accessors —
+        // those are callable and surveyed, and `describe` renders them under
+        // `attributes` rather than as operations, which is a rendering
+        // difference and not a disagreement about the surface.
+        let surveyed: BTreeSet<String> = dryrun::operations_of(&r, &e, DISPATCHER)
+            .into_iter()
+            .filter(|op| !op.starts_with("_get_") && !op.starts_with("_set_"))
+            .collect();
+
+        assert_eq!(described, surveyed, "the agent must be shown what the gate judges");
+        // And the count a search hit advertises is the same number, since that
+        // is the first place an agent reads a size off.
+        let hits = search_interfaces(&r, &e, &CapabilityTable::new("t"), "dispatcher", 10, None);
+        let Some(Json::Array(list)) = hits.get("interfaces") else { panic!("{hits}") };
+        assert_eq!(list[0].get("operations"), Some(&Json::Number("3".into())), "{hits}");
+    }
+
+    /// Search reads the resolved surface too: an interface an agent can only
+    /// name by an operation it inherits was unfindable, so the agent could not
+    /// reach the description that would have listed it either.
+    #[test]
+    fn search_finds_an_interface_by_an_operation_it_inherits() {
+        let r = registry(INHERITING);
+        let e = Exposure::nothing().allow_interface(DISPATCHER);
+        let doc = search_interfaces(&r, &e, &CapabilityTable::new("t"), "describe", 10, None);
+        let Some(Json::Array(list)) = doc.get("interfaces") else { panic!("{doc}") };
+        let ids: Vec<&str> =
+            list.iter().filter_map(|i| i.get("id").and_then(Json::as_str)).collect();
+        assert_eq!(ids, vec![DISPATCHER], "{doc}");
+    }
+
+    /// A name declared on the derived interface shadows the base's, which is
+    /// what a servant does — so the description has to agree with the servant
+    /// about *which* declaration is in force, not merely that one exists.
+    #[test]
+    fn a_derived_declaration_shadows_the_base_it_overrides() {
+        let r = registry(
+            "module m {
+               interface Base { //@ ai_effect: destructive
+                 void ping(); };
+               interface Derived : Base { //@ ai_effect: read_only
+                 void ping(); };
+             };",
+        );
+        let ops = resolved_operations(&r, "IDL:m/Derived:1.0");
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].1, "IDL:m/Derived:1.0");
+        assert_eq!(ops[0].2.annotations.get("ai_effect").map(String::as_str), Some("read_only"));
     }
 
     // ---- the vector half (D003 part A) --------------------------------------
@@ -1409,6 +1668,7 @@ mod tests {
         interface Account {
           //@ ai_effect: read_only
           long balance();
+          //@ ai_effect: idempotent
           void deposit(in long cents);
         };
       };";

@@ -581,12 +581,14 @@ mod tests {
           //@ ai_effect: read_only
           long balance();
           //@ ai_authz: accounts:write
+          //@ ai_effect: idempotent
           void deposit(in long cents);
           //@ ai_effect: destructive
           //@ ai_approver: the duty risk officer
           void close();
         };
-        interface Ledger { long total(); };
+        interface Ledger { //@ ai_effect: read_only
+          long total(); };
       };";
 
     const ACCOUNT: &str = "IDL:bank/Account:1.0";

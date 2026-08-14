@@ -38,7 +38,21 @@ const IDL: &str = "module bank {
   interface Account {
     //@ ai_effect: read_only
     long balance();
+    //@ ai_effect: idempotent
     void deposit(in long cents);
+  };
+};
+";
+
+/// The same estate one annotation short: `sweep` is what every legacy contract
+/// on every legacy disk looks like to this bridge — an operation nobody ever
+/// described. Kept in its own contract so the tests above measure an annotated
+/// deployment and the ones below measure an unannotated one.
+const UNANNOTATED_IDL: &str = "module bank {
+  interface Account {
+    //@ ai_effect: read_only
+    long balance();
+    void sweep();
   };
 };
 ";
@@ -84,12 +98,23 @@ struct Served {
 /// Runs the real binary against a target that never answers, feeding it the
 /// frames `frames(root_handle)` builds, and returns both streams.
 fn serve(name: &str, extra: &[&str], frames: impl Fn(&str) -> Vec<String>) -> Served {
+    serve_contract(name, IDL, extra, frames)
+}
+
+/// The same, over a named contract, so a test can measure an unannotated
+/// deployment without changing what the others measure.
+fn serve_contract(
+    name: &str,
+    idl: &str,
+    extra: &[&str],
+    frames: impl Fn(&str) -> Vec<String>,
+) -> Served {
     let dir =
         std::env::temp_dir().join(format!("orbweaver-mcp-audit-{}-{name}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("a scratch directory");
     let idl_path = dir.join("bank.idl");
     let ior_path = dir.join("account.ior");
-    std::fs::write(&idl_path, IDL).expect("writes the contract");
+    std::fs::write(&idl_path, idl).expect("writes the contract");
 
     // A listener that is bound and never accepted: `connect` completes from the
     // backlog, which is all the server needs to start serving.
@@ -284,4 +309,134 @@ fn a_ledger_small_enough_to_drop_still_emits_every_line_exactly_once() {
         "{:#?}",
         served.err
     );
+}
+
+/// **The estate defect at the process boundary.** Expose an operation whose
+/// contract states no `ai_effect` and the deployment must refuse it, tell the
+/// operator how big the silence is *before* anything is called, and name the
+/// annotation rather than the allowlist.
+///
+/// The library test `an_operation_the_contract_says_nothing_about_is_refused`
+/// pins the gate; this pins the thing an operator actually runs. RC-5 was a
+/// property of a real process's real output, and a library assertion would not
+/// have caught it any more than it caught the audit lines that never left the
+/// process.
+#[test]
+fn an_unannotated_operation_is_refused_by_the_process_and_the_silence_is_counted() {
+    let served = serve_contract(
+        "unannotated",
+        UNANNOTATED_IDL,
+        &["--expose", &format!("{ACCOUNT}.sweep")],
+        |h| vec![call(2, h, "sweep")],
+    );
+
+    // Said before the loop, not discovered one refusal at a time.
+    assert!(
+        served.err.iter().any(|l| {
+            l.contains("carry no ai_effect and will be REFUSED") && l.contains("--assume-effect")
+        }),
+        "the size of the silence must be stated at startup:\n{:#?}",
+        served.err
+    );
+    let refuse = served
+        .err
+        .iter()
+        .find(|l| l.starts_with("REFUSE ") && l.contains("operation=sweep"))
+        .unwrap_or_else(|| panic!("no refusal for sweep:\n{:#?}", served.err));
+    // The actionable half: what is missing, and where it goes.
+    assert!(refuse.contains("carries no ai_effect"), "{refuse}");
+    assert!(refuse.contains("ai_effect: read_only"), "{refuse}");
+    // And it must not read as a permissions misconfiguration, which is the
+    // failure mode the estate recorded arriving by another road.
+    assert!(!refuse.contains("is not exposed"), "{refuse}");
+    assert!(
+        !served.err.iter().any(|l| l.starts_with("ALLOW ")),
+        "nothing may be allowed:\n{:#?}",
+        served.err
+    );
+}
+
+/// The operator's one declaration, at the process boundary: `--assume-effect`
+/// covers every silence at once, and the deployment says out loud that the
+/// allows now rest on an assumption nobody's contract makes.
+///
+/// This is what keeps failing closed usable. Without it, a legacy estate is
+/// seventy-six refusals an operator clears one at a time, and a gate cleared
+/// that way is a gate that has been routed around.
+#[test]
+fn one_assumption_covers_every_silence_and_the_process_says_it_is_an_assumption() {
+    let served = serve_contract(
+        "assumed",
+        UNANNOTATED_IDL,
+        &["--expose", &format!("{ACCOUNT}.sweep"), "--assume-effect", "read_only"],
+        |h| vec![call(2, h, "sweep")],
+    );
+
+    assert!(
+        served.err.iter().any(|l| {
+            l.contains("--assume-effect \"read_only\"")
+                && l.contains("This is an assumption made here, not a statement in any contract.")
+        }),
+        "the assumption must be disclosed at startup:\n{:#?}",
+        served.err
+    );
+    // Allowed by policy, then failed at argument mapping — nothing reached the
+    // wire, and the decision the ledger records is the policy's.
+    assert!(
+        served.err.contains(&format!("ALLOW caller=alice target={ACCOUNT} operation=sweep")),
+        "{:#?}",
+        served.err
+    );
+}
+
+/// Runs the binary in `--dry-run` and returns its one stdout document.
+///
+/// A helper of its own rather than [`serve_contract`] with a flag: a dry run
+/// prints no root handle and never enters the loop, so waiting for one would
+/// wait out the deadline and report a hang as a missing handle.
+fn dry_run(name: &str, idl: &str, extra: &[&str]) -> Json {
+    let dir = std::env::temp_dir().join(format!("orbweaver-mcp-dry-{}-{name}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    let idl_path = dir.join("bank.idl");
+    std::fs::write(&idl_path, idl).expect("writes the contract");
+    let out = Command::new(env!("CARGO_BIN_EXE_orbweaver-mcp-server"))
+        .args(["--idl", idl_path.to_str().expect("utf-8")])
+        .args(["--as", "alice", "--dry-run"])
+        .args(extra)
+        .output()
+        .expect("the server binary is built by `cargo test`");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(out.status.success(), "{}: {}", out.status, String::from_utf8_lossy(&out.stderr));
+    Json::parse(&String::from_utf8_lossy(&out.stdout)).expect("one JSON object on stdout")
+}
+
+/// The dry-run document an operator signs, over an unannotated contract, under
+/// both postures. This is the "unusable gate" finding closed: the report only
+/// carries signal when its answers vary, and every row that rests on an
+/// assumption has to say so or the page is indistinguishable from an annotated
+/// deployment's.
+#[test]
+fn the_dry_run_document_names_the_posture_and_marks_what_rests_on_it() {
+    let doc = dry_run("dry-refuse", UNANNOTATED_IDL, &["--expose", ACCOUNT]);
+    assert_eq!(doc.get("unannotated_effect").and_then(Json::as_str), Some("refuse"), "{doc}");
+    let summary = doc.get("summary").expect("a summary");
+    // Two operations, two different answers: `balance` is described and
+    // `sweep` is not. A document whose every row said the same word would be
+    // correct and carry nothing.
+    assert_eq!(summary.get("allow"), Some(&Json::Number("1".into())), "{doc}");
+    assert_eq!(summary.get("need_effect"), Some(&Json::Number("1".into())), "{doc}");
+
+    let doc = dry_run(
+        "dry-assume",
+        UNANNOTATED_IDL,
+        &["--expose", ACCOUNT, "--assume-effect", "read_only"],
+    );
+    assert_eq!(doc.get("unannotated_effect").and_then(Json::as_str), Some("read_only"), "{doc}");
+    // Both are `allow` now, and only one of them is the contract's word.
+    assert_eq!(
+        doc.get("summary").and_then(|s| s.get("allow")),
+        Some(&Json::Number("2".into())),
+        "{doc}"
+    );
+    assert!(doc.to_string().contains(r#""effect_stated_by":"exposure""#), "{doc}");
 }

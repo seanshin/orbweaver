@@ -33,9 +33,12 @@ use orbweaver_dynamic::json::Json;
 const IDL: &str = "module parkinglot {
   interface ParkingControl {
     //@ ai_authz: parkinglot.barrier.open
+    //@ ai_effect: idempotent
     void open_barrier();
     //@ ai_authz: parkinglot.barrier.open
+    //@ ai_effect: idempotent
     void close_barrier();
+    //@ ai_effect: read_only
     long vehicle_count();
   };
 };

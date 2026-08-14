@@ -382,6 +382,7 @@ mod tests {
                  //@ ai_effect: read_only
                  long balance();
                  //@ ai_authz: accounts:write
+                 //@ ai_effect: idempotent
                  void deposit(in long cents);
                  //@ ai_effect: destructive
                  void close();

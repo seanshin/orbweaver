@@ -27,7 +27,7 @@ use orbweaver_forge::infer::{
 use orbweaver_forge::pipeline::{ItemStatus, Stage, run_batch};
 use orbweaver_giop::Ior;
 use orbweaver_giop::server::Server;
-use orbweaver_mcp::policy::{Approval as CallApproval, Exposure};
+use orbweaver_mcp::policy::{Approval as CallApproval, Denied, Exposure};
 use orbweaver_registry::ifr::{RepositoryServer, interface_ids};
 use orbweaver_registry::ingest::{Limits, ingest};
 use orbweaver_registry::{Entry, Origin, Registry};
@@ -296,10 +296,16 @@ fn an_inferred_scope_enforces_nothing_at_the_policy_gate() {
     let exposure = Exposure::nothing().allow_interface(SUBJECT_ID);
     let verdict =
         exposure.check_call(&annotated, SUBJECT_ID, "delete_all", CallApproval::default(), None);
+    // An ingested contract carries no SIDL, so the effect gate stops it — which
+    // is *not* the inference gating anything, and the distinction is the whole
+    // property. The refusal must never be MissingScope or NeedsApproval,
+    // because either would mean a model-invented permission name had become
+    // enforceable. This used to assert `is_ok()`, which said the same thing
+    // more weakly: back then nothing stopped the call at all.
     assert!(
-        verdict.is_ok(),
-        "an inferred annotation must not gate anything; if this fails the marks have leaked into \
-         ai_* keys: {verdict:?}"
+        matches!(verdict, Err(Denied::EffectUnstated { .. })),
+        "an inferred annotation must not gate anything; if this is MissingScope or \
+         NeedsApproval the marks have leaked into ai_* keys: {verdict:?}"
     );
 
     // Which is exactly why the refusal has to happen before the allowlist.

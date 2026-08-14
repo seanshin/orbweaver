@@ -476,7 +476,9 @@ fn annotation_advice(src: &str, spec: &orbweaver_idl::ast::Spec) -> Vec<Finding>
                     rule: "sidl/missing-ai_effect".into(),
                     severity: Severity::Advice,
                     message: format!(
-                        "{}.{} has no ai_effect, so the bridge must assume it needs approval",
+                        "{}.{} has no ai_effect, so the bridge refuses it: it cannot tell \
+                         whether an agent may call this without a human. Annotate it, or set \
+                         the exposure's --assume-effect",
                         i.name.text, op.name.text
                     ),
                     line: op.name.span.line,
