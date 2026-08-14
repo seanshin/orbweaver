@@ -606,7 +606,12 @@ crate whose fuzz found that recursive types could not be marshalled at all.
 ### 7.3 The remaining work, as parallel streams
 
 > Stream F (the MoE control plane, our first application domain) is specified
-> in [`PLAN-MOE.md`](PLAN-MOE.md), reviewed and adopted 2026-08-14.
+> in [`PLAN-MOE.md`](PLAN-MOE.md), reviewed and adopted 2026-08-14. The rule
+> that defines that stream — *the data plane stays out of CORBA permanently* —
+> is enforced by no gate in this project and cannot be fully stated as a
+> predicate over a contract; what to do about that is open as
+> [`decisions/D006-plane-rule-tensor.md`](decisions/D006-plane-rule-tensor.md)
+> (**PROPOSED**).
 > The core CORBA services (Naming, Event, Trading, LifeCycle, IFR facade) are
 > planned as a suite in [`PLAN-SERVICES.md`](PLAN-SERVICES.md) (2026-08-14).
 > What that suite deliberately excludes (Notification, OTS, Time, PSS,

@@ -238,6 +238,22 @@ absence has a reason, which is what §8.1 of `PLAN-SERVICES` asks of every
 `select`는 참조만 돌려주므로 순수 컨트롤 플레인이고, 그 부재는 결정이 아니라
 **공백**이다.
 
+> **Open as a decision, and it corrects this section.** Whether the plane rule
+> can be stated as a predicate over a contract at all, and which of five
+> mechanisms should carry it, is
+> [`decisions/D006-plane-rule-tensor.md`](decisions/D006-plane-rule-tensor.md)
+> (**PROPOSED**). Two of its findings amend what is written above: the split
+> here is not two operations against one — `select` takes `GateSignal`, which
+> holds a `Tensor affinity`, so **all three operations touch a `Tensor`** and
+> only the return side of `select` is references-only; and a bound is *not*
+> enforced by the marshaller for free, because `orbweaver-gen` drops it
+> (`gen/src/lib.rs:164`) while `orbweaver-dynamic` enforces it. The bound change
+> was re-measured as BREAKING, and so is removing the two operations.
+> 규칙을 계약에 대한 술어로 쓸 수 있는가와 다섯 기제 중 무엇을 택할 것인가는
+> D006(**제안됨**)으로 열려 있다. 위 서술 두 곳을 정정한다: `select`도
+> `GateSignal.affinity`로 `Tensor`에 닿으므로 **세 연산 모두** 해당하며, 상한은
+> 마샬러가 공짜로 강제하지 않는다(정적 생성 경로가 상한을 버린다).
+
 ## 5. What this supplement does not claim / 이 보완이 주장하지 않는 것
 
 No accelerator, no fused kernel, no RDMA exists in this repository; the data

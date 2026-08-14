@@ -565,7 +565,11 @@ IFR 파사드, 그리고 재귀 타입이 애초에 마샬링되지 않았음을
 ### 7.3 남은 작업, 병행 스트림으로
 
 > 스트림 F(MoE 컨트롤 플레인 — 첫 응용 도메인)는 [`PLAN-MOE.md`](PLAN-MOE.md)에
-> 명세되어 있다 (2026-08-14 검토·채택).
+> 명세되어 있다 (2026-08-14 검토·채택). 그 스트림을 정의하는 철칙 — *데이터
+> 플레인은 영구히 CORBA 밖에 있다* — 은 이 프로젝트의 어떤 게이트도 강제하지
+> 않으며 계약에 대한 술어로 온전히 쓸 수도 없다. 이를 어떻게 할 것인가는
+> [`decisions/D006-plane-rule-tensor.md`](decisions/D006-plane-rule-tensor.md)
+> 로 열려 있다(**제안됨**).
 > CORBA 기본 서비스(Naming·Event·Trading·LifeCycle·IFR 파사드)는
 > [`PLAN-SERVICES.md`](PLAN-SERVICES.md)에 서비스 스위트로 계획되어 있다 (2026-08-14).
 > 그 스위트가 의도적으로 제외한 것(Notification·OTS·Time·PSS·동시성 제어·
