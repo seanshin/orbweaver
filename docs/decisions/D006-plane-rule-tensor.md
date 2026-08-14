@@ -1,12 +1,36 @@
 # D006 — The plane rule: what a `Tensor` may carry, and whether any check can tell
 
-**STATUS: PROPOSED** — drafted 2026-08-14 from the finding written up in
+**STATUS: APPROVED** — drafted 2026-08-14 from the finding written up in
 [`PLAN-MOE.md`](../PLAN-MOE.md) §4.6 and cross-referenced from
-[`PLAN-SERVICES.md`](../PLAN-SERVICES.md) §8.1. **Nothing is adopted.** No crate
-and no corpus file is touched by this document; its footprint is this file and a
-pointer line in `PLAN-MOE.md` §4.6, `PLAN.md` §7.3 and `PLAN.ko.md` §7.3.
-**상태: 제안됨** — 2026-08-14 작성. 채택되는 것은 없다. 크레이트도 코퍼스도
-건드리지 않으며, 산출물은 이 파일과 세 계획서의 포인터 한 줄씩이다.
+[`PLAN-SERVICES.md`](../PLAN-SERVICES.md) §8.1, approved the same day by the
+user ("승인하고 순서대로 진행"), with the recommendation adopted as written:
+
+- **Option E is adopted.** `Expert::process` and `Router::dispatch` are
+  **excluded**, with the reason recorded where `PLAN-SERVICES` §8.1 asks for it.
+  Nothing serves them, nothing plans to, and paying a breaking change to bound
+  an operation that has never run means writing an unmeasured constant into a
+  wire contract to govern traffic nobody has sent.
+- **Option A is the return path, not a rejection.** If a consumer ever needs an
+  activation-shaped call, it returns as a **new versioned interface** carrying a
+  bounded handle type — where §5.3 already prescribes a version bump, so the
+  bound costs nothing extra. That path is conditional on generated code
+  enforcing bounds, which this decision measured as missing.
+- **B and C are premature** by `contract.rs`'s own rule for adding a rule: the
+  only action either can offer is reporting that somebody made a claim no check
+  can test.
+
+Approval does not make the rule enforceable, and the document says why: a bound
+constrains **size, not frequency**, and §3's operative phrase is *never per
+token* — a 16-byte handle called once per token is the data plane at full rate,
+passing every check any option installs. The one time this project actually held
+a "never per token" rule it did so by **removing the API**, held by a
+`compile_fail` test. Exclusion is that mechanism; a bound is not.
+
+**상태: 승인됨** — 2026-08-14 승인. E 채택: `process`/`dispatch`를 명시적으로
+제외한다. A는 기각이 아니라 **복귀 경로**이며, 활성화 형태의 호출이 필요해지면 새
+버전 인터페이스로 돌아온다. 승인해도 규칙이 검사 가능해지지는 않는다 — 상한은
+크기를 제약하지 **빈도**를 보지 못하고, "토큰당 금지"를 실제로 지킨 유일한 방법은
+API를 없애고 `compile_fail`로 잠근 것이었다.
 
 This is a decision and not a batch because every mechanism that would make the
 rule checkable **constrains what a deployment may put in a `Tensor`** — and the

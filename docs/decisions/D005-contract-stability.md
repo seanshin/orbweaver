@@ -1,12 +1,40 @@
 # D005 — Contract stability across regenerations: what S2 is allowed to choose
 
-**STATUS: PROPOSED** — drafted 2026-08-14 from the finding in
+**STATUS: APPROVED** — drafted 2026-08-14 from the finding in
 [`docs/pipeline-runs/2026-08-14-end-to-end.md`](../pipeline-runs/2026-08-14-end-to-end.md)
-(*Cause A*). Nothing is adopted. No crate is touched by this document; its
-footprint is this file and one pointer line in each PLAN.
-**상태: 제안됨** — 2026-08-14 작성, 근거는 종단 실행 기록의 근본원인 A. 채택되는
-것은 없다. 이 문서는 크레이트를 건드리지 않으며, 산출물은 이 파일과 두 PLAN의
-포인터 한 줄뿐이다.
+(*Cause A*), approved the same day by the user ("승인하고 순서대로 진행"), with
+the recommendation adopted as written:
+
+1. **Option C first** — a scope-shaped literal token the requirement states must
+   survive to the `//@ ai_authz` S3 emits, checked by string equality with no
+   model, codified in `annotate::RULES` where
+   `every_rule_is_a_prompt_constraint_and_a_check` forces both halves to exist.
+   S1's `Brief.authz` already records the token, so the check is cheap and the
+   drift it catches is the one no gate in this project can currently see.
+2. **Then option B** — `orbweaver_forge::validate_against`, which already wraps
+   §5.3's differ and which the pipeline simply never calls, wired into the S4
+   gate against the registered contract. Accepted on the record that the
+   registry of record does not exist yet and that the differ reads no
+   annotations.
+3. **Framed by option D** — a regeneration over a registered contract is an
+   explicit, reasoned act rather than a repeat.
+4. **Option A rejected** — pinning names in the brief revokes S2's rename, which
+   is today's second line of defence against the project's dominant failure, and
+   buys no stability anyway because S1 regenerates too.
+
+What approval does **not** buy, restated because it is the document's own
+warning: stabilising regeneration converts the only signal this project has ever
+produced that a reading was a *choice* rather than a fact into silence. The
+compensating instrument is a person reading the brief's `open_questions` before
+registration, and that obligation belongs to whichever change lands these
+options.
+
+**상태: 승인됨** — 2026-08-14 승인. C를 먼저(요구사항의 리터럴 스코프 토큰이
+애노테이션까지 살아남는지 모델 없이 검사), 그다음 B(§5.3 differ를 S4 게이트에),
+D로 틀을 잡고, A는 기각. 승인이 사주지 **않는** 것: 재생성을 안정화하면 "이 독해는
+사실이 아니라 선택이었다"는 유일한 신호가 침묵으로 바뀐다. 보완 장치는 등록 전에
+사람이 `open_questions`를 읽는 것이며, 그 의무는 이 선택지들을 구현하는 변경에
+붙는다.
 
 This is a decision and not a bug report because every mechanism that would
 prevent the finding constrains **what S2 is allowed to choose**. That is a

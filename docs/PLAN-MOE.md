@@ -232,9 +232,14 @@ That is why the two are unimplemented, and the honest split is:
   operation this section filed as pure control plane is the one whose exposure
   nobody had noticed, which is a fair illustration of why a rule that lives in
   prose is not a rule.
-- **`Router::dispatch` and `Expert::process`** are the ones that would carry an
-  `Activation` in *both* directions, which is the difference of degree that
-  still separates them from `select`. Serving them means either committing to the handle reading in a
+- **`Router::dispatch` and `Expert::process`** carry an `Activation` in *both*
+  directions, which is the difference of degree that separates them from
+  `select`. **Excluded by D006, approved 2026-08-14** — and the reason approval
+  changes less than it looks: a bound constrains size, not frequency, so no
+  mechanism any option offered could see a 16-byte handle called once per token,
+  which is the data plane at full rate. Exclusion is the mechanism this project
+  has actually made hold before (F3 removed the API and a `compile_fail` test
+  keeps it removed); a bound is not. Serving them means either committing to the handle reading in a
   document that binds, or declaring them excluded. **Committing needs a
   decision**, because it constrains what a deployment may put in a `Tensor`,
   and a rule nobody can check is a rule that will be broken by whoever needs a
