@@ -365,6 +365,15 @@ pub(crate) fn required_scopes(registry: &Registry, id: &str, operation: &str) ->
         .unwrap_or_default()
 }
 
+/// Whether the interface (or an ancestor) declares the attribute this accessor
+/// name reaches.
+pub(crate) fn declares_accessor(registry: &Registry, id: &str, operation: &str) -> bool {
+    attribute_annotations(registry, id, operation).is_some()
+        || operation
+            .strip_prefix("_set_")
+            .is_some_and(|n| attribute_annotations(registry, id, &format!("_get_{n}")).is_some())
+}
+
 /// The annotations of the attribute an accessor name reaches, if any.
 ///
 /// `_get_x` and `_set_x` are what an attribute becomes on the wire (§4.4), so
@@ -410,9 +419,14 @@ fn attribute_annotations<'r>(
 pub(crate) fn destructive_effect(registry: &Registry, id: &str, operation: &str) -> Option<String> {
     let annotations = match registry.resolve_operation(id, operation) {
         Some((_, sig)) => &sig.annotations,
-        // Same gap as `required_scopes`: a `_set_` is a mutation and was never
-        // approval-gated, because it had no signature to carry an ai_effect.
-        None => attribute_annotations(registry, id, operation)?,
+        // Same gap as `required_scopes`, with one difference that matters: an
+        // `ai_effect` on an attribute describes **writing** it. Applying it to
+        // the getter as well made reading a `destructive` attribute demand a
+        // human approval, which is not what the annotation says and is the
+        // kind of gate people learn to click through. A scope is the other
+        // way round — it guards the value, so it guards both accessors.
+        None if operation.starts_with("_set_") => attribute_annotations(registry, id, operation)?,
+        None => return None,
     };
     let effect = annotations.get("ai_effect")?;
     match effect.trim() {
@@ -468,6 +482,29 @@ mod tests {
 
     /// A `_set_` is a mutation, and it was never approval-gated for the same
     /// reason it was never scope-gated.
+    /// An `ai_effect` on an attribute describes writing it. Applied to the
+    /// getter it made *reading* a destructive attribute demand a human
+    /// approval — a gate on the wrong operation, and the kind people learn to
+    /// click through. A scope is the other way round: it guards the value, so
+    /// it guards both accessors.
+    #[test]
+    fn an_effect_gates_the_setter_and_not_the_getter() {
+        let r = registry(
+            "module m { interface I {
+               //@ ai_effect: destructive
+               //@ ai_authz: m.mode
+               attribute string mode;
+             }; };",
+        );
+        assert_eq!(
+            destructive_effect(&r, "IDL:m/I:1.0", "_set_mode").as_deref(),
+            Some("destructive")
+        );
+        assert_eq!(destructive_effect(&r, "IDL:m/I:1.0", "_get_mode"), None);
+        assert_eq!(required_scopes(&r, "IDL:m/I:1.0", "_get_mode"), ["m.mode"]);
+        assert_eq!(required_scopes(&r, "IDL:m/I:1.0", "_set_mode"), ["m.mode"]);
+    }
+
     #[test]
     fn a_setter_can_require_approval() {
         let r = registry(

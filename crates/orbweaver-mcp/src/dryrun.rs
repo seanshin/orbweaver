@@ -343,7 +343,11 @@ pub fn predict(chain: &mut Chain, ctx: &CallContext<'_>) -> Prediction {
         operation: ctx.operation.to_owned(),
         caller: ctx.caller.map_or(NOBODY, |c| c.principal.as_str()).to_owned(),
         would,
-        declared: ctx.registry.resolve_operation(ctx.target, ctx.operation).is_some(),
+        // An attribute accessor is declared — as an attribute. Reporting it
+        // undeclared would tell an operator the catalog does not know the
+        // name, when the catalog is precisely where it came from.
+        declared: ctx.registry.resolve_operation(ctx.target, ctx.operation).is_some()
+            || crate::policy::declares_accessor(ctx.registry, ctx.target, ctx.operation),
         dry,
         scope,
         effect,
