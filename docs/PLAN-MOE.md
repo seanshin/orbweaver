@@ -187,6 +187,57 @@ version bump has a reason of its own.**
 지금 값을 치를 이유가 없으므로, 답은 계약 확장이 아니라 미지값을 아는 질의다.
 편할 때 released 타입을 고치는 프로젝트에는 §5.3이 아예 없는 것과 같다.
 
+## 4.6 Why `Router` is in no plan — the plane rule and its escape hatch
+
+The coverage sweep found `moe::Router::select` and `dispatch` declared in a
+landed contract, served by nothing, and named in no plan — not even in the
+exclusions. Reading the contract against §3's rule explains it, and the
+explanation is worth more than the omission.
+
+§3 says **the data plane stays out of CORBA permanently**. The contract
+declares:
+
+```idl
+typedef sequence<octet> Tensor;      // reference-carrying; never inlined
+struct Activation { Tensor data; string dtype; string shape; };
+
+interface Expert { Activation process(in Activation x, in CallContext ctx); };
+interface Router { Activation dispatch(in Activation x, in CallContext ctx); };
+```
+
+Those two operations are control-plane-legal **only** under the reading that
+`Tensor` carries a *handle* — a shared-memory name, an accelerator buffer id —
+rather than the activation itself. That reading exists in a comment in
+`corpus/golden/22` and **nowhere else**: not in this document, not in
+`PLAN-SERVICES`, not in `ARCHITECTURE`. And nothing enforces it. A
+`sequence<octet>` will carry a megabyte as cheerfully as a sixteen-byte handle,
+so the rule that defines this whole stream is, today, a sentence in a plan and
+a comment in a corpus file.
+
+That is why the two are unimplemented, and the honest split is:
+
+- **`Router::select`** returns `ExpertSeq` — references, nothing else. It is
+  pure control plane, it is the operation the trading engine already answers
+  internally, and its absence is a **gap** rather than a decision.
+- **`Router::dispatch` and `Expert::process`** are the ones that would carry an
+  `Activation`. Serving them means either committing to the handle reading in a
+  document that binds, or declaring them excluded. **Committing needs a
+  decision**, because it constrains what a deployment may put in a `Tensor`,
+  and a rule nobody can check is a rule that will be broken by whoever needs a
+  quick result.
+
+Nothing here is implemented on the strength of this section: it records why the
+gap exists and what closing it would require. What *is* now true is that the
+absence has a reason, which is what §8.1 of `PLAN-SERVICES` asks of every
+`BAD_OPERATION`.
+
+**`Router`가 어느 계획서에도 없던 이유.** 데이터 플레인 금지 규칙 아래에서
+`process`/`dispatch`가 합법인 것은 **`Tensor`가 핸들을 나른다는 독해** 아래에서
+뿐인데, 그 독해는 코퍼스 파일의 주석에만 있고 강제하는 것은 없다.
+`sequence<octet>`는 16바이트 핸들만큼이나 기꺼이 1메가바이트를 나른다. 반면
+`select`는 참조만 돌려주므로 순수 컨트롤 플레인이고, 그 부재는 결정이 아니라
+**공백**이다.
+
 ## 5. What this supplement does not claim / 이 보완이 주장하지 않는 것
 
 No accelerator, no fused kernel, no RDMA exists in this repository; the data
