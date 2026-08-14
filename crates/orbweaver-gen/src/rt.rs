@@ -532,16 +532,239 @@ impl<T: Cdr> Cdr for Vec<T> {
         Ok(())
     }
     fn get(d: &mut Decoder<'_>) -> Result<Self, GiopError> {
+        // Zero is "no declared bound", the same spelling `TypeCode::Sequence`
+        // and `orbweaver_dynamic::check_bound` use, so an unbounded sequence
+        // and a bounded one read through one function rather than two.
+        <Self as Boundable>::get_bounded(d, 0)
+    }
+}
+
+/// A value whose IDL declaration may carry a bound, and how that bound counts.
+///
+/// # Why a trait and not three special cases
+///
+/// The bound is enforced in exactly one place — [`Bounded`]'s [`Cdr`] impl —
+/// and this trait is what lets that one place serve `sequence`, `string` and
+/// `wstring` without knowing which it has. A generated file therefore contains
+/// no bound arithmetic at all, which is the same rule the rest of this module
+/// exists for: names and order in the generated file, wire decisions here.
+///
+/// # The unit is not negotiable
+///
+/// `sequence<T, N>` bounds **elements**, `string<N>` bounds **characters**
+/// (Unicode scalar values, not bytes) and `wstring<N>` bounds **UTF-16 code
+/// units**. Those are the three units `orbweaver_dynamic` counts with, and
+/// counting anything else here would produce a static path that refuses a
+/// different set of values than the reference implementation — which is the
+/// defect this trait exists to close, wearing a different hat.
+pub trait Boundable: Sized {
+    /// What a refusal says.
+    ///
+    /// A `&'static str` because [`GiopError::Decode`] carries one, so the
+    /// declared bound and the offending length cannot travel in the message:
+    /// the workspace MSRV is 1.85 and writing an integer into a `&'static str`
+    /// at compile time needs const `str::from_utf8`, stable in 1.87. The
+    /// oracle therefore holds the two paths to the same **verdict** — refuse or
+    /// accept, at the same point in the stream — and not to the same prose,
+    /// which they could not share anyway across two error types.
+    const OVER_BOUND: &'static str;
+
+    /// The length the declared bound constrains, in the unit it is declared in.
+    fn bounded_len(&self) -> usize;
+
+    /// Reads one value, refusing an over-long one **where the dynamic path
+    /// refuses it**.
+    ///
+    /// For a sequence that is immediately after the length prefix and before a
+    /// single element is read, so a refusal costs the same bytes and the same
+    /// allocations on both paths. A bound of zero means unbounded.
+    fn get_bounded(d: &mut Decoder<'_>, bound: usize) -> Result<Self, GiopError>;
+}
+
+impl<T: Cdr> Boundable for Vec<T> {
+    const OVER_BOUND: &'static str = "sequence is longer than the bound its IDL declares";
+
+    fn bounded_len(&self) -> usize {
+        self.len()
+    }
+
+    fn get_bounded(d: &mut Decoder<'_>, bound: usize) -> Result<Self, GiopError> {
         let n = d.get_u32()?;
+        // The declared bound before the buffer, in that order, because the
+        // dynamic path does it in that order: a message that violates both
+        // gets the bound's verdict on either path rather than whichever check
+        // happened to run first.
+        if bound > 0 && n as usize > bound {
+            return Err(GiopError::Decode(Self::OVER_BOUND));
+        }
         // Validated against the bytes actually present, so a four-byte length
         // cannot buy a multi-gigabyte allocation (the Phase 0 audit's worst
-        // finding, kept out of a third door).
+        // finding, kept out of a third door). Independent of the declared
+        // bound: this one holds for unbounded sequences too.
         let n = d.validate_count(n, 1)?;
         let mut out = Vec::with_capacity(n);
         for _ in 0..n {
             out.push(T::get(d)?);
         }
         Ok(out)
+    }
+}
+
+impl Boundable for String {
+    const OVER_BOUND: &'static str = "string is longer than the bound its IDL declares";
+
+    /// Characters, not bytes: `string<8>` admits eight Korean syllables, which
+    /// are twenty-four octets on the wire.
+    fn bounded_len(&self) -> usize {
+        self.chars().count()
+    }
+
+    /// Deliberately unchecked, and this is a **measured** asymmetry rather than
+    /// an invented one.
+    ///
+    /// `orbweaver_dynamic` calls `check_bound` for a `string` on encode
+    /// (`dynamic/src/lib.rs:461`) and does **not** call it on decode
+    /// (`:736`), where the sequence arm checks both. The dynamic path is the
+    /// reference implementation, and §8's rule is that the two paths agree —
+    /// so refusing here would make the static path reject a message the
+    /// reference accepts. That is the same class of divergence this batch
+    /// closed, pointing the other way, and it would be no better for being
+    /// the stricter side of it.
+    fn get_bounded(d: &mut Decoder<'_>, bound: usize) -> Result<Self, GiopError> {
+        let _ = bound;
+        <Self as Cdr>::get(d)
+    }
+}
+
+impl Boundable for WString {
+    const OVER_BOUND: &'static str = "wstring is longer than the bound its IDL declares";
+
+    /// UTF-16 code units, which is what a `wstring` bound counts and what the
+    /// dynamic path measures: a character outside the BMP costs two.
+    fn bounded_len(&self) -> usize {
+        self.0.encode_utf16().count()
+    }
+
+    /// Unchecked on decode, for the reason [`String::get_bounded`] gives:
+    /// `dynamic/src/lib.rs:466` checks a `wstring` bound on encode and `:738`
+    /// does not check it on decode.
+    fn get_bounded(d: &mut Decoder<'_>, bound: usize) -> Result<Self, GiopError> {
+        let _ = bound;
+        <Self as Cdr>::get(d)
+    }
+}
+
+/// A value carrying the bound its IDL declaration gave it.
+///
+/// `sequence<octet, 64>` is `Bounded<Vec<u8>, 64>`, `string<16>` is
+/// `Bounded<String, 16>`, `wstring<4>` is `Bounded<WString, 4>`.
+///
+/// # Why the bound is in the type
+///
+/// Because a bound that is not in the type is a bound the next template change
+/// drops. It was dropped once already: `rust_type` mapped
+/// `sequence<octet, 64>` to a bare `Vec<u8>` and the runtime wrote `self.len()`
+/// unchecked, so a generated stub sent sixty-five octets where the dynamic path
+/// refused them and a generated skeleton accepted what the dynamic one rejected
+/// (`docs/decisions/D006-plane-rule-tensor.md` §2 measured it while arguing
+/// about something else).
+///
+/// The alternative was a check emitted onto each member line. It fails for two
+/// reasons that are worth stating, because the cheap version is always
+/// tempting. First it is **invisible in the trait**: a reader of
+/// `fn store(&mut self, blob: Vec<u8>)` learns nothing about the bound, and
+/// neither does anything that reflects over the signature. Second it is
+/// **checkable per site rather than once**: one omitted line is one silent
+/// hole, and there are as many sites as there are members, parameters, returns
+/// and exception fields. Here there is a single [`Cdr`] impl, so the bound is
+/// either enforced everywhere or nowhere, and "nowhere" does not compile.
+///
+/// # Where the refusal happens
+///
+/// At the marshalling boundary, both directions, **at the point the dynamic
+/// path refuses**: on encode before any byte of the value is written, on decode
+/// immediately after a sequence's length prefix. [`Bounded::try_new`] is an
+/// earlier, optional door for a caller who would rather find out at
+/// construction; it is not the authoritative check, because moving the only
+/// check there would make the static path refuse at a *different point* than
+/// the reference implementation, and the oracle's rule is that the two refuse
+/// alike.
+///
+/// [`Bounded::new`] is therefore total and unchecked, exactly as
+/// `Value::List(…)` is: holding an over-long value is legal, and marshalling
+/// one is not.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Hash)]
+pub struct Bounded<T, const N: usize>(pub T);
+
+impl<T, const N: usize> Bounded<T, N> {
+    /// The bound the IDL declared. Present so a test — or a reader — can name
+    /// the number without re-deriving it from the type.
+    pub const BOUND: usize = N;
+
+    /// Wraps a value. Total and unchecked; see the type's documentation for
+    /// why the authoritative check is at the marshalling boundary.
+    pub fn new(value: T) -> Self {
+        Self(value)
+    }
+
+    /// The wrapped value.
+    ///
+    /// Named `value` rather than `get` so it cannot be confused with
+    /// [`Cdr::get`], which this type also has.
+    pub fn value(&self) -> &T {
+        &self.0
+    }
+
+    /// The wrapped value, by value.
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<T: Boundable, const N: usize> Bounded<T, N> {
+    /// Wraps a value, refusing one already past the bound.
+    ///
+    /// The early door: the same verdict [`Cdr::put`] would give, delivered
+    /// where a caller can still do something about it.
+    pub fn try_new(value: T) -> Result<Self, GiopError> {
+        if N > 0 && value.bounded_len() > N {
+            return Err(GiopError::Decode(T::OVER_BOUND));
+        }
+        Ok(Self(value))
+    }
+
+    /// Whether this value would marshal, as far as its bound is concerned.
+    pub fn is_within_bound(&self) -> bool {
+        N == 0 || self.0.bounded_len() <= N
+    }
+}
+
+impl<T, const N: usize> std::ops::Deref for Bounded<T, N> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<T, const N: usize> AsRef<T> for Bounded<T, N> {
+    fn as_ref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<T: Boundable + Cdr, const N: usize> Cdr for Bounded<T, N> {
+    fn put(&self, e: &mut Encoder) -> Result<(), GiopError> {
+        // Before the value is written, not after: the dynamic path checks the
+        // bound and only then puts the length prefix, so both paths leave the
+        // encoder at the same position when they refuse.
+        if N > 0 && self.0.bounded_len() > N {
+            return Err(GiopError::Decode(T::OVER_BOUND));
+        }
+        self.0.put(e)
+    }
+
+    fn get(d: &mut Decoder<'_>) -> Result<Self, GiopError> {
+        T::get_bounded(d, N).map(Bounded)
     }
 }
 
