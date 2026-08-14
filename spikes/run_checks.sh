@@ -376,10 +376,12 @@ fkill spike-server
 
 # ── Fragmentation ────────────────────────────────────────────────────────────
 hr "GIOP fragmentation"
-# Neither available peer emits GIOP fragments: omniORB's giopMaxMsgSize is a
-# hard cap that raises MARSHAL rather than a split threshold, and JacORB 3.9
-# has no GIOP fragmentation property at all. So the independent evidence runs
-# in one direction only — we fragment, they reassemble. The receiver used to be
+# This comment used to say neither available peer emits fragments. That was an
+# assumption nobody had tested with a large enough argument: asked for a 1 MB
+# sequence<octet>, omniORB 4.3.4 answers in two pieces, reproducibly, with no
+# configuration — measured by spike-mux. JacORB 3.9 still does not. So the
+# reassembler has now been fed a real peer's fragments, and the direction below
+# (we fragment, they reassemble) is no longer the only independent evidence. The receiver used to be
 # covered only by round-trip against our own emitter, which is one shape; it is
 # now also driven by hand-built streams from §9.4.9 that a conformant peer may
 # legally send and ours never does (`tests/fragment_reception.rs`, run by cargo
@@ -1301,6 +1303,34 @@ else
   esac
 fi
 [ "$obs_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
+# ── Stream E: multiplexing and pooling, against both peers ──────────────────
+hr "multiplexing — several requests in flight, replies correlated by id"
+# Out-of-order replies are the peer's to volunteer, so they are reported and
+# never gated; what is gated is that the run completed. The self-test needs no
+# fixture and says so — it scores no out-of-order claim, because our own server
+# reads one request per connection.
+mx_fail=0
+mx=$(cargo run -q --bin spike-mux 2>&1)
+if printf '%s' "$mx" | grep -q "mux: PASS"; then
+  echo "  ok   self-test: pipelining, tombstones, and a refusal below GIOP 1.2"
+else
+  echo "  FAIL mux self-test"; printf '%s' "$mx" | grep -i fail | head -3 | sed 's/^/       /'
+  mx_fail=1
+fi
+if start_server; then
+  mxp=$(cargo run -q --bin spike-mux -- spikes/echo.ior 12 1.2 2>&1)
+  if printf '%s' "$mxp" | grep -q "mux: PASS"; then
+    echo "  ok   omniORB at 1.2: $(printf '%s' "$mxp" | grep -o 'out-of-order [0-9]*' | head -1 | sed 's/^/replies /')"
+    printf '%s' "$mxp" | grep -E 'FRAGMENTS|UNMEASURED' | head -2 | sed 's/^/       /'
+  else
+    echo "  FAIL multiplexing against omniORB"; mx_fail=1
+  fi
+else
+  mx_fail=1
+fi
+cleanup
+[ "$mx_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
 # ── Stream E batch 2: concurrent dispatch, run more than once ───────────────
 hr "concurrent dispatch — five runs, because one green run is not evidence"
