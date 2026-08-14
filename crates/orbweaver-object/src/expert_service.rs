@@ -228,15 +228,20 @@ impl Capability {
     /// it) and `route_freq` seeded at zero.
     ///
     /// `specialization` and `latency_p50` have no member in this contract —
-    /// see the module docs. They are left empty and zero rather than guessed
-    /// from `latency_p99_ms`, which would put a fabricated number where a
-    /// constraint query can read it.
+    /// see the module docs — so they are `None`, which is the sentence the
+    /// wire actually supports: *nobody told us*.
+    ///
+    /// They used to be an empty string and `0.0`, and the zero was the worse
+    /// of the two. It did not merely fail to match a query; it satisfied
+    /// every upper bound, so `latency_p50 < 20` preferred exactly the experts
+    /// whose latency nobody had measured. `None` cannot be compared, and the
+    /// query reports those offers as unanswerable rather than as answers.
     pub fn to_offer(&self, residency: Residency) -> Offer {
         Offer {
             id: self.id.clone(),
-            specialization: String::new(),
+            specialization: None,
             cost: f64::from(self.cost),
-            latency_p50: 0.0,
+            latency_p50: None,
             latency_p99: f64::from(self.latency_p99_ms),
             load: f64::from(self.load),
             residency,
@@ -864,8 +869,11 @@ mod tests {
         assert_eq!(got.route_freq, 0.0, "the store owns routing history");
         // The two members the contract has no room for.
         let offer = svc.store().get("expert-math").unwrap();
-        assert_eq!(offer.specialization, "", "moe::Capability declares no specialization");
-        assert_eq!(offer.latency_p50, 0.0, "…and no p50");
+        // `None`, not a placeholder. The placeholder version of this test
+        // asserted `""` and `0.0` and passed while that `0.0` satisfied every
+        // `latency_p50 <` bound a query could ask on the wire path.
+        assert_eq!(offer.specialization, None, "moe::Capability declares no specialization");
+        assert_eq!(offer.latency_p50, None, "…and no p50, which is not the same as fast");
     }
 
     // ── a served instance ───────────────────────────────────────────────────

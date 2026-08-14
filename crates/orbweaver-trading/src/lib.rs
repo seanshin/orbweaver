@@ -76,13 +76,28 @@ pub const DECAY: (u64, u64) = (1, 2);
 pub struct Offer {
     /// The capability id the expert registered under (`moe::CapabilityId`).
     pub id: String,
-    /// What the expert is for: `math`, `code`, `retrieval`, `vision`, …
-    pub specialization: String,
+    /// What the expert is for: `math`, `code`, `retrieval`, `vision`, … or
+    /// `None` when the source could not say.
+    ///
+    /// Optional because `moe::Capability` — the contract an expert registers
+    /// over the wire — has no member for it, so an offer built from a wire
+    /// registration genuinely does not know. It used to be an empty string,
+    /// and that was not a smaller lie than it looks: a query for
+    /// `specialization == 'math'` matched nothing and read as "no expert is
+    /// available for maths", which is a different sentence from "nobody told
+    /// us what these experts do".
+    pub specialization: Option<String>,
     /// Relative invocation cost.
     pub cost: f64,
-    /// Median latency, in milliseconds (the IDL suffixes the unit; queries
-    /// use bare numbers and this contract).
-    pub latency_p50: f64,
+    /// Median latency in milliseconds, or `None` when the source could not
+    /// say.
+    ///
+    /// The sharper half of the same gap, and the reason both fields became
+    /// optional in one change: as a placeholder `0.0` it did not merely fail
+    /// to match, it **matched every upper bound**. A router selecting on
+    /// `latency_p50 < 20` preferred exactly the offers nobody had measured,
+    /// because an unknown latency looked faster than any known one.
+    pub latency_p50: Option<f64>,
     /// 99th-percentile latency, in milliseconds.
     pub latency_p99: f64,
     /// Current load, `0.0..=1.0` by convention.
@@ -266,9 +281,9 @@ mod tests {
     fn offer(id: &str, freq: u64) -> Offer {
         Offer {
             id: id.to_owned(),
-            specialization: "math".to_owned(),
+            specialization: Some("math".to_owned()),
             cost: 1.0,
-            latency_p50: 10.0,
+            latency_p50: Some(10.0),
             latency_p99: 50.0,
             load: 0.5,
             residency: Residency::Offloaded,

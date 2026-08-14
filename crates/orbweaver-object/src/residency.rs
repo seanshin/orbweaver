@@ -920,9 +920,9 @@ mod tests {
     fn offer(id: &str, residency: Residency, footprint: u64, freq: u64) -> Offer {
         Offer {
             id: id.to_owned(),
-            specialization: "math".to_owned(),
+            specialization: Some("math".to_owned()),
             cost: 1.0,
-            latency_p50: 10.0,
+            latency_p50: Some(10.0),
             latency_p99: 50.0,
             load: 0.5,
             residency,

@@ -176,17 +176,53 @@ struct Comparison {
     literal: Literal,
 }
 
+/// The answer to a comparison, which is not a boolean.
+///
+/// A field the offer's source could not populate makes the comparison
+/// **unanswerable**, and collapsing that into `false` is what made the gap
+/// silent: an unanswerable query and an answered-no query produced the same
+/// empty result, so an operator could not tell "no expert does maths" from
+/// "nobody said what these experts do".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Truth {
+    /// The offer satisfies the comparison.
+    Yes,
+    /// The offer does not satisfy it.
+    No,
+    /// The offer does not carry the field, so nothing can be concluded.
+    Unknown,
+}
+
+impl Truth {
+    /// Conjunction in three values: any `No` decides, otherwise any `Unknown`
+    /// does. An offer that is `Unknown` for one conjunct and `No` for another
+    /// is genuinely `No` — the missing field would not have saved it.
+    fn and(self, other: Truth) -> Truth {
+        match (self, other) {
+            (Truth::No, _) | (_, Truth::No) => Truth::No,
+            (Truth::Unknown, _) | (_, Truth::Unknown) => Truth::Unknown,
+            _ => Truth::Yes,
+        }
+    }
+}
+
 impl Comparison {
     /// Whether the offer satisfies this comparison. The literal's variant
     /// always matches the field's kind — the parser refused anything else.
-    fn holds(&self, offer: &Offer) -> bool {
+    fn holds(&self, offer: &Offer) -> Truth {
         let ord = match &self.literal {
-            Literal::Text(s) => text_value(offer, self.field).cmp(s.as_str()),
-            Literal::Float(x) => float_value(offer, self.field).total_cmp(x),
+            Literal::Text(s) => match text_value(offer, self.field) {
+                Some(v) => v.cmp(s.as_str()),
+                None => return Truth::Unknown,
+            },
+            Literal::Float(x) => match float_value(offer, self.field) {
+                Some(v) => v.total_cmp(x),
+                None => return Truth::Unknown,
+            },
             Literal::Counter(n) => counter_value(offer, self.field).cmp(n),
             Literal::State(r) => offer.residency.cmp(r),
         };
-        self.op.holds(ord)
+        if self.op.holds(ord) { Truth::Yes } else { Truth::No }
     }
 }
 
@@ -196,21 +232,21 @@ enum Direction {
     Desc,
 }
 
-fn text_value(offer: &Offer, field: Field) -> &str {
+fn text_value(offer: &Offer, field: Field) -> Option<&str> {
     match field {
-        Field::Id => &offer.id,
-        Field::Specialization => &offer.specialization,
-        Field::PlacementNode => &offer.placement_node,
+        Field::Id => Some(&offer.id),
+        Field::Specialization => offer.specialization.as_deref(),
+        Field::PlacementNode => Some(&offer.placement_node),
         _ => unreachable!("the parser only pairs text literals with text fields"),
     }
 }
 
-fn float_value(offer: &Offer, field: Field) -> f64 {
+fn float_value(offer: &Offer, field: Field) -> Option<f64> {
     match field {
-        Field::Cost => offer.cost,
+        Field::Cost => Some(offer.cost),
         Field::LatencyP50 => offer.latency_p50,
-        Field::LatencyP99 => offer.latency_p99,
-        Field::Load => offer.load,
+        Field::LatencyP99 => Some(offer.latency_p99),
+        Field::Load => Some(offer.load),
         _ => unreachable!("the parser only pairs float literals with float fields"),
     }
 }
@@ -225,10 +261,24 @@ fn counter_value(offer: &Offer, field: Field) -> u64 {
 
 /// Compares two offers on `field`, for `ORDER BY`. Floats compare by IEEE
 /// total order — deterministic even for the values nobody should register.
+/// An unknown value sorts **after** every known one, in either direction, so
+/// an offer nobody measured is never the answer to "the fastest". That is the
+/// ordering counterpart of the matching rule: unknown must not win by being
+/// zero.
 fn offer_cmp(a: &Offer, b: &Offer, field: Field) -> Ordering {
     match field.kind() {
-        Kind::Text => text_value(a, field).cmp(text_value(b, field)),
-        Kind::Float => float_value(a, field).total_cmp(&float_value(b, field)),
+        Kind::Text => match (text_value(a, field), text_value(b, field)) {
+            (Some(x), Some(y)) => x.cmp(y),
+            (None, None) => Ordering::Equal,
+            (None, Some(_)) => Ordering::Greater,
+            (Some(_), None) => Ordering::Less,
+        },
+        Kind::Float => match (float_value(a, field), float_value(b, field)) {
+            (Some(x), Some(y)) => x.total_cmp(&y),
+            (None, None) => Ordering::Equal,
+            (None, Some(_)) => Ordering::Greater,
+            (Some(_), None) => Ordering::Less,
+        },
         Kind::Counter => counter_value(a, field).cmp(&counter_value(b, field)),
         Kind::State => a.residency.cmp(&b.residency),
     }
@@ -557,9 +607,19 @@ impl Query {
         Ok(Query { conjuncts, order })
     }
 
-    /// Whether `offer` satisfies every conjunct.
+    /// Whether `offer` satisfies every conjunct, in three values.
+    pub fn evaluate(&self, offer: &Offer) -> Truth {
+        self.conjuncts.iter().fold(Truth::Yes, |acc, c| acc.and(c.holds(offer)))
+    }
+
+    /// Whether `offer` definitely satisfies every conjunct.
+    ///
+    /// `Unknown` answers `false` here, which is safe — an offer that might
+    /// match is not a match — but a caller that only asks this question cannot
+    /// distinguish "no" from "cannot tell", so [`Query::select`] reports the
+    /// two separately and the servant path says so out loud.
     pub fn matches(&self, offer: &Offer) -> bool {
-        self.conjuncts.iter().all(|c| c.holds(offer))
+        self.evaluate(offer) == Truth::Yes
     }
 
     /// Every matching offer, in the pinned order: the `ORDER BY` field and
@@ -567,7 +627,27 @@ impl Query {
     /// when no ordering was asked for. The same store and query always
     /// return the same list in the same order.
     pub fn select<'a>(&self, store: &'a OfferStore) -> Vec<&'a Offer> {
-        let mut out: Vec<&Offer> = store.iter().filter(|o| self.matches(o)).collect();
+        self.select_reporting(store).matched
+    }
+
+    /// [`Query::select`], plus the offers the query could not answer for.
+    ///
+    /// The reason this exists rather than a plain `Vec`: an offer registered
+    /// over the wire carries no `specialization` and no `latency_p50`, because
+    /// `moe::Capability` has no member for either. Folding those into "did not
+    /// match" made the two indistinguishable, and one of them is a question
+    /// for whoever registered the expert rather than an answer about maths.
+    pub fn select_reporting<'a>(&self, store: &'a OfferStore) -> Selection<'a> {
+        let mut matched: Vec<&Offer> = Vec::new();
+        let mut unanswerable: Vec<&Offer> = Vec::new();
+        for offer in store.iter() {
+            match self.evaluate(offer) {
+                Truth::Yes => matched.push(offer),
+                Truth::Unknown => unanswerable.push(offer),
+                Truth::No => {}
+            }
+        }
+        let mut out = matched;
         if let Some((field, direction)) = self.order {
             out.sort_by(|a, b| {
                 let ord = offer_cmp(a, b, field);
@@ -578,13 +658,114 @@ impl Query {
                 ord.then_with(|| a.id.cmp(&b.id))
             });
         }
-        out
+        unanswerable.sort_by(|a, b| a.id.cmp(&b.id));
+        Selection { matched: out, unanswerable }
+    }
+}
+
+/// What a query could answer, and what it could not.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Selection<'a> {
+    /// Offers that definitely satisfy every conjunct, in the pinned order.
+    pub matched: Vec<&'a Offer>,
+    /// Offers with a field the query names and the offer does not carry, in
+    /// ascending id. Never silently dropped: an empty `matched` beside a
+    /// non-empty `unanswerable` is a different situation from an empty
+    /// `matched` alone, and only the second one means "nothing qualifies".
+    pub unanswerable: Vec<&'a Offer>,
+}
+
+impl Selection<'_> {
+    /// One line an operator can act on, or `None` when everything was
+    /// answerable.
+    pub fn gap_note(&self) -> Option<String> {
+        if self.unanswerable.is_empty() {
+            return None;
+        }
+        let ids: Vec<&str> = self.unanswerable.iter().map(|o| o.id.as_str()).collect();
+        Some(format!(
+            "{} offer(s) could not be judged because they do not carry a field the query              names: {}. An expert registered over the wire has no specialization and no              latency_p50, because moe::Capability declares neither.",
+            ids.len(),
+            ids.join(", ")
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bug this three-valued logic exists for, pinned from both sides.
+    ///
+    /// An offer registered over the wire carries no `latency_p50`, and as a
+    /// `0.0` placeholder it did not fail to match `latency_p50 < 20` — it
+    /// **matched**, so a router selecting on latency preferred exactly the
+    /// experts nobody had measured. The mirror case is `specialization`,
+    /// where the empty-string placeholder produced a silent non-match that
+    /// read as "no expert does maths".
+    #[test]
+    fn an_unknown_field_neither_matches_nor_silently_misses() {
+        let mut store = OfferStore::new();
+        store
+            .register(Offer {
+                id: "from-the-wire".to_owned(),
+                specialization: None,
+                cost: 1.0,
+                latency_p50: None,
+                latency_p99: 50.0,
+                load: 0.1,
+                residency: Residency::Resident,
+                mem_footprint: 100,
+                placement_node: "n1".to_owned(),
+                route_freq: 0,
+            })
+            .expect("registers");
+
+        let fast = Query::parse("latency_p50 < 20").expect("parses");
+        let sel = fast.select_reporting(&store);
+        assert!(sel.matched.is_empty(), "an unmeasured latency is not a fast one");
+        assert_eq!(sel.unanswerable.len(), 1, "and it is reported, not dropped");
+        assert!(sel.gap_note().expect("a note").contains("from-the-wire"));
+
+        let maths = Query::parse("specialization == 'math'").expect("parses");
+        let sel = maths.select_reporting(&store);
+        assert!(sel.matched.is_empty());
+        assert_eq!(sel.unanswerable.len(), 1, "'nobody said' is not 'no'");
+
+        // A conjunct the offer definitely fails still decides: the missing
+        // field would not have saved it.
+        let slow = Query::parse("latency_p99 > 1000 AND latency_p50 < 20").expect("parses");
+        let sel = slow.select_reporting(&store);
+        assert!(sel.matched.is_empty());
+        assert!(sel.unanswerable.is_empty(), "No beats Unknown");
+    }
+
+    /// Ordering must not let an unknown win either: `ORDER BY latency_p50`
+    /// puts the unmeasured offer last, not first.
+    #[test]
+    fn an_unknown_sorts_after_every_known_value() {
+        let mut store = OfferStore::new();
+        for (id, p50) in [("known-slow", Some(90.0)), ("unknown", None), ("known-fast", Some(5.0))]
+        {
+            store
+                .register(Offer {
+                    id: id.to_owned(),
+                    specialization: Some("math".to_owned()),
+                    cost: 1.0,
+                    latency_p50: p50,
+                    latency_p99: 100.0,
+                    load: 0.1,
+                    residency: Residency::Resident,
+                    mem_footprint: 100,
+                    placement_node: "n1".to_owned(),
+                    route_freq: 0,
+                })
+                .expect("registers");
+        }
+        let q = Query::parse("specialization == 'math' ORDER BY latency_p50 ASC").expect("parses");
+        let ids: Vec<&str> = q.select(&store).iter().map(|o| o.id.as_str()).collect();
+        assert_eq!(ids, ["known-fast", "known-slow", "unknown"]);
+    }
 
     fn store() -> OfferStore {
         let mut s = OfferStore::new();
@@ -596,9 +777,9 @@ mod tests {
         ] {
             s.register(Offer {
                 id: id.to_owned(),
-                specialization: spec.to_owned(),
+                specialization: Some(spec.to_owned()),
                 cost: 1.0,
-                latency_p50: p99 / 2.0,
+                latency_p50: Some(p99 / 2.0),
                 latency_p99: p99,
                 load,
                 residency,
