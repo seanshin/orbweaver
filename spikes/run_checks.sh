@@ -1130,6 +1130,27 @@ else
   fail_total=$((fail_total+1))
 fi
 
+# ── The estate: thirteen legacy contracts through the whole path ────────────
+# Consumer-shaped, not a gate — nothing under spikes/estate/ is any stage's
+# input, which is what lets it measure the path instead of participating in
+# it. Every corpus file is self-contained, so this is the only place a
+# multi-file estate, four prefix styles and an unannotated contract are seen
+# at once. Takes no lock of its own: private mktemp dir, fixture by PID.
+hr "legacy estate — thirteen contracts, one pass, ingestion to agent call"
+if [ -x spikes/estate/run.sh ]; then
+  if est=$(./spikes/estate/run.sh --tsv 2>&1); then
+    printf '%s\n' "$est" | sed 's/^/  /'
+    echo "  ok   estate: every stage measured"
+  else
+    printf '%s\n' "$est" | tail -20 | sed 's/^/  /'
+    echo "  FAIL estate: see docs/pipeline-runs/2026-08-14-estate.md"
+    fail_total=$((fail_total+1))
+  fi
+else
+  echo "  FAIL spikes/estate/run.sh missing — an unmeasured path is a failure"
+  fail_total=$((fail_total+1))
+fi
+
 # ── D005 option B: a regeneration is diffed against what is registered ──────
 hr "registered-contract diff — an undeclared breaking change is refused"
 # The half option C cannot cover, and vice versa: the differ reads no
