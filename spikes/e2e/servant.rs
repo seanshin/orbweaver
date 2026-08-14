@@ -24,7 +24,8 @@ use orbweaver_gen::rt::{
 };
 use orbweaver_genout::f_parking::ParkingFacility::{
     BarrierGate, FloorLevel, FloorOccupancy, GateAlreadyOpen, GateIdentifier, GateState,
-    ParkingControlFault, ParkingControlServant, ParkingControlSkeleton, VehicleEntry,
+    ParkingControlFault, ParkingControlRefs, ParkingControlServant, ParkingControlSkeleton,
+    ParkingControlTarget, VehicleEntry,
 };
 use orbweaver_object::{ObjectId, Poa, Target};
 
@@ -57,8 +58,16 @@ impl Facility {
 }
 
 impl ParkingControlServant for Facility {
+    fn knows(&self, __at: &ParkingControlTarget<'_>) -> bool {
+        // One facility, one object: the default oid and nothing else. `knows`
+        // has no default in the generated trait on purpose — a default of
+        // `true` is the single-object bug this shape exists to remove.
+        __at.oid().is_empty()
+    }
+
     fn get_floor_occupancy(
         &mut self,
+        __at: &ParkingControlTarget<'_>,
         level: FloorLevel,
     ) -> Result<FloorOccupancy, ParkingControlFault> {
         match self.floors.get(&level) {
@@ -73,6 +82,7 @@ impl ParkingControlServant for Facility {
 
     fn get_gate_status(
         &mut self,
+        __at: &ParkingControlTarget<'_>,
         target_gate: GateIdentifier,
     ) -> Result<BarrierGate, ParkingControlFault> {
         // The contract declares no `raises` here, so an unknown gate has to be
@@ -82,7 +92,7 @@ impl ParkingControlServant for Facility {
         Ok(BarrierGate { gate_id: target_gate, state })
     }
 
-    fn open_entry_gate(&mut self, vehicle: VehicleEntry) -> Result<(), ParkingControlFault> {
+    fn open_entry_gate(&mut self, __at: &ParkingControlTarget<'_>, vehicle: VehicleEntry) -> Result<(), ParkingControlFault> {
         let state = self.gates.get(ENTRY_GATE).copied().unwrap_or(GateState::GATE_FAULT);
         if state == GateState::GATE_OPEN {
             return Err(ParkingControlFault::GateAlreadyOpen(GateAlreadyOpen {
@@ -141,7 +151,7 @@ fn main() -> std::process::ExitCode {
     poa.activate(oid.clone());
     let key = poa.object_key(&oid);
 
-    let server = match Server::bind("127.0.0.1:0", key) {
+    let server = match Server::bind("127.0.0.1:0", key.clone()) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("bind: {e}");
@@ -175,7 +185,18 @@ fn main() -> std::process::ExitCode {
     }
     eprintln!("serving {TYPE_ID} on {:?}", server.local_addr());
 
-    let mut front = PoaFront { poa, inner: ParkingControlSkeleton::new(Facility::new()) };
+    // The skeleton now needs the key scheme as well as the servant: it parses
+    // the object key itself rather than assuming there is only one object.
+    // Rooted at exactly the key the server was bound with, or nothing it
+    // parses matches what arrives.
+    let addr = server.local_addr().expect("bound");
+    let refs = ParkingControlRefs::new(orbweaver_gen::rt::ObjectHome::new(
+        addr.ip().to_string(),
+        addr.port(),
+        key.clone(),
+    ));
+    let mut front =
+        PoaFront { poa, inner: ParkingControlSkeleton::new(refs, Facility::new()) };
     if let Err(e) = server.serve(&mut front, || false) {
         eprintln!("serve: {e}");
         return std::process::ExitCode::FAILURE;

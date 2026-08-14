@@ -572,12 +572,13 @@ fn the_three_skeletons_claim_disjoint_parts_of_one_key_space() {
 const NOT_COMPARED: [(&str, &str); 5] = [
     (
         "describe_interface",
-        "the operation the whole facade exists for, and it is not in the contract: its \
-         reply carries `CORBA::TypeCode` members, and this workspace's registry loads \
-         `::CORBA::TypeCode` as `void` (measured: an operation declared to return one \
-         generates `-> ()`). Generating it would produce a silently empty reply, so the \
-         corpus file leaves it out. The cause is in `orbweaver-registry`, not in the \
-         generator.",
+        "not in the contract, and the reason has since changed — which is what this \
+         list is for. It was excluded because the registry loaded `::CORBA::TypeCode` \
+         as `void`, so generating it would have produced a silently empty reply. That \
+         defect is fixed: the registry now yields a TypeCode and the generator has a \
+         static mapping for one. What remains is only that `corpus/services/ir-subset.idl` \
+         does not yet declare the operation, so this entry is now a piece of work rather \
+         than a limitation.",
     ),
     (
         "_is_a on a non-interface entry",
@@ -636,11 +637,12 @@ fn the_divergences_are_the_ones_named_and_they_still_diverge() {
         Answer::Raised { id, .. } => assert_eq!(id, rt::BAD_OPERATION),
         other => panic!("the generated skeleton must not pretend to serve it: {other:?}"),
     }
-    // And the cause, measured rather than asserted from a comment: the
-    // registry loads `::CORBA::TypeCode` as `void`, so an operation declared to
-    // return one would generate `-> ()` and reply with nothing at all. That is
-    // an `orbweaver-registry` defect; what belongs here is the evidence for why
-    // the contract leaves the operation out rather than generating it wrong.
+    // The cause, re-measured rather than asserted from a comment — and it has
+    // changed since this test was written. The registry used to load
+    // `::CORBA::TypeCode` as `void`, so an operation returning one generated
+    // `-> ()` and replied with nothing at all. That is fixed, so what is
+    // asserted here now is the *new* fact: the type resolves, the operation is
+    // generatable, and only the corpus contract's silence keeps it out.
     let probe = orbweaver_idl::parse(
         "module probe { interface Described { ::CORBA::TypeCode shape(); }; };",
     )
@@ -652,10 +654,10 @@ fn the_divergences_are_the_ones_named_and_they_still_diverge() {
         .and_then(|i| i.operations.get("shape"))
         .expect("the probe operation");
     assert!(
-        matches!(sig.returns, orbweaver_giop::typecode::TypeCode::Void),
-        "measured 2026-08-14: the registry loads ::CORBA::TypeCode as {:?}, not a TypeCode. \
-         If this now holds a TypeCode, `describe_interface` has become generatable and this \
-         entry of NOT_COMPARED should go.",
+        matches!(sig.returns, orbweaver_giop::typecode::TypeCode::TypeCode),
+        "measured 2026-08-14, after the registry fix: ::CORBA::TypeCode must resolve to a \
+         TypeCode and not to {:?}. If this is Void again, the silent-empty-reply defect is \
+         back and every operation returning a TypeCode marshals nothing.",
         sig.returns
     );
 

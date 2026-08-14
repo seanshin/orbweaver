@@ -877,7 +877,25 @@ impl Builder<'_> {
                 bound: bound.as_deref().and_then(const_u32).unwrap_or(0),
             },
             TypeSpec::Named(n) => match self.names.resolve(scope, n) {
+                // `::CORBA::TypeCode` resolves to the predeclared native the
+                // front end provides, and a native has no derivation — so it
+                // used to fall through to `void`, silently. That is not a
+                // cosmetic default: `describe_interface`, the operation the
+                // Interface Repository facade exists for, returns a TypeCode,
+                // and an operation whose return type quietly became `void`
+                // marshals nothing where a peer expects a TypeCode.
+                //
+                // CLAUDE.md *requires* this spelling, which is what made the
+                // gap invisible: the rule reads as support. Found by the
+                // generated-servant batch, which could not express
+                // `describe_interface` and said so rather than emitting an
+                // empty reply.
                 Some(p) => self.derive(&p).unwrap_or(TypeCode::Void),
+                // `::CORBA::TypeCode` is *predeclared by the front end* for
+                // checking and is not among the spec's definitions, so it
+                // resolves to nothing and used to land here, silently, as
+                // `void`.
+                None if is_corba_typecode(n) => TypeCode::TypeCode,
                 // An unresolved name is a semantic error the checker already
                 // reports; producing `void` here keeps the registry loadable
                 // for tooling that wants to show what *did* resolve.
@@ -885,6 +903,15 @@ impl Builder<'_> {
             },
         }
     }
+}
+
+/// Whether a scoped name is the predeclared `::CORBA::TypeCode`.
+///
+/// Matched on the full name rather than on a trailing `TypeCode`, so a user's
+/// own `TypeCode` declared in their own module keeps whatever they declared it
+/// to be — that one resolves, and never reaches this arm.
+fn is_corba_typecode(n: &orbweaver_idl::ast::ScopedName) -> bool {
+    matches!(n.parts.as_slice(), [m, t] if m == "CORBA" && t == "TypeCode")
 }
 
 fn annotations_of(d: &Definition) -> &[orbweaver_idl::lex::Annotation] {
@@ -959,6 +986,44 @@ fn label_bytes(e: &ConstExpr, disc: &TypeCode) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `::CORBA::TypeCode` is a TypeCode, not `void`.
+    ///
+    /// It used to be `void`, because the front end predeclares the name for
+    /// checking and the registry resolves against the spec's own definitions,
+    /// where it is absent — so it fell through the unresolved arm. Nothing
+    /// noticed for months, and CLAUDE.md *requires* this spelling, which is
+    /// what made the gap read as support. An operation returning a TypeCode
+    /// marshalled nothing at a peer expecting one.
+    #[test]
+    fn corba_typecode_is_not_void() {
+        let spec =
+            orbweaver_idl::parse("module m { interface I { ::CORBA::TypeCode describe(); }; };")
+                .expect("parses");
+        let mut r = Registry::new();
+        r.load(&spec).expect("loads");
+        let Some(Entry::Interface(i)) = r.get("IDL:m/I:1.0") else { panic!("no interface") };
+        assert_eq!(i.operations["describe"].returns, TypeCode::TypeCode);
+    }
+
+    /// And a user's own `TypeCode`, declared in their own module, keeps what
+    /// they declared — the rule matches the full predeclared name, not a
+    /// trailing identifier.
+    #[test]
+    fn a_users_own_typecode_is_still_their_own() {
+        let spec = orbweaver_idl::parse(
+            "module m { typedef long TypeCode; interface I { TypeCode describe(); }; };",
+        )
+        .expect("parses");
+        let mut r = Registry::new();
+        r.load(&spec).expect("loads");
+        let Some(Entry::Interface(i)) = r.get("IDL:m/I:1.0") else { panic!("no interface") };
+        assert!(
+            matches!(i.operations["describe"].returns.resolve_alias(), TypeCode::Long),
+            "{:?}",
+            i.operations["describe"].returns
+        );
+    }
 
     fn load(src: &str) -> Registry {
         let spec = orbweaver_idl::parse(src).expect("parses");

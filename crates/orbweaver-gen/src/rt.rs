@@ -627,6 +627,28 @@ impl Cdr for AnyVal {
     }
 }
 
+/// A `TypeCode` as a value, which is what `::CORBA::TypeCode` declares.
+///
+/// The whole implementation is `giop`'s own codec, deliberately: a `TypeCode`
+/// inside an `any` and a `TypeCode` as a parameter are the same bytes, and a
+/// second encoding of the same rules is how the two drift apart.
+///
+/// This exists because the registry used to load `::CORBA::TypeCode` as
+/// `void`. The generator then emitted a stub that marshalled **nothing** where
+/// a peer expected a TypeCode, and it did so silently, because a `void` return
+/// is a perfectly ordinary thing to generate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeCodeVal(pub orbweaver_giop::typecode::TypeCode);
+
+impl Cdr for TypeCodeVal {
+    fn put(&self, e: &mut Encoder) -> Result<(), GiopError> {
+        orbweaver_giop::typecode::encode(e, &self.0)
+    }
+    fn get(d: &mut Decoder<'_>) -> Result<Self, GiopError> {
+        Ok(TypeCodeVal(orbweaver_giop::typecode::decode(d)?))
+    }
+}
+
 /// An object reference, inline-marshalled; `None` is nil.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ObjRef(pub Option<Ior>);

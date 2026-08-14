@@ -158,6 +158,7 @@ pub(crate) fn rust_type(tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
         TypeCode::String(_) => "String".into(),
         TypeCode::WString(_) => "orbweaver_gen::rt::WString".into(),
         TypeCode::Any => "orbweaver_gen::rt::AnyVal".into(),
+        TypeCode::TypeCode => "orbweaver_gen::rt::TypeCodeVal".into(),
         TypeCode::Void | TypeCode::Null => "()".into(),
         TypeCode::ObjRef { .. } => "orbweaver_gen::rt::ObjRef".into(),
         TypeCode::Sequence { element, .. } => format!("Vec<{}>", rust_type(element, cx)?),
