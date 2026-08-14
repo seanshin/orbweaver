@@ -1088,6 +1088,58 @@ else
   fail_total=$((fail_total+1))
 fi
 
+# ── Scope drift is loud before a call (stream C, D005's class) ──────────────
+hr "scope drift — a permission name no token can satisfy, reported as an outage"
+# The failure D005 measured is silent by construction: an identity provider
+# issuing the requirement's literal scope against a contract asking for another
+# refuses every legitimate caller, and it reads as a permissions
+# misconfiguration rather than a generation defect. So what is checked here is
+# that the process refuses to be quiet about it — and, just as important, that
+# a deployment which does not configure a mapping cannot tell the feature
+# exists.
+sd_fail=0
+SD=/tmp/orbweaver-scope-drift
+rm -rf "$SD" && mkdir -p "$SD"
+cat > "$SD/parkinglot.idl" <<'IDL'
+module parkinglot {
+  interface ParkingControl {
+    //@ ai_desc: Raises the entry barrier
+    //@ ai_authz: parkinglot.barrier.open
+    void open_barrier();
+  };
+};
+IDL
+sd_out=$(cargo run -q -p orbweaver-mcp --bin orbweaver-mcp-server -- \
+  --idl "$SD/parkinglot.idl" --expose IDL:parkinglot/ParkingControl:1.0 \
+  --as alice --map-scope 'gate:operate=gate:operate' \
+  --token-scope 'gate:operate' --dry-run 2>"$SD/err")
+sd_code=$?
+sd_err=$(cat "$SD/err" 2>/dev/null)
+if [ "$sd_code" -eq 3 ] && printf '%s' "$sd_err" | grep -q "open_barrier"; then
+  echo "  ok   a scope no issued token can satisfy exits 3 and names the operation that goes dark"
+else
+  echo "  FAIL a drifted scope was not reported as an outage (exit $sd_code)"
+  printf '%s' "$sd_err" | head -3 | sed 's/^/       /'
+  sd_fail=1
+fi
+if cargo run -q -p orbweaver-mcp --bin orbweaver-mcp-server -- \
+     --idl "$SD/parkinglot.idl" --expose IDL:parkinglot/ParkingControl:1.0 \
+     --as alice --map-scope 'gate:operate=parkinglot.barrier.open' \
+     --token-scope 'gate:operate' --dry-run >/dev/null 2>&1; then
+  echo "  ok   one line of translation repairs it, with the contract untouched"
+else
+  echo "  FAIL the mapping did not repair the drift"; sd_fail=1
+fi
+sd_plain=$(cargo run -q -p orbweaver-mcp --bin orbweaver-mcp-server -- \
+  --idl "$SD/parkinglot.idl" --expose IDL:parkinglot/ParkingControl:1.0 \
+  --as alice --dry-run 2>/dev/null)
+case "$sd_plain" in
+  *scope_map*) echo "  FAIL an unconfigured deployment can tell the feature exists"; sd_fail=1 ;;
+  *) echo "  ok   with no mapping configured, the report is the document it always was" ;;
+esac
+rm -rf "$SD"
+[ "$sd_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
 # ── R7: an IOR that is dialable from where the client actually is ───────────
 hr "NAT rewriting — the address a container publishes is not the one it bound"
 # assumption D already measured that a server publishes a routable-but-local
