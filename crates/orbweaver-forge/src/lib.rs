@@ -220,6 +220,7 @@ pub fn validate(src: &str) -> Report {
                     fix: None,
                 });
             }
+            findings.extend(explicit_ids(&spec));
             findings.extend(wire_support(src, &spec));
             findings.extend(annotation_advice(src, &spec));
         }
@@ -337,6 +338,79 @@ fn fix_for(d: &Diagnostic, src: &str) -> Option<String> {
 }
 
 /// Things that compile and will not work on this project's wire (§4.4).
+/// An explicit `#pragma ID` that is not a well-formed repository id.
+///
+/// A repository id is identity: `_is_a`, the IFR facade, ingestion's matching,
+/// an IOR's `type_id` and the exposure allowlist all key on it. `#pragma ID`
+/// lets a file set one directly, and nothing checked what it set — we accepted
+/// `not an idl id at all` in silence and put it on the wire as the identity of
+/// an interface.
+///
+/// **Warning, not error, and the oracle decides that.** omniidl accepts the
+/// same file with `Warning: Repository id of 'I' set to invalid string`, so
+/// refusing it would reject IDL a deployed compiler compiles — the divergence
+/// this project records rather than creates. Saying nothing, though, is worse
+/// than either: the id travels, and the peer that disagrees with it is the one
+/// who finds out.
+///
+/// The form checked is the one the specification gives, `IDL:<path>:<major>.<minor>`,
+/// deliberately permissive about the path's first segment because a prefix is
+/// a domain name and carries dots. Other schemes (`RMI:`, `DCE:`) are reported
+/// as unrecognised rather than malformed: they are real, and we do not
+/// implement them.
+fn explicit_ids(spec: &orbweaver_idl::ast::Spec) -> Vec<Finding> {
+    let mut out = Vec::new();
+    for (name, id) in &spec.repository_ids {
+        let complaint = if let Some(rest) = id.strip_prefix("IDL:") {
+            match rest.rsplit_once(':') {
+                None => Some("it has no `:<major>.<minor>` version suffix".to_owned()),
+                Some((path, version)) => {
+                    let bad_version = version.split_once('.').is_none_or(|(maj, min)| {
+                        maj.is_empty()
+                            || min.is_empty()
+                            || !maj.bytes().all(|b| b.is_ascii_digit())
+                            || !min.bytes().all(|b| b.is_ascii_digit())
+                    });
+                    if bad_version {
+                        Some(format!("its version {version:?} is not `<major>.<minor>`"))
+                    } else if path.is_empty() {
+                        Some("its path is empty".to_owned())
+                    } else if path.split('/').any(str::is_empty) {
+                        Some("its path has an empty segment".to_owned())
+                    } else {
+                        None
+                    }
+                }
+            }
+        } else if id.starts_with("RMI:") || id.starts_with("DCE:") {
+            Some("it uses a scheme this project does not implement".to_owned())
+        } else {
+            Some("it does not start with `IDL:`".to_owned())
+        };
+
+        if let Some(why) = complaint {
+            out.push(Finding {
+                rule: "id/explicit-malformed".into(),
+                severity: Severity::Warning,
+                message: format!(
+                    "#pragma ID sets the repository id of {name} to {id:?}, but {why}. \
+                     A repository id is identity on the wire — `_is_a`, the repository \
+                     facade, ingestion and the exposure allowlist all key on it — so a \
+                     malformed one disagrees with every peer that derives its own",
+                ),
+                line: 0,
+                column: 0,
+                source: name.clone(),
+                fix: Some(format!(
+                    "set it to `IDL:<path>:<major>.<minor>`, or drop the pragma and let \
+                     the id be derived from the scope of {name}"
+                )),
+            });
+        }
+    }
+    out
+}
+
 fn wire_support(src: &str, spec: &orbweaver_idl::ast::Spec) -> Vec<Finding> {
     let mut out = Vec::new();
     walk(&spec.definitions, &mut |def| {
@@ -439,6 +513,46 @@ mod tests {
 
     fn rules(src: &str) -> Vec<String> {
         validate(src).findings.iter().map(|f| f.rule.clone()).collect()
+    }
+
+    /// `#pragma ID` is a direct write to identity, and nothing checked it.
+    /// omniidl warns on the same file rather than refusing, so we warn: this
+    /// is a divergence to record, not one to create.
+    #[test]
+    fn an_explicit_id_that_is_not_a_repository_id_is_reported() {
+        let r = validate(
+            "module m { interface I { long ping(); };\n#pragma ID I \"not an idl id\"\n};",
+        );
+        let f = r.findings.iter().find(|f| f.rule == "id/explicit-malformed").expect("reported");
+        assert_eq!(f.severity, Severity::Warning, "the oracle accepts it; we do not refuse");
+        assert!(f.message.contains("not an idl id"), "{}", f.message);
+        assert!(r.is_ok(), "a warning must not fail the gate");
+    }
+
+    /// The forms that are wrong in a way a reader would not spot: a missing
+    /// version, a version that is not two numbers, an empty path segment.
+    #[test]
+    fn the_shape_of_a_repository_id_is_checked_not_just_its_prefix() {
+        for bad in ["IDL:m/I", "IDL:m/I:1", "IDL:m/I:x.y", "IDL::1.0", "IDL:m//I:1.0"] {
+            let src =
+                format!("module m {{ interface I {{ long ping(); }};\n#pragma ID I \"{bad}\"\n}};");
+            let r = validate(&src);
+            assert!(
+                r.findings.iter().any(|f| f.rule == "id/explicit-malformed"),
+                "{bad} passed unreported"
+            );
+        }
+    }
+
+    /// A well-formed one — including a dotted prefix segment, which is what a
+    /// `#pragma prefix` produces — must be silent, or the rule fires on every
+    /// correct file and gets ignored.
+    #[test]
+    fn a_well_formed_explicit_id_is_silent() {
+        let r = validate(
+            "module m { interface I { long ping(); };\n#pragma ID I \"IDL:acme.com/m/I:2.3\"\n};",
+        );
+        assert!(!r.findings.iter().any(|f| f.rule == "id/explicit-malformed"), "{:?}", r.findings);
     }
 
     #[test]
