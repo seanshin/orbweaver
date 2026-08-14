@@ -8,6 +8,30 @@ records what changed and, where it matters, what it changes on the wire.
 
 ---
 
+## Unreleased
+
+- **Declared bounds are enforced by generated code**, at the same refusal point
+  the dynamic path uses, and the §8 oracle gained the reading that would have
+  caught the gap: for a value that violates its contract, the two paths must
+  write the same bytes and reach the same verdict. Byte equality over valid
+  values never could — which is how the divergence survived until D006 measured
+  it while arguing about something else.
+- **D005 option C**: a scope-shaped token the requirement states verbatim must
+  survive to the `//@ ai_authz` S3 emits, checked by string equality with no
+  model. It compares against the whole file's scopes so it survives S2's
+  rename, and it fires on the regeneration that keeps every name and changes
+  only the scope — the case that passes all eight end-to-end hops today.
+  Finding recorded rather than smoothed: **none of the twenty frozen
+  requirements states a scope literally**, so the benchmark cannot exercise the
+  rule at all.
+- **D005 and D006 approved.** `Expert::process` and `Router::dispatch` are
+  excluded; the bound is their return path via a new versioned interface.
+- **IF2's two stores are joinable** (`CallStats::merge`) and deliberately not
+  joined: a static call is evidence a path *already has* a stub, so folding it
+  in would have the promotion policy recommend promoting it again.
+
+---
+
 ## v0.3.0 — 2026-08-14
 
 The wire-behaviour section leads again, for the same reason. Everything in it
