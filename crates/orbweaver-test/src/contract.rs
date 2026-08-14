@@ -46,6 +46,54 @@
 //! `oneway` + `ai_idempotent` 검사를 뺐다 — 전자는 올바른 계약에서 발화하고,
 //! 후자는 어휘가 말하지 않는 것을 주장한다.
 //!
+//! ## Two consumers that did not exist when the rule was written
+//!
+//! `orbweaver-mcp`'s **quota stage** (§4.5 #2) counts calls against a budget
+//! keyed on `(caller, target, operation)`, and `orbweaver-forge`'s **S3i
+//! inference** attaches `inferred_*` values that `infer::approve` later promotes
+//! into the `ai_*` keys the gates read. Both act on things a contract decides,
+//! so both can be named. The same test threw out more candidates than it let
+//! through, and those are recorded here for the same reason the two above are —
+//! a checker fills up with style opinions one plausible rule at a time.
+//!
+//! - **A quota refusal on a non-idempotent operation is *not* flagged.** The
+//!   refusal reaches a stub as CORBA `TRANSIENT`, which invites a retry, and
+//!   inviting a retry of something the contract says is unsafe to retry looks
+//!   like a real contradiction. It is not: `Quota::before` refuses **before the
+//!   invocation**, so nothing ran and there is nothing to repeat. Idempotence is
+//!   a claim about repeating an effect, and a call that was refused had none.
+//!
+//! - **A `oneway` under a quota is *not* flagged.** The reasoning that a oneway
+//!   has no reply to carry the refusal in is wrong here: `guard::Guarded::
+//!   invoke_oneway` runs the chain first and returns the refusal to its caller
+//!   locally, so the caller does learn. The gate is in the same process as the
+//!   stub, not at the other end of the wire.
+//!
+//! - **An operation with no `ai_authz` is *not* flagged for sharing `<nobody>`'s
+//!   budget.** Every unauthenticated session is one principal, which the quota's
+//!   own documentation states as its honest limitation — but that is a property
+//!   of whether the *host* wired an identity, not of anything the contract says.
+//!   A finding that fires on every operation in a deployment that has no
+//!   authentication is a finding about the deployment, filed against the IDL.
+//!
+//! - **`inferred_status: unapproved` is *not* flagged on its own.** It is
+//!   exactly what `infer::worksheet` and `infer::exposure_refusal` exist to
+//!   report, in more detail and with the ingestion source attached. A second
+//!   opinion on the same fact does not make the fact more visible; it makes two
+//!   reports that have to agree.
+//!
+//! - **`inferred_effect` carrying an ungating value is *not* flagged.**
+//!   `infer::approve` already refuses it with `ApproveError::Ungating`, at the
+//!   only door it can enter through. A check that duplicates an enforced gate
+//!   adds a warning before a refusal, which is noise in front of a wall.
+//!
+//! - **An `inferred_*` mark with nothing promotable beside it is *not*
+//!   flagged**, though it would genuinely wedge `approve` on
+//!   `NothingInferred` — because `Inference::annotations` always writes
+//!   `inferred_desc` and `inferred_effect`, so no producer in the tree can
+//!   reach that state. Reporting it would be reporting a shape nobody has
+//!   measured, which is the rule about unmeasured checks pointed the other way.
+//!
 //! # Severity
 //!
 //! Never [`Severity::Error`]; see the crate documentation. Within that,
@@ -55,6 +103,9 @@
 
 use std::collections::BTreeMap;
 
+use orbweaver_forge::infer::{
+    INFERRED_PREFIX, MARK_BASIS, MARK_EVIDENCE, MARK_SOURCE, MARK_STATUS,
+};
 use orbweaver_forge::{Finding, Severity};
 use orbweaver_giop::typecode::TypeCode;
 use orbweaver_registry::{Entry, OperationSig, ParamDirection, Registry, RepositoryId};
@@ -410,6 +461,12 @@ fn operation_findings(
         }
     }
 
+    // ── inferred values against the keys they will be promoted into ─────────
+    out.extend(inference_findings(&at, sig));
+
+    // ── the budget the quota stage will key on ──────────────────────────────
+    out.extend(quota_findings(registry, id, &at, name, effect));
+
     // ── parameter-level vocabulary against parameter types ──────────────────
     for p in &sig.params {
         out.extend(unknown_keys(id, &format!("parameter {} of {name}", p.name), &p.annotations));
@@ -457,6 +514,154 @@ fn operation_findings(
         }
     }
     out
+}
+
+/// The four `inferred_*` keys that are metadata *about* an inference rather
+/// than a value it proposes.
+///
+/// Taken from `orbweaver-forge` rather than retyped, because `infer::approve`
+/// skips exactly these when it decides what to promote and a second list here
+/// would be a second answer to a question with one.
+fn is_mark(key: &str) -> bool {
+    [MARK_STATUS, MARK_EVIDENCE, MARK_SOURCE, MARK_BASIS].contains(&key)
+}
+
+/// What `infer::approve` would do to this operation's annotations.
+///
+/// The consumer is `orbweaver_forge::infer::approve`, and what it does is
+/// literal: for every `inferred_<k>` that is not one of the marks it inserts
+/// `ai_<k>` with that value. Both rules below are about the key it would land
+/// on rather than about the value, because the value is a human's to judge and
+/// the key is not.
+fn inference_findings(at: &str, sig: &OperationSig) -> Vec<Finding> {
+    let mut out = Vec::new();
+    for key in sig.annotations.keys() {
+        let Some(suffix) = key.strip_prefix(INFERRED_PREFIX) else { continue };
+        if is_mark(key) {
+            continue;
+        }
+        let target = format!("ai_{suffix}");
+
+        // An inference landing on a key an author already filled in. `approve`
+        // inserts, so the authored value is replaced and `MARK_STATUS` then
+        // reads "approved by …" over the top — the one state `Provenance`
+        // cannot tell you about afterwards, because the annotation that was
+        // overwritten leaves nothing behind.
+        if let Some(authored) = sig.annotations.get(&target) {
+            out.push(finding(
+                "contract/inference-overwrites-authored-annotation",
+                Severity::Advice,
+                format!(
+                    "{at} carries {key:?} beside an authored {target:?} of {:?}; \
+                     infer::approve promotes the inferred value into that key, so approving \
+                     this operation replaces something a person wrote with something a machine \
+                     read off the name, and afterwards nothing records that the authored value \
+                     ever existed",
+                    authored.trim()
+                ),
+                at.to_owned(),
+                Some(format!(
+                    "decide which one is true before anybody runs approve: drop {key:?} if the \
+                     authored value stands, or clear {target:?} so the promotion is a promotion \
+                     rather than an overwrite"
+                )),
+            ));
+        }
+
+        // An inference landing on a key that is not in the vocabulary. It
+        // promotes cleanly and produces a dead annotation: `contract/
+        // unknown-annotation` would then fire on the very key this promotion
+        // created.
+        if !VOCABULARY.contains(&target.as_str()) {
+            out.push(finding(
+                "contract/inference-promotes-into-nothing",
+                Severity::Warning,
+                format!(
+                    "{at} carries {key:?}, and infer::approve would promote it to {target:?}, \
+                     which is not in the SIDL v1 vocabulary; the promotion would manufacture an \
+                     annotation no consumer reads, out of a human approval that was given in the \
+                     belief it enabled something"
+                ),
+                at.to_owned(),
+                Some(format!(
+                    "name the inference after a key that exists — one of {} — or drop it; an \
+                     approval is the scarcest thing in this pipeline and it should not be spent \
+                     on a key nothing consults",
+                    VOCABULARY.join(", ")
+                )),
+            ));
+        }
+    }
+    out
+}
+
+/// Where the quota stage will find more than one budget for one operation.
+///
+/// The consumer is `orbweaver_mcp::quota::Quota`, and what it does is key a
+/// budget on `(caller, target, operation)` where `target` is **the repository id
+/// the call was made through** (`guard::Guarded` passes its own `self.id`), not
+/// the id the operation was declared under. An inherited operation is callable
+/// through every derived interface, so under [`Scope::Interface`] or
+/// [`Scope::Operation`] the same operation on the same object has one budget per
+/// id a caller can reach it by — and a caller holding both references gets the
+/// limit twice.
+///
+/// That is the quota's own argument about scopes turned one level outward:
+/// "a budget an agent escapes by moving to another operation is not a budget on
+/// the agent". Moving to another *interface* over the same object is the same
+/// escape.
+///
+/// Reported only for operations the contract itself marks `destructive`, which
+/// is deliberate and is what keeps the rule quiet. Inheritance is ordinary and
+/// correct; a report that fired on every inherited operation would be a report
+/// about IDL rather than about this deployment, and nobody would read the ones
+/// that mattered.
+///
+/// [`Scope::Interface`]: orbweaver_mcp::quota::Scope::Interface
+/// [`Scope::Operation`]: orbweaver_mcp::quota::Scope::Operation
+fn quota_findings(
+    registry: &Registry,
+    id: &RepositoryId,
+    at: &str,
+    name: &str,
+    effect: Option<&str>,
+) -> Vec<Finding> {
+    if !effect.is_some_and(|e| GATED_EFFECTS.contains(&e)) {
+        return Vec::new();
+    }
+    // Interfaces that inherit this one and do not redeclare the operation, so
+    // the call they receive is this declaration.
+    let mut heirs: Vec<&RepositoryId> = registry
+        .ids()
+        .filter(|other| other.as_str() != id.as_str())
+        .filter(|other| registry.ancestors(other).iter().any(|a| a == id))
+        .filter(|other| registry.interface(other).is_some_and(|i| !i.operations.contains_key(name)))
+        .collect();
+    if heirs.is_empty() {
+        return Vec::new();
+    }
+    heirs.sort();
+    vec![finding(
+        "contract/inherited-destructive-splits-the-quota",
+        Severity::Advice,
+        format!(
+            "{at} is destructive and is inherited by {} interface(s) that do not redeclare it \
+             ({}); the quota stage keys a budget on the repository id a call was made through, so \
+             at Scope::Interface or Scope::Operation this one operation has {} budgets and a \
+             caller holding a reference under each id may call it {} times the configured limit",
+            heirs.len(),
+            heirs.iter().map(|h| h.as_str()).collect::<Vec<_>>().join(", "),
+            heirs.len() + 1,
+            heirs.len() + 1
+        ),
+        at.to_owned(),
+        Some(
+            "count this budget at Scope::Caller, which does not subdivide by interface, or expose \
+             exactly one of the ids that reach this operation — a budget an agent escapes by \
+             narrowing to the base interface is not a budget on the agent"
+                .into(),
+        ),
+    )]
 }
 
 /// `ai_*` keys nobody reads.
@@ -602,6 +807,8 @@ fn carries_a_quantity(tc: &TypeCode) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use orbweaver_forge::infer;
+
     use super::*;
 
     fn registry(src: &str) -> Registry {
@@ -613,6 +820,36 @@ mod tests {
 
     fn rules(src: &str) -> Vec<String> {
         contract_findings(&registry(src)).iter().map(|f| f.rule.clone()).collect()
+    }
+
+    /// One ingested interface with one operation, annotated exactly as given.
+    ///
+    /// Built rather than parsed because `inferred_*` values do not come from
+    /// IDL: they are attached to an entry that arrived off the wire, which is
+    /// also the only entry an inference is allowed to sit on. `define_ingested`
+    /// is the single door into the registry for that, so the fixture goes
+    /// through it rather than around it.
+    fn ingested(annotations: &[(&str, &str)]) -> Registry {
+        let sig = OperationSig {
+            returns: TypeCode::Void,
+            params: Vec::new(),
+            raises: Vec::new(),
+            oneway: false,
+            annotations: annotations
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+        };
+        let entry = Entry::Interface(orbweaver_registry::InterfaceEntry {
+            bases: Vec::new(),
+            operations: BTreeMap::from([("settle".to_owned(), sig)]),
+            attributes: BTreeMap::new(),
+            forward_only: false,
+        });
+        let mut r = Registry::new();
+        r.define_ingested("IDL:remote/Ledger:1.0".to_owned(), entry, "a foreign IR")
+            .expect("defines");
+        r
     }
 
     /// A contract that says nothing wrong produces nothing. A checker that
@@ -996,6 +1233,192 @@ mod tests {
     #[test]
     fn a_forward_declared_interface_is_skipped() {
         assert!(rules("module m { interface I; };").is_empty());
+    }
+
+    // ── the two consumers that appeared after the rule for adding a rule ─────
+
+    /// An inference landing on a key an author already filled in. The finding
+    /// has to name `approve` and say that it overwrites, because "these two
+    /// disagree" without the consequence is a style opinion.
+    #[test]
+    fn an_inference_that_would_overwrite_an_authored_annotation_is_named() {
+        let f = contract_findings(&ingested(&[
+            ("ai_effect", "destructive"),
+            ("ai_authz", "ledger.settle"),
+            ("inferred_effect", "unknown"),
+            (infer::MARK_STATUS, infer::UNAPPROVED),
+        ]));
+        let g = f
+            .iter()
+            .find(|f| f.rule == "contract/inference-overwrites-authored-annotation")
+            .unwrap_or_else(|| panic!("{f:?}"));
+        assert_eq!(g.severity, Severity::Advice);
+        assert!(g.message.contains("infer::approve"), "{}", g.message);
+        assert!(g.message.contains("destructive"), "the authored value: {}", g.message);
+    }
+
+    /// The consumer really does overwrite. Pinned against `infer::approve`
+    /// itself rather than against a copy of what it is believed to do — the
+    /// premise of the rule is a behaviour, and a behaviour can be run.
+    #[test]
+    fn approve_really_does_replace_the_authored_value() {
+        let mut ann = BTreeMap::from([
+            ("ai_effect".to_owned(), "destructive".to_owned()),
+            ("inferred_effect".to_owned(), "unknown".to_owned()),
+            (infer::MARK_STATUS.to_owned(), infer::UNAPPROVED.to_owned()),
+        ]);
+        infer::approve(
+            &mut ann,
+            &infer::Approval { by: "an operator".into(), at: "2026-08-14".into() },
+        )
+        .expect("promotes");
+        assert_eq!(ann["ai_effect"], "unknown", "the authored value was replaced");
+    }
+
+    /// An inference named after a key the vocabulary does not have. `approve`
+    /// promotes it happily and produces an annotation nothing reads — spending
+    /// the one human approval in the pipeline on nothing.
+    #[test]
+    fn an_inference_promoting_into_a_key_nobody_reads_is_a_warning() {
+        let f = contract_findings(&ingested(&[
+            ("ai_effect", "destructive"),
+            ("ai_authz", "ledger.settle"),
+            ("inferred_sensitivity", "high"),
+            (infer::MARK_STATUS, infer::UNAPPROVED),
+        ]));
+        let g = f
+            .iter()
+            .find(|f| f.rule == "contract/inference-promotes-into-nothing")
+            .unwrap_or_else(|| panic!("{f:?}"));
+        assert_eq!(g.severity, Severity::Warning, "nothing will read the result");
+        assert!(g.message.contains("ai_sensitivity"), "{}", g.message);
+    }
+
+    /// The marks are not values. A finding on `inferred_status` would fire on
+    /// every single inferred operation in the registry, which is exactly the
+    /// noise the rule for adding a rule exists to keep out — and the whole
+    /// point of `unapproved` being visible is that the state is normal.
+    #[test]
+    fn the_inference_marks_are_not_mistaken_for_proposals() {
+        let f = contract_findings(&ingested(&[
+            ("ai_effect", "destructive"),
+            ("ai_authz", "ledger.settle"),
+            (infer::MARK_STATUS, infer::UNAPPROVED),
+            (infer::MARK_EVIDENCE, "the name contains \"settle\""),
+            (infer::MARK_SOURCE, "a foreign IR"),
+            (infer::MARK_BASIS, infer::BASIS_UNRECOGNISED),
+        ]));
+        assert!(f.is_empty(), "a mark is metadata, not a proposal: {f:?}");
+    }
+
+    /// And an inference on a key the author left empty is the ordinary, correct
+    /// state — that is what S3i is *for*. Neither rule may fire on it.
+    #[test]
+    fn an_ordinary_unapproved_inference_is_silent() {
+        let f = contract_findings(&ingested(&[
+            ("ai_effect", "destructive"),
+            ("ai_authz", "ledger.settle"),
+            ("inferred_desc", "Settles a trade"),
+            (infer::MARK_STATUS, infer::UNAPPROVED),
+        ]));
+        // `inferred_desc` promotes into `ai_desc`, which is in the vocabulary
+        // and which the author did not write, so there is nothing to say.
+        assert!(f.is_empty(), "{f:?}");
+    }
+
+    /// The quota rule: a destructive operation reachable under more than one
+    /// repository id has more than one budget.
+    #[test]
+    fn a_destructive_operation_inherited_by_two_interfaces_has_three_budgets() {
+        let f = contract_findings(&registry(
+            "module m {
+               interface Base {
+                 //@ ai_effect: destructive
+                 //@ ai_authz: m.write
+                 void wipe();
+               };
+               interface Left : Base { };
+               interface Right : Base { };
+             };",
+        ));
+        let g = f
+            .iter()
+            .find(|f| f.rule == "contract/inherited-destructive-splits-the-quota")
+            .unwrap_or_else(|| panic!("{f:?}"));
+        assert_eq!(g.severity, Severity::Advice);
+        assert!(g.message.contains("3 budgets"), "{}", g.message);
+        assert!(g.message.contains("IDL:m/Left:1.0"), "the heirs are named: {}", g.message);
+        assert!(g.fix.as_deref().unwrap().contains("Scope::Caller"), "{g:?}");
+    }
+
+    /// The premise, pinned against the quota itself: two repository ids really
+    /// are two budgets. If `Scope::Interface` ever stops keying on the target,
+    /// this fails and the rule goes rather than drifting into a folk belief.
+    #[test]
+    fn the_quota_really_does_key_a_separate_budget_per_repository_id() {
+        use orbweaver_mcp::interceptor::{CallContext, Interceptor, Outcome};
+        use orbweaver_mcp::policy::Approval;
+        use orbweaver_mcp::quota::{Quota, Renewal, Scope};
+
+        let reg = registry(
+            "module m {
+               interface Base { void wipe(); };
+               interface Left : Base { };
+             };",
+        );
+        let mut quota = Quota::new(1, Scope::Interface, Renewal::Never);
+        let call = |target: &'static str| CallContext {
+            registry: &reg,
+            caller: None,
+            target,
+            operation: "wipe",
+            approval: Approval { destructive_approved: true },
+        };
+        assert!(matches!(quota.before(&call("IDL:m/Base:1.0")), Outcome::Proceed));
+        assert!(matches!(quota.before(&call("IDL:m/Base:1.0")), Outcome::Refuse(_)), "the limit");
+        assert!(
+            matches!(quota.before(&call("IDL:m/Left:1.0")), Outcome::Proceed),
+            "the same operation on the same object, under the derived id, is a second budget"
+        );
+        assert_eq!(quota.budgets(), 2);
+    }
+
+    /// The rule stays quiet on ordinary inheritance, which is the whole reason
+    /// it is restricted to `destructive`. A report that fires on every derived
+    /// interface is a report about IDL.
+    #[test]
+    fn inheritance_on_its_own_is_not_a_quota_finding() {
+        let f = rules(
+            "module m {
+               interface Base {
+                 //@ ai_effect: read_only
+                 //@ ai_authz: m.read
+                 long peek();
+               };
+               interface Derived : Base { };
+             };",
+        );
+        assert!(f.is_empty(), "{f:?}");
+
+        // And an heir that redeclares the operation is answering for itself.
+        let redeclared = rules(
+            "module m {
+               interface Base {
+                 //@ ai_effect: destructive
+                 //@ ai_authz: m.write
+                 void wipe();
+               };
+               interface Derived : Base {
+                 //@ ai_effect: destructive
+                 //@ ai_authz: m.write
+                 void wipe();
+               };
+             };",
+        );
+        assert!(
+            !redeclared.contains(&"contract/inherited-destructive-splits-the-quota".to_owned()),
+            "{redeclared:?}"
+        );
     }
 
     /// Determinism, because a report that reorders itself cannot be diffed.

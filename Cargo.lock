@@ -224,10 +224,12 @@ name = "orbweaver-test"
 version = "0.1.0"
 dependencies = [
  "orbweaver-cdr",
+ "orbweaver-console",
  "orbweaver-dynamic",
  "orbweaver-forge",
  "orbweaver-giop",
  "orbweaver-idl",
+ "orbweaver-mcp",
  "orbweaver-registry",
 ]
 

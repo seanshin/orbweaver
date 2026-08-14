@@ -18,6 +18,14 @@ orbweaver-idl = { path = "../orbweaver-idl" }
 # both had to normalise them, and the two would drift on the day one grew a
 # field. Cycle-free: nothing in forge's tree depends on this crate.
 orbweaver-forge = { path = "../orbweaver-forge" }
+# Fuzz targets and one pinning test, never a rule's implementation.
+# `orbweaver-console` owns the D004 trace reader and `orbweaver-mcp` owns the
+# quota stage; both parse or act on input somebody else chose, and neither can
+# be reached from here without depending on it. Cycle-free: console depends on
+# mcp/registry/dynamic/idl and mcp on cdr/giop/registry/dynamic/idl, and
+# nothing in the workspace depends on this crate.
+orbweaver-console = { path = "../orbweaver-console" }
+orbweaver-mcp = { path = "../orbweaver-mcp" }
 
 [lints]
 workspace = true
