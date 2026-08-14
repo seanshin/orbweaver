@@ -76,3 +76,7 @@ path = "src/bin/spike_concurrent.rs"
 [[bin]]
 name = "spike-nat"
 path = "src/bin/spike_nat.rs"
+
+[[bin]]
+name = "spike-mux"
+path = "src/bin/spike_mux.rs"
