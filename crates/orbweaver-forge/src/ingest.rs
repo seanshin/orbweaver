@@ -84,11 +84,88 @@ Rules:
   \"Position\" with a field \"position\", or a parameter \"account\" carrying an
   \"Account\", is illegal downstream. Name the field for its role
   (\"location\", \"the_account\", \"source_account\"), not for its type.
+- \"authz\" is the permission AS THE REQUIREMENT STATES IT, copied verbatim
+  when the requirement names one (\"gate:operate\"). Do not normalise it, do not
+  reword it, do not compose a tidier one — a later stage binds this token to the
+  contract's own scope by string equality, and a token you improved here is a
+  scope no identity provider issues. Where the requirement only implies a
+  permission in prose, say what it implies and put the wording in
+  \"open_questions\"; where it names none, use null.
 - Do not invent operations the requirement does not ask for. Anything you are
   unsure about belongs in \"open_questions\", which is the field a human reads
   first — leaving it empty when the requirement is genuinely ambiguous is the
   one failure this stage cannot detect.
 ";
+
+/// Whether a token is shaped like an authorization scope (D005 option C).
+///
+/// # What "scope-shaped" means here, precisely
+///
+/// Two or more `[a-z][a-z0-9_-]*` segments joined by `:` or `.`, ASCII only,
+/// at most [`MAX_SCOPE_LEN`] bytes. `gate:operate`, `bank.transfer.write`,
+/// `echo:blob` and `parkinglot.barrier.open` all pass; so does `api.v2`.
+///
+/// # What it does **not** claim
+///
+/// It is a *lexical* filter over one convention, not a definition of "scope":
+///
+/// - **It does not claim to recognise every scope.** `admin` (no separator),
+///   `GATE_OPERATE` (upper case), `gate/operate` (a slash), `읽기권한`
+///   (non-ASCII) and a permission described only in prose — "운영자만" — are all
+///   real ways to state a permission and all invisible to this predicate. A
+///   requirement whose permission is stated any of those ways gets no binding
+///   at all, which is silence and not a pass.
+/// - **It does not claim every token it accepts is a scope.** `config.yaml`,
+///   `api.example.com` and `main.rs` are all scope-shaped by this rule. That is
+///   why the predicate is never used alone: [`Brief::stated_scopes`] binds a
+///   token only when S1 *also* recorded it as an operation's `authz`, so a
+///   filename has to have been read as a permission before it can bind
+///   anything.
+/// - **It says nothing about whether the scope is the right one.** A model that
+///   invents a plausible permission for an operation the requirement never
+///   mentioned writes a token nobody stated, and nothing here is a check on
+///   that (D005, *What none of these options fix*).
+pub fn scope_shaped(token: &str) -> bool {
+    if token.is_empty() || token.len() > MAX_SCOPE_LEN || !token.is_ascii() {
+        return false;
+    }
+    if !token.contains([':', '.']) {
+        return false;
+    }
+    token.split([':', '.']).all(|segment| {
+        let mut chars = segment.chars();
+        matches!(chars.next(), Some(c) if c.is_ascii_lowercase())
+            && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+    })
+}
+
+/// The longest token [`scope_shaped`] will consider. A scope is an identifier
+/// an identity provider issues, not a sentence.
+pub const MAX_SCOPE_LEN: usize = 100;
+
+/// Every scope-shaped token in a piece of text, in order, deduplicated.
+///
+/// A measurement instrument rather than a gate input: it answers "could this
+/// requirement bind anything at all", which is how the false-positive rate over
+/// `corpus/requirements/` is measured. The binding itself goes through
+/// [`Brief::stated_scopes`], which requires S1 to have read the token as a
+/// permission — this function requires only that the characters are there.
+pub fn scope_tokens(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    // Upper case is part of a candidate even though `scope_shaped` refuses it,
+    // so `Gate:operate` is rejected whole rather than split into a token the
+    // text does not contain.
+    let boundary = |c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'));
+    for candidate in text.split(boundary) {
+        // Sentence punctuation is not part of the token: "…gate:operate." ends
+        // a sentence and states a scope.
+        let trimmed = candidate.trim_end_matches([':', '.', '-', '_']);
+        if scope_shaped(trimmed) && !out.iter().any(|t| t == trimmed) {
+            out.push(trimmed.to_owned());
+        }
+    }
+    out
+}
 
 /// What an operation does to the state behind it, as the requirement implies
 /// it.
@@ -488,6 +565,39 @@ impl Brief {
         let json = Json::parse(stripped.trim())
             .map_err(|e| err("$", format!("not JSON: {}", e.message)))?;
         Brief::from_json(&json)
+    }
+
+    /// The scopes this brief **binds**: operation name → the literal token.
+    ///
+    /// D005 option C, and the one artifact the binding is read from. A pair is
+    /// included only when all three hold:
+    ///
+    /// 1. S1 recorded a token in [`OperationSketch::authz`];
+    /// 2. the token is [`scope_shaped`];
+    /// 3. the token occurs **verbatim** in [`Brief::requirement`].
+    ///
+    /// Condition 3 is what makes this a binding on a *stated* token rather than
+    /// on a model's opinion: a scope S1 composed for an operation the
+    /// requirement scopes only in prose is recorded in the brief, read by a
+    /// human, handed to S2 — and binds nothing. The brief is the artifact the
+    /// binding lives in rather than the requirement text because it is the
+    /// artifact a human can correct *before any IDL exists*: deleting a wrong
+    /// `authz` here is a recorded decision, and re-extracting from the
+    /// requirement on every run would put the token beyond correction.
+    ///
+    /// Its own limit, stated where it is implemented: if S1 paraphrases the
+    /// requirement instead of copying it verbatim as `S1_PROMPT` requires,
+    /// condition 3 fails and the binding silently does not apply. That is the
+    /// safe direction — no false demand — and it is still a hole.
+    pub fn stated_scopes(&self) -> BTreeMap<String, String> {
+        self.operations
+            .iter()
+            .filter_map(|op| {
+                let token = op.authz.as_deref()?.trim();
+                (scope_shaped(token) && self.requirement.contains(token))
+                    .then(|| (op.name.trim().to_owned(), token.to_owned()))
+            })
+            .collect()
     }
 
     /// The brief rendered for a prompt: what S2 is handed instead of prose.
@@ -1104,6 +1214,80 @@ mod tests {
         assert!(text.contains("OPEN QUESTIONS"), "{text}");
     }
 
+    /// What "scope-shaped" is, as a table rather than as a paragraph. The
+    /// rejections are the interesting half: a rule that fires on the wrong
+    /// tokens is a rule people learn to skim.
+    #[test]
+    fn scope_shaped_accepts_the_conventions_the_corpus_uses_and_little_else() {
+        for token in [
+            "gate:operate",        // the measured requirement
+            "bank.transfer.write", // the corpus's dotted convention
+            "echo:blob",           // a spike fixture
+            "accounts.write",
+            "parkinglot.barrier.open", // the drift, which is also scope-shaped
+            "api.v2",
+            "a:b",
+            "gate-control:operate_now",
+        ] {
+            assert!(scope_shaped(token), "{token} should be scope-shaped");
+        }
+        for token in [
+            "",
+            "admin",        // no separator: a bare word is not distinguishable
+            "GATE:OPERATE", // upper case is a different convention we do not claim
+            "Gate:operate",
+            "gate/operate", // a slash is a path, and paths are everywhere
+            "gate:",        // trailing separator
+            ":operate",
+            "gate::operate",  // an empty segment
+            "1.0",            // a version
+            "v1.0",           // …and a version with a prefix
+            "읽기:권한",      // non-ASCII: matching it would fire on prose
+            "gate:operate x", // a phrase is not a token
+        ] {
+            assert!(!scope_shaped(token), "{token:?} should not be scope-shaped");
+        }
+        assert!(
+            !scope_shaped(&format!("a.{}", "b".repeat(MAX_SCOPE_LEN))),
+            "a scope is not a text"
+        );
+    }
+
+    /// The scan is what the false-positive rate over `corpus/requirements/` is
+    /// measured with, so its own behaviour on sentence punctuation and on
+    /// mixed-case neighbours is pinned here.
+    #[test]
+    fn the_scan_finds_a_stated_token_and_leaves_prose_alone() {
+        assert_eq!(scope_tokens("차단기 개방은 gate:operate 권한이 필요하다."), ["gate:operate"]);
+        assert_eq!(scope_tokens("The scope is gate:operate."), ["gate:operate"]);
+        assert_eq!(scope_tokens("운영자 권한을 가진 사람만 열 수 있다."), Vec::<String>::new());
+        // A capitalised neighbour must not be shaved into a token the text does
+        // not contain.
+        assert_eq!(scope_tokens("Gate:operate"), Vec::<String>::new());
+        assert_eq!(scope_tokens("a.b a.b"), ["a.b"], "deduplicated");
+    }
+
+    /// The binding, and the two conditions that keep it honest.
+    #[test]
+    fn a_brief_binds_only_a_scope_shaped_token_the_requirement_states() {
+        let mut b = brief();
+        // The default brief's tokens are S1's own words: scope-shaped, but the
+        // requirement never states them, so nothing binds.
+        assert!(b.stated_scopes().is_empty(), "{:?}", b.stated_scopes());
+
+        b.requirement.push_str(" 계정 생성은 accounts.write 권한이 필요하다.");
+        assert_eq!(
+            b.stated_scopes(),
+            BTreeMap::from([("create".to_owned(), "accounts.write".to_owned())]),
+            "the token the requirement states binds; the one it does not, does not"
+        );
+
+        // A permission stated only in prose binds nothing at all, which is the
+        // limit rather than a defect.
+        b.operations[0].authz = Some("운영자 권한".into());
+        assert!(b.stated_scopes().is_empty());
+    }
+
     /// The codify rule for this stage: the prompt must describe every key the
     /// parser insists on, or S1 fails on a schema the model was never told.
     #[test]
@@ -1126,5 +1310,8 @@ mod tests {
         }
         // And the dominant root cause is a prompt constraint, not only a check.
         assert!(S1_PROMPT.contains("case-insensitive"), "{S1_PROMPT}");
+        // So is the one thing S1 records that a later stage binds by string
+        // equality: a token S1 tidies here is a token nothing can bind.
+        assert!(S1_PROMPT.contains("copied verbatim"), "{S1_PROMPT}");
     }
 }

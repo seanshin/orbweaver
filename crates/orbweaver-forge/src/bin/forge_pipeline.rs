@@ -170,7 +170,12 @@ fn run() -> Result<ExitCode, String> {
     let scratch = out_dir.join(".forge");
     let mut ingest = a.ingest.map(|c| CommandStage::new(StageId::Ingest, c, &scratch));
     let mut synthesize = a.synthesize.map(|c| CommandStage::new(StageId::Synthesize, c, &scratch));
-    let mut annotate = a.annotate.map(|c| CommandStage::new(StageId::Annotate, c, &scratch));
+    // S3 alone gets a second input: the brief S1 wrote, so the scope the
+    // requirement states can be bound to the ai_authz S3 emits (D005 option C).
+    // A run that starts at S3 over IDL with no brief beside it binds nothing.
+    let mut annotate = a
+        .annotate
+        .map(|c| CommandStage::new(StageId::Annotate, c, &scratch).with_briefs(&workspace));
     let mut pipeline = Pipeline {
         ingest: ingest.as_mut().map(|s| s as &mut dyn orbweaver_forge::pipeline::Stage),
         synthesize: synthesize.as_mut().map(|s| s as &mut dyn orbweaver_forge::pipeline::Stage),
