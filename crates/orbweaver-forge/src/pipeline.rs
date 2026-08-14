@@ -1035,8 +1035,17 @@ impl Workspace {
     /// The ids whose **input** artifact for `stage` is already on disk.
     ///
     /// This is how `--from s3` finds its work without being told: the drafts
-    /// that exist are the items. Returned sorted, so runs are comparable across
-    /// machines.
+    /// that exist are the items. Returned sorted and deduplicated, so runs are
+    /// comparable across machines.
+    ///
+    /// Discovery has to accept exactly what [`Workspace::load`] will resolve,
+    /// or the fallback it documents is unreachable. S4 and S5 load `<id>.sidl.idl`
+    /// **or** `<id>.idl` where nothing annotated it; globbing only the annotated
+    /// suffix meant an unannotated contract could be loaded but never found, so
+    /// `--only s4` over a legacy estate saw nothing and the only way to be
+    /// gated at all was to rename the file. That rename is what made the run
+    /// report a file with no annotations in it as annotated — one defect
+    /// feeding the next.
     pub fn ids_ready_for(&self, stage: StageId) -> Vec<String> {
         let Some(previous) = input_stage(stage) else { return Vec::new() };
         let Some(suffix) = previous.artifact_suffix() else { return Vec::new() };
@@ -1045,15 +1054,27 @@ impl Workspace {
             .filter_map(|e| e.ok())
             .filter_map(|e| e.file_name().to_str().map(str::to_owned))
             .filter_map(|name| {
-                // `.idl` must not swallow `.sidl.idl`: the draft set and the
-                // annotated set are different sets of files.
+                // `.idl` must not swallow `.sidl.idl`: to S3 the draft set and
+                // the annotated set are different sets of files, and an item
+                // already annotated is not waiting to be annotated again.
                 if previous == StageId::Synthesize && name.ends_with(".sidl.idl") {
                     return None;
+                }
+                // To a gate they are one set: an unannotated contract is a
+                // contract, and it is the case the annotation gates exist for.
+                if gates_whatever_exists(stage) && name.ends_with(".idl") {
+                    return Some(
+                        name.strip_suffix(".sidl.idl")
+                            .or_else(|| name.strip_suffix(".idl"))
+                            .unwrap_or(&name)
+                            .to_owned(),
+                    );
                 }
                 name.strip_suffix(suffix).map(str::to_owned)
             })
             .collect();
         ids.sort();
+        ids.dedup();
         ids
     }
 }
@@ -1068,6 +1089,16 @@ fn input_stage(stage: StageId) -> Option<StageId> {
         // that to the annotated file if there is one.
         StageId::Validate | StageId::Register => Some(StageId::Annotate),
     }
+}
+
+/// Whether `stage` gates whatever the producers left, rather than consuming one
+/// named producer's output.
+///
+/// S4 and S5 are the two: they run over a contract whoever wrote it, which is
+/// the whole point of being able to point them at an estate nothing in this
+/// pipeline produced.
+fn gates_whatever_exists(stage: StageId) -> bool {
+    matches!(stage, StageId::Validate | StageId::Register)
 }
 
 /// Why a run could not start, or could not continue.
@@ -1502,6 +1533,34 @@ mod tests {
         assert_eq!(ws.ids_ready_for(StageId::Annotate), vec!["R01".to_owned()]);
         // S4 gates the annotated file when there is one.
         assert!(ws.gated_artifact("R01").unwrap().to_string_lossy().ends_with(".sidl.idl"));
+        // …and finds the item exactly once, not once per artifact on disk.
+        assert_eq!(ws.ids_ready_for(StageId::Validate), vec!["R01".to_owned()]);
+    }
+
+    /// Discovery must accept everything [`Workspace::load`] resolves, or the
+    /// fallback that resolution documents is unreachable.
+    ///
+    /// A legacy estate is a directory of `.idl` written by somebody else. S4
+    /// could *load* one and could not *find* one, so the only way to be gated
+    /// was to rename the file to `.sidl.idl` — which then made the run report a
+    /// contract with no annotations in it as annotated. A gate that can only be
+    /// reached by misdescribing its input is not a gate.
+    #[test]
+    fn a_gate_finds_an_unannotated_contract_nothing_here_produced() {
+        let dir = std::env::temp_dir().join(format!("forge-ws-estate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("creates");
+        // Not stored through a stage: dropped in, the way an estate arrives.
+        std::fs::write(dir.join("ESTATE.idl"), "module a { interface I { void f(); }; };")
+            .expect("writes");
+        let ws = Workspace::new(&dir);
+
+        assert_eq!(ws.ids_ready_for(StageId::Validate), vec!["ESTATE".to_owned()]);
+        assert_eq!(ws.ids_ready_for(StageId::Register), vec!["ESTATE".to_owned()]);
+        // S3 is a producer, not a gate: it consumes drafts and this is not one
+        // of its drafts to re-annotate — but the difference is deliberate, so
+        // both halves are pinned here rather than left to be discovered.
+        assert_eq!(ws.ids_ready_for(StageId::Annotate), vec!["ESTATE".to_owned()]);
     }
 
     #[test]

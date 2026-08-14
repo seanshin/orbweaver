@@ -495,6 +495,39 @@ fn annotation_advice(src: &str, spec: &orbweaver_idl::ast::Spec) -> Vec<Finding>
     out
 }
 
+/// Whether `src` carries any SIDL annotation at all.
+///
+/// The question a run report actually wants when it says how many contracts
+/// were annotated. It used to ask the *file name* — `.sidl.idl` meant
+/// annotated — which is a fact about a rename, not about the file, and a
+/// legacy estate renamed so a gate would find it was duly reported as
+/// annotated while containing nothing of the kind. The name is a convention
+/// for the pipeline's own artifacts; it is not evidence about a contract
+/// somebody else wrote.
+///
+/// A file that will not parse is not annotated: it has not been shown to carry
+/// anything, and reporting it as annotated would be the same lie in a new
+/// place. S4 reports the parse failure separately, so nothing is hidden.
+pub fn carries_annotations(src: &str) -> bool {
+    let Ok(spec) = orbweaver_idl::parse(src) else { return false };
+    let mut found = false;
+    walk(&spec.definitions, &mut |def| {
+        let orbweaver_idl::ast::Definition::Interface(i) = def else { return };
+        let Some(body) = &i.body else { return };
+        for m in body {
+            let annotations = match m {
+                orbweaver_idl::ast::InterfaceMember::Operation(op) => &op.annotations,
+                orbweaver_idl::ast::InterfaceMember::Attribute(a) => &a.annotations,
+                _ => continue,
+            };
+            if !annotations.is_empty() {
+                found = true;
+            }
+        }
+    });
+    found
+}
+
 fn walk(
     defs: &[orbweaver_idl::ast::Definition],
     f: &mut impl FnMut(&orbweaver_idl::ast::Definition),
@@ -513,6 +546,31 @@ mod tests {
 
     fn rules(src: &str) -> Vec<String> {
         validate(src).findings.iter().map(|f| f.rule.clone()).collect()
+    }
+
+    /// The question is about the contract, so it is asked of the contract.
+    ///
+    /// A thirteen-file legacy estate was renamed to `.sidl.idl` because that was
+    /// the only name S4 would discover, and the run then reported it as an
+    /// annotated file — true about the name, false about every line in it. Both
+    /// halves are fixed; this pins the half that stops the *report* from
+    /// depending on a rename.
+    #[test]
+    fn annotation_is_read_from_the_contract_and_not_from_its_name() {
+        let bare = "module m { interface I { void f(); }; };";
+        assert!(!carries_annotations(bare), "no annotation anywhere");
+
+        let annotated = "module m { interface I {\n //@ ai_desc: does the thing\n void f(); }; };";
+        assert!(carries_annotations(annotated));
+
+        // An attribute's annotations count: they are what gates its accessors,
+        // so a contract carrying only those is annotated.
+        let attr = "module m { interface I {\n //@ ai_effect: read_only\n readonly attribute long n; }; };";
+        assert!(carries_annotations(attr));
+
+        // Unparseable is not annotated. It has not been shown to carry
+        // anything, and claiming otherwise would be the same lie relocated.
+        assert!(!carries_annotations("module m { interface"));
     }
 
     /// `#pragma ID` is a direct write to identity, and nothing checked it.

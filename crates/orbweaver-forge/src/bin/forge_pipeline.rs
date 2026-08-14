@@ -253,7 +253,10 @@ fn run() -> Result<ExitCode, String> {
     }
 
     // Attribution, in one line: "S4 passed" says something different about a
-    // file no annotation stage has seen.
+    // file no annotation stage has seen. The question is about the contract, so
+    // it is asked of the contract — a `.sidl.idl` name is a fact about a
+    // rename, and a legacy estate renamed only so `--only s4` would find it
+    // used to be counted as annotated.
     if let Some(s4) = report.stage(StageId::Validate) {
         let annotated = s4
             .items
@@ -261,7 +264,8 @@ fn run() -> Result<ExitCode, String> {
             .filter(|i| {
                 workspace
                     .gated_artifact(&i.id)
-                    .is_some_and(|p| p.to_string_lossy().ends_with(".sidl.idl"))
+                    .and_then(|p| std::fs::read_to_string(p).ok())
+                    .is_some_and(|src| orbweaver_forge::carries_annotations(&src))
             })
             .count();
         println!(

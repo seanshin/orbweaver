@@ -136,17 +136,17 @@ fi
 
 # ── Stage 3: the amalgamation, which is the only multi-file path we have ─────
 bold "stage 3 — one translation unit, in dependency order"
-python3 "$ESTATE/amalgamate.py" "$IDLDIR" >"$WORK/ESTATE.sidl.idl" 2>"$WORK/amal.err"
-if [ ! -s "$WORK/ESTATE.sidl.idl" ]; then
+python3 "$ESTATE/amalgamate.py" "$IDLDIR" >"$WORK/ESTATE.idl" 2>"$WORK/amal.err"
+if [ ! -s "$WORK/ESTATE.idl" ]; then
     fail "amalgamate.py produced nothing: $(head -3 "$WORK/amal.err")"
     echo "estate: FAIL — nothing downstream can be measured"
     exit 1
 fi
 python3 "$ESTATE/amalgamate.py" "$IDLDIR" --naive >"$WORK/ESTATE-naive.idl" 2>/dev/null
-LINES=$(grep -c '' "$WORK/ESTATE.sidl.idl")
+LINES=$(grep -c '' "$WORK/ESTATE.idl")
 say "spliced $N files into $LINES lines"
 row s3-splice lines "$LINES"
-VAL=$("$ROOT/target/debug/sidl-validate" "$WORK/ESTATE.sidl.idl" 2>&1)
+VAL=$("$ROOT/target/debug/sidl-validate" "$WORK/ESTATE.idl" 2>&1)
 if [ $? -eq 0 ]; then
     pass "S4 accepts the whole estate as one unit: $(printf '%s' "$VAL" | tail -1)"
 else
@@ -155,16 +155,19 @@ fi
 ADVICE=$(printf '%s' "$VAL" | tail -1 | grep -oE '[0-9]+ non-blocking' | cut -d' ' -f1)
 row s3-splice advice "${ADVICE:-0}"
 
-# The name is load-bearing and it should not be. `forge-pipeline --only s4`
-# discovers `<id>.sidl.idl` and nothing else, so a legacy contract that no
-# annotation stage has ever seen has to be named as if one had.
-note "the file is named .sidl.idl because that is the only name S4 discovers"
+# The name used to be load-bearing: `forge-pipeline --only s4` discovered
+# `<id>.sidl.idl` and nothing else, so a legacy contract no annotation stage
+# had ever seen had to be named as if one had — and the run then reported it
+# as annotated, which was true about the name and false about every line in
+# it. Fixed in the forge; the file is now named what it is, and stage 7
+# asserts the report agrees.
+note "the file is named .idl, which is what it is"
 
 # ── Stage 4: identity, against the compiler that owns it ─────────────────────
 bold "stage 4 — repository ids, ours against omniidl"
 if command -v omniidl >/dev/null 2>&1; then
     IDW="$WORK/ids"; mkdir -p "$IDW"
-    "$ROOT/target/debug/repository-ids" "$WORK/ESTATE.sidl.idl" 2>/dev/null \
+    "$ROOT/target/debug/repository-ids" "$WORK/ESTATE.idl" 2>/dev/null \
         | cut -f3 | sort -u >"$IDW/ours"
     "$ROOT/target/debug/repository-ids" "$WORK/ESTATE-naive.idl" 2>/dev/null \
         | cut -f3 | sort -u >"$IDW/naive"
@@ -212,7 +215,7 @@ fi
 # ── Stage 5: S4 gate + S5 registration, exposure off ─────────────────────────
 bold "stage 5 — S4 gate and S5 registration, every interface exposed=no"
 mkdir -p "$WORK/out"
-cp "$WORK/ESTATE.sidl.idl" "$WORK/out/ESTATE.sidl.idl"
+cp "$WORK/ESTATE.idl" "$WORK/out/ESTATE.idl"
 PIPE=$("$ROOT/target/debug/forge-pipeline" --out "$WORK/out" --only s4 --register 2>&1)
 PIPE_RC=$?
 printf '%s\n' "$PIPE" | sed 's/^/  | /' | quiet
@@ -234,26 +237,37 @@ if [ -s "$WS" ]; then
 else
     fail "S5 left no exposure worksheet"
 fi
-# The pipeline's own attribution line, which the filename convention makes lie.
-if printf '%s' "$PIPE" | grep -q 'gated 1 annotated file'; then
-    note "the pipeline reports the estate as an ANNOTATED file — it carries no annotations"
-    note "the only name --only s4 discovers is .sidl.idl, so the honesty line reports the name"
-fi
+# The pipeline's own attribution line. It used to read the *filename*, so an
+# estate renamed to .sidl.idl purely to be discovered was reported as
+# annotated; it now reads the contract. Asserted rather than noted, because a
+# note about a fixed defect is how the defect comes back.
+ATTR=$(printf '%s' "$PIPE" | grep -o 'gated [0-9]* annotated file(s) and [0-9]* unannotated draft(s)')
+row s5-register attribution "${ATTR:-none}"
+case "$ATTR" in
+    "gated 0 annotated file(s) and 1 unannotated draft(s)")
+        pass "the estate is reported as unannotated, which is what it is" ;;
+    "") fail "the pipeline printed no attribution line at all" ;;
+    *)  fail "attribution disagrees with the contract: $ATTR" ;;
+esac
 
 # ── Stage 6: both generated halves ───────────────────────────────────────────
 bold "stage 6 — client stubs and server skeletons for the whole estate"
-# The same bytes under a second name. `gen-corpus` derives its module name from
-# the file stem, so generating from `ESTATE.sidl.idl` would emit `f_ESTATE_sidl`
-# — a module name carrying a pipeline-stage suffix that the contract has nothing
-# to do with. The rename is the driver's, and it is the same class of finding as
-# stage 5's: two tools disagree about what a legacy contract's filename means.
+# `gen-corpus` derives its module name from the file stem, so while the estate
+# had to be called `ESTATE.sidl.idl` to be discovered at all, it emitted a
+# module named `f_ESTATE_sidl` — a contract carrying a pipeline-stage suffix it
+# has nothing to do with. That was never a second defect: it was stage 5's
+# defect arriving somewhere else, and naming the file what it is removed both.
+# The assertion below is what keeps it removed.
 mkdir -p "$WORK/gen"
-cp "$WORK/ESTATE.sidl.idl" "$WORK/gen/ESTATE.idl"
+cp "$WORK/ESTATE.idl" "$WORK/gen/ESTATE.idl"
 GEN=$("$ROOT/target/debug/gen-corpus" --out "$WORK/genout" --workspace "$ROOT" \
       "$WORK/gen/ESTATE.idl" 2>&1)
 GEN_RC=$?
 printf '%s\n' "$GEN" | sed 's/^/  | /' | quiet
 EMITTED_FILE="$WORK/genout/src/f_ESTATE.rs"
+if [ -e "$WORK/genout/src/f_ESTATE_sidl.rs" ]; then
+    fail "a stage suffix reached a module name: f_ESTATE_sidl"
+fi
 SKIPS=$(printf '%s' "$GEN" | grep -c '^skipped ')
 row s6-generate skipped "$SKIPS"
 if [ $GEN_RC -eq 0 ] && [ -s "$EMITTED_FILE" ]; then
@@ -317,7 +331,7 @@ EXPOSE_ALL=()
 while read -r id; do
     [ -n "$id" ] && EXPOSE_ALL+=(--expose "$id")
 done < <(grep '^IDL:' "$WS" 2>/dev/null | cut -f1)
-"$MCP" --idl "$WORK/out/ESTATE.sidl.idl" "${EXPOSE_ALL[@]}" --as ops-agent \
+"$MCP" --idl "$WORK/out/ESTATE.idl" "${EXPOSE_ALL[@]}" --as ops-agent \
        --dry-run >"$WORK/dry-all.json" 2>"$WORK/dry-all.err"
 if [ -s "$WORK/dry-all.json" ]; then
     SUM=$(python3 - "$WORK/dry-all.json" <<'PY'
@@ -394,7 +408,7 @@ fi
 # ── Stage 9: an agent-shaped caller, twice, with two exposures ───────────────
 bold "stage 9 — an agent reaches the estate through the MCP bridge"
 if [ -s "$IOR" ]; then
-    AGENT=$(python3 "$ESTATE/agent.py" "$IOR" "$WORK/out/ESTATE.sidl.idl" 2>&1)
+    AGENT=$(python3 "$ESTATE/agent.py" "$IOR" "$WORK/out/ESTATE.idl" 2>&1)
     AGENT_RC=$?
     printf '%s\n' "$AGENT" | sed 's/^/  | /' | quiet
     row s9-agent rc "$AGENT_RC"
