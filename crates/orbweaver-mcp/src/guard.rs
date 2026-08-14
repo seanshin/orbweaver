@@ -241,13 +241,18 @@ impl<'r, C: Invoker> Guarded<'r, C> {
 
     /// What the guard's telemetry stage counted.
     ///
-    /// Honest shortfall: these counters are the *static* path's, they live and
-    /// die with this `Guarded`, and nothing merges them back into the session's
-    /// (`Bridge::stats`). PLAN-MOE **IF2** asks for one store; one store across
-    /// two objects with independent lifetimes needs a shared one, which needs
-    /// either interior mutability or a store passed in at assembly. Neither is
-    /// here yet, and pretending the numbers add up would be worse than saying
-    /// they do not.
+    /// These counters are the *static* path's and they live and die with this
+    /// `Guarded`. PLAN-MOE **IF2** asks for one store, and
+    /// [`crate::promote::CallStats::merge`] is how a deployment gets one —
+    /// `bridge.absorb_static(guarded.stats())` before the guard is dropped.
+    ///
+    /// It is not automatic, and that is a decision rather than an omission:
+    /// [`crate::promote::PromotionPolicy::recommend`] answers "which dynamic
+    /// path has earned a compiled stub", and a static call is evidence that a
+    /// path *already has one*. Merging by default would keep a promoted path
+    /// looking hot and have the policy recommend promoting it again. So the two
+    /// stores answer two questions, and joining them is the caller's act, taken
+    /// when the question is traffic rather than promotion.
     pub fn stats(&self) -> &CallStats {
         self.chain.stats()
     }

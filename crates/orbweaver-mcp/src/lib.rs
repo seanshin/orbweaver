@@ -391,6 +391,25 @@ impl<'a> Bridge<'a> {
         ))
     }
 
+    /// Folds a static guard's counters into this session's.
+    ///
+    /// The explicit half of PLAN-MOE **IF2**: one store when a deployment asks
+    /// for one, and two while the question is what to promote next — see
+    /// [`crate::promote::CallStats::merge`] for why the default is not to fold.
+    /// Call it before the guard is dropped; afterwards its counts are gone.
+    /// Returns `false` when this session's chain has no telemetry stage, so a
+    /// history handed to a bridge that counts nothing is reported rather than
+    /// dropped.
+    pub fn absorb_static(&mut self, stats: &promote::CallStats) -> bool {
+        match self.chain.stats_mut() {
+            Some(mine) => {
+                mine.merge(stats);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// `invoke_operation(handle, operation, args)`.
     pub fn invoke(
         &mut self,

@@ -97,6 +97,34 @@ impl CallStats {
         }
     }
 
+    /// Adds another history into this one.
+    ///
+    /// Exists so that PLAN-MOE's **IF2** — one store, not two — is reachable by
+    /// a deployment that wants a single operational view across the dynamic
+    /// session and the static guards it handed out. It is deliberately **not**
+    /// done automatically, and the reason is the signal rather than the
+    /// plumbing: [`PromotionPolicy::recommend`] answers "which dynamic path has
+    /// earned a compiled stub", and a static call is evidence that a path
+    /// *already has one*. Folding static counts in by default would keep a
+    /// promoted path looking hot and have the policy recommend promoting it
+    /// again — the store would be one, and the number in it would mean two
+    /// things at once.
+    ///
+    /// So merging is the caller's explicit act, taken when the question is
+    /// "how much traffic does this operation carry" rather than "what should be
+    /// promoted next".
+    ///
+    /// **IF2는 이 함수로 도달 가능하지만 자동이 아니다.** 정적 호출은 그 경로가
+    /// *이미* 스텁을 가졌다는 증거이므로, 기본으로 합치면 승격된 경로가 계속
+    /// 뜨거워 보이고 정책이 같은 것을 또 승격하라고 말한다.
+    pub fn merge(&mut self, other: &CallStats) {
+        for ((id, operation), c) in &other.counts {
+            let mine = self.counts.entry((id.clone(), operation.clone())).or_default();
+            mine.calls += c.calls;
+            mine.failures += c.failures;
+        }
+    }
+
     /// How many calls of `operation` on `id` have been recorded.
     pub fn calls(&self, id: &str, operation: &str) -> u64 {
         self.get(id, operation).calls
@@ -381,6 +409,35 @@ pub fn verify_promotion(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+
+    /// IF2 is reachable, and deliberately not automatic. Merging is what a
+    /// deployment does when the question is traffic; leaving the stores apart
+    /// is what keeps the promotion signal meaning one thing.
+    #[test]
+    fn merging_is_available_and_would_distort_the_promotion_signal() {
+        let mut dynamic = CallStats::new();
+        for _ in 0..3 {
+            dynamic.record("IDL:m/I:1.0", "hot", true);
+        }
+        let mut static_side = CallStats::new();
+        for _ in 0..40 {
+            static_side.record("IDL:m/I:1.0", "hot", true);
+        }
+
+        // Apart: a policy wanting ten calls does not see a promoted path as a
+        // candidate, which is the answer promotion needs.
+        let policy = PromotionPolicy { min_calls: 10, max_failure_rate: 0.5 };
+        assert!(policy.recommend(&dynamic).is_empty());
+
+        // Folded: the same history now recommends promoting a path that is
+        // already static — the number means two things at once, which is why
+        // this is the caller's explicit act and not the default.
+        let mut joined = CallStats::new();
+        joined.merge(&dynamic);
+        joined.merge(&static_side);
+        assert_eq!(joined.calls("IDL:m/I:1.0", "hot"), 43);
+        assert_eq!(policy.recommend(&joined).len(), 1);
+    }
 
     use orbweaver_cdr::{Encoder, Endian};
     use orbweaver_giop::{Error as GiopError, Invoker, Reply};

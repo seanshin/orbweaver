@@ -581,6 +581,12 @@ pub trait Interceptor {
     fn trace_mut(&mut self) -> Option<&mut Trace> {
         None
     }
+
+    /// The counters this stage keeps, for a chain owner folding another
+    /// history in. `None` for every stage that keeps none.
+    fn counters_mut(&mut self) -> Option<&mut CallStats> {
+        None
+    }
 }
 
 /// An ordered, extensible stack of [`Interceptor`]s.
@@ -886,6 +892,14 @@ impl Chain {
         self.stages.iter_mut().find_map(|s| s.interceptor.trace_mut())
     }
 
+    /// The telemetry stage's counters, for folding another history in.
+    ///
+    /// `None` when the chain has no telemetry stage — which is reported rather
+    /// than silently discarding the history the caller meant to keep.
+    pub fn stats_mut(&mut self) -> Option<&mut CallStats> {
+        self.stages.iter_mut().find_map(|s| s.interceptor.counters_mut())
+    }
+
     /// The counters the chain's telemetry stage kept. Empty when there is no
     /// such stage.
     pub fn stats(&self) -> &CallStats {
@@ -1068,6 +1082,12 @@ impl TelemetryInterceptor {
         &self.stats
     }
 
+    /// The same counters, mutably, so a chain owner can fold in a static
+    /// guard's history.
+    pub fn stats_mut(&mut self) -> &mut CallStats {
+        &mut self.stats
+    }
+
     /// The trace it emits into, if one is attached.
     pub fn trace(&self) -> Option<&Trace> {
         self.trace.as_ref()
@@ -1075,6 +1095,10 @@ impl TelemetryInterceptor {
 }
 
 impl Interceptor for TelemetryInterceptor {
+    fn counters_mut(&mut self) -> Option<&mut CallStats> {
+        Some(&mut self.stats)
+    }
+
     fn before(&mut self, _ctx: &CallContext<'_>) -> Outcome {
         // Observation only: this stage never refuses. It is registered outside
         // the gates so that its `after` runs whatever they decide.
