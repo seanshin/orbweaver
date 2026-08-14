@@ -1,0 +1,47 @@
+// ---------------------------------------------------------------------------
+// Dispatch.  Two levels of inheritance on top of Describable, which is the
+// deepest chain in the estate and the reason the 2012 "flatten the hierarchy"
+// ticket is still open.
+// ---------------------------------------------------------------------------
+#ifndef _MFS_10_DISPATCH_IDL_
+#define _MFS_10_DISPATCH_IDL_
+
+#include "01-common.idl"
+#include "08-depot-codes.idl"
+
+#pragma prefix "meridian.com"
+
+module MFS {
+
+    module Dispatch {
+
+        struct Leg {
+            ::MFS::Depots::DepotCode from_site;
+            ::MFS::Depots::DepotCode to_site;
+            ::MFS::Common::ISODate   depart;
+            ::MFS::Common::ISODate   arrive;
+        };
+
+        typedef sequence<Leg> Legs;
+
+        interface Routable : ::MFS::Common::Describable {
+            Legs plan(in ::MFS::Depots::DepotCode origin,
+                      in ::MFS::Depots::DepotCode destination);
+            boolean reachable(in ::MFS::Depots::DepotCode site);
+        };
+
+        interface Dispatcher : Routable {
+            ::MFS::Common::RecordId assign(
+                in ::MFS::Common::RecordId consignment,
+                in string vehicle)
+                raises (::MFS::Common::NotAuthorised);
+
+            void recall(in ::MFS::Common::RecordId run)
+                raises (::MFS::Common::NotAuthorised);
+
+            ::MFS::Common::StringList vehicles_at(in ::MFS::Depots::DepotCode site);
+        };
+    };
+};
+
+#endif // _MFS_10_DISPATCH_IDL_

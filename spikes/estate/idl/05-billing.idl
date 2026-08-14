@@ -1,0 +1,65 @@
+// ---------------------------------------------------------------------------
+// Billing.
+//
+// NOTE: no `#pragma prefix` in this file.  This is not a decision; the file was
+// split out of a bigger one in 2006 and the pragma stayed behind.  Billing's
+// repository ids therefore do not carry the company prefix that everything it
+// inherits from does.  Nobody noticed because both ends were built from the
+// same tree.
+// ---------------------------------------------------------------------------
+#ifndef _MFS_05_BILLING_IDL_
+#define _MFS_05_BILLING_IDL_
+
+#include "01-common.idl"
+#include "02-mfs-types.idl"
+
+module MFS {
+
+    module Billing {
+
+        struct LineItem {
+            string                 sku;
+            unsigned long          quantity;
+            ::MFS::Common::Amount  unit_price;
+        };
+
+        typedef sequence<LineItem> LineItems;
+
+        struct Invoice {
+            ::MFS::Common::RecordId number;
+            string                  account_code;
+            ::MFS::Common::ISODate  issued;
+            LineItems               lines;
+            ::MFS::Common::Amount   total;
+        };
+
+        exception AlreadySettled {
+            ::MFS::Common::RecordId number;
+        };
+
+        interface InvoiceService : ::MFS::Common::Describable {
+
+            Invoice raise_invoice(
+                in string account_code,
+                in LineItems lines)
+                raises (::MFS::Common::SystemFault);
+
+            Invoice fetch(in ::MFS::Common::RecordId number)
+                raises (::MFS::Common::SystemFault);
+
+            void settle(
+                in ::MFS::Common::RecordId number,
+                in ::MFS::Common::Amount paid)
+                raises (AlreadySettled, ::MFS::Common::NotAuthorised);
+
+            void void_invoice(
+                in ::MFS::Common::RecordId number,
+                in string reason)
+                raises (AlreadySettled, ::MFS::Common::NotAuthorised);
+
+            ::MFS::Common::Amount outstanding(in string account_code);
+        };
+    };
+};
+
+#endif // _MFS_05_BILLING_IDL_

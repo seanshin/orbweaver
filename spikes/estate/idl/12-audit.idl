@@ -1,0 +1,36 @@
+// ---------------------------------------------------------------------------
+// Audit sink.  The only interface in the estate with a writable attribute, and
+// the only one with a oneway operation.  Both were deliberate in 2005.
+// ---------------------------------------------------------------------------
+#ifndef _MFS_12_AUDIT_IDL_
+#define _MFS_12_AUDIT_IDL_
+
+#include "01-common.idl"
+#include "02-mfs-types.idl"
+
+#pragma prefix "meridian.com"
+
+module MFS {
+
+    module Audit {
+
+        interface AuditSink : ::MFS::Common::Describable {
+
+            readonly attribute unsigned long depth;
+
+            // Turning this off is a supported operation and always has been.
+            attribute boolean enabled;
+
+            oneway void record(
+                in ::MFS::Common::AuditStamp stamp,
+                in string note);
+
+            ::MFS::Common::AuditTrail since(in ::MFS::Common::ISODate mark);
+
+            void purge(in ::MFS::Common::ISODate before)
+                raises (::MFS::Common::NotAuthorised);
+        };
+    };
+};
+
+#endif // _MFS_12_AUDIT_IDL_

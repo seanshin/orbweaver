@@ -1,0 +1,33 @@
+// ---------------------------------------------------------------------------
+// Depot codes.  One typedef and two constants, in its own file, because the
+// depot list used to be generated from the mainframe extract nightly.
+//
+// The generator was turned off in 2015.  The file stayed.
+// ---------------------------------------------------------------------------
+#ifndef _MFS_08_DEPOT_CODES_IDL_
+#define _MFS_08_DEPOT_CODES_IDL_
+
+#include "02-mfs-types.idl"
+
+#pragma prefix "meridian.com"
+
+module MFS {
+
+    module Depots {
+
+        // Three letters, uppercase, except LHR2 and the four Belgian ones.
+        typedef string DepotCode;
+
+        typedef sequence<DepotCode> DepotCodes;
+
+        const unsigned long MAX_BAYS = 48;
+
+        struct Bay {
+            DepotCode     site;
+            unsigned long number;
+            boolean       refrigerated;
+        };
+    };
+};
+
+#endif // _MFS_08_DEPOT_CODES_IDL_

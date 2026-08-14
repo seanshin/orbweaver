@@ -1,0 +1,86 @@
+// ---------------------------------------------------------------------------
+// Shipment tracking.  Eleven operations, because every team that wanted a
+// tracking feature added it here rather than opening a second interface.
+// ---------------------------------------------------------------------------
+#ifndef _MFS_04_SHIPMENT_IDL_
+#define _MFS_04_SHIPMENT_IDL_
+
+#include "01-common.idl"
+#include "02-mfs-types.idl"
+
+#pragma prefix "meridian.com"
+
+module MFS {
+
+    module Tracking {
+
+        struct ScanEvent {
+            ::MFS::Common::ISODate occurred_at;
+            string                 depot;
+            string                 scan_code;
+            string                 note;
+        };
+
+        typedef sequence<ScanEvent> ScanHistory;
+
+        struct Consignment {
+            ::MFS::Common::RecordId  reference;
+            string                   origin;
+            string                   destination;
+            ::MFS::Common::Priority  level;
+            ::MFS::Common::ISODate   promised;
+            boolean                  delivered;
+        };
+
+        exception UnknownConsignment {
+            ::MFS::Common::RecordId reference;
+        };
+
+        interface ShipmentTracker : ::MFS::Common::Describable {
+
+            Consignment lookup(in ::MFS::Common::RecordId reference)
+                raises (UnknownConsignment);
+
+            ::MFS::Common::StringList list_stops(in ::MFS::Common::RecordId reference)
+                raises (UnknownConsignment);
+
+            void add_scan(
+                in ::MFS::Common::RecordId reference,
+                in ScanEvent scan)
+                raises (UnknownConsignment, ::MFS::Common::NotAuthorised);
+
+            ScanHistory history(
+                in ::MFS::Common::RecordId reference,
+                in ::MFS::Common::ISODate since)
+                raises (UnknownConsignment);
+
+            ::MFS::Common::ISODate estimated_arrival(in ::MFS::Common::RecordId reference)
+                raises (UnknownConsignment);
+
+            void reroute(
+                in ::MFS::Common::RecordId reference,
+                in string depot)
+                raises (UnknownConsignment, ::MFS::Common::NotAuthorised);
+
+            boolean delivered(in ::MFS::Common::RecordId reference)
+                raises (UnknownConsignment);
+
+            void cancel(
+                in ::MFS::Common::RecordId reference,
+                in string reason)
+                raises (UnknownConsignment, ::MFS::Common::NotAuthorised);
+
+            unsigned long backlog();
+
+            void set_priority(
+                in ::MFS::Common::RecordId reference,
+                in ::MFS::Common::Priority level)
+                raises (UnknownConsignment, ::MFS::Common::NotAuthorised);
+
+            ::MFS::Common::StringList problem_codes(in ::MFS::Common::RecordId reference)
+                raises (UnknownConsignment);
+        };
+    };
+};
+
+#endif // _MFS_04_SHIPMENT_IDL_

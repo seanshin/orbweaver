@@ -1,0 +1,49 @@
+// ---------------------------------------------------------------------------
+// Rating engine.  Came in with the Trans-Continental acquisition in 2013.
+//
+// Their prefix, their module name, our base interface — the interface was made
+// to inherit MFS::Common::Describable during integration so the console could
+// list it, and nothing else about the file was touched.
+// ---------------------------------------------------------------------------
+#ifndef _MFS_11_PRICING_IDL_
+#define _MFS_11_PRICING_IDL_
+
+#include "01-common.idl"
+#include "02-mfs-types.idl"
+
+#pragma prefix "trans-continental.example"
+
+module TCS {
+
+    module Rating {
+
+        struct Tariff {
+            string                 code;
+            string                 lane;
+            ::MFS::Common::Amount  base_rate;
+            ::MFS::Common::ISODate effective;
+        };
+
+        typedef sequence<Tariff> Tariffs;
+
+        exception NoTariff {
+            string lane;
+        };
+
+        interface RateEngine : ::MFS::Common::Describable {
+
+            ::MFS::Common::Amount quote(
+                in string lane,
+                in unsigned long weight_kg,
+                in ::MFS::Common::Priority level)
+                raises (NoTariff);
+
+            Tariffs effective_tariffs(in ::MFS::Common::ISODate on_date);
+
+            void load_tariffs(in Tariffs sheet)
+                raises (::MFS::Common::NotAuthorised);
+        };
+    };
+};
+
+#endif // _MFS_11_PRICING_IDL_

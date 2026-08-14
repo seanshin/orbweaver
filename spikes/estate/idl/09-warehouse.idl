@@ -1,0 +1,56 @@
+// ---------------------------------------------------------------------------
+// Warehouse.
+//
+// Includes 08-depot-codes.idl and nothing else.  It uses ISODate, AuditStamp
+// and Priority, none of which are declared there — they arrive through
+// 08 -> 02 -> 01, three files away.  This compiles and has compiled since 2010,
+// and the day somebody tidies the include in 08 it stops compiling here.
+// ---------------------------------------------------------------------------
+#ifndef _MFS_09_WAREHOUSE_IDL_
+#define _MFS_09_WAREHOUSE_IDL_
+
+#include "08-depot-codes.idl"
+
+#pragma prefix "meridian.com"
+
+module MFS {
+
+    module Warehouse {
+
+        struct StockLine {
+            string                  sku;
+            unsigned long           on_hand;
+            unsigned long           allocated;
+            ::MFS::Depots::DepotCode site;
+            ::MFS::Common::ISODate   counted;
+        };
+
+        typedef sequence<StockLine> StockLines;
+
+        exception OutOfStock {
+            string        sku;
+            unsigned long short_by;
+        };
+
+        interface StockControl : ::MFS::Common::Describable {
+
+            StockLines by_site(in ::MFS::Depots::DepotCode site);
+
+            void allocate(
+                in string sku,
+                in unsigned long units,
+                in ::MFS::Common::Priority level)
+                raises (OutOfStock, ::MFS::Common::NotAuthorised);
+
+            void receive(
+                in string sku,
+                in unsigned long units,
+                in ::MFS::Depots::DepotCode site,
+                in ::MFS::Common::AuditStamp stamp);
+
+            ::MFS::Common::AuditTrail movements(in string sku);
+        };
+    };
+};
+
+#endif // _MFS_09_WAREHOUSE_IDL_

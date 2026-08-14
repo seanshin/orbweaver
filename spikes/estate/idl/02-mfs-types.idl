@@ -1,0 +1,41 @@
+// ---------------------------------------------------------------------------
+// Meridian Freight Systems — the types that did not fit in common.idl.
+//
+// This file exists because adding to common.idl forces a full rebuild.  It
+// reopens MFS::Common anyway, so the rebuild happens; nobody has checked this
+// since the makefile was rewritten.
+// ---------------------------------------------------------------------------
+#ifndef _MFS_02_MFS_TYPES_IDL_
+#define _MFS_02_MFS_TYPES_IDL_
+
+#include "01-common.idl"
+
+#pragma prefix "meridian.com"
+
+module MFS {
+
+    module Common {
+
+        typedef sequence<octet> BlobData;
+
+        // HOTSHOT was added for one customer in 2007 and is now used by four.
+        enum Priority { LOW, NORMAL, RUSH, HOTSHOT };
+
+        typedef sequence<AuditStamp> AuditTrail;
+
+        // Minor units in `millis` because a 1998 customer billed in mills.
+        struct Amount {
+            string        currency;
+            long          units;
+            unsigned long millis;
+        };
+
+        union Detail switch (long) {
+            case 0:  string   text;
+            case 1:  BlobData payload;
+            default: StatusCode code;
+        };
+    };
+};
+
+#endif // _MFS_02_MFS_TYPES_IDL_

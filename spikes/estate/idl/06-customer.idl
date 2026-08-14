@@ -1,0 +1,49 @@
+// ---------------------------------------------------------------------------
+// Customer directory.
+//
+// The prefix pragma is written *inside* module MFS here, not at file scope,
+// because the person who added the prefix in 2008 was working from a printout
+// of a different file.  It happens to produce the same ids; nobody has ever
+// checked that claim against a compiler.
+// ---------------------------------------------------------------------------
+#ifndef _MFS_06_CUSTOMER_IDL_
+#define _MFS_06_CUSTOMER_IDL_
+
+#include "01-common.idl"
+
+module MFS {
+
+#pragma prefix "meridian.com"
+
+    module Customer {
+
+        struct Account {
+            string code;
+            string trading_name;
+            ::MFS::Common::StringList contacts;
+            boolean on_credit_hold;
+        };
+
+        typedef sequence<Account> Accounts;
+
+        exception NoSuchAccount {
+            string code;
+        };
+
+        interface CustomerDirectory : ::MFS::Common::Describable {
+
+            Account find(in string code)
+                raises (NoSuchAccount);
+
+            Accounts search(in string fragment);
+
+            void hold_credit(in string code, in string reason)
+                raises (NoSuchAccount, ::MFS::Common::NotAuthorised);
+
+            void release_credit(in string code)
+                raises (NoSuchAccount, ::MFS::Common::NotAuthorised);
+        };
+    };
+};
+
+#endif // _MFS_06_CUSTOMER_IDL_

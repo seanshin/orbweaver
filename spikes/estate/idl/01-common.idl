@@ -1,0 +1,55 @@
+// ---------------------------------------------------------------------------
+// Meridian Freight Systems — shared definitions.
+//
+// Owner: J. Okonkwo (left 2011).  Current owner: nobody.  Ask #ops-legacy.
+// Everything includes this file.  Adding anything here means a full rebuild of
+// the estate, so people stopped adding things here in about 2009 and started
+// putting them in mfs_types.idl instead.  See the comment at the top of that
+// file, which says the same thing in reverse.
+// ---------------------------------------------------------------------------
+#ifndef _MFS_01_COMMON_IDL_
+#define _MFS_01_COMMON_IDL_
+
+#pragma prefix "meridian.com"
+
+module MFS {
+
+    module Common {
+
+        // "1999-12-31T23:59:59Z".  Yes, a string.  The 2004 proposal to make
+        // it a struct is in the wiki that was decommissioned.
+        typedef string ISODate;
+
+        typedef unsigned long RecordId;
+        typedef sequence<string> StringList;
+
+        // Non-zero means something went wrong.  The table of which non-zero
+        // means what lives in a spreadsheet.
+        typedef long StatusCode;
+
+        struct AuditStamp {
+            ISODate stamped_at;
+            string  actor;
+            string  terminal;
+        };
+
+        exception SystemFault {
+            StatusCode code;
+            string     detail;
+        };
+
+        exception NotAuthorised {
+            string principal;
+            string required_role;
+        };
+
+        // Every long-lived object in the estate is supposed to inherit this.
+        // About two thirds of them actually do.
+        interface Describable {
+            readonly attribute string label;
+            string describe();
+        };
+    };
+};
+
+#endif // _MFS_01_COMMON_IDL_

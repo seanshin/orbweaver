@@ -1,0 +1,38 @@
+// ---------------------------------------------------------------------------
+// System console.
+//
+// This is the file that would embarrass its author.  Flat module, screaming
+// operation names, booleans where an enum belongs, no exceptions anywhere
+// (a failure returns FALSE and the reason goes to a log nobody reads), and
+// SHUTDOWN takes a force flag.  It has been on the estate's ORB since 1999 and
+// it is the interface the operations team actually uses.
+// ---------------------------------------------------------------------------
+#ifndef _MFS_13_ADMIN_IDL_
+#define _MFS_13_ADMIN_IDL_
+
+#include "01-common.idl"
+
+#pragma prefix "meridian.com"
+
+module MFSADMIN {
+
+    interface SystemConsole {
+
+        boolean SHUTDOWN(in string reason, in boolean bForce);
+
+        boolean RESTART_NODE(in string node_name);
+
+        string GET_CONFIG(in string key);
+
+        boolean SET_CONFIG(in string key, in string val);
+
+        // Returns the whole thing as one newline-separated blob.
+        string DUMP_STATE();
+
+        boolean PURGE_CACHE(in string which);
+
+        ::MFS::Common::StringList LIST_NODES();
+    };
+};
+
+#endif // _MFS_13_ADMIN_IDL_

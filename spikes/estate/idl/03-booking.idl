@@ -1,0 +1,56 @@
+// ---------------------------------------------------------------------------
+// Booking.  The oldest module still in production.
+// ---------------------------------------------------------------------------
+#ifndef _MFS_03_BOOKING_IDL_
+#define _MFS_03_BOOKING_IDL_
+
+#include "01-common.idl"
+#include "02-mfs-types.idl"
+
+#pragma prefix "meridian.com"
+
+module MFS {
+
+    module Booking {
+
+        struct Party {
+            string account_code;
+            string display_name;
+            ::MFS::Common::StringList address_lines;
+        };
+
+        struct Slot {
+            ::MFS::Common::ISODate opens;
+            ::MFS::Common::ISODate closes;
+            string depot;
+        };
+
+        exception SlotUnavailable {
+            Slot   requested;
+            string reason;
+        };
+
+        interface BookingManager : ::MFS::Common::Describable {
+
+            ::MFS::Common::RecordId reserve(
+                in Party shipper,
+                in Party consignee,
+                in Slot  window,
+                in ::MFS::Common::Priority level)
+                raises (SlotUnavailable, ::MFS::Common::SystemFault);
+
+            void amend(
+                in ::MFS::Common::RecordId booking,
+                in Slot window)
+                raises (SlotUnavailable, ::MFS::Common::NotAuthorised);
+
+            void release(in ::MFS::Common::RecordId booking)
+                raises (::MFS::Common::NotAuthorised);
+
+            Slot confirmed_window(in ::MFS::Common::RecordId booking)
+                raises (::MFS::Common::SystemFault);
+        };
+    };
+};
+
+#endif // _MFS_03_BOOKING_IDL_

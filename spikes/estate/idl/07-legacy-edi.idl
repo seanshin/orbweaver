@@ -1,0 +1,53 @@
+// ---------------------------------------------------------------------------
+// EDI gateway.  Written 2003 against X12 4010, extended by whoever was on call.
+//
+// Do not refactor.  Three partners bind to this by name and one of them still
+// sends us a tape.
+//
+// lFlags: bit 0 = validate only, bit 1 = suppress ack, bit 2 = ??? (set by the
+// Tuesday batch, do not clear).
+// ---------------------------------------------------------------------------
+#ifndef _MFS_07_LEGACY_EDI_IDL_
+#define _MFS_07_LEGACY_EDI_IDL_
+
+#include "01-common.idl"
+#include "02-mfs-types.idl"
+
+#pragma prefix "meridian.com"
+
+module MFS {
+
+    module Edi {
+
+        interface EdiGateway {
+
+            // The one everybody calls.  sWhat is the document type, except
+            // when it starts with '@', in which case it is a command.
+            void doIt(
+                in    string  sWhat,
+                in    string  sPartner,
+                in    any     oPayload,
+                in    long    lFlags,
+                in    boolean bSync,
+                inout string  sCorrelation,
+                out   string  sResult,
+                out   long    lRc,
+                out   string  sDiag);
+
+            // Added 2009.  Same thing but returns instead of using out params.
+            // Nobody migrated.
+            string DO_TRANSLATE(in string raw_document, in string map_name);
+
+            // Returns "OK" or a message.  Never raises.
+            string ping_partner(in string sPartner);
+
+            // Empty string means "all partners", which is why the 2014 outage
+            // happened.
+            void flush_queue(in string sPartner);
+
+            ::MFS::Common::BlobData last_payload(in string sPartner);
+        };
+    };
+};
+
+#endif // _MFS_07_LEGACY_EDI_IDL_
