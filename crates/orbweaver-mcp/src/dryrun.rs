@@ -455,12 +455,26 @@ pub fn survey(
 /// Sorted, because a report an operator diffs must not reorder itself.
 pub(crate) fn operations_of(registry: &Registry, exposure: &Exposure, id: &str) -> Vec<String> {
     let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    if let Some(iface) = registry.interface(id) {
+    let mut collect = |iface: &orbweaver_registry::InterfaceEntry| {
         names.extend(iface.operations.keys().cloned());
+        // Attribute accessors are operations on the wire, and an exposure that
+        // names the interface makes them callable. Leaving them out of the
+        // survey meant an operator previewing a deployment saw `ping` and not
+        // `_get_balance`, while an agent could call both — which is exactly
+        // the surprise the dry run exists to remove.
+        for (attr, sig) in &iface.attributes {
+            names.insert(format!("_get_{attr}"));
+            if !sig.readonly {
+                names.insert(format!("_set_{attr}"));
+            }
+        }
+    };
+    if let Some(iface) = registry.interface(id) {
+        collect(iface);
     }
     for base in registry.ancestors(id) {
         if let Some(iface) = registry.interface(&base) {
-            names.extend(iface.operations.keys().cloned());
+            collect(iface);
         }
     }
     names.extend(exposure.allowed_operations(id).cloned());

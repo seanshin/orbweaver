@@ -347,11 +347,56 @@ impl Exposure {
 /// [`crate::interceptor::ScopeInterceptor`] reads the requirement through this
 /// same function: one implementation of the rule, two compositions of it.
 pub(crate) fn required_scopes(registry: &Registry, id: &str, operation: &str) -> Vec<String> {
-    let Some((_, sig)) = registry.resolve_operation(id, operation) else { return Vec::new() };
-    sig.annotations
+    let annotations = match registry.resolve_operation(id, operation) {
+        Some((_, sig)) => &sig.annotations,
+        // An attribute accessor is an operation on the wire and nothing else
+        // in this crate knew it. `resolve_operation` looks only at declared
+        // operations, so `_get_balance` had no signature, no annotations and
+        // therefore no scopes — while `allow_interface` made it perfectly
+        // callable. An `//@ ai_authz` written on an attribute bought nothing.
+        None => match attribute_annotations(registry, id, operation) {
+            Some(a) => a,
+            None => return Vec::new(),
+        },
+    };
+    annotations
         .get("ai_authz")
         .map(|v| v.split(',').map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).collect())
         .unwrap_or_default()
+}
+
+/// The annotations of the attribute an accessor name reaches, if any.
+///
+/// `_get_x` and `_set_x` are what an attribute becomes on the wire (§4.4), so
+/// the policy has to be able to see them. Ancestors are walked because an
+/// inherited attribute is callable on the derived interface — the same reason
+/// `resolve_operation` walks them for operations.
+///
+/// A `_set_` on a `readonly` attribute resolves to nothing here: the servant
+/// answers `BAD_OPERATION` and there is no annotation to honour, so treating
+/// it as gated would invent a control over a call that cannot happen.
+fn attribute_annotations<'r>(
+    registry: &'r Registry,
+    id: &str,
+    operation: &str,
+) -> Option<&'r std::collections::BTreeMap<String, String>> {
+    let (name, is_set) = match operation.strip_prefix("_get_") {
+        Some(n) => (n, false),
+        None => (operation.strip_prefix("_set_")?, true),
+    };
+    let mut ids = vec![id.to_owned()];
+    ids.extend(registry.ancestors(id));
+    for candidate in ids {
+        if let Some(iface) = registry.interface(&candidate)
+            && let Some(attr) = iface.attributes.get(name)
+        {
+            if is_set && attr.readonly {
+                return None;
+            }
+            return Some(&attr.annotations);
+        }
+    }
+    None
 }
 
 /// The `ai_effect` value, when it is one that needs a human.
@@ -363,8 +408,13 @@ pub(crate) fn required_scopes(registry: &Registry, id: &str, operation: &str) ->
 /// [`crate::interceptor::ApprovalInterceptor`] reads it through this same
 /// function, for the same reason [`required_scopes`] gives.
 pub(crate) fn destructive_effect(registry: &Registry, id: &str, operation: &str) -> Option<String> {
-    let (_, sig) = registry.resolve_operation(id, operation)?;
-    let effect = sig.annotations.get("ai_effect")?;
+    let annotations = match registry.resolve_operation(id, operation) {
+        Some((_, sig)) => &sig.annotations,
+        // Same gap as `required_scopes`: a `_set_` is a mutation and was never
+        // approval-gated, because it had no signature to carry an ai_effect.
+        None => attribute_annotations(registry, id, operation)?,
+    };
+    let effect = annotations.get("ai_effect")?;
     match effect.trim() {
         "read_only" | "readonly" | "idempotent" | "safe" => None,
         other => Some(other.to_owned()),
@@ -374,6 +424,63 @@ pub(crate) fn destructive_effect(registry: &Registry, id: &str, operation: &str)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An `ai_authz` written on an attribute used to buy nothing: the accessor
+    /// has no operation signature, so the scope check found no annotations and
+    /// let the call through — while `allow_interface` made `_get_balance`
+    /// perfectly callable. Invisible *and* ungated.
+    #[test]
+    fn an_attribute_accessor_is_gated_by_the_attributes_own_scope() {
+        let r = registry(
+            "module m { interface I {
+               //@ ai_authz: bank.balance.read
+               readonly attribute long balance;
+               //@ ai_authz: bank.label.write
+               attribute string label;
+               long ping();
+             }; };",
+        );
+        assert_eq!(required_scopes(&r, "IDL:m/I:1.0", "_get_balance"), ["bank.balance.read"]);
+        assert_eq!(required_scopes(&r, "IDL:m/I:1.0", "_set_label"), ["bank.label.write"]);
+        assert_eq!(required_scopes(&r, "IDL:m/I:1.0", "_get_label"), ["bank.label.write"]);
+        // A `_set_` on a readonly attribute reaches no annotation: the servant
+        // answers BAD_OPERATION, and inventing a control over a call that
+        // cannot happen would be a gate nobody can pass or fail.
+        assert!(required_scopes(&r, "IDL:m/I:1.0", "_set_balance").is_empty());
+        assert!(required_scopes(&r, "IDL:m/I:1.0", "ping").is_empty());
+    }
+
+    /// And an inherited attribute is callable on the derived interface, so the
+    /// walk has to reach it — the same reason `resolve_operation` walks bases.
+    #[test]
+    fn an_inherited_attributes_scope_is_found_from_the_derived_interface() {
+        let r = registry(
+            "module m {
+               interface Base {
+                 //@ ai_authz: base.reading
+                 readonly attribute long reading;
+               };
+               interface Derived : Base { long ping(); };
+             };",
+        );
+        assert_eq!(required_scopes(&r, "IDL:m/Derived:1.0", "_get_reading"), ["base.reading"]);
+    }
+
+    /// A `_set_` is a mutation, and it was never approval-gated for the same
+    /// reason it was never scope-gated.
+    #[test]
+    fn a_setter_can_require_approval() {
+        let r = registry(
+            "module m { interface I {
+               //@ ai_effect: destructive
+               attribute string mode;
+             }; };",
+        );
+        assert_eq!(
+            destructive_effect(&r, "IDL:m/I:1.0", "_set_mode").as_deref(),
+            Some("destructive")
+        );
+    }
 
     fn registry(src: &str) -> Registry {
         let spec = orbweaver_idl::parse(src).expect("parses");
