@@ -21,7 +21,20 @@
 //! The window uses `std::thread::scope`, so the compiler enforces that no
 //! out-of-band step runs while the wire is open.
 //!
-//! Usage: `spike-tenants`
+//! Usage: `spike-tenants [factory-ior [globex-factory-ior]] [--hold]`
+//!
+//! Defaults are `spikes/moe-factory.ior` and `spikes/moe-factory-globex.ior`.
+//! Both are published and `READY` is printed **before** the checks run, so a
+//! harness can wait on a file the way it does for `spike-names`.
+//!
+//! With `--hold` the serving window stays open after the checks — the same
+//! shape `spike-names`, `spike-events` and `spike-ifr` have, and the thing
+//! whose absence made `SERVICES-COVERAGE.md` §9 build a separate holder crate
+//! to address this servant from outside. Both tenants' factories are held, so
+//! an external client can measure the isolation claim and not only the
+//! operation list; acme's 1.0 model has been retired by then, which is what
+//! makes a `get_manifest` on a stale reference answer `OBJECT_NOT_EXIST`.
+//! Stopped by killing the process.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -164,7 +177,16 @@ where
 }
 
 fn main() -> std::process::ExitCode {
-    match run() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let hold = args.iter().any(|a| a == "--hold");
+    let paths: Vec<&str> =
+        args.iter().filter(|a| !a.starts_with("--")).map(String::as_str).collect();
+    let out = [
+        paths.first().copied().unwrap_or("spikes/moe-factory.ior"),
+        paths.get(1).copied().unwrap_or("spikes/moe-factory-globex.ior"),
+    ];
+
+    match run(&out, hold) {
         Ok(0) => {
             println!("\ntenant-service: PASS");
             std::process::ExitCode::SUCCESS
@@ -180,7 +202,7 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-fn run() -> Result<u32, Box<dyn std::error::Error>> {
+fn run(out: &[&str; 2], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
     let server = Server::bind("127.0.0.1:0", b"MoE".to_vec())?;
     let port = server.local_addr()?.port();
     let svc = TenantService::new("127.0.0.1", port, "MoE");
@@ -209,6 +231,13 @@ fn run() -> Result<u32, Box<dyn std::error::Error>> {
     println!("expert   acme   {}", String::from_utf8_lossy(&key_of(&expert_a)?));
     println!("expert   globex {}", String::from_utf8_lossy(&key_of(&expert_b)?));
     println!("nodes    gpu-eu-1=eu-west, gpu-us-1=us-east");
+    // Published before the checks run, so a harness waiting on a file is
+    // waiting on something that exists as early as it can.
+    for (path, ior) in out.iter().zip([&factory_a, &factory_b]) {
+        std::fs::write(path, ior.to_stringified()?)?;
+        println!("IOR written to {path}");
+    }
+    println!("READY");
 
     // ── window 1: minting, isolation, the base crossing ─────────────────────
     println!("\nwindow 1 — the wire is open");
@@ -547,6 +576,14 @@ fn run() -> Result<u32, Box<dyn std::error::Error>> {
         "the base crossing is in the trail, not only in a counter",
     );
     r.eq(svc.audit_log("nobody").len(), 0, "a tenant with no calls has no trail");
+
+    if hold {
+        println!(
+            "\nHOLDING — both tenants' factories stay served; point an external client at {}",
+            out.join(", ")
+        );
+        server.serve_shared(&svc, || false)?;
+    }
 
     Ok(r.failures)
 }

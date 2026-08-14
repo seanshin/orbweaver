@@ -125,6 +125,10 @@ pub const OBJECT_NOT_EXIST: &str = "IDL:omg.org/CORBA/OBJECT_NOT_EXIST:1.0";
 /// Repository ID for a failure with no more precise description — including a
 /// user exception reaching a caller that cannot carry one.
 pub const UNKNOWN: &str = "IDL:omg.org/CORBA/UNKNOWN:1.0";
+/// Repository ID for a servant invariant that did not hold. Never a statement
+/// about the caller's request: it says the servant found its own state
+/// inconsistent, which is a defect here rather than something to retry.
+pub const INTERNAL: &str = "IDL:omg.org/CORBA/INTERNAL:1.0";
 
 /// Whether an operation had run when it failed (§9.4.3.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,6 +178,13 @@ impl SystemException {
     /// An `OBJECT_NOT_EXIST` for an unrecognised object key.
     pub fn object_not_exist() -> Self {
         Self { id: OBJECT_NOT_EXIST.into(), minor: 0, completed: Completion::No }
+    }
+
+    /// An `INTERNAL` for a servant invariant that did not hold. `Completion::No`
+    /// because a servant that noticed its own inconsistency stopped before
+    /// changing anything.
+    pub fn internal() -> Self {
+        Self { id: INTERNAL.into(), minor: 0, completed: Completion::No }
     }
 
     /// The standard mapping for a user exception that reached a caller unable

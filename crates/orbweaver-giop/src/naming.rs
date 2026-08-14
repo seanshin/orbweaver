@@ -135,7 +135,7 @@ impl ObjectUrl {
             return Ok(ObjectUrl::Corbaname {
                 addresses,
                 object_key: key,
-                name: parse_stringified_name(name_part)?,
+                name: parse_stringified_name(&unescape_name(name_part)?)?,
             });
         }
         Err(UrlError::BadSchemeName(format!("{url:?} is not corbaloc: or corbaname:")))
@@ -325,6 +325,151 @@ pub fn parse_stringified_name(s: &str) -> std::result::Result<Vec<NameComponent>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// corbaname: URL construction — the inverse of the parser above
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Whether `b` may stand for itself in the stringified-name part of a
+/// `corbaname:` URL.
+///
+/// RFC 2396's `unreserved` set (alphanumerics plus the `mark` characters) and
+/// the `reserved` characters a URL path may carry literally. Two of those
+/// reserved characters carry meaning for the *name* grammar as well — `/`
+/// separates components and `.` separates an id from its kind — and leaving
+/// them unescaped is what makes the two layers compose: the name grammar's own
+/// `\` escape is what hides a `/` inside a component, and `\` is **not** in
+/// this set, so it survives as `%5C`.
+///
+/// Everything else is escaped: the space and the control characters (no URL
+/// carries them), `#` (which would end the address part early), `%` (which
+/// would be read as somebody else's escape) and every byte above 0x7F (so a
+/// non-ASCII name travels as its UTF-8 bytes rather than as whatever the peer
+/// guesses).
+fn is_url_name_safe(b: u8) -> bool {
+    b.is_ascii_alphanumeric()
+        || matches!(
+            b,
+            // unreserved marks
+            b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')'
+            // reserved, legal in a path and meaningful to the name grammar
+            | b';' | b'/' | b':' | b'?' | b'@' | b'&' | b'=' | b'+' | b'$' | b','
+        )
+}
+
+/// Percent-escapes a stringified name for the fragment of a `corbaname:` URL
+/// (§2.5.3.3).
+fn escape_name(s: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(s.len());
+    for &b in s.as_bytes() {
+        if is_url_name_safe(b) {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            out.push(HEX[usize::from(b >> 4)] as char);
+            out.push(HEX[usize::from(b & 0x0f)] as char);
+        }
+    }
+    out
+}
+
+/// The inverse of [`escape_name`]: decodes `%XX` back into text.
+///
+/// The URL layer sits **above** the name grammar, so this runs first and
+/// [`parse_stringified_name`] runs on the result. One consequence worth
+/// stating: a `%2F` written by some other producer decodes to a `/` and is
+/// then read as a component separator. That is the ordering the layering
+/// implies, and [`to_url`] never emits one — it leaves `/` literal, because
+/// the name grammar's own `\/` is how a component hides a slash.
+fn unescape_name(s: &str) -> std::result::Result<String, UrlError> {
+    let bytes = unescape(s)?;
+    String::from_utf8(bytes).map_err(|_| {
+        UrlError::BadSchemeSpecificPart(
+            "the escaped stringified name is not valid UTF-8 once decoded".into(),
+        )
+    })
+}
+
+/// `NamingContextExt::to_url` — builds a `corbaname:` URL out of an address
+/// and a stringified name (§2.5.3.3).
+///
+/// `address` is a `corbaloc:` address list *without* the scheme —
+/// `:host`, `:host:2809`, `iiop:1.2@host:2809`, optionally with `/ObjectKey`
+/// and optionally comma-separated. `name` is a stringified name in the grammar
+/// [`stringify_name`] emits and [`parse_stringified_name`] reads.
+///
+/// # The parser is the specification
+///
+/// A `to_url` whose output our own parser rejects would be worse than no
+/// `to_url` at all, so this does not merely trust its escaping: it parses what
+/// it built and refuses to hand back a URL that does not read as the name it
+/// was given. The round trip is therefore an invariant of the function and not
+/// only of a test.
+///
+/// # Errors
+///
+/// Exactly two kinds, so a servant can map them onto the two exceptions the
+/// operation declares:
+///
+/// - [`UrlError::BadAddress`] — `InvalidAddress`. An empty address, one our
+///   own `corbaloc:` address parser refuses, or one carrying a byte that
+///   cannot stand in a URL (space, control, `#`, non-ASCII).
+/// - [`UrlError::BadSchemeSpecificPart`] — `InvalidName`. A name the name
+///   grammar refuses.
+/// - [`UrlError::Other`] — the round-trip check above failed, which is a
+///   defect in this function rather than in either argument.
+///
+/// # Two places this was measured against omniNames, 2026-08-14
+///
+/// omniNames' own `to_url` was driven with the same arguments through
+/// omniORB's python client and agreed on every URL it produced, bar the
+/// **case of the hex digits** — it writes `%5c`, this writes `%5C`. Both are
+/// legal (RFC 2396 calls hex digits case-insensitive; RFC 3986 recommends
+/// upper), each parser reads the other's, and
+/// `a_foreign_escaped_corbaname_decodes_the_same_way` pins that we read
+/// theirs.
+///
+/// It also disagreed twice, and both are decisions rather than accidents:
+///
+/// - **An empty name.** omniNames returns the bare `corbaname:<addr>` — a URL
+///   naming the context itself — and this does too, because our parser reads
+///   that URL back as the empty name it was given. An empty *`Name`* is still
+///   `InvalidName` everywhere it is a name: `to_name`, `to_string` and
+///   `resolve` all refuse it, and none of them is producing a URL.
+/// - **`rir:`.** omniNames returns `corbaname:rir:#a`; this refuses with
+///   `InvalidAddress`, because [`ObjectUrl::parse`] accepts `rir:` under
+///   `corbaloc:` only, so emitting one would hand back a URL our own parser
+///   rejects — the single thing this function exists not to do. Accepting it
+///   means giving `ObjectUrl::Corbaname` an address-less form, which nothing
+///   in this repository can resolve through yet.
+pub fn to_url(address: &str, name: &str) -> std::result::Result<String, UrlError> {
+    if address.is_empty() {
+        return Err(UrlError::BadAddress("no address given".into()));
+    }
+    if let Some(bad) = address.bytes().find(|&b| b <= b' ' || b == 0x7f || b >= 0x80 || b == b'#') {
+        return Err(UrlError::BadAddress(format!(
+            "{address:?} carries a byte that cannot stand in a URL: 0x{bad:02X}"
+        )));
+    }
+    // The same reading of the address the parser will make, made now so the
+    // failure is `InvalidAddress` rather than a URL nobody can use.
+    let (addr_part, _key_part) = split_key(address);
+    parse_addresses(addr_part)?;
+
+    let intended = if name.is_empty() { Vec::new() } else { parse_stringified_name(name)? };
+    let url = if name.is_empty() {
+        format!("corbaname:{address}")
+    } else {
+        format!("corbaname:{address}#{}", escape_name(name))
+    };
+    match ObjectUrl::parse(&url) {
+        Ok(ObjectUrl::Corbaname { name: read_back, .. }) if read_back == intended => Ok(url),
+        other => Err(UrlError::Other(format!(
+            "built {url:?} but our own parser read it as {other:?}, not as {intended:?}"
+        ))),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // CosNaming client
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -366,6 +511,22 @@ impl NamingContext {
         let reply = self.conn.invoke("resolve_str", move |e| e.put_str(&owned))?;
         let mut b = reply.body()?;
         Ior::read_from(&mut b)
+    }
+
+    /// `NamingContextExt::to_url` — asks the *peer* to build a `corbaname:`
+    /// URL out of `address` and the stringified `name`.
+    ///
+    /// [`to_url`] does the same thing locally and needs no round trip. This
+    /// exists for the direction that cannot be done locally: asking a foreign
+    /// naming service to produce the URL form *it* would hand out, which is
+    /// the only way to find out whether its escaping and ours agree.
+    pub fn to_url(&mut self, address: &str, name: &str) -> Result<String> {
+        let (address, name) = (address.to_owned(), name.to_owned());
+        let reply = self.conn.invoke("to_url", move |e| {
+            e.put_str(&address);
+            e.put_str(&name);
+        })?;
+        Ok(reply.body()?.get_string()?)
     }
 
     /// `NamingContext::bind` — publishes `obj` under `name`.
@@ -669,6 +830,141 @@ mod tests {
                 NameComponent { id: "obj".into(), kind: "kind".into() }
             ]
         );
+    }
+
+    /// The claim this operation is worth having: **`parse(to_url(a, n))` is
+    /// `n`**, for every name that needs escaping and for both of the two
+    /// escape layers at once.
+    ///
+    /// The cases are chosen to hit each layer and their interaction: `/` and
+    /// `.` inside a component (the name grammar's `\` escape, which the URL
+    /// layer must then carry as `%5C` without disturbing the separators that
+    /// mean what they say), a space and a `%` and a `#` (the URL layer's job
+    /// alone — a literal one of any of them makes the URL unparsable or
+    /// re-readable as somebody else's escape), and non-ASCII (which must
+    /// travel as UTF-8 bytes rather than as a guess).
+    #[test]
+    fn to_url_round_trips_through_our_own_parser() {
+        let names = [
+            vec![NameComponent::new("spike"), NameComponent::new("Echo")],
+            vec![NameComponent { id: "a/b".into(), kind: "c.d".into() }],
+            vec![NameComponent { id: "with space".into(), kind: "and space".into() }],
+            vec![NameComponent { id: "100%".into(), kind: "#frag".into() }],
+            vec![NameComponent { id: "함정".into(), kind: "한글".into() }],
+            vec![NameComponent { id: "back\\slash".into(), kind: String::new() }],
+            vec![
+                NameComponent::new("ctx"),
+                NameComponent { id: "obj".into(), kind: "dev".into() },
+                NameComponent { id: "trailing.".into(), kind: String::new() },
+            ],
+        ];
+        let addresses = [
+            ":example.test",
+            ":example.test:2809",
+            "iiop:1.2@127.0.0.1:4001",
+            "iiop:1.2@127.0.0.1:4001/NameService",
+            ":a.test:1111,:b.test:2222",
+            "iiop:[::1]:2809",
+        ];
+        for address in addresses {
+            for name in &names {
+                let sn = stringify_name(name);
+                let url = to_url(address, &sn).unwrap_or_else(|e| panic!("{address} {sn:?}: {e}"));
+                match ObjectUrl::parse(&url) {
+                    Ok(ObjectUrl::Corbaname { name: back, .. }) => {
+                        assert_eq!(&back, name, "{url}");
+                    }
+                    other => panic!("{url} parsed as {other:?}"),
+                }
+            }
+        }
+    }
+
+    /// The escaping is not merely reversible, it is the *right* escaping: the
+    /// characters that would break the URL are gone from the text, and the two
+    /// that carry name-grammar meaning are still there to carry it.
+    #[test]
+    fn to_url_escapes_what_a_url_cannot_carry_and_nothing_else() {
+        let url = to_url(":h", &stringify_name(&[NameComponent::new("a b#c%d")])).unwrap();
+        assert_eq!(url, "corbaname::h#a%20b%23c%25d");
+
+        // `/` and `.` inside a component: the name grammar backslashes them,
+        // and the URL layer escapes only the backslash it added.
+        let url =
+            to_url(":h", &stringify_name(&[NameComponent { id: "a/b".into(), kind: ".".into() }]))
+                .unwrap();
+        assert_eq!(url, "corbaname::h#a%5C/b.%5C.");
+
+        // …while separators that mean what they say stay literal.
+        let url = to_url(":h", "one/two.kind").unwrap();
+        assert_eq!(url, "corbaname::h#one/two.kind");
+
+        // Non-ASCII travels as its UTF-8 bytes.
+        assert_eq!(to_url(":h", "함").unwrap(), "corbaname::h#%ED%95%A8");
+    }
+
+    /// The two failures map onto the two exceptions the operation declares,
+    /// and they are told apart by which argument was wrong.
+    #[test]
+    fn to_url_refuses_bad_addresses_and_bad_names_distinguishably() {
+        for bad in ["", "host-with-no-protocol-token", ":", ":h ost", ":h#x", ":호스트"] {
+            assert!(
+                matches!(to_url(bad, "a"), Err(UrlError::BadAddress(_))),
+                "{bad:?} should be InvalidAddress"
+            );
+        }
+        assert!(
+            matches!(to_url(":h", "trailing\\"), Err(UrlError::BadSchemeSpecificPart(_))),
+            "a trailing backslash should be InvalidName"
+        );
+        // Measured against omniNames (see `to_url`'s docs): `rir:` is the one
+        // address it accepts and we refuse, because our parser reads `rir:`
+        // under `corbaloc:` only and this must not emit what it cannot read.
+        assert!(matches!(to_url("rir:", "a"), Err(UrlError::BadAddress(_))));
+    }
+
+    /// The empty name is not a failure: it is the URL that names the context
+    /// itself, it round-trips, and it is byte-for-byte what omniNames answers.
+    #[test]
+    fn an_empty_name_gives_the_url_for_the_context_itself() {
+        let url = to_url(":h", "").unwrap();
+        assert_eq!(url, "corbaname::h", "no fragment at all, as omniNames writes it");
+        match ObjectUrl::parse(&url) {
+            Ok(ObjectUrl::Corbaname { name, object_key, .. }) => {
+                assert!(name.is_empty());
+                assert_eq!(object_key, b"NameService");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// A URL some other producer escaped is decoded by the same rule, so the
+    /// parser reads foreign escaping as well as its own.
+    #[test]
+    fn a_foreign_escaped_corbaname_decodes_the_same_way() {
+        match ObjectUrl::parse("corbaname::h:2809/NameService#a%20b/c%2Ed") {
+            Ok(ObjectUrl::Corbaname { name, .. }) => assert_eq!(
+                name,
+                vec![NameComponent::new("a b"), NameComponent { id: "c".into(), kind: "d".into() }],
+                "%2E decodes to '.' and is then the kind separator — the URL layer sits above \
+                 the name grammar"
+            ),
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            ObjectUrl::parse("corbaname::h#%FF"),
+            Err(UrlError::BadSchemeSpecificPart(_))
+        ));
+        // omniNames writes its hex in lower case (`%5c`) where this writes
+        // `%5C` — measured 2026-08-14, and the only escaping difference the
+        // two producers have. Reading theirs is what makes it a difference
+        // rather than an incompatibility.
+        match ObjectUrl::parse("corbaname::h#a%5c/b") {
+            Ok(ObjectUrl::Corbaname { name, .. }) => {
+                assert_eq!(name, vec![NameComponent::new("a/b")]);
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

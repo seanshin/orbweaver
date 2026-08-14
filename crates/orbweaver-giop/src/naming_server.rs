@@ -9,8 +9,8 @@
 //!
 //! `resolve`, `bind`, `rebind`, `unbind`, `bind_new_context`, `new_context`,
 //! `list`, and the `NamingContextExt` string surface (`resolve_str`,
-//! `to_name`, `to_string`) — plus `_is_a`/`_non_existent`, which every ORB
-//! probes with before trusting a narrow. Everything else answers
+//! `to_name`, `to_string`, `to_url`) — plus `_is_a`/`_non_existent`, which
+//! every ORB probes with before trusting a narrow. Everything else answers
 //! `BAD_OPERATION` rather than being half-served:
 //!
 //! - **`BindingIterator` is stubbed.** `list` returns at most `how_many`
@@ -26,6 +26,21 @@
 //!   dispatch, and [`Dispatch::knows`] answers for all of them.
 //! - **`destroy` is not served**; contexts live as long as the process, and
 //!   an unbound context stays reachable by its key.
+//!
+//! # `to_url` and the parser it has to agree with
+//!
+//! `to_url` was the one `NamingContextExt` operation absent while its client
+//! half already shipped: [`crate::naming`] has parsed `corbaname:` URLs since
+//! Phase 1, and `to_url` is the operation that *produces* one. It is served
+//! by [`crate::naming::to_url`], which builds the URL, parses what it built
+//! with that same parser, and refuses to hand back anything the parser reads
+//! as a different name — so the two halves cannot disagree about escaping the
+//! way an encoder and a decoder written apart always eventually do.
+//!
+//! This servant does **not** consult its own tree to answer it: §2.5.3.3's
+//! `to_url` is a pure string operation over an address the *caller* supplies,
+//! and inventing a "did you mean this context?" check would answer a question
+//! the operation does not ask.
 //!
 //! # Exception shapes
 //!
@@ -79,8 +94,8 @@ use orbweaver_cdr::Encoder;
 
 use crate::guarded::Guarded;
 use crate::naming::{
-    NAMING_CONTEXT_EXT_ID, NameComponent, parse_stringified_name, read_name, stringify_name,
-    write_name,
+    NAMING_CONTEXT_EXT_ID, NameComponent, UrlError, parse_stringified_name, read_name,
+    stringify_name, to_url, write_name,
 };
 use crate::server::{Dispatch, DispatchBody, Request, SharedDispatch, SystemException};
 use crate::{IiopProfile, Ior, Version};
@@ -98,6 +113,10 @@ pub const ALREADY_BOUND_ID: &str = "IDL:omg.org/CosNaming/NamingContext/AlreadyB
 
 /// Repository id of `CosNaming::NamingContext::InvalidName`.
 pub const INVALID_NAME_ID: &str = "IDL:omg.org/CosNaming/NamingContext/InvalidName:1.0";
+
+/// Repository id of `CosNaming::NamingContextExt::InvalidAddress` — declared
+/// by the `Ext` interface alone, and raised only by `to_url`.
+pub const INVALID_ADDRESS_ID: &str = "IDL:omg.org/CosNaming/NamingContextExt/InvalidAddress:1.0";
 
 /// `NotFoundReason::missing_node` — the component is not bound at all.
 pub const WHY_MISSING_NODE: u32 = 0;
@@ -123,6 +142,8 @@ enum UserExc {
     AlreadyBound,
     /// `InvalidName`, no members.
     InvalidName,
+    /// `NamingContextExt::InvalidAddress`, no members.
+    InvalidAddress,
 }
 
 impl UserExc {
@@ -138,6 +159,7 @@ impl UserExc {
             }
             UserExc::AlreadyBound => out.put_str(ALREADY_BOUND_ID),
             UserExc::InvalidName => out.put_str(INVALID_NAME_ID),
+            UserExc::InvalidAddress => out.put_str(INVALID_ADDRESS_ID),
         }
     }
 }
@@ -394,6 +416,25 @@ impl NamingServer {
                     return Err(UserExc::InvalidName.into());
                 }
                 out.put_str(&stringify_name(&name));
+            }
+            // `URLString to_url(in Address addr, in StringName sn)
+            //  raises(InvalidAddress, InvalidName)`. The whole answer comes
+            // from `crate::naming`, so the URL this hands out and the URL our
+            // client parses are one piece of code — see the module docs.
+            "to_url" => {
+                let address = args.get_string().map_err(|_| marshal())?;
+                let name = args.get_string().map_err(|_| marshal())?;
+                let url = to_url(&address, &name).map_err(|e| match e {
+                    UrlError::BadAddress(_) => Raise::User(UserExc::InvalidAddress),
+                    UrlError::BadSchemeName(_) | UrlError::BadSchemeSpecificPart(_) => {
+                        Raise::User(UserExc::InvalidName)
+                    }
+                    // The round-trip check refused what it built: our own two
+                    // halves disagree, which is this servant's defect and not
+                    // a statement about either argument.
+                    UrlError::Other(_) => Raise::System(SystemException::internal()),
+                })?;
+                out.put_str(&url);
             }
             _ => return Err(SystemException::bad_operation().into()),
         }
@@ -827,6 +868,97 @@ mod tests {
         let reply = ctx.connection().invoke("to_string", |e| write_name(e, &name)).unwrap();
         assert_eq!(reply.body().unwrap().get_string().unwrap(), "ctx/obj.dev");
         served.shutdown(ctx);
+    }
+
+    /// The operation the coverage sweep found absent, over the wire, closing
+    /// the loop the client half left open: the server produces the URL and
+    /// **our own parser reads back the name that went in** — including the
+    /// components that need both escape layers.
+    #[test]
+    fn to_url_over_the_wire_round_trips_through_the_client_parser() {
+        let served = Served::start();
+        let mut ctx = served.client();
+        let cases = [
+            vec![nc("spike"), nc("Echo")],
+            vec![NameComponent { id: "a/b".into(), kind: "c.d".into() }],
+            vec![NameComponent { id: "with space".into(), kind: "함정".into() }],
+            vec![NameComponent { id: "100%".into(), kind: "#frag".into() }],
+        ];
+        for name in &cases {
+            let sn = crate::naming::stringify_name(name);
+            let url = ctx.to_url("iiop:1.2@127.0.0.1:4001", &sn).unwrap();
+            assert!(url.starts_with("corbaname:iiop:1.2@127.0.0.1:4001#"), "{url}");
+            match crate::naming::ObjectUrl::parse(&url) {
+                Ok(crate::naming::ObjectUrl::Corbaname { name: back, addresses, object_key }) => {
+                    assert_eq!(&back, name, "{url}");
+                    assert_eq!(addresses[0].port, 4001);
+                    assert_eq!(object_key, b"NameService", "no key means NameService");
+                }
+                other => panic!("{url} parsed as {other:?}"),
+            }
+        }
+        served.shutdown(ctx);
+    }
+
+    /// The two exceptions `to_url` declares, told apart by which argument was
+    /// wrong — the distinction is the whole reason `InvalidAddress` exists as
+    /// a separate exception rather than as another `InvalidName`.
+    #[test]
+    fn to_url_raises_invalid_address_and_invalid_name_separately() {
+        let served = Served::start();
+        let mut ctx = served.client();
+        for (address, name, want) in [
+            ("no-protocol-token", "a", INVALID_ADDRESS_ID),
+            ("", "a", INVALID_ADDRESS_ID),
+            // Measured divergence from omniNames, reasoned in `naming::to_url`.
+            ("rir:", "a", INVALID_ADDRESS_ID),
+            (":h", "trailing\\", INVALID_NAME_ID),
+        ] {
+            match ctx.to_url(address, name) {
+                Err(Error::UserException { id, .. }) => {
+                    assert_eq!(id, want, "to_url({address:?}, {name:?})");
+                }
+                other => panic!("to_url({address:?}, {name:?}) gave {other:?}"),
+            }
+        }
+        served.shutdown(ctx);
+    }
+
+    /// The URL `to_url` hands out is one a client can act on: resolving the
+    /// name it names, through this same server, returns the bound reference.
+    /// (Same process, so it is our client both times — the cross-ORB half is
+    /// `spike-names --hold` plus the omniORB snippet in its header.)
+    #[test]
+    fn a_url_from_to_url_resolves_against_the_server_that_made_it() {
+        let served = Served::start();
+        let mut ctx = served.client();
+        ctx.bind_new_context(&[nc("spike")]).unwrap();
+        ctx.bind(
+            &[nc("spike"), NameComponent { id: "Echo.1".into(), kind: String::new() }],
+            &dummy(b"Echo"),
+        )
+        .unwrap();
+
+        let addr = served.root.primary().unwrap();
+        let url = ctx
+            .to_url(
+                &format!("iiop:1.2@{}:{}", addr.host, addr.port),
+                &crate::naming::stringify_name(&[
+                    nc("spike"),
+                    NameComponent { id: "Echo.1".into(), kind: String::new() },
+                ]),
+            )
+            .unwrap();
+        drop(ctx);
+
+        let parsed = crate::naming::ObjectUrl::parse(&url).unwrap();
+        let crate::naming::ObjectUrl::Corbaname { name, .. } = &parsed else {
+            panic!("{url} is not a corbaname URL")
+        };
+        let name = name.clone();
+        let mut through = NamingContext::from_url(&parsed, T).unwrap();
+        assert_eq!(through.resolve(&name).unwrap().primary().unwrap().object_key, b"Echo");
+        served.shutdown(through);
     }
 
     #[test]
