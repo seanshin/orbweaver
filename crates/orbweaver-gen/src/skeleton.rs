@@ -9,16 +9,52 @@
 //!   variant per exception named in a `raises` clause. Its `write` puts the
 //!   body §9.4.3.1 describes — repository id first, then the members — and
 //!   says which reply status the bytes travel under;
+//! * `<I>Refs` — the object-key scheme and the reference factory: `key_of`,
+//!   `oid_of`, `reference`, `nil`. Reversible by construction, so no table of
+//!   minted keys exists to be lost across a restart;
+//! * `<I>Target<'a>` — *which* object a call was addressed to, plus the means
+//!   to name its neighbours;
 //! * `<I>Servant` — a trait with one method per operation and per attribute
-//!   accessor, taking **decoded Rust arguments** and returning
-//!   `Result<Ret, <I>Fault>`. No `Encoder`, no `Decoder`, no operation names:
-//!   a servant that never sees the wire cannot get the wire wrong;
+//!   accessor, each taking an `<I>Target` and then **decoded Rust arguments**,
+//!   returning `Result<Ret, <I>Fault>`. No `Encoder`, no `Decoder`, no
+//!   operation names: a servant that never sees the wire cannot get the wire
+//!   wrong. Plus `knows` (required) and `forward` (defaulted);
+//! * `<I>Object` and `<I>Objects<S>` — the other shape: one value per object,
+//!   behind a map, implemented in terms of `<I>Servant`;
 //! * `<I>Skeleton<S>` — the [`rt::Dispatch`](crate::rt::Dispatch)
-//!   implementation that decodes, calls the trait, and encodes.
+//!   implementation that decodes the key, decodes the arguments, calls the
+//!   trait, and encodes.
 //!
 //! Both halves are generated from the same [`OpShape`](crate::OpShape), so the
 //! arguments a caller passes and the arguments a servant receives are the same
 //! list by construction rather than by review.
+//!
+//! # Why a skeleton has an object-key scheme
+//!
+//! Because a servant that answers for exactly one object is not a servant
+//! anybody deploys. Every hand-written `Dispatch` in this workspace holds many
+//! objects — a naming context per key, an `InterfaceDef` per repository id, a
+//! factory per tenant, two singletons for two interfaces — and all four build
+//! their keys the same way: a root key the server was bound with, plus a
+//! derived suffix. That derivation is generated here; which keys *exist* is
+//! not, and cannot be, because a contract says what an object does and never
+//! which ones there are. So `knows` is a required method with no default: the
+//! `true` that [`rt::Dispatch`](crate::rt::Dispatch) defaults to is exactly
+//! what made a generated server claim every key in its process.
+//!
+//! # Why identity is an argument and not a `&mut self` per object
+//!
+//! Both shapes are emitted; the argument-taking one is the trait and the
+//! map-shaped one is the adapter, in that order, because the five hand-written
+//! servants were read before the choice was made and **none** of them keeps a
+//! value per object. The IR facade derives its objects from a registry and
+//! stores nothing per reference — materialising one value per entry would
+//! recreate the minted-key table its own documentation rejects. The naming and
+//! tenant servants resolve the key on every call because their operations reach
+//! *other* objects: resolving a path walks contexts, cloning a model writes a
+//! sibling. A map-shaped trait can express none of that, and can be expressed
+//! *by* the other in ten lines per operation — so it is the one generated on
+//! top.
 //!
 //! # Why the error type is not the user exceptions alone
 //!
@@ -125,7 +161,11 @@ pub(crate) fn emit_skeleton(registry: &Registry, id: &str, cx: &Cx<'_>) -> Resul
 
     let mut s = String::new();
     emit_fault(&mut s, &name, id, &raises);
+    emit_refs(&mut s, &name, id);
+    emit_target(&mut s, &name, id);
     emit_trait(&mut s, registry, &name, id, &ops, &attrs, cx)?;
+    emit_object_trait(&mut s, &name, id, &ops, &attrs, cx)?;
+    emit_object_map(&mut s, &name, id, &ops, &attrs, cx)?;
     emit_dispatch(&mut s, registry, &name, id, &ops, &attrs, cx)?;
     Ok(s)
 }
@@ -251,6 +291,141 @@ fn emit_fault(s: &mut String, name: &str, id: &str, raises: &[Raise]) {
     let _ = writeln!(s, "}}");
 }
 
+/// The object-key scheme and reference factory for one interface.
+///
+/// This is the half of "many objects, one process" the generator *can* decide:
+/// how a key is built and taken apart. Which keys exist is the servant's, and
+/// it is asked through `knows`.
+fn emit_refs(s: &mut String, name: &str, id: &str) {
+    let ty = format!("{name}Refs");
+    doc(s, &format!("The object-key scheme for `{id}`, and its reference factory."));
+    doc(s, "");
+    doc(s, "# The keys");
+    doc(s, "");
+    doc(s, "```text");
+    doc(s, "root                          the default object — oid \"\"");
+    doc(s, &format!("root ++ \"/{name}/\" ++ <oid>    the object named <oid>"));
+    doc(s, "```");
+    doc(s, "");
+    doc(s, "`root` is the key the `rt::Server` was bound with. The derivation is");
+    doc(s, "reversible, so no table of minted keys exists: a reference survives a");
+    doc(s, "restart, and a client cannot make the process grow by looking things");
+    doc(s, "up. The oid is the *whole* remainder after the prefix, so it may");
+    doc(s, "contain `/`, `:`, or the infix itself — there is nothing to escape.");
+    doc(s, "");
+    doc(s, "The infix is the interface name, so two generated skeletons sharing a");
+    doc(s, "root cannot read each other's keys. Use `with_infix` when they are");
+    doc(s, "*meant* to share one key space — an `InterfaceDef` and a `Contained`");
+    doc(s, "over the same repository entry are two interfaces over one object.");
+    doc(s, "");
+    doc(s, "# Minting");
+    doc(s, "");
+    doc(s, "`reference` and `ior` answer with a real IIOP profile, built by");
+    doc(s, "`rt::ObjectHome` — the servant never assembles one, which is why the");
+    doc(s, "GIOP version and profile shape are still decided in exactly one");
+    doc(s, "place. `nil` is the nil reference (§9.3.6), the truthful answer when");
+    doc(s, "there is no such object.");
+    let _ = writeln!(s, "#[derive(Debug, Clone, PartialEq, Eq)]");
+    let _ = writeln!(s, "pub struct {ty} {{");
+    let _ = writeln!(s, "    home: rt::ObjectHome,");
+    let _ = writeln!(s, "    infix: String,");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "impl {ty} {{");
+    let _ = writeln!(s, "    /// The repository id minted references advertise.");
+    let _ = writeln!(s, "    pub const TYPE_ID: &'static str = \"{id}\";");
+    let _ = writeln!(s, "    /// What separates the root key from the oid.");
+    let _ = writeln!(s, "    pub const KEY_INFIX: &'static str = \"/{name}/\";");
+    let _ = writeln!(s, "    /// The scheme rooted at `home`, with the generated infix.");
+    let _ = writeln!(s, "    pub fn new(home: rt::ObjectHome) -> Self {{");
+    let _ = writeln!(s, "        Self {{ home, infix: Self::KEY_INFIX.to_owned() }}");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    /// The same, with a key space this interface shares with another.");
+    let _ = writeln!(s, "    ///");
+    let _ = writeln!(s, "    /// Two skeletons given the same infix must disagree about `knows`");
+    let _ = writeln!(s, "    /// for every key, or `rt::Servants` will hand a request to");
+    let _ = writeln!(s, "    /// whichever was added first. Sharing a key space is a claim that");
+    let _ = writeln!(s, "    /// the two answer for disjoint sets of objects.");
+    let _ = writeln!(
+        s,
+        "    pub fn with_infix(home: rt::ObjectHome, infix: impl Into<String>) -> Self {{"
+    );
+    let _ = writeln!(s, "        Self {{ home, infix: infix.into() }}");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    /// Where these objects are published.");
+    let _ = writeln!(s, "    pub fn home(&self) -> &rt::ObjectHome {{ &self.home }}");
+    let _ = writeln!(s, "    /// The infix in use, generated or overridden.");
+    let _ = writeln!(s, "    pub fn infix(&self) -> &str {{ &self.infix }}");
+    let _ =
+        writeln!(s, "    /// The default object's key, which is also every other key's prefix.");
+    let _ = writeln!(s, "    pub fn root_key(&self) -> &[u8] {{ self.home.root_key() }}");
+    let _ = writeln!(s, "    /// The object key for `oid`; the empty oid is the root key.");
+    let _ = writeln!(s, "    pub fn key_of(&self, oid: &str) -> Vec<u8> {{");
+    let _ = writeln!(s, "        self.home.key_of(&self.infix, oid)");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    /// The oid a key addresses, or `None` if it is not one of ours.");
+    let _ = writeln!(s, "    pub fn oid_of<'a>(&self, key: &'a [u8]) -> Option<&'a str> {{");
+    let _ = writeln!(s, "        self.home.oid_of(&self.infix, key)");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    /// A reference to `oid`, in the form an operation returns.");
+    let _ = writeln!(s, "    pub fn reference(&self, oid: &str) -> rt::ObjRef {{");
+    let _ = writeln!(s, "        self.home.reference(Self::TYPE_ID, self.key_of(oid))");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    /// The same reference, in the form `LOCATION_FORWARD` carries.");
+    let _ = writeln!(s, "    pub fn ior(&self, oid: &str) -> rt::Ior {{");
+    let _ = writeln!(s, "        self.home.ior(Self::TYPE_ID, self.key_of(oid))");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    /// The nil reference: there is no such object.");
+    let _ = writeln!(s, "    pub fn nil() -> rt::ObjRef {{ rt::ObjectHome::nil() }}");
+    let _ = writeln!(s, "}}");
+}
+
+/// The identity of the object a call was addressed to.
+fn emit_target(s: &mut String, name: &str, id: &str) {
+    let ty = format!("{name}Target");
+    let refs = format!("{name}Refs");
+    doc(s, &format!("Which `{id}` a call is addressed to."));
+    doc(s, "");
+    doc(s, "Every method of the servant trait takes one of these. It carries two");
+    doc(s, "things a servant cannot get any other way: **who it is** (`oid`), and");
+    doc(s, "**how to name its neighbours** (`sibling`) — so an operation that");
+    doc(s, "answers with a reference to another object of this interface can do");
+    doc(s, "it in one call rather than by assembling an IIOP profile.");
+    doc(s, "");
+    doc(s, "The oid borrows the request's own key bytes, so learning who you are");
+    doc(s, "allocates nothing.");
+    let _ = writeln!(s, "#[derive(Debug, Clone, Copy)]");
+    let _ = writeln!(s, "pub struct {ty}<'a> {{");
+    let _ = writeln!(s, "    oid: &'a str,");
+    let _ = writeln!(s, "    refs: &'a {refs},");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "impl<'a> {ty}<'a> {{");
+    let _ = writeln!(s, "    /// The identity `oid` under `refs`.");
+    let _ = writeln!(s, "    pub fn new(oid: &'a str, refs: &'a {refs}) -> Self {{");
+    let _ = writeln!(s, "        Self {{ oid, refs }}");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    /// Which object this is. The empty oid is the default object,");
+    let _ = writeln!(s, "    /// addressed by the bare root key the server was bound with.");
+    let _ = writeln!(s, "    pub fn oid(&self) -> &'a str {{ self.oid }}");
+    let _ = writeln!(s, "    /// Whether this is the default object.");
+    let _ = writeln!(s, "    pub fn is_default(&self) -> bool {{ self.oid.is_empty() }}");
+    let _ = writeln!(s, "    /// The key scheme, for minting references into other key spaces.");
+    let _ = writeln!(s, "    pub fn refs(&self) -> &'a {refs} {{ self.refs }}");
+    let _ = writeln!(s, "    /// The raw object key this call arrived on.");
+    let _ = writeln!(s, "    pub fn key(&self) -> Vec<u8> {{ self.refs.key_of(self.oid) }}");
+    let _ =
+        writeln!(s, "    /// A reference to *this* object, for handing back one's own address.");
+    let _ = writeln!(
+        s,
+        "    pub fn reference(&self) -> rt::ObjRef {{ self.refs.reference(self.oid) }}"
+    );
+    let _ = writeln!(s, "    /// A reference to another object of this interface.");
+    let _ = writeln!(
+        s,
+        "    pub fn sibling(&self, oid: &str) -> rt::ObjRef {{ self.refs.reference(oid) }}"
+    );
+    let _ = writeln!(s, "}}");
+}
+
 /// Every method the trait carries: (wire name, Rust name, signature).
 fn methods(
     ops: &BTreeMap<String, OperationSig>,
@@ -294,7 +469,85 @@ fn emit_trait(
     doc(s, "or a system exception built with `rt::raise::*` — the vocabulary");
     doc(s, "(`OBJECT_NOT_EXIST`, `NO_PERMISSION`, `BAD_PARAM`, `TRANSIENT`) that");
     doc(s, "no contract declares and every servant needs.");
+    doc(s, "");
+    doc(s, "# Why every method carries an identity");
+    doc(s, "");
+    doc(s, &format!("The first argument is a `{name}Target`: *which* object of this"));
+    doc(s, "interface the call was addressed to. One servant therefore answers for");
+    doc(s, "many objects, which is what a process needs to hold a naming context");
+    doc(s, "per key, an `InterfaceDef` per repository id, or a factory per tenant.");
+    doc(s, "");
+    doc(s, "The alternative — a map from key to servant, so each object gets its");
+    doc(s, "own `&mut self` and no argument — is generated too, as");
+    doc(s, &format!("`{name}Objects`, in terms of this trait. It is the *adapter* and not"));
+    doc(s, "the trait because the five hand-written servants in this workspace are");
+    doc(s, "measured, and none of them keeps one value per object: the IR facade");
+    doc(s, "derives its objects from the registry and stores nothing per");
+    doc(s, "reference, and the naming and tenant servants resolve the key on every");
+    doc(s, "call because their operations reach *other* objects — resolving a path,");
+    doc(s, "cloning one model into another. A map-shaped trait can express none of");
+    doc(s, "those; this one expresses the map in ten lines per operation.");
     let _ = writeln!(s, "pub trait {name}Servant {{");
+    // `knows` is required, and that is the whole point of this batch. A default
+    // `true` is what `rt::Dispatch` has, and it is what made every generated
+    // server single-object: it silently claims every key in the process.
+    for line in [
+        "Whether this servant answers for the object `__at` names.",
+        "",
+        "**Required, with no default.** `rt::Dispatch::knows` defaults to",
+        "accepting everything, which is right for a process with one object and",
+        "is exactly what stopped a generated skeleton from ever holding more",
+        "than one: an unknown key was served as if it were the only object.",
+        "There is no answer the generator can give here — the contract says",
+        "what an object *does*, never which ones exist — so the question is",
+        "asked rather than guessed.",
+        "",
+        "A single-object servant writes `__at.is_default()`. A `false` here",
+        "becomes `OBJECT_NOT_EXIST` for a request and `UNKNOWN_OBJECT` for a",
+        "`LocateRequest`, and is also how `rt::Servants` picks between",
+        "skeletons sharing one key space.",
+    ] {
+        if line.is_empty() {
+            let _ = writeln!(s, "    ///");
+        } else {
+            let _ = writeln!(s, "    /// {line}");
+        }
+    }
+    let _ = writeln!(s, "    fn knows(&self, __at: &{name}Target<'_>) -> bool;");
+    for line in [
+        "Where this request should be sent instead, if anywhere.",
+        "",
+        "Returning `Some` produces a `LOCATION_FORWARD` (§9.4.3.2), which the",
+        "client retries transparently against the new reference.",
+        "",
+        "# Why the generator defaults this and cannot fill it in",
+        "",
+        "Everything mechanical about a forward *is* generated: the object key is",
+        "decoded, the identity is handed over, and a returned reference becomes",
+        "a `LOCATION_FORWARD` reply instead of an invocation. What cannot be",
+        "generated is the policy — *when* to redirect and *where to*. IDL",
+        "describes operations, types and inheritance; it has no vocabulary for",
+        "object location, migration, replication or load, so there is no clause",
+        "in any contract from which a forward target could be derived. A",
+        "generator that invented one would be inventing deployment.",
+        "",
+        "So the default is `None` — served here — and it is a default rather",
+        "than a silence: this method exists, is documented, and is the one place",
+        "to override. Note the two limits the runtime imposes and this cannot",
+        "lift: a `oneway` is never forwarded, because there is no reply to carry",
+        "the address, and `LOCATION_FORWARD_PERM` is not reachable through",
+        "`rt::Dispatch` at all.",
+    ] {
+        if line.is_empty() {
+            let _ = writeln!(s, "    ///");
+        } else {
+            let _ = writeln!(s, "    /// {line}");
+        }
+    }
+    let _ = writeln!(s, "    fn forward(&mut self, __at: &{name}Target<'_>) -> Option<rt::Ior> {{");
+    let _ = writeln!(s, "        let _ = __at;");
+    let _ = writeln!(s, "        None");
+    let _ = writeln!(s, "    }}");
     for (wire, rust, sig) in methods(ops, attrs) {
         let shape = op_shape(&sig, cx)?;
         let mut docs = String::new();
@@ -310,11 +563,143 @@ fn emit_trait(
         }
         let _ = writeln!(
             s,
+            "    fn {}(&mut self, __at: &{name}Target<'_>{}) -> Result<{}, {exc}>;",
+            ident(&rust),
+            shape.args,
+            shape.ret_ty
+        );
+    }
+    let _ = writeln!(s, "}}");
+    Ok(())
+}
+
+/// The per-object half: one value per object, addressed through a map.
+fn emit_object_trait(
+    s: &mut String,
+    name: &str,
+    id: &str,
+    ops: &BTreeMap<String, OperationSig>,
+    attrs: &BTreeMap<String, orbweaver_registry::AttributeSig>,
+    cx: &Cx<'_>,
+) -> Result<(), String> {
+    let exc = format!("{name}Fault");
+    doc(s, &format!("One object of `{id}`, for a servant that keeps a value per object."));
+    doc(s, "");
+    doc(s, "The same operations as the servant trait with the identity removed:");
+    doc(s, "`&mut self` *is* the object. This is the shape most people reach for");
+    doc(s, "first, and it is the right one whenever objects are created, held and");
+    doc(s, "destroyed rather than derived — an active session, a subscription, a");
+    doc(s, "connection.");
+    doc(s, "");
+    doc(s, &format!("Put a collection of these behind `{name}Objects` to get a"));
+    doc(s, &format!("`{name}Servant`. What it cannot express is an operation that reaches"));
+    doc(s, "another object — resolving a path, cloning one model into another — or");
+    doc(s, "a population too large or too derived to materialise; for those,");
+    doc(s, "implement the servant trait directly.");
+    let _ = writeln!(s, "pub trait {name}Object {{");
+    for (wire, rust, sig) in methods(ops, attrs) {
+        let shape = op_shape(&sig, cx)?;
+        let mut docs = String::new();
+        op_doc(&mut docs, &wire, &sig.annotations);
+        for line in docs.lines() {
+            let _ = writeln!(s, "    {line}");
+        }
+        let _ = writeln!(
+            s,
             "    fn {}(&mut self{}) -> Result<{}, {exc}>;",
             ident(&rust),
             shape.args,
             shape.ret_ty
         );
+    }
+    let _ = writeln!(s, "}}");
+    Ok(())
+}
+
+/// The adapter: a map of per-object values, serving the identity-taking trait.
+fn emit_object_map(
+    s: &mut String,
+    name: &str,
+    id: &str,
+    ops: &BTreeMap<String, OperationSig>,
+    attrs: &BTreeMap<String, orbweaver_registry::AttributeSig>,
+    cx: &Cx<'_>,
+) -> Result<(), String> {
+    let exc = format!("{name}Fault");
+    let obj = format!("{name}Object");
+    let map = format!("{name}Objects");
+    doc(s, &format!("A map from oid to one `{obj}`, serving `{id}`."));
+    doc(s, "");
+    doc(s, &format!("The bridge between the two shapes: it implements `{name}Servant` by"));
+    doc(s, "looking the identity up and calling the object it found. An oid with");
+    doc(s, "no object is `OBJECT_NOT_EXIST` with `COMPLETED_NO` — nothing ran, so");
+    doc(s, "a client may re-send elsewhere — and `knows` answers from the same map,");
+    doc(s, "so a `LocateRequest` and an invocation cannot disagree.");
+    doc(s, "");
+    doc(s, "The default object is the entry under the empty oid, which is what the");
+    doc(s, "bare root key addresses. A one-object process inserts exactly that.");
+    let _ = writeln!(s, "#[derive(Debug, Clone)]");
+    let _ = writeln!(s, "pub struct {map}<S: {obj}> {{");
+    let _ = writeln!(s, "    objects: std::collections::BTreeMap<String, S>,");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "impl<S: {obj}> Default for {map}<S> {{");
+    let _ = writeln!(s, "    fn default() -> Self {{");
+    let _ = writeln!(s, "        Self {{ objects: std::collections::BTreeMap::new() }}");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "impl<S: {obj}> {map}<S> {{");
+    let _ = writeln!(s, "    /// An empty map, which knows no object at all.");
+    let _ = writeln!(s, "    pub fn new() -> Self {{ Self::default() }}");
+    let _ = writeln!(s, "    /// Adds or replaces the object under `oid`, answering what it");
+    let _ = writeln!(s, "    /// displaced. The empty oid is the default object.");
+    let _ = writeln!(
+        s,
+        "    pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {{"
+    );
+    let _ = writeln!(s, "        self.objects.insert(oid.into(), object)");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    /// Removes an object, after which its key is `OBJECT_NOT_EXIST`.");
+    let _ = writeln!(s, "    pub fn remove(&mut self, oid: &str) -> Option<S> {{");
+    let _ = writeln!(s, "        self.objects.remove(oid)");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    /// The object under `oid`, if there is one.");
+    let _ =
+        writeln!(s, "    pub fn get(&self, oid: &str) -> Option<&S> {{ self.objects.get(oid) }}");
+    let _ = writeln!(s, "    /// The object under `oid`, mutably.");
+    let _ = writeln!(s, "    pub fn get_mut(&mut self, oid: &str) -> Option<&mut S> {{");
+    let _ = writeln!(s, "        self.objects.get_mut(oid)");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    /// Every oid held, in sorted order.");
+    let _ = writeln!(s, "    pub fn oids(&self) -> impl Iterator<Item = &str> {{");
+    let _ = writeln!(s, "        self.objects.keys().map(String::as_str)");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    /// How many objects are held.");
+    let _ = writeln!(s, "    pub fn len(&self) -> usize {{ self.objects.len() }}");
+    let _ = writeln!(s, "    /// Whether no object is held.");
+    let _ = writeln!(s, "    pub fn is_empty(&self) -> bool {{ self.objects.is_empty() }}");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "impl<S: {obj}> {name}Servant for {map}<S> {{");
+    let _ = writeln!(s, "    fn knows(&self, __at: &{name}Target<'_>) -> bool {{");
+    let _ = writeln!(s, "        self.objects.contains_key(__at.oid())");
+    let _ = writeln!(s, "    }}");
+    for (_wire, rust, sig) in methods(ops, attrs) {
+        let shape = op_shape(&sig, cx)?;
+        let args = shape.ins.iter().map(|(a, _)| a.as_str()).collect::<Vec<_>>().join(", ");
+        let _ = writeln!(
+            s,
+            "    fn {}(&mut self, __at: &{name}Target<'_>{}) -> Result<{}, {exc}> {{",
+            ident(&rust),
+            shape.args,
+            shape.ret_ty
+        );
+        let _ = writeln!(s, "        match self.objects.get_mut(__at.oid()) {{");
+        let _ = writeln!(s, "            Some(__o) => __o.{}({args}),", ident(&rust));
+        let _ = writeln!(
+            s,
+            "            None => Err({exc}::System(rt::raise::object_not_exist().did_not_run())),"
+        );
+        let _ = writeln!(s, "        }}");
+        let _ = writeln!(s, "    }}");
     }
     let _ = writeln!(s, "}}");
     Ok(())
@@ -350,21 +735,66 @@ fn emit_dispatch(
     doc(s, "unchanged — repository id, minor code and completion status — so the");
     doc(s, "servant's answer about whether a retry is safe is the one the client");
     doc(s, "receives.");
+    doc(s, "");
+    doc(s, "# Many objects");
+    doc(s, "");
+    doc(s, &format!("The skeleton owns a `{name}Refs`, so it takes each request's object"));
+    doc(s, "key apart before it looks at the operation and hands the servant the");
+    doc(s, "identity it resolved. A key that does not parse under the scheme is");
+    doc(s, "not ours; a key that parses but names nothing the servant `knows` is");
+    doc(s, "`OBJECT_NOT_EXIST`. Both answers come from generated code, and neither");
+    doc(s, "was possible while a skeleton had no key scheme at all.");
     let _ = writeln!(s, "pub struct {skel}<S: {servant}> {{");
     let _ = writeln!(s, "    /// The implementation invocations are delivered to.");
     let _ = writeln!(s, "    pub servant: S,");
+    let _ = writeln!(s, "    refs: {name}Refs,");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "impl<S: {servant}> {skel}<S> {{");
-    let _ = writeln!(s, "    /// A skeleton over a servant.");
-    let _ = writeln!(s, "    pub fn new(servant: S) -> Self {{ Self {{ servant }} }}");
+    let _ = writeln!(s, "    /// A skeleton serving `servant`'s objects under `refs`.");
+    let _ = writeln!(s, "    ///");
+    let _ = writeln!(s, "    /// `refs` must be rooted at the key the `rt::Server` was bound");
+    let _ = writeln!(s, "    /// with, or nothing this skeleton parses will match what arrives.");
+    let _ = writeln!(s, "    pub fn new(refs: {name}Refs, servant: S) -> Self {{");
+    let _ = writeln!(s, "        Self {{ servant, refs }}");
+    let _ = writeln!(s, "    }}");
+    let _ =
+        writeln!(s, "    /// The key scheme in force, for minting references to these objects.");
+    let _ = writeln!(s, "    pub fn refs(&self) -> &{name}Refs {{ &self.refs }}");
     let _ = writeln!(s, "}}");
 
     let _ = writeln!(s, "impl<S: {servant}> rt::Dispatch for {skel}<S> {{");
+    // Two gates, in the order `Server` applies them: is this key ours at all
+    // (the scheme decides), and does the servant hold that object (only it
+    // knows). A skeleton that answered the first alone would serve every
+    // well-formed key as if the object existed.
+    let _ = writeln!(s, "    fn knows(&self, __object_key: &[u8]) -> bool {{");
+    let _ = writeln!(s, "        match self.refs.oid_of(__object_key) {{");
+    let _ = writeln!(
+        s,
+        "            Some(__oid) => self.servant.knows(&{name}Target::new(__oid, &self.refs)),"
+    );
+    let _ = writeln!(s, "            None => false,");
+    let _ = writeln!(s, "        }}");
+    let _ = writeln!(s, "    }}");
+    // The forward seam. Everything here is derivable; the decision inside
+    // `servant.forward` is not — see the trait method's documentation.
+    let _ = writeln!(s, "    fn forward(&mut self, __req: &rt::Request) -> Option<rt::Ior> {{");
+    let _ = writeln!(s, "        let __oid = self.refs.oid_of(&__req.object_key)?;");
+    let _ = writeln!(s, "        let __at = {name}Target::new(__oid, &self.refs);");
+    let _ = writeln!(s, "        self.servant.forward(&__at)");
+    let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "    fn dispatch_body(");
     let _ = writeln!(s, "        &mut self,");
     let _ = writeln!(s, "        __req: &rt::Request,");
     let _ = writeln!(s, "        __out: &mut rt::Encoder,");
     let _ = writeln!(s, "    ) -> Result<rt::DispatchBody, rt::SystemException> {{");
+    // `Server` refuses an unknown key before it gets here, so this is the
+    // belt-and-braces answer for a skeleton driven directly.
+    let _ = writeln!(s, "        let __oid = self");
+    let _ = writeln!(s, "            .refs");
+    let _ = writeln!(s, "            .oid_of(&__req.object_key)");
+    let _ = writeln!(s, "            .ok_or_else(rt::SystemException::object_not_exist)?;");
+    let _ = writeln!(s, "        let __at = {name}Target::new(__oid, &self.refs);");
     // The decoder is positioned inside the whole message, so alignment is
     // measured from the GIOP header — the origin rule, honoured by not copying.
     let _ = writeln!(
@@ -383,11 +813,9 @@ fn emit_dispatch(
                  .map_err(|_| rt::SystemException::marshal())?;"
             );
         }
-        let call = format!(
-            "self.servant.{}({})",
-            ident(&rust),
-            shape.ins.iter().map(|(a, _)| a.as_str()).collect::<Vec<_>>().join(", ")
-        );
+        let mut passed = vec!["&__at".to_owned()];
+        passed.extend(shape.ins.iter().map(|(a, _)| a.clone()));
+        let call = format!("self.servant.{}({})", ident(&rust), passed.join(", "));
         if sig.oneway {
             for line in [
                 "// oneway (§9.4.1): no reply may be written, at all. An empty one",
@@ -516,7 +944,7 @@ mod tests {
             .next()
             .expect("bounded by the next arm");
         assert!(!arm.contains("put(__out)"), "a oneway may write no reply:\n{arm}");
-        assert!(arm.contains("if let Err(__f) = self.servant.fire(n)"), "{arm}");
+        assert!(arm.contains("if let Err(__f) = self.servant.fire(&__at, n)"), "{arm}");
         // Dropped, but not in silence: §9.4.1 leaves the fault nowhere to go,
         // and a `let _ =` would make an undebuggable server out of a correct
         // protocol decision.
@@ -643,7 +1071,108 @@ mod tests {
     fn an_argument_named_e_does_not_collide_with_a_generated_local() {
         let g = generate("module m { struct T { long v; }; interface I { long take(in T e); }; };");
         assert!(g.source.contains("let e: crate::g::m::T = Cdr::get(&mut __args)"), "{}", g.source);
-        assert!(g.source.contains("self.servant.take(e)"), "{}", g.source);
-        assert!(g.source.contains("fn take(&mut self, e: crate::g::m::T)"), "{}", g.source);
+        assert!(g.source.contains("self.servant.take(&__at, e)"), "{}", g.source);
+        assert!(
+            g.source.contains("fn take(&mut self, __at: &ITarget<'_>, e: crate::g::m::T)"),
+            "{}",
+            g.source
+        );
+    }
+
+    /// The gap this batch closed, at the generator level. A skeleton with no
+    /// key scheme answers every object key identically, so one process serves
+    /// one object — which is not what a single hand-written servant in this
+    /// workspace does.
+    #[test]
+    fn a_skeleton_derives_its_object_keys_reversibly_from_the_root() {
+        let g = generate("module m { interface I { long ping(); }; };");
+        assert!(g.source.contains("pub const KEY_INFIX: &'static str = \"/I/\";"), "{}", g.source);
+        assert!(
+            g.source.contains("pub const TYPE_ID: &'static str = \"IDL:m/I:1.0\";"),
+            "{}",
+            g.source
+        );
+        // Both directions, and both through `rt` — the key scheme is a fact of
+        // the interface, the byte-level derivation is not.
+        assert!(g.source.contains("self.home.key_of(&self.infix, oid)"), "{}", g.source);
+        assert!(g.source.contains("self.home.oid_of(&self.infix, key)"), "{}", g.source);
+        // No table of minted keys anywhere in the emitted scheme.
+        let refs = g.source.split("pub struct IRefs").nth(1).expect("the refs type");
+        let refs = refs.split("pub struct ITarget").next().expect("bounded by the target type");
+        assert!(!refs.contains("BTreeMap"), "keys must be derived, not minted:\n{refs}");
+    }
+
+    /// `knows` is required rather than defaulted, and the skeleton asks *both*
+    /// gates: does the key parse under our scheme, and does the servant hold
+    /// that object. A skeleton answering the first alone would serve every
+    /// well-formed key as though the object existed.
+    #[test]
+    fn knows_is_asked_of_the_servant_and_has_no_default() {
+        let g = generate("module m { interface I { long ping(); }; };");
+        let t = g.source.split("pub trait IServant").nth(1).expect("the trait");
+        let t = t.split("pub trait IObject").next().expect("bounded by the object trait");
+        assert!(t.contains("fn knows(&self, __at: &ITarget<'_>) -> bool;"), "{t}");
+        assert!(!t.contains("fn knows(&self, __at: &ITarget<'_>) -> bool {"), "no default:\n{t}");
+        let d = g.source.split("impl<S: IServant> rt::Dispatch").nth(1).expect("the dispatch");
+        assert!(d.contains("Some(__oid) => self.servant.knows(&ITarget::new(__oid, &self.refs))"));
+        assert!(d.contains("None => false,"), "{d}");
+    }
+
+    /// The `LOCATION_FORWARD` seam. Everything mechanical is generated — the
+    /// key is decoded and the identity handed over; only the decision is the
+    /// servant's, because no IDL clause describes object location.
+    #[test]
+    fn the_forward_seam_is_generated_and_defaulted_rather_than_silent() {
+        let g = generate("module m { interface I { long ping(); }; };");
+        let t = g.source.split("pub trait IServant").nth(1).expect("the trait");
+        assert!(
+            t.contains("fn forward(&mut self, __at: &ITarget<'_>) -> Option<rt::Ior> {"),
+            "{t}"
+        );
+        let d = g.source.split("impl<S: IServant> rt::Dispatch").nth(1).expect("the dispatch");
+        assert!(
+            d.contains("fn forward(&mut self, __req: &rt::Request) -> Option<rt::Ior> {"),
+            "{d}"
+        );
+        assert!(d.contains("self.servant.forward(&__at)"), "{d}");
+    }
+
+    /// An operation returning an object reference must be answerable without
+    /// the servant assembling an IIOP profile: the identity it was called with
+    /// can name its neighbours.
+    #[test]
+    fn a_servant_can_mint_a_reference_without_building_an_ior() {
+        let g = generate("module m { interface I { I child(in string leaf); }; };");
+        assert!(
+            g.source.contains("pub fn sibling(&self, oid: &str) -> rt::ObjRef"),
+            "{}",
+            g.source
+        );
+        assert!(
+            g.source.contains("pub fn reference(&self, oid: &str) -> rt::ObjRef"),
+            "{}",
+            g.source
+        );
+        assert!(g.source.contains("pub fn nil() -> rt::ObjRef"), "{}", g.source);
+        // The profile is assembled in `rt`, exactly once, and never emitted.
+        assert!(!g.source.contains("IiopProfile"), "the wire shape must stay in rt:\n{}", g.source);
+        assert!(g.source.contains("self.home.reference(Self::TYPE_ID"), "{}", g.source);
+    }
+
+    /// The map shape, generated in terms of the identity shape. An absent oid
+    /// is `OBJECT_NOT_EXIST` with `COMPLETED_NO` — nothing ran.
+    #[test]
+    fn the_per_object_map_is_generated_in_terms_of_the_identity_trait() {
+        let g = generate("module m { interface I { long ping(); }; };");
+        assert!(g.source.contains("pub trait IObject {"), "{}", g.source);
+        assert!(g.source.contains("fn ping(&mut self) -> Result<i32, IFault>;"), "{}", g.source);
+        let m =
+            g.source.split("impl<S: IObject> IServant for IObjects<S>").nth(1).expect("adapter");
+        assert!(m.contains("self.objects.contains_key(__at.oid())"), "{m}");
+        assert!(m.contains("Some(__o) => __o.ping(),"), "{m}");
+        assert!(
+            m.contains("Err(IFault::System(rt::raise::object_not_exist().did_not_run()))"),
+            "{m}"
+        );
     }
 }

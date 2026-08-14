@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use orbweaver_cdr::{Encoder, Endian};
-use orbweaver_gen::rt::{Cdr, Dispatch, DispatchBody, Server};
+use orbweaver_gen::rt::{Cdr, Dispatch, DispatchBody, ObjectHome, Server};
 use orbweaver_giop::server::{Request, decode_request};
 use orbweaver_giop::{
     Connection, DEFAULT_MAX_MESSAGE_SIZE, Error as GiopError, Ior, Version, encode_request,
@@ -30,7 +30,7 @@ use orbweaver_giop::{
 };
 
 use emitted::f_24_skeleton_surface::gc24::{
-    GaugeClient, GaugeFault, GaugeServant, GaugeSkeleton, Reading, Rejected,
+    GaugeClient, GaugeFault, GaugeRefs, GaugeServant, GaugeSkeleton, GaugeTarget, Reading, Rejected,
 };
 
 const KEY: &[u8] = b"gauge";
@@ -57,20 +57,30 @@ impl Default for Bench {
 }
 
 impl GaugeServant for Bench {
-    fn latest(&mut self) -> Result<Reading, GaugeFault> {
+    /// One object, addressed by the bare root key the server was bound with.
+    fn knows(&self, __at: &GaugeTarget<'_>) -> bool {
+        __at.is_default()
+    }
+
+    fn latest(&mut self, __at: &GaugeTarget<'_>) -> Result<Reading, GaugeFault> {
         Ok(self.latest.clone())
     }
 
-    fn label(&mut self) -> Result<String, GaugeFault> {
+    fn label(&mut self, __at: &GaugeTarget<'_>) -> Result<String, GaugeFault> {
         Ok(self.label.clone())
     }
 
-    fn set_label(&mut self, value: String) -> Result<(), GaugeFault> {
+    fn set_label(&mut self, __at: &GaugeTarget<'_>, value: String) -> Result<(), GaugeFault> {
         self.label = value;
         Ok(())
     }
 
-    fn record(&mut self, sample: f64, unit: String) -> Result<Reading, GaugeFault> {
+    fn record(
+        &mut self,
+        __at: &GaugeTarget<'_>,
+        sample: f64,
+        unit: String,
+    ) -> Result<Reading, GaugeFault> {
         if sample < 0.0 {
             return Err(GaugeFault::Rejected(Rejected {
                 why: "a sample below zero is not a reading".into(),
@@ -86,7 +96,7 @@ impl GaugeServant for Bench {
         Ok(self.latest.clone())
     }
 
-    fn scale_all(&mut self, e: f64) -> Result<i32, GaugeFault> {
+    fn scale_all(&mut self, __at: &GaugeTarget<'_>, e: f64) -> Result<i32, GaugeFault> {
         for s in &mut self.samples {
             *s *= e;
         }
@@ -94,18 +104,27 @@ impl GaugeServant for Bench {
         Ok(self.samples.len() as i32)
     }
 
-    fn reset(&mut self) -> Result<(), GaugeFault> {
+    fn reset(&mut self, __at: &GaugeTarget<'_>) -> Result<(), GaugeFault> {
         self.samples.clear();
         self.latest = Reading { at: 0.0, sequence_no: 0, unit: String::new() };
         Ok(())
     }
 
-    fn split(&mut self) -> Result<(f64, String), GaugeFault> {
+    fn split(&mut self, __at: &GaugeTarget<'_>) -> Result<(f64, String), GaugeFault> {
         Ok((self.latest.at, self.latest.unit.clone()))
     }
 }
 
 // ── Harness ──────────────────────────────────────────────────────────────────
+
+/// The key scheme for a one-object gauge: the bare root key and nothing else.
+///
+/// The port is zero because a `Gauge` mints no references — its contract
+/// returns no object reference anywhere — so nothing here ever reads it. Where
+/// a server exists, `ObjectHome::of` takes the real one.
+fn refs() -> GaugeRefs {
+    GaugeRefs::new(ObjectHome::new("127.0.0.1", 0, KEY.to_vec()))
+}
 
 /// Runs `f` against a live server whose dispatcher is the generated skeleton.
 ///
@@ -116,10 +135,11 @@ fn with_server<F: FnOnce(&Ior)>(f: F) {
     let server = Server::bind("127.0.0.1:0", KEY.to_vec()).expect("bind");
     let addr = server.local_addr().expect("addr");
     let ior = server.ior(TYPE_ID, "127.0.0.1").expect("ior");
+    let home = ObjectHome::of(&server, "127.0.0.1").expect("home");
     let stop = Arc::new(AtomicBool::new(false));
     let flag = stop.clone();
     let t = std::thread::spawn(move || {
-        let mut skeleton = GaugeSkeleton::new(Bench::default());
+        let mut skeleton = GaugeSkeleton::new(GaugeRefs::new(home), Bench::default());
         server.serve(&mut skeleton, || flag.load(Ordering::SeqCst)).expect("serve");
     });
 
@@ -172,7 +192,7 @@ fn a_oneway_gets_no_reply_and_the_connection_survives_it() {
     for version in VERSIONS {
         for endian in [Endian::Big, Endian::Little] {
             let req = request(version, endian, "reset", false, |_| {});
-            let mut skeleton = GaugeSkeleton::new(Bench::default());
+            let mut skeleton = GaugeSkeleton::new(refs(), Bench::default());
             let mut out = Encoder::continuing_at(endian, 24);
             let kind = skeleton.dispatch_body(&req, &mut out).expect("dispatch");
             assert_eq!(kind, DispatchBody::Return, "{version} {endian:?}");
@@ -258,7 +278,8 @@ fn the_reply_body_aligns_from_the_message_not_from_the_buffer() {
 
     // The origin Server uses: no padding, the 8-aligned member leads.
     let req = request(Version::V1_2, Endian::Big, "_get_latest", true, |_| {});
-    let mut skeleton = GaugeSkeleton::new(Bench { latest: reading.clone(), ..Bench::default() });
+    let mut skeleton =
+        GaugeSkeleton::new(refs(), Bench { latest: reading.clone(), ..Bench::default() });
     let mut out = Encoder::continuing_at(Endian::Big, 24);
     assert_eq!(skeleton.dispatch_body(&req, &mut out).expect("dispatch"), DispatchBody::Return);
     let body = out.finish().expect("finish");
@@ -286,7 +307,7 @@ fn the_reply_body_aligns_from_the_message_not_from_the_buffer() {
                 0,
                 "{version}: this case only bites when the body is unaligned"
             );
-            let mut skeleton = GaugeSkeleton::new(Bench::default());
+            let mut skeleton = GaugeSkeleton::new(refs(), Bench::default());
             let mut out = Encoder::continuing_at(endian, 24);
             assert_eq!(
                 skeleton.dispatch_body(&req, &mut out).expect("dispatch"),

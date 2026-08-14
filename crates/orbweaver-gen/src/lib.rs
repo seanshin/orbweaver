@@ -1032,6 +1032,39 @@ mod tests {
         assert!(g.source.contains("self.r#loop.put(e)?"), "{}", g.source);
     }
 
+    /// `corpus/services/` holds whole services rather than type coverage, and
+    /// it is not under `corpus/golden/` because the files in it carry identity
+    /// pragmas that the golden corpus is deliberately free of. The harness's
+    /// out-of-workspace build globs `corpus/golden/*.idl`, so without this
+    /// nothing would notice a services contract that stopped generating.
+    #[test]
+    fn the_services_corpus_generates_with_nothing_skipped() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/services");
+        let mut seen = 0usize;
+        let mut failures = Vec::new();
+        for entry in std::fs::read_dir(&root).expect("corpus/services") {
+            let path = entry.expect("entry").path();
+            if path.extension().is_none_or(|x| x != "idl") {
+                continue;
+            }
+            seen += 1;
+            let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+            let src = std::fs::read_to_string(&path).expect("read");
+            let spec = orbweaver_idl::parse(&src).expect("a service contract parses");
+            let mut r = Registry::new();
+            r.load(&spec).expect("a service contract loads");
+            let g = emit(&r, "g");
+            if !g.skipped.is_empty() {
+                failures.push(format!("{stem}: skipped {:?}", g.skipped));
+            }
+            if g.emitted == 0 {
+                failures.push(format!("{stem}: emitted nothing"));
+            }
+        }
+        assert!(seen > 0, "corpus/services must not be empty");
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     #[test]
     fn the_whole_golden_corpus_generates_with_only_the_deferred_files_skipping() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/golden");

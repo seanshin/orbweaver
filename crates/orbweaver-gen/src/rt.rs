@@ -5,7 +5,6 @@
 //! re-implemented instead of reused. A generated file contains **names and
 //! order**, never encoding rules.
 
-use orbweaver_giop::Version;
 use orbweaver_giop::codeset::{CodeSetId, WideCodec};
 
 pub use orbweaver_cdr::{Decoder, Encoder, Endian};
@@ -13,7 +12,9 @@ pub use orbweaver_giop::server::{
     BAD_OPERATION, Completion, Dispatch, DispatchBody, MARSHAL, OBJECT_NOT_EXIST, Request, Server,
     SystemException, UNKNOWN,
 };
-pub use orbweaver_giop::{Connection, Error as GiopError, Invoker, Ior, Reply};
+pub use orbweaver_giop::{
+    Connection, Error as GiopError, IiopProfile, Invoker, Ior, Reply, Version,
+};
 
 /// Repository id every CORBA object answers `_is_a` to.
 ///
@@ -214,6 +215,245 @@ pub fn oneway_fault_dropped(interface: &str, operation: &str, fault: &dyn std::f
         "orbweaver: {interface}::{operation} is oneway (§9.4.1): no reply may be sent, so the \
          servant's {fault:?} was dropped"
     );
+}
+
+/// Where a generated skeleton's objects live, and the root of their key space.
+///
+/// # Why this is in the runtime and not in the generated file
+///
+/// Five hand-written servants in this workspace mint references, and all five
+/// contain the *same* function under different names — `naming_server::ior_for`,
+/// `tenant_service::ior_for`, `expert_service::ior_for`, `ifr::ior_for` — each
+/// assembling `Ior { type_id, profiles: vec![IiopProfile { version, host, port,
+/// object_key, components }] }` by hand. That is a wire decision (§9.3.6 and
+/// §7.6.2: which profile, which GIOP version goes in it), and the rule this
+/// crate is built on is that wire decisions exist once. A code generator is a
+/// machine for duplicating things, so emitting a sixth copy per interface would
+/// be the worst place of all to put it.
+///
+/// # Host and port are not the bind address
+///
+/// Phase 0 assumption D: behind NAT or in a container, the address a server
+/// binds and the address a client can dial differ, and publishing the bind
+/// address is a service nobody can reach. `host`/`port` are therefore what goes
+/// *into* the profile and are the caller's to get right; [`ObjectHome::of`] is
+/// the convenience for the common case where they are the same, and it takes
+/// `host` separately even so.
+///
+/// # The key scheme
+///
+/// One root key, plus one derived key per object:
+///
+/// ```text
+/// root                          the default object — oid ""
+/// root ++ <infix> ++ <oid>      the object named <oid>, oid in UTF-8
+/// ```
+///
+/// The derivation is **reversible**, which is the point: the server holds no
+/// per-reference table, so a reference a client stored yesterday still resolves
+/// after a restart, and a process cannot be made to grow by looking things up.
+/// [`ObjectHome::oid_of`] recovers the oid by stripping a fixed prefix, so the
+/// oid is the *whole* remainder and may contain the infix, `/`, `:` or anything
+/// else UTF-8 can carry — there is nothing to escape and nothing to be
+/// ambiguous about. `ifr.rs` derives its keys exactly this way and says the
+/// same thing about why.
+///
+/// Two interfaces served from one root are separated by their infixes, which a
+/// generated skeleton takes from the interface name. Because the infix is
+/// matched at a fixed offset, no oid under one infix can be read as a key under
+/// another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectHome {
+    host: String,
+    port: u16,
+    root: Vec<u8>,
+}
+
+impl ObjectHome {
+    /// A home publishing at `host:port`, rooted at `root_key`.
+    ///
+    /// `root_key` must be the key the [`Server`] was bound with, or the
+    /// references minted here address an object that server will not accept.
+    pub fn new(host: impl Into<String>, port: u16, root_key: Vec<u8>) -> Self {
+        Self { host: host.into(), port, root: root_key }
+    }
+
+    /// The home for a bound [`Server`], publishing under `host`.
+    ///
+    /// Reads the port back from the listener, which is the only way to get it
+    /// right after a port-zero bind, and takes the root key from the server so
+    /// the two cannot disagree.
+    pub fn of(server: &Server, host: impl Into<String>) -> Result<Self, GiopError> {
+        Ok(Self {
+            host: host.into(),
+            port: server.local_addr()?.port(),
+            root: server.object_key().to_vec(),
+        })
+    }
+
+    /// The host that goes into minted profiles.
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    /// The port that goes into minted profiles.
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// The root object key: the default object's key, and the prefix of every
+    /// other.
+    pub fn root_key(&self) -> &[u8] {
+        &self.root
+    }
+
+    /// The object key for `oid` under `infix`. The empty oid is the root key.
+    pub fn key_of(&self, infix: &str, oid: &str) -> Vec<u8> {
+        if oid.is_empty() {
+            return self.root.clone();
+        }
+        let mut key = self.root.clone();
+        key.extend_from_slice(infix.as_bytes());
+        key.extend_from_slice(oid.as_bytes());
+        key
+    }
+
+    /// The oid a key addresses, or `None` if this home did not derive it.
+    ///
+    /// Borrowed from the key rather than copied: the caller already owns the
+    /// bytes, and a servant answering per call should not allocate to learn
+    /// who it is.
+    pub fn oid_of<'a>(&self, infix: &str, key: &'a [u8]) -> Option<&'a str> {
+        if key == self.root.as_slice() {
+            return Some("");
+        }
+        let rest = key.strip_prefix(self.root.as_slice())?;
+        let rest = rest.strip_prefix(infix.as_bytes())?;
+        std::str::from_utf8(rest).ok()
+    }
+
+    /// A reference to `key`, advertising `type_id`.
+    pub fn ior(&self, type_id: &str, key: Vec<u8>) -> Ior {
+        Ior {
+            type_id: type_id.to_owned(),
+            profiles: vec![IiopProfile {
+                version: Version::V1_2,
+                host: self.host.clone(),
+                port: self.port,
+                object_key: key,
+                components: Vec::new(),
+            }],
+        }
+    }
+
+    /// The same reference as [`ObjectHome::ior`], in the form generated code
+    /// marshals.
+    pub fn reference(&self, type_id: &str, key: Vec<u8>) -> ObjRef {
+        ObjRef(Some(self.ior(type_id, key)))
+    }
+
+    /// The nil reference (§9.3.6): empty type id, no profiles.
+    ///
+    /// A truthful "there is no such object", and distinct from an absent
+    /// field — it still occupies its place in the reply body.
+    pub fn nil() -> ObjRef {
+        ObjRef(None)
+    }
+}
+
+/// Several [`Dispatch`]es behind one [`Server`], chosen by object key.
+///
+/// A generated skeleton serves one interface. A process usually serves more
+/// than one: `ifr.rs` answers as `Repository` under its root key and as
+/// `InterfaceDef` under every derived key, and `tenant_service.rs` answers as
+/// five different interfaces depending on the key's shape. Without something
+/// like this, "the generator can serve many objects" would still mean "of one
+/// interface", and every multi-interface service would stay hand-written.
+///
+/// The routing rule is [`Dispatch::knows`], asked in insertion order, first
+/// match wins. That makes `knows` load-bearing rather than advisory, which is
+/// why a generated servant must implement it and cannot inherit a `true`.
+/// Overlapping members are a configuration mistake this type cannot detect —
+/// it can only be predictable about which one wins.
+#[derive(Default)]
+pub struct Servants {
+    entries: Vec<Box<dyn Dispatch + Send>>,
+}
+
+impl std::fmt::Debug for Servants {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Servants").field("len", &self.entries.len()).finish()
+    }
+}
+
+impl Servants {
+    /// An empty multiplexer, which knows no key at all.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds a dispatcher, after every one already added.
+    pub fn with(mut self, dispatch: impl Dispatch + Send + 'static) -> Self {
+        self.push(dispatch);
+        self
+    }
+
+    /// Adds a dispatcher, after every one already added.
+    pub fn push(&mut self, dispatch: impl Dispatch + Send + 'static) {
+        self.entries.push(Box::new(dispatch));
+    }
+
+    /// How many dispatchers are behind this one.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether no dispatcher has been added, in which case every key is
+    /// `OBJECT_NOT_EXIST`.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// The index of the first member that knows `object_key`.
+    ///
+    /// An index rather than a borrow: returning `&mut dyn Dispatch` out of the
+    /// search makes the borrow live for the whole function, and the caller
+    /// still needs `self` afterwards.
+    fn route(&self, object_key: &[u8]) -> Option<usize> {
+        self.entries.iter().position(|d| d.knows(object_key))
+    }
+}
+
+impl Dispatch for Servants {
+    fn knows(&self, object_key: &[u8]) -> bool {
+        self.entries.iter().any(|d| d.knows(object_key))
+    }
+
+    fn forward(&mut self, request: &Request) -> Option<Ior> {
+        let at = self.route(&request.object_key)?;
+        self.entries[at].forward(request)
+    }
+
+    fn dispatch_body(
+        &mut self,
+        request: &Request,
+        out: &mut Encoder,
+    ) -> Result<DispatchBody, SystemException> {
+        match self.route(&request.object_key) {
+            Some(at) => self.entries[at].dispatch_body(request, out),
+            // `Server` asked `knows` first, so this is only reachable if a
+            // member changed its mind between the two calls. Answering the
+            // same thing the server would have is the honest recovery.
+            None => Err(SystemException::object_not_exist()),
+        }
+    }
+
+    fn dispatch(&mut self, request: &Request, out: &mut Encoder) -> Result<(), SystemException> {
+        match self.dispatch_body(request, out)? {
+            DispatchBody::Return => Ok(()),
+            DispatchBody::UserException => Err(SystemException::unknown_user_exception()),
+        }
+    }
 }
 
 /// The marshalling contract every generated type implements.

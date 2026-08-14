@@ -10,12 +10,12 @@
 #![deny(missing_docs)]
 #![allow(non_camel_case_types, non_snake_case, dead_code)]
 
-/// IDL module `fault25`.
-pub mod fault25 {
+/// IDL module `gc26`.
+pub mod gc26 {
     use orbweaver_gen::rt::{self, Cdr};
-    /// A key-value vault whose every failure is a system exception
+    /// One node of a directory tree; a process holds many of them
     ///
-    /// Client stub for `IDL:fault25/Vault:1.0`.
+    /// Client stub for `IDL:gc26/Directory:1.0`.
     ///
     /// Static twin of the dynamic path; §8 requires their bytes to be
     /// identical, and the harness holds them to it.
@@ -24,72 +24,67 @@ pub mod fault25 {
     /// `Connection` inside the trust boundary, or over the guarded
     /// wrapper at it — a stub hard-wired to the transport would be the
     /// §4.7 bypass in compiled form.
-    pub struct VaultClient<C: rt::Invoker> {
+    pub struct DirectoryClient<C: rt::Invoker> {
         /// What calls travel over.
         pub conn: C,
     }
-    impl<C: rt::Invoker> VaultClient<C> {
+    impl<C: rt::Invoker> DirectoryClient<C> {
         /// A stub over an open invoker.
         pub fn new(conn: C) -> Self { Self { conn } }
-        /// Reads one entry; an absent key is OBJECT_NOT_EXIST
+        /// A reference to the child node bound under a leaf
         ///
-        /// `fetch` on the wire.
-        pub fn fetch(&mut self, key: String) -> Result<String, rt::GiopError> {
+        /// `child` on the wire.
+        pub fn child(&mut self, leaf: String) -> Result<orbweaver_gen::rt::ObjRef, rt::GiopError> {
             let mut __probe = rt::Encoder::new(self.conn.endian());
-            key.put(&mut __probe)?;
+            leaf.put(&mut __probe)?;
             __probe.finish().map_err(rt::GiopError::Cdr)?;
-            let __reply = self.conn.invoke("fetch", |__e| {
-                let _ = key.put(__e);
+            let __reply = self.conn.invoke("child", |__e| {
+                let _ = leaf.put(__e);
             })?;
             let mut __body = __reply.body()?;
             let __r0 = Cdr::get(&mut __body)?;
             Ok(__r0)
         }
-        /// Fires and forgets; a fault here has no reply to travel in
+        /// How many bindings this node holds directly
         ///
-        /// `forget` on the wire.
-        pub fn forget(&mut self, key: String) -> Result<(), rt::GiopError> {
+        /// `count` on the wire.
+        pub fn count(&mut self) -> Result<i32, rt::GiopError> {
+            let __reply = self.conn.invoke("count", |__e| {
+            })?;
+            let mut __body = __reply.body()?;
+            let __r0 = Cdr::get(&mut __body)?;
+            Ok(__r0)
+        }
+        /// Removes a binding; the caller learns nothing about the outcome
+        ///
+        /// `drop_binding` on the wire.
+        pub fn drop_binding(&mut self, leaf: String) -> Result<(), rt::GiopError> {
             let mut __probe = rt::Encoder::new(self.conn.endian());
-            key.put(&mut __probe)?;
+            leaf.put(&mut __probe)?;
             __probe.finish().map_err(rt::GiopError::Cdr)?;
-            self.conn.invoke_oneway("forget", |__e| {
-                let _ = key.put(__e);
+            self.conn.invoke_oneway("drop_binding", |__e| {
+                let _ = leaf.put(__e);
             })
         }
-        /// Rotates to the next generation; refuses mid-rotation with TRANSIENT
+        /// Creates a child node and answers a reference to it
         ///
-        /// `rotate` on the wire.
-        pub fn rotate(&mut self, wanted: i32) -> Result<i32, rt::GiopError> {
+        /// `make_child` on the wire.
+        pub fn make_child(&mut self, leaf: String) -> Result<orbweaver_gen::rt::ObjRef, rt::GiopError> {
             let mut __probe = rt::Encoder::new(self.conn.endian());
-            wanted.put(&mut __probe)?;
+            leaf.put(&mut __probe)?;
             __probe.finish().map_err(rt::GiopError::Cdr)?;
-            let __reply = self.conn.invoke("rotate", |__e| {
-                let _ = wanted.put(__e);
+            let __reply = self.conn.invoke("make_child", |__e| {
+                let _ = leaf.put(__e);
             })?;
             let mut __body = __reply.body()?;
             let __r0 = Cdr::get(&mut __body)?;
             Ok(__r0)
         }
-        /// Writes one entry; refused callers get NO_PERMISSION, an empty key BAD_PARAM
+        /// The label of this particular node, not of the tree
         ///
-        /// `store` on the wire.
-        pub fn store(&mut self, key: String, text: String) -> Result<(), rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
-            key.put(&mut __probe)?;
-            text.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
-            let __reply = self.conn.invoke("store", |__e| {
-                let _ = key.put(__e);
-                let _ = text.put(__e);
-            })?;
-            let _ = __reply;
-            Ok(())
-        }
-        /// How many entries the vault holds
-        ///
-        /// `_get_depth` on the wire.
-        pub fn depth(&mut self) -> Result<i32, rt::GiopError> {
-            let __reply = self.conn.invoke("_get_depth", |__e| {
+        /// `_get_label` on the wire.
+        pub fn label(&mut self) -> Result<String, rt::GiopError> {
+            let __reply = self.conn.invoke("_get_label", |__e| {
             })?;
             let mut __body = __reply.body()?;
             let __r0 = Cdr::get(&mut __body)?;
@@ -97,7 +92,7 @@ pub mod fault25 {
         }
     }
     
-    /// Everything a servant for `IDL:fault25/Vault:1.0` can fail with.
+    /// Everything a servant for `IDL:gc26/Directory:1.0` can fail with.
     ///
     /// `System` is always here, whatever the contract declares: an unknown
     /// key is `OBJECT_NOT_EXIST`, a refused call is `NO_PERMISSION`, a
@@ -107,21 +102,25 @@ pub mod fault25 {
     /// that tells the caller whether a retry is safe, and the one thing a
     /// generator cannot know for a servant.
     ///
-    /// This interface names no `raises` clause, so `System` is the only
-    /// variant. It is still an inhabited type: a servant that cannot fail
-    /// is not a servant anybody can write.
+    /// The remaining variants are the exceptions named in a `raises`
+    /// clause of this interface or of one it inherits. `write` puts the
+    /// body §9.4.3.1 describes — repository id first, then the members —
+    /// which is exactly what the client side reads back out of
+    /// `rt::GiopError::UserException`.
     #[derive(Debug, Clone)]
-    pub enum VaultFault {
+    pub enum DirectoryFault {
         /// A CORBA system exception, with the completion status the
         /// servant chose. Travels as a `SystemException` reply.
         System(rt::SystemException),
+        /// IDL exception `IDL:gc26/NotBound:1.0`.
+        NotBound(crate::emitted::f_26_object_identity::gc26::NotBound),
     }
-    impl From<rt::SystemException> for VaultFault {
+    impl From<rt::SystemException> for DirectoryFault {
         fn from(__ex: rt::SystemException) -> Self {
             Self::System(__ex)
         }
     }
-    impl PartialEq for VaultFault {
+    impl PartialEq for DirectoryFault {
         fn eq(&self, __other: &Self) -> bool {
             match (self, __other) {
                 (Self::System(__a), Self::System(__b)) => {
@@ -129,15 +128,18 @@ pub mod fault25 {
                         && __a.minor == __b.minor
                         && __a.completed == __b.completed
                 }
+                (Self::NotBound(__a), Self::NotBound(__b)) => __a == __b,
+                _ => false,
             }
         }
     }
-    impl VaultFault {
+    impl DirectoryFault {
         /// The repository id of the user exception this fault carries, or
         /// `None` for a system exception, which carries its own.
         pub fn user_id(&self) -> Option<&'static str> {
             match self {
                 Self::System(_) => None,
+                Self::NotBound(_) => Some("IDL:gc26/NotBound:1.0"),
             }
         }
         /// Writes this fault into the reply body and says which reply status the
@@ -149,19 +151,23 @@ pub mod fault25 {
         /// nothing may be written before the fault is known — the whole buffer
         /// travels under one status.
         pub fn write(&self, __out: &mut rt::Encoder) -> Result<rt::DispatchBody, rt::SystemException> {
-            let _ = __out;
             match self {
                 Self::System(__ex) => Err(__ex.clone()),
+                Self::NotBound(__v) => {
+                    __out.put_str("IDL:gc26/NotBound:1.0");
+                    __v.put(__out).map_err(|_| rt::SystemException::marshal())?;
+                    Ok(rt::DispatchBody::UserException)
+                }
             }
         }
     }
-    /// The object-key scheme for `IDL:fault25/Vault:1.0`, and its reference factory.
+    /// The object-key scheme for `IDL:gc26/Directory:1.0`, and its reference factory.
     ///
     /// # The keys
     ///
     /// ```text
     /// root                          the default object — oid ""
-    /// root ++ "/Vault/" ++ <oid>    the object named <oid>
+    /// root ++ "/Directory/" ++ <oid>    the object named <oid>
     /// ```
     ///
     /// `root` is the key the `rt::Server` was bound with. The derivation is
@@ -183,15 +189,15 @@ pub mod fault25 {
     /// place. `nil` is the nil reference (§9.3.6), the truthful answer when
     /// there is no such object.
     #[derive(Debug, Clone, PartialEq, Eq)]
-    pub struct VaultRefs {
+    pub struct DirectoryRefs {
         home: rt::ObjectHome,
         infix: String,
     }
-    impl VaultRefs {
+    impl DirectoryRefs {
         /// The repository id minted references advertise.
-        pub const TYPE_ID: &'static str = "IDL:fault25/Vault:1.0";
+        pub const TYPE_ID: &'static str = "IDL:gc26/Directory:1.0";
         /// What separates the root key from the oid.
-        pub const KEY_INFIX: &'static str = "/Vault/";
+        pub const KEY_INFIX: &'static str = "/Directory/";
         /// The scheme rooted at `home`, with the generated infix.
         pub fn new(home: rt::ObjectHome) -> Self {
             Self { home, infix: Self::KEY_INFIX.to_owned() }
@@ -230,7 +236,7 @@ pub mod fault25 {
         /// The nil reference: there is no such object.
         pub fn nil() -> rt::ObjRef { rt::ObjectHome::nil() }
     }
-    /// Which `IDL:fault25/Vault:1.0` a call is addressed to.
+    /// Which `IDL:gc26/Directory:1.0` a call is addressed to.
     ///
     /// Every method of the servant trait takes one of these. It carries two
     /// things a servant cannot get any other way: **who it is** (`oid`), and
@@ -241,13 +247,13 @@ pub mod fault25 {
     /// The oid borrows the request's own key bytes, so learning who you are
     /// allocates nothing.
     #[derive(Debug, Clone, Copy)]
-    pub struct VaultTarget<'a> {
+    pub struct DirectoryTarget<'a> {
         oid: &'a str,
-        refs: &'a VaultRefs,
+        refs: &'a DirectoryRefs,
     }
-    impl<'a> VaultTarget<'a> {
+    impl<'a> DirectoryTarget<'a> {
         /// The identity `oid` under `refs`.
-        pub fn new(oid: &'a str, refs: &'a VaultRefs) -> Self {
+        pub fn new(oid: &'a str, refs: &'a DirectoryRefs) -> Self {
             Self { oid, refs }
         }
         /// Which object this is. The empty oid is the default object,
@@ -256,7 +262,7 @@ pub mod fault25 {
         /// Whether this is the default object.
         pub fn is_default(&self) -> bool { self.oid.is_empty() }
         /// The key scheme, for minting references into other key spaces.
-        pub fn refs(&self) -> &'a VaultRefs { self.refs }
+        pub fn refs(&self) -> &'a DirectoryRefs { self.refs }
         /// The raw object key this call arrived on.
         pub fn key(&self) -> Vec<u8> { self.refs.key_of(self.oid) }
         /// A reference to *this* object, for handing back one's own address.
@@ -264,30 +270,30 @@ pub mod fault25 {
         /// A reference to another object of this interface.
         pub fn sibling(&self, oid: &str) -> rt::ObjRef { self.refs.reference(oid) }
     }
-    /// A key-value vault whose every failure is a system exception
+    /// One node of a directory tree; a process holds many of them
     ///
-    /// What a servant for `IDL:fault25/Vault:1.0` must implement.
+    /// What a servant for `IDL:gc26/Directory:1.0` must implement.
     ///
     /// One method per operation and per attribute accessor, taking decoded
     /// Rust arguments. Nothing here mentions GIOP: the wire is entirely the
-    /// business of `VaultSkeleton`, which adapts this trait to
+    /// business of `DirectorySkeleton`, which adapts this trait to
     /// `rt::Dispatch`.
     ///
-    /// Every method may fail with a `VaultFault`: a declared user exception,
+    /// Every method may fail with a `DirectoryFault`: a declared user exception,
     /// or a system exception built with `rt::raise::*` — the vocabulary
     /// (`OBJECT_NOT_EXIST`, `NO_PERMISSION`, `BAD_PARAM`, `TRANSIENT`) that
     /// no contract declares and every servant needs.
     ///
     /// # Why every method carries an identity
     ///
-    /// The first argument is a `VaultTarget`: *which* object of this
+    /// The first argument is a `DirectoryTarget`: *which* object of this
     /// interface the call was addressed to. One servant therefore answers for
     /// many objects, which is what a process needs to hold a naming context
     /// per key, an `InterfaceDef` per repository id, or a factory per tenant.
     ///
     /// The alternative — a map from key to servant, so each object gets its
     /// own `&mut self` and no argument — is generated too, as
-    /// `VaultObjects`, in terms of this trait. It is the *adapter* and not
+    /// `DirectoryObjects`, in terms of this trait. It is the *adapter* and not
     /// the trait because the five hand-written servants in this workspace are
     /// measured, and none of them keeps one value per object: the IR facade
     /// derives its objects from the registry and stores nothing per
@@ -295,7 +301,7 @@ pub mod fault25 {
     /// call because their operations reach *other* objects — resolving a path,
     /// cloning one model into another. A map-shaped trait can express none of
     /// those; this one expresses the map in ten lines per operation.
-    pub trait VaultServant {
+    pub trait DirectoryServant {
         /// Whether this servant answers for the object `__at` names.
         ///
         /// **Required, with no default.** `rt::Dispatch::knows` defaults to
@@ -310,7 +316,7 @@ pub mod fault25 {
         /// becomes `OBJECT_NOT_EXIST` for a request and `UNKNOWN_OBJECT` for a
         /// `LocateRequest`, and is also how `rt::Servants` picks between
         /// skeletons sharing one key space.
-        fn knows(&self, __at: &VaultTarget<'_>) -> bool;
+        fn knows(&self, __at: &DirectoryTarget<'_>) -> bool;
         /// Where this request should be sent instead, if anywhere.
         ///
         /// Returning `Some` produces a `LOCATION_FORWARD` (§9.4.3.2), which the
@@ -333,36 +339,36 @@ pub mod fault25 {
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
         /// the address, and `LOCATION_FORWARD_PERM` is not reachable through
         /// `rt::Dispatch` at all.
-        fn forward(&mut self, __at: &VaultTarget<'_>) -> Option<rt::Ior> {
+        fn forward(&mut self, __at: &DirectoryTarget<'_>) -> Option<rt::Ior> {
             let _ = __at;
             None
         }
-        /// Reads one entry; an absent key is OBJECT_NOT_EXIST
+        /// A reference to the child node bound under a leaf
         ///
-        /// `fetch` on the wire.
-        fn fetch(&mut self, __at: &VaultTarget<'_>, key: String) -> Result<String, VaultFault>;
-        /// Fires and forgets; a fault here has no reply to travel in
+        /// `child` on the wire.
+        fn child(&mut self, __at: &DirectoryTarget<'_>, leaf: String) -> Result<orbweaver_gen::rt::ObjRef, DirectoryFault>;
+        /// How many bindings this node holds directly
         ///
-        /// `forget` on the wire.
+        /// `count` on the wire.
+        fn count(&mut self, __at: &DirectoryTarget<'_>) -> Result<i32, DirectoryFault>;
+        /// Removes a binding; the caller learns nothing about the outcome
+        ///
+        /// `drop_binding` on the wire.
         ///
         /// `oneway`: the caller is not waiting, so neither a result nor a fault
         /// can reach it. Returning `Err` here is dropped — deliberately, and
         /// logged, because a oneway that fails invisibly is undebuggable.
-        fn forget(&mut self, __at: &VaultTarget<'_>, key: String) -> Result<(), VaultFault>;
-        /// Rotates to the next generation; refuses mid-rotation with TRANSIENT
+        fn drop_binding(&mut self, __at: &DirectoryTarget<'_>, leaf: String) -> Result<(), DirectoryFault>;
+        /// Creates a child node and answers a reference to it
         ///
-        /// `rotate` on the wire.
-        fn rotate(&mut self, __at: &VaultTarget<'_>, wanted: i32) -> Result<i32, VaultFault>;
-        /// Writes one entry; refused callers get NO_PERMISSION, an empty key BAD_PARAM
+        /// `make_child` on the wire.
+        fn make_child(&mut self, __at: &DirectoryTarget<'_>, leaf: String) -> Result<orbweaver_gen::rt::ObjRef, DirectoryFault>;
+        /// The label of this particular node, not of the tree
         ///
-        /// `store` on the wire.
-        fn store(&mut self, __at: &VaultTarget<'_>, key: String, text: String) -> Result<(), VaultFault>;
-        /// How many entries the vault holds
-        ///
-        /// `_get_depth` on the wire.
-        fn depth(&mut self, __at: &VaultTarget<'_>) -> Result<i32, VaultFault>;
+        /// `_get_label` on the wire.
+        fn label(&mut self, __at: &DirectoryTarget<'_>) -> Result<String, DirectoryFault>;
     }
-    /// One object of `IDL:fault25/Vault:1.0`, for a servant that keeps a value per object.
+    /// One object of `IDL:gc26/Directory:1.0`, for a servant that keeps a value per object.
     ///
     /// The same operations as the servant trait with the identity removed:
     /// `&mut self` *is* the object. This is the shape most people reach for
@@ -370,36 +376,36 @@ pub mod fault25 {
     /// destroyed rather than derived — an active session, a subscription, a
     /// connection.
     ///
-    /// Put a collection of these behind `VaultObjects` to get a
-    /// `VaultServant`. What it cannot express is an operation that reaches
+    /// Put a collection of these behind `DirectoryObjects` to get a
+    /// `DirectoryServant`. What it cannot express is an operation that reaches
     /// another object — resolving a path, cloning one model into another — or
     /// a population too large or too derived to materialise; for those,
     /// implement the servant trait directly.
-    pub trait VaultObject {
-        /// Reads one entry; an absent key is OBJECT_NOT_EXIST
+    pub trait DirectoryObject {
+        /// A reference to the child node bound under a leaf
         ///
-        /// `fetch` on the wire.
-        fn fetch(&mut self, key: String) -> Result<String, VaultFault>;
-        /// Fires and forgets; a fault here has no reply to travel in
+        /// `child` on the wire.
+        fn child(&mut self, leaf: String) -> Result<orbweaver_gen::rt::ObjRef, DirectoryFault>;
+        /// How many bindings this node holds directly
         ///
-        /// `forget` on the wire.
-        fn forget(&mut self, key: String) -> Result<(), VaultFault>;
-        /// Rotates to the next generation; refuses mid-rotation with TRANSIENT
+        /// `count` on the wire.
+        fn count(&mut self) -> Result<i32, DirectoryFault>;
+        /// Removes a binding; the caller learns nothing about the outcome
         ///
-        /// `rotate` on the wire.
-        fn rotate(&mut self, wanted: i32) -> Result<i32, VaultFault>;
-        /// Writes one entry; refused callers get NO_PERMISSION, an empty key BAD_PARAM
+        /// `drop_binding` on the wire.
+        fn drop_binding(&mut self, leaf: String) -> Result<(), DirectoryFault>;
+        /// Creates a child node and answers a reference to it
         ///
-        /// `store` on the wire.
-        fn store(&mut self, key: String, text: String) -> Result<(), VaultFault>;
-        /// How many entries the vault holds
+        /// `make_child` on the wire.
+        fn make_child(&mut self, leaf: String) -> Result<orbweaver_gen::rt::ObjRef, DirectoryFault>;
+        /// The label of this particular node, not of the tree
         ///
-        /// `_get_depth` on the wire.
-        fn depth(&mut self) -> Result<i32, VaultFault>;
+        /// `_get_label` on the wire.
+        fn label(&mut self) -> Result<String, DirectoryFault>;
     }
-    /// A map from oid to one `VaultObject`, serving `IDL:fault25/Vault:1.0`.
+    /// A map from oid to one `DirectoryObject`, serving `IDL:gc26/Directory:1.0`.
     ///
-    /// The bridge between the two shapes: it implements `VaultServant` by
+    /// The bridge between the two shapes: it implements `DirectoryServant` by
     /// looking the identity up and calling the object it found. An oid with
     /// no object is `OBJECT_NOT_EXIST` with `COMPLETED_NO` — nothing ran, so
     /// a client may re-send elsewhere — and `knows` answers from the same map,
@@ -408,15 +414,15 @@ pub mod fault25 {
     /// The default object is the entry under the empty oid, which is what the
     /// bare root key addresses. A one-object process inserts exactly that.
     #[derive(Debug, Clone)]
-    pub struct VaultObjects<S: VaultObject> {
+    pub struct DirectoryObjects<S: DirectoryObject> {
         objects: std::collections::BTreeMap<String, S>,
     }
-    impl<S: VaultObject> Default for VaultObjects<S> {
+    impl<S: DirectoryObject> Default for DirectoryObjects<S> {
         fn default() -> Self {
             Self { objects: std::collections::BTreeMap::new() }
         }
     }
-    impl<S: VaultObject> VaultObjects<S> {
+    impl<S: DirectoryObject> DirectoryObjects<S> {
         /// An empty map, which knows no object at all.
         pub fn new() -> Self { Self::default() }
         /// Adds or replaces the object under `oid`, answering what it
@@ -443,42 +449,42 @@ pub mod fault25 {
         /// Whether no object is held.
         pub fn is_empty(&self) -> bool { self.objects.is_empty() }
     }
-    impl<S: VaultObject> VaultServant for VaultObjects<S> {
-        fn knows(&self, __at: &VaultTarget<'_>) -> bool {
+    impl<S: DirectoryObject> DirectoryServant for DirectoryObjects<S> {
+        fn knows(&self, __at: &DirectoryTarget<'_>) -> bool {
             self.objects.contains_key(__at.oid())
         }
-        fn fetch(&mut self, __at: &VaultTarget<'_>, key: String) -> Result<String, VaultFault> {
+        fn child(&mut self, __at: &DirectoryTarget<'_>, leaf: String) -> Result<orbweaver_gen::rt::ObjRef, DirectoryFault> {
             match self.objects.get_mut(__at.oid()) {
-                Some(__o) => __o.fetch(key),
-                None => Err(VaultFault::System(rt::raise::object_not_exist().did_not_run())),
+                Some(__o) => __o.child(leaf),
+                None => Err(DirectoryFault::System(rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn forget(&mut self, __at: &VaultTarget<'_>, key: String) -> Result<(), VaultFault> {
+        fn count(&mut self, __at: &DirectoryTarget<'_>) -> Result<i32, DirectoryFault> {
             match self.objects.get_mut(__at.oid()) {
-                Some(__o) => __o.forget(key),
-                None => Err(VaultFault::System(rt::raise::object_not_exist().did_not_run())),
+                Some(__o) => __o.count(),
+                None => Err(DirectoryFault::System(rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn rotate(&mut self, __at: &VaultTarget<'_>, wanted: i32) -> Result<i32, VaultFault> {
+        fn drop_binding(&mut self, __at: &DirectoryTarget<'_>, leaf: String) -> Result<(), DirectoryFault> {
             match self.objects.get_mut(__at.oid()) {
-                Some(__o) => __o.rotate(wanted),
-                None => Err(VaultFault::System(rt::raise::object_not_exist().did_not_run())),
+                Some(__o) => __o.drop_binding(leaf),
+                None => Err(DirectoryFault::System(rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn store(&mut self, __at: &VaultTarget<'_>, key: String, text: String) -> Result<(), VaultFault> {
+        fn make_child(&mut self, __at: &DirectoryTarget<'_>, leaf: String) -> Result<orbweaver_gen::rt::ObjRef, DirectoryFault> {
             match self.objects.get_mut(__at.oid()) {
-                Some(__o) => __o.store(key, text),
-                None => Err(VaultFault::System(rt::raise::object_not_exist().did_not_run())),
+                Some(__o) => __o.make_child(leaf),
+                None => Err(DirectoryFault::System(rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn depth(&mut self, __at: &VaultTarget<'_>) -> Result<i32, VaultFault> {
+        fn label(&mut self, __at: &DirectoryTarget<'_>) -> Result<String, DirectoryFault> {
             match self.objects.get_mut(__at.oid()) {
-                Some(__o) => __o.depth(),
-                None => Err(VaultFault::System(rt::raise::object_not_exist().did_not_run())),
+                Some(__o) => __o.label(),
+                None => Err(DirectoryFault::System(rt::raise::object_not_exist().did_not_run())),
             }
         }
     }
-    /// Serves `IDL:fault25/Vault:1.0`: decodes the request, calls the servant, encodes the reply.
+    /// Serves `IDL:gc26/Directory:1.0`: decodes the request, calls the servant, encodes the reply.
     ///
     /// Hand it to `rt::Server::serve` in place of a hand-written
     /// `rt::Dispatch`. What it answers, beyond the contract's own
@@ -491,45 +497,45 @@ pub mod fault25 {
     ///   readonly attribute;
     /// * a body that does not decode with `MARSHAL`.
     ///
-    /// A `VaultFault::System` the servant raises is passed through
+    /// A `DirectoryFault::System` the servant raises is passed through
     /// unchanged — repository id, minor code and completion status — so the
     /// servant's answer about whether a retry is safe is the one the client
     /// receives.
     ///
     /// # Many objects
     ///
-    /// The skeleton owns a `VaultRefs`, so it takes each request's object
+    /// The skeleton owns a `DirectoryRefs`, so it takes each request's object
     /// key apart before it looks at the operation and hands the servant the
     /// identity it resolved. A key that does not parse under the scheme is
     /// not ours; a key that parses but names nothing the servant `knows` is
     /// `OBJECT_NOT_EXIST`. Both answers come from generated code, and neither
     /// was possible while a skeleton had no key scheme at all.
-    pub struct VaultSkeleton<S: VaultServant> {
+    pub struct DirectorySkeleton<S: DirectoryServant> {
         /// The implementation invocations are delivered to.
         pub servant: S,
-        refs: VaultRefs,
+        refs: DirectoryRefs,
     }
-    impl<S: VaultServant> VaultSkeleton<S> {
+    impl<S: DirectoryServant> DirectorySkeleton<S> {
         /// A skeleton serving `servant`'s objects under `refs`.
         ///
         /// `refs` must be rooted at the key the `rt::Server` was bound
         /// with, or nothing this skeleton parses will match what arrives.
-        pub fn new(refs: VaultRefs, servant: S) -> Self {
+        pub fn new(refs: DirectoryRefs, servant: S) -> Self {
             Self { servant, refs }
         }
         /// The key scheme in force, for minting references to these objects.
-        pub fn refs(&self) -> &VaultRefs { &self.refs }
+        pub fn refs(&self) -> &DirectoryRefs { &self.refs }
     }
-    impl<S: VaultServant> rt::Dispatch for VaultSkeleton<S> {
+    impl<S: DirectoryServant> rt::Dispatch for DirectorySkeleton<S> {
         fn knows(&self, __object_key: &[u8]) -> bool {
             match self.refs.oid_of(__object_key) {
-                Some(__oid) => self.servant.knows(&VaultTarget::new(__oid, &self.refs)),
+                Some(__oid) => self.servant.knows(&DirectoryTarget::new(__oid, &self.refs)),
                 None => false,
             }
         }
         fn forward(&mut self, __req: &rt::Request) -> Option<rt::Ior> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
-            let __at = VaultTarget::new(__oid, &self.refs);
+            let __at = DirectoryTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
         }
         fn dispatch_body(
@@ -541,13 +547,13 @@ pub mod fault25 {
                 .refs
                 .oid_of(&__req.object_key)
                 .ok_or_else(rt::SystemException::object_not_exist)?;
-            let __at = VaultTarget::new(__oid, &self.refs);
+            let __at = DirectoryTarget::new(__oid, &self.refs);
             let mut __args = __req.body().map_err(|_| rt::SystemException::marshal())?;
             match __req.operation.as_str() {
-                "fetch" => {
-                    let key: String = Cdr::get(&mut __args)
+                "child" => {
+                    let leaf: String = Cdr::get(&mut __args)
                         .map_err(|_| rt::SystemException::marshal())?;
-                    match self.servant.fetch(&__at, key) {
+                    match self.servant.child(&__at, leaf) {
                         Ok(__r0) => {
                             __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
                             Ok(rt::DispatchBody::Return)
@@ -555,23 +561,32 @@ pub mod fault25 {
                         Err(__f) => __f.write(__out),
                     }
                 }
-                "forget" => {
-                    let key: String = Cdr::get(&mut __args)
+                "count" => {
+                    match self.servant.count(&__at) {
+                        Ok(__r0) => {
+                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
+                            Ok(rt::DispatchBody::Return)
+                        }
+                        Err(__f) => __f.write(__out),
+                    }
+                }
+                "drop_binding" => {
+                    let leaf: String = Cdr::get(&mut __args)
                         .map_err(|_| rt::SystemException::marshal())?;
                     // oneway (§9.4.1): no reply may be written, at all. An empty one
                     // is a whole extra message, which the peer — not waiting for it —
                     // would read as the header of the next reply. The servant's
                     // verdict has no way back, so it is dropped — and logged, so the
                     // drop is a decision somebody can see rather than a silence.
-                    if let Err(__f) = self.servant.forget(&__at, key) {
-                        rt::oneway_fault_dropped("IDL:fault25/Vault:1.0", "forget", &__f);
+                    if let Err(__f) = self.servant.drop_binding(&__at, leaf) {
+                        rt::oneway_fault_dropped("IDL:gc26/Directory:1.0", "drop_binding", &__f);
                     }
                     Ok(rt::DispatchBody::Return)
                 }
-                "rotate" => {
-                    let wanted: i32 = Cdr::get(&mut __args)
+                "make_child" => {
+                    let leaf: String = Cdr::get(&mut __args)
                         .map_err(|_| rt::SystemException::marshal())?;
-                    match self.servant.rotate(&__at, wanted) {
+                    match self.servant.make_child(&__at, leaf) {
                         Ok(__r0) => {
                             __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
                             Ok(rt::DispatchBody::Return)
@@ -579,20 +594,8 @@ pub mod fault25 {
                         Err(__f) => __f.write(__out),
                     }
                 }
-                "store" => {
-                    let key: String = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let text: String = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    match self.servant.store(&__at, key, text) {
-                        Ok(()) => {
-                            Ok(rt::DispatchBody::Return)
-                        }
-                        Err(__f) => __f.write(__out),
-                    }
-                }
-                "_get_depth" => {
-                    match self.servant.depth(&__at) {
+                "_get_label" => {
+                    match self.servant.label(&__at) {
                         Ok(__r0) => {
                             __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
                             Ok(rt::DispatchBody::Return)
@@ -604,7 +607,7 @@ pub mod fault25 {
                     let __id: String = Cdr::get(&mut __args)
                         .map_err(|_| rt::SystemException::marshal())?;
                     let __answer = matches!(__id.as_str(),
-                        "IDL:fault25/Vault:1.0" |
+                        "IDL:gc26/Directory:1.0" |
                         rt::OBJECT_ID);
                     __answer.put(__out).map_err(|_| rt::SystemException::marshal())?;
                     Ok(rt::DispatchBody::Return)
@@ -627,6 +630,24 @@ pub mod fault25 {
                     Err(rt::SystemException::unknown_user_exception())
                 }
             }
+        }
+    }
+
+    /// IDL exception `IDL:gc26/NotBound:1.0`.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct NotBound {
+        /// IDL member `missing`, marshalled first.
+        pub missing: String,
+    }
+    impl Cdr for NotBound {
+        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
+            self.missing.put(e)?;
+            Ok(())
+        }
+        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+            Ok(Self {
+                missing: Cdr::get(d)?,
+            })
         }
     }
 

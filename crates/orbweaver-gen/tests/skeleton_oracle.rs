@@ -56,18 +56,33 @@ use std::collections::BTreeMap;
 
 use orbweaver_cdr::{Encoder, Endian};
 use orbweaver_dynamic::Value;
-use orbweaver_gen::rt::{Dispatch, DispatchBody};
+use orbweaver_gen::rt::{Dispatch, DispatchBody, ObjectHome};
 use orbweaver_giop::server::{Request, decode_request};
 use orbweaver_giop::typecode::TypeCode;
 use orbweaver_giop::{DEFAULT_MAX_MESSAGE_SIZE, Version, encode_request, read_message};
 use orbweaver_registry::{ParamDirection, Registry};
 
 use emitted::f_24_skeleton_surface::gc24::{
-    Busy, GaugeFault, GaugeServant, GaugeSkeleton, Reading, Rejected,
+    Busy, GaugeFault, GaugeRefs, GaugeServant, GaugeSkeleton, GaugeTarget, Reading, Rejected,
 };
-use emitted::f_25_servant_faults::fault25::{VaultFault, VaultServant, VaultSkeleton};
+use emitted::f_25_servant_faults::fault25::{
+    VaultFault, VaultRefs, VaultServant, VaultSkeleton, VaultTarget,
+};
 
 const KEY: &[u8] = b"oracle";
+
+/// The key scheme both skeletons under test serve under: one object each, at
+/// the bare root key. Neither contract returns an object reference, so the
+/// published host and port are never read out of a reply.
+fn gauge_refs() -> GaugeRefs {
+    GaugeRefs::new(ObjectHome::new("127.0.0.1", 0, KEY.to_vec()))
+}
+
+/// The same, for the vault.
+fn vault_refs() -> VaultRefs {
+    VaultRefs::new(ObjectHome::new("127.0.0.1", 0, KEY.to_vec()))
+}
+
 const GAUGE: &str = "IDL:gc24/Gauge:1.0";
 const VAULT: &str = "IDL:fault25/Vault:1.0";
 const VERSIONS: [Version; 3] = [Version::V1_0, Version::V1_1, Version::V1_2];
@@ -129,20 +144,30 @@ fn reading_value() -> Value {
 struct CannedGauge;
 
 impl GaugeServant for CannedGauge {
-    fn latest(&mut self) -> Result<Reading, GaugeFault> {
+    /// One object, addressed by the bare root key the server was bound with.
+    fn knows(&self, __at: &GaugeTarget<'_>) -> bool {
+        __at.is_default()
+    }
+
+    fn latest(&mut self, __at: &GaugeTarget<'_>) -> Result<Reading, GaugeFault> {
         Ok(reading())
     }
 
-    fn label(&mut self) -> Result<String, GaugeFault> {
+    fn label(&mut self, __at: &GaugeTarget<'_>) -> Result<String, GaugeFault> {
         Ok(LABEL.to_owned())
     }
 
-    fn set_label(&mut self, value: String) -> Result<(), GaugeFault> {
+    fn set_label(&mut self, __at: &GaugeTarget<'_>, value: String) -> Result<(), GaugeFault> {
         assert_eq!(value, NEW_LABEL, "the dynamic encoder's string did not arrive intact");
         Ok(())
     }
 
-    fn record(&mut self, sample: f64, unit: String) -> Result<Reading, GaugeFault> {
+    fn record(
+        &mut self,
+        __at: &GaugeTarget<'_>,
+        sample: f64,
+        unit: String,
+    ) -> Result<Reading, GaugeFault> {
         if sample < 0.0 {
             return Err(GaugeFault::Rejected(Rejected { why: WHY.into(), code: CODE }));
         }
@@ -154,16 +179,16 @@ impl GaugeServant for CannedGauge {
         Ok(reading())
     }
 
-    fn scale_all(&mut self, e: f64) -> Result<i32, GaugeFault> {
+    fn scale_all(&mut self, __at: &GaugeTarget<'_>, e: f64) -> Result<i32, GaugeFault> {
         assert_eq!(e, SCALE);
         Ok(SCALED)
     }
 
-    fn reset(&mut self) -> Result<(), GaugeFault> {
+    fn reset(&mut self, __at: &GaugeTarget<'_>) -> Result<(), GaugeFault> {
         Ok(())
     }
 
-    fn split(&mut self) -> Result<(f64, String), GaugeFault> {
+    fn split(&mut self, __at: &GaugeTarget<'_>) -> Result<(f64, String), GaugeFault> {
         Ok((-0.125, "kPa".into()))
     }
 }
@@ -178,26 +203,36 @@ const DEPTH: i32 = 1;
 struct CannedVault;
 
 impl VaultServant for CannedVault {
-    fn fetch(&mut self, key: String) -> Result<String, VaultFault> {
+    /// One object, addressed by the bare root key the server was bound with.
+    fn knows(&self, __at: &VaultTarget<'_>) -> bool {
+        __at.is_default()
+    }
+
+    fn fetch(&mut self, __at: &VaultTarget<'_>, key: String) -> Result<String, VaultFault> {
         assert_eq!(key, "alpha");
         Ok(FETCHED.to_owned())
     }
 
-    fn store(&mut self, key: String, text: String) -> Result<(), VaultFault> {
+    fn store(
+        &mut self,
+        __at: &VaultTarget<'_>,
+        key: String,
+        text: String,
+    ) -> Result<(), VaultFault> {
         assert_eq!((key.as_str(), text.as_str()), ("beta", "second"));
         Ok(())
     }
 
-    fn rotate(&mut self, wanted: i32) -> Result<i32, VaultFault> {
+    fn rotate(&mut self, __at: &VaultTarget<'_>, wanted: i32) -> Result<i32, VaultFault> {
         assert_eq!(wanted, ROTATE_ARG);
         Ok(ROTATED)
     }
 
-    fn forget(&mut self, _key: String) -> Result<(), VaultFault> {
+    fn forget(&mut self, __at: &VaultTarget<'_>, _key: String) -> Result<(), VaultFault> {
         Ok(())
     }
 
-    fn depth(&mut self) -> Result<i32, VaultFault> {
+    fn depth(&mut self, __at: &VaultTarget<'_>) -> Result<i32, VaultFault> {
         Ok(DEPTH)
     }
 }
@@ -502,7 +537,7 @@ fn vault_cases(reg: &Registry) -> Vec<Case> {
 fn a_gauge_skeletons_replies_are_the_dynamic_paths_bytes() {
     let reg = registry_of("24-skeleton-surface.idl");
     let cases = gauge_cases(&reg);
-    let mut skeleton = GaugeSkeleton::new(CannedGauge);
+    let mut skeleton = GaugeSkeleton::new(gauge_refs(), CannedGauge);
     let bad = compare(&reg, &mut skeleton, &cases);
     assert!(
         bad.is_empty(),
@@ -517,7 +552,7 @@ fn a_gauge_skeletons_replies_are_the_dynamic_paths_bytes() {
 fn a_vault_skeletons_replies_are_the_dynamic_paths_bytes() {
     let reg = registry_of("25-servant-faults.idl");
     let cases = vault_cases(&reg);
-    let mut skeleton = VaultSkeleton::new(CannedVault);
+    let mut skeleton = VaultSkeleton::new(vault_refs(), CannedVault);
     let bad = compare(&reg, &mut skeleton, &cases);
     assert!(
         bad.is_empty(),
@@ -603,7 +638,7 @@ fn every_member_is_compared_or_named() {
 #[test]
 fn the_oracle_notices_a_wrong_value_and_a_wrong_origin() {
     let reg = registry_of("24-skeleton-surface.idl");
-    let mut skeleton = GaugeSkeleton::new(CannedGauge);
+    let mut skeleton = GaugeSkeleton::new(gauge_refs(), CannedGauge);
 
     let wrong = Case {
         op: "_get_label".into(),

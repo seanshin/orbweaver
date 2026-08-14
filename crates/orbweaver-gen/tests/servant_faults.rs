@@ -28,14 +28,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use orbweaver_cdr::{Encoder, Endian};
-use orbweaver_gen::rt::{self, Completion, Dispatch, DispatchBody, Server};
+use orbweaver_gen::rt::{self, Completion, Dispatch, DispatchBody, ObjectHome, Server};
 use orbweaver_giop::server::{Request, decode_request};
 use orbweaver_giop::{
     Connection, DEFAULT_MAX_MESSAGE_SIZE, Error as GiopError, Ior, Version, encode_request,
     read_message,
 };
 
-use emitted::f_25_servant_faults::fault25::{VaultClient, VaultFault, VaultServant, VaultSkeleton};
+use emitted::f_25_servant_faults::fault25::{
+    VaultClient, VaultFault, VaultRefs, VaultServant, VaultSkeleton, VaultTarget,
+};
 
 const KEY: &[u8] = b"vault";
 const TYPE_ID: &str = "IDL:fault25/Vault:1.0";
@@ -73,7 +75,12 @@ impl Store {
 }
 
 impl VaultServant for Store {
-    fn fetch(&mut self, key: String) -> Result<String, VaultFault> {
+    /// One object, addressed by the bare root key the server was bound with.
+    fn knows(&self, __at: &VaultTarget<'_>) -> bool {
+        __at.is_default()
+    }
+
+    fn fetch(&mut self, __at: &VaultTarget<'_>, key: String) -> Result<String, VaultFault> {
         match self.entries.iter().find(|(k, _)| *k == key) {
             Some((_, v)) => Ok(v.clone()),
             // The key names nothing here. Nothing ran, so a client may safely
@@ -82,7 +89,12 @@ impl VaultServant for Store {
         }
     }
 
-    fn store(&mut self, key: String, text: String) -> Result<(), VaultFault> {
+    fn store(
+        &mut self,
+        __at: &VaultTarget<'_>,
+        key: String,
+        text: String,
+    ) -> Result<(), VaultFault> {
         if !self.may_write {
             // Refused, and a retry will not change that — which is exactly
             // what distinguishes NO_PERMISSION from TRANSIENT.
@@ -96,7 +108,7 @@ impl VaultServant for Store {
         Ok(())
     }
 
-    fn rotate(&mut self, wanted: i32) -> Result<i32, VaultFault> {
+    fn rotate(&mut self, __at: &VaultTarget<'_>, wanted: i32) -> Result<i32, VaultFault> {
         if self.rotating {
             // The refusal lands *after* the generation counter moved, so
             // COMPLETED_NO would be a lie and COMPLETED_MAYBE is the truth.
@@ -108,7 +120,7 @@ impl VaultServant for Store {
         Ok(wanted + 1)
     }
 
-    fn forget(&mut self, key: String) -> Result<(), VaultFault> {
+    fn forget(&mut self, __at: &VaultTarget<'_>, key: String) -> Result<(), VaultFault> {
         self.forgot = Some(key.clone());
         if self.entries.iter().any(|(k, _)| *k == key) {
             self.entries.retain(|(k, _)| *k != key);
@@ -118,22 +130,29 @@ impl VaultServant for Store {
         Err(rt::raise::object_not_exist().did_not_run().into())
     }
 
-    fn depth(&mut self) -> Result<i32, VaultFault> {
+    fn depth(&mut self, __at: &VaultTarget<'_>) -> Result<i32, VaultFault> {
         Ok(self.entries.len() as i32)
     }
 }
 
 // ── Harness ──────────────────────────────────────────────────────────────────
 
+/// The key scheme for a one-object vault: the bare root key and nothing else.
+fn refs() -> VaultRefs {
+    VaultRefs::new(ObjectHome::new("127.0.0.1", 0, KEY.to_vec()))
+}
+
 /// Runs `f` against a live server whose dispatcher is the generated skeleton.
 fn with_server<F: FnOnce(&Ior)>(may_write: bool, f: F) {
     let server = Server::bind("127.0.0.1:0", KEY.to_vec()).expect("bind");
     let addr = server.local_addr().expect("addr");
     let ior = server.ior(TYPE_ID, "127.0.0.1").expect("ior");
+    let home = ObjectHome::of(&server, "127.0.0.1").expect("home");
     let stop = Arc::new(AtomicBool::new(false));
     let flag = stop.clone();
     let t = std::thread::spawn(move || {
-        let mut skeleton = VaultSkeleton::new(Store { may_write, ..Store::open() });
+        let mut skeleton =
+            VaultSkeleton::new(VaultRefs::new(home), Store { may_write, ..Store::open() });
         server.serve(&mut skeleton, || flag.load(Ordering::SeqCst)).expect("serve");
     });
 
@@ -259,7 +278,7 @@ fn a_raising_servant_writes_no_reply_body() {
     for version in VERSIONS {
         for endian in [Endian::Big, Endian::Little] {
             let req = request(version, endian, "fetch", true, |e| e.put_str("nope"));
-            let mut skeleton = VaultSkeleton::new(Store::open());
+            let mut skeleton = VaultSkeleton::new(refs(), Store::open());
             let mut out = Encoder::continuing_at(endian, 24);
             let ex = skeleton.dispatch_body(&req, &mut out).expect_err("the servant raised");
             assert_eq!(ex.id, rt::OBJECT_NOT_EXIST, "{version} {endian:?}");
@@ -277,7 +296,7 @@ fn a_raising_servant_writes_no_reply_body() {
 fn a_oneway_fault_is_dropped_and_the_connection_survives_it() {
     for endian in [Endian::Big, Endian::Little] {
         let req = request(Version::V1_2, endian, "forget", false, |e| e.put_str("nope"));
-        let mut skeleton = VaultSkeleton::new(Store::open());
+        let mut skeleton = VaultSkeleton::new(refs(), Store::open());
         let mut out = Encoder::continuing_at(endian, 24);
         let kind = skeleton.dispatch_body(&req, &mut out).expect("a oneway never fails outward");
         assert_eq!(kind, DispatchBody::Return, "{endian:?}");

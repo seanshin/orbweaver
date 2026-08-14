@@ -11,9 +11,16 @@
 //! stale, this file still builds and `ORBWEAVER_BLESS=1` still writes them.
 
 /// Every checked-in fixture, and the corpus file it is generated from.
-const FIXTURES: [(&str, &str); 2] = [
-    ("24-skeleton-surface", "f_24_skeleton_surface"),
-    ("25-servant-faults", "f_25_servant_faults"),
+///
+/// The path is carried per row rather than assumed: `ir-subset.idl` is under
+/// `corpus/services/` and not `corpus/golden/`, because it carries an identity
+/// pragma and the golden corpus is deliberately free of them (see the file's
+/// own header, and `orbweaver-registry`'s `pragma_corpus.rs`).
+const FIXTURES: [(&str, &str); 4] = [
+    ("golden/24-skeleton-surface", "f_24_skeleton_surface"),
+    ("golden/25-servant-faults", "f_25_servant_faults"),
+    ("golden/26-object-identity", "f_26_object_identity"),
+    ("services/ir-subset", "f_ir_subset"),
 ];
 
 #[test]
@@ -21,7 +28,7 @@ fn the_checked_in_generated_modules_are_current() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut stale = Vec::new();
     for (idl_name, module) in FIXTURES {
-        let idl = root.join(format!("../../corpus/golden/{idl_name}.idl"));
+        let idl = root.join(format!("../../corpus/{idl_name}.idl"));
         let src = std::fs::read_to_string(&idl).expect("the corpus file");
         let spec = orbweaver_idl::parse(&src).expect("the corpus file parses");
         let mut registry = orbweaver_registry::Registry::new();

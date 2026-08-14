@@ -1,0 +1,58 @@
+// 26 — many objects of one interface in one process.
+//
+// Added with the skeleton batch that gave generated skeletons an object-key
+// scheme. Until it, a generated `Dispatch` answered every key the same way, so
+// one process could serve exactly one object of one interface — which is not
+// what any of the five hand-written servants in this workspace do.
+//
+// What this contract pins:
+//
+//   * **Identity is per call, not per servant.** `count` and `label` answer
+//     differently under different object keys, so a skeleton that ignored the
+//     key would pass every compile check and answer the wrong node.
+//   * **A reference is minted, not hand-built.** `child` and `make_child`
+//     return a reference to *another object of this same interface*, which is
+//     the naming-service shape (a context per key) and the IFR shape (an
+//     `InterfaceDef` per repository id) and the tenant shape (a factory per
+//     tenant). A servant must be able to answer with one without assembling an
+//     IIOP profile itself.
+//   * **A oneway still has an identity.** `drop_binding` writes no reply, and
+//     it still has to know which node it was called on.
+//
+// `leaf` rather than `name` throughout: `name` is a member of half the structs
+// in this corpus and the case-insensitive clash rule is the dominant
+// generation failure.
+
+module gc26 {
+
+  //@ ai_desc: No binding under that name in this node
+  exception NotBound {
+    //@ ai_desc: The leaf that was not found
+    string missing;
+  };
+
+  //@ ai_desc: One node of a directory tree; a process holds many of them
+  interface Directory {
+    //@ ai_desc: The label of this particular node, not of the tree
+    //@ ai_effect: read_only
+    readonly attribute string label;
+
+    //@ ai_desc: How many bindings this node holds directly
+    //@ ai_effect: read_only
+    long count();
+
+    //@ ai_desc: A reference to the child node bound under a leaf
+    //@ ai_effect: read_only
+    Directory child(in string leaf) raises (NotBound);
+
+    //@ ai_desc: Creates a child node and answers a reference to it
+    //@ ai_effect: destructive
+    //@ ai_authz: gc26.directory.write
+    Directory make_child(in string leaf);
+
+    //@ ai_desc: Removes a binding; the caller learns nothing about the outcome
+    //@ ai_effect: destructive
+    //@ ai_authz: gc26.directory.write
+    oneway void drop_binding(in string leaf);
+  };
+};

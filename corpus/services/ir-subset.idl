@@ -1,0 +1,118 @@
+// The read-only Interface Repository subset, as a contract.
+//
+// This is the first file under `corpus/services/`, which exists because this
+// one may not live under `corpus/golden/`: it carries `#pragma prefix`, and
+// `corpus/pragma/` is where identity pragmas belong. `pragma_corpus.rs`'s
+// `the_existing_corpus_has_no_pragma_derived_ids` enforces that separation over
+// golden, negative, annotations and requirements — the guard that no id this
+// project already publishes was silently renamed — and it is right to. But
+// `corpus/pragma/` is omniidl-blessed data whose regeneration command filters
+// `IDL:omg.org/` out, and every id here is one of those.
+//
+// So: `corpus/services/` holds contracts that exist to be *served* — whole
+// services rather than type-system coverage — and this is one.
+//
+// `crates/orbweaver-registry/src/ifr.rs` serves these interfaces from a
+// hand-written `Dispatch`. This file is the same surface written as IDL, so a
+// *generated* skeleton can be held against it: same repository ids, same
+// inheritance, same operations, same enum ordinals. The comparison lives in
+// `crates/orbweaver-gen/tests/ifr_shape.rs`, which drives both servants with
+// the same GIOP requests and compares the reply bytes.
+//
+// `#pragma prefix "omg.org"` is what makes the ids the real ones —
+// `IDL:omg.org/CORBA/Repository:1.0` — rather than a look-alike. Without it a
+// generated skeleton would answer `_is_a` for ids no foreign ORB has heard of,
+// and the comparison would be against a contract of our own invention.
+//
+// Two things in the real IR are deliberately absent:
+//
+//   * `describe_interface` and everything reaching `CORBA::TypeCode`. The
+//     registry currently loads `::CORBA::TypeCode` as `void` (measured), so an
+//     operation returning one generates a `()` — silently the wrong thing. It
+//     is left out rather than generated wrong; see the test's module docs.
+//   * `valuetype`-shaped definition kinds. The registry does not hold them.
+//
+// The mutating half is present on purpose: `create_module` is declared so that
+// the servant can *refuse* it with NO_PERMISSION. A policy refusal is only
+// expressible for an operation the contract declares — `BAD_OPERATION` says
+// "no such operation", which invites a retry against another reference, and
+// that is exactly the retry the policy exists to stop.
+
+#pragma prefix "omg.org"
+
+module CORBA {
+
+  typedef string Identifier;
+  typedef string ScopedName;
+  typedef string RepositoryId;
+  typedef string VersionSpec;
+
+  //@ ai_desc: What kind of IDL construct a repository entry describes
+  enum DefinitionKind {
+    dk_none, dk_all, dk_Attribute, dk_Constant, dk_Exception, dk_Interface,
+    dk_Module, dk_Operation, dk_Typedef, dk_Alias, dk_Struct, dk_Union,
+    dk_Enum, dk_Primitive, dk_String, dk_Sequence, dk_Array, dk_Repository
+  };
+
+  //@ ai_desc: The root of the Interface Repository hierarchy
+  interface IRObject {
+    //@ ai_desc: Which kind of IDL construct this object describes
+    //@ ai_effect: read_only
+    readonly attribute DefinitionKind def_kind;
+  };
+
+  //@ ai_desc: A definition that has a type, which every type definition is
+  interface IDLType : IRObject {
+  };
+
+  //@ ai_desc: Anything the repository holds under a name
+  interface Contained : IRObject {
+    //@ ai_desc: The repository id this definition is registered under
+    //@ ai_effect: read_only
+    readonly attribute RepositoryId id;
+
+    //@ ai_desc: The unqualified IDL name of this definition
+    //@ ai_effect: read_only
+    readonly attribute Identifier name;
+
+    //@ ai_desc: The fully scoped IDL name, leading colons included
+    //@ ai_effect: read_only
+    readonly attribute ScopedName absolute_name;
+  };
+
+  //@ ai_desc: A module reference; declared so create_module has a return type
+  interface ModuleDef;
+
+  //@ ai_desc: A definition that can hold other definitions
+  interface Container : IRObject {
+    //@ ai_desc: Adds a module to the repository; refused on a read-only facade
+    //@ ai_effect: destructive
+    //@ ai_authz: corba.ifr.write
+    ModuleDef create_module(in RepositoryId new_id,
+                            in Identifier new_name,
+                            in VersionSpec new_version);
+  };
+
+  //@ ai_desc: An interface reference the repository hands back
+  interface InterfaceDef;
+
+  typedef sequence<InterfaceDef> InterfaceDefSeq;
+
+  //@ ai_desc: The repository's description of one IDL interface
+  interface InterfaceDef : Container, Contained, IDLType {
+    //@ ai_desc: References to the interfaces this one directly derives from
+    //@ ai_effect: read_only
+    readonly attribute InterfaceDefSeq base_interfaces;
+
+    //@ ai_desc: Whether the interface described here derives from a given id
+    //@ ai_effect: read_only
+    boolean is_a(in RepositoryId derived_from);
+  };
+
+  //@ ai_desc: The repository itself, the object a client starts from
+  interface Repository : Container {
+    //@ ai_desc: The definition registered under a repository id, or nil
+    //@ ai_effect: read_only
+    Contained lookup_id(in RepositoryId search_id);
+  };
+};

@@ -206,6 +206,115 @@ pub mod gc24 {
             }
         }
     }
+    /// The object-key scheme for `IDL:gc24/Gauge:1.0`, and its reference factory.
+    ///
+    /// # The keys
+    ///
+    /// ```text
+    /// root                          the default object — oid ""
+    /// root ++ "/Gauge/" ++ <oid>    the object named <oid>
+    /// ```
+    ///
+    /// `root` is the key the `rt::Server` was bound with. The derivation is
+    /// reversible, so no table of minted keys exists: a reference survives a
+    /// restart, and a client cannot make the process grow by looking things
+    /// up. The oid is the *whole* remainder after the prefix, so it may
+    /// contain `/`, `:`, or the infix itself — there is nothing to escape.
+    ///
+    /// The infix is the interface name, so two generated skeletons sharing a
+    /// root cannot read each other's keys. Use `with_infix` when they are
+    /// *meant* to share one key space — an `InterfaceDef` and a `Contained`
+    /// over the same repository entry are two interfaces over one object.
+    ///
+    /// # Minting
+    ///
+    /// `reference` and `ior` answer with a real IIOP profile, built by
+    /// `rt::ObjectHome` — the servant never assembles one, which is why the
+    /// GIOP version and profile shape are still decided in exactly one
+    /// place. `nil` is the nil reference (§9.3.6), the truthful answer when
+    /// there is no such object.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct GaugeRefs {
+        home: rt::ObjectHome,
+        infix: String,
+    }
+    impl GaugeRefs {
+        /// The repository id minted references advertise.
+        pub const TYPE_ID: &'static str = "IDL:gc24/Gauge:1.0";
+        /// What separates the root key from the oid.
+        pub const KEY_INFIX: &'static str = "/Gauge/";
+        /// The scheme rooted at `home`, with the generated infix.
+        pub fn new(home: rt::ObjectHome) -> Self {
+            Self { home, infix: Self::KEY_INFIX.to_owned() }
+        }
+        /// The same, with a key space this interface shares with another.
+        ///
+        /// Two skeletons given the same infix must disagree about `knows`
+        /// for every key, or `rt::Servants` will hand a request to
+        /// whichever was added first. Sharing a key space is a claim that
+        /// the two answer for disjoint sets of objects.
+        pub fn with_infix(home: rt::ObjectHome, infix: impl Into<String>) -> Self {
+            Self { home, infix: infix.into() }
+        }
+        /// Where these objects are published.
+        pub fn home(&self) -> &rt::ObjectHome { &self.home }
+        /// The infix in use, generated or overridden.
+        pub fn infix(&self) -> &str { &self.infix }
+        /// The default object's key, which is also every other key's prefix.
+        pub fn root_key(&self) -> &[u8] { self.home.root_key() }
+        /// The object key for `oid`; the empty oid is the root key.
+        pub fn key_of(&self, oid: &str) -> Vec<u8> {
+            self.home.key_of(&self.infix, oid)
+        }
+        /// The oid a key addresses, or `None` if it is not one of ours.
+        pub fn oid_of<'a>(&self, key: &'a [u8]) -> Option<&'a str> {
+            self.home.oid_of(&self.infix, key)
+        }
+        /// A reference to `oid`, in the form an operation returns.
+        pub fn reference(&self, oid: &str) -> rt::ObjRef {
+            self.home.reference(Self::TYPE_ID, self.key_of(oid))
+        }
+        /// The same reference, in the form `LOCATION_FORWARD` carries.
+        pub fn ior(&self, oid: &str) -> rt::Ior {
+            self.home.ior(Self::TYPE_ID, self.key_of(oid))
+        }
+        /// The nil reference: there is no such object.
+        pub fn nil() -> rt::ObjRef { rt::ObjectHome::nil() }
+    }
+    /// Which `IDL:gc24/Gauge:1.0` a call is addressed to.
+    ///
+    /// Every method of the servant trait takes one of these. It carries two
+    /// things a servant cannot get any other way: **who it is** (`oid`), and
+    /// **how to name its neighbours** (`sibling`) — so an operation that
+    /// answers with a reference to another object of this interface can do
+    /// it in one call rather than by assembling an IIOP profile.
+    ///
+    /// The oid borrows the request's own key bytes, so learning who you are
+    /// allocates nothing.
+    #[derive(Debug, Clone, Copy)]
+    pub struct GaugeTarget<'a> {
+        oid: &'a str,
+        refs: &'a GaugeRefs,
+    }
+    impl<'a> GaugeTarget<'a> {
+        /// The identity `oid` under `refs`.
+        pub fn new(oid: &'a str, refs: &'a GaugeRefs) -> Self {
+            Self { oid, refs }
+        }
+        /// Which object this is. The empty oid is the default object,
+        /// addressed by the bare root key the server was bound with.
+        pub fn oid(&self) -> &'a str { self.oid }
+        /// Whether this is the default object.
+        pub fn is_default(&self) -> bool { self.oid.is_empty() }
+        /// The key scheme, for minting references into other key spaces.
+        pub fn refs(&self) -> &'a GaugeRefs { self.refs }
+        /// The raw object key this call arrived on.
+        pub fn key(&self) -> Vec<u8> { self.refs.key_of(self.oid) }
+        /// A reference to *this* object, for handing back one's own address.
+        pub fn reference(&self) -> rt::ObjRef { self.refs.reference(self.oid) }
+        /// A reference to another object of this interface.
+        pub fn sibling(&self, oid: &str) -> rt::ObjRef { self.refs.reference(oid) }
+    }
     /// A gauge whose skeleton exercises oneway, attributes and alignment
     ///
     /// What a servant for `IDL:gc24/Gauge:1.0` must implement.
@@ -219,11 +328,70 @@ pub mod gc24 {
     /// or a system exception built with `rt::raise::*` — the vocabulary
     /// (`OBJECT_NOT_EXIST`, `NO_PERMISSION`, `BAD_PARAM`, `TRANSIENT`) that
     /// no contract declares and every servant needs.
+    ///
+    /// # Why every method carries an identity
+    ///
+    /// The first argument is a `GaugeTarget`: *which* object of this
+    /// interface the call was addressed to. One servant therefore answers for
+    /// many objects, which is what a process needs to hold a naming context
+    /// per key, an `InterfaceDef` per repository id, or a factory per tenant.
+    ///
+    /// The alternative — a map from key to servant, so each object gets its
+    /// own `&mut self` and no argument — is generated too, as
+    /// `GaugeObjects`, in terms of this trait. It is the *adapter* and not
+    /// the trait because the five hand-written servants in this workspace are
+    /// measured, and none of them keeps one value per object: the IR facade
+    /// derives its objects from the registry and stores nothing per
+    /// reference, and the naming and tenant servants resolve the key on every
+    /// call because their operations reach *other* objects — resolving a path,
+    /// cloning one model into another. A map-shaped trait can express none of
+    /// those; this one expresses the map in ten lines per operation.
     pub trait GaugeServant {
+        /// Whether this servant answers for the object `__at` names.
+        ///
+        /// **Required, with no default.** `rt::Dispatch::knows` defaults to
+        /// accepting everything, which is right for a process with one object and
+        /// is exactly what stopped a generated skeleton from ever holding more
+        /// than one: an unknown key was served as if it were the only object.
+        /// There is no answer the generator can give here — the contract says
+        /// what an object *does*, never which ones exist — so the question is
+        /// asked rather than guessed.
+        ///
+        /// A single-object servant writes `__at.is_default()`. A `false` here
+        /// becomes `OBJECT_NOT_EXIST` for a request and `UNKNOWN_OBJECT` for a
+        /// `LocateRequest`, and is also how `rt::Servants` picks between
+        /// skeletons sharing one key space.
+        fn knows(&self, __at: &GaugeTarget<'_>) -> bool;
+        /// Where this request should be sent instead, if anywhere.
+        ///
+        /// Returning `Some` produces a `LOCATION_FORWARD` (§9.4.3.2), which the
+        /// client retries transparently against the new reference.
+        ///
+        /// # Why the generator defaults this and cannot fill it in
+        ///
+        /// Everything mechanical about a forward *is* generated: the object key is
+        /// decoded, the identity is handed over, and a returned reference becomes
+        /// a `LOCATION_FORWARD` reply instead of an invocation. What cannot be
+        /// generated is the policy — *when* to redirect and *where to*. IDL
+        /// describes operations, types and inheritance; it has no vocabulary for
+        /// object location, migration, replication or load, so there is no clause
+        /// in any contract from which a forward target could be derived. A
+        /// generator that invented one would be inventing deployment.
+        ///
+        /// So the default is `None` — served here — and it is a default rather
+        /// than a silence: this method exists, is documented, and is the one place
+        /// to override. Note the two limits the runtime imposes and this cannot
+        /// lift: a `oneway` is never forwarded, because there is no reply to carry
+        /// the address, and `LOCATION_FORWARD_PERM` is not reachable through
+        /// `rt::Dispatch` at all.
+        fn forward(&mut self, __at: &GaugeTarget<'_>) -> Option<rt::Ior> {
+            let _ = __at;
+            None
+        }
         /// Records one sample and returns the reading it produced
         ///
         /// `record` on the wire.
-        fn record(&mut self, sample: f64, unit: String) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault>;
+        fn record(&mut self, __at: &GaugeTarget<'_>, sample: f64, unit: String) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault>;
         /// whether it happened, so the scope is all that guards it
         ///
         /// `reset` on the wire.
@@ -231,6 +399,49 @@ pub mod gc24 {
         /// `oneway`: the caller is not waiting, so neither a result nor a fault
         /// can reach it. Returning `Err` here is dropped — deliberately, and
         /// logged, because a oneway that fails invisibly is undebuggable.
+        fn reset(&mut self, __at: &GaugeTarget<'_>) -> Result<(), GaugeFault>;
+        /// Multiplies every stored sample and answers how many changed
+        ///
+        /// `scale_all` on the wire.
+        fn scale_all(&mut self, __at: &GaugeTarget<'_>, e: f64) -> Result<i32, GaugeFault>;
+        /// Splits the latest reading into its parts
+        ///
+        /// `split` on the wire.
+        fn split(&mut self, __at: &GaugeTarget<'_>) -> Result<(f64, String), GaugeFault>;
+        /// Human-readable label for this gauge
+        ///
+        /// `_get_label` on the wire.
+        fn label(&mut self, __at: &GaugeTarget<'_>) -> Result<String, GaugeFault>;
+        /// Human-readable label for this gauge
+        ///
+        /// `_set_label` on the wire.
+        fn set_label(&mut self, __at: &GaugeTarget<'_>, value: String) -> Result<(), GaugeFault>;
+        /// The most recent reading, or a zeroed one before any sample
+        ///
+        /// `_get_latest` on the wire.
+        fn latest(&mut self, __at: &GaugeTarget<'_>) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault>;
+    }
+    /// One object of `IDL:gc24/Gauge:1.0`, for a servant that keeps a value per object.
+    ///
+    /// The same operations as the servant trait with the identity removed:
+    /// `&mut self` *is* the object. This is the shape most people reach for
+    /// first, and it is the right one whenever objects are created, held and
+    /// destroyed rather than derived — an active session, a subscription, a
+    /// connection.
+    ///
+    /// Put a collection of these behind `GaugeObjects` to get a
+    /// `GaugeServant`. What it cannot express is an operation that reaches
+    /// another object — resolving a path, cloning one model into another — or
+    /// a population too large or too derived to materialise; for those,
+    /// implement the servant trait directly.
+    pub trait GaugeObject {
+        /// Records one sample and returns the reading it produced
+        ///
+        /// `record` on the wire.
+        fn record(&mut self, sample: f64, unit: String) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault>;
+        /// whether it happened, so the scope is all that guards it
+        ///
+        /// `reset` on the wire.
         fn reset(&mut self) -> Result<(), GaugeFault>;
         /// Multiplies every stored sample and answers how many changed
         ///
@@ -253,6 +464,99 @@ pub mod gc24 {
         /// `_get_latest` on the wire.
         fn latest(&mut self) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault>;
     }
+    /// A map from oid to one `GaugeObject`, serving `IDL:gc24/Gauge:1.0`.
+    ///
+    /// The bridge between the two shapes: it implements `GaugeServant` by
+    /// looking the identity up and calling the object it found. An oid with
+    /// no object is `OBJECT_NOT_EXIST` with `COMPLETED_NO` — nothing ran, so
+    /// a client may re-send elsewhere — and `knows` answers from the same map,
+    /// so a `LocateRequest` and an invocation cannot disagree.
+    ///
+    /// The default object is the entry under the empty oid, which is what the
+    /// bare root key addresses. A one-object process inserts exactly that.
+    #[derive(Debug, Clone)]
+    pub struct GaugeObjects<S: GaugeObject> {
+        objects: std::collections::BTreeMap<String, S>,
+    }
+    impl<S: GaugeObject> Default for GaugeObjects<S> {
+        fn default() -> Self {
+            Self { objects: std::collections::BTreeMap::new() }
+        }
+    }
+    impl<S: GaugeObject> GaugeObjects<S> {
+        /// An empty map, which knows no object at all.
+        pub fn new() -> Self { Self::default() }
+        /// Adds or replaces the object under `oid`, answering what it
+        /// displaced. The empty oid is the default object.
+        pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
+            self.objects.insert(oid.into(), object)
+        }
+        /// Removes an object, after which its key is `OBJECT_NOT_EXIST`.
+        pub fn remove(&mut self, oid: &str) -> Option<S> {
+            self.objects.remove(oid)
+        }
+        /// The object under `oid`, if there is one.
+        pub fn get(&self, oid: &str) -> Option<&S> { self.objects.get(oid) }
+        /// The object under `oid`, mutably.
+        pub fn get_mut(&mut self, oid: &str) -> Option<&mut S> {
+            self.objects.get_mut(oid)
+        }
+        /// Every oid held, in sorted order.
+        pub fn oids(&self) -> impl Iterator<Item = &str> {
+            self.objects.keys().map(String::as_str)
+        }
+        /// How many objects are held.
+        pub fn len(&self) -> usize { self.objects.len() }
+        /// Whether no object is held.
+        pub fn is_empty(&self) -> bool { self.objects.is_empty() }
+    }
+    impl<S: GaugeObject> GaugeServant for GaugeObjects<S> {
+        fn knows(&self, __at: &GaugeTarget<'_>) -> bool {
+            self.objects.contains_key(__at.oid())
+        }
+        fn record(&mut self, __at: &GaugeTarget<'_>, sample: f64, unit: String) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault> {
+            match self.objects.get_mut(__at.oid()) {
+                Some(__o) => __o.record(sample, unit),
+                None => Err(GaugeFault::System(rt::raise::object_not_exist().did_not_run())),
+            }
+        }
+        fn reset(&mut self, __at: &GaugeTarget<'_>) -> Result<(), GaugeFault> {
+            match self.objects.get_mut(__at.oid()) {
+                Some(__o) => __o.reset(),
+                None => Err(GaugeFault::System(rt::raise::object_not_exist().did_not_run())),
+            }
+        }
+        fn scale_all(&mut self, __at: &GaugeTarget<'_>, e: f64) -> Result<i32, GaugeFault> {
+            match self.objects.get_mut(__at.oid()) {
+                Some(__o) => __o.scale_all(e),
+                None => Err(GaugeFault::System(rt::raise::object_not_exist().did_not_run())),
+            }
+        }
+        fn split(&mut self, __at: &GaugeTarget<'_>) -> Result<(f64, String), GaugeFault> {
+            match self.objects.get_mut(__at.oid()) {
+                Some(__o) => __o.split(),
+                None => Err(GaugeFault::System(rt::raise::object_not_exist().did_not_run())),
+            }
+        }
+        fn label(&mut self, __at: &GaugeTarget<'_>) -> Result<String, GaugeFault> {
+            match self.objects.get_mut(__at.oid()) {
+                Some(__o) => __o.label(),
+                None => Err(GaugeFault::System(rt::raise::object_not_exist().did_not_run())),
+            }
+        }
+        fn set_label(&mut self, __at: &GaugeTarget<'_>, value: String) -> Result<(), GaugeFault> {
+            match self.objects.get_mut(__at.oid()) {
+                Some(__o) => __o.set_label(value),
+                None => Err(GaugeFault::System(rt::raise::object_not_exist().did_not_run())),
+            }
+        }
+        fn latest(&mut self, __at: &GaugeTarget<'_>) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault> {
+            match self.objects.get_mut(__at.oid()) {
+                Some(__o) => __o.latest(),
+                None => Err(GaugeFault::System(rt::raise::object_not_exist().did_not_run())),
+            }
+        }
+    }
     /// Serves `IDL:gc24/Gauge:1.0`: decodes the request, calls the servant, encodes the reply.
     ///
     /// Hand it to `rt::Server::serve` in place of a hand-written
@@ -270,20 +574,53 @@ pub mod gc24 {
     /// unchanged — repository id, minor code and completion status — so the
     /// servant's answer about whether a retry is safe is the one the client
     /// receives.
+    ///
+    /// # Many objects
+    ///
+    /// The skeleton owns a `GaugeRefs`, so it takes each request's object
+    /// key apart before it looks at the operation and hands the servant the
+    /// identity it resolved. A key that does not parse under the scheme is
+    /// not ours; a key that parses but names nothing the servant `knows` is
+    /// `OBJECT_NOT_EXIST`. Both answers come from generated code, and neither
+    /// was possible while a skeleton had no key scheme at all.
     pub struct GaugeSkeleton<S: GaugeServant> {
         /// The implementation invocations are delivered to.
         pub servant: S,
+        refs: GaugeRefs,
     }
     impl<S: GaugeServant> GaugeSkeleton<S> {
-        /// A skeleton over a servant.
-        pub fn new(servant: S) -> Self { Self { servant } }
+        /// A skeleton serving `servant`'s objects under `refs`.
+        ///
+        /// `refs` must be rooted at the key the `rt::Server` was bound
+        /// with, or nothing this skeleton parses will match what arrives.
+        pub fn new(refs: GaugeRefs, servant: S) -> Self {
+            Self { servant, refs }
+        }
+        /// The key scheme in force, for minting references to these objects.
+        pub fn refs(&self) -> &GaugeRefs { &self.refs }
     }
     impl<S: GaugeServant> rt::Dispatch for GaugeSkeleton<S> {
+        fn knows(&self, __object_key: &[u8]) -> bool {
+            match self.refs.oid_of(__object_key) {
+                Some(__oid) => self.servant.knows(&GaugeTarget::new(__oid, &self.refs)),
+                None => false,
+            }
+        }
+        fn forward(&mut self, __req: &rt::Request) -> Option<rt::Ior> {
+            let __oid = self.refs.oid_of(&__req.object_key)?;
+            let __at = GaugeTarget::new(__oid, &self.refs);
+            self.servant.forward(&__at)
+        }
         fn dispatch_body(
             &mut self,
             __req: &rt::Request,
             __out: &mut rt::Encoder,
         ) -> Result<rt::DispatchBody, rt::SystemException> {
+            let __oid = self
+                .refs
+                .oid_of(&__req.object_key)
+                .ok_or_else(rt::SystemException::object_not_exist)?;
+            let __at = GaugeTarget::new(__oid, &self.refs);
             let mut __args = __req.body().map_err(|_| rt::SystemException::marshal())?;
             match __req.operation.as_str() {
                 "record" => {
@@ -291,7 +628,7 @@ pub mod gc24 {
                         .map_err(|_| rt::SystemException::marshal())?;
                     let unit: String = Cdr::get(&mut __args)
                         .map_err(|_| rt::SystemException::marshal())?;
-                    match self.servant.record(sample, unit) {
+                    match self.servant.record(&__at, sample, unit) {
                         Ok(__r0) => {
                             __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
                             Ok(rt::DispatchBody::Return)
@@ -305,7 +642,7 @@ pub mod gc24 {
                     // would read as the header of the next reply. The servant's
                     // verdict has no way back, so it is dropped — and logged, so the
                     // drop is a decision somebody can see rather than a silence.
-                    if let Err(__f) = self.servant.reset() {
+                    if let Err(__f) = self.servant.reset(&__at) {
                         rt::oneway_fault_dropped("IDL:gc24/Gauge:1.0", "reset", &__f);
                     }
                     Ok(rt::DispatchBody::Return)
@@ -313,7 +650,7 @@ pub mod gc24 {
                 "scale_all" => {
                     let e: f64 = Cdr::get(&mut __args)
                         .map_err(|_| rt::SystemException::marshal())?;
-                    match self.servant.scale_all(e) {
+                    match self.servant.scale_all(&__at, e) {
                         Ok(__r0) => {
                             __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
                             Ok(rt::DispatchBody::Return)
@@ -322,7 +659,7 @@ pub mod gc24 {
                     }
                 }
                 "split" => {
-                    match self.servant.split() {
+                    match self.servant.split(&__at) {
                         Ok((__r0, __r1)) => {
                             __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
                             __r1.put(__out).map_err(|_| rt::SystemException::marshal())?;
@@ -332,7 +669,7 @@ pub mod gc24 {
                     }
                 }
                 "_get_label" => {
-                    match self.servant.label() {
+                    match self.servant.label(&__at) {
                         Ok(__r0) => {
                             __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
                             Ok(rt::DispatchBody::Return)
@@ -343,7 +680,7 @@ pub mod gc24 {
                 "_set_label" => {
                     let value: String = Cdr::get(&mut __args)
                         .map_err(|_| rt::SystemException::marshal())?;
-                    match self.servant.set_label(value) {
+                    match self.servant.set_label(&__at, value) {
                         Ok(()) => {
                             Ok(rt::DispatchBody::Return)
                         }
@@ -351,7 +688,7 @@ pub mod gc24 {
                     }
                 }
                 "_get_latest" => {
-                    match self.servant.latest() {
+                    match self.servant.latest(&__at) {
                         Ok(__r0) => {
                             __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
                             Ok(rt::DispatchBody::Return)
