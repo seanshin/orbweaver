@@ -16,10 +16,11 @@
 /// `corpus/services/` and not `corpus/golden/`, because it carries an identity
 /// pragma and the golden corpus is deliberately free of them (see the file's
 /// own header, and `orbweaver-registry`'s `pragma_corpus.rs`).
-const FIXTURES: [(&str, &str); 4] = [
+const FIXTURES: [(&str, &str); 5] = [
     ("golden/24-skeleton-surface", "f_24_skeleton_surface"),
     ("golden/25-servant-faults", "f_25_servant_faults"),
     ("golden/26-object-identity", "f_26_object_identity"),
+    ("golden/27-bounds", "f_27_bounds"),
     ("services/ir-subset", "f_ir_subset"),
 ];
 

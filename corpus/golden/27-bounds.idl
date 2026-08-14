@@ -1,0 +1,42 @@
+// 27 — a declared bound in every place one can appear.
+//
+// A bound is part of the contract in both directions: a conformant peer may
+// neither send more than it declared nor accept more than it declared. The
+// static generated path used to drop every bound in this file — `rust_type`
+// mapped `sequence<octet, 6>` to a bare `Vec<u8>` and the runtime wrote the
+// length unchecked — while the dynamic path enforced them, which
+// `docs/decisions/D006-plane-rule-tensor.md` §2 measured while arguing about
+// something else.
+//
+// The placements here are deliberately one each, so a regression names itself:
+// a bounded string, wstring and sequence as top-level typedefs; a bounded
+// member inside a struct; a bounded element inside a bounded sequence and
+// inside an unbounded one; a bounded field in an exception; a bounded
+// parameter, return and attribute. `crates/orbweaver-gen/tests/bounds_oracle.rs`
+// holds the static and dynamic paths to the same verdict over all of them,
+// including the values that violate the bound — which is the case §8's
+// equal-bytes rule can never generate, because a violating value has no bytes.
+module gc27 {
+  typedef string<8>            Tag;
+  typedef wstring<4>           WideTag;
+  typedef sequence<octet, 6>   Blob;
+  typedef sequence<Tag, 3>     TagSeq;
+  typedef sequence<Blob>       BlobSeq;
+
+  struct Record {
+    Tag     label;
+    Blob    payload;
+    WideTag wide;
+  };
+
+  exception TooBig {
+    Tag  reason;
+    Blob offending;
+  };
+
+  interface Ledger {
+    Record keep(in Tag key, in Record entry) raises (TooBig);
+    TagSeq digest(in BlobSeq batch);
+    attribute Tag title;
+  };
+};

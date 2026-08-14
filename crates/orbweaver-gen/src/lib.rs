@@ -16,6 +16,17 @@
 //! happens when it is duplicated (the `wstring` BOM failure), and a code
 //! generator is a machine for duplicating things.
 //!
+//! A **declared bound** is one of those facts, and it travels in the emitted
+//! *type*: `sequence<octet, 64>` is `rt::Bounded<Vec<u8>, 64>`. The bound used
+//! to be discarded by [`rust_type`], so a generated stub sent sixty-five octets
+//! where the dynamic path refused them and a generated skeleton accepted what
+//! the dynamic one rejected — measured in
+//! `docs/decisions/D006-plane-rule-tensor.md` §2. The check itself is still in
+//! [`rt`], in one [`rt::Cdr`] impl, so the emitted file gained a type parameter
+//! and no arithmetic. `tests/bounds_oracle.rs` holds the two paths to the same
+//! verdict over values that violate the bound, which is the case §8's
+//! equal-bytes rule can never generate.
+//!
 //! # What is skipped, per item
 //!
 //! A type that reaches `fixed` is emitted as a comment naming §4.4, and
@@ -148,6 +159,25 @@ pub(crate) fn rust_path(id: &str, cx: &Cx<'_>) -> String {
 }
 
 /// The Rust type for a `TypeCode`, or the reason there is none.
+///
+/// # Declared bounds are part of the type
+///
+/// `sequence<octet, 64>` is `rt::Bounded<Vec<u8>, 64>`, `string<16>` is
+/// `rt::Bounded<String, 16>`, `wstring<4>` is `rt::Bounded<rt::WString, 4>`.
+/// The bound used to be discarded right here — the pattern read
+/// `Sequence { element, .. }` — and the runtime wrote `self.len()` unchecked,
+/// so a generated stub sent sixty-five octets where the dynamic path refused
+/// them and a generated skeleton accepted what the dynamic one rejected. That
+/// divergence is measured in `docs/decisions/D006-plane-rule-tensor.md` §2,
+/// which found it while arguing about the MoE control plane.
+///
+/// It is carried in the *type* rather than checked on the emitted member line
+/// because a per-line check is invisible to a reader of the generated trait and
+/// has to be right once per site; see [`rt::Bounded`] for the whole argument
+/// and for where the refusal happens.
+///
+/// An absent bound is zero, which is the registry's spelling for "unbounded",
+/// and those keep their bare `Vec`/`String`/`WString`.
 pub(crate) fn rust_type(tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
     Ok(match tc {
         TypeCode::Boolean => "bool".into(),
@@ -162,13 +192,20 @@ pub(crate) fn rust_type(tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
         TypeCode::Float => "f32".into(),
         TypeCode::Double => "f64".into(),
         TypeCode::LongDouble => "orbweaver_gen::rt::LongDouble".into(),
-        TypeCode::String(_) => "String".into(),
-        TypeCode::WString(_) => "orbweaver_gen::rt::WString".into(),
+        TypeCode::String(0) => "String".into(),
+        TypeCode::String(bound) => format!("orbweaver_gen::rt::Bounded<String, {bound}>"),
+        TypeCode::WString(0) => "orbweaver_gen::rt::WString".into(),
+        TypeCode::WString(bound) => {
+            format!("orbweaver_gen::rt::Bounded<orbweaver_gen::rt::WString, {bound}>")
+        }
         TypeCode::Any => "orbweaver_gen::rt::AnyVal".into(),
         TypeCode::TypeCode => "orbweaver_gen::rt::TypeCodeVal".into(),
         TypeCode::Void | TypeCode::Null => "()".into(),
         TypeCode::ObjRef { .. } => "orbweaver_gen::rt::ObjRef".into(),
-        TypeCode::Sequence { element, .. } => format!("Vec<{}>", rust_type(element, cx)?),
+        TypeCode::Sequence { element, bound: 0 } => format!("Vec<{}>", rust_type(element, cx)?),
+        TypeCode::Sequence { element, bound } => {
+            format!("orbweaver_gen::rt::Bounded<Vec<{}>, {bound}>", rust_type(element, cx)?)
+        }
         TypeCode::Array { element, length } => {
             format!("[{}; {length}]", rust_type(element, cx)?)
         }
