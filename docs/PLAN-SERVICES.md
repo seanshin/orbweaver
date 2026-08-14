@@ -226,6 +226,29 @@ concrete trigger that would un-defer it, and the v1 we would build — in
 | Time / PSS / Concurrency / Collections | no consumer names them; adopt-on-demand |
 | Federated Naming / Trading Link | tenancy (F5) may name the requirement; until then out |
 
+## 8.1 Operations absent without a reason / 이유 없는 부재 — 12건
+
+`SERVICES-COVERAGE.md` probed all 107 declared operations over the wire and
+found **12 answering `BAD_OPERATION` with no reason written anywhere**. The
+wire cannot distinguish a considered refusal from a forgotten one, so a
+`BAD_OPERATION` nobody wrote a sentence about is a gap by definition. This
+section is that sentence, written now — and where the honest answer is "nobody
+decided", it says so rather than inventing a rationale after the fact.
+
+| Absent | Verdict |
+|---|---|
+| `NamingContextExt::to_url` | **A gap, and an odd one**: the client half already ships — `crate::naming` *parses* `corbaname:`, and `to_url` produces one. It should be served; the omission was not a decision. |
+| `Repository::get_canonical_typecode`, `get_primitive` | **Deferred, reason now recorded**: both hand out `TypeCode`s the registry never stored — a canonical form and the primitives table — so serving them means minting type information rather than reporting it, which is the one thing a read-only facade must not do. |
+| `Container::lookup_name`, `describe_contents` | **Deferred, same class as §7's five**: they enumerate a container's contents, and `describe_interface` already carries what a client wanted from them. Listed with the others rather than left absent. |
+| `Contained::_get_version` | **A defect, not a deferral.** Its write half `_set_version` answers `NO_PERMISSION` — "the operation exists and the answer is no" — while its read half says "no such operation", on data the registry already parses out of every repository id. Backwards by `ifr.rs`'s own argument. To be fixed. |
+| `IDLType::_get_type` | **Deferred with the same reason as `describe_interface`'s absence used to have**: it returns a `TypeCode`, and until recently the registry loaded `::CORBA::TypeCode` as `void`. That is fixed, so this one is now merely unimplemented rather than unimplementable. |
+| `moe::Router::select`, `dispatch` | **Undecided, and that is the finding.** Declared in a landed contract (`corpus/golden/22`), served by nothing, and named in no plan — not even in the exclusions above. Routing is the control plane's centre; its absence needs a decision, not a table row. |
+
+**부재 12건에 대한 문장.** 와이어는 숙고된 거부와 잊힌 거부를 구분하지 못하므로,
+아무도 문장을 쓰지 않은 `BAD_OPERATION`은 정의상 공백이다. `to_url`과
+`_get_version`은 **결함**이고(고칠 것), 나머지는 이유를 붙여 유예하며,
+`moe::Router`는 **미결정**이라고 적는다 — 사후에 근거를 지어내지 않는다.
+
 ## 9. Fixture & dependency policy / 픽스처·의존성 정책
 
 No service in this plan adds a Cargo dependency — pure spec implementation.
