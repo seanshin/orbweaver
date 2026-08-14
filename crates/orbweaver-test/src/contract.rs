@@ -202,6 +202,16 @@ const MUTATING_VERBS: [&str; 26] = [
 pub fn contract_findings(registry: &Registry) -> Vec<Finding> {
     let mut out = Vec::new();
     for id in registry.ids() {
+        // A type carries annotations too, and nothing was reading them. The
+        // checker's whole premise is that an `ai_*` key reaching the registry
+        // and read by nobody is worth reporting — and a typo on a `typedef`
+        // was exactly that, silently, including on the one place D006 proposed
+        // putting a plane-rule marker.
+        if !matches!(registry.get(id), Some(Entry::Interface(_)))
+            && let Some(ann) = registry.annotations(id)
+        {
+            out.extend(unknown_keys(id, "the type", ann));
+        }
         let Some(Entry::Interface(iface)) = registry.get(id) else { continue };
         if iface.forward_only {
             continue;
@@ -808,6 +818,35 @@ fn carries_a_quantity(tc: &TypeCode) -> bool {
 #[cfg(test)]
 mod tests {
     use orbweaver_forge::infer;
+
+    /// A typo on a `typedef` was silent, which contradicted this module's own
+    /// premise: an `ai_*` key that reaches the registry and is read by nobody
+    /// is exactly what it reports. The walk visited interfaces only, so every
+    /// annotation on a type — including the place D006 proposed putting a
+    /// plane-rule marker — went unchecked.
+    #[test]
+    fn an_unknown_annotation_on_a_type_is_reported_too() {
+        let r = rules(
+            "module m {
+               //@ ai_handel: true
+               typedef sequence<octet> Blob;
+             };",
+        );
+        assert_eq!(r, ["contract/unknown-annotation"], "{r:?}");
+    }
+
+    /// And a known key on a type stays silent, or the rule fires on every
+    /// correctly annotated typedef in the corpus.
+    #[test]
+    fn a_known_annotation_on_a_type_is_silent() {
+        let r = rules(
+            "module m {
+               //@ ai_desc: An opaque handle
+               typedef sequence<octet> Blob;
+             };",
+        );
+        assert!(r.is_empty(), "{r:?}");
+    }
 
     use super::*;
 
