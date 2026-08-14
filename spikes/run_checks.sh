@@ -1111,6 +1111,23 @@ else
   fail_total=$((fail_total+1))
 fi
 
+# ── The audit ledger is bounded, and says where it was cut ──────────────────
+hr "audit ledger — a survey over the ceiling must name what it dropped"
+# Dropping the oldest silently is how an audit log stops being one: a dropped
+# hour and a quiet hour read identically, exactly when somebody is reading the
+# log to tell them apart. --dry-run needs no IOR, no socket and no handle, so
+# this is deterministic and fixture-free; an absent marker is a FAILURE.
+al_marker=$(cargo run -q -p orbweaver-mcp --bin orbweaver-mcp-server -- \
+  --idl spikes/echo.idl --expose IDL:spike/Echo:1.0 --as alice \
+  --dry-run --audit-capacity 3 2>&1 >/dev/null | grep -E '^ELIDED ' || true)
+al_dropped=$(printf '%s' "$al_marker" | sed -n 's/.*dropped=\([0-9][0-9]*\).*/\1/p')
+if [ -n "$al_dropped" ] && [ "$al_dropped" -ge 1 ]; then
+  echo "  ok   a ceiling of 3 over 11 decisions elided $al_dropped line(s) and named it in the ledger"
+else
+  echo "  FAIL the ledger dropped lines without saying so"
+  fail_total=$((fail_total+1))
+fi
+
 # ── Scope drift is loud before a call (stream C, D005's class) ──────────────
 hr "scope drift — a permission name no token can satisfy, reported as an outage"
 # The failure D005 measured is silent by construction: an identity provider
