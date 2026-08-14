@@ -29,6 +29,21 @@
 규칙 요지: OMG 명세로부터 1st-party 구현, **이름 붙은 소비자**의 부분집합만,
 가능한 곳은 **양방향** 오라클, 생략 연산은 시끄럽게 거부(반쪽 서비스 금지).
 
+**Whether rule 2 is being kept is measured, not asserted.**
+[`SERVICES-COVERAGE.md`](SERVICES-COVERAGE.md) (2026-08-14) drives every
+operation each service's IDL declares against the running servant and reports,
+per operation, whether it is served, refused with a reason quoted from the
+servant, or refused with no reason written anywhere. The last category is the
+one this rule exists to keep empty; it currently holds **12 of 107** declared
+operations, and the sections below are where their reasons would go. Re-run it
+with `./spikes/service_sweep.sh`.
+
+규칙 2가 지켜지고 있는지는 주장이 아니라 **측정**된다 —
+[`SERVICES-COVERAGE.md`](SERVICES-COVERAGE.md)가 선언된 모든 연산을 실행 중인
+서번트에 걸어보고 서빙/이유 있는 거부/이유 없는 거부로 분류한다. 마지막 칸이
+비어 있게 하는 것이 이 규칙의 목적이며, 현재 **선언 107개 중 12개**가 거기에
+있다.
+
 ## 2. CosNaming / 네이밍 — ✅ both halves landed and measured
 
 | | |
