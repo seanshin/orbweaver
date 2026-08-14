@@ -1,12 +1,38 @@
-//! The wire surface of the MoE control plane: `moe::ExpertRegistry` and
-//! `moe::ExpertLoader` from `corpus/golden/22-moe-control-plane.idl`, served
-//! on our own [`Server`](orbweaver_giop::server::Server).
+//! The wire surface of the MoE control plane: `moe::ExpertRegistry`,
+//! `moe::ExpertLoader` and `moe::Router::select` from
+//! `corpus/golden/22-moe-control-plane.idl`, served on our own
+//! [`Server`](orbweaver_giop::server::Server).
 //!
 //! PLAN-SERVICES §3 defers the standard `CosTrading::Lookup` facade until a
 //! foreign trading client is named, and lands **the project contract**
-//! instead. That contract is corpus/golden/22 and nothing else: the two
+//! instead. That contract is corpus/golden/22 and nothing else: the
 //! interfaces below are served exactly as declared there, with no operation
 //! added and none half-served.
+//!
+//! # The three objects, and the three operations that are not here
+//!
+//! `ExpertRegistry` and `ExpertLoader` are served whole. `Router` is served
+//! **by half, on purpose**, and the halves are the split PLAN-MOE §4.6
+//! reasoned out:
+//!
+//! - **`Router::select`** returns `ExpertSeq` — references, nothing else. It
+//!   is pure control plane and it is the question `orbweaver_trading` already
+//!   answers internally, so it is served here by delegating to that engine.
+//!   See [`ExpertService::select`], especially for what it answers when the
+//!   offer store cannot answer at all.
+//! - **`Router::dispatch`** carries an `Activation`, and so does
+//!   **`Expert::process`**. Both are control-plane-legal only under the
+//!   reading that a `Tensor` holds a handle rather than a payload — a reading
+//!   that lives in a comment in corpus/golden/22, binds nothing, and is
+//!   enforced by nothing. Serving them would commit the project to it
+//!   silently. `dispatch` answers `BAD_OPERATION` **and this paragraph is its
+//!   reason**, which is what PLAN-SERVICES §8.1 asks of every refusal.
+//! - **`moe::Expert`'s own operations** are not served here at all, and that
+//!   is not an omission either: this registry *stores* expert references and
+//!   hands them back, and the experts themselves are served elsewhere
+//!   (`tenant_service` serves `::moe::Expert` for corpus/golden/23). An
+//!   `Expert` servant on the registry's object would answer for an expert
+//!   that does not live here.
 //!
 //! # The join this file exists for
 //!
@@ -109,15 +135,19 @@ use orbweaver_giop::guarded::Guarded;
 use orbweaver_giop::server::{Completion, Dispatch, Request, SharedDispatch, SystemException};
 use orbweaver_giop::{IiopProfile, Ior, Version};
 use orbweaver_trading::policy::{Decision, LoadingPolicy};
+use orbweaver_trading::query::Query;
 use orbweaver_trading::{FREQ_SCALE, Offer, OfferStore, Residency, StoreError};
 
 use crate::residency::{Applied, BatchStats, ExpertLoader, GuardCondition, TransitionError};
-use crate::{Lifespan, OBJECT_ID, get_reference, is_equivalent};
+use crate::{Lifespan, OBJECT_ID, get_reference, is_equivalent, put_reference};
 
 /// Repository id of `moe::ExpertRegistry`.
 pub const EXPERT_REGISTRY_ID: &str = "IDL:moe/ExpertRegistry:1.0";
 /// Repository id of `moe::ExpertLoader`.
 pub const EXPERT_LOADER_ID: &str = "IDL:moe/ExpertLoader:1.0";
+/// Repository id of `moe::Router` — `select` served, `dispatch` refused; see
+/// the module docs and PLAN-MOE §4.6.
+pub const ROUTER_ID: &str = "IDL:moe/Router:1.0";
 /// Repository id of `moe::Expert` — the type of the reference
 /// `register_expert`, `deregister` and `heartbeat` take.
 pub const EXPERT_ID: &str = "IDL:moe/Expert:1.0";
@@ -135,6 +165,12 @@ pub const NO_PERMISSION: &str = "IDL:omg.org/CORBA/NO_PERMISSION:1.0";
 /// routing frequency has not fallen, or a call is inflight. Retry after the
 /// next window and it may well succeed.
 pub const TRANSIENT: &str = "IDL:omg.org/CORBA/TRANSIENT:1.0";
+/// `NO_IMPLEMENT`: `Router::select` was asked a question this deployment
+/// cannot answer, because the constraint names an offer property
+/// `moe::Capability` declares no member for. See
+/// [`ExpertService::select`] — it is the one refusal on this surface that is
+/// about the *contract* rather than about the request or the machine.
+pub const NO_IMPLEMENT: &str = "IDL:omg.org/CORBA/NO_IMPLEMENT:1.0";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // moe::Residency and moe::Capability on the wire
@@ -309,6 +345,143 @@ impl Capability {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// moe::GateSignal and moe::Constraints — Router::select's two arguments
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `moe::GateSignal`, corpus/golden/22 line 33:
+/// `struct GateSignal { Tensor affinity; unsigned short top_k; };`
+///
+/// # `affinity` is decoded and deliberately not read
+///
+/// `Tensor` is `sequence<octet>`, and whether one carries a *handle* or a
+/// *payload* is the open decision PLAN-MOE §4.6 records — the decision that
+/// keeps `Router::dispatch` and `Expert::process` unimplemented. A `select`
+/// that interpreted these bytes as an affinity vector and did arithmetic on
+/// them would be making that decision unilaterally, on the operation that was
+/// supposed to be the *pure control-plane* half.
+///
+/// So [`ExpertService::select`] reads `top_k` and nothing else, and
+/// `the_affinity_tensor_is_not_read` pins that as a property rather than
+/// leaving it as an omission: the same store and the same `top_k` answer
+/// identically whatever bytes arrive here.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GateSignal {
+    /// `Tensor affinity` — the gate network's output. Carried, never read.
+    pub affinity: Vec<u8>,
+    /// `unsigned short top_k` — at most this many experts come back. Zero
+    /// means zero: it is not a sentinel for "no limit", because inventing one
+    /// is how `latency_p50 == 0.0` came to mean "infinitely fast".
+    pub top_k: u16,
+}
+
+impl GateSignal {
+    /// Marshals the struct in declaration order.
+    pub fn write_to(&self, out: &mut Encoder) {
+        out.put_octet_seq(&self.affinity);
+        out.put_u16(self.top_k);
+    }
+
+    /// Demarshals what [`GateSignal::write_to`] wrote.
+    pub fn read_from(d: &mut Decoder<'_>) -> orbweaver_cdr::Result<Self> {
+        let affinity = d.get_octet_seq()?.to_vec();
+        Ok(GateSignal { affinity, top_k: d.get_u16()? })
+    }
+}
+
+/// `moe::Constraints`, corpus/golden/22 line 34:
+/// `struct Constraints { CapabilityId required; float max_latency_ms; float
+/// max_cost; };`
+///
+/// # What each member is compared against, and why
+///
+/// - **`required`** is matched against the offer's `specialization`, not
+///   against its `id`. The declared type points at `id` — `CapabilityId` is
+///   the id's typedef — but the operation's own shape refutes that reading:
+///   `select` returns a *sequence* and `GateSignal` carries a `top_k`, and
+///   neither means anything if the constraint already names one expert. That
+///   is `resolve`, not selection. §4.3's own worked example is
+///   `specialization == 'math'`, which is the question a gate asks.
+///   **An empty `required` constrains nothing** — an empty string is not a
+///   capability, so there is nothing to match on. That is the one reading of
+///   a member here that is not literal, and it is the difference between an
+///   operation with an answerable form and one without.
+/// - **`max_latency_ms`** is an upper bound on `latency_p99`. The offer
+///   carries two latencies and this member names no percentile; p99 is the
+///   one `moe::Capability` transports, so it is the one an offer that arrived
+///   over this contract actually has. Reading it as p50 would make every wire
+///   registration unanswerable on every call — honest, and useless.
+/// - **`max_cost`** is an upper bound on `cost`.
+///
+/// Both bounds are inclusive and both are taken literally, zero included: a
+/// `max_cost` of `0.0` is the bound "cost at most nothing", which nothing
+/// satisfies, and answering that with an empty sequence is true. Treating it
+/// as "unset" would be the placeholder-zero mistake PLAN-MOE §4.5 measured.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Constraints {
+    /// `CapabilityId required` — the capability the caller needs, matched
+    /// against the offer's specialization. Empty means unconstrained.
+    pub required: String,
+    /// `float max_latency_ms` — inclusive upper bound on `latency_p99`.
+    pub max_latency_ms: f32,
+    /// `float max_cost` — inclusive upper bound on `cost`.
+    pub max_cost: f32,
+}
+
+impl Constraints {
+    /// Marshals the struct in declaration order.
+    pub fn write_to(&self, out: &mut Encoder) {
+        out.put_str(&self.required);
+        out.put_f32(self.max_latency_ms);
+        out.put_f32(self.max_cost);
+    }
+
+    /// Demarshals what [`Constraints::write_to`] wrote.
+    pub fn read_from(d: &mut Decoder<'_>) -> orbweaver_cdr::Result<Self> {
+        Ok(Constraints {
+            required: d.get_string()?,
+            max_latency_ms: d.get_f32()?,
+            max_cost: d.get_f32()?,
+        })
+    }
+
+    /// The §4.3 query text these constraints mean, in the grammar
+    /// [`orbweaver_trading::query::Query`] parses.
+    ///
+    /// Built as *text* on purpose. The trading engine already answers this
+    /// question — three-valued matching, unknown-aware ordering, positioned
+    /// diagnostics — and its published surface is a query string, so this is
+    /// delegation rather than a second matcher that could disagree with the
+    /// first. The ordering is `route_freq DESC` because the grammar orders by
+    /// a *field* and `route_freq` is the numerator of §6's residency score;
+    /// the score itself is not a field, so it cannot be an `ORDER BY`. Ties
+    /// break on ascending id inside the engine, so the same store answers the
+    /// same way every time.
+    ///
+    /// Refuses rather than mangles: a `required` carrying a `'` would close
+    /// the query's string literal early, and a non-finite bound has no
+    /// literal in the grammar at all. Both are `BAD_PARAM` — the argument, not
+    /// the store.
+    fn to_query_text(&self) -> Result<String, SystemException> {
+        let mut clauses: Vec<String> = Vec::new();
+        if !self.required.is_empty() {
+            if self.required.contains('\'') {
+                return Err(system(BAD_PARAM, Completion::No));
+            }
+            clauses.push(format!("specialization == '{}'", self.required));
+        }
+        for (field, bound) in [("latency_p99", self.max_latency_ms), ("cost", self.max_cost)] {
+            if !bound.is_finite() {
+                return Err(system(BAD_PARAM, Completion::No));
+            }
+            // `{}` on an f64 is the shortest round-tripping decimal and never
+            // uses exponent notation, which the query lexer has no rule for.
+            clauses.push(format!("{field} <= {}", f64::from(bound)));
+        }
+        Ok(format!("{} ORDER BY route_freq DESC", clauses.join(" AND ")))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // The servant
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -390,6 +563,7 @@ pub struct ExpertService {
     port: u16,
     registry_key: Vec<u8>,
     loader_key: Vec<u8>,
+    router_key: Vec<u8>,
     /// Constant after construction, so it stays outside the lock: the §6
     /// policy is configuration, not state, and taking a lock to read
     /// configuration is the serialization this batch removed, put back by
@@ -423,6 +597,7 @@ impl ExpertService {
             port,
             registry_key: key("/registry"),
             loader_key: key("/loader"),
+            router_key: key("/router"),
             policy,
             cold_below,
             state: Guarded::new(
@@ -451,6 +626,11 @@ impl ExpertService {
         &self.loader_key
     }
 
+    /// The `Router` object key.
+    pub fn router_key(&self) -> &[u8] {
+        &self.router_key
+    }
+
     /// A publishable `ExpertRegistry` reference.
     pub fn registry_ior(&self) -> Ior {
         self.ior_for(EXPERT_REGISTRY_ID, &self.registry_key)
@@ -459,6 +639,13 @@ impl ExpertService {
     /// A publishable `ExpertLoader` reference.
     pub fn loader_ior(&self) -> Ior {
         self.ior_for(EXPERT_LOADER_ID, &self.loader_key)
+    }
+
+    /// A publishable `Router` reference. `select` is served on it; `dispatch`
+    /// answers `BAD_OPERATION` — see the module docs for the reason, which is
+    /// PLAN-MOE §4.6's undecided half.
+    pub fn router_ior(&self) -> Ior {
+        self.ior_for(ROUTER_ID, &self.router_key)
     }
 
     fn ior_for(&self, type_id: &str, key: &[u8]) -> Ior {
@@ -518,6 +705,125 @@ impl ExpertService {
     /// which is the right failure direction.
     pub fn observe_free_memory(&self, bytes: u64) {
         self.state.write(|s| s.free_memory = bytes);
+    }
+
+    /// Records what `id` specializes in — the offer property `moe::Capability`
+    /// declares no member for.
+    ///
+    /// Out of band for the same reason as [`ExpertService::observe_free_memory`]
+    /// and [`ExpertService::record_hit`]: it is a control-plane fact the
+    /// contract carries no room for, so it arrives in-process rather than
+    /// through an operation this contract does not declare. PLAN-MOE §4.5
+    /// measured what putting it *in* the contract costs — `idl-diff` refuses
+    /// the added member as BREAKING — so this is deliberately not a step
+    /// towards a wire member; it is what makes [`ExpertService::select`]
+    /// answerable at all for a deployment that knows its own experts.
+    ///
+    /// Returns whether `id` was registered. Nothing else about the offer
+    /// changes — the residency mirror included, since the offer is read,
+    /// amended and written back whole.
+    pub fn declare_specialization(&self, id: &str, specialization: &str) -> bool {
+        self.state.write(|s| {
+            let Some(mut offer) = s.store.get(id).cloned() else {
+                return false;
+            };
+            offer.specialization = Some(specialization.to_owned());
+            s.store.heartbeat(offer).is_ok()
+        })
+    }
+
+    /// `moe::Router::select` — the experts that satisfy `qos`, at most
+    /// `gate.top_k` of them, best first.
+    ///
+    /// # It delegates; it does not decide
+    ///
+    /// The question "which offers satisfy these constraints, in what order" is
+    /// [`orbweaver_trading`]'s, and it already answers it for the loading
+    /// policy. [`Constraints::to_query_text`] turns the struct into the §4.3
+    /// query the engine parses, the engine matches and orders, and this
+    /// function only maps the surviving offer ids back to the `Expert`
+    /// references [`ExpertService::register_expert`] stored. A second matcher
+    /// here would be a second thing to keep in step with §6, and the last
+    /// two copies of one truth in this file needed a choke point to stop them
+    /// drifting.
+    ///
+    /// # What it answers when the store cannot answer
+    ///
+    /// **`NO_IMPLEMENT`, for the whole call — never a shorter list.**
+    ///
+    /// An offer that registered over this contract carries no
+    /// `specialization`, so a `required` constraint is *unanswerable* for it
+    /// rather than false — that is what [`orbweaver_trading::query::Truth`]'s
+    /// third value is for, and
+    /// [`Selection::unanswerable`](orbweaver_trading::query::Selection) is
+    /// where the engine puts those offers instead of discarding them. On the
+    /// wire there is nowhere to put them: `ExpertSeq` is references and
+    /// nothing else, so a sequence that quietly omitted them would say *these
+    /// are all the experts that qualify* — which is exactly the sentence the
+    /// three-valued matching exists to stop being said. A short answer that
+    /// looks complete is worse than no answer.
+    ///
+    /// So the rule is: **a sequence of references is a complete answer or it
+    /// is a refusal.** Any unanswerable offer refuses the call, even when
+    /// other offers definitely matched and even when `top_k` was already
+    /// filled — the ordering is over all matches, so an offer nobody could
+    /// judge might have outranked the ones that came back.
+    ///
+    /// `NO_IMPLEMENT` and not one of the four exceptions this servant already
+    /// uses, because it is a different sentence from all of them:
+    ///
+    /// | | says | wrong here because |
+    /// |---|---|---|
+    /// | `BAD_OPERATION` | no such operation | `select` exists and ran |
+    /// | `BAD_PARAM` | your argument was bad | it was well formed; a malformed one *is* `BAD_PARAM`, above |
+    /// | `NO_PERMISSION` | you may not | nobody is being refused access |
+    /// | `TRANSIENT` | try the next window | a window cannot add a member to a struct; retrying for ever is the one thing a caller must not do |
+    /// | **`NO_IMPLEMENT`** | **this ORB cannot carry out what you asked** | the property the constraint names has no implementation behind it in this deployment, and PLAN-MOE §4.5 says what closing that costs |
+    ///
+    /// A caller that wants an answer today drops `required` (an empty one
+    /// constrains nothing and every remaining field is answerable), or the
+    /// deployment declares specializations out of band with
+    /// [`ExpertService::declare_specialization`].
+    ///
+    /// # What it does not do
+    ///
+    /// It does not filter on residency: `Constraints` declares no member for
+    /// it and inventing one would be policy this contract did not ask for. An
+    /// OFFLOADED expert can therefore come back, and dialling it answers
+    /// `OBJECT_NOT_EXIST` by F3's design — the caller's cue to `prefetch`. It
+    /// also does not dial anything: the references are copied out of the
+    /// table under the lock and handed back, so the "no outbound call inside
+    /// a lock" rule this module's docs anticipated for `select` is kept by
+    /// there being no call at all.
+    pub fn select(
+        &self,
+        gate: &GateSignal,
+        qos: &Constraints,
+    ) -> Result<Vec<Ior>, SystemException> {
+        let text = qos.to_query_text()?;
+        // A query text we built ourselves that will not parse is our defect,
+        // not the caller's — and `to_query_text` has already refused every
+        // argument that could make one.
+        let query = Query::parse(&text).map_err(|_| SystemException::internal())?;
+        self.state.read(|s| {
+            let selection = query.select_reporting(&s.store);
+            if !selection.unanswerable.is_empty() {
+                return Err(system(NO_IMPLEMENT, Completion::No));
+            }
+            let mut chosen = Vec::with_capacity(selection.matched.len().min(gate.top_k.into()));
+            for offer in selection.matched.iter().take(gate.top_k.into()) {
+                // An offer with no reference would mean the store and the
+                // reference table disagree about who is registered. They are
+                // written together under one lock, so this is unreachable —
+                // and if it ever is reached, saying so is better than
+                // returning a list one expert short.
+                let Some(registered) = s.refs.get(&offer.id) else {
+                    return Err(SystemException::internal());
+                };
+                chosen.push(registered.reference.clone());
+            }
+            Ok(chosen)
+        })
     }
 
     /// Records one routing hit against `id`'s decayed counter — §6's feedback
@@ -727,6 +1033,26 @@ impl ExpertState {
     }
 }
 
+/// Which of the three objects a request addressed. One servant, three object
+/// keys, three repository ids — a client narrows to exactly one interface, and
+/// an operation from a neighbouring one is `BAD_OPERATION` on this object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Face {
+    Registry,
+    Loader,
+    Router,
+}
+
+impl Face {
+    fn repository_id(self) -> &'static str {
+        match self {
+            Face::Registry => EXPERT_REGISTRY_ID,
+            Face::Loader => EXPERT_LOADER_ID,
+            Face::Router => ROUTER_ID,
+        }
+    }
+}
+
 /// The wire operations, each one lock section deep.
 ///
 /// This layer exists so that **taking the lock happens in exactly one place
@@ -773,15 +1099,24 @@ impl ExpertService {
     /// nothing else.
     fn handle(&self, req: &Request, out: &mut Encoder) -> Result<(), SystemException> {
         let mut args = req.body().map_err(|_| SystemException::marshal())?;
-        let on_registry = req.object_key == self.registry_key;
+        let face = if req.object_key == self.registry_key {
+            Face::Registry
+        } else if req.object_key == self.loader_key {
+            Face::Loader
+        } else if req.object_key == self.router_key {
+            Face::Router
+        } else {
+            // `knows` gates this, so it is unreachable through `Server` — but
+            // a direct `dispatch` call has no such gate.
+            return Err(SystemException::object_not_exist());
+        };
 
         // Every ORB probes with these before it trusts a narrow, and the
-        // answer differs by which of the two objects was addressed.
+        // answer differs by which of the three objects was addressed.
         match req.operation.as_str() {
             "_is_a" => {
                 let want = args.get_string().map_err(|_| SystemException::marshal())?;
-                let mine = if on_registry { EXPERT_REGISTRY_ID } else { EXPERT_LOADER_ID };
-                out.put_bool(want == mine || want == OBJECT_ID);
+                out.put_bool(want == face.repository_id() || want == OBJECT_ID);
                 return Ok(());
             }
             "_non_existent" | "_not_existent" => {
@@ -791,7 +1126,30 @@ impl ExpertService {
             _ => {}
         }
 
-        if on_registry {
+        if face == Face::Router {
+            // `Activation dispatch(in Activation x, in CallContext ctx)` is
+            // NOT served, and the reason is PLAN-MOE §4.6's: it carries an
+            // `Activation`, whose `Tensor` is control-plane-legal only under
+            // the reading that it holds a handle rather than a payload. That
+            // reading lives in a corpus comment, binds nothing and is enforced
+            // by nothing, so serving `dispatch` would commit this project to
+            // it by accident. `select` returns references only and needs no
+            // such commitment, which is why exactly one of the two is here.
+            if req.operation != "select" {
+                return Err(SystemException::bad_operation());
+            }
+            let gate = GateSignal::read_from(&mut args).map_err(|_| SystemException::marshal())?;
+            let qos = Constraints::read_from(&mut args).map_err(|_| SystemException::marshal())?;
+            let experts = self.select(&gate, &qos)?;
+            // `sequence<Expert>`: a length then that many object references.
+            out.put_u32(experts.len() as u32);
+            for expert in &experts {
+                put_reference(out, Some(expert)).map_err(|_| SystemException::marshal())?;
+            }
+            return Ok(());
+        }
+
+        if face == Face::Registry {
             match req.operation.as_str() {
                 "register_expert" => {
                     let reference = get_reference(&mut args)
@@ -848,11 +1206,13 @@ impl ExpertService {
 }
 
 impl SharedDispatch for ExpertService {
-    /// Two object keys, one servant — see the type docs. Both are constants
-    /// set at construction, so this answers without taking the lock: a
-    /// `LocateRequest` cannot be delayed by a heartbeat.
+    /// Three object keys, one servant — see the type docs. All three are
+    /// constants set at construction, so this answers without taking the lock:
+    /// a `LocateRequest` cannot be delayed by a heartbeat.
     fn knows(&self, object_key: &[u8]) -> bool {
-        object_key == self.registry_key || object_key == self.loader_key
+        object_key == self.registry_key
+            || object_key == self.loader_key
+            || object_key == self.router_key
     }
 
     fn dispatch(&self, request: &Request, out: &mut Encoder) -> Result<(), SystemException> {
@@ -1064,6 +1424,251 @@ mod tests {
         assert_eq!(offer.latency_p50, None, "…and no p50, which is not the same as fast");
     }
 
+    // ── Router::select ──────────────────────────────────────────────────────
+
+    fn gate(top_k: u16) -> GateSignal {
+        GateSignal { affinity: Vec::new(), top_k }
+    }
+
+    /// Constraints that admit everything: no required capability, and bounds
+    /// well above what `cap()` registers (latency 42, cost 1.5).
+    fn open(top_k: u16) -> (GateSignal, Constraints) {
+        (
+            gate(top_k),
+            Constraints { required: String::new(), max_latency_ms: 1000.0, max_cost: 100.0 },
+        )
+    }
+
+    /// Three experts with different routing histories, so the ordering claim
+    /// has something to order.
+    fn routed() -> ExpertService {
+        let svc = service();
+        for name in ["expert-a", "expert-b", "expert-c"] {
+            svc.register_expert(expert_ref(name), &cap(name, 10)).unwrap();
+        }
+        for _ in 0..3 {
+            svc.record_hit("expert-b");
+        }
+        svc.record_hit("expert-c");
+        svc
+    }
+
+    fn keys(experts: &[Ior]) -> Vec<String> {
+        experts
+            .iter()
+            .map(|i| String::from_utf8_lossy(&i.primary().unwrap().object_key).into_owned())
+            .collect()
+    }
+
+    /// The ordering and the truncation, together: best first by `route_freq`,
+    /// ties on ascending id, and never more than `top_k`.
+    #[test]
+    fn select_returns_the_best_experts_first_and_no_more_than_top_k() {
+        let svc = routed();
+        let (g, qos) = open(10);
+        assert_eq!(
+            keys(&svc.select(&g, &qos).unwrap()),
+            ["expert-b", "expert-c", "expert-a"],
+            "route_freq DESC: b (3 hits), c (1), a (0)"
+        );
+        let (g, qos) = open(2);
+        assert_eq!(keys(&svc.select(&g, &qos).unwrap()), ["expert-b", "expert-c"]);
+        // Zero means zero. It is not a sentinel for "everything".
+        let (g, qos) = open(0);
+        assert!(svc.select(&g, &qos).unwrap().is_empty());
+    }
+
+    /// The bounds are real bounds, inclusively applied, and a query that
+    /// genuinely excludes everything returns an **empty sequence** — which is
+    /// the true answer "nothing qualifies", and is a different reply from the
+    /// refusal below.
+    #[test]
+    fn bounds_exclude_and_an_honest_nothing_is_an_empty_sequence() {
+        let svc = routed();
+        let g = gate(10);
+        let admits = Constraints { required: String::new(), max_latency_ms: 42.0, max_cost: 1.5 };
+        assert_eq!(svc.select(&g, &admits).unwrap().len(), 3, "the bounds are inclusive");
+
+        let too_fast =
+            Constraints { required: String::new(), max_latency_ms: 41.9, max_cost: 100.0 };
+        assert!(svc.select(&g, &too_fast).unwrap().is_empty());
+        let too_cheap =
+            Constraints { required: String::new(), max_latency_ms: 1000.0, max_cost: 1.4 };
+        assert!(svc.select(&g, &too_cheap).unwrap().is_empty());
+        // The all-zero probe body a sweep sends: a real bound of zero, which
+        // nothing satisfies. Answered, not refused.
+        assert!(svc.select(&gate(0), &Constraints::default()).unwrap().is_empty());
+    }
+
+    /// The finding this operation was written around: a constraint naming a
+    /// property the offer cannot answer refuses the **whole call**, rather
+    /// than returning the offers that happened to be judgeable.
+    ///
+    /// Three states, because only the middle one is subtle: nothing knows its
+    /// specialization (refuse), *some* do (refuse — a short list would claim
+    /// to be complete), all do (answer, and answer with only the matches).
+    #[test]
+    fn a_constraint_the_offers_cannot_answer_refuses_the_whole_call() {
+        let svc = routed();
+        let g = gate(10);
+        let math =
+            Constraints { required: "math".to_owned(), max_latency_ms: 1000.0, max_cost: 100.0 };
+
+        // None: every offer arrived over a contract with no specialization.
+        assert_eq!(
+            svc.select(&g, &math).unwrap_err().id,
+            NO_IMPLEMENT,
+            "an unanswerable constraint is not 'no experts do maths'"
+        );
+
+        // Some: expert-b is known to do maths, the other two are unjudged.
+        // Returning just expert-b would say "this is every maths expert".
+        assert!(svc.declare_specialization("expert-b", "math"));
+        assert_eq!(
+            svc.select(&g, &math).unwrap_err().id,
+            NO_IMPLEMENT,
+            "a partial answer that looks complete is the failure mode, not the fix"
+        );
+
+        // All: now the question is answerable, and the answer is only the
+        // offers that match.
+        assert!(svc.declare_specialization("expert-a", "vision"));
+        assert!(svc.declare_specialization("expert-c", "math"));
+        assert_eq!(
+            keys(&svc.select(&g, &math).unwrap()),
+            ["expert-b", "expert-c"],
+            "route_freq DESC among the maths experts, and no vision expert"
+        );
+        // …and a capability nobody claims is now a true empty, not a refusal.
+        let none = Constraints { required: "cooking".to_owned(), ..math.clone() };
+        assert!(svc.select(&g, &none).unwrap().is_empty());
+
+        // The escape hatch a caller has today: drop the constraint the
+        // contract cannot carry, and everything else still answers.
+        let svc = routed();
+        let (g, qos) = open(10);
+        assert_eq!(svc.select(&g, &qos).unwrap().len(), 3);
+    }
+
+    /// `declare_specialization` amends one property and disturbs nothing else
+    /// — the residency mirror included, since a heartbeat is what it rides on.
+    #[test]
+    fn declaring_a_specialization_leaves_the_rest_of_the_offer_alone() {
+        let svc = service();
+        svc.register_expert(expert_ref("expert-a"), &cap("expert-a", 10)).unwrap();
+        svc.prefetch("expert-a").unwrap();
+        svc.complete_load("expert-a").unwrap();
+        svc.record_hit("expert-a");
+
+        assert!(svc.declare_specialization("expert-a", "math"));
+        assert!(
+            !svc.declare_specialization("expert-ghost", "math"),
+            "an unknown id declares nothing"
+        );
+        let offer = svc.with_store(|s| s.get("expert-a").cloned()).unwrap();
+        assert_eq!(offer.specialization.as_deref(), Some("math"));
+        assert_eq!(offer.residency, Residency::Resident, "the mirror still agrees with the loader");
+        assert_eq!(offer.route_freq, FREQ_SCALE, "the store still owns routing history");
+        assert_eq!(offer.mem_footprint, 10);
+        assert_eq!(svc.with_loader(|l| l.status("expert-a")), Some(Residency::Resident));
+        // …and the p50 the contract also cannot carry is still unknown, which
+        // is the point: this closes one gap, not the class.
+        assert_eq!(offer.latency_p50, None);
+    }
+
+    /// The `Tensor` is decoded and not read. Same store, same `top_k`, four
+    /// different affinity blobs — including one large enough to be a payload
+    /// rather than a handle — and one answer.
+    ///
+    /// Stated as a property because the alternative reading of these bytes is
+    /// the open decision in PLAN-MOE §4.6: a `select` that quietly started
+    /// interpreting them would be making that decision, and this test is what
+    /// makes that a change somebody has to notice.
+    #[test]
+    fn the_affinity_tensor_is_not_read() {
+        let svc = routed();
+        let qos = open(10).1;
+        let baseline = keys(&svc.select(&gate(10), &qos).unwrap());
+        for affinity in
+            [vec![], vec![0u8], vec![0xff; 3], (0..4096u32).map(|i| i as u8).collect::<Vec<_>>()]
+        {
+            let g = GateSignal { affinity, top_k: 10 };
+            assert_eq!(keys(&svc.select(&g, &qos).unwrap()), baseline);
+        }
+    }
+
+    /// An argument that cannot be turned into a query literal is the caller's
+    /// problem, and it is a different exception from the store's gap.
+    #[test]
+    fn a_constraint_that_cannot_be_a_query_literal_is_bad_param() {
+        let svc = routed();
+        let g = gate(1);
+        for qos in [
+            Constraints { required: "it's math".to_owned(), max_latency_ms: 1.0, max_cost: 1.0 },
+            Constraints { required: String::new(), max_latency_ms: f32::NAN, max_cost: 1.0 },
+            Constraints { required: String::new(), max_latency_ms: 1.0, max_cost: f32::INFINITY },
+        ] {
+            assert_eq!(svc.select(&g, &qos).unwrap_err().id, BAD_PARAM, "{qos:?}");
+        }
+    }
+
+    /// The query text is the delegation, so it is pinned: a member that
+    /// silently started comparing against a different field would still
+    /// return plausible experts.
+    #[test]
+    fn the_constraints_become_the_documented_query() {
+        let qos = Constraints { required: "math".to_owned(), max_latency_ms: 200.0, max_cost: 2.5 };
+        assert_eq!(
+            qos.to_query_text().unwrap(),
+            "specialization == 'math' AND latency_p99 <= 200 AND cost <= 2.5 \
+             ORDER BY route_freq DESC"
+        );
+        // An empty `required` drops the conjunct rather than matching '' .
+        let qos = Constraints { required: String::new(), ..qos };
+        assert_eq!(
+            qos.to_query_text().unwrap(),
+            "latency_p99 <= 200 AND cost <= 2.5 ORDER BY route_freq DESC"
+        );
+        // Every text this can build is one the engine parses.
+        assert!(Query::parse(&qos.to_query_text().unwrap()).is_ok());
+        // …including the awkward widenings: an f32 bound printed as f64 must
+        // still lex, which rules out exponent notation.
+        for bound in [0.1_f32, -0.0, 1e30, 1e-30, f32::MIN, f32::MAX] {
+            let qos =
+                Constraints { required: String::new(), max_latency_ms: bound, max_cost: bound };
+            let text = qos.to_query_text().unwrap();
+            assert!(Query::parse(&text).is_ok(), "{bound} produced {text:?}");
+        }
+    }
+
+    /// The two structs marshal in the IDL's declaration order, decoded with
+    /// the primitive getters so a swap in both directions still fails, in both
+    /// byte orders.
+    #[test]
+    fn gate_signal_and_constraints_are_in_the_idls_declaration_order() {
+        let g = GateSignal { affinity: vec![1, 2, 3], top_k: 7 };
+        let qos =
+            Constraints { required: "math".to_owned(), max_latency_ms: 200.5, max_cost: 0.25 };
+        for endian in [Endian::Big, Endian::Little] {
+            let mut e = Encoder::new(endian);
+            g.write_to(&mut e);
+            qos.write_to(&mut e);
+            let bytes = e.finish().unwrap();
+
+            let mut d = Decoder::new(&bytes, endian);
+            // corpus/golden/22 line 33, then line 34.
+            assert_eq!(d.get_octet_seq().unwrap(), &[1, 2, 3], "1 affinity {endian:?}");
+            assert_eq!(d.get_u16().unwrap(), 7, "2 top_k {endian:?}");
+            assert_eq!(d.get_string().unwrap(), "math", "3 required {endian:?}");
+            assert_eq!(d.get_f32().unwrap(), 200.5, "4 max_latency_ms {endian:?}");
+            assert_eq!(d.get_f32().unwrap(), 0.25, "5 max_cost {endian:?}");
+
+            let mut d = Decoder::new(&bytes, endian);
+            assert_eq!(GateSignal::read_from(&mut d).unwrap(), g, "round trip {endian:?}");
+            assert_eq!(Constraints::read_from(&mut d).unwrap(), qos, "round trip {endian:?}");
+        }
+    }
+
     // ── a served instance ───────────────────────────────────────────────────
 
     /// The service on loopback. Clients are used sequentially and `shutdown`
@@ -1074,6 +1679,7 @@ mod tests {
     struct Served {
         registry: Ior,
         loader: Ior,
+        router: Ior,
         stop: Arc<AtomicBool>,
         thread: Option<std::thread::JoinHandle<ExpertService>>,
     }
@@ -1084,14 +1690,15 @@ mod tests {
             let port = server.local_addr().unwrap().port();
             svc.host = "127.0.0.1".into();
             svc.port = port;
-            let (registry, loader) = (svc.registry_ior(), svc.loader_ior());
+            let (registry, loader, router) =
+                (svc.registry_ior(), svc.loader_ior(), svc.router_ior());
             let stop = Arc::new(AtomicBool::new(false));
             let flag = stop.clone();
             let thread = std::thread::spawn(move || {
                 server.serve(&mut svc, || flag.load(Ordering::SeqCst)).unwrap();
                 svc
             });
-            Served { registry, loader, stop, thread: Some(thread) }
+            Served { registry, loader, router, stop, thread: Some(thread) }
         }
 
         fn registry(&self) -> Connection {
@@ -1100,6 +1707,10 @@ mod tests {
 
         fn loader(&self) -> Connection {
             Connection::connect(&self.loader, T).unwrap()
+        }
+
+        fn router(&self) -> Connection {
+            Connection::connect(&self.router, T).unwrap()
         }
 
         fn shutdown(mut self, last: Connection) -> ExpertService {
@@ -1543,7 +2154,71 @@ mod tests {
         assert!(!ldr.invoke_nullary("_non_existent").unwrap().body().unwrap().get_bool().unwrap());
         let err = ldr.invoke_nullary("select").unwrap_err();
         assert_eq!(exception_id(err), orbweaver_giop::server::BAD_OPERATION, "Router op");
-        served.shutdown(ldr);
+        drop(ldr);
+
+        let mut router = served.router();
+        for (id, want) in [
+            (ROUTER_ID, true),
+            (OBJECT_ID, true),
+            (EXPERT_REGISTRY_ID, false),
+            (EXPERT_LOADER_ID, false),
+        ] {
+            let reply = router.invoke("_is_a", move |e| e.put_str(id)).unwrap();
+            assert!(reply.body().unwrap().get_bool().unwrap() == want, "router _is_a {id}");
+        }
+        // The other half of `Router`, refused with the reason in the module
+        // docs — and a neighbouring interface's operation, refused because
+        // these are three objects rather than one with a union of operations.
+        let err = router.invoke("dispatch", |e| e.put_octet_seq(&[])).unwrap_err();
+        assert_eq!(exception_id(err), orbweaver_giop::server::BAD_OPERATION, "Router::dispatch");
+        let err = router.invoke("status", |e| e.put_str("expert-a")).unwrap_err();
+        assert_eq!(exception_id(err), orbweaver_giop::server::BAD_OPERATION, "loader op on router");
+        served.shutdown(router);
+    }
+
+    /// `select` over a real socket: the arguments decode as corpus/golden/22
+    /// declares them and the reply is an `ExpertSeq` — a length then that many
+    /// object references, which is the shape a generated client reads.
+    #[test]
+    fn select_answers_an_expert_seq_on_the_wire() {
+        let svc = routed();
+        let served = Served::start(svc);
+        let mut router = served.router();
+
+        let (g, qos) = open(2);
+        let reply = router
+            .invoke("select", move |e| {
+                g.write_to(e);
+                qos.write_to(e);
+            })
+            .expect("select is served");
+        let mut b = reply.body().unwrap();
+        let n = b.get_u32().unwrap();
+        assert_eq!(n, 2, "top_k truncated the three registered experts");
+        let mut got = Vec::new();
+        for _ in 0..n {
+            let reference = get_reference(&mut b).unwrap().expect("a live reference, not nil");
+            assert_eq!(reference.type_id, EXPERT_ID, "the sequence is of moe::Expert");
+            got.push(
+                String::from_utf8_lossy(&reference.primary().unwrap().object_key).into_owned(),
+            );
+        }
+        assert_eq!(got, ["expert-b", "expert-c"], "route_freq DESC, over the wire");
+        assert!(b.is_empty(), "the reply body is the sequence and nothing else");
+
+        // And the refusal, on the wire, for the constraint the contract
+        // cannot carry — the one a caller must not retry.
+        let g = gate(10);
+        let math =
+            Constraints { required: "math".to_owned(), max_latency_ms: 1000.0, max_cost: 100.0 };
+        let err = router
+            .invoke("select", move |e| {
+                g.write_to(e);
+                math.write_to(e);
+            })
+            .unwrap_err();
+        assert_eq!(exception_id(err), NO_IMPLEMENT);
+        served.shutdown(router);
     }
 
     /// An object key this service never minted is nobody's.
@@ -1552,7 +2227,8 @@ mod tests {
         let svc = service();
         assert!(SharedDispatch::knows(&svc, svc.registry_key()));
         assert!(SharedDispatch::knows(&svc, svc.loader_key()));
-        assert!(!SharedDispatch::knows(&svc, b"MoE"), "the base key alone names neither object");
+        assert!(SharedDispatch::knows(&svc, svc.router_key()));
+        assert!(!SharedDispatch::knows(&svc, b"MoE"), "the base key alone names none of them");
         assert!(!SharedDispatch::knows(&svc, b"NameService"));
     }
 }

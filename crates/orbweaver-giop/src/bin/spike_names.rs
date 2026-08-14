@@ -4,15 +4,16 @@
 //! The client half has resolved against omniNames since Phase 1; this
 //! exercises the same client against `NamingServer` — bind, resolve,
 //! resolve_str, AlreadyBound, unbind then NotFound, nested contexts through
-//! two levels by path and by the child's own object key, and the `list`
+//! two levels by path and by the child's own object key, `to_url` round-tripped
+//! back through the client's own parser, and the `list`
 //! stub. Self-consistency only: it proves the two halves agree, not that
 //! either matches the specification.
 //!
 //! Usage: `spike-names [ior-out-path] [--hold]`
 //!
 //! Default IOR path is `spikes/names.ior`. With `--hold` the server keeps
-//! running after the checks, `spike/Echo` left bound, so an external client
-//! can be pointed at it.
+//! running after the checks, `spike/Echo` and `spike/Echo 2.dev` left bound,
+//! so an external client can be pointed at it.
 //!
 //! # Cross-ORB oracle (integration's job, not run here)
 //!
@@ -26,6 +27,20 @@
 //! print(orb.object_to_string(nc.resolve_str('spike/Echo')))"
 //! ```
 //!
+//! The second direction, which is `to_url`'s: ask **our** server to build a
+//! `corbaname:` URL and then hand that URL straight back to omniORB's
+//! `string_to_object`, which resolves it by dialling the address inside it.
+//! The `--hold` banner prints the address to pass; the name deliberately
+//! carries a space, so the claim covers the escaping and not only the plumbing.
+//!
+//! ```text
+//! python3 -c "import sys; from omniORB import CORBA; import CosNaming; \
+//! orb = CORBA.ORB_init(sys.argv); \
+//! nc = orb.string_to_object(open('spikes/names.ior').read().strip())._narrow(CosNaming.NamingContextExt); \
+//! url = nc.to_url('iiop:1.2@127.0.0.1:PORT', 'spike/Echo 2.dev'); print(url); \
+//! print(orb.object_to_string(orb.string_to_object(url)))"
+//! ```
+//!
 //! PASS is a printed `IOR:` string whose object key is `Echo` (the dummy
 //! bound below — host 192.0.2.1 is TEST-NET, deliberately undialable:
 //! naming stores references, it does not call them). One serving limit the
@@ -37,7 +52,7 @@
 //! mutex, one operation at a time.
 
 use orbweaver_giop::Error;
-use orbweaver_giop::naming::{NameComponent, NamingContext, read_name};
+use orbweaver_giop::naming::{NameComponent, NamingContext, ObjectUrl, read_name, stringify_name};
 use orbweaver_giop::naming_server::{
     ALREADY_BOUND_ID, NOT_FOUND_ID, NamingServer, WHY_MISSING_NODE,
 };
@@ -131,6 +146,25 @@ fn run(out_path: &str, hold: bool) -> Result<(), Box<dyn std::error::Error>> {
     )?;
     ok("resolve_str agreed with resolve");
 
+    // ── to_url: built by the server, read back by the client's parser ──
+    // A name with a space in it, because a URL cannot carry one literally:
+    // this is the case that distinguishes a `to_url` that escapes from one
+    // that concatenates.
+    let spaced = NameComponent { id: "Echo 2".into(), kind: "dev".into() };
+    ctx.bind(&[n("spike"), spaced.clone()], &dummy(b"Echo"))?;
+    let address = format!("iiop:1.2@127.0.0.1:{port}");
+    let stringified = stringify_name(&[n("spike"), spaced.clone()]);
+    let url = ctx.to_url(&address, &stringified)?;
+    require(url == format!("corbaname:{address}#spike/Echo%202.dev"), "to_url escaped wrongly")?;
+    match ObjectUrl::parse(&url) {
+        Ok(ObjectUrl::Corbaname { name, .. }) => require(
+            name == vec![n("spike"), spaced.clone()],
+            "our parser read a different name out of our own to_url",
+        )?,
+        other => return Err(format!("to_url produced something we cannot parse: {other:?}").into()),
+    }
+    ok(&format!("to_url round-tripped through the client's parser: {url}"));
+
     // ── AlreadyBound ──
     match ctx.bind(&[n("spike"), n("Echo")], &echo) {
         Err(Error::UserException { id, .. }) if id == ALREADY_BOUND_ID => {
@@ -194,6 +228,7 @@ fn run(out_path: &str, hold: bool) -> Result<(), Box<dyn std::error::Error>> {
 
     if hold {
         println!("HOLDING — spike/Echo stays bound; point a cross-ORB client at {out_path}");
+        println!("HOLDING — to_url address for the oracle: iiop:1.2@127.0.0.1:{port}");
         loop {
             std::thread::park();
         }

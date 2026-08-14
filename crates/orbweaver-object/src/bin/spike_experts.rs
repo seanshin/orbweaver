@@ -25,17 +25,33 @@
 //! end — the type system enforces that no control step runs while the wire is
 //! open, which is the property the design is claiming.
 //!
-//! Usage: `spike-experts`
+//! Usage: `spike-experts [registry-ior [loader-ior [router-ior]]] [--hold]`
+//!
+//! Defaults are `spikes/moe-registry.ior`, `spikes/moe-loader.ior` and
+//! `spikes/moe-router.ior`. The three references are published and `READY` is
+//! printed **before** the checks run, so a harness can wait on a file the way
+//! it does for `spike-names`.
+//!
+//! With `--hold` the serving window stays open after the checks instead of
+//! closing with the last one — the same shape `spike-names`, `spike-events`
+//! and `spike-ifr` have, and the thing whose absence made
+//! `SERVICES-COVERAGE.md` §9 build a separate holder crate to address this
+//! servant from outside. Held state is what the checks left: three experts
+//! registered, `expert-code` OFFLOADED, `expert-math` ACTIVE, `expert-vision`
+//! RESIDENT and pinned, and all three carrying an out-of-band specialization
+//! so `Router::select` has an answerable question to be asked. Stopped by
+//! killing the process; there is no remote shutdown.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use orbweaver_giop::server::Server;
+use orbweaver_giop::server::{BAD_OPERATION, Server};
 use orbweaver_giop::{Connection, Error, IiopProfile, Ior, Version};
 use orbweaver_object::expert_service::{
-    BAD_PARAM, Capability, EXPERT_ID, ExpertService, NO_PERMISSION, TRANSIENT,
-    residency_from_ordinal,
+    BAD_PARAM, Capability, Constraints, EXPERT_ID, ExpertService, GateSignal, NO_IMPLEMENT,
+    NO_PERMISSION, TRANSIENT, residency_from_ordinal,
 };
+use orbweaver_object::get_reference;
 use orbweaver_object::residency::Applied;
 use orbweaver_trading::policy::{Decision, LoadingPolicy};
 use orbweaver_trading::{FREQ_SCALE, Residency};
@@ -146,7 +162,17 @@ where
 }
 
 fn main() -> std::process::ExitCode {
-    match run() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let hold = args.iter().any(|a| a == "--hold");
+    let paths: Vec<&str> =
+        args.iter().filter(|a| !a.starts_with("--")).map(String::as_str).collect();
+    let out = [
+        paths.first().copied().unwrap_or("spikes/moe-registry.ior"),
+        paths.get(1).copied().unwrap_or("spikes/moe-loader.ior"),
+        paths.get(2).copied().unwrap_or("spikes/moe-router.ior"),
+    ];
+
+    match run(&out, hold) {
         Ok(0) => {
             println!("\nexpert-service: PASS");
             std::process::ExitCode::SUCCESS
@@ -162,7 +188,37 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-fn run() -> Result<u32, Box<dyn std::error::Error>> {
+/// The `ExpertSeq` a `Router::select` reply carries: a length, then that many
+/// object references. Decoded here rather than trusted, because "select
+/// answered" and "select answered a sequence of experts" are different claims.
+fn select(c: &mut Connection, gate: GateSignal, qos: Constraints) -> Result<Vec<Ior>, Error> {
+    let reply = c.invoke("select", move |e| {
+        gate.write_to(e);
+        qos.write_to(e);
+    })?;
+    let mut body = reply.body()?;
+    let n = body.get_u32()?;
+    let n = body.validate_count(n, 4)?;
+    let mut experts = Vec::with_capacity(n);
+    for _ in 0..n {
+        experts.push(get_reference(&mut body)?.ok_or(Error::Decode("a nil expert reference"))?);
+    }
+    Ok(experts)
+}
+
+/// The object keys of a selection, which is what a reader can check by eye.
+fn names(experts: &[Ior]) -> Vec<String> {
+    experts
+        .iter()
+        .map(|i| {
+            i.primary()
+                .map(|p| String::from_utf8_lossy(&p.object_key).into_owned())
+                .unwrap_or_else(|_| "<no profile>".to_owned())
+        })
+        .collect()
+}
+
+fn run(out: &[&str; 3], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
     // §6's knobs, and the cold threshold in FREQ_SCALE units: "fewer than two
     // hits' worth of history left".
     let policy = LoadingPolicy { affinity_weight: 1, low_watermark: 100, high_watermark: 400 };
@@ -173,6 +229,7 @@ fn run() -> Result<u32, Box<dyn std::error::Error>> {
     let svc = ExpertService::new("127.0.0.1", port, b"MoE", policy, cold_below);
     let registry_ior = svc.registry_ior();
     let loader_ior = svc.loader_ior();
+    let router_ior = svc.router_ior();
     let mut r = Report { failures: 0 };
 
     println!("serving  {}", server.local_addr()?);
@@ -182,10 +239,18 @@ fn run() -> Result<u32, Box<dyn std::error::Error>> {
         String::from_utf8_lossy(svc.registry_key())
     );
     println!("loader   {} key {:?}", loader_ior.type_id, String::from_utf8_lossy(svc.loader_key()));
+    println!("router   {} key {:?}", router_ior.type_id, String::from_utf8_lossy(svc.router_key()));
     println!(
         "policy   affinity {}, watermarks {}/{}, cold below {cold_below}",
         policy.affinity_weight, policy.low_watermark, policy.high_watermark
     );
+    // Published before the checks run, so a harness waiting on a file is
+    // waiting on something that exists as early as it can.
+    for (path, ior) in out.iter().zip([&registry_ior, &loader_ior, &router_ior]) {
+        std::fs::write(path, ior.to_stringified()?)?;
+        println!("IOR written to {path}");
+    }
+    println!("READY");
 
     // ── window 1: registration and the loading requests ─────────────────────
     println!("\nwindow 1 — the wire is open");
@@ -312,6 +377,7 @@ fn run() -> Result<u32, Box<dyn std::error::Error>> {
     // ── window 2: the guarded eviction ──────────────────────────────────────
     println!("\nwindow 2 — the wire is open again");
     let loader_ior2 = loader_ior.clone();
+    let router_ior2 = router_ior.clone();
     serve_window(&server, &svc, &registry_ior, &mut r, |r| {
         let mut ldr = match Connection::connect(&loader_ior2, T) {
             Ok(c) => c,
@@ -340,6 +406,50 @@ fn run() -> Result<u32, Box<dyn std::error::Error>> {
             Ok(s) => r.eq(s, Residency::Resident, "…and that status is unchanged too"),
             Err(e) => r.check(false, &format!("status: {e}")),
         }
+        drop(ldr);
+
+        // ── moe::Router::select, on its own object ──
+        let mut rtr = match Connection::connect(&router_ior2, T) {
+            Ok(c) => c,
+            Err(e) => {
+                r.check(false, &format!("connect to the router: {e}"));
+                return;
+            }
+        };
+        // Unconstrained on the one property the contract cannot carry: every
+        // remaining field is answerable, so this is the form of the question
+        // that works today. All three have one hit, so they tie on route_freq
+        // and the engine's ascending-id tie-break decides.
+        let open = Constraints { required: String::new(), max_latency_ms: 1000.0, max_cost: 100.0 };
+        match select(&mut rtr, GateSignal { affinity: vec![7; 8], top_k: 2 }, open.clone()) {
+            Ok(experts) => r.eq(
+                names(&experts),
+                vec!["expert-code".to_owned(), "expert-math".to_owned()],
+                "select(top_k=2) — route_freq DESC, ties by id, truncated",
+            ),
+            Err(e) => r.check(false, &format!("select: {e}")),
+        }
+        // A constraint on a property no offer carries: refused whole. The
+        // failure this replaces would have been an ExpertSeq of length 0,
+        // which reads as "no expert does maths".
+        let math =
+            Constraints { required: "math".to_owned(), max_latency_ms: 1000.0, max_cost: 100.0 };
+        let got = exception_id(rtr.invoke("select", {
+            let math = math.clone();
+            move |e| {
+                GateSignal { affinity: Vec::new(), top_k: 4 }.write_to(e);
+                math.write_to(e);
+            }
+        }));
+        r.eq(
+            got.as_str(),
+            NO_IMPLEMENT,
+            "select(required='math') with no specialization on file is NO_IMPLEMENT, not empty",
+        );
+        // The other half of the interface, refused with the PLAN-MOE §4.6
+        // reason written in the servant.
+        let got = exception_id(rtr.invoke("dispatch", |e| e.put_octet_seq(&[])));
+        r.eq(got.as_str(), BAD_OPERATION, "Router::dispatch is refused: it carries an Activation");
     });
 
     // ── the policy application, pinned ──────────────────────────────────────
@@ -383,6 +493,73 @@ fn run() -> Result<u32, Box<dyn std::error::Error>> {
         Some(Residency::Offloaded),
         "the offer store mirrors what the loader actually did",
     );
+
+    // ── out of band again: the property the contract has no member for ──────
+    println!("\nafter the policy — out of band, because moe::Capability declares no member");
+    for (name, spec) in
+        [("expert-code", "code"), ("expert-math", "math"), ("expert-vision", "vision")]
+    {
+        r.check(
+            svc.declare_specialization(name, spec),
+            &format!("declare_specialization({name}, {spec}) — PLAN-MOE §4.5's gap, from inside"),
+        );
+    }
+
+    // ── window 3: the same question, now answerable ─────────────────────────
+    println!("\nwindow 3 — the wire is open, and the router can answer");
+    let router_ior3 = router_ior.clone();
+    serve_window(&server, &svc, &registry_ior, &mut r, |r| {
+        let mut rtr = match Connection::connect(&router_ior3, T) {
+            Ok(c) => c,
+            Err(e) => {
+                r.check(false, &format!("connect to the router: {e}"));
+                return;
+            }
+        };
+        let math =
+            Constraints { required: "math".to_owned(), max_latency_ms: 1000.0, max_cost: 100.0 };
+        match select(&mut rtr, GateSignal { affinity: Vec::new(), top_k: 4 }, math) {
+            Ok(experts) => r.eq(
+                names(&experts),
+                vec!["expert-math".to_owned()],
+                "select(required='math') now answers, and answers only the maths expert",
+            ),
+            Err(e) => r.check(false, &format!("select: {e}")),
+        }
+        // A capability nobody claims: an empty sequence is the true answer,
+        // and it is a different reply from the refusal in window 2.
+        let none =
+            Constraints { required: "cooking".to_owned(), max_latency_ms: 1000.0, max_cost: 100.0 };
+        match select(&mut rtr, GateSignal { affinity: Vec::new(), top_k: 4 }, none) {
+            Ok(experts) => r.eq(
+                experts.len(),
+                0,
+                "select(required='cooking') is an empty sequence — answered, not refused",
+            ),
+            Err(e) => r.check(false, &format!("select: {e}")),
+        }
+        // expert-code is OFFLOADED after the policy pass and is still
+        // selected: `Constraints` declares no residency member, so `select`
+        // does not filter on one, and a caller's cue is `prefetch`.
+        let code =
+            Constraints { required: "code".to_owned(), max_latency_ms: 1000.0, max_cost: 100.0 };
+        match select(&mut rtr, GateSignal { affinity: Vec::new(), top_k: 4 }, code) {
+            Ok(experts) => r.eq(
+                names(&experts),
+                vec!["expert-code".to_owned()],
+                "an OFFLOADED expert is still selected — select filters on the declared constraints only",
+            ),
+            Err(e) => r.check(false, &format!("select: {e}")),
+        }
+    });
+
+    if hold {
+        println!(
+            "\nHOLDING — registry/loader/router stay served; point an external client at {}",
+            out.join(", ")
+        );
+        server.serve_shared(&svc, || false)?;
+    }
 
     Ok(r.failures)
 }
