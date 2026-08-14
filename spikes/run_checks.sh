@@ -699,7 +699,14 @@ fi
 wf_out=$(cargo run -q --release -p orbweaver-test --bin wire-fuzz -- --cases 20000 2>&1)
 if printf '%s' "$wf_out" | grep -q "wire-fuzz: PASS"; then
   echo "  ok   $(printf '%s' "$wf_out" | head -1 | sed 's/^wire-fuzz: //')"
-  echo "  ok   $(printf '%s' "$wf_out" | sed -n 2p | sed 's/^ *//')"
+  printf '%s' "$wf_out" | sed -n '2,3p' | sed 's/^  /  ok   /'
+  # A target that reached nothing is green and worthless, and only a reader of
+  # this line can turn the binary's own warning into a failure.
+  if printf '%s' "$wf_out" | grep -q "WARNING:"; then
+    printf '%s' "$wf_out" | grep "WARNING:" | sed 's/^ */       /'
+    echo "  FAIL a fuzz target reached nothing; its green result measures nothing"
+    fail_total=$((fail_total+1))
+  fi
 else
   printf '%s' "$wf_out" | grep "FAIL" | head -3 | sed 's/^/       /'
   echo "  FAIL a decoder panicked on bytes a peer can send"
@@ -1085,6 +1092,22 @@ if [ "$dr_rc" -eq 0 ] && [ "$allowed" = "10" ] && [ "$scoped" = "1" ] && [ "$str
   echo "  ok   every audit line is a DRYRUN line — no question counted as a call"
 else
   echo "  FAIL the dry-run preview did not hold (allow=$allowed need_scope=$scoped stray=$stray)"
+  fail_total=$((fail_total+1))
+fi
+
+# ── Service coverage: every declared operation, over the wire ───────────────
+hr "service coverage — what the five servants actually serve"
+# Each COMPONENTS row says ✅ and each servant implements a subset, deliberately.
+# The wire cannot distinguish a considered BAD_OPERATION from a forgotten one,
+# so this counts the facts and docs/SERVICES-COVERAGE.md carries the reasons; a
+# servant that stops dispatching an operation, or starts dispatching one the
+# plan says is refused, moves a count here and nowhere else.
+cov=$(./spikes/service_sweep.sh 2>&1)
+if printf '%s' "$cov" | grep -q "service-sweep: PASS"; then
+  printf '%s' "$cov" | grep '^TOTAL' | sed 's/^/  ok   /'
+else
+  echo "  FAIL service coverage sweep"
+  printf '%s' "$cov" | grep -E 'FAIL|UNMEASURED|BLOCKED' | head -5 | sed 's/^/       /'
   fail_total=$((fail_total+1))
 fi
 

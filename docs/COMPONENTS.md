@@ -44,6 +44,29 @@ Anything requiring a new dependency class needs a decision document first
 | LifeCycle / Property | ✅ | F5: `ModelFactory`/`ComposedModel`/`PolicyDomain`/`EnterpriseExpert` served from corpus/golden/23. **The object key is the tenant context** — `moe::CallContext` carries no tenant and a servant sees no service context, so there is a factory per tenant; a shared one could not have checked `retire` at all. Refusal precedes the existence check, so it is not an existence oracle. `base()` is served, counted and audited: two tenants on one base necessarily get the identical reference, which is a correlator by construction and only stops by not sharing. Scopes and caller identity are **not** enforced here and the module says which layer owns each (guard chain, MCP capability handles, CSIv2) |
 | Transaction / Time / PSS / Concurrency / CosCollections / Notification / federated naming / full Security Service | — | **excluded and designed**: `docs/PLAN-DEFERRED.md` gives each a chapter with the concrete trigger that would un-defer it and a v1 sketch, so "excluded" means "designed enough to resume" rather than "forgotten". Honest absence over decorative interfaces |
 
+## What the ✅ rows actually serve / ✅가 실제로 서빙하는 것
+
+Every service row above says ✅ and every servant implements a **subset**,
+deliberately. [`SERVICES-COVERAGE.md`](SERVICES-COVERAGE.md) is the measured
+list: 107 declared operations probed with raw GIOP rather than with our own
+client, classified served / refused-with-a-reason / absent.
+
+The number that matters: **12 of 107 are `BAD_OPERATION` with no reason in the
+servant, the plan, or anywhere in the tree.** The wire cannot distinguish a
+considered refusal from a forgotten one, so the wire supplies the fact and a
+document has to supply the reason — and for those twelve, none does yet.
+
+Known and unfixed, from that sweep: `_get_version` answers `BAD_OPERATION`
+while `_set_version` answers `NO_PERMISSION`, which is backwards by `ifr.rs`'s
+own argument that `NO_PERMISSION` says the operation exists and the answer is
+no — on data the registry already parses out of every repository id it holds.
+`moe::Router::select`/`dispatch` are declared in a landed contract, served by
+nothing, and named in no plan including the exclusions table.
+
+**✅ 행은 모두 의도적으로 부분집합을 구현한다.** 107개 중 **12개가 이유 없는
+`BAD_OPERATION`** 이다 — 와이어는 숙고된 거부와 잊힌 거부를 구분하지 못하므로,
+사실은 와이어가 주고 이유는 문서가 줘야 하는데 그 12개에는 아직 없다.
+
 ## Reading this honestly / 정직한 독해
 
 The wire→bridge spine (cdr→giop→idl→registry→dynamic→mcp→gen) is implemented
