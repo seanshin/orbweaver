@@ -163,26 +163,68 @@ Each of these produced a phantom failure during Phase 0. They will recur.
 ## Commands
 
 ```bash
-cargo test --workspace          # unit tests: CDR alignment, GIOP framing, IOR
-./spikes/run_checks.sh          # full assumption harness; exit code is the verdict
-python3 spikes/idl_lint.py *.idl  # pre-oracle lint: case-insensitive clashes
-omniidl -b dump <file>.idl      # conformance oracle for a single file
-cargo run -q --bin spike-dump -- spikes/echo.ior <op> <big|little> <n>
+cargo test --workspace          # ~1040 tests across twelve crates
+./spikes/run_checks.sh          # the harness; exit code is the verdict, one run at a time
 ```
 
-Fixture setup: `brew install omniorb` (interop peer and oracle only).
+The harness takes a machine-wide lock (`/tmp/orbweaver-harness.lock`) and kills
+fixtures by process group. Two runs at once used to destroy each other's peers
+and report failures that were about the scheduling; that cost two diagnoses.
+Wait for the lock rather than removing it. *하네스는 머신 전역 락을 잡는다.*
+
+**Gates, in the order they get run:**
+
+```bash
+cargo run -q --bin sidl-validate -- <files>.idl   # S4: syntax, semantics, fix hints
+cargo run -q -p orbweaver-test --bin contract-check -- corpus/golden/*.idl
+                                # property (defects) + annotation advice (never gates)
+cargo run -q --bin idl-diff -- <released>.idl <proposed>.idl   # §5.3, exit 1 on breaking
+omniidl -b dump <file>.idl      # the conformance oracle for one file
+./spikes/differential.sh        # two front ends over the corpus, divergences recorded
+```
+
+**Measurement tools** — each prints what it could *not* measure:
+
+```bash
+cargo run -q --release -p orbweaver-test --bin wire-fuzz -- --cases 50000
+                                # panic freedom over the decoders a peer reaches first
+cargo run -q --bin repository-ids -- corpus/pragma/*.idl   # ids, to diff against omniidl
+./spikes/service_sweep.sh       # every declared operation of the five servants, over the wire
+./spikes/end_to_end.sh          # requirement → contract → both halves → guarded call
+./spikes/nat_rewrite.sh         # R7: an IOR dialable from where the client actually is
+cargo run -q -p orbweaver-console --bin orbweaver-console -- catalog <file>.idl --text
+```
+
+Fixture setup: `brew install omniorb` (interop peer and oracle only);
+`spikes/jacorb/setup.sh` for the second oracle and its Interface Repository.
 
 ## Layout
 
 ```
-crates/orbweaver-cdr/     CDR encode/decode
-crates/orbweaver-giop/    GIOP messages, IOR, invoker, spike binaries
-corpus/golden/            must all compile — type-system and CDR coverage
-corpus/negative/          must all be rejected — diagnostic quality material
-corpus/requirements/      assumption B benchmark, frozen before generation
-corpus/annotations/       assumption C probes
-spikes/                   omniORB fixture, server, harness
-docs/                     PLAN.md, PLAN.ko.md, PHASE0.md
+crates/orbweaver-cdr/       CDR encode/decode
+crates/orbweaver-giop/      GIOP, IOR, TypeCode, Server/Dispatch, naming + event servants
+crates/orbweaver-idl/       IDL 4.2 front end, SIDL structured comments
+crates/orbweaver-registry/  types as data, the IFR facade, remote IFR ingestion, §5.3 differ
+crates/orbweaver-object/    POA, references, MoE residency, tenancy
+crates/orbweaver-dynamic/   value marshalling, DII/DSI shape, AnyJSON
+crates/orbweaver-trading/   offer store, constraint queries, loading policy
+crates/orbweaver-forge/     the S1–S5 pipeline, each stage a producer plus its own gate
+crates/orbweaver-mcp/       the agent boundary: triad, handles, interceptor chain, dry-run
+crates/orbweaver-gen/       client stubs and server skeletons
+crates/orbweaver-test/      property, contract advice, wire fuzz
+crates/orbweaver-console/   catalog, contract diff and trace pages — renders, decides nothing
+corpus/golden/              must all compile — type-system and CDR coverage
+corpus/negative/            must all be rejected — diagnostic quality material
+corpus/services/            contracts that exist to be served (identity pragmas live here)
+corpus/pragma/              repository-id cases, diffed against omniidl
+corpus/requirements/        assumption B benchmark, frozen before generation
+corpus/queries/             the frozen search benchmark (v1 stays frozen; v2 is widened)
+corpus/annotations/         assumption C probes
+corpus/divergences.tsv      where the front ends disagree, with which one we follow
+spikes/                     fixtures, servers, the harness, and the measurement scripts
+docs/                       ARCHITECTURE (as built) · PLAN(.ko) · COMPONENTS (measured)
+                            PLAN-MOE · PLAN-SERVICES · PLAN-DEFERRED · SERVICES-COVERAGE
+                            decisions/ · pipeline-runs/ · PHASE0–6
 ```
 
 ## Conventions
