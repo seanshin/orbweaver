@@ -24,6 +24,7 @@
 //!
 //! | §4.5 | concern | stage | occupant |
 //! |------|---------|-------|----------|
+//! | 1 | 인증·인가 | [`SEAT_EXPIRY`] | [`crate::token::Expiry`], installed by a deployment |
 //! | 1 | 인증·인가 | [`STAGE_EXPOSURE`], [`STAGE_SCOPES`] | the default-deny allowlist and `ai_authz` |
 //! | 2 | 쿼터·레이트 리밋 | [`SEAT_QUOTA`] | [`crate::quota::Quota`], installed by a deployment |
 //! | 3 | 안전 필터 | [`STAGE_APPROVAL`], [`SEAT_SAFETY_CONTENT`] | the destructive-effect approval only |
@@ -33,6 +34,14 @@
 //! A seat that is still empty is named rather than omitted, because **a named
 //! empty seat is a plan and an unnamed absence is a gap**:
 //!
+//! - **[`SEAT_EXPIRY`] (§4.5 #1, the authentication half) has an occupant, and
+//!   it is not in [`Chain::standard`] either.** [`crate::token::Expiry`] refuses
+//!   a caller whose credential has outlived its grant — §4.8's fourth
+//!   discomfort, which is about the *middle* of a long-lived session rather than
+//!   its start. It is installed with [`Chain::expiry`] because it needs an
+//!   instant only a host has (there is no clock in this crate), and because the
+//!   two things it could do before the host supplies one are opposites that only
+//!   an operator can choose between.
 //! - **[`SEAT_QUOTA`] (§4.5 #2) has an occupant, and it is not in
 //!   [`Chain::standard`].** [`crate::quota::Quota`] is a consumption budget:
 //!   how many calls, counted against what, and what happens at the limit. It is
@@ -71,9 +80,9 @@
 //! the acting order and the numbering comes back:
 //!
 //! ```text
-//! registration:  audit  telemetry  exposure  scopes  [quota]  approval
-//! before  (in):    ·        ·         1 ───────1 ─────[2]──────3
-//! after  (out):    5 ◀──────4 ◀───────·────────·───────·───────·
+//! registration:  audit  telemetry  [expiry]  exposure  scopes  [quota]  approval
+//! before  (in):    ·        ·        [1] ──────1 ───────1 ─────[2]──────3
+//! after  (out):    5 ◀──────4 ◀───────·────────·────────·───────·───────·
 //! ```
 //!
 //! The gates act on the way in, in §4.5's order 1 → 2 → 3. The observers act on
@@ -179,6 +188,17 @@ use crate::policy::{Approval, Denied, Exposure, destructive_effect, required_sco
 use crate::promote::CallStats;
 use crate::telemetry::{ABSENT, Decision, OUTCOME_OK, Trace};
 
+/// §4.5 #1, the **authentication** half's seat: has the caller's credential
+/// outlived its grant?
+///
+/// [`crate::token::Expiry`] is the first-party occupant and [`Chain::expiry`]
+/// installs it here — ahead of every other gate, because authentication
+/// precedes authorization and because [`crate::identity::Delegation::decide`]
+/// already checks expiry "first and unconditionally". Like [`SEAT_QUOTA`] it is
+/// **not** in [`Chain::standard`]: the gate needs an instant only a host has,
+/// and both behaviours it could default to are wrong (see
+/// [`crate::token::Unstamped`]).
+pub const SEAT_EXPIRY: &str = "authn.expiry";
 /// §4.5 #1, the allowlist half: is this interface, and this operation on it,
 /// exposed at all?
 pub const STAGE_EXPOSURE: &str = "authz.exposure";
@@ -491,6 +511,23 @@ impl Chain {
     /// [`crate::quota`]'s module docs.
     pub fn quota(&mut self, quota: crate::quota::Quota) -> bool {
         self.insert_after(STAGE_SCOPES, SEAT_QUOTA, quota)
+    }
+
+    /// Puts the credential-expiry gate in §4.5 #1's authentication seat: ahead
+    /// of every other gate, immediately inside the two observers.
+    ///
+    /// Returns **`false`** when there is no [`STAGE_TELEMETRY`] to sit inside —
+    /// reachable only through [`Chain::empty`] — and installs nothing, so a host
+    /// cannot come away believing it is checking expiry when it is not. Same
+    /// rule as [`Chain::quota`] and [`Chain::trace`]: absence is reported, never
+    /// greened.
+    ///
+    /// Pass a **clone** of one [`crate::token::Expiry`] to every chain a session
+    /// owns — the bridge's and each [`crate::guard::Guarded`]'s — so that one
+    /// stamp moves all of them. A stub with an instant of its own is a stub that
+    /// keeps serving an hour after the token died.
+    pub fn expiry(&mut self, expiry: crate::token::Expiry) -> bool {
+        self.insert_after(STAGE_TELEMETRY, SEAT_EXPIRY, expiry)
     }
 
     /// Every stage's name, in registration order.

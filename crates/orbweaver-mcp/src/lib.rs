@@ -51,6 +51,7 @@ pub mod quota;
 pub mod rpc;
 pub mod session;
 pub mod telemetry;
+pub mod token;
 
 use std::collections::{BTreeMap, BTreeSet};
 

@@ -136,7 +136,10 @@ pub enum Would {
     /// something the caller could otherwise have: it is not on the menu, which
     /// is a different answer and a different fix.
     NotExposed,
-    /// The contract requires a scope and nobody is signed in to hold it.
+    /// Nobody is signed in to hold a scope the contract requires — or the
+    /// caller who was signed in has a credential that has since expired
+    /// ([`crate::token::Expiry`]). One row, because both have the same fix:
+    /// authenticate again. The row's `why` says which it is.
     NeedAuthentication,
     /// The contract requires a scope this caller does not hold.
     NeedScope,
@@ -175,7 +178,9 @@ impl Would {
             Some(Denied::InterfaceNotExposed(_) | Denied::OperationNotExposed { .. }) => {
                 Would::NotExposed
             }
-            Some(Denied::NotAuthenticated { .. }) => Would::NeedAuthentication,
+            Some(Denied::NotAuthenticated { .. } | Denied::CredentialExpired { .. }) => {
+                Would::NeedAuthentication
+            }
             Some(Denied::MissingScope { .. }) => Would::NeedScope,
             Some(Denied::NeedsApproval { .. }) => Would::NeedApproval,
             Some(Denied::QuotaExhausted { .. }) => Would::Exhausted,
@@ -448,7 +453,7 @@ pub fn survey(
 /// Every operation name the gate could be asked about for `id`: what the
 /// contract declares (inherited included), union what the exposure names.
 /// Sorted, because a report an operator diffs must not reorder itself.
-fn operations_of(registry: &Registry, exposure: &Exposure, id: &str) -> Vec<String> {
+pub(crate) fn operations_of(registry: &Registry, exposure: &Exposure, id: &str) -> Vec<String> {
     let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     if let Some(iface) = registry.interface(id) {
         names.extend(iface.operations.keys().cloned());
