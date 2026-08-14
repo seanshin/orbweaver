@@ -5,7 +5,10 @@
 //! S1 ingest      requirement text   → brief JSON   gate: ingest::gate
 //! S2 synthesize  brief JSON         → .idl         gate: synthesize::gate
 //! S3 annotate    .idl               → .sidl.idl    gate: annotate::check_against
-//! S4 validate    the annotated file → verdict      gate: validate  (the gate)
+//! S4 validate    the annotated file → verdict      gate: validate, and
+//!                                                   validate_against where a
+//!                                                   contract is registered
+//!                                                   (D005 option B)
 //! S5 register    valid SIDL         → catalog      register()
 //! ```
 //!
@@ -43,13 +46,14 @@
 //! **모든 단계는 같은 모양이다: 생산자 + 자기 게이트.** 그래서 각 단계를 단독
 //! 실행·측정할 수 있고, 실패를 어느 단계 탓인지 말할 수 있다.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use orbweaver_registry::Registry;
 
 use crate::ingest::Brief;
-use crate::{Report, Severity, annotate, ingest, synthesize, validate};
+use crate::{Finding, Report, Severity, annotate, ingest, synthesize, validate, validate_against};
 
 /// One stage of the §5 pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -455,6 +459,118 @@ pub fn run_batch(
     }
 }
 
+/// Where the contract a regeneration is compared against comes from — D005
+/// option B's "registered", made concrete.
+///
+/// # What "registered" means here, and why
+///
+/// D003-B deferred durable storage, so there is no registry of record to read,
+/// and PLAN §5.3 already says as much: *"'released' currently means the file
+/// `idl-diff` is pointed at rather than a contract read from a registry of
+/// record."* Three candidates existed and only one of them is honest today.
+///
+/// - **The S5 catalog within a run — rejected.** [`register`] builds its
+///   [`Registry`] *after* S4, out of the very artifacts S4 has just gated, so
+///   diffing an item against it compares a contract with itself and can never
+///   report a change. Its own documentation says the rows do not persist. A
+///   baseline a run creates cannot constrain that run.
+/// - **Nothing until a store exists — rejected.** That is D005's option E taken
+///   by omission. The differ, its verdicts and [`crate::validate_against`] are
+///   built, tested and proved on the wire; withholding them until storage lands
+///   protects nobody, and the harm B answers — a regenerated contract whose
+///   repository ids no longer resolve — is happening now.
+/// - **A directory of contracts the run is pointed at — adopted.** It is
+///   already what `idl-diff` means by "released", so B introduces no second
+///   meaning of the word; it is auditable, because every outcome names the file
+///   it was compared against ([`DiffOutcome::against`]); and it is the seam the
+///   durable store plugs into — when D003-B lands, [`Registered::contract`] is
+///   the only body that changes.
+///
+/// # An absent contract is silence, not a failure
+///
+/// A first generation has nothing to diff against and must never be refused for
+/// it. [`Registered::contract`] answers [`Baseline::None`], the gate falls back
+/// to plain [`validate`], and the absence is *counted and printed* rather than
+/// passed over silently — which is the difference between "nothing was
+/// registered" and "nothing was checked".
+///
+/// **등록본이 없으면 침묵한다.** 첫 생성은 비교 대상이 없으므로 거부하지 않는다.
+/// 다만 비교하지 않았다는 사실 자체는 세어서 보고한다.
+#[derive(Debug, Clone)]
+pub struct Registered {
+    at: Workspace,
+}
+
+impl Registered {
+    /// The directory of record for this run.
+    ///
+    /// An item's contract is `<id>.sidl.idl`, or `<id>.idl` where nothing
+    /// annotated it — the same resolution [`Workspace::gated_artifact`] uses, so
+    /// a previous run's output directory *is* a usable registry of record and
+    /// the two halves of "regenerate and compare" need no separate layout.
+    pub fn at(dir: impl Into<PathBuf>) -> Registered {
+        Registered { at: Workspace::new(dir) }
+    }
+
+    /// The directory this reads from.
+    pub fn root(&self) -> &Path {
+        self.at.root()
+    }
+
+    /// What is registered under `id`.
+    pub fn contract(&self, id: &str) -> Baseline {
+        let Some(path) = self.at.gated_artifact(id) else { return Baseline::None };
+        match std::fs::read_to_string(&path) {
+            Ok(idl) => Baseline::Contract { path, idl },
+            Err(e) => Baseline::Unreadable { path, message: e.to_string() },
+        }
+    }
+}
+
+/// What the registry of record had for one item.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Baseline {
+    /// Nothing is registered under this id. A first generation, and silence.
+    #[default]
+    None,
+    /// The registered contract and the file it was read from.
+    Contract {
+        /// Where it came from, so a report can name it.
+        path: PathBuf,
+        /// The contract itself.
+        idl: String,
+    },
+    /// Something is registered and could not be read. Never silence: an
+    /// unmeasured check is a failure, never a pass, and "the baseline was
+    /// unreadable" must not look like "there was no baseline".
+    Unreadable {
+        /// The file that could not be read.
+        path: PathBuf,
+        /// The I/O error, verbatim.
+        message: String,
+    },
+}
+
+/// What S4's §5.3 comparison did for one item — the record that makes the
+/// difference between *checked and clean* and *never checked* visible.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffOutcome {
+    /// The item.
+    pub id: String,
+    /// The registered contract it was compared against, `None` when the item
+    /// has none.
+    pub against: Option<PathBuf>,
+    /// Whether the comparison actually ran. `false` when there was no baseline,
+    /// and `false` when the file itself was rejected — [`crate::validate_against`]
+    /// refuses to diff a file that does not parse, because that diff would be
+    /// nonsense and would bury the real cause.
+    pub compared: bool,
+    /// The changes that refused the item, worst first, verbatim.
+    pub blocking: Vec<String>,
+    /// The reason a superseding run gave, when one downgraded them.
+    pub superseded: Option<String>,
+}
+
 /// The gate as a stage: S4, whose producer is the identity.
 ///
 /// S4 is a verdict, not a rewrite, so its "producer" hands its input straight
@@ -462,12 +578,106 @@ pub fn run_batch(
 /// anyway is what lets `--from s4 --to s4` re-gate a directory of files with
 /// the same code path, the same report shape and the same numbers as a full
 /// run.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct ValidateStage;
+///
+/// # D005 option B: the §5.3 comparison, wired in
+///
+/// Given a [`Registered`] directory this gate calls [`crate::validate_against`]
+/// rather than [`validate`], so a regeneration over an already-registered
+/// contract is diffed against what is registered and an undeclared breaking
+/// change is **refused** — the capability D005 records as built, tested and
+/// simply never called by the pipeline.
+///
+/// ## What it cannot see, stated where it is wired
+///
+/// The differ compares bases, operations, attributes, `TypeCode`s and constant
+/// types and values. It never reads `OperationSig::annotations`, so a
+/// regeneration that keeps every identifier and changes only `//@ ai_authz`
+/// produces **zero changes** and passes this gate — by §5.3's own logic an
+/// annotation is not a wire change at all. That is precisely why D005 landed
+/// option C first and why B does not subsume it: the two see disjoint halves of
+/// the same regeneration, and only C sees the half that fails silently in
+/// production.
+///
+/// The one exception is narrower than it looks. A contract that *also* states
+/// its scope as an IDL constant — as the recorded parking contract does, with
+/// `const string GATE_OPERATE_PERMISSION` — moves that constant's value, which
+/// the differ does compare and calls *conditionally breaking*, which this crate
+/// maps to a warning. So even there B does not refuse, and it sees the scope
+/// only because the contract's author chose to model it as a constant. That is
+/// a property of one contract's style, not a capability of this gate.
+///
+/// **B는 스코프 표류를 보지 못한다.** 애노테이션은 §5.3의 표에 행이 없고 differ는
+/// 읽지도 않는다. C가 먼저 착륙한 이유가 이것이며, B는 C를 대체하지 못한다.
+///
+/// ## Superseding, and why it is recorded rather than merely allowed
+///
+/// D005 warns that a full regeneration renames everything, so this gate fires
+/// on every id every time, and *an approval that is always given stops being a
+/// signal*. Nothing here can prevent that. What it can do is make the approval
+/// leave evidence: [`ValidateStage::superseding`] downgrades the refusals under
+/// a stated reason and records **which changes** that reason covered
+/// ([`DiffOutcome::superseded`], written out by [`record_supersede`]), so a
+/// reflex approval is at least an auditable one.
+#[derive(Debug, Default)]
+pub struct ValidateStage {
+    registered: Option<Registered>,
+    supersede: Option<String>,
+    id: String,
+    baseline: Baseline,
+    // `Stage::gate` takes `&self` — every other stage's gate is a pure function
+    // of its inputs and widening the trait for this one would be the tail
+    // wagging the dog. The cell holds the ledger, nothing else.
+    ledger: RefCell<Vec<DiffOutcome>>,
+}
+
+impl ValidateStage {
+    /// S4 with no baseline: [`validate`] alone, exactly as before D005 option B.
+    pub fn new() -> ValidateStage {
+        ValidateStage::default()
+    }
+
+    /// S4 against a registry of record (D005 option B).
+    pub fn against(registered: Registered) -> ValidateStage {
+        ValidateStage { registered: Some(registered), ..ValidateStage::default() }
+    }
+
+    /// Declare the regeneration: breaking changes are downgraded under `reason`
+    /// instead of refusing the item, and every one they cover is recorded.
+    ///
+    /// This is D005's option D as far as one gate can carry it — a regeneration
+    /// over a registered contract is an explicit, reasoned act rather than a
+    /// repeat. An empty reason is not a declaration and is ignored.
+    pub fn superseding(mut self, reason: impl Into<String>) -> ValidateStage {
+        let reason = reason.into();
+        self.supersede = (!reason.trim().is_empty()).then_some(reason);
+        self
+    }
+
+    /// Every item this gate has judged, in order, with what it was compared
+    /// against — including the items that had nothing to compare against, which
+    /// is the number that keeps "clean" and "unchecked" apart.
+    pub fn outcomes(&self) -> Vec<DiffOutcome> {
+        self.ledger.borrow().clone()
+    }
+
+    /// The registry of record this gate reads, if it has one.
+    pub fn registered(&self) -> Option<&Registered> {
+        self.registered.as_ref()
+    }
+}
 
 impl Stage for ValidateStage {
     fn id(&self) -> StageId {
         StageId::Validate
+    }
+
+    /// Loads what is registered under this item, if anything is.
+    fn begin_item(&mut self, id: &str) {
+        self.id = id.to_owned();
+        self.baseline = match &self.registered {
+            Some(registered) => registered.contract(id),
+            None => Baseline::None,
+        };
     }
 
     fn produce(&mut self, input: &str, _repair: Option<&str>) -> Result<String, String> {
@@ -475,8 +685,109 @@ impl Stage for ValidateStage {
     }
 
     fn gate(&self, _input: &str, output: &str) -> Report {
-        validate(output)
+        let mut outcome = DiffOutcome {
+            id: self.id.clone(),
+            against: None,
+            compared: false,
+            blocking: Vec::new(),
+            superseded: None,
+        };
+        let mut report = match &self.baseline {
+            Baseline::None => validate(output),
+            Baseline::Unreadable { path, message } => {
+                outcome.against = Some(path.clone());
+                let mut report = validate(output);
+                report.findings.push(Finding {
+                    rule: "evolution/registered-unreadable".into(),
+                    severity: Severity::Error,
+                    message: format!(
+                        "{} is registered for {} and could not be read ({message}), so this \
+                         regeneration was never compared against it — an unmeasured check is a \
+                         failure, never a pass",
+                        path.display(),
+                        self.id
+                    ),
+                    line: 0,
+                    column: 0,
+                    source: self.id.clone(),
+                    fix: Some(
+                        "make the registered contract readable, or point --registered at the \
+                         directory that holds it"
+                            .into(),
+                    ),
+                });
+                report
+            }
+            Baseline::Contract { path, idl } => {
+                outcome.against = Some(path.clone());
+                let report = validate_against(output, idl);
+                // `validate_against` refuses to diff a file that does not parse,
+                // so the comparison ran exactly when nothing *else* rejected it.
+                outcome.compared = !report
+                    .findings
+                    .iter()
+                    .any(|f| f.severity == Severity::Error && !f.rule.starts_with("evolution/"));
+                report
+            }
+        };
+
+        for finding in &mut report.findings {
+            if finding.severity != Severity::Error || !finding.rule.starts_with("evolution/") {
+                continue;
+            }
+            outcome.blocking.push(finding.message.clone());
+            if let Some(reason) = &self.supersede {
+                finding.severity = Severity::Warning;
+                finding.message = format!("superseded — {reason}: {}", finding.message);
+                finding.fix = None;
+                outcome.superseded = Some(reason.clone());
+            }
+        }
+        report.findings.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.line.cmp(&b.line)));
+        self.ledger.borrow_mut().push(outcome);
+        report
     }
+}
+
+/// The name of the record [`record_supersede`] writes.
+pub const SUPERSEDED_FILE: &str = "superseded.tsv";
+
+/// Writes what a superseding run waved through, or `Ok(None)` if it waved
+/// nothing through.
+///
+/// D005 option D asks that a regeneration over a registered contract be *"an
+/// explicit `--supersede <id> --reason <text>` that is recorded"*. This is the
+/// recording half: one row per change, naming the item, the reason given and
+/// the change it covered. A blanket approval stays a blanket approval — the
+/// gate cannot make it thoughtful — but it stops being invisible.
+pub fn record_supersede(
+    outcomes: &[DiffOutcome],
+    out_dir: &Path,
+) -> Result<Option<PathBuf>, PipelineError> {
+    let waved: Vec<&DiffOutcome> = outcomes.iter().filter(|o| o.superseded.is_some()).collect();
+    if waved.is_empty() {
+        return Ok(None);
+    }
+    let mut text = String::from(
+        "# Breaking changes waved through by an explicit supersede (docs/PLAN.md \u{a7}5.3,\n\
+         # docs/decisions/D005-contract-stability.md option D). Each row is a change a\n\
+         # deployed peer does not survive, allowed to land under the reason beside it.\n\
+         # An approval that is always given stops being a signal; this file is what is\n\
+         # left to read when that happens.\n\
+         # columns: item\treason\tchange\n",
+    );
+    for outcome in &waved {
+        let reason = outcome.superseded.as_deref().unwrap_or_default();
+        let against = outcome.against.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
+        for change in &outcome.blocking {
+            text.push_str(&format!("{}\t{reason}\t{change}\t{against}\n", outcome.id));
+        }
+    }
+    let path = out_dir.join(SUPERSEDED_FILE);
+    let io = |e: std::io::Error| PipelineError::Io { path: path.clone(), message: e.to_string() };
+    std::fs::create_dir_all(out_dir).map_err(io)?;
+    std::fs::write(&path, text).map_err(io)?;
+    Ok(Some(path))
 }
 
 /// A stage backed by an external command — the seam a model plugs into.
@@ -621,6 +932,10 @@ impl Stage for CommandStage {
 /// `gate_for(StageId::Annotate, draft, annotated)` is S3's whole verdict on one
 /// file — minus the one check that needs a second artifact, for which see
 /// [`gate_for_with_brief`].
+///
+/// S4 here is [`validate`] alone. The §5.3 comparison against a registered
+/// contract needs a *third* artifact — the contract — and lives on
+/// [`ValidateStage`], which knows where to find one.
 pub fn gate_for(stage: StageId, input: &str, output: &str) -> Report {
     gate_for_with_brief(stage, None, input, output)
 }
@@ -833,6 +1148,13 @@ pub struct Pipeline<'a> {
     pub synthesize: Option<&'a mut dyn Stage>,
     /// S3's producer.
     pub annotate: Option<&'a mut dyn Stage>,
+    /// S4 — the gate itself, which has no producer but does have a
+    /// configuration: the registry of record it compares against, and whether
+    /// this regeneration was declared (D005 options B and D).
+    /// [`ValidateStage::default`] is the pre-D005-B behaviour, [`validate`]
+    /// alone. Read [`ValidateStage::outcomes`] after the run for what it
+    /// compared and what it did not.
+    pub validate: ValidateStage,
     /// The first stage to run.
     pub first: StageId,
     /// The last stage to run. Capped at [`StageId::Validate`]; S5 is
@@ -850,6 +1172,7 @@ impl<'a> Pipeline<'a> {
             ingest: None,
             synthesize: None,
             annotate: None,
+            validate: ValidateStage::default(),
             first: StageId::Validate,
             last: StageId::Validate,
             max_rounds: 1,
@@ -965,10 +1288,13 @@ pub fn run_pipeline(
             break;
         }
         let max_rounds = pipeline.max_rounds;
-        let batch = match pipeline.producer(stage) {
-            Some(producer) => run_batch(producer, &current, max_rounds),
-            // S4 rewrites nothing, so one round is the whole loop.
-            None => run_batch(&mut ValidateStage, &current, 1),
+        let batch = if let Some(producer) = pipeline.producer(stage) {
+            run_batch(producer, &current, max_rounds)
+        } else {
+            // S4 rewrites nothing, so one round is the whole loop. The stage is
+            // the caller's, so its ledger — what each item was compared against
+            // — outlives the run.
+            run_batch(&mut pipeline.validate, &current, 1)
         };
 
         for item in &batch.items {

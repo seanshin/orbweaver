@@ -5,9 +5,29 @@
 //!                [--requirements <dir>]
 //!                [--ingest <cmd>] [--synthesize <cmd>] [--annotate <cmd>]
 //!                [--from s1] [--to s4] [--only s3]
+//!                [--registered <dir>] [--supersede <reason>]
 //!                [--max-rounds N] [--register]
 //!                [--print-prompt s1|s2|s3]
 //! ```
+//!
+//! # Regenerating over a registered contract (D005 option B)
+//!
+//! `--registered <dir>` makes S4 diff each item against the contract registered
+//! under its id — `<dir>/<id>.sidl.idl`, or `<id>.idl` where nothing annotated
+//! it, which is the layout `--out` already writes, so yesterday's output
+//! directory is a usable registry of record. An id with nothing registered under
+//! it is a **first generation**: there is nothing to diff against, so nothing is
+//! demanded, and the run says how many items were in that position rather than
+//! counting them as checked.
+//!
+//! A breaking change refuses the item. `--supersede <reason>` declares the
+//! regeneration instead — D005 option D — downgrading the refusals and writing
+//! every change the reason covered to `<out>/superseded.tsv`.
+//!
+//! **What this does not see:** the differ reads no annotations, so a
+//! regeneration that keeps every identifier and changes only `//@ ai_authz` is
+//! *compatible* by §5.3 and passes. That is D005 option C's job
+//! (`s3/authz-not-the-stated-scope`, at S3), and it is why C landed first.
 //!
 //! # One command contract for every stage
 //!
@@ -52,8 +72,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use orbweaver_forge::pipeline::{
-    CommandStage, EXPOSURE_TODO_FILE, ItemStatus, Pipeline, StageId, Workspace, register,
-    run_pipeline,
+    CommandStage, EXPOSURE_TODO_FILE, ItemStatus, Pipeline, Registered, StageId, ValidateStage,
+    Workspace, record_supersede, register, run_pipeline,
 };
 
 fn usage() -> String {
@@ -61,10 +81,14 @@ fn usage() -> String {
         "usage: forge-pipeline --out <dir> [--requirements <dir>]\n\
          \x20   [--ingest <cmd>] [--synthesize <cmd>] [--annotate <cmd>]\n\
          \x20   [--from {stages}] [--to {stages}] [--only {stages}]\n\
+         \x20   [--registered <dir>] [--supersede <reason>]\n\
          \x20   [--max-rounds N] [--register] [--print-prompt s1|s2|s3]\n\
          \n\
          Every producer is invoked as `<cmd> <input-file> [<repair-file>]`, with\n\
-         FORGE_STAGE and FORGE_PROMPT in the environment; stdout is the artifact.",
+         FORGE_STAGE and FORGE_PROMPT in the environment; stdout is the artifact.\n\
+         --registered points S4 at the contracts a regeneration is compared with;\n\
+         an id with nothing registered under it is a first generation and is not\n\
+         refused for having no baseline.",
         stages = "s1|s2|s3|s4"
     )
 }
@@ -76,6 +100,8 @@ struct Args {
     ingest: Option<String>,
     synthesize: Option<String>,
     annotate: Option<String>,
+    registered: Option<PathBuf>,
+    supersede: Option<String>,
     from: Option<StageId>,
     to: Option<StageId>,
     max_rounds: Option<usize>,
@@ -109,6 +135,8 @@ fn run() -> Result<ExitCode, String> {
             // an existing harness keeps working against the split pipeline.
             "--synthesize" | "--generator" => a.synthesize = Some(value("--synthesize")?),
             "--annotate" => a.annotate = Some(value("--annotate")?),
+            "--registered" => a.registered = Some(value("--registered")?.into()),
+            "--supersede" => a.supersede = Some(value("--supersede")?),
             "--from" => a.from = Some(stage("--from", value("--from")?)?),
             "--to" => a.to = Some(stage("--to", value("--to")?)?),
             "--only" => {
@@ -176,10 +204,28 @@ fn run() -> Result<ExitCode, String> {
     let mut annotate = a
         .annotate
         .map(|c| CommandStage::new(StageId::Annotate, c, &scratch).with_briefs(&workspace));
+    // S4's baseline. Without --registered this is the pre-D005-B gate exactly:
+    // `validate` alone, nothing compared, nothing claimed.
+    if a.supersede.is_some() && a.registered.is_none() {
+        return Err(
+            "--supersede declares a regeneration over registered contracts, and --registered \
+             was not given: there is nothing to supersede"
+                .to_owned(),
+        );
+    }
+    let mut gate = match &a.registered {
+        Some(dir) => ValidateStage::against(Registered::at(dir)),
+        None => ValidateStage::new(),
+    };
+    if let Some(reason) = &a.supersede {
+        gate = gate.superseding(reason.clone());
+    }
+
     let mut pipeline = Pipeline {
         ingest: ingest.as_mut().map(|s| s as &mut dyn orbweaver_forge::pipeline::Stage),
         synthesize: synthesize.as_mut().map(|s| s as &mut dyn orbweaver_forge::pipeline::Stage),
         annotate: annotate.as_mut().map(|s| s as &mut dyn orbweaver_forge::pipeline::Stage),
+        validate: gate,
         first,
         last,
         max_rounds: a.max_rounds.unwrap_or(3),
@@ -222,6 +268,34 @@ fn run() -> Result<ExitCode, String> {
             "S4 gated {annotated} annotated file(s) and {} unannotated draft(s)",
             s4.items.len().saturating_sub(annotated)
         );
+    }
+
+    // D005 option B, reported the way the honesty rules require: how many items
+    // were actually compared, and how many had nothing to compare against. A
+    // silent baseline-less run reads as "clean" and is not.
+    let outcomes = pipeline.validate.outcomes();
+    if let Some(registered) = pipeline.validate.registered() {
+        let compared = outcomes.iter().filter(|o| o.compared).count();
+        let first_generation = outcomes.iter().filter(|o| o.against.is_none()).count();
+        let refused = outcomes.iter().filter(|o| !o.blocking.is_empty()).count();
+        println!(
+            "S4 §5.3: compared {compared} item(s) against {}; {first_generation} had no \
+             registered contract (first generation — nothing to diff, nothing demanded); \
+             {refused} carried a breaking change",
+            registered.root().display()
+        );
+        // The differ's blind spot, printed beside its result rather than left in
+        // a document: a scope drift is compatible by §5.3 and invisible here.
+        println!(
+            "S4 §5.3: annotations are not compared — a regeneration that keeps every \
+             identifier and changes only //@ ai_authz is compatible here (D005 option C \
+             covers that, at S3)"
+        );
+        match record_supersede(&outcomes, &out_dir) {
+            Ok(Some(path)) => println!("S4 §5.3: superseded changes recorded: {}", path.display()),
+            Ok(None) => {}
+            Err(e) => return Err(e.to_string()),
+        }
     }
 
     if !report.all_valid() {
