@@ -314,17 +314,18 @@ could serve as one.
 
 Stated because an absence that is not written down reads as a feature:
 
-- Request multiplexing and connection pooling are not implemented: one
-  request at a time per connection, and a new connection per reference.
-- **A generated stub does not enforce a declared bound** while the dynamic path
-  refuses the same value in both directions — so static and dynamic diverge on
-  exactly the path a latency-sensitive deployment picks, and §8's oracle cannot
-  see it, because it compares bytes for values that are valid on both sides.
 - Nothing in the token exchange has been through a **real identity provider**;
   it is unit-tested against hand-built claims — the same shape as CSIv2 being a
   per-peer claim rather than a feature.
-- The **container probe has never executed** (no docker here), and no rewritten
-  IOR has been put in front of a foreign ORB.
+- **No rewritten IOR has been put in front of a foreign ORB**, and port
+  translation has never been dialled. R7 is now measured across a real routing
+  boundary (a second host), but both ends of that measurement were ours.
+- **Multiplexing is refused below GIOP 1.2**, deliberately: a 1.1 `Fragment`
+  carries no request id, so a fragmented 1.1 reply is attributable only by
+  position. Against a stock omniORB that is a live limit, not a theoretical
+  one — it fragments a 1 MB reply at 1.1, and we refuse it.
+- A `CloseConnection` arriving **between fragments** surfaces as
+  `UnexpectedMessage` rather than as a retryable close.
 - Ingested contracts carry no SIDL, so the guard's gates have nothing to key
   on — a second, independent reason exposure stays off.
 - The embedding synonym class, the TAO oracle column and the SSLIOP peer proof
