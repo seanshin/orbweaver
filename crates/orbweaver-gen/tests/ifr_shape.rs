@@ -15,8 +15,27 @@
 //!
 //! `ifr.rs` itself is **not modified**; it is imported and driven as the
 //! oracle. Every case in [`compared`] sends the same GIOP request to both
-//! servants and requires the reply bytes to be identical — the §8 rule
-//! ("static result equals dynamic result") applied to a different pair.
+//! servants, in **both byte orders**, and requires the reply bytes to be
+//! identical — the §8 rule ("static result equals dynamic result") applied to
+//! a different pair.
+//!
+//! # `describe_interface`
+//!
+//! The operation the IR facade exists for — one call and a DII client has
+//! every signature it needs — is now part of the comparison, and it is the
+//! case with the most in it: a struct of eight members carrying three nested
+//! sequences of structs, three enums, a nil object reference and a `TypeCode`
+//! per operation, per parameter, per attribute and per raised exception.
+//!
+//! It reached the comparison in two steps, and both are worth naming because
+//! [`NOT_COMPARED`] is where they were recorded. It was excluded first because
+//! the registry loaded `::CORBA::TypeCode` as `void`, so generating it would
+//! have produced a silently empty reply; then, once that was fixed, only
+//! because `corpus/services/ir-subset.idl` did not declare it. The contract now
+//! does, with the description structs' members placed against `ifr.rs`'s
+//! `write_to` line by line rather than against a recollection of the
+//! specification — member order is the whole game when the test is byte
+//! equality.
 //!
 //! # What the generated skeleton cannot express
 //!
@@ -24,7 +43,7 @@
 //! answer differently, with the cause, and
 //! [`the_divergences_are_the_ones_named_and_they_still_diverge`] fails if one
 //! of them quietly starts agreeing. A list of known gaps nobody re-measures is
-//! a list of things that were once true.
+//! a list of things that were once true — as its former first entry was.
 //!
 //! # The shape of the arrangement
 //!
@@ -36,17 +55,22 @@
 
 mod emitted;
 
+use std::collections::BTreeSet;
+
 use orbweaver_cdr::{Encoder, Endian};
 use orbweaver_gen::rt::{self, Dispatch, ObjRef, ObjectHome, Servants};
 use orbweaver_giop::server::{Request, decode_request};
+use orbweaver_giop::typecode::TypeCode;
 use orbweaver_giop::{DEFAULT_MAX_MESSAGE_SIZE, Version, encode_request, read_message};
-use orbweaver_registry::{Entry, Registry, ifr};
+use orbweaver_registry::{Entry, ParamDirection, Registry, ifr};
 
+use emitted::f_ir_subset::CORBA::InterfaceDef::FullInterfaceDescription;
 use emitted::f_ir_subset::CORBA::{
-    ContainedFault, ContainedRefs, ContainedServant, ContainedSkeleton, ContainedTarget,
-    DefinitionKind, InterfaceDefFault, InterfaceDefRefs, InterfaceDefServant, InterfaceDefSkeleton,
-    InterfaceDefTarget, RepositoryFault, RepositoryRefs, RepositoryServant, RepositorySkeleton,
-    RepositoryTarget,
+    AttributeDescription, AttributeMode, ContainedFault, ContainedRefs, ContainedServant,
+    ContainedSkeleton, ContainedTarget, DefinitionKind, ExceptionDescription, InterfaceDefFault,
+    InterfaceDefRefs, InterfaceDefServant, InterfaceDefSkeleton, InterfaceDefTarget,
+    OperationDescription, OperationMode, ParameterDescription, ParameterMode, RepositoryFault,
+    RepositoryRefs, RepositoryServant, RepositorySkeleton, RepositoryTarget,
 };
 
 const ROOT: &[u8] = b"ifr-root";
@@ -96,7 +120,7 @@ const ABSENT: &str = "IDL:bank/Nope:1.0";
 /// arguments, and writing one made the generated skeleton answer `MARSHAL`
 /// where the hand-written one answered `NO_PERMISSION`. That divergence was a
 /// malformed request, not a defect; the real ordering difference it exposed is
-/// the fifth entry of `NOT_COMPARED`.
+/// the last entry of `NOT_COMPARED`.
 const CREATE_ARGS: &[&str] = &["IDL:bank/New:1.0", "New", "1.0"];
 
 fn registry() -> Registry {
@@ -108,18 +132,40 @@ fn registry() -> Registry {
 
 // ── The hand-written half: three servant bodies, no dispatch ─────────────────
 
-/// The `Contained` triple `ifr.rs` computes, reproduced here.
+/// The `Contained` triple `ifr.rs` computes — name, containing module, version
+/// — reproduced here.
 ///
 /// `split_repository_id` alone is wrong under `#pragma prefix`, which reads
 /// every leading segment as an enclosing module; the registry recorded the
 /// qualified name when it loaded the IDL and the count of its segments is what
 /// says how much of the path is prefix. Both helpers `ifr.rs` uses for the
 /// fallback are public, so the fallback is shared rather than re-derived.
+///
+/// The oracle's own `contained_of` is private, so this is the one piece of
+/// `ifr.rs` that is re-implemented rather than called. It is re-implemented
+/// *line for line* on purpose: `describe_interface` is compared as bytes, and
+/// three of its string members come from here.
+fn contained_of(registry: &Registry, id: &str) -> (String, String, String) {
+    let split = ifr::split_repository_id(id);
+    let Some(qual) = registry.qualified_name(id) else { return split };
+    let (_, _, version) = split;
+    let Some(path) = id.strip_prefix("IDL:").and_then(|rest| rest.rsplit_once(':').map(|(p, _)| p))
+    else {
+        return ifr::split_repository_id(id);
+    };
+    let name = qual.rsplit("::").next().unwrap_or(qual).to_owned();
+    let segments: Vec<&str> = path.split('/').collect();
+    let defined_in = if qual.split("::").count() < 2 || segments.len() < 2 {
+        // Top level: the container is the repository, which has no id.
+        String::new()
+    } else {
+        format!("IDL:{}:{version}", segments[..segments.len() - 1].join("/"))
+    };
+    (name, defined_in, version)
+}
+
 fn name_of(registry: &Registry, id: &str) -> String {
-    match registry.qualified_name(id) {
-        Some(q) => q.rsplit("::").next().unwrap_or(q).to_owned(),
-        None => ifr::split_repository_id(id).0,
-    }
+    contained_of(registry, id).0
 }
 
 fn absolute_name_of(registry: &Registry, id: &str) -> String {
@@ -129,8 +175,28 @@ fn absolute_name_of(registry: &Registry, id: &str) -> String {
     }
 }
 
+/// One `ExceptionDescription`, as `ifr.rs` builds it.
+///
+/// An unregistered `raises` clause means the IDL named an exception we never
+/// saw a definition for; an empty `tk_except` is the honest answer and keeps
+/// the description decodable.
+fn exception_description(registry: &Registry, id: &str) -> ExceptionDescription {
+    let (name, defined_in, version) = contained_of(registry, id);
+    let tc = registry.typecode(id).cloned().unwrap_or(TypeCode::Except {
+        id: id.to_owned(),
+        name: name.clone(),
+        members: Vec::new(),
+    });
+    ExceptionDescription {
+        name,
+        id: id.to_owned(),
+        defined_in,
+        version,
+        r#type: rt::TypeCodeVal(tc),
+    }
+}
+
 fn def_kind_of(registry: &Registry, id: &str) -> DefinitionKind {
-    use orbweaver_giop::typecode::TypeCode;
     match registry.get(id) {
         Some(Entry::Interface(_)) => DefinitionKind::dk_Interface,
         Some(Entry::Const { .. }) => DefinitionKind::dk_Constant,
@@ -256,6 +322,120 @@ impl InterfaceDefServant for InterfaceDefFacade {
         Ok(self.registry.is_a(at.oid(), &derived_from))
     }
 
+    /// The operation the facade exists for: one call and a DII client has
+    /// every signature it needs.
+    ///
+    /// Inherited members are included, each naming the interface that declares
+    /// it, because the consumer is a client asking "what may I call" and an
+    /// inherited operation is callable. Own members come first — the chain is
+    /// the interface itself followed by its ancestors — and a name declared in
+    /// both a derived interface and a base appears once, as the derived one.
+    ///
+    /// The order below is not incidental: this reply is compared byte for byte
+    /// against `ifr.rs`, so the chain order, the `BTreeMap` order within each
+    /// interface, and the first-wins de-duplication are all load-bearing.
+    fn describe_interface(
+        &mut self,
+        at: &InterfaceDefTarget<'_>,
+    ) -> Result<FullInterfaceDescription, InterfaceDefFault> {
+        let id = at.oid();
+        let Some(iface) = self.registry.interface(id) else {
+            return Err(rt::SystemException::bad_operation().into());
+        };
+        let bases = iface.bases.clone();
+        let (name, defined_in, version) = contained_of(&self.registry, id);
+
+        let mut chain = vec![id.to_owned()];
+        chain.extend(self.registry.ancestors(id));
+
+        let mut operations = Vec::new();
+        let mut attributes = Vec::new();
+        let mut seen_ops: BTreeSet<String> = BTreeSet::new();
+        let mut seen_attrs: BTreeSet<String> = BTreeSet::new();
+
+        for owner in &chain {
+            let Some(declarer) = self.registry.interface(owner) else { continue };
+            let (_, _, owner_version) = ifr::split_repository_id(owner);
+            let owner_path =
+                owner.strip_suffix(&format!(":{owner_version}")).unwrap_or(owner).to_owned();
+
+            for (op_name, sig) in &declarer.operations {
+                if !seen_ops.insert(op_name.clone()) {
+                    continue;
+                }
+                operations.push(OperationDescription {
+                    name: op_name.clone(),
+                    id: format!("{owner_path}/{op_name}:{owner_version}"),
+                    defined_in: owner.clone(),
+                    version: owner_version.clone(),
+                    result: rt::TypeCodeVal(sig.returns.clone()),
+                    mode: if sig.oneway {
+                        OperationMode::OP_ONEWAY
+                    } else {
+                        OperationMode::OP_NORMAL
+                    },
+                    // The IDL `context` clause is not parsed, and inventing
+                    // identifiers would be worse than reporting none.
+                    contexts: Vec::new(),
+                    parameters: sig
+                        .params
+                        .iter()
+                        .map(|p| ParameterDescription {
+                            name: p.name.clone(),
+                            r#type: rt::TypeCodeVal(p.tc.clone()),
+                            // `type_def` is an `IDLType` reference in the IDL.
+                            // This facade mints no `IDLType` objects — the
+                            // TypeCode is the complete answer — so nil is the
+                            // truthful "there is no such object here".
+                            type_def: ObjectHome::nil(),
+                            mode: match p.direction {
+                                ParamDirection::In => ParameterMode::PARAM_IN,
+                                ParamDirection::Out => ParameterMode::PARAM_OUT,
+                                ParamDirection::InOut => ParameterMode::PARAM_INOUT,
+                            },
+                        })
+                        .collect(),
+                    exceptions: sig
+                        .raises
+                        .iter()
+                        .map(|x| exception_description(&self.registry, x))
+                        .collect(),
+                });
+            }
+
+            for (attr_name, sig) in &declarer.attributes {
+                if !seen_attrs.insert(attr_name.clone()) {
+                    continue;
+                }
+                attributes.push(AttributeDescription {
+                    name: attr_name.clone(),
+                    id: format!("{owner_path}/{attr_name}:{owner_version}"),
+                    defined_in: owner.clone(),
+                    version: owner_version.clone(),
+                    r#type: rt::TypeCodeVal(sig.tc.clone()),
+                    mode: if sig.readonly {
+                        AttributeMode::ATTR_READONLY
+                    } else {
+                        AttributeMode::ATTR_NORMAL
+                    },
+                });
+            }
+        }
+
+        Ok(FullInterfaceDescription {
+            name: name.clone(),
+            id: id.to_owned(),
+            defined_in,
+            version,
+            operations,
+            attributes,
+            // Direct bases only, in declaration order — the same set
+            // `_get_base_interfaces` answers with as references.
+            base_interfaces: bases,
+            r#type: rt::TypeCodeVal(TypeCode::ObjRef { id: id.to_owned(), name }),
+        })
+    }
+
     fn create_module(
         &mut self,
         _at: &InterfaceDefTarget<'_>,
@@ -338,8 +518,13 @@ enum Answer {
     Unknown,
 }
 
-fn request(key: &[u8], operation: &str, args: &[&str]) -> Request {
-    let wire = encode_request(Version::V1_2, Endian::Big, 1, key, operation, true, |e| {
+/// Both byte orders, always. An encoder that only works native-endian passes
+/// every local test and fails in the field; a `describe_interface` reply is
+/// mostly `TypeCode`s, which are the deepest nesting either servant encodes.
+const ORDERS: [Endian; 2] = [Endian::Big, Endian::Little];
+
+fn request(endian: Endian, key: &[u8], operation: &str, args: &[&str]) -> Request {
+    let wire = encode_request(Version::V1_2, endian, 1, key, operation, true, |e| {
         for a in args {
             e.put_str(a);
         }
@@ -352,12 +537,18 @@ fn request(key: &[u8], operation: &str, args: &[&str]) -> Request {
 
 /// Drives one servant exactly as `Server` would: `knows` first, then a body
 /// written into an encoder at the origin a real reply occupies.
-fn ask<D: Dispatch>(d: &mut D, key: &[u8], operation: &str, args: &[&str]) -> Answer {
+fn ask<D: Dispatch>(
+    d: &mut D,
+    endian: Endian,
+    key: &[u8],
+    operation: &str,
+    args: &[&str],
+) -> Answer {
     if !d.knows(key) {
         return Answer::Unknown;
     }
-    let req = request(key, operation, args);
-    let mut out = Encoder::continuing_at(Endian::Big, 24);
+    let req = request(endian, key, operation, args);
+    let mut out = Encoder::continuing_at(endian, 24);
     match d.dispatch_body(&req, &mut out) {
         Ok(kind) => Answer::Body(kind, out.finish().expect("finish")),
         Err(ex) => Answer::Raised { id: ex.id, minor: ex.minor, completed: ex.completed },
@@ -397,6 +588,9 @@ fn compared() -> Vec<Case> {
         v.push(case("lookup_id", ROOT.to_vec(), "lookup_id", &[id]));
     }
     v.push(case("repository create_module", ROOT.to_vec(), "create_module", CREATE_ARGS));
+    // Not an operation of `Repository`: both must say BAD_OPERATION rather
+    // than one of them describing the repository as though it were a type.
+    v.push(case("repository describe_interface", ROOT.to_vec(), "describe_interface", &[]));
 
     // ── an InterfaceDef, at a derived key ──
     for id in [ACCOUNT, PARTY] {
@@ -421,6 +615,13 @@ fn compared() -> Vec<Case> {
         for want in [ACCOUNT, PARTY, ABSENT, ifr::OBJECT_ID] {
             v.push(case("interfacedef is_a", key.clone(), "is_a", &[want]));
         }
+        // The whole `FullInterfaceDescription`, in one reply: strings, three
+        // nested sequences of structs, an enum per member, a nil object
+        // reference and four TypeCodes. `Account` carries a base, an inherited
+        // readonly attribute, a struct return, a struct parameter and a
+        // `raises`; `Party` carries none of those, which is the other half of
+        // the range this one case covers.
+        v.push(case("interfacedef describe_interface", key.clone(), "describe_interface", &[]));
         v.push(case("interfacedef create_module", key.clone(), "create_module", CREATE_ARGS));
         v.push(case("interfacedef unknown op", key.clone(), "no_such_operation", &[]));
     }
@@ -432,6 +633,12 @@ fn compared() -> Vec<Case> {
         for op in ["_get_def_kind", "_get_id", "_get_name", "_get_absolute_name"] {
             v.push(case("contained accessor", key.clone(), op, &[]));
         }
+        // `describe_interface` belongs to `InterfaceDef`. `ifr.rs` reaches its
+        // own `describe_interface` and finds the entry is not an interface;
+        // the generated `Contained` skeleton never declared the operation.
+        // Two different routes, the same BAD_OPERATION — so this is compared
+        // rather than listed as a divergence.
+        v.push(case("contained describe_interface", key.clone(), "describe_interface", &[]));
     }
 
     // ── keys neither servant serves ──
@@ -444,26 +651,37 @@ fn compared() -> Vec<Case> {
 
 // ── The comparison ───────────────────────────────────────────────────────────
 
-/// Every case in [`compared`], byte for byte, against `ifr.rs` itself.
+/// Every case in [`compared`], byte for byte, against `ifr.rs` itself, in both
+/// byte orders.
 #[test]
 fn the_generated_skeleton_answers_what_the_hand_written_servant_answers() {
     let mut hand = hand_written();
     let mut from_idl = generated();
     let mut wrong = Vec::new();
-    for c in compared() {
-        let want = ask(&mut hand, &c.key, c.op, &c.args);
-        let got = ask(&mut from_idl, &c.key, c.op, &c.args);
-        if want != got {
-            wrong.push(format!(
-                "{} — {} {:?} on {:?}\n    hand-written: {want:?}\n    generated:    {got:?}",
-                c.what,
-                c.op,
-                &c.args,
-                String::from_utf8_lossy(&c.key)
-            ));
+    let mut measured = 0usize;
+    for endian in ORDERS {
+        for c in compared() {
+            measured += 1;
+            let want = ask(&mut hand, endian, &c.key, c.op, &c.args);
+            let got = ask(&mut from_idl, endian, &c.key, c.op, &c.args);
+            if want != got {
+                wrong.push(format!(
+                    "{} — {} {:?} on {:?} ({endian:?})\n    hand-written: {want:?}\n    \
+                     generated:    {got:?}",
+                    c.what,
+                    c.op,
+                    &c.args,
+                    String::from_utf8_lossy(&c.key)
+                ));
+            }
         }
     }
-    assert!(wrong.is_empty(), "{} of the cases differ:\n{}", wrong.len(), wrong.join("\n"));
+    assert!(
+        wrong.is_empty(),
+        "{} of the {measured} comparisons differ:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
 }
 
 /// The comparison would pass on two servants that both answered nothing, so
@@ -473,12 +691,12 @@ fn the_comparison_is_not_vacuous() {
     let cases = compared();
     // Pinned, not bounded: a matrix that silently shrinks is a comparison
     // that silently weakens, and ">= 60" would not have noticed.
-    assert_eq!(cases.len(), 71, "the compared matrix changed size");
+    assert_eq!(cases.len(), 77, "the compared matrix changed size");
     let mut from_idl = generated();
     let (mut bodies, mut raised, mut unknown) = (0, 0, 0);
     let mut nonempty = 0;
     for c in &cases {
-        match ask(&mut from_idl, &c.key, c.op, &c.args) {
+        match ask(&mut from_idl, Endian::Big, &c.key, c.op, &c.args) {
             Answer::Body(_, b) => {
                 bodies += 1;
                 if !b.is_empty() {
@@ -497,7 +715,7 @@ fn the_comparison_is_not_vacuous() {
     // And the oracle must not be answering trivially either: a `lookup_id`
     // reply has to be a real reference with the address in it.
     let mut hand = hand_written();
-    let Answer::Body(_, body) = ask(&mut hand, ROOT, "lookup_id", &[ACCOUNT]) else {
+    let Answer::Body(_, body) = ask(&mut hand, Endian::Big, ROOT, "lookup_id", &[ACCOUNT]) else {
         panic!("lookup_id must answer with a body");
     };
     let mut d = rt::Decoder::new(&body, Endian::Big);
@@ -505,6 +723,122 @@ fn the_comparison_is_not_vacuous() {
     assert_eq!(ior.type_id, ifr::INTERFACE_DEF_ID);
     assert_eq!(ior.profiles[0].port, PORT);
     assert_eq!(ior.profiles[0].object_key, entry_key(ACCOUNT));
+}
+
+/// The generated `describe_interface` reply, read back by the **oracle's own
+/// decoder**, in both byte orders.
+///
+/// Byte equality against `ifr.rs` is the measurement; this is the check that
+/// the bytes both agree on are the right ones. `ifr::FullInterfaceDescription`
+/// is what omniORB's IR client has already been measured against (see that
+/// module's cross-ORB note), so decoding generated bytes with it is the
+/// closest thing to a foreign reader available without a fixture.
+#[test]
+fn a_generated_description_decodes_as_the_oracles_own_struct() {
+    let mut from_idl = generated();
+    for endian in ORDERS {
+        let key = entry_key(ACCOUNT);
+        let Answer::Body(_, body) = ask(&mut from_idl, endian, &key, "describe_interface", &[])
+        else {
+            panic!("{endian:?}: describe_interface must answer with a body");
+        };
+        // The reply was written at the offset a real body occupies, so it is
+        // read from there too — alignment is measured from the GIOP header.
+        let mut d = rt::Decoder::new(&body, endian);
+        let described =
+            ifr::decode_full_interface_description(&mut d).expect("the oracle's own reader");
+        assert_eq!(d.remaining(), 0, "{endian:?}: trailing bytes");
+
+        assert_eq!(described.name, "Account");
+        assert_eq!(described.id, ACCOUNT);
+        assert_eq!(described.defined_in, "IDL:bank:1.0");
+        assert_eq!(described.version, "1.0");
+        assert_eq!(described.base_interfaces, [PARTY], "direct bases, in declaration order");
+        assert_eq!(described.tc, TypeCode::ObjRef { id: ACCOUNT.into(), name: "Account".into() });
+
+        let ops: Vec<&str> = described.operations.iter().map(|o| o.name.as_str()).collect();
+        assert_eq!(ops, ["balance", "withdraw"]);
+        let withdraw = &described.operations[1];
+        assert_eq!(withdraw.id, "IDL:bank/Account/withdraw:1.0");
+        assert_eq!(withdraw.defined_in, ACCOUNT, "the interface that declares it");
+        assert_eq!(withdraw.mode, ifr::OP_NORMAL);
+        assert_eq!(withdraw.result, TypeCode::Void);
+        assert!(withdraw.contexts.is_empty());
+        let params: Vec<(&str, u32)> =
+            withdraw.parameters.iter().map(|p| (p.name.as_str(), p.mode)).collect();
+        assert_eq!(params, [("amount", ifr::PARAM_IN)]);
+        assert!(
+            matches!(&withdraw.parameters[0].tc, TypeCode::Struct { id, .. } if id == MONEY),
+            "the parameter's TypeCode is the registry's, not a name: {:?}",
+            withdraw.parameters[0].tc
+        );
+        assert_eq!(withdraw.exceptions.len(), 1);
+        assert_eq!(withdraw.exceptions[0].id, DENIED);
+        assert!(
+            matches!(&withdraw.exceptions[0].tc, TypeCode::Except { members, .. }
+                if members.len() == 1),
+            "the exception carries its members"
+        );
+
+        // The inherited attribute, named with its declarer — the half a
+        // servant that only walked its own interface would drop.
+        let attrs: Vec<(&str, u32)> =
+            described.attributes.iter().map(|a| (a.name.as_str(), a.mode)).collect();
+        assert_eq!(attrs, [("party_id", ifr::ATTR_READONLY)]);
+        assert_eq!(described.attributes[0].defined_in, PARTY);
+        assert_eq!(described.attributes[0].id, "IDL:bank/Party/party_id:1.0");
+    }
+}
+
+/// The contract really does declare the operation, with the members that once
+/// could not be expressed.
+///
+/// The first entry of `NOT_COMPARED` used to say `describe_interface` was
+/// missing because `::CORBA::TypeCode` loaded as `void`. If that regresses,
+/// the generated struct's `type` member becomes `()` and this file stops
+/// compiling — but a compile failure names no cause, so the cause is measured
+/// here instead.
+#[test]
+fn the_contract_declares_describe_interface_over_real_typecodes() {
+    let src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/services/ir-subset.idl"),
+    )
+    .expect("the contract");
+    let spec = orbweaver_idl::parse(&src).expect("the contract parses");
+    let mut r = Registry::new();
+    r.load(&spec).expect("loads");
+
+    let sig = r
+        .interface(ifr::INTERFACE_DEF_ID)
+        .and_then(|i| i.operations.get("describe_interface"))
+        .expect("InterfaceDef::describe_interface");
+    let TypeCode::Struct { id, members, .. } = &sig.returns else {
+        panic!("describe_interface must return a struct, not {:?}", sig.returns);
+    };
+    assert_eq!(id, "IDL:omg.org/CORBA/InterfaceDef/FullInterfaceDescription:1.0");
+    let names: Vec<&str> = members.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "name",
+            "id",
+            "defined_in",
+            "version",
+            "operations",
+            "attributes",
+            "base_interfaces",
+            "type"
+        ],
+        "member order is `ifr.rs`'s write_to order, and the comparison is byte equality"
+    );
+    assert!(
+        matches!(members[7].tc, TypeCode::TypeCode),
+        "measured: `::CORBA::TypeCode` must resolve to a TypeCode and not to {:?}. If this is \
+         Void again, the silent-empty-reply defect is back and every member declared as a \
+         TypeCode marshals nothing at all.",
+        members[7].tc
+    );
 }
 
 /// The generated arrangement reproduces the hand-written key scheme exactly —
@@ -556,9 +890,21 @@ fn the_three_skeletons_claim_disjoint_parts_of_one_key_space() {
 /// Where the generated skeleton and `ifr.rs` answer differently, with the cause.
 ///
 /// Each entry is a `(what, why)` pair, and every one of them is re-measured by
-/// [`the_divergences_are_the_ones_named_and_they_still_diverge`]. Two are
-/// contract-level (a generated skeleton can only be as expressive as the IDL);
-/// two are the same root cause, which is worth saying once:
+/// [`the_divergences_are_the_ones_named_and_they_still_diverge`].
+///
+/// **This list got shorter on 2026-08-14, and that is the point of keeping it.**
+/// `describe_interface` was its first entry for two successive reasons — first
+/// that the registry loaded `::CORBA::TypeCode` as `void`, then, once that was
+/// fixed, only that the corpus contract did not declare the operation. Neither
+/// is true now: `corpus/services/ir-subset.idl` declares it and the whole
+/// `FullInterfaceDescription` it returns, and the generated skeleton answers it
+/// byte for byte in both byte orders (`compared`, and
+/// [`a_generated_description_decodes_as_the_oracles_own_struct`]). An entry
+/// whose stated cause is repaired is work, not a limitation, and the way to
+/// tell the two apart is to write the cause down where it can be re-read.
+///
+/// Of the four that remain, the first two are one root cause, which is worth
+/// saying once:
 ///
 /// **`ifr.rs` varies the identity of an object with the object, inside one key
 /// space.** A key under `/ifr/` is an `InterfaceDef` or a `Contained` or a
@@ -569,17 +915,11 @@ fn the_three_skeletons_claim_disjoint_parts_of_one_key_space() {
 /// operation set. Reproducing `ifr.rs`'s per-entry-kind `_is_a` exactly would
 /// need an interface per entry kind in the contract, which the IR IDL does not
 /// have.
-const NOT_COMPARED: [(&str, &str); 5] = [
-    (
-        "describe_interface",
-        "not in the contract, and the reason has since changed — which is what this \
-         list is for. It was excluded because the registry loaded `::CORBA::TypeCode` \
-         as `void`, so generating it would have produced a silently empty reply. That \
-         defect is fixed: the registry now yields a TypeCode and the generator has a \
-         static mapping for one. What remains is only that `corpus/services/ir-subset.idl` \
-         does not yet declare the operation, so this entry is now a piece of work rather \
-         than a limitation.",
-    ),
+///
+/// The last two are not contract-level absences at all: both are *ordering*
+/// and *name-shape* policies that `ifr.rs` applies before it looks at the
+/// contract, and IDL has no clause for either.
+const NOT_COMPARED: [(&str, &str); 4] = [
     (
         "_is_a on a non-interface entry",
         "`ifr.rs` answers IDLType true for a struct/enum/alias entry and false for a \
@@ -619,63 +959,32 @@ const NOT_COMPARED: [(&str, &str); 5] = [
 /// Every named divergence must still be one.
 ///
 /// A list of known gaps that nobody re-measures is a list of things that were
-/// once true. This drives every measurable one and requires it to disagree; the
-/// first is a contract-level absence, so its *cause* is measured instead.
+/// once true — which is exactly what happened to this list's former first
+/// entry. Every remaining one is measurable, so every remaining one is driven
+/// here and required to disagree.
 #[test]
 fn the_divergences_are_the_ones_named_and_they_still_diverge() {
-    assert_eq!(NOT_COMPARED.len(), 5);
+    assert_eq!(NOT_COMPARED.len(), 4);
     let mut hand = hand_written();
     let mut from_idl = generated();
-
-    // 1 — describe_interface is not in the generated contract at all.
     let key = entry_key(ACCOUNT);
-    assert!(
-        matches!(ask(&mut hand, &key, "describe_interface", &[]), Answer::Body(..)),
-        "the hand-written servant serves it"
-    );
-    match ask(&mut from_idl, &key, "describe_interface", &[]) {
-        Answer::Raised { id, .. } => assert_eq!(id, rt::BAD_OPERATION),
-        other => panic!("the generated skeleton must not pretend to serve it: {other:?}"),
-    }
-    // The cause, re-measured rather than asserted from a comment — and it has
-    // changed since this test was written. The registry used to load
-    // `::CORBA::TypeCode` as `void`, so an operation returning one generated
-    // `-> ()` and replied with nothing at all. That is fixed, so what is
-    // asserted here now is the *new* fact: the type resolves, the operation is
-    // generatable, and only the corpus contract's silence keeps it out.
-    let probe = orbweaver_idl::parse(
-        "module probe { interface Described { ::CORBA::TypeCode shape(); }; };",
-    )
-    .expect("parses");
-    let mut pr = Registry::new();
-    pr.load(&probe).expect("loads");
-    let sig = pr
-        .interface("IDL:probe/Described:1.0")
-        .and_then(|i| i.operations.get("shape"))
-        .expect("the probe operation");
-    assert!(
-        matches!(sig.returns, orbweaver_giop::typecode::TypeCode::TypeCode),
-        "measured 2026-08-14, after the registry fix: ::CORBA::TypeCode must resolve to a \
-         TypeCode and not to {:?}. If this is Void again, the silent-empty-reply defect is \
-         back and every operation returning a TypeCode marshals nothing.",
-        sig.returns
-    );
+    let big = Endian::Big;
 
-    // 2 and 3 — a non-interface entry.
+    // 1 and 2 — a non-interface entry.
     let money = entry_key(MONEY);
     assert_ne!(
-        ask(&mut hand, &money, "_is_a", &[ifr::IDL_TYPE_ID]),
-        ask(&mut from_idl, &money, "_is_a", &[ifr::IDL_TYPE_ID]),
+        ask(&mut hand, big, &money, "_is_a", &[ifr::IDL_TYPE_ID]),
+        ask(&mut from_idl, big, &money, "_is_a", &[ifr::IDL_TYPE_ID]),
     );
     assert_ne!(
-        ask(&mut hand, &money, "create_module", CREATE_ARGS),
-        ask(&mut from_idl, &money, "create_module", CREATE_ARGS),
+        ask(&mut hand, big, &money, "create_module", CREATE_ARGS),
+        ask(&mut from_idl, big, &money, "create_module", CREATE_ARGS),
     );
 
-    // 4 — the setter of a readonly attribute.
+    // 3 — the setter of a readonly attribute.
     let (a, b) = (
-        ask(&mut hand, &key, "_set_id", &[ABSENT]),
-        ask(&mut from_idl, &key, "_set_id", &[ABSENT]),
+        ask(&mut hand, big, &key, "_set_id", &[ABSENT]),
+        ask(&mut from_idl, big, &key, "_set_id", &[ABSENT]),
     );
     match (a, b) {
         (Answer::Raised { id: a, .. }, Answer::Raised { id: b, .. }) => {
@@ -685,12 +994,12 @@ fn the_divergences_are_the_ones_named_and_they_still_diverge() {
         other => panic!("both must refuse, differently: {other:?}"),
     }
 
-    // 5 — a refused operation whose body does not match the contract. The
+    // 4 — a refused operation whose body does not match the contract. The
     // round this batch spent on it is the reason it is written down.
     let short = [ABSENT];
     match (
-        ask(&mut hand, ROOT, "create_module", &short),
-        ask(&mut from_idl, ROOT, "create_module", &short),
+        ask(&mut hand, big, ROOT, "create_module", &short),
+        ask(&mut from_idl, big, ROOT, "create_module", &short),
     ) {
         (Answer::Raised { id: a, .. }, Answer::Raised { id: b, .. }) => {
             assert_eq!(a, ifr::NO_PERMISSION, "refused before the body is read");
@@ -701,7 +1010,16 @@ fn the_divergences_are_the_ones_named_and_they_still_diverge() {
     // With a well-formed body the two agree, which is what makes this an
     // ordering difference rather than a missing refusal.
     assert_eq!(
-        ask(&mut hand, ROOT, "create_module", CREATE_ARGS),
-        ask(&mut from_idl, ROOT, "create_module", CREATE_ARGS),
+        ask(&mut hand, big, ROOT, "create_module", CREATE_ARGS),
+        ask(&mut from_idl, big, ROOT, "create_module", CREATE_ARGS),
     );
+
+    // And the entry that left: `describe_interface` must not merely be absent
+    // from this list, it must actually agree. A gap removed from a list of
+    // gaps is worth exactly as much as the measurement that replaced it.
+    for endian in ORDERS {
+        let want = ask(&mut hand, endian, &key, "describe_interface", &[]);
+        assert!(matches!(want, Answer::Body(..)), "the oracle serves it");
+        assert_eq!(want, ask(&mut from_idl, endian, &key, "describe_interface", &[]));
+    }
 }

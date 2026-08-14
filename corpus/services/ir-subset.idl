@@ -24,12 +24,22 @@
 // generated skeleton would answer `_is_a` for ids no foreign ORB has heard of,
 // and the comparison would be against a contract of our own invention.
 //
-// Two things in the real IR are deliberately absent:
+// `describe_interface` and the description structs it reaches are declared
+// here as of 2026-08-14. They were absent while the registry loaded
+// `::CORBA::TypeCode` as `void` (measured), because an operation returning one
+// generated a `()` and would have replied with nothing at all — silently. That
+// registry defect is fixed and `orbweaver-gen` maps a `TypeCode` to
+// `rt::TypeCodeVal`, so the operation is now generatable and is generated.
 //
-//   * `describe_interface` and everything reaching `CORBA::TypeCode`. The
-//     registry currently loads `::CORBA::TypeCode` as `void` (measured), so an
-//     operation returning one generates a `()` — silently the wrong thing. It
-//     is left out rather than generated wrong; see the test's module docs.
+// **The member order of the description structs is not a matter of taste.**
+// `crates/orbweaver-registry/src/ifr.rs` writes these structs by hand and is
+// the oracle the generated skeleton is compared against *byte for byte*; the
+// order below was checked member by member against its `write_to`, which is
+// itself the OMG IR IDL's order. Reordering a member here is a silent breaking
+// change that no compiler will catch and the comparison will.
+//
+// One thing in the real IR is still deliberately absent:
+//
 //   * `valuetype`-shaped definition kinds. The registry does not hold them.
 //
 // The mutating half is present on purpose: `create_module` is declared so that
@@ -80,6 +90,70 @@ module CORBA {
     readonly attribute ScopedName absolute_name;
   };
 
+  // ── the description records `describe_interface` answers with ─────────────
+  //
+  // Member order below is `ifr.rs`'s `write_to` order, which is the OMG IR
+  // IDL's declaration order. The comparison is byte equality against that
+  // servant, so every member is placed against the encoder line that writes it
+  // rather than against a recollection of the specification.
+
+  typedef sequence<RepositoryId> RepositoryIdSeq;
+  typedef Identifier ContextIdentifier;
+  typedef sequence<ContextIdentifier> ContextIdSeq;
+
+  //@ ai_desc: Whether a caller waits for an operation's reply
+  enum OperationMode { OP_NORMAL, OP_ONEWAY };
+
+  //@ ai_desc: Which way a parameter travels
+  enum ParameterMode { PARAM_IN, PARAM_OUT, PARAM_INOUT };
+
+  //@ ai_desc: Whether an attribute may be written as well as read
+  enum AttributeMode { ATTR_NORMAL, ATTR_READONLY };
+
+  //@ ai_desc: One parameter of an operation, as the repository describes it
+  struct ParameterDescription {
+    Identifier name;
+    ::CORBA::TypeCode type;
+    IDLType type_def;
+    ParameterMode mode;
+  };
+  typedef sequence<ParameterDescription> ParDescriptionSeq;
+
+  //@ ai_desc: One exception an operation may raise
+  struct ExceptionDescription {
+    Identifier name;
+    RepositoryId id;
+    RepositoryId defined_in;
+    VersionSpec version;
+    ::CORBA::TypeCode type;
+  };
+  typedef sequence<ExceptionDescription> ExcDescriptionSeq;
+
+  //@ ai_desc: One operation, with everything needed to build a call to it
+  struct OperationDescription {
+    Identifier name;
+    RepositoryId id;
+    RepositoryId defined_in;
+    VersionSpec version;
+    ::CORBA::TypeCode result;
+    OperationMode mode;
+    ContextIdSeq contexts;
+    ParDescriptionSeq parameters;
+    ExcDescriptionSeq exceptions;
+  };
+  typedef sequence<OperationDescription> OpDescriptionSeq;
+
+  //@ ai_desc: One attribute, with its type and whether it may be written
+  struct AttributeDescription {
+    Identifier name;
+    RepositoryId id;
+    RepositoryId defined_in;
+    VersionSpec version;
+    ::CORBA::TypeCode type;
+    AttributeMode mode;
+  };
+  typedef sequence<AttributeDescription> AttrDescriptionSeq;
+
   //@ ai_desc: A module reference; declared so create_module has a return type
   interface ModuleDef;
 
@@ -107,6 +181,22 @@ module CORBA {
     //@ ai_desc: Whether the interface described here derives from a given id
     //@ ai_effect: read_only
     boolean is_a(in RepositoryId derived_from);
+
+    //@ ai_desc: Everything a DII client needs to call this interface, at once
+    struct FullInterfaceDescription {
+      Identifier name;
+      RepositoryId id;
+      RepositoryId defined_in;
+      VersionSpec version;
+      OpDescriptionSeq operations;
+      AttrDescriptionSeq attributes;
+      RepositoryIdSeq base_interfaces;
+      ::CORBA::TypeCode type;
+    };
+
+    //@ ai_desc: Describes this interface in one reply, inherited members included
+    //@ ai_effect: read_only
+    FullInterfaceDescription describe_interface();
   };
 
   //@ ai_desc: The repository itself, the object a client starts from

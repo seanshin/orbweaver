@@ -13,6 +13,69 @@
 /// IDL module `CORBA`.
 pub mod CORBA {
     use orbweaver_gen::rt::{self, Cdr};
+    /// IDL typedef `IDL:omg.org/CORBA/AttrDescriptionSeq:1.0`.
+    pub type AttrDescriptionSeq = Vec<crate::emitted::f_ir_subset::CORBA::AttributeDescription>;
+
+    /// IDL struct `IDL:omg.org/CORBA/AttributeDescription:1.0`.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct AttributeDescription {
+        /// IDL member `name`, marshalled first.
+        pub name: crate::emitted::f_ir_subset::CORBA::Identifier,
+        /// IDL member `id`, marshalled second.
+        pub id: crate::emitted::f_ir_subset::CORBA::RepositoryId,
+        /// IDL member `defined_in`, marshalled third.
+        pub defined_in: crate::emitted::f_ir_subset::CORBA::RepositoryId,
+        /// IDL member `version`, marshalled fourth.
+        pub version: crate::emitted::f_ir_subset::CORBA::VersionSpec,
+        /// IDL member `type`, marshalled fifth.
+        pub r#type: orbweaver_gen::rt::TypeCodeVal,
+        /// IDL member `mode`, marshalled sixth.
+        pub mode: crate::emitted::f_ir_subset::CORBA::AttributeMode,
+    }
+    impl Cdr for AttributeDescription {
+        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
+            self.name.put(e)?;
+            self.id.put(e)?;
+            self.defined_in.put(e)?;
+            self.version.put(e)?;
+            self.r#type.put(e)?;
+            self.mode.put(e)?;
+            Ok(())
+        }
+        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+            Ok(Self {
+                name: Cdr::get(d)?,
+                id: Cdr::get(d)?,
+                defined_in: Cdr::get(d)?,
+                version: Cdr::get(d)?,
+                r#type: Cdr::get(d)?,
+                mode: Cdr::get(d)?,
+            })
+        }
+    }
+
+    /// IDL enum `IDL:omg.org/CORBA/AttributeMode:1.0`. The ordinal is what travels.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum AttributeMode {
+        /// IDL enumerator `ATTR_NORMAL`; ordinal 0 on the wire.
+        ATTR_NORMAL = 0,
+        /// IDL enumerator `ATTR_READONLY`; ordinal 1 on the wire.
+        ATTR_READONLY = 1,
+    }
+    impl Cdr for AttributeMode {
+        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
+            e.put_u32(*self as u32);
+            Ok(())
+        }
+        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+            Ok(match d.get_u32()? {
+                0 => Self::ATTR_NORMAL,
+                1 => Self::ATTR_READONLY,
+                _ => return Err(rt::GiopError::Decode("ordinal outside AttributeMode; the sender may be built against a newer contract")),
+            })
+        }
+    }
+
     /// Anything the repository holds under a name
     ///
     /// Client stub for `IDL:omg.org/CORBA/Contained:1.0`.
@@ -1073,6 +1136,12 @@ pub mod CORBA {
         }
     }
 
+    /// IDL typedef `IDL:omg.org/CORBA/ContextIdSeq:1.0`.
+    pub type ContextIdSeq = Vec<crate::emitted::f_ir_subset::CORBA::ContextIdentifier>;
+
+    /// IDL typedef `IDL:omg.org/CORBA/ContextIdentifier:1.0`.
+    pub type ContextIdentifier = crate::emitted::f_ir_subset::CORBA::Identifier;
+
     /// IDL enum `IDL:omg.org/CORBA/DefinitionKind:1.0`. The ordinal is what travels.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum DefinitionKind {
@@ -1139,6 +1208,43 @@ pub mod CORBA {
                 16 => Self::dk_Array,
                 17 => Self::dk_Repository,
                 _ => return Err(rt::GiopError::Decode("ordinal outside DefinitionKind; the sender may be built against a newer contract")),
+            })
+        }
+    }
+
+    /// IDL typedef `IDL:omg.org/CORBA/ExcDescriptionSeq:1.0`.
+    pub type ExcDescriptionSeq = Vec<crate::emitted::f_ir_subset::CORBA::ExceptionDescription>;
+
+    /// IDL struct `IDL:omg.org/CORBA/ExceptionDescription:1.0`.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct ExceptionDescription {
+        /// IDL member `name`, marshalled first.
+        pub name: crate::emitted::f_ir_subset::CORBA::Identifier,
+        /// IDL member `id`, marshalled second.
+        pub id: crate::emitted::f_ir_subset::CORBA::RepositoryId,
+        /// IDL member `defined_in`, marshalled third.
+        pub defined_in: crate::emitted::f_ir_subset::CORBA::RepositoryId,
+        /// IDL member `version`, marshalled fourth.
+        pub version: crate::emitted::f_ir_subset::CORBA::VersionSpec,
+        /// IDL member `type`, marshalled fifth.
+        pub r#type: orbweaver_gen::rt::TypeCodeVal,
+    }
+    impl Cdr for ExceptionDescription {
+        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
+            self.name.put(e)?;
+            self.id.put(e)?;
+            self.defined_in.put(e)?;
+            self.version.put(e)?;
+            self.r#type.put(e)?;
+            Ok(())
+        }
+        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+            Ok(Self {
+                name: Cdr::get(d)?,
+                id: Cdr::get(d)?,
+                defined_in: Cdr::get(d)?,
+                version: Cdr::get(d)?,
+                r#type: Cdr::get(d)?,
             })
         }
     }
@@ -2095,6 +2201,16 @@ pub mod CORBA {
             let __r0 = Cdr::get(&mut __body)?;
             Ok(__r0)
         }
+        /// Describes this interface in one reply, inherited members included
+        ///
+        /// `describe_interface` on the wire.
+        pub fn describe_interface(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::InterfaceDef::FullInterfaceDescription, rt::GiopError> {
+            let __reply = self.conn.invoke("describe_interface", |__e| {
+            })?;
+            let mut __body = __reply.body()?;
+            let __r0 = Cdr::get(&mut __body)?;
+            Ok(__r0)
+        }
         /// Whether the interface described here derives from a given id
         ///
         /// `is_a` on the wire.
@@ -2405,6 +2521,10 @@ pub mod CORBA {
         ///
         /// `create_module` on the wire.
         fn create_module(&mut self, __at: &InterfaceDefTarget<'_>, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> Result<orbweaver_gen::rt::ObjRef, InterfaceDefFault>;
+        /// Describes this interface in one reply, inherited members included
+        ///
+        /// `describe_interface` on the wire.
+        fn describe_interface(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::InterfaceDef::FullInterfaceDescription, InterfaceDefFault>;
         /// Whether the interface described here derives from a given id
         ///
         /// `is_a` on the wire.
@@ -2448,6 +2568,10 @@ pub mod CORBA {
         ///
         /// `create_module` on the wire.
         fn create_module(&mut self, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> Result<orbweaver_gen::rt::ObjRef, InterfaceDefFault>;
+        /// Describes this interface in one reply, inherited members included
+        ///
+        /// `describe_interface` on the wire.
+        fn describe_interface(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::InterfaceDef::FullInterfaceDescription, InterfaceDefFault>;
         /// Whether the interface described here derives from a given id
         ///
         /// `is_a` on the wire.
@@ -2526,6 +2650,12 @@ pub mod CORBA {
         fn create_module(&mut self, __at: &InterfaceDefTarget<'_>, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> Result<orbweaver_gen::rt::ObjRef, InterfaceDefFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.create_module(new_id, new_name, new_version),
+                None => Err(InterfaceDefFault::System(rt::raise::object_not_exist().did_not_run())),
+            }
+        }
+        fn describe_interface(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::InterfaceDef::FullInterfaceDescription, InterfaceDefFault> {
+            match self.objects.get_mut(__at.oid()) {
+                Some(__o) => __o.describe_interface(),
                 None => Err(InterfaceDefFault::System(rt::raise::object_not_exist().did_not_run())),
             }
         }
@@ -2640,6 +2770,15 @@ pub mod CORBA {
                     let new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec = Cdr::get(&mut __args)
                         .map_err(|_| rt::SystemException::marshal())?;
                     match self.servant.create_module(&__at, new_id, new_name, new_version) {
+                        Ok(__r0) => {
+                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
+                            Ok(rt::DispatchBody::Return)
+                        }
+                        Err(__f) => __f.write(__out),
+                    }
+                }
+                "describe_interface" => {
+                    match self.servant.describe_interface(&__at) {
                         Ok(__r0) => {
                             __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
                             Ok(rt::DispatchBody::Return)
@@ -3160,6 +3299,139 @@ pub mod CORBA {
                     Err(rt::SystemException::unknown_user_exception())
                 }
             }
+        }
+    }
+
+    /// IDL typedef `IDL:omg.org/CORBA/OpDescriptionSeq:1.0`.
+    pub type OpDescriptionSeq = Vec<crate::emitted::f_ir_subset::CORBA::OperationDescription>;
+
+    /// IDL struct `IDL:omg.org/CORBA/OperationDescription:1.0`.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct OperationDescription {
+        /// IDL member `name`, marshalled first.
+        pub name: crate::emitted::f_ir_subset::CORBA::Identifier,
+        /// IDL member `id`, marshalled second.
+        pub id: crate::emitted::f_ir_subset::CORBA::RepositoryId,
+        /// IDL member `defined_in`, marshalled third.
+        pub defined_in: crate::emitted::f_ir_subset::CORBA::RepositoryId,
+        /// IDL member `version`, marshalled fourth.
+        pub version: crate::emitted::f_ir_subset::CORBA::VersionSpec,
+        /// IDL member `result`, marshalled fifth.
+        pub result: orbweaver_gen::rt::TypeCodeVal,
+        /// IDL member `mode`, marshalled sixth.
+        pub mode: crate::emitted::f_ir_subset::CORBA::OperationMode,
+        /// IDL member `contexts`, marshalled seventh.
+        pub contexts: crate::emitted::f_ir_subset::CORBA::ContextIdSeq,
+        /// IDL member `parameters`, marshalled eighth.
+        pub parameters: crate::emitted::f_ir_subset::CORBA::ParDescriptionSeq,
+        /// IDL member `exceptions`, marshalled ninth.
+        pub exceptions: crate::emitted::f_ir_subset::CORBA::ExcDescriptionSeq,
+    }
+    impl Cdr for OperationDescription {
+        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
+            self.name.put(e)?;
+            self.id.put(e)?;
+            self.defined_in.put(e)?;
+            self.version.put(e)?;
+            self.result.put(e)?;
+            self.mode.put(e)?;
+            self.contexts.put(e)?;
+            self.parameters.put(e)?;
+            self.exceptions.put(e)?;
+            Ok(())
+        }
+        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+            Ok(Self {
+                name: Cdr::get(d)?,
+                id: Cdr::get(d)?,
+                defined_in: Cdr::get(d)?,
+                version: Cdr::get(d)?,
+                result: Cdr::get(d)?,
+                mode: Cdr::get(d)?,
+                contexts: Cdr::get(d)?,
+                parameters: Cdr::get(d)?,
+                exceptions: Cdr::get(d)?,
+            })
+        }
+    }
+
+    /// IDL enum `IDL:omg.org/CORBA/OperationMode:1.0`. The ordinal is what travels.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum OperationMode {
+        /// IDL enumerator `OP_NORMAL`; ordinal 0 on the wire.
+        OP_NORMAL = 0,
+        /// IDL enumerator `OP_ONEWAY`; ordinal 1 on the wire.
+        OP_ONEWAY = 1,
+    }
+    impl Cdr for OperationMode {
+        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
+            e.put_u32(*self as u32);
+            Ok(())
+        }
+        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+            Ok(match d.get_u32()? {
+                0 => Self::OP_NORMAL,
+                1 => Self::OP_ONEWAY,
+                _ => return Err(rt::GiopError::Decode("ordinal outside OperationMode; the sender may be built against a newer contract")),
+            })
+        }
+    }
+
+    /// IDL typedef `IDL:omg.org/CORBA/ParDescriptionSeq:1.0`.
+    pub type ParDescriptionSeq = Vec<crate::emitted::f_ir_subset::CORBA::ParameterDescription>;
+
+    /// IDL struct `IDL:omg.org/CORBA/ParameterDescription:1.0`.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct ParameterDescription {
+        /// IDL member `name`, marshalled first.
+        pub name: crate::emitted::f_ir_subset::CORBA::Identifier,
+        /// IDL member `type`, marshalled second.
+        pub r#type: orbweaver_gen::rt::TypeCodeVal,
+        /// IDL member `type_def`, marshalled third.
+        pub type_def: orbweaver_gen::rt::ObjRef,
+        /// IDL member `mode`, marshalled fourth.
+        pub mode: crate::emitted::f_ir_subset::CORBA::ParameterMode,
+    }
+    impl Cdr for ParameterDescription {
+        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
+            self.name.put(e)?;
+            self.r#type.put(e)?;
+            self.type_def.put(e)?;
+            self.mode.put(e)?;
+            Ok(())
+        }
+        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+            Ok(Self {
+                name: Cdr::get(d)?,
+                r#type: Cdr::get(d)?,
+                type_def: Cdr::get(d)?,
+                mode: Cdr::get(d)?,
+            })
+        }
+    }
+
+    /// IDL enum `IDL:omg.org/CORBA/ParameterMode:1.0`. The ordinal is what travels.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum ParameterMode {
+        /// IDL enumerator `PARAM_IN`; ordinal 0 on the wire.
+        PARAM_IN = 0,
+        /// IDL enumerator `PARAM_OUT`; ordinal 1 on the wire.
+        PARAM_OUT = 1,
+        /// IDL enumerator `PARAM_INOUT`; ordinal 2 on the wire.
+        PARAM_INOUT = 2,
+    }
+    impl Cdr for ParameterMode {
+        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
+            e.put_u32(*self as u32);
+            Ok(())
+        }
+        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+            Ok(match d.get_u32()? {
+                0 => Self::PARAM_IN,
+                1 => Self::PARAM_OUT,
+                2 => Self::PARAM_INOUT,
+                _ => return Err(rt::GiopError::Decode("ordinal outside ParameterMode; the sender may be built against a newer contract")),
+            })
         }
     }
 
@@ -3710,10 +3982,63 @@ pub mod CORBA {
     /// IDL typedef `IDL:omg.org/CORBA/RepositoryId:1.0`.
     pub type RepositoryId = String;
 
+    /// IDL typedef `IDL:omg.org/CORBA/RepositoryIdSeq:1.0`.
+    pub type RepositoryIdSeq = Vec<crate::emitted::f_ir_subset::CORBA::RepositoryId>;
+
     /// IDL typedef `IDL:omg.org/CORBA/ScopedName:1.0`.
     pub type ScopedName = String;
 
     /// IDL typedef `IDL:omg.org/CORBA/VersionSpec:1.0`.
     pub type VersionSpec = String;
 
+    /// IDL module `InterfaceDef`.
+    pub mod InterfaceDef {
+        use orbweaver_gen::rt::{self, Cdr};
+        /// IDL struct `IDL:omg.org/CORBA/InterfaceDef/FullInterfaceDescription:1.0`.
+        #[derive(Debug, Clone, PartialEq)]
+        pub struct FullInterfaceDescription {
+            /// IDL member `name`, marshalled first.
+            pub name: crate::emitted::f_ir_subset::CORBA::Identifier,
+            /// IDL member `id`, marshalled second.
+            pub id: crate::emitted::f_ir_subset::CORBA::RepositoryId,
+            /// IDL member `defined_in`, marshalled third.
+            pub defined_in: crate::emitted::f_ir_subset::CORBA::RepositoryId,
+            /// IDL member `version`, marshalled fourth.
+            pub version: crate::emitted::f_ir_subset::CORBA::VersionSpec,
+            /// IDL member `operations`, marshalled fifth.
+            pub operations: crate::emitted::f_ir_subset::CORBA::OpDescriptionSeq,
+            /// IDL member `attributes`, marshalled sixth.
+            pub attributes: crate::emitted::f_ir_subset::CORBA::AttrDescriptionSeq,
+            /// IDL member `base_interfaces`, marshalled seventh.
+            pub base_interfaces: crate::emitted::f_ir_subset::CORBA::RepositoryIdSeq,
+            /// IDL member `type`, marshalled eighth.
+            pub r#type: orbweaver_gen::rt::TypeCodeVal,
+        }
+        impl Cdr for FullInterfaceDescription {
+            fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
+                self.name.put(e)?;
+                self.id.put(e)?;
+                self.defined_in.put(e)?;
+                self.version.put(e)?;
+                self.operations.put(e)?;
+                self.attributes.put(e)?;
+                self.base_interfaces.put(e)?;
+                self.r#type.put(e)?;
+                Ok(())
+            }
+            fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+                Ok(Self {
+                    name: Cdr::get(d)?,
+                    id: Cdr::get(d)?,
+                    defined_in: Cdr::get(d)?,
+                    version: Cdr::get(d)?,
+                    operations: Cdr::get(d)?,
+                    attributes: Cdr::get(d)?,
+                    base_interfaces: Cdr::get(d)?,
+                    r#type: Cdr::get(d)?,
+                })
+            }
+        }
+
+    }
 }
