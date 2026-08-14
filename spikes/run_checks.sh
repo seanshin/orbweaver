@@ -1597,6 +1597,20 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
       echo "  SKIPPED  omniORBpy absent — the servant-fault claims are unmeasured"
       skipped=$((skipped+1))
     fi
+    # §8 in the reading that catches a dropped bound: the two paths must refuse
+    # alike. Byte equality only ever samples values both paths accepted, so a
+    # bound the generator dropped was invisible to the oracle above — which is
+    # how it survived until D006 measured it while arguing about something else.
+    bo=$(cargo test -q -p orbweaver-gen --test bounds_oracle 2>&1)
+    if printf '%s' "$bo" | grep -q "^test result: ok"; then
+      n_bo=$(printf '%s' "$bo" | grep -o '^test result: ok. [0-9]*' | grep -o '[0-9]*$')
+      echo "  ok   static and dynamic refuse alike: $n_bo bound case(s), both byte orders,"
+      echo "       encode and decode, stub and skeleton, argument and reply direction"
+    else
+      echo "  FAIL a declared bound is enforced by one path and not the other"
+      printf '%s\n' "$bo" | grep -A3 "panicked" | head -6 | sed 's/^/       /'
+      gen_fail=1
+    fi
     # §8's rule in the direction nothing checked: a skeleton's reply bytes
     # against the dynamic path's. No fixture — ours on one end, the reference
     # implementation on the other.
