@@ -290,6 +290,46 @@ pub enum Error {
     /// A previous failure left unread bytes in the stream, so the connection
     /// can no longer be framed. It must be discarded, not reused.
     Desynchronized,
+    /// A fragmented message was cut short by an orderly control message —
+    /// `CloseConnection` (§9.4.7) or `MessageError` (§9.4.8) — arriving where
+    /// §9.4.9's continuation was due.
+    ///
+    /// Two rules meet here and neither one alone gives a true answer. §9.4.9
+    /// says nothing may interrupt a fragmented message on a connection, which
+    /// makes this an interleaved message; §13.5.1 makes `CloseConnection`
+    /// something a server may legitimately send at any moment, which is why
+    /// [`crate::pool`] re-sends on one. So [`Error::Desynchronized`] and
+    /// [`Error::UnexpectedMessage`] both say "the peer is broken and the stream
+    /// is corrupt" about what was in fact an orderly goodbye, and a client that
+    /// believes them gives up on a call it could simply have re-dialed.
+    /// [`Error::ConnectionClosed`] says the opposite and is no better: its
+    /// promise is §13.5.1's *"were not processed, and may be safely resent"*,
+    /// and a peer that had already begun to send this reply had, demonstrably,
+    /// processed the request — re-sending a non-idempotent operation on that
+    /// promise runs it twice.
+    ///
+    /// Hence a variant of its own. It says teardown rather than corruption —
+    /// see [`Error::is_orderly_close`] — and it names the one request §13.5.1's
+    /// promise does **not** cover. Every *other* request outstanding on the
+    /// connection is still covered, which is why [`crate::mux::Failed::unsent`]
+    /// is decided per caller rather than per connection.
+    InterruptedMidReassembly {
+        /// What arrived instead: `CloseConnection` or `MessageError`.
+        ///
+        /// The difference is what the peer is telling us. A `CloseConnection`
+        /// is about the *connection* and leaves every other outstanding
+        /// request re-sendable; a `MessageError` is a report about something
+        /// **we** sent that the peer could not parse (§9.4.8), names nothing,
+        /// and therefore makes no request safe to re-send.
+        control: MsgType,
+        /// The message type that was being reassembled.
+        partial: MsgType,
+        /// The request id of that half-received message — the one call that
+        /// must not be re-sent on §13.5.1's promise.
+        request_id: u32,
+        /// How many wire messages of it had arrived, counting the leading one.
+        received: usize,
+    },
     /// `LOCATION_FORWARD` chain exceeded [`MAX_FORWARD_HOPS`].
     TooManyForwards,
     /// A multiplexed call's own deadline expired before its reply arrived.
@@ -331,6 +371,32 @@ pub enum Error {
     Tls(rustls::Error),
 }
 
+impl Error {
+    /// Whether the peer tore this connection down in an orderly way — §9.4.7
+    /// `CloseConnection`, whether it arrived between messages or between the
+    /// fragments of one — rather than leaving a stream that can no longer be
+    /// framed.
+    ///
+    /// Exists so the decision that matters can be taken on a value instead of
+    /// on the text of a message. "Teardown" and "corruption" call for opposite
+    /// reactions — dial again versus stop and report — and a caller that has to
+    /// match on a `Display` string to tell them apart will get it wrong the
+    /// first time either string is reworded.
+    ///
+    /// True does **not** by itself mean the call may be re-sent: an orderly
+    /// close that interrupted a reply already in flight is
+    /// [`Error::InterruptedMidReassembly`], and for that one request §13.5.1's
+    /// promise does not hold. Re-send safety is [`crate::mux::Failed::unsent`],
+    /// which knows which caller is asking.
+    pub fn is_orderly_close(&self) -> bool {
+        matches!(
+            self,
+            Error::ConnectionClosed
+                | Error::InterruptedMidReassembly { control: MsgType::CloseConnection, .. }
+        )
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -362,6 +428,13 @@ impl fmt::Display for Error {
             }
             Error::Desynchronized => {
                 write!(f, "connection is desynchronized and must be discarded")
+            }
+            Error::InterruptedMidReassembly { control, partial, request_id, received } => {
+                write!(
+                    f,
+                    "peer sent {control:?} after {received} piece(s) of a fragmented {partial:?} \
+                     for request {request_id}"
+                )
             }
             Error::TooManyForwards => write!(f, "too many LOCATION_FORWARD hops"),
             Error::Timeout { request_id, waited } => {
@@ -1043,6 +1116,15 @@ pub fn read_message(stream: &mut impl Read, max_size: usize) -> Result<RawMessag
         // request id to correlate them, so concatenation is not reassembly and
         // there is no way to tell whose fragments these are. Refusing beats
         // producing a plausible wrong value.
+        //
+        // This refusal deliberately wins over anything that follows, including
+        // a `CloseConnection` sitting in the very next bytes: nothing more is
+        // read, so the rest of the stream stays where it is and the diagnosis
+        // stays about the thing we actually cannot do. Preferring the close
+        // would be worse than untidy — `FragmentUnsupported` is permanent for
+        // this peer and this reply, a close is retryable, and reporting the
+        // retryable one would send [`crate::pool`] round again to be told the
+        // same thing on a fresh connection.
         return Err(Error::FragmentUnsupported);
     }
 
@@ -1055,7 +1137,30 @@ pub fn read_message(stream: &mut impl Read, max_size: usize) -> Result<RawMessag
         }
         let next = read_one_message(stream, max_size)?;
         if next.msg_type != MsgType::Fragment {
-            return Err(Error::UnexpectedMessage(next.msg_type));
+            // Not every interruption is a broken peer. `CloseConnection` and
+            // `MessageError` are the two messages a peer sends *about* the
+            // conversation rather than as part of it, and §13.5.1 makes the
+            // first one an ordinary event a client is expected to survive. Both
+            // arrive here as well-framed whole messages, so the inbound framing
+            // is intact and "desynchronized" would be a false diagnosis; what is
+            // lost is this one logical message, which can never complete now.
+            // Reporting them as an interleaved `Request` would be reported is
+            // the difference between a client that re-dials and a client that
+            // gives up, so they are told apart here rather than guessed at
+            // upstream.
+            return Err(match next.msg_type {
+                MsgType::CloseConnection | MsgType::MessageError => {
+                    Error::InterruptedMidReassembly {
+                        control: next.msg_type,
+                        partial: msg_type,
+                        request_id: logical_request_id(&bytes, endian, version, msg_type)?,
+                        // The leading message plus every fragment that arrived
+                        // before the interruption.
+                        received: count,
+                    }
+                }
+                other => Error::UnexpectedMessage(other),
+            });
         }
         // The version must not change mid-message. This is not pedantry about
         // a field: a 1.1 `Fragment` carries no request id, so the four bytes
@@ -1854,6 +1959,16 @@ impl Connection {
         //
         // Any framing failure from here leaves unread bytes behind, so every
         // error path poisons the connection.
+        //
+        // The reader's reason is passed through untouched, which matters most
+        // for the one case that looks like it wants translating:
+        // [`Error::InterruptedMidReassembly`] with a `CloseConnection` is a
+        // teardown, but it is *not* [`Error::ConnectionClosed`] and must not be
+        // rewritten into one on the way out — this request's reply had already
+        // begun, so §13.5.1's "was not processed" does not describe it, and a
+        // caller re-sending on that promise would run the operation twice. The
+        // fact a caller needs is on the value: `is_orderly_close` says re-dial,
+        // the variant says do not assume this call went unrun.
         let raw = match read_message(&mut self.stream, self.max_message_size) {
             Ok(m) => m,
             Err(e) => {

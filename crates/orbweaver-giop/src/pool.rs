@@ -79,6 +79,16 @@
 //! `CloseConnection` is refusing, and a retry loop against it is a hot loop
 //! that never reports the refusal. The second failure is the caller's.
 //!
+//! One close does **not** get the retry, and the exception is the whole reason
+//! the flag is per caller: a `CloseConnection` that arrives between the
+//! *fragments* of a reply (§9.4.9) leaves one request whose answer had already
+//! started coming back. §13.5.1's promise is about outstanding messages
+//! *without replies*, so it does not reach that one — the peer had processed
+//! it — and re-sending it here would run a non-idempotent operation twice to
+//! hide an error the caller would rather have seen. It surfaces as
+//! [`Error::InterruptedMidReassembly`]; the other callers on that connection
+//! still get their re-send.
+//!
 //! The same one retry covers a **failed write**, and for the same
 //! specification-grade reason rather than optimism: a GIOP message the peer
 //! never finished reading cannot have been dispatched, and the connection is

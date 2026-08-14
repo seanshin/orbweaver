@@ -1232,6 +1232,29 @@ impl Server {
                 {
                     return Ok(()); // peer hung up; not an error
                 }
+                Err(Error::InterruptedMidReassembly {
+                    control: MsgType::CloseConnection, ..
+                }) => {
+                    // A client that says goodbye between the fragments of its
+                    // own request is doing the orderly thing, not a broken one,
+                    // and this loop already treats a `CloseConnection` between
+                    // whole messages as the end of the conversation. Where the
+                    // message lands in the stream cannot be what decides
+                    // whether it is a protocol error: answering the goodbye
+                    // with a §9.4.8 `MessageError` and logging a fault would
+                    // put a phantom failure in the server's own record every
+                    // time a peer shut down mid-upload.
+                    return Ok(());
+                }
+                Err(e @ Error::InterruptedMidReassembly { .. }) => {
+                    // The other one: a `MessageError` interrupted the request.
+                    // The peer is telling us it could not parse something we
+                    // sent, so it is already giving up; answering a
+                    // `MessageError` with a `MessageError` is the one reply
+                    // guaranteed to be useless, and between two ORBs that both
+                    // do it, it is a loop.
+                    return Err(e);
+                }
                 Err(e) => {
                     // §9.4.8: tell the peer rather than leaving it waiting.
                     let _ = encode_message_error(Endian::native())
@@ -1285,6 +1308,16 @@ impl Server {
                     }
                 }
                 MsgType::CloseConnection => return Ok(()),
+                MsgType::MessageError => {
+                    // §9.4.8 is a report about something *we* sent, so there is
+                    // nothing here to answer and the conversation is over. It
+                    // is still a fault worth returning — a peer that cannot
+                    // parse our replies is a real interop failure — but it is
+                    // reported without sending a `MessageError` back, for the
+                    // same reason as the mid-fragment case above: two ORBs that
+                    // both answer one with another never stop.
+                    return Err(Error::UnexpectedMessage(MsgType::MessageError));
+                }
                 other => {
                     let _ = encode_message_error(msg.endian)
                         .and_then(|m| s.write_all(&m).map_err(Error::Io));
@@ -1721,6 +1754,77 @@ mod tests {
         assert!(!conn.is_usable(), "a cleanly closed connection must not be reused");
         drop(conn);
         t.join().unwrap();
+    }
+
+    /// The serving side of the collision §9.4.9 and §13.5.1 create: a client
+    /// that says goodbye between the fragments of its own request is shutting
+    /// down, not misbehaving.
+    ///
+    /// Where the message lands in the stream cannot be what decides whether it
+    /// is a protocol error — this loop already ends quietly on a
+    /// `CloseConnection` between whole messages. Before the reader told the two
+    /// apart, the same goodbye one fragment earlier produced a §9.4.8
+    /// `MessageError` aimed at a peer that had stopped listening, and a
+    /// serving error in our own record for a peer that did everything right.
+    #[test]
+    fn a_goodbye_between_the_fragments_of_a_request_ends_the_connection_quietly() {
+        let server = Server::bind("127.0.0.1:0", b"k".to_vec()).unwrap();
+        let addr = server.local_addr().unwrap();
+        let t = std::thread::spawn(move || {
+            let (s, _) = server.listener.accept().unwrap();
+            server.serve_connection(s, &mut Pong)
+        });
+
+        let mut c = TcpStream::connect(addr).unwrap();
+        let pieces = crate::fragment_message(ping_wire(Version::V1_2, Endian::Big, 1), 24).unwrap();
+        assert!(pieces.len() > 1, "the test needs a genuinely fragmented request");
+        c.write_all(&pieces[0]).unwrap();
+        c.write_all(&encode_close_connection(Version::V1_2, Endian::Big).unwrap()).unwrap();
+        c.flush().unwrap();
+
+        // Nothing may come back — not a reply to a request that never
+        // completed, and above all not a MessageError at a peer that has
+        // already said goodbye.
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut back = [0u8; 12];
+        match std::io::Read::read(&mut c, &mut back) {
+            Ok(0) => {}
+            Ok(n) => panic!("the server answered an orderly goodbye with {:?}", &back[..n]),
+            Err(e) => panic!("expected a clean EOF, got {e}"),
+        }
+        t.join().unwrap().expect("an orderly goodbye is not a serving error");
+    }
+
+    /// §9.4.8 is a report about something *we* sent, so there is nothing to
+    /// answer. Answering it with another `MessageError` is the one reply
+    /// guaranteed to be useless — and between two ORBs that both do it, it does
+    /// not stop.
+    #[test]
+    fn a_message_error_is_not_answered_with_another_message_error() {
+        let server = Server::bind("127.0.0.1:0", b"k".to_vec()).unwrap();
+        let addr = server.local_addr().unwrap();
+        let t = std::thread::spawn(move || {
+            let (s, _) = server.listener.accept().unwrap();
+            server.serve_connection(s, &mut Pong)
+        });
+
+        let mut c = TcpStream::connect(addr).unwrap();
+        c.write_all(&encode_message_error(Endian::Big).unwrap()).unwrap();
+        c.flush().unwrap();
+
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut back = [0u8; 12];
+        match std::io::Read::read(&mut c, &mut back) {
+            Ok(0) => {}
+            Ok(n) => panic!("a MessageError must not be answered, got {:?}", &back[..n]),
+            Err(e) => panic!("expected a clean EOF, got {e}"),
+        }
+        // Still a fault worth reporting: a peer that cannot parse what we send
+        // is a real interop failure, it is just not one another header helps.
+        match t.join().unwrap() {
+            Err(Error::UnexpectedMessage(MsgType::MessageError)) => {}
+            other => panic!("expected the report to surface, got {other:?}"),
+        }
     }
 
     // ── concurrency ──────────────────────────────────────────────────────────

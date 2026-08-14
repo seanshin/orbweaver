@@ -32,8 +32,19 @@
 //! from §9.4.9 and asserts what the reader does with each — which makes the
 //! specification the oracle where no peer can be.
 //!
+//! **Second amendment, same day.** Every case here assumed a peer that is
+//! either correct or broken. The third case is the ordinary one: a peer that
+//! does not vanish but *speaks* — a `CloseConnection` or a `MessageError`
+//! between two fragments. The last section is about that, and it is the only
+//! place in this file where the specification does not settle the answer by
+//! itself: §9.4.9 forbids the interruption and §13.5.1 permits the message, so
+//! what the reader owes the caller is not a verdict on the peer but a report
+//! precise enough to choose between re-dialing and giving up.
+//!
 //! 수신 측은 지금까지 **우리 송신기의 출력만** 먹어봤다. 송신기 하나는 형태
 //! 하나를 만든다. 그래서 여기서는 규격이 허용하는 다른 형태들을 손으로 만든다.
+//! 마지막 절은 "사라지는 피어"가 아니라 "말을 거는 피어" — 조각 사이에 도착한
+//! `CloseConnection`/`MessageError` — 를 다룬다.
 
 use std::io::Cursor;
 
@@ -102,6 +113,21 @@ fn with_more(mut m: Vec<u8>) -> Vec<u8> {
 fn read(stream: &[u8]) -> Result<orbweaver_giop::RawMessage, Error> {
     read_message(&mut Cursor::new(stream), 1024 * 1024)
 }
+
+/// A bodiless control message — `CloseConnection` or `MessageError`. §9.4.7 and
+/// §9.4.8 both give them a header and nothing else.
+fn control(msg_type: MsgType, endian: Endian, version: Version) -> Vec<u8> {
+    let mut m = Vec::new();
+    m.extend_from_slice(MAGIC);
+    m.push(version.major);
+    m.push(version.minor);
+    m.push(endian.as_flag());
+    m.push(msg_type as u8);
+    m.extend_from_slice(&[0, 0, 0, 0]); // message_size = 0
+    m
+}
+
+const V1_2: Version = Version { major: 1, minor: 2 };
 
 /// The shape our emitter never produces: a split so early that the leading
 /// message holds nothing but the request id, with the whole body arriving in
@@ -261,4 +287,148 @@ fn a_chain_cut_short_is_an_error_not_a_short_message() {
     stream.extend(fragment(9, b"12345678", true, Endian::Big));
     // …and then the peer vanishes, with the more-fragments bit still set.
     assert!(read(&stream).is_err());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The peer that does not vanish but speaks
+//
+// Everything above is about a peer that is either correct or broken. These are
+// about the third case, which is the common one in production and the one the
+// two rules disagree about: §9.4.9 says nothing may interrupt a fragmented
+// message, and §13.5.1 says a server may send `CloseConnection` whenever it
+// likes — including, therefore, halfway through a reply. The reader cannot
+// obey both, so what it must do instead is report the collision precisely
+// enough that the caller can decide: an orderly close is a reason to dial
+// again, corruption is a reason to stop, and the two must not arrive wearing
+// the same error.
+//
+// 규격 두 조항이 충돌한다. 리더는 어느 한쪽을 고르는 대신, 호출자가 "다시 걸기"와
+// "포기"를 구분할 수 있도록 정확히 보고한다.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The case the file was written without: the peer speaks instead of vanishing.
+///
+/// It must not read as [`Error::Desynchronized`] — the stream was never
+/// desynchronized, every byte of that `CloseConnection` was well framed — and
+/// it must not read as a plain [`Error::ConnectionClosed`] either, because
+/// §13.5.1's "was not processed" is *false* about a request whose reply had
+/// already started. So it is its own answer, and it carries the id of the one
+/// call the promise does not cover.
+#[test]
+fn a_close_between_fragments_is_a_teardown_that_names_the_call_it_cut() {
+    for endian in [Endian::Big, Endian::Little] {
+        let mut stream = with_more(request(42, &[], endian));
+        stream.extend(fragment(42, b"12345678", true, endian));
+        stream.extend(control(MsgType::CloseConnection, endian, V1_2));
+
+        let err = read(&stream).expect_err("a goodbye is not a continuation");
+        assert!(err.is_orderly_close(), "{endian:?}: the peer said goodbye, got {err}");
+        match err {
+            Error::InterruptedMidReassembly { control, partial, request_id, received } => {
+                assert_eq!(control, MsgType::CloseConnection, "{endian:?}");
+                assert_eq!(partial, MsgType::Request, "{endian:?}");
+                assert_eq!(request_id, 42, "{endian:?}: the caller must be able to name its call");
+                assert_eq!(received, 2, "{endian:?}: the leading message and one fragment");
+            }
+            other => panic!("{endian:?}: expected an interrupted reassembly, got {other}"),
+        }
+    }
+}
+
+/// The distinction has to be readable from the value. A caller that has to
+/// match on the text of a message to tell "the peer closed" from "the stream is
+/// corrupt" is one rewording away from retrying corruption or abandoning a
+/// service that is merely restarting.
+#[test]
+fn teardown_and_corruption_are_told_apart_without_reading_the_message() {
+    let mut closed = with_more(request(1, &[], Endian::Big));
+    closed.extend(control(MsgType::CloseConnection, Endian::Big, V1_2));
+
+    let mut stolen = with_more(request(1, &[], Endian::Big));
+    stolen.extend(fragment(999, b"stolen__", false, Endian::Big));
+
+    let mut interleaved = with_more(request(1, &[], Endian::Big));
+    interleaved.extend(request(2, b"whole___", Endian::Big));
+
+    let mut reported = with_more(request(1, &[], Endian::Big));
+    reported.extend(control(MsgType::MessageError, Endian::Big, V1_2));
+
+    assert!(read(&closed).expect_err("closed").is_orderly_close());
+    for (what, stream) in
+        [("a fragment for another request", stolen), ("an interleaved message", interleaved)]
+    {
+        let err = read(&stream).expect_err(what);
+        assert!(!err.is_orderly_close(), "{what} is corruption, not a goodbye: {err}");
+    }
+    // And a `MessageError` is neither: an orderly message that is nonetheless
+    // not a close, so it must not be retried as one.
+    let err = read(&reported).expect_err("a message error");
+    assert!(!err.is_orderly_close(), "a report is not a goodbye: {err}");
+}
+
+/// §9.4.8's `MessageError` is a report about something **we** sent, not damage
+/// to what the peer is sending: the message is well framed and the conversation
+/// is simply over. What it must never do is claim a request is safe to re-send
+/// — it names nothing, so there is no request it could be talking about.
+#[test]
+fn a_message_error_between_fragments_is_a_report_not_corruption() {
+    let mut stream = with_more(request(8, &[], Endian::Big));
+    stream.extend(control(MsgType::MessageError, Endian::Big, V1_2));
+
+    match read(&stream).expect_err("a report is not a continuation") {
+        Error::InterruptedMidReassembly { control, partial, request_id, received } => {
+            assert_eq!(control, MsgType::MessageError);
+            assert_eq!(partial, MsgType::Request);
+            assert_eq!(request_id, 8);
+            assert_eq!(received, 1, "only the leading message had arrived");
+        }
+        other => panic!("expected an interrupted reassembly, got {other}"),
+    }
+}
+
+/// At GIOP 1.1 the reader refuses fragmentation outright, and that refusal must
+/// win over the close that follows it — not by accident of ordering but because
+/// stopping early is the point: nothing after the leading message is consumed,
+/// so the reason reported is the one thing we genuinely cannot do.
+///
+/// Preferring the close would be an availability bug in the opposite direction
+/// from the one this section fixes: `FragmentUnsupported` is permanent for this
+/// peer at this version, a close is retryable, and reporting the retryable one
+/// sends the pool round again to be told the same thing on a fresh connection.
+#[test]
+fn at_1_1_the_refusal_to_fragment_wins_and_leaves_the_close_unread() {
+    let v1_1 = Version { major: 1, minor: 1 };
+    let mut head = request(1, b"12345678", Endian::Big);
+    head[5] = 1; // 1.1
+    patch_size(&mut head, Endian::Big);
+    let head = with_more(head);
+    let head_len = head.len();
+
+    let mut stream = head;
+    stream.extend(control(MsgType::CloseConnection, Endian::Big, v1_1));
+
+    let mut cursor = Cursor::new(&stream[..]);
+    let err = read_message(&mut cursor, 1024 * 1024).expect_err("1.1 cannot reassemble");
+    assert!(matches!(err, Error::FragmentUnsupported), "got {err}");
+    assert!(!err.is_orderly_close(), "this is not retryable and must not look it");
+    assert_eq!(
+        cursor.position() as usize,
+        head_len,
+        "the refusal must consume nothing beyond the message it refuses"
+    );
+}
+
+/// The other side of the same line: a `CloseConnection` that interrupts nothing
+/// is an ordinary message and must stay one. The new answer above exists for a
+/// half-received message; a reader that started reporting every close as an
+/// error would break the orderly shutdown every ORB performs.
+#[test]
+fn a_close_that_interrupts_nothing_is_still_an_ordinary_message() {
+    for msg_type in [MsgType::CloseConnection, MsgType::MessageError] {
+        let stream = control(msg_type, Endian::Big, V1_2);
+        let msg = read(&stream).expect("a control message between messages is a message");
+        assert_eq!(msg.msg_type, msg_type);
+        assert_eq!(msg.fragments, 1);
+        assert!(!msg.more_fragments);
+    }
 }

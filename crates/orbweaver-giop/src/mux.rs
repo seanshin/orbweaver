@@ -163,11 +163,21 @@
 //!   `UnexpectedMessage` exactly as it did before this module existed, and the
 //!   mux faults rather than mis-filing anything.
 //!
-//! One consequence is worth stating because it is a real gap: a
-//! `CloseConnection` arriving *between* the fragments of a reply is refused as
-//! an unexpected message rather than reported as [`Error::ConnectionClosed`],
-//! so [`crate::pool`] will not retry it. No peer has been observed doing this
-//! and no test forces it; it is recorded here rather than fixed.
+//! **Closed 2026-08-14.** That gap used to be recorded here: a
+//! `CloseConnection` arriving *between* the fragments of a reply was refused as
+//! an unexpected message, reduced to `Desynchronized` by the fault, and so
+//! never retried by [`crate::pool`]. It now arrives as
+//! [`Error::InterruptedMidReassembly`], and the fault it makes is the only one
+//! that answers per caller: the call whose reply was already coming back is
+//! **not** re-sendable — the peer had processed it, whatever §13.5.1 says about
+//! requests without replies — while every other caller on the connection gets
+//! [`Error::ConnectionClosed`] and its re-send. Reporting one answer for both
+//! groups is wrong in one direction or the other whichever answer is chosen,
+//! which is why there are two.
+//!
+//! Still not observed from a peer: this needs a server to shut down inside the
+//! window between two fragments, and neither fixture will do it on command. The
+//! oracle is a scripted TCP peer built from this crate's own encoders.
 //!
 //! # Locks
 //!
@@ -336,7 +346,7 @@ pub type Answered = std::result::Result<Sent, Failed>;
 /// reason is stored in this reduced form and rebuilt per caller.
 #[derive(Debug, Clone)]
 enum Fault {
-    /// §9.4.7 `CloseConnection`. Retryable, and the only fault that is.
+    /// §9.4.7 `CloseConnection`, between messages. Retryable for everybody.
     Closed,
     /// Framing can no longer be trusted.
     Desynchronized,
@@ -344,21 +354,72 @@ enum Fault {
     Io(std::io::ErrorKind, String),
     /// The peer sent something that has no place here.
     Unexpected(MsgType),
+    /// An orderly control message arrived where the continuation of a
+    /// fragmented reply was due — [`Error::InterruptedMidReassembly`].
+    ///
+    /// The only fault that does not mean the same thing to every waiter, which
+    /// is why [`Fault::to_error`] and [`Fault::unsent`] take the caller's
+    /// request id. One caller had a reply *in flight*; the others had nothing
+    /// back at all, and §13.5.1 covers them and not it.
+    Interrupted {
+        /// `CloseConnection` or `MessageError`.
+        control: MsgType,
+        /// What was being reassembled.
+        partial: MsgType,
+        /// Whose reply it was.
+        request_id: u32,
+        /// How many pieces of it had arrived.
+        received: usize,
+    },
 }
 
 impl Fault {
-    fn to_error(&self) -> Error {
+    /// The error to hand the caller waiting on `waiter`.
+    ///
+    /// Per caller rather than per connection, because an interruption is one
+    /// event with two meanings: the caller whose reply was cut short needs the
+    /// full context — it is the one request that may already have run — while
+    /// everybody else simply met a closed connection, and telling them about
+    /// somebody else's request id would be noise they cannot act on.
+    fn to_error(&self, waiter: u32) -> Error {
         match self {
             Fault::Closed => Error::ConnectionClosed,
             Fault::Desynchronized => Error::Desynchronized,
             Fault::Io(kind, msg) => Error::Io(std::io::Error::new(*kind, msg.clone())),
             Fault::Unexpected(t) => Error::UnexpectedMessage(*t),
+            Fault::Interrupted { control, partial, request_id, received }
+                if waiter == *request_id =>
+            {
+                Error::InterruptedMidReassembly {
+                    control: *control,
+                    partial: *partial,
+                    request_id: *request_id,
+                    received: *received,
+                }
+            }
+            Fault::Interrupted { control: MsgType::CloseConnection, .. } => Error::ConnectionClosed,
+            Fault::Interrupted { control, .. } => Error::UnexpectedMessage(*control),
         }
     }
 
-    /// Whether a caller still waiting when this fault landed may re-send.
-    fn unsent(&self) -> bool {
-        matches!(self, Fault::Closed)
+    /// Whether the caller waiting on `waiter` may re-send.
+    fn unsent(&self, waiter: u32) -> bool {
+        match self {
+            Fault::Closed => true,
+            // §13.5.1's promise is about requests *without replies*. The peer
+            // had begun this one's reply, so it was processed; every other
+            // caller on the connection is still covered. Getting this wrong in
+            // the generous direction duplicates a non-idempotent call, which is
+            // the one failure mode a retry is supposed to be worth.
+            Fault::Interrupted { control: MsgType::CloseConnection, request_id, .. } => {
+                waiter != *request_id
+            }
+            // A `MessageError` says the peer could not parse something we sent
+            // and names nothing (§9.4.8 carries no body). With no way to tell
+            // which message it means, no request may be called unsent.
+            Fault::Interrupted { .. } => false,
+            Fault::Desynchronized | Fault::Io(..) | Fault::Unexpected(_) => false,
+        }
     }
 }
 
@@ -871,8 +932,11 @@ impl Inner {
             let mut held = self.lock();
             if let Some(f) = held.fault.clone() {
                 // Nothing was written, so this one is re-sendable whatever
-                // killed the connection.
-                return Err(failed(f.to_error(), true));
+                // killed the connection. It has no id yet either, and 0 is
+                // never allocated as one — so an interruption describes itself
+                // to this caller as the close or the report it was, rather than
+                // as somebody else's half-received reply.
+                return Err(failed(f.to_error(0), true));
             }
             // §13.5.1: ids must be unambiguous within the lifetime of the
             // connection and unique across Request and LocateRequest alike.
@@ -1121,7 +1185,7 @@ impl Inner {
             if held.slots.remove(&id).is_some() {
                 held.in_flight = held.in_flight.saturating_sub(1);
             }
-            return Collected::Gone(failed(f.to_error(), f.unsent()));
+            return Collected::Gone(failed(f.to_error(id), f.unsent(id)));
         }
         if !held.slots.contains_key(&id) {
             // No slot and no fault: already collected, or never registered.
@@ -1148,6 +1212,21 @@ impl Inner {
                     return;
                 }
                 Inner::fault_locked(held, &self.faulted, Fault::Io(e.kind(), e.to_string()));
+                return;
+            }
+            Err(Error::InterruptedMidReassembly { control, partial, request_id, received }) => {
+                // The peer interrupted a reply with an orderly control message.
+                // Reduced to `Desynchronized` — which is what every non-I/O
+                // reader error used to become — this told N callers that the
+                // connection was corrupt and none of them that it had merely
+                // been closed, so `crate::pool` refused to retry a call that
+                // §13.5.1 says nobody processed. The fault keeps the shape so
+                // each waiter can be told its own truth.
+                Inner::fault_locked(
+                    held,
+                    &self.faulted,
+                    Fault::Interrupted { control, partial, request_id, received },
+                );
                 return;
             }
             Err(e) => {
@@ -1292,12 +1371,45 @@ mod tests {
     /// promises it.
     #[test]
     fn only_close_connection_reports_a_request_as_unsent() {
-        assert!(Fault::Closed.unsent());
-        assert!(!Fault::Desynchronized.unsent());
-        assert!(!Fault::Io(std::io::ErrorKind::BrokenPipe, "gone".into()).unsent());
-        assert!(!Fault::Unexpected(MsgType::Request).unsent());
-        assert!(matches!(Fault::Closed.to_error(), Error::ConnectionClosed));
-        assert!(matches!(Fault::Desynchronized.to_error(), Error::Desynchronized));
+        assert!(Fault::Closed.unsent(1));
+        assert!(!Fault::Desynchronized.unsent(1));
+        assert!(!Fault::Io(std::io::ErrorKind::BrokenPipe, "gone".into()).unsent(1));
+        assert!(!Fault::Unexpected(MsgType::Request).unsent(1));
+        assert!(matches!(Fault::Closed.to_error(1), Error::ConnectionClosed));
+        assert!(matches!(Fault::Desynchronized.to_error(1), Error::Desynchronized));
+    }
+
+    /// The one fault that is not the same for everybody. A close that cut a
+    /// reply in half is retryable for every caller *except* the one whose reply
+    /// it cut: that peer had begun answering, so §13.5.1's "was not processed"
+    /// is false for exactly that request and true for the rest.
+    #[test]
+    fn an_interruption_answers_each_caller_about_its_own_request() {
+        let f = Fault::Interrupted {
+            control: MsgType::CloseConnection,
+            partial: MsgType::Reply,
+            request_id: 7,
+            received: 2,
+        };
+        assert!(!f.unsent(7), "the half-answered call was processed; re-sending would repeat it");
+        assert!(f.unsent(8), "§13.5.1 still covers a caller that got nothing back");
+        assert!(matches!(
+            f.to_error(7),
+            Error::InterruptedMidReassembly { control: MsgType::CloseConnection, received: 2, .. }
+        ));
+        assert!(matches!(f.to_error(8), Error::ConnectionClosed));
+        assert!(f.to_error(7).is_orderly_close() && f.to_error(8).is_orderly_close());
+
+        // A `MessageError` names nothing, so it makes nobody's request unsent.
+        let m = Fault::Interrupted {
+            control: MsgType::MessageError,
+            partial: MsgType::Reply,
+            request_id: 7,
+            received: 1,
+        };
+        assert!(!m.unsent(7) && !m.unsent(8));
+        assert!(!m.to_error(7).is_orderly_close(), "a report is not a goodbye");
+        assert!(matches!(m.to_error(8), Error::UnexpectedMessage(MsgType::MessageError)));
     }
 
     /// The distinction the whole timeout policy rests on: a read that consumed

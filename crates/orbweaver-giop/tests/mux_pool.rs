@@ -18,9 +18,11 @@ use orbweaver_cdr::Endian;
 use orbweaver_giop::guarded::Guarded;
 use orbweaver_giop::mux::{Mux, Sent};
 use orbweaver_giop::pool::{Limits, Pool};
-use orbweaver_giop::server::{decode_request, encode_close_connection, encode_reply};
+use orbweaver_giop::server::{
+    decode_request, encode_close_connection, encode_message_error, encode_reply,
+};
 use orbweaver_giop::{
-    Connection, DEFAULT_MAX_MESSAGE_SIZE, Error, IiopProfile, Ior, ReplyStatus, Version,
+    Connection, DEFAULT_MAX_MESSAGE_SIZE, Error, IiopProfile, Ior, MsgType, ReplyStatus, Version,
     fragment_message, read_message,
 };
 use std::io::Write;
@@ -252,6 +254,137 @@ fn a_message_interleaved_into_a_fragmented_reply_faults_instead_of_misattributin
     done.recv_timeout(T).expect("the peer finished its script");
 }
 
+/// Answers `id` with a reply big enough to fragment — and then sends only its
+/// leading piece, which is the state §9.4.9 calls a message in progress and the
+/// state every test below interrupts.
+fn start_a_fragmented_reply(s: &mut TcpStream, version: Version, endian: Endian, id: u32) {
+    let big = encode_reply(version, endian, id, ReplyStatus::NoException, |e| {
+        e.put_octet_seq(&vec![0u8; 4096]);
+    })
+    .expect("reply encodes");
+    let pieces = fragment_message(big, 512).expect("fragments");
+    assert!(pieces.len() > 2, "the test needs a genuinely fragmented reply");
+    s.write_all(&pieces[0]).expect("the leading piece goes out");
+    s.flush().expect("flush");
+}
+
+/// One `CloseConnection`, two truths — and a fault that used to tell both
+/// callers the same one.
+///
+/// §13.5.1 promises that requests *without replies* were not processed, and it
+/// is the whole basis of the pool's re-send. The caller whose reply had already
+/// begun arriving is the one request that promise does not describe: the peer
+/// demonstrably processed it. Telling that caller it may re-send would run a
+/// non-idempotent operation twice; telling the *other* caller it may not turns
+/// a routine server shutdown into a failed call. Neither is acceptable, so the
+/// answer is per caller.
+#[test]
+fn a_close_between_reply_fragments_is_re_sendable_for_everyone_but_the_call_it_cut() {
+    let (idtx, idrx) = mpsc::channel();
+    let (addr, done) = scripted(move |l| {
+        let (mut s, _) = l.accept().expect("accept");
+        let (first, _, v, e) = take_request(&mut s);
+        let (_second, _, _, _) = take_request(&mut s);
+        idtx.send(first).expect("report which call gets cut");
+        start_a_fragmented_reply(&mut s, v, e, first);
+        s.write_all(&encode_close_connection(v, e).expect("close encodes")).expect("goodbye");
+        s.flush().expect("flush");
+    });
+
+    let ior = ior_at(addr, b"key", 2);
+    let mux = Mux::connect(&ior, T).expect("connect");
+    let cut = mux.send(b"key", "half_answered", |_| {}).expect("goes out");
+    let untouched = mux.send(b"key", "never_answered", |_| {}).expect("goes out");
+    assert_eq!(cut.request_id(), idrx.recv_timeout(T).expect("the peer names the call it cuts"));
+
+    let fa = cut.wait(T).expect_err("half a reply is not an answer");
+    let fb = untouched.wait(T).expect_err("and the other call was never answered at all");
+
+    assert!(
+        matches!(
+            fa.error,
+            Error::InterruptedMidReassembly { control: MsgType::CloseConnection, .. }
+        ),
+        "the cut call must hear that its reply had started: got {}",
+        fa.error
+    );
+    assert!(!fa.unsent, "the peer had begun answering this one, so re-sending would repeat it");
+    assert!(matches!(fb.error, Error::ConnectionClosed), "got {}", fb.error);
+    assert!(fb.unsent, "§13.5.1 covers a request that got nothing back");
+    assert!(
+        fa.error.is_orderly_close() && fb.error.is_orderly_close(),
+        "both callers met a teardown, and neither may read it as corruption"
+    );
+    assert!(!mux.is_usable(), "a closed connection must not be handed out again");
+    done.recv_timeout(T).expect("the peer finished its script");
+}
+
+/// The other control message, and the opposite conclusion. §9.4.8's
+/// `MessageError` says the peer could not parse something **we** sent; it is a
+/// report rather than damage, so it is not corruption — but it names nothing,
+/// so it makes no request safe to re-send and it is not a goodbye either.
+#[test]
+fn a_message_error_between_reply_fragments_is_a_report_nobody_may_re_send() {
+    let (addr, done) = scripted(|l| {
+        let (mut s, _) = l.accept().expect("accept");
+        let (id, _, v, e) = take_request(&mut s);
+        start_a_fragmented_reply(&mut s, v, e, id);
+        s.write_all(&encode_message_error(e).expect("message error encodes")).expect("the report");
+        s.flush().expect("flush");
+    });
+
+    let ior = ior_at(addr, b"key", 2);
+    let mux = Mux::connect(&ior, T).expect("connect");
+    let f =
+        mux.call_on(b"key", "half_answered", |_| {}, T).expect_err("half a reply is not an answer");
+    assert!(
+        matches!(f.error, Error::InterruptedMidReassembly { control: MsgType::MessageError, .. }),
+        "got {}",
+        f.error
+    );
+    assert!(!f.unsent, "a MessageError names no request, so it promises nothing about any of them");
+    assert!(!f.error.is_orderly_close(), "a report is not a goodbye");
+    done.recv_timeout(T).expect("the peer finished its script");
+}
+
+/// The invoker that is not the mux: one connection, one call, and the same
+/// distinction. A variant nobody surfaces is not a fix, so this checks the
+/// simplest caller in the crate sees it too — and that it is *not* quietly
+/// rewritten into [`Error::ConnectionClosed`] on the way out.
+#[test]
+fn a_single_connection_reports_a_close_between_reply_fragments_as_a_teardown() {
+    let (idtx, idrx) = mpsc::channel();
+    let (addr, done) = scripted(move |l| {
+        let (mut s, _) = l.accept().expect("accept");
+        let (id, _, v, e) = take_request(&mut s);
+        idtx.send(id).expect("report the id");
+        start_a_fragmented_reply(&mut s, v, e, id);
+        s.write_all(&encode_close_connection(v, e).expect("close encodes")).expect("goodbye");
+        s.flush().expect("flush");
+        // Held open until the client hangs up, so the goodbye cannot be raced
+        // away by a reset.
+        let _ = read_message(&mut s, DEFAULT_MAX_MESSAGE_SIZE);
+    });
+
+    let ior = ior_at(addr, b"key", 2);
+    let mut conn = Connection::connect(&ior, T).expect("connect");
+    let err = conn.invoke_nullary("half_answered").expect_err("half a reply is not an answer");
+    assert!(err.is_orderly_close(), "the peer said goodbye; got {err}");
+    let sent = idrx.recv_timeout(T).expect("the peer reported the id");
+    match err {
+        Error::InterruptedMidReassembly { control, partial, request_id, received } => {
+            assert_eq!(control, MsgType::CloseConnection);
+            assert_eq!(partial, MsgType::Reply);
+            assert_eq!(request_id, sent, "the caller must be able to name the call that was cut");
+            assert_eq!(received, 1, "only the leading piece arrived");
+        }
+        other => panic!("expected an interrupted reassembly, got {other}"),
+    }
+    assert!(!conn.is_usable(), "the message can never complete now; the connection is spent");
+    drop(conn);
+    done.recv_timeout(T).expect("the peer finished its script");
+}
+
 /// The version rule, at the boundary it is decided on: GIOP 1.1 refuses to put
 /// a second request in flight, and still carries calls one at a time.
 #[test]
@@ -412,6 +545,40 @@ fn a_peer_that_only_says_goodbye_is_reported_not_retried_forever() {
     let err = pool.invoke(&ior, "op", |_| {}).expect_err("a refusing server must be reported");
     assert!(matches!(err, Error::ConnectionClosed), "got {err}");
     assert_eq!(pool.stats().retried, 1, "once, not until it works");
+    done.recv_timeout(T).expect("the peer finished its script");
+}
+
+/// The retry has a limit that is not a count: a call the peer had *begun*
+/// answering is never re-sent, however invisible the connection was.
+///
+/// This is the one place the pool's kindness would become a defect. Hiding a
+/// close is legitimate because §13.5.1 says the request was not processed —
+/// and that sentence stops being true the moment a reply starts coming back.
+/// Re-sending here would turn one server shutdown into one duplicated
+/// operation, silently, on a connection the caller never asked for.
+#[test]
+fn a_call_the_peer_had_begun_answering_is_reported_rather_than_retried() {
+    let (addr, done) = scripted(|l| {
+        let (mut s, _) = l.accept().expect("accept");
+        let (id, _, v, e) = take_request(&mut s);
+        start_a_fragmented_reply(&mut s, v, e, id);
+        s.write_all(&encode_close_connection(v, e).expect("close encodes")).expect("goodbye");
+        s.flush().expect("flush");
+        // No second accept: a pool that retried would find nothing here, and
+        // the counter below says whether it tried.
+    });
+
+    let pool = Pool::new();
+    let ior = ior_at(addr, b"key", 2);
+    let err =
+        pool.invoke(&ior, "half_answered", |_| {}).expect_err("half a reply is not an answer");
+    assert!(
+        matches!(err, Error::InterruptedMidReassembly { control: MsgType::CloseConnection, .. }),
+        "got {err}"
+    );
+    let stats = pool.stats();
+    assert_eq!(stats.retried, 0, "the operation may have run; a hidden re-send would repeat it");
+    assert_eq!(stats.dialed, 1, "and nothing may have been dialed to repeat it on");
     done.recv_timeout(T).expect("the peer finished its script");
 }
 
