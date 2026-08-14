@@ -29,6 +29,13 @@ generated/
 *.ior
 omniORB.log
 *.log
+# …except the ones that are evidence rather than output. A recorded pipeline
+# run IS the measurement for stages that cannot be re-run in the harness, and
+# the end-to-end check refuses to pass without it. This is the third time a
+# blanket ignore has swallowed a committed artefact (see spikes/tls/*.pem):
+# the agent's gate passed on its own disk while the commit lost the file, and
+# only CI, running from a fresh clone, could tell.
+!spikes/e2e/recorded/*.log
 
 # Environment / secrets
 .env

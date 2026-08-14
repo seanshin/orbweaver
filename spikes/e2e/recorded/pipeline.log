@@ -1,0 +1,68 @@
+Provenance of the artifacts beside this file.
+=============================================
+
+These are not a stand-in. They are the verbatim output of one live run of
+S1 ingest -> S2 synthesize -> S3 annotate -> S4 validate -> S5 register against
+a real model producer, recorded so the rest of the path can be replayed without
+one. `spikes/end_to_end.sh` replays them by default and re-runs S4 and S5 over
+them for real; `E2E_MODEL=1` calls the producer again instead.
+
+  date        2026-08-14
+  requirement spikes/e2e/requirement.txt (unchanged since)
+  producer    spikes/e2e/producer.sh -> `claude -p` (Claude Code CLI 2.1.229)
+  model       self-reported by the CLI; not independently verified
+  prompts     orbweaver_forge::{ingest::S1_PROMPT, synthesize::S2_PROMPT,
+              annotate::S3_PROMPT}, passed through FORGE_PROMPT
+  command     forge-pipeline --requirements <dir> --ingest <w> --synthesize <w>
+                             --annotate <w> --out <dir> --max-rounds 3 --register
+  exit        0
+  wall        about 2 min for 3 sequential model calls and no repair rounds
+
+Report, verbatim
+----------------
+
+range: S1 ingest → S4 validate over 1 item(s), 3 repair round(s) allowed per stage
+S1 ingest: 1 item(s)
+  first-pass: 1/1 valid (100%) — after round 1, before any repair
+  rounds: 1 used, 3 allowed
+    round 1: no causes
+  result: all 1 item(s) valid
+S2 synthesize: 1 item(s)
+  first-pass: 1/1 valid (100%) — after round 1, before any repair
+  rounds: 1 used, 3 allowed
+    round 1: no causes
+  result: all 1 item(s) valid
+S3 annotate: 1 item(s)
+  first-pass: 1/1 valid (100%) — after round 1, before any repair
+  rounds: 1 used, 3 allowed
+    round 1: no causes
+  result: all 1 item(s) valid
+S4 validate: 1 item(s)
+  first-pass: 1/1 valid (100%) — after round 1, before any repair
+  rounds: 1 used, 1 allowed
+    round 1: no causes
+  result: all 1 item(s) valid
+S4 gated 1 annotated file(s) and 0 unannotated draft(s)
+S5: registered 1 item(s); 1 exposable interface(s), every one exposed=no
+S5: allowlist worksheet: <out>/exposure.todo.tsv
+
+How to read 1/1
+---------------
+
+A batch of one is not a rate. Four 100%s over a single requirement say that
+nothing went wrong once; they say nothing about how often something does. The
+rates worth citing are the twenty-item ones in
+docs/pipeline-runs/2026-08-13-split-pipeline.md. What this run measures is that
+the stages compose, not how well they perform.
+
+What a second run of the same requirement produced
+--------------------------------------------------
+
+A different contract. Same requirement, same prompts, S1–S4 all valid again,
+and the interface came out `ParkingLot::GateControl` with operations
+`get_floor_availability` / `get_barrier_state` / `open_entry_barrier`, against
+this run's `ParkingFacility::ParkingControl` with `get_floor_occupancy` /
+`get_gate_status` / `open_entry_gate`. The scope moved too: this run wrote the
+`gate:operate` the requirement names, the second wrote
+`parkinglot.barrier.open`. See the run record for what that costs and why it is
+the finding the demonstration exists to have produced.
