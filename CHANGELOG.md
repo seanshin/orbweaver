@@ -8,9 +8,11 @@ records what changed and, where it matters, what it changes on the wire.
 
 ---
 
-## Unreleased
+## v0.3.0 — 2026-08-14
 
-Since v0.2.0. The wire-behaviour section leads again, for the same reason.
+The wire-behaviour section leads again, for the same reason. Everything in it
+was found by a reader we did not write, or by composing two parts that had only
+ever been measured apart.
 
 ### ⚠ Wire behaviour changed / 와이어 동작 변경
 
@@ -60,6 +62,37 @@ Since v0.2.0. The wire-behaviour section leads again, for the same reason.
   `string` constant is emitted as `&str`, since Rust has no `const String`.
   *상수는 값을 갖는다 — 레지스트리가 한 번 접고, 접을 수 없으면 값을 만들지 않는다.*
 
+- **`CosNaming::NamingContextExt::to_url`**, measured against **two** producers:
+  omniORB's own client resolved a URL ours built, and omniNames was run as a
+  second producer over 14 argument pairs (11 identical, 3 differing only in
+  hex-digit case, each parser reading the other's). One behaviour changed
+  *because* of that comparison: an empty name returns the bare `corbaname:`
+  form, as omniNames does.
+- **`moe::Router::select`**, delegating to the trading engine. When a
+  constraint names a field a wire-registered offer cannot answer it refuses the
+  **whole call** with `NO_IMPLEMENT`: a shorter list would say *these are all
+  the experts that qualify*, which is the sentence three-valued matching exists
+  to prevent.
+- **Constants are generated**, with the value folded once in the registry
+  rather than an expression every consumer would have to fold — three folders
+  that will disagree, and the one that disagrees silently ships. An expression
+  that cannot be folded stores nothing rather than a guessed zero.
+- **A deferral answers `NO_IMPLEMENT`, an oversight still answers
+  `BAD_OPERATION`.** Ten Interface Repository operations moved, so the
+  distinction `SERVICES-COVERAGE.md` opens by saying the wire cannot make is
+  one the wire now makes for that service — and `BAD_OPERATION` there is zero.
+- **The audit ledger is bounded** and spends one slot on an in-band `ELIDED`
+  marker naming what it dropped, because a dropped hour and a quiet hour read
+  identically exactly when somebody is reading the log to tell them apart.
+  `verify_promotion` refuses a truncated history rather than concluding from a
+  gap, and checks before parsing so the marker is not reported as a formatting
+  bug.
+- **A trace can name what failed**: `CallResult` carries the exception's
+  repository id, so D004's `outcome` column stops saying `-` for a failure it
+  simply had not been told about.
+- **D006** (PROPOSED): the data-plane rule, and the finding that no option can
+  enforce it — a bound constrains size, not frequency, and "never per token" is
+  the operative phrase.
 - **Attribute accessors are gated and visible.** `allow_interface` made
   `_get_balance` callable while the policy resolved scopes only through
   declared operations, so an `ai_authz` written on an attribute bought nothing
@@ -122,6 +155,12 @@ Since v0.2.0. The wire-behaviour section leads again, for the same reason.
   unknown sorts after every known value.
 - The generator inverted a repository id into a Rust module path, emitting
   `pub mod acme.com` for prefixed IDL.
+- **`_get_version` answered "no such operation" while `_set_version` answered
+  "you may not"** — backwards by the servant's own argument, on data the
+  registry parses out of every repository id it holds.
+- **Annotations on types were never checked.** The contract checker walked
+  interfaces only, so a typo on a `typedef` was silent — contradicting its own
+  premise that an `ai_*` key nobody reads is what it reports.
 - **A bound change is no longer reported as the silent class.** `idl-diff`
   described `sequence<octet>` becoming `sequence<octet, 64>` as "the encoded
   form differs, and CDR gives a receiver no way to notice". Both halves are
@@ -253,8 +292,15 @@ Stated because an absence that is not written down reads as a feature:
 
 - Request multiplexing and connection pooling are not implemented: one
   request at a time per connection, and a new connection per reference.
-- A generated skeleton has no object keys, so one servant per process; the
-  naming server's multi-context shape is not yet generatable.
+- **A generated stub does not enforce a declared bound** while the dynamic path
+  refuses the same value in both directions — so static and dynamic diverge on
+  exactly the path a latency-sensitive deployment picks, and §8's oracle cannot
+  see it, because it compares bytes for values that are valid on both sides.
+- Nothing in the token exchange has been through a **real identity provider**;
+  it is unit-tested against hand-built claims — the same shape as CSIv2 being a
+  per-peer claim rather than a feature.
+- The **container probe has never executed** (no docker here), and no rewritten
+  IOR has been put in front of a foreign ORB.
 - Ingested contracts carry no SIDL, so the guard's gates have nothing to key
   on — a second, independent reason exposure stays off.
 - The embedding synonym class, the TAO oracle column and the SSLIOP peer proof
