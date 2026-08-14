@@ -49,6 +49,25 @@
 //! change would be attributed to S2 by every reader of the diff. Structured
 //! comments in, nothing else.
 //!
+//! # The scope the requirement stated, bound to the scope this stage emits
+//!
+//! S3 invents `ai_authz` from the IDL, and the IDL does not carry the
+//! requirement's own words. A run recorded on 2026-08-14
+//! (`docs/pipeline-runs/2026-08-14-end-to-end.md`, Cause A) re-ran S1–S3 over an
+//! unchanged requirement with unchanged prompts and produced a contract that
+//! passed every gate 1/1 while asking for `parkinglot.barrier.open` where the
+//! requirement says `gate:operate`. Nothing in this project could see it: the
+//! deployment fails **closed** against every legitimate caller, and the evidence
+//! points at the identity provider.
+//!
+//! `docs/decisions/D005-contract-stability.md` (approved) answers it with option
+//! C, which is [`check_against_brief`] and [`stated_scope_findings`]: a
+//! scope-shaped token the requirement states, recorded by S1 in
+//! [`crate::ingest::Brief`], must appear verbatim in this stage's output. String
+//! equality, no model. What it does *not* buy is in
+//! [`crate::ingest::scope_shaped`]'s documentation and in the decision — it binds
+//! one *stated* token, and a requirement that states none is untouched.
+//!
 //! **S3은 별도 단계다.** 우리 코퍼스를 `contract-check`로 재면 20건이 나왔고
 //! 지배적 원인은 **변경 연산에 스코프(`ai_authz`)가 없는 것**이었다. 이는 다른
 //! 프롬프트에 얹힌 단계가 만드는 전형적 실패이며, 구문 게이트로는 잡을 수 없다
@@ -61,6 +80,7 @@ use orbweaver_idl::ast::{
 };
 use orbweaver_registry::{Entry, Registry};
 
+use crate::ingest::Brief;
 use crate::{Finding, Report, Severity, validate};
 
 /// One thing S3 must always do.
@@ -79,7 +99,7 @@ pub struct Rule {
 }
 
 /// Everything S3 must always do, as prompt constraints and as checks.
-pub const RULES: [Rule; 11] = [
+pub const RULES: [Rule; 12] = [
     Rule {
         id: "s3/missing-ai_desc",
         demand: "every operation carries an ai_desc",
@@ -136,6 +156,11 @@ pub const RULES: [Rule; 11] = [
         demand: "the IDL that comes out is the IDL that went in, plus comments",
         prompt_phrase: "Do not change the IDL",
     },
+    Rule {
+        id: "s3/authz-not-the-stated-scope",
+        demand: "a scope-shaped token the requirement states survives verbatim into ai_authz",
+        prompt_phrase: "copy each token verbatim into ai_authz",
+    },
 ];
 
 /// The annotation constraints, quoted into the S3 prompt verbatim.
@@ -176,6 +201,16 @@ permission — the guard lets any caller who reaches the bridge call it.
 Write ai_authz per operation, never on the interface. The guard reads the
 operation's annotations and never the interface's, so an interface-level scope
 looks exactly like an enforced one and enforces nothing.
+
+When a SCOPES THE REQUIREMENT STATES block accompanies the input, its tokens
+are quoted from the requirement itself:
+copy each token verbatim into ai_authz on the operation it names.
+Do not normalise it, do not reword it, do not compose a tidier one from the
+interface's own vocabulary. A scope is a string an identity provider issues, so a
+contract that asks for a scope the requirement never stated refuses every
+legitimate caller — and the refusal is well-formed, correctly audited, and
+indistinguishable from a permissions misconfiguration, so the people who debug
+it will check the identity provider and find it correct.
 
 Also:
 - do not annotate read_only on an operation whose name says it changes
@@ -321,6 +356,190 @@ pub fn check_against(before: &str, after: &str) -> Report {
     }
     report.findings.extend(contract_changes(before, after));
     report
+}
+
+/// [`check_against`] plus the binding between the requirement's own scope
+/// tokens and the `ai_authz` this stage emits — D005 option C.
+///
+/// The brief is optional because S3 is runnable alone over an IDL file nobody
+/// has a brief for, and a missing brief must mean *no binding* rather than *no
+/// stated scope*. When one is supplied, [`Brief::stated_scopes`] decides what is
+/// bound and [`stated_scope_findings`] checks it by string equality, with no
+/// model anywhere in the path.
+///
+/// # The obligation that rides with it
+///
+/// D005 attaches one to whichever change lands its options, and states it as a
+/// warning rather than a caveat: **stabilising regeneration converts the only
+/// signal this project has ever produced that a reading was a *choice* rather
+/// than a fact into silence.** Two runs disagreeing is how anyone learned that
+/// S1 asked ten questions and S2 answered them alone. The compensating
+/// instrument cannot be a green check.
+///
+/// What a crate can do about that is small and is done here: while the brief is
+/// in hand — S3 is the last stage that holds it, because S4 and S5 see only IDL
+/// — every unanswered `open_question` is carried into this report as
+/// `s3/unanswered-question`, at [`Severity::Advice`], so it is in front of
+/// whoever reads the stage report before registration. It blocks nothing and
+/// proves nothing. The instrument is the person; this only makes the questions
+/// impossible not to see.
+pub fn check_against_brief(brief: Option<&Brief>, before: &str, after: &str) -> Report {
+    let mut report = check_against(before, after);
+    if !report.is_ok() {
+        return report;
+    }
+    if let Some(brief) = brief {
+        report.findings.extend(stated_scope_findings(&brief.stated_scopes(), after));
+        report.findings.extend(brief.open_questions.iter().map(|q| Finding {
+            rule: "s3/unanswered-question".to_owned(),
+            severity: Severity::Advice,
+            message: format!(
+                "S1 could not settle this from the requirement and nothing since has: {q}. The \
+                 contract answers it anyway — read this before the contract is registered"
+            ),
+            line: 0,
+            column: 0,
+            source: q.clone(),
+            fix: None,
+        }));
+    }
+    report
+}
+
+/// The scopes block S3's producer is handed alongside the IDL.
+///
+/// Empty when the brief binds nothing, which is most requirements — a prompt
+/// that always carries a heading and no content teaches a reader to skip the
+/// heading.
+pub fn stated_scopes_block(scopes: &BTreeMap<String, String>) -> String {
+    if scopes.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "SCOPES THE REQUIREMENT STATES — quoted from the requirement, to be copied verbatim into \
+         ai_authz:\n",
+    );
+    for (operation, token) in scopes {
+        out.push_str(&format!("  {operation}: {token}\n"));
+    }
+    out.push_str(
+        "If the operation was renamed before it reached you, the token still belongs on whichever \
+         operation now does that work. The token itself never changes.\n\n",
+    );
+    out
+}
+
+/// Whether every scope the requirement states survived into an `ai_authz`.
+///
+/// `scopes` is [`Brief::stated_scopes`]: operation name → the literal token.
+/// Two ways to fire, one rule, at most one finding per stated token:
+///
+/// - **absent** — the token is nowhere in the file. This is the measured drift
+///   (`gate:operate` → `parkinglot.barrier.open`) and it is caught whatever the
+///   operations were renamed to, because the token is compared against the
+///   file's whole set of scopes rather than against one operation.
+/// - **misplaced** — an operation whose name still matches the brief's carries a
+///   *different* scope. This is the case D005 calls decisive: a regeneration
+///   that keeps every identifier and changes only `//@ ai_authz` passes all
+///   eight hops of the end-to-end run today.
+///
+/// Silent on a file that does not parse: [`gate`] has already said why, and a
+/// scope finding stacked on a syntax error buries the cause.
+pub fn stated_scope_findings(scopes: &BTreeMap<String, String>, idl: &str) -> Vec<Finding> {
+    if scopes.is_empty() {
+        return Vec::new();
+    }
+    let Ok(spec) = orbweaver_idl::check(idl) else { return Vec::new() };
+    let mut interfaces: Vec<&Interface> = Vec::new();
+    collect_interfaces(&spec.definitions, &mut interfaces);
+
+    struct Op<'a> {
+        iface: &'a str,
+        name: &'a str,
+        scope: Option<&'a str>,
+        at: &'a orbweaver_idl::lex::Span,
+    }
+    let mut ops: Vec<Op<'_>> = Vec::new();
+    for iface in &interfaces {
+        for member in iface.body.iter().flatten() {
+            if let InterfaceMember::Operation(op) = member {
+                let ann = annotations(&op.annotations);
+                ops.push(Op {
+                    iface: iface.name.text.as_str(),
+                    name: op.name.text.as_str(),
+                    scope: ann.get("ai_authz").copied().filter(|s| !s.is_empty()),
+                    at: &op.name.span,
+                });
+            }
+        }
+    }
+    let present: BTreeMap<&str, &str> =
+        ops.iter().filter_map(|o| o.scope.map(|s| (s, o.name))).collect();
+
+    // Grouped by token, so a scope two operations share is one cause and not
+    // two findings (§5.1: causes, not items).
+    let mut by_token: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (operation, token) in scopes {
+        by_token.entry(token.as_str()).or_default().push(operation.as_str());
+    }
+
+    let mut out = Vec::new();
+    for (token, brief_ops) in by_token {
+        if !present.contains_key(token) {
+            let found: Vec<String> = present.keys().map(|s| format!("{s:?}")).collect();
+            let found = if found.is_empty() {
+                "no operation in this file carries a scope at all".to_owned()
+            } else {
+                format!("the scopes this file does ask for are {}", found.join(", "))
+            };
+            out.push(Finding {
+                rule: "s3/authz-not-the-stated-scope".to_owned(),
+                severity: Severity::Error,
+                message: format!(
+                    "the requirement states the scope {token:?} and S1 recorded it on {}, but no \
+                     operation carries `//@ ai_authz: {token}` — {found}. An identity provider \
+                     issuing the scope the requirement states refuses every caller of a contract \
+                     that asks for a different one, and the refusal is well-formed, correctly \
+                     audited and indistinguishable from a permissions misconfiguration",
+                    brief_ops.join(", ")
+                ),
+                line: 0,
+                column: 0,
+                source: token.to_owned(),
+                fix: Some(format!(
+                    "write `//@ ai_authz: {token}` verbatim above the operation that does this \
+                     work. If the token itself is wrong, correct it in the brief and re-run from \
+                     S2 — the brief is the artifact of record and an edit there is a decision \
+                     somebody made, while a scope composed here is one nobody did"
+                )),
+            });
+            continue;
+        }
+        for brief_op in brief_ops {
+            let Some(op) = ops.iter().find(|o| o.name.eq_ignore_ascii_case(brief_op)) else {
+                continue;
+            };
+            let Some(scope) = op.scope else { continue };
+            if scope == token {
+                continue;
+            }
+            out.push(Finding {
+                rule: "s3/authz-not-the-stated-scope".to_owned(),
+                severity: Severity::Error,
+                message: format!(
+                    "{}.{} carries ai_authz {scope:?}, and the requirement states {token:?} for \
+                     the operation of that name; the contract and the identity provider would \
+                     disagree about this one operation while every other check passes",
+                    op.iface, op.name
+                ),
+                line: op.at.line,
+                column: op.at.column,
+                source: op.name.to_owned(),
+                fix: Some(format!("annotate `//@ ai_authz: {token}` on {}", op.name)),
+            });
+        }
+    }
+    out
 }
 
 /// Every annotation check over one file.
@@ -1137,6 +1356,135 @@ mod tests {
         assert!(r.findings.iter().all(|f| !f.rule.starts_with("s3/")), "{:?}", r.findings);
     }
 
+    /// A brief whose requirement states one scope-shaped token literally, on
+    /// one operation — the shape of the 2026-08-14 parking requirement.
+    fn scoped_brief(operation: &str, token: &str) -> Brief {
+        Brief {
+            requirement: format!("차단기 개방은 {token} 권한을 가진 운영자만 할 수 있다."),
+            summary: "gate control".into(),
+            operations: vec![crate::ingest::OperationSketch {
+                name: operation.into(),
+                effect: crate::ingest::Effect::Destructive,
+                authz: Some(token.into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    const GATE_IDL: &str = "module m { interface Gate {
+             //@ ai_desc: Reads the gate state
+             //@ ai_effect: read_only
+             long peek();
+             //@ ai_desc: Opens the entry gate
+             //@ ai_effect: destructive
+             //@ ai_authz: SCOPE
+             void open_entry_gate(in long plate);
+           }; };";
+
+    /// D005's measured drift: the requirement says `gate:operate`, the contract
+    /// asks for something else, every other gate passes.
+    #[test]
+    fn a_stated_scope_no_operation_carries_is_refused() {
+        let brief = scoped_brief("open_entry_gate", "gate:operate");
+        let after = GATE_IDL.replace("SCOPE", "parkinglot.barrier.open");
+        let before = strip_annotations(&after);
+
+        // Every other check is content — which is the whole finding.
+        assert!(check_against(&before, &after).is_ok(), "{:?}", check_against(&before, &after));
+
+        let r = check_against_brief(Some(&brief), &before, &after);
+        let f =
+            r.findings.iter().find(|f| f.rule == "s3/authz-not-the-stated-scope").expect("refused");
+        assert_eq!(f.severity, Severity::Error);
+        assert!(f.message.contains("gate:operate"), "{}", f.message);
+        assert!(f.message.contains("parkinglot.barrier.open"), "{}", f.message);
+        assert!(f.fix.as_deref().unwrap().contains("//@ ai_authz: gate:operate"), "{f:?}");
+    }
+
+    /// The token is in the file, on the wrong operation. D005 calls this the
+    /// decisive case: names kept, only the scope moved, all eight hops green.
+    #[test]
+    fn a_stated_scope_on_the_wrong_operation_is_refused() {
+        let brief = scoped_brief("open_entry_gate", "gate:operate");
+        let after = "module m { interface Gate {
+             //@ ai_desc: Reads the gate state
+             //@ ai_effect: destructive
+             //@ ai_authz: gate:operate
+             long peek();
+             //@ ai_desc: Opens the entry gate
+             //@ ai_effect: destructive
+             //@ ai_authz: parkinglot.barrier.open
+             void open_entry_gate(in long plate);
+           }; };";
+        let before = strip_annotations(after);
+        let f = check_against_brief(Some(&brief), &before, after)
+            .findings
+            .into_iter()
+            .find(|f| f.rule == "s3/authz-not-the-stated-scope")
+            .expect("refused");
+        assert!(f.message.contains("Gate.open_entry_gate"), "{}", f.message);
+        assert!(f.line > 0, "the finding is locatable: {f:?}");
+    }
+
+    /// The rule must be silent on correct output, or it is a rule people route
+    /// around.
+    #[test]
+    fn a_contract_that_keeps_the_stated_scope_is_silent() {
+        let brief = scoped_brief("open_entry_gate", "gate:operate");
+        let after = GATE_IDL.replace("SCOPE", "gate:operate");
+        let before = strip_annotations(&after);
+        let r = check_against_brief(Some(&brief), &before, &after);
+        assert!(r.is_ok(), "{:?}", r.findings);
+
+        // …and still silent when S2 renamed the operation, as long as the token
+        // survived: the rename is S2's right and the token is what binds.
+        let renamed = after.replace("open_entry_gate", "open_entry_barrier");
+        let renamed_before = strip_annotations(&renamed);
+        assert!(check_against_brief(Some(&brief), &renamed_before, &renamed).is_ok());
+    }
+
+    /// Three ways the binding declines to fire, each one deliberate.
+    #[test]
+    fn the_binding_declines_rather_than_guesses() {
+        let after = GATE_IDL.replace("SCOPE", "parkinglot.barrier.open");
+        let before = strip_annotations(&after);
+
+        // No brief: S3 run alone over IDL nobody has a brief for.
+        assert!(check_against_brief(None, &before, &after).is_ok());
+
+        // A brief whose token is not scope-shaped: prose, not a scope.
+        let mut prose = scoped_brief("open_entry_gate", "gate:operate");
+        prose.operations[0].authz = Some("운영자 권한".into());
+        prose.requirement = "차단기 개방은 운영자 권한이 필요하다.".into();
+        assert!(prose.stated_scopes().is_empty());
+        assert!(check_against_brief(Some(&prose), &before, &after).is_ok());
+
+        // A scope-shaped token S1 composed rather than read: the requirement
+        // never says it, so nothing binds it.
+        let mut invented = scoped_brief("open_entry_gate", "gate:operate");
+        invented.requirement = "차단기 개방은 운영자만 할 수 있다.".into();
+        assert!(invented.stated_scopes().is_empty(), "the requirement never states the token");
+        assert!(check_against_brief(Some(&invented), &before, &after).is_ok());
+    }
+
+    /// The block is per-item data, and empty when there is nothing to say: a
+    /// heading with no content under it teaches a reader to skip the heading.
+    #[test]
+    fn the_scopes_block_names_the_operation_and_the_token() {
+        assert_eq!(stated_scopes_block(&BTreeMap::new()), "");
+        let block =
+            stated_scopes_block(&scoped_brief("open_entry_gate", "gate:operate").stated_scopes());
+        assert!(block.contains("open_entry_gate: gate:operate"), "{block}");
+        assert!(block.contains("SCOPES THE REQUIREMENT STATES"), "{block}");
+    }
+
+    /// A "before" for the contract-identity check: the same file without its
+    /// structured comments, which is what S2 would have handed S3.
+    fn strip_annotations(idl: &str) -> String {
+        idl.lines().filter(|l| !l.trim_start().starts_with("//@")).collect::<Vec<_>>().join("\n")
+    }
+
     /// The codify test. Every rule S3 enforces is also a constraint S3's prompt
     /// states, and vice versa — a rule in one and not the other is exactly how
     /// the corpus finding got in.
@@ -1155,7 +1503,7 @@ mod tests {
 
         // And each rule fires on a file that breaks it, so the roster is not a
         // list of aspirations.
-        let samples: [(&str, &str); 11] = [
+        let samples: [(&str, &str); 12] = [
             ("s3/missing-ai_desc", "module m { interface I { long peek(); }; };"),
             (
                 "s3/missing-ai_effect",
@@ -1203,11 +1551,29 @@ mod tests {
                  topic); }; };",
             ),
             ("s3/contract-changed", ""),
+            ("s3/authz-not-the-stated-scope", ""),
         ];
         for rule in RULES {
             let (_, sample) = samples.iter().find(|(id, _)| *id == rule.id).unwrap_or_else(|| {
                 panic!("{} has no sample; every rule must be shown to fire", rule.id)
             });
+            if rule.id == "s3/authz-not-the-stated-scope" {
+                // Needs the item's brief as well as the file, so it has its own
+                // tests above; shown to fire here too, because a roster entry
+                // nobody demonstrates is an aspiration.
+                let brief = scoped_brief("open_entry_gate", "gate:operate");
+                let after = GATE_IDL.replace("SCOPE", "parkinglot.barrier.open");
+                let before = strip_annotations(&after);
+                assert!(
+                    check_against_brief(Some(&brief), &before, &after)
+                        .findings
+                        .iter()
+                        .any(|f| f.rule == rule.id),
+                    "{} never fires",
+                    rule.id
+                );
+                continue;
+            }
             if rule.id == "s3/contract-changed" {
                 // Needs a before and an after, so it has its own test above.
                 let before = "module m { interface I { long peek(); }; };";

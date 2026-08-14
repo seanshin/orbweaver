@@ -152,6 +152,20 @@ pub trait Stage {
     /// Which stage this is.
     fn id(&self) -> StageId;
 
+    /// Which item is about to be produced and gated.
+    ///
+    /// Called by [`run_batch`] before each item in both phases, so a stage that
+    /// needs a **second input artifact** can go and find it. The default does
+    /// nothing, because only S3 has one: D005 option C binds the scope a
+    /// requirement states to the `ai_authz` S3 emits, and the token lives in
+    /// S1's brief, which S3's input — an `.idl` file — cannot carry.
+    ///
+    /// The item id rather than the artifact itself, because the artifact is on
+    /// disk in the workspace and a [`Stage`] that wants it knows where to look;
+    /// widening the produce/gate signatures for one stage's second input would
+    /// change every implementation of this trait for a case none of them have.
+    fn begin_item(&mut self, _id: &str) {}
+
     /// Turn one input artifact into one output artifact.
     ///
     /// `repair` is the gate's own [`crate::Report::repair_prompt`] for **this
@@ -367,6 +381,7 @@ pub fn run_batch(
         for &i in &pending {
             let state = &mut states[i];
             state.rounds = round;
+            stage.begin_item(&items[i].0);
             produced.push((i, stage.produce(&items[i].1, state.repair.as_deref())));
         }
 
@@ -384,6 +399,7 @@ pub fn run_batch(
                     still_failing.push(i);
                 }
                 Ok(text) => {
+                    stage.begin_item(&items[i].0);
                     let report = stage.gate(&items[i].1, &text);
                     states[i].output = Some(text);
                     if report.is_ok() {
@@ -485,13 +501,37 @@ pub struct CommandStage {
     stage: StageId,
     command: String,
     scratch: PathBuf,
+    briefs: Option<PathBuf>,
+    brief: Option<Brief>,
 }
 
 impl CommandStage {
     /// A stage that shells out to `command`. `scratch` holds the temporary
     /// input, repair and prompt files.
     pub fn new(stage: StageId, command: impl Into<String>, scratch: impl Into<PathBuf>) -> Self {
-        CommandStage { stage, command: command.into(), scratch: scratch.into() }
+        CommandStage {
+            stage,
+            command: command.into(),
+            scratch: scratch.into(),
+            briefs: None,
+            brief: None,
+        }
+    }
+
+    /// Also read each item's brief out of `workspace` — S3's second input.
+    ///
+    /// This is the plumbing D005 option C names as its honest cost. With it,
+    /// S3's producer is handed the scopes the requirement states
+    /// ([`annotate::stated_scopes_block`], appended to the prompt file the
+    /// wrapper already reads) and S3's gate binds them
+    /// ([`annotate::check_against_brief`]). Without it — S3 run alone over a
+    /// directory of IDL nobody has a brief for — nothing is bound and nothing is
+    /// claimed, which is the honest reading of a missing artifact.
+    ///
+    /// Only S3 reads it. S1 has no brief yet and S2 already receives one.
+    pub fn with_briefs(mut self, workspace: &Workspace) -> Self {
+        self.briefs = Some(workspace.root().to_path_buf());
+        self
     }
 
     fn write(&self, name: &str, text: &str) -> Result<PathBuf, String> {
@@ -506,6 +546,23 @@ impl CommandStage {
 impl Stage for CommandStage {
     fn id(&self) -> StageId {
         self.stage
+    }
+
+    /// Loads this item's brief, when the stage was given somewhere to find one.
+    ///
+    /// A brief that is absent or unreadable binds nothing and is not an error:
+    /// `--from s3` over hand-written IDL is a supported run, and refusing it
+    /// would make a second input mandatory for a stage that has always had one.
+    fn begin_item(&mut self, id: &str) {
+        self.brief = None;
+        if self.stage != StageId::Annotate {
+            return;
+        }
+        let Some(dir) = &self.briefs else { return };
+        let path =
+            dir.join(format!("{id}{}", StageId::Ingest.artifact_suffix().unwrap_or_default()));
+        let Ok(text) = std::fs::read_to_string(&path) else { return };
+        self.brief = Brief::parse(&text).ok();
     }
 
     fn produce(&mut self, input: &str, repair: Option<&str>) -> Result<String, String> {
@@ -526,7 +583,14 @@ impl Stage for CommandStage {
         cmd.arg(&input_file);
         cmd.env("FORGE_STAGE", self.stage.tag());
         if let Some(prompt) = self.stage.prompt() {
-            let path = self.write(&format!("{}.prompt.txt", self.stage.tag()), prompt)?;
+            // The constraints are the crate constant, always. What follows them
+            // is per-item *data* the constraints refer to — the scopes the
+            // requirement states, which S3 cannot read off its `.idl` input.
+            // `--print-prompt s3` still prints the constant alone, because the
+            // constant is what a first-pass rate is a measurement of.
+            let scopes = self.brief.as_ref().map(Brief::stated_scopes).unwrap_or_default();
+            let text = format!("{prompt}\n{}", annotate::stated_scopes_block(&scopes));
+            let path = self.write(&format!("{}.prompt.txt", self.stage.tag()), &text)?;
             cmd.env("FORGE_PROMPT", &path);
         }
         if let Some(text) = repair {
@@ -547,7 +611,7 @@ impl Stage for CommandStage {
     }
 
     fn gate(&self, input: &str, output: &str) -> Report {
-        gate_for(self.stage, input, output)
+        gate_for_with_brief(self.stage, self.brief.as_ref(), input, output)
     }
 }
 
@@ -555,12 +619,27 @@ impl Stage for CommandStage {
 ///
 /// Exposed so a caller can check one artifact without constructing a producer:
 /// `gate_for(StageId::Annotate, draft, annotated)` is S3's whole verdict on one
-/// file.
+/// file — minus the one check that needs a second artifact, for which see
+/// [`gate_for_with_brief`].
 pub fn gate_for(stage: StageId, input: &str, output: &str) -> Report {
+    gate_for_with_brief(stage, None, input, output)
+}
+
+/// [`gate_for`] with the item's brief, where the caller has one.
+///
+/// S3 is the only stage that reads it, and it reads it for exactly one rule:
+/// `s3/authz-not-the-stated-scope`, which binds a scope-shaped token the
+/// requirement states to the `//@ ai_authz` this stage emits (D005 option C).
+pub fn gate_for_with_brief(
+    stage: StageId,
+    brief: Option<&Brief>,
+    input: &str,
+    output: &str,
+) -> Report {
     match stage {
         StageId::Ingest => ingest::gate(output),
         StageId::Synthesize => synthesize::gate(input, output),
-        StageId::Annotate => annotate::check_against(input, output),
+        StageId::Annotate => annotate::check_against_brief(brief, input, output),
         StageId::Validate | StageId::Register => validate(output),
     }
 }
