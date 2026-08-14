@@ -52,6 +52,17 @@ Since v0.2.0. The wire-behaviour section leads again, for the same reason.
 - The fuzz reaches the **text** parsers too (stringified IORs, D004 trace
   lines, the ingestion validators): 450,000 cases × 17 targets across five
   seeds, zero panics, with every target's reach asserted.
+- **Dispatch runs concurrently** (`SharedDispatch`). One lock per servant, at
+  most one held per thread, nothing blocking inside it — so lock *ordering* is
+  vacuous rather than documented, since a deadlock cycle needs a thread holding
+  two locks. Enforced structurally: a guard cannot escape its closure, a
+  per-thread marker refuses a second section, and dialling asserts nothing is
+  held (panicking in debug, so a violation fails the test that wrote it). The
+  existing `Dispatch` trait and every generated skeleton are unchanged and
+  still serialized. **The finding**: `ServerStats::peak_dispatching` was written
+  to witness overlap and could not — it sits outside the servant's own lock and
+  counted callers queued for it, reaching N on a *serialized* server. The
+  negative control caught it; review had not.
 - **Multi-object generated skeletons**: `knows()` required with no default,
   identity as an explicit `Target` argument, and **71 pinned cases answering
   byte-identically to the hand-written Interface Repository facade**, down to a
@@ -81,6 +92,13 @@ Since v0.2.0. The wire-behaviour section leads again, for the same reason.
   unknown sorts after every known value.
 - The generator inverted a repository id into a Rust module path, emitting
   `pub mod acme.com` for prefixed IDL.
+- **A bound change is no longer reported as the silent class.** `idl-diff`
+  described `sequence<octet>` becoming `sequence<octet, 64>` as "the encoded
+  form differs, and CDR gives a receiver no way to notice". Both halves are
+  false: the bytes are identical, and a peer that exceeds the bound is refused
+  loudly. The verdict stays Breaking; the reason now says which kind of
+  breaking, because the sentence being borrowed describes §5.3's measured case
+  of a peer returning the wrong member and raising nothing.
 - The `*.log` ignore swallowed the end-to-end provenance record, which only a
   fresh clone could reveal — the third time a blanket ignore has taken a
   committed artefact.
