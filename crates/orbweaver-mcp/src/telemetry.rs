@@ -111,13 +111,18 @@ pub const ABSENT: &str = "-";
 /// `outcome` for a call that completed.
 pub const OUTCOME_OK: &str = "ok";
 
-/// `outcome` for a call a stage refused: the system exception the refusal
-/// becomes.
+/// `outcome` for a call a **policy** stage refused: the system exception the
+/// refusal becomes.
 ///
-/// This is not a guess. [`crate::guard::Guarded`] turns every chain refusal into
+/// This is not a guess. [`crate::guard::Guarded`] turns a policy refusal into
 /// exactly this repository id, which is what a stub's caller sees; the dynamic
 /// path renders the same policy fact as a `ToolError`. The audit line carries
 /// the *why*, and this field carries what the caller was told.
+///
+/// It is not the only refusal outcome: a spent [`crate::quota`] budget that a
+/// later window renews is [`crate::guard::TRANSIENT`], because a retry may
+/// succeed. [`crate::guard::refusal_id`] is the one place that chooses between
+/// them, for the trace and for the exception alike.
 pub const OUTCOME_REFUSED: &str = NO_PERMISSION;
 
 /// Which path a call took, which is what the promotion policy reasons about.
@@ -308,7 +313,8 @@ impl<'a> SpanRecord<'a> {
         self.path
     }
 
-    /// [`OUTCOME_OK`], [`OUTCOME_REFUSED`], or [`ABSENT`].
+    /// [`OUTCOME_OK`], [`OUTCOME_REFUSED`], [`crate::guard::TRANSIENT`] for a
+    /// spent quota, or [`ABSENT`].
     pub fn outcome(&self) -> &'a str {
         self.outcome
     }

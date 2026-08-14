@@ -143,20 +143,26 @@ pub enum Would {
     /// The contract marks the operation as needing a human, and no approval is
     /// in hand.
     NeedApproval,
-    /// A stage outside the built-in gates refused — a deployment's quota, rate
-    /// limiter or safety filter.
+    /// A consumption budget is spent ([`crate::quota`]). **The one row that is
+    /// not about permission**: nothing is missing from the caller and nothing
+    /// has to be added to a role — the answer is about what has been used, and
+    /// the row's `why` says whether a later window changes it.
+    Exhausted,
+    /// A stage outside the built-in gates refused — a deployment's own safety
+    /// filter, router or rule.
     Refuse,
 }
 
 impl Would {
     /// Every variant, in the order a summary lists them. Fixed so that two
     /// surveys of the same exposure diff cleanly.
-    pub const ALL: [Would; 6] = [
+    pub const ALL: [Would; 7] = [
         Would::Allow,
         Would::NotExposed,
         Would::NeedAuthentication,
         Would::NeedScope,
         Would::NeedApproval,
+        Would::Exhausted,
         Would::Refuse,
     ];
 
@@ -172,6 +178,7 @@ impl Would {
             Some(Denied::NotAuthenticated { .. }) => Would::NeedAuthentication,
             Some(Denied::MissingScope { .. }) => Would::NeedScope,
             Some(Denied::NeedsApproval { .. }) => Would::NeedApproval,
+            Some(Denied::QuotaExhausted { .. }) => Would::Exhausted,
             Some(Denied::Intercepted { .. }) => Would::Refuse,
         }
     }
@@ -184,6 +191,7 @@ impl Would {
             Would::NeedAuthentication => "need_authentication",
             Would::NeedScope => "need_scope",
             Would::NeedApproval => "need_approval",
+            Would::Exhausted => "exhausted",
             Would::Refuse => "refuse",
         }
     }

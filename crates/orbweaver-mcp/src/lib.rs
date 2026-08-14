@@ -47,6 +47,7 @@ pub mod identity;
 pub mod interceptor;
 pub mod policy;
 pub mod promote;
+pub mod quota;
 pub mod rpc;
 pub mod session;
 pub mod telemetry;
