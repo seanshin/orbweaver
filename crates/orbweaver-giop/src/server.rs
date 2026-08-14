@@ -747,6 +747,44 @@ impl Server {
         })
     }
 
+    /// Builds a publishable IOR by running the **bound** address through
+    /// `map` — endpoint rewriting at publish time (PLAN R7).
+    ///
+    /// This is the rewrite this project prefers, and the reason is who reads
+    /// the result: a reference the server hands out is read by every client,
+    /// including foreign ORBs nobody here can patch. See
+    /// [`crate::nat`] and `docs/PHASE6.md`.
+    ///
+    /// Two refusals, both deliberate:
+    ///
+    /// - A **wildcard bind** (`0.0.0.0`, `::`) that no rule names is an error,
+    ///   not a default. `0.0.0.0` is bindable and unpublishable, and an ORB
+    ///   that publishes it produces references that fail at every client
+    ///   rather than at the one process that could have been configured.
+    /// - An address that is not a wildcard and that no rule names is
+    ///   published unchanged. A deployment with no NAT in front of it sets no
+    ///   map, and must still get a working reference.
+    pub fn ior_mapped(&self, type_id: &str, map: &crate::nat::EndpointMap) -> Result<crate::Ior> {
+        let bound = self.local_addr()?;
+        let (host, port) = match crate::nat::published_address(bound, map) {
+            Some(ep) => ep,
+            None if crate::nat::is_unpublishable(bound.ip()) => {
+                return Err(crate::Error::BadIor(
+                    "bound to a wildcard address and no rule publishes it; \
+                     an IOR must name an address a client can dial",
+                ));
+            }
+            None => (bound.ip().to_string(), bound.port()),
+        };
+        self.ior(type_id, &host).map(|mut ior| {
+            // `ior` took the bound port; a rule may have moved it.
+            if let Some(p) = ior.profiles.first_mut() {
+                p.port = port;
+            }
+            ior
+        })
+    }
+
     /// Serves connections concurrently until `stop` returns true.
     ///
     /// Each accepted connection gets a thread; `dispatch` is shared between
@@ -1477,6 +1515,48 @@ mod tests {
                 components: Vec::new(),
             }],
         }
+    }
+
+    /// Publish-time rewriting, the R7 mitigation at the point addresses enter
+    /// the wire: the bound address goes through the map, the object key does
+    /// not.
+    #[test]
+    fn ior_mapped_publishes_the_mapped_address_and_nothing_else() {
+        use crate::nat::{EndpointMap, Rule};
+        let server = Server::bind("127.0.0.1:0", b"servant-identity".to_vec()).unwrap();
+        let port = server.local_addr().unwrap().port();
+
+        let plain = server.ior_mapped("IDL:spike/Echo:1.0", &EndpointMap::new()).unwrap();
+        assert_eq!(plain.profiles[0].host, "127.0.0.1", "no map means publish what was bound");
+        assert_eq!(plain.profiles[0].port, port);
+
+        let map = EndpointMap::new().with(Rule::endpoint("127.0.0.1", port, "203.0.113.9", 31000));
+        let mapped = server.ior_mapped("IDL:spike/Echo:1.0", &map).unwrap();
+        assert_eq!(mapped.profiles[0].host, "203.0.113.9");
+        assert_eq!(mapped.profiles[0].port, 31000);
+        assert_eq!(
+            mapped.profiles[0].object_key, b"servant-identity",
+            "identity is not an address"
+        );
+        assert_eq!(mapped.profiles[0].version, plain.profiles[0].version);
+    }
+
+    /// `0.0.0.0` is bindable and unpublishable. Publishing it would produce a
+    /// reference that fails at every client instead of at the one process that
+    /// could still be configured.
+    #[test]
+    fn ior_mapped_refuses_to_publish_a_wildcard_bind() {
+        use crate::nat::{EndpointMap, Rule};
+        let server = Server::bind("0.0.0.0:0", b"k".to_vec()).unwrap();
+        let port = server.local_addr().unwrap().port();
+        assert!(matches!(
+            server.ior_mapped("IDL:spike/Echo:1.0", &EndpointMap::new()),
+            Err(crate::Error::BadIor(_))
+        ));
+        let map = EndpointMap::new().with(Rule::host("0.0.0.0", "203.0.113.9"));
+        let ior = server.ior_mapped("IDL:spike/Echo:1.0", &map).unwrap();
+        assert_eq!(ior.profiles[0].host, "203.0.113.9");
+        assert_eq!(ior.profiles[0].port, port, "a host-only rule keeps the bound port");
     }
 
     /// The limit this batch exists to remove: N clients, each mid-session at

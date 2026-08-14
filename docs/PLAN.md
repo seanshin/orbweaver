@@ -770,7 +770,7 @@ Putting an AI bridge in front of legacy CORBA widens the attack surface in ways 
 | **R4** | LLM hallucinates IDL | Medium | High | Compile gate blocks 100% of syntactic errors. Semantic errors caught by contract tests and human review queue |
 | **R5** | Specification defects dominate, per AutoMCP | Medium | High | Annotation coverage is a KPI; registration blocked below threshold. Gaps back-inferred from traffic observation |
 | **R6** | CORBA expertise is scarce | Medium | High | Secure at least one experienced ORB engineer or external advisor. Accumulate operational knowledge internally |
-| **R7** | **IOR addressing under NAT/containers** — an internal IP baked into an IOR is uncallable externally | Medium | High | Endpoint rewriting templated into every deployment. Verified in Phase 0 assumption D |
+| **R7** | **IOR addressing under NAT/containers** — an internal IP baked into an IOR is uncallable externally | Medium | High | Endpoint rewriting templated into every deployment. Hazard verified in Phase 0 assumption D; the rewriter is `orbweaver_giop::nat` plus `Server::ior_mapped`, measured by dialing in `spikes/nat_rewrite.sh` (docs/PHASE6.md). A real routing domain remains unmeasured — the container probe under `spikes/nat/` is written and unrun |
 | **R8** | Scope growth from building the ORB core | Medium | Medium | Phases 1–2 are strictly wire and compiler work with no AI scope creep. GIOP 1.2 over TCP only in v1 |
 | **R9** | CORBA market contraction | Strategic | Medium | IDL 4.x is shared with DDS; land a DDS target early. Position as an OMG IDL automation platform, not a CORBA product |
 | **R10** | Dynamic path too slow | Low | Medium | Structurally solved by promotion. Hot paths always use static stubs |
