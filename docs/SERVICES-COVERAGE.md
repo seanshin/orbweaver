@@ -119,6 +119,15 @@ Object addressed: the root `NamingContextExt` published by
 
 **Declared 17 · served 10 · refused with a reason 6 · absent 1.**
 
+> **Re-measured 2026-08-14, after `to_url` landed: absent 0.** The client half
+> already parsed `corbaname:`; the producing half now exists, was measured
+> against **two** producers — omniORB's own client resolved a URL ours built,
+> and omniNames was run as a second producer over 14 argument pairs (11
+> identical, 3 differing only in hex-digit case, each parser reading the
+> other's) — and one behaviour changed *because* of that comparison rather
+> than despite it: an empty name returns the bare `corbaname:<addr>` form, as
+> omniNames does.
+
 `to_url` is the finding. It is the one `NamingContextExt` operation the project
 already has the machinery for — `crate::naming` parses `corbaname:` URLs on the
 client side, and `to_url` is the operation that *produces* one — and it is the
@@ -210,6 +219,11 @@ containing module's repository id, which is what a client wanted
 
 **Declared 44 distinct · served 8 · refused with a reason 30 · absent 6.**
 
+> **Re-measured 2026-08-14: `BAD_OPERATION` 0.** `_get_version` is served and
+> the ten deferrals answer `NO_IMPLEMENT`, so a considered deferral no longer
+> looks like an oversight on the wire — which is the distinction this report
+> opens by saying the wire cannot make on its own.
+
 The six absences are the finding. `_get_version` is the sharpest: its *write*
 half `_set_version` is refused `NO_PERMISSION` — "the operation exists and the
 answer is no" — while its *read* half answers "no such operation", on a servant
@@ -271,6 +285,14 @@ Objects addressed: `moe::ExpertRegistry` and `moe::ExpertLoader`, held open by
 | **`select`, `dispatch`** | `moe::Router` | **absent** | `BAD_OPERATION` on both served objects |
 
 **Declared 12 · served 7 · refused with a reason 0 · absent 5.**
+
+> **Re-measured 2026-08-14 with a Router object published: `select` dispatches,
+> `dispatch` answers `BAD_OPERATION`.** That is the intended state rather than a
+> remaining gap — `select` returns references and is served; `dispatch` carries
+> an `Activation` and is the open decision D006 recommends excluding. The sweep
+> now probes a fourth object (`moe-router.ior`) and says so when none is
+> published, instead of quietly probing Router against servants that never
+> claimed it.
 
 The two servants serve their two interfaces completely — the module's claim
 (*"the two interfaces below are served exactly as declared there, with no

@@ -72,13 +72,19 @@ start() {
 echo "building"
 cargo build -q --bin spike-names --bin spike-events 2>&1 | sed 's/^/  /'
 cargo build -q -p orbweaver-registry --bin spike-ifr 2>&1 | sed 's/^/  /'
-(cd spikes/svc-hold && cargo build -q) 2>&1 | sed 's/^/  /'
+cargo build -q -p orbweaver-object --bin spike-experts --bin spike-tenants 2>&1 | sed 's/^/  /'
 
 echo "starting fixtures"
 start naming names.ior ./target/debug/spike-names "$RUN_DIR/names.ior" --hold
 start events events.ior ./target/debug/spike-events "$RUN_DIR/events.ior" --hold
 start ifr ifr.ior ./target/debug/spike-ifr "$RUN_DIR/ifr.ior" --hold
-start moe moe-factory.ior ./spikes/svc-hold/target/debug/moe-hold "$RUN_DIR"
+# The spikes hold their own servants now, so the separate holder crate is
+# redundant — and it was strictly weaker: it published one tenant's factory,
+# so the isolation claim could not be measured from outside at all.
+start moe-experts moe-registry.ior ./target/debug/spike-experts \
+    "$RUN_DIR/moe-registry.ior" "$RUN_DIR/moe-loader.ior" "$RUN_DIR/moe-router.ior" --hold
+start moe-tenants moe-factory.ior ./target/debug/spike-tenants \
+    "$RUN_DIR/moe-factory.ior" "$RUN_DIR/moe-factory-globex.ior" --hold
 
 if [ "$FAILURES" -ne 0 ]; then
     echo

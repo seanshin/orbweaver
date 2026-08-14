@@ -762,7 +762,7 @@ def write_capability(w, cid):
     w.string("moe/1.0")
 
 
-def do_experts(sweep, interfaces, registry, loader):
+def do_experts(sweep, interfaces, registry, loader, router=None):
     conn = Conn(registry)
     try:
         expert = Ref("IDL:moe/Expert:1.0", "192.0.2.7", 4242, b"expert-sweep")
@@ -802,11 +802,23 @@ def do_experts(sweep, interfaces, registry, loader):
             loader,
             resolve(interfaces, "moe::ExpertLoader"),
         )
-        # The other two interfaces the contract declares. No object of either
-        # is served, so they are probed against the two that are — an operation
-        # answered by neither is answered by nothing.
+        if router is not None:
+            sweep_object(
+                sweep,
+                "MoE control plane",
+                "Router",
+                conn,
+                router,
+                resolve(interfaces, "moe::Router"),
+            )
+
+        # The interfaces the contract declares with no object of their own.
+        # Probed against the objects that are served, because an operation
+        # answered by none of them is answered by nothing. `moe::Router` joins
+        # this list only when no router object was published.
+        absent = ["moe::Expert"] if router is not None else ["moe::Expert", "moe::Router"]
         for label, obj in [("ExpertRegistry", registry), ("ExpertLoader", loader)]:
-            for iface in ("moe::Expert", "moe::Router"):
+            for iface in absent:
                 sweep_object(sweep, "MoE control plane", label, conn, obj, resolve(interfaces, iface))
         for label, obj in [("ExpertRegistry", registry), ("ExpertLoader", loader)]:
             sweep_object(
@@ -975,7 +987,11 @@ def main(argv):
     try:
         registry = parse_ior(open(os.path.join(ior_dir, "moe-registry.ior")).read())
         loader = parse_ior(open(os.path.join(ior_dir, "moe-loader.ior")).read())
-        do_experts(sweep, control, registry, loader)
+        router_path = os.path.join(ior_dir, "moe-router.ior")
+        router = parse_ior(open(router_path).read()) if os.path.exists(router_path) else None
+        if router is None:
+            sweep.unmeasured.append("moe-router.ior: absent, so Router is probed as unserved")
+        do_experts(sweep, control, registry, loader, router)
     except Exception as e:  # noqa: BLE001
         sweep.unmeasured.append(f"moe-registry.ior: {type(e).__name__}: {e}")
 

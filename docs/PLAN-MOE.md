@@ -217,8 +217,13 @@ a comment in a corpus file.
 That is why the two are unimplemented, and the honest split is:
 
 - **`Router::select`** returns `ExpertSeq` — references, nothing else — and its
-  absence is a **gap** rather than a decision, since the trading engine already
-  answers exactly that question internally.
+  absence was a **gap** rather than a decision. **Closed 2026-08-14**: it
+  delegates to the trading engine rather than reimplementing selection, and
+  when a constraint names a field a wire-registered offer cannot answer it
+  refuses the *whole call* with `NO_IMPLEMENT`. A shorter list would have said
+  *these are all the experts that qualify*, which is the sentence the offer
+  store's three-valued matching exists to prevent; a sequence of references is
+  a complete answer or it is a refusal.
 
   **Corrected by D006, which measured what this section asserted.** `select` is
   not free of the plane question: it *takes* a `GateSignal`, and a `GateSignal`
