@@ -57,6 +57,23 @@ pub enum Denied {
         /// What `ai_authz` asks for.
         required: String,
     },
+    /// The caller's credential has outlived its grant ([`crate::token::Expiry`],
+    /// §4.8's fourth discomfort).
+    ///
+    /// Classified as [`crate::dryrun::Would::NeedAuthentication`] rather than
+    /// given a row of its own, deliberately: the two say the same thing to the
+    /// person reading the report — *sign in again* — and splitting one action
+    /// into two rows would make an operator choose between them. What separates
+    /// them in the record is the `why`, which names the expiry.
+    CredentialExpired {
+        /// The principal whose credential lapsed.
+        principal: String,
+        /// How long ago it lapsed, or `None` when the host has supplied no
+        /// instant and the stage therefore **cannot tell**. The two are
+        /// different facts and a stage that cannot tell must never render as
+        /// *still valid*; see [`crate::token::Unstamped`].
+        overdue_secs: Option<u64>,
+    },
     /// The contract names an authorization requirement and nobody is
     /// authenticated to satisfy it.
     NotAuthenticated {
@@ -146,6 +163,17 @@ impl std::fmt::Display for Denied {
                 f,
                 "{id}.{operation} requires the scope {required:?}, which this caller does not \
                  hold"
+            ),
+            Denied::CredentialExpired { principal, overdue_secs: Some(secs) } => write!(
+                f,
+                "the credential for {principal} expired {secs}s ago; a call must not proceed on \
+                 an expired context, so this session must re-authenticate"
+            ),
+            Denied::CredentialExpired { principal, overdue_secs: None } => write!(
+                f,
+                "the credential for {principal} carries an expiry and the host has supplied no \
+                 instant to check it against; a stage that cannot tell must not read as still \
+                 valid, so this call is refused until the host stamps the expiry gate"
             ),
             Denied::NotAuthenticated { id, operation, required } => write!(
                 f,

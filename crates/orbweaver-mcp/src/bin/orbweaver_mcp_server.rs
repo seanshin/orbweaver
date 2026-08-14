@@ -4,6 +4,7 @@
 //! orbweaver-mcp-server --idl <file.idl>... --ior <file> \
 //!                      [--expose <IDL:module/Iface:1.0[.operation]>]... \
 //!                      [--as <principal>] [--scope <scope>]... \
+//!                      [--map-scope <token-scope>=<contract-scope>]... [--token-scope <s>]... \
 //!                      [--dry-run [<IDL:module/Iface:1.0>]] \
 //!                      [--trace <path>|-] [--trace-ts <rfc3339>] \
 //!                      [--quota <calls>] [--quota-scope <everything|caller|interface|operation>]
@@ -20,6 +21,27 @@
 //! without serving anything. No target is dialled and `--ior` is not required,
 //! because the question is asked before there is a deployment to point at. It
 //! is the instrument for signing an exposure off; see `orbweaver_mcp::dryrun`.
+//!
+//! # `--map-scope`: the vocabulary gap, made loud before a call
+//!
+//! A token's scopes are the identity provider's vocabulary and `ai_authz`'s are
+//! the contract's, and D005 measured what happens when they drift apart: a
+//! deployment whose IdP issues `gate:operate` against a contract that demands
+//! `parkinglot.barrier.open` **refuses every legitimate caller**, and the
+//! refusal is indistinguishable from a permissions misconfiguration.
+//!
+//! `--map-scope <token>=<contract>` declares the translation
+//! (`orbweaver_mcp::token::ScopeMap`) and `--token-scope <s>` declares what a
+//! token from this IdP carries — which is also what `--as`'s caller holds, after
+//! translation, so the report and the run agree about the same caller.
+//! `--scope` is unchanged and still names **contract** scopes directly, for a
+//! host whose caller is already in the contract's vocabulary.
+//!
+//! With any `--map-scope` given, `--dry-run`'s document carries a `scope_map`
+//! section naming every contract scope no token can ever satisfy, who requires
+//! it, every token scope placed nowhere, and every mapping nothing asks for.
+//! **A finding exits 3**, because a report whose exit code is always zero is a
+//! report a pipeline never reads.
 //!
 //! # `--trace`: one JSON line per decision
 //!
@@ -88,6 +110,7 @@
 use std::io::{BufRead, Write};
 use std::time::Duration;
 
+use orbweaver_dynamic::json::Json;
 use orbweaver_giop::{Connection, Ior};
 use orbweaver_mcp::Bridge;
 use orbweaver_mcp::identity::Caller;
@@ -95,6 +118,7 @@ use orbweaver_mcp::policy::{Approval, Exposure};
 use orbweaver_mcp::quota::{Quota, Renewal, Scope};
 use orbweaver_mcp::session::Session;
 use orbweaver_mcp::telemetry::{CallPath, JsonLines, Timestamp, Trace};
+use orbweaver_mcp::token::ScopeMap;
 use orbweaver_registry::Registry;
 
 /// D004's trace for this run: `-` is stderr, anything else is a file.
@@ -162,6 +186,9 @@ fn main() -> std::process::ExitCode {
     let mut session_id = "stdio".to_owned();
     let mut principal: Option<String> = None;
     let mut scopes: Vec<String> = Vec::new();
+    let mut token_scopes: Vec<String> = Vec::new();
+    let mut scope_map = ScopeMap::nothing();
+    let mut mapping_given = false;
     let mut dry_run = false;
     let mut dry_run_only: Option<String> = None;
     let mut trace_to: Option<String> = None;
@@ -182,6 +209,20 @@ fn main() -> std::process::ExitCode {
             "--session" => next("--session").map(|v| session_id = v),
             "--as" => next("--as").map(|v| principal = Some(v)),
             "--scope" => next("--scope").map(|v| scopes.push(v)),
+            "--token-scope" => next("--token-scope").map(|v| token_scopes.push(v)),
+            // `token=contract`, split at the **first** `=` only: a contract
+            // scope is free to contain one and an IdP scope is not, so the
+            // asymmetric split is the one that cannot mangle a real name.
+            "--map-scope" => next("--map-scope").and_then(|v| match v.split_once('=') {
+                Some((token, contract)) if !token.is_empty() && !contract.is_empty() => {
+                    scope_map = std::mem::take(&mut scope_map).map(token, contract);
+                    mapping_given = true;
+                    Ok(())
+                }
+                _ => Err(format!(
+                    "--map-scope {v:?}: expected <token-scope>=<contract-scope>, both non-empty"
+                )),
+            }),
             "--dry-run" => {
                 dry_run = true;
                 Ok(())
@@ -200,6 +241,7 @@ fn main() -> std::process::ExitCode {
                 eprintln!(
                     "usage: orbweaver-mcp-server --idl <file.idl>... --ior <file> \
                      [--expose <id[.operation]>]... [--as <principal>] [--scope <scope>]... \
+                     [--map-scope <token>=<contract>]... [--token-scope <scope>]... \
                      [--dry-run[=<id>]] [--trace <path>|-] [--trace-ts <rfc3339>] \
                      [--quota <calls>] [--quota-scope <everything|caller|interface|operation>]"
                 );
@@ -286,8 +328,24 @@ fn main() -> std::process::ExitCode {
         );
     }
 
-    let caller = principal
-        .map(|p| scopes.iter().fold(Caller::new(p), |c, scope| c.with_scope(scope.clone())));
+    // Token scopes reach the caller only through the map, which is the whole
+    // point: this process holds the IdP's vocabulary and the contract's, and
+    // the only way from one to the other is the translation an operator wrote.
+    // Anything the map does not place grants nothing and is named on stderr —
+    // ignored is not silent (`orbweaver_mcp::token::Unmapped`).
+    let translated = scope_map.translate(&token_scopes);
+    for unplaced in translated.unmapped() {
+        eprintln!(
+            "--token-scope {unplaced:?} is placed by no --map-scope, so it grants this bridge \
+             nothing"
+        );
+    }
+    let caller = principal.map(|p| {
+        scopes
+            .iter()
+            .chain(translated.granted())
+            .fold(Caller::new(p), |c, scope| c.with_scope(scope.clone()))
+    });
 
     let quota = match quota_for(quota_limit, &quota_scope) {
         Ok(q) => q,
@@ -303,6 +361,12 @@ fn main() -> std::process::ExitCode {
         // The approval is the one a session starts with — an operator asking
         // "what needs a human?" wants the answer for a session that has not
         // been handed one.
+        // D005's class, asked before the survey and answered from the same
+        // exposure the survey runs against: is there a contract scope no token
+        // this deployment issues can ever satisfy? Computed here because
+        // `Bridge::new` takes the exposure by value.
+        let scope_audit =
+            mapping_given.then(|| scope_map.audit(&registry, &exposure, &token_scopes));
         let mut bridge = Bridge::new(&registry, exposure, session_id.clone());
         if let Some(caller) = caller {
             bridge.set_caller(caller);
@@ -333,15 +397,35 @@ fn main() -> std::process::ExitCode {
                 }
             }
         }
-        let report = match &dry_run_only {
+        let mut report = match &dry_run_only {
             Some(id) => bridge.dry_run_interface(id, Approval::default()),
             None => bridge.dry_run_all(Approval::default()),
         };
+        // Folded into the one document rather than printed beside it: stdout is
+        // one JSON object, and a second one would break every pipeline that
+        // parses this. Absent entirely when no mapping was configured, so a
+        // deployment that does not use the feature sees the document it always
+        // saw.
+        if let (Some(audit), Json::Object(fields)) = (&scope_audit, &mut report) {
+            fields.insert("scope_map".to_owned(), audit.to_json());
+        }
         println!("{report}");
         // The questions are on the record too, and stderr is where a
         // diagnostic goes; the report on stdout is what gets piped.
         for line in bridge.audit() {
             eprintln!("{line}");
+        }
+        // A finding is worth an exit code. An operator can read `scope_map.ok`
+        // out of the document, and a pipeline that never checks is exactly how
+        // D005's drift reached production the one time it was measured — so the
+        // process says so in the one channel a script cannot ignore.
+        if let Some(audit) = &scope_audit {
+            for finding in audit.findings() {
+                eprintln!("{finding}");
+            }
+            if !audit.ok() {
+                return std::process::ExitCode::from(3);
+            }
         }
         return std::process::ExitCode::SUCCESS;
     }
