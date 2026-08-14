@@ -1285,6 +1285,35 @@ else
 fi
 [ "$obs_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
+# ── Stream E batch 2: concurrent dispatch, run more than once ───────────────
+hr "concurrent dispatch — five runs, because one green run is not evidence"
+# Every test in these crates is deadline-bounded, so a regression is a failed
+# run and never a hung harness. The count is the check: a concurrency change
+# that passes once has not been measured.
+cd_runs=${ORBWEAVER_CONCURRENCY_RUNS:-5}
+cd_failures=0
+for cd_run in $(seq 1 "$cd_runs"); do
+  # No RUSTFLAGS here on purpose. Setting it changes cargo's fingerprint, so
+  # every later group in this file rebuilds the whole graph from scratch — the
+  # first version of this group did exactly that and pushed the event-channel
+  # fixture past its 12s readiness deadline, which looked like a wire failure
+  # and was a build-cache one. The lint gate is CI's job; this group's job is
+  # the repeat count.
+  cd_out=$(cargo test -q -p orbweaver-giop -p orbweaver-registry -p orbweaver-object 2>&1)
+  if printf '%s' "$cd_out" | grep -q "^test result: FAILED"; then
+    echo "  FAIL run $cd_run of $cd_runs"
+    printf '%s' "$cd_out" | grep -A3 "^failures:" | head -6 | sed 's/^/       /'
+    cd_failures=$((cd_failures+1))
+  fi
+done
+if [ "$cd_failures" -eq 0 ]; then
+  echo "  ok   $cd_runs runs of the three servant crates, all green"
+  echo "  ok   the negative control is a test: serialized dispatch must NOT overlap,"
+  echo "       and it fails on its deadline rather than hanging when it does"
+else
+  fail_total=$((fail_total+1))
+fi
+
 # ── Stream E: concurrent connections ─────────────────────────────────────────
 hr "concurrency — many clients at once, and a cap that says no out loud"
 # Every service above documented "one client at a time" as a limit its harness
