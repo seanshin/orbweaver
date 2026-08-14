@@ -2,9 +2,10 @@
 //!
 //! Implements GIOP 1.0, 1.1 and 1.2 on both sides: request/reply and
 //! locate/locate-reply, fragmentation in both directions, codeset negotiation,
-//! multi-profile failover at connect time and the serving half. Request
-//! multiplexing and connection pooling remain stream-E work (PLAN §7.3); where
-//! something is absent this code fails loudly rather than misparsing.
+//! multi-profile failover at connect time and the serving half. Several
+//! requests may be in flight on one connection ([`mux`]) and connections are
+//! reused per endpoint ([`pool`]); where something is absent this code fails
+//! loudly rather than misparsing.
 //!
 //! Failover is verified here only at the dial level — a refused endpoint moves
 //! the client to the next one. Whether a peer that *accepts* on a secondary
@@ -33,9 +34,11 @@ pub mod codeset;
 pub mod csiv2;
 pub mod event_server;
 pub mod guarded;
+pub mod mux;
 pub mod naming;
 pub mod naming_server;
 pub mod nat;
+pub mod pool;
 pub mod server;
 pub mod ssliop;
 pub mod typecode;
@@ -88,7 +91,10 @@ pub const DEFAULT_FRAGMENT_THRESHOLD: usize = 1024 * 1024;
 pub const MAX_FRAGMENTS: usize = 4096;
 
 /// A GIOP protocol version.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+///
+/// `Hash` because [`pool`] keys connections on it: two references to one
+/// endpoint that negotiated different versions may not share a connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Version {
     /// Major version. Always 1 in practice.
     pub major: u8,
@@ -286,6 +292,31 @@ pub enum Error {
     Desynchronized,
     /// `LOCATION_FORWARD` chain exceeded [`MAX_FORWARD_HOPS`].
     TooManyForwards,
+    /// A multiplexed call's own deadline expired before its reply arrived.
+    ///
+    /// Distinct from [`Error::Io`] with a timeout kind, which is the *socket*
+    /// giving up: this is the caller giving up on a connection that may still
+    /// be perfectly healthy for everybody else on it. See [`mux`].
+    Timeout {
+        /// The request that went unanswered, so a `CancelRequest` can name it.
+        request_id: u32,
+        /// How long this caller actually waited.
+        waited: Duration,
+    },
+    /// More than one request in flight was asked for on a connection where
+    /// this implementation will not do it — see [`mux`] for the version
+    /// argument and for which transports can be split.
+    MultiplexingUnsupported {
+        /// The version negotiated for the connection.
+        version: Version,
+    },
+    /// The pool is at its connection bound and nothing in it could be evicted,
+    /// so a new endpoint cannot be dialed. Refusing is deliberate; see
+    /// [`pool`].
+    PoolExhausted {
+        /// The bound in force.
+        limit: usize,
+    },
     /// No profile in the IOR advertised a TLS endpoint (`TAG_SSL_SEC_TRANS`),
     /// so [`Connection::connect_tls`] had nothing to dial. Distinct from
     /// [`Error::AllEndpointsFailed`] on purpose: "the target offers no TLS"
@@ -333,6 +364,15 @@ impl fmt::Display for Error {
                 write!(f, "connection is desynchronized and must be discarded")
             }
             Error::TooManyForwards => write!(f, "too many LOCATION_FORWARD hops"),
+            Error::Timeout { request_id, waited } => {
+                write!(f, "request {request_id} unanswered after {waited:?}")
+            }
+            Error::MultiplexingUnsupported { version } => {
+                write!(f, "more than one request in flight is not supported on {version}")
+            }
+            Error::PoolExhausted { limit } => {
+                write!(f, "connection pool is at its bound of {limit} and nothing was evictable")
+            }
             #[cfg(feature = "ssliop")]
             Error::NoTlsEndpoint => {
                 write!(f, "no profile in the IOR advertises a TLS endpoint (TAG_SSL_SEC_TRANS)")
@@ -1233,6 +1273,45 @@ enum Stream {
     Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
 }
 
+impl Stream {
+    /// A second handle on the same transport, for a reader and a writer to
+    /// hold at once — `None` when the transport cannot be split.
+    ///
+    /// A `TcpStream` splits: two clones name one kernel socket, and the kernel
+    /// already serializes each direction, so one thread may block in `read`
+    /// while another writes. A TLS session does not: its record layer, its
+    /// sequence numbers and its rekeying live in one `ClientConnection` that
+    /// both directions mutate, so "clone the socket" would clone the wrong
+    /// half of the state. [`mux`] answers that by not multiplexing over TLS at
+    /// all rather than by wrapping the session in a lock that would serialize
+    /// it anyway — see that module.
+    fn try_split(&self) -> Option<Stream> {
+        match self {
+            Stream::Plain(s) => s.try_clone().ok().map(Stream::Plain),
+            #[cfg(feature = "ssliop")]
+            Stream::Tls(_) => None,
+        }
+    }
+
+    /// Re-arms the socket's read timeout.
+    ///
+    /// [`mux`] needs it per read rather than per connection: the thread that
+    /// happens to be reading is a *caller*, with its own deadline, and a
+    /// socket timeout set once at dial time would let it overshoot that
+    /// deadline by the difference. The timeout is per `read` call, not per
+    /// message, so a message that is still streaming in still completes.
+    fn set_read_timeout(&self, t: Duration) -> std::io::Result<()> {
+        // Zero means "no timeout" to the kernel, which is the opposite of what
+        // a zero budget means here.
+        let t = Some(t.max(Duration::from_millis(1)));
+        match self {
+            Stream::Plain(s) => s.set_read_timeout(t),
+            #[cfg(feature = "ssliop")]
+            Stream::Tls(s) => s.sock.set_read_timeout(t),
+        }
+    }
+}
+
 impl Read for Stream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
@@ -1278,10 +1357,20 @@ impl fmt::Debug for Stream {
 /// `CloseConnection` from a protocol error, and poisons itself rather than
 /// reusing a stream whose framing is in doubt.
 ///
-/// Connection pooling and request multiplexing remain stream-E work.
+/// **One request at a time**, which is now a choice rather than a limit: this
+/// type owns its stream and blocks on the reply, so it is the right thing for
+/// a spike, a probe, or any caller that wants a socket to itself. A caller
+/// that wants several requests in flight, or connections shared across
+/// references, wraps one in [`mux::Mux`] or asks [`pool::Pool`] for one —
+/// both of which take a `Connection` and keep everything it negotiated.
 #[derive(Debug)]
 pub struct Connection {
     stream: Stream,
+    /// The endpoint actually dialed, which is not always the profile's own
+    /// address: failover may have landed on a `TAG_ALTERNATE_IIOP_ADDRESS`.
+    /// [`pool`] keys on this, so it has to be what the socket connected to
+    /// rather than what the IOR asked for first.
+    endpoint: (String, u16),
     object_key: Vec<u8>,
     version: Version,
     endian: Endian,
@@ -1432,8 +1521,11 @@ impl Connection {
         while tls.is_handshaking() {
             tls.complete_io(&mut tcp)?;
         }
-        let mut conn =
-            Self::from_stream(p, Stream::Tls(Box::new(rustls::StreamOwned::new(tls, tcp))));
+        let mut conn = Self::from_stream(
+            p,
+            (host.to_owned(), port),
+            Stream::Tls(Box::new(rustls::StreamOwned::new(tls, tcp))),
+        );
         conn.tls_config = Some(std::sync::Arc::clone(config));
         Ok(conn)
     }
@@ -1441,32 +1533,24 @@ impl Connection {
     /// Connects to one endpoint, taking everything except the address —
     /// version, object key, components — from the profile it belongs to.
     fn connect_endpoint(p: &IiopProfile, host: &str, port: u16, timeout: Duration) -> Result<Self> {
-        Ok(Self::from_stream(p, Stream::Plain(dial_configured(host, port, timeout)?)))
+        Ok(Self::from_stream(
+            p,
+            (host.to_owned(), port),
+            Stream::Plain(dial_configured(host, port, timeout)?),
+        ))
     }
 
     /// Builds the connection state over an established transport, taking
     /// everything except the transport — version, object key, codeset
     /// negotiation — from the profile. Shared by the plain and TLS paths so
     /// the two cannot drift apart in anything but the transport itself.
-    fn from_stream(p: &IiopProfile, stream: Stream) -> Self {
-        // Negotiate from TAG_CODE_SETS if the peer published one. Absent it,
-        // §7.10.2.5 makes the transmission codeset ISO-8859-1 and forbids
-        // pretending otherwise, so no context is sent and strings are Latin-1.
-        let mut char_converter = None;
-        for c in &p.components {
-            if c.tag == codeset::TAG_CODE_SETS
-                && let Ok(info) = codeset::CodeSetComponentInfo::parse(&c.data)
-                && let Ok(id) =
-                    codeset::negotiate(&codeset::client_char_component(), &info.for_char)
-                && let Ok(conv) = codeset::Converter::new(id)
-            {
-                char_converter = Some(conv);
-            }
-        }
+    fn from_stream(p: &IiopProfile, endpoint: (String, u16), stream: Stream) -> Self {
+        let char_converter = negotiated_char_converter(p);
         let codeset_context_pending = char_converter.is_some();
 
         Self {
             stream,
+            endpoint,
             object_key: p.object_key.clone(),
             version: Version::negotiate(p.version),
             endian: Endian::native(),
@@ -1539,6 +1623,16 @@ impl Connection {
     /// The object key extracted from the IOR.
     pub fn object_key(&self) -> &[u8] {
         &self.object_key
+    }
+
+    /// The host and port this connection actually reached.
+    ///
+    /// Not necessarily the first address in the IOR: failover may have moved
+    /// on to a later profile or to a `TAG_ALTERNATE_IIOP_ADDRESS`. [`pool`]
+    /// keys on the answer, and keying on the *requested* address would file
+    /// two connections to one server under two names.
+    pub fn endpoint(&self) -> (&str, u16) {
+        (&self.endpoint.0, self.endpoint.1)
     }
 
     /// Whether framing is still trustworthy.
@@ -1751,9 +1845,12 @@ impl Connection {
         // Exactly one message answers one request. This was written as a loop,
         // which said the opposite — that some messages could be skipped and the
         // read retried — while every branch in fact returned. Nothing here may
-        // loop until request multiplexing exists: with one outstanding request,
-        // a message that is not our reply means our accounting is wrong, and
-        // reading past it would compound the error rather than recover from it.
+        // loop, and multiplexing does not change that: with one outstanding
+        // request, a message that is not our reply means our accounting is
+        // wrong, and reading past it would compound the error rather than
+        // recover from it. The loop that *is* correct — read, file under a
+        // request id, look again — needs somewhere to file, which is exactly
+        // what [`mux::Mux`] adds and this type deliberately does not have.
         //
         // Any framing failure from here leaves unread bytes behind, so every
         // error path poisons the connection.
@@ -1829,6 +1926,30 @@ impl Connection {
 enum Outcome {
     Done(Reply),
     Forwarded(Ior),
+}
+
+/// The `char` converter a connection to this profile would negotiate, or
+/// `None` when the profile publishes no `TAG_CODE_SETS`.
+///
+/// §7.10.2.5 makes this a **per-connection** decision, taken once from the
+/// profile and then implied by every string on the wire. That is why it is a
+/// function of the profile alone and why [`pool`] puts its answer in the pool
+/// key: two references to one endpoint that negotiate different codesets
+/// cannot share a connection, because the second one's strings would be
+/// encoded under the first one's agreement. Absent a component the specified
+/// default is ISO-8859-1 with no context sent, which is what `None` means.
+fn negotiated_char_converter(p: &IiopProfile) -> Option<codeset::Converter> {
+    let mut char_converter = None;
+    for c in &p.components {
+        if c.tag == codeset::TAG_CODE_SETS
+            && let Ok(info) = codeset::CodeSetComponentInfo::parse(&c.data)
+            && let Ok(id) = codeset::negotiate(&codeset::client_char_component(), &info.for_char)
+            && let Ok(conv) = codeset::Converter::new(id)
+        {
+            char_converter = Some(conv);
+        }
+    }
+    char_converter
 }
 
 /// [`dial`], plus the socket options every connection gets: both timeouts,

@@ -1,0 +1,745 @@
+//! Connections reused per endpoint, instead of one dialed per reference.
+//!
+//! A CORBA client holds references, not connections: resolving four names out
+//! of one naming service yields four IORs that all point at the same
+//! host and port. Dialing per reference pays a TCP handshake, a codeset
+//! negotiation and a file descriptor for each of them, and — before
+//! [`crate::mux`] — serialized nothing, because each had its own socket. This
+//! module keeps one connection per endpoint and lets [`crate::mux`] carry
+//! everybody's calls over it.
+//!
+//! *레퍼런스마다 새로 연결하지 않고, 엔드포인트마다 연결을 재사용한다.*
+//!
+//! # The key
+//!
+//! `(host, port, GIOP version, negotiated char codeset)` — the endpoint plus
+//! **everything that is agreed once per connection and then implied by every
+//! message on it**.
+//!
+//! Host and port alone are not enough, and the two extra fields are not
+//! caution:
+//!
+//! - **Version.** §9.4.1 forbids exceeding the minor version a profile
+//!   advertises, and profiles on one server do differ — an object published by
+//!   an older POA can carry a 1.0 profile beside a 1.2 one. A pooled 1.2
+//!   connection handed to a 1.0 reference would speak a version that
+//!   reference's profile never offered. It also decides whether the connection
+//!   multiplexes at all ([`crate::mux`]), so two versions on one connection
+//!   would mean two different concurrency rules on one socket.
+//! - **Codeset.** §7.10.2.5 negotiates per *connection* and the agreement
+//!   travels in a service context on the first request only. Two references
+//!   whose profiles publish different `TAG_CODE_SETS` therefore cannot share a
+//!   connection: the second one's strings would go out encoded under the
+//!   first's agreement, with no way for the peer to tell. This is the failure
+//!   that would not show up in any test with ASCII-only fixtures, which is
+//!   exactly why it is in the key rather than in a comment.
+//!
+//! The **object key is not** in it, and that is the point of pooling: GIOP
+//! addresses per message, so one connection serves every object behind an
+//! endpoint. [`crate::mux::Mux::call_on`] takes the key per call for this
+//! reason.
+//!
+//! TLS connections are **not pooled**. `Connection::connect_tls` (feature
+//! `ssliop`) takes a `rustls::ClientConfig` that says which roots to trust and
+//! which client certificate to present; that is a trust decision, and two
+//! configs that differ are two different decisions. A cache would have to key on it, an
+//! `Arc` pointer is not an identity a cache may use, and a pool that silently
+//! handed one caller's TLS session to another caller's trust policy would be a
+//! security bug wearing a performance feature's clothes.
+//!
+//! # When a connection is discarded
+//!
+//! - **It faulted.** Anything that makes framing unknowable takes the
+//!   connection out on the spot; a `Mux` answers [`Mux::is_usable`] for
+//!   exactly this question and the pool asks before handing one out.
+//! - **It went idle.** [`Limits::max_idle`], default
+//!   [`DEFAULT_MAX_IDLE`]. Peers reap idle connections themselves — omniORB
+//!   scans outgoing connections on `outConScanPeriod` — and discovering their
+//!   decision mid-request costs a failed call, while making our own decision
+//!   first costs a dial. Idle means *no calls in flight and nothing since*,
+//!   both read from the mux's atomics.
+//! - **It was closed under us.** See below.
+//! - **The bound was reached and it was the least recently used idle one.**
+//!
+//! # `CloseConnection`, and why a caller must not see it
+//!
+//! §13.5.1: *"If a client receives a CloseConnection message from the server,
+//! it should assume that any outstanding messages (i.e., without replies) were
+//! received after the server sent the CloseConnection message, were not
+//! processed, and may be safely resent on a new connection."*
+//!
+//! That is a promise about **processing**, not about idempotence, so it
+//! applies to every operation and not only the safe ones. A pooled connection
+//! is one the caller never asked for and cannot see, so a server closing it —
+//! which every ORB does to idle connections — must not surface as their error.
+//! [`Pool::invoke`] therefore discards the connection and re-sends **once** on
+//! a fresh one.
+//!
+//! Once, not until it works. A server that answers every request with
+//! `CloseConnection` is refusing, and a retry loop against it is a hot loop
+//! that never reports the refusal. The second failure is the caller's.
+//!
+//! The same one retry covers a **failed write**, and for the same
+//! specification-grade reason rather than optimism: a GIOP message the peer
+//! never finished reading cannot have been dispatched, and the connection is
+//! discarded, so the rest of those bytes will never arrive. That is exactly
+//! what [`crate::mux::Failed::unsent`] reports, and the pool retries on that
+//! flag rather than on a list of error kinds it would have to keep in sync.
+//!
+//! # The bound
+//!
+//! An unbounded pool is a file-descriptor leak with a nicer name, so:
+//!
+//! - [`Limits::max_per_endpoint`] connections to any one endpoint. Reaching it
+//!   is not an error — with multiplexing, another caller simply shares an
+//!   existing connection, which is the whole point.
+//! - [`Limits::max_total`] connections overall, defaulting to
+//!   [`DEFAULT_MAX_TOTAL`], the same number [`crate::server::DEFAULT_MAX_CONNECTIONS`]
+//!   bounds the serving side with. When a *new* endpoint needs a connection
+//!   and the pool is full, idle connections are evicted to make room; if none
+//!   are idle the dial is **refused** with [`Error::PoolExhausted`].
+//!
+//! Refusing rather than queueing is the same choice [`crate::server`] made at
+//! its own cap, and for the same reason: a caller told "no capacity" can shed
+//! load or back off, while a caller queued behind an unknown number of others
+//! cannot tell a slow peer from a leak. Dialing anyway would make the bound a
+//! suggestion, which is the leak this bound exists to prevent.
+//!
+//! # Why there is no checkout, and no lease to leak
+//!
+//! Because connections multiplex, the pool is a **cache**, not a checkout
+//! desk: several callers hold the same [`Mux`] at once and none of them owns
+//! it. There is nothing to return, so there is no return-on-drop path, no
+//! "leased but never returned" state, and no way for a panicking caller to
+//! lose a connection. On a connection that cannot multiplex the mux's own
+//! turnstile serializes the callers, so the shape of the API does not change
+//! with the version — only the concurrency does.
+//!
+//! # The lock rule
+//!
+//! [`Connection::connect`] asserts that no lock section is held, because a
+//! dial can block for the whole connect timeout and a lock held across it is
+//! the cross-process deadlock [`crate::guarded`] exists to prevent. A pool is
+//! the obvious place to violate that — "look up the endpoint, and dial while
+//! I am in here if I do not find one" is the natural way to write it, and it
+//! is wrong.
+//!
+//! So the pool's own state is a [`Guarded`], and dialing inside it does not
+//! merely break a convention: [`crate::guarded::assert_nothing_held`] fires
+//! inside `connect` and the test that would have introduced it panics. The
+//! shape that keeps it true is three steps — **look, then dial, then file**:
+//!
+//! 1. under the lock, look for a usable connection; if there is none, *reserve*
+//!    a slot against the bound and release the lock;
+//! 2. **outside** the lock, dial;
+//! 3. under the lock again, file the new connection and release the
+//!    reservation.
+//!
+//! The reservation is what makes step 2 safe to do without the lock: it counts
+//! against [`Limits::max_total`] while nothing is in the map yet, so two
+//! threads dialing at once cannot both discover room that only one of them
+//! could have. Evicted connections are moved out of the map and dropped
+//! **after** the lock is released, because closing a socket is a syscall and
+//! the rule is that nothing which can block happens inside a section.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use orbweaver_cdr::{Encoder, Endian};
+
+use crate::guarded::Guarded;
+use crate::mux::{Failed, Mux, Sent};
+use crate::{
+    Connection, Error, Invoker, Ior, MAX_FORWARD_HOPS, Reply, Result, Version, codeset,
+    negotiated_char_converter,
+};
+
+/// Default ceiling on connections held across every endpoint.
+///
+/// The same number [`crate::server::DEFAULT_MAX_CONNECTIONS`] uses for the
+/// serving side, deliberately: a process that will accept 64 connections and
+/// hold 64 more has one number to reason about, not two.
+pub const DEFAULT_MAX_TOTAL: usize = 64;
+
+/// Default ceiling on connections to any one endpoint.
+///
+/// More than one only helps where a connection cannot multiplex — GIOP below
+/// 1.2, or TLS — and there it is the difference between concurrency and a
+/// queue. On a multiplexing connection the pool stops at one until
+/// [`Limits::soft_in_flight`] says otherwise.
+pub const DEFAULT_MAX_PER_ENDPOINT: usize = 4;
+
+/// Default number of calls that may pile onto one connection before the pool
+/// prefers to dial another.
+///
+/// Not a limit — going over it is fine and happens whenever the endpoint is at
+/// [`Limits::max_per_endpoint`]. It is the point at which spending a file
+/// descriptor is likely cheaper than sharing a socket, and it is a guess:
+/// nothing here has been tuned against a peer under load, and saying so is
+/// cheaper than pretending the number is measured.
+pub const DEFAULT_SOFT_IN_FLIGHT: usize = 8;
+
+/// Default idle period after which a pooled connection is dropped.
+///
+/// Shorter than the peers' own idle scans (omniORB's `outConScanPeriod`
+/// defaults to two minutes) so that *we* decide, deterministically, rather
+/// than finding out mid-request that the peer decided. The cost of being early
+/// is a dial; the cost of being late is a failed call and a retry.
+pub const DEFAULT_MAX_IDLE: Duration = Duration::from_secs(20);
+
+/// How long a pooled dial waits for the socket.
+pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// What a pool will and will not hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    /// Connections across all endpoints. The file-descriptor bound.
+    pub max_total: usize,
+    /// Connections to any one endpoint.
+    pub max_per_endpoint: usize,
+    /// Calls on one connection before another is preferred.
+    pub soft_in_flight: usize,
+    /// Idle period after which a connection is dropped.
+    pub max_idle: Duration,
+    /// Timeout for a pooled dial.
+    pub connect_timeout: Duration,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits {
+            max_total: DEFAULT_MAX_TOTAL,
+            max_per_endpoint: DEFAULT_MAX_PER_ENDPOINT,
+            soft_in_flight: DEFAULT_SOFT_IN_FLIGHT,
+            max_idle: DEFAULT_MAX_IDLE,
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+        }
+    }
+}
+
+/// What makes two references able to share a connection.
+///
+/// See the module docs for why each field is here. `Hash + Eq` because it is a
+/// map key, and `Clone` because the pool answers with it — a caller that has
+/// acquired a connection often wants to say which one it got.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Key {
+    /// Host as the profile spells it. Two spellings of one address ("localhost"
+    /// and "127.0.0.1") are deliberately *not* unified: resolving them here
+    /// would mean a DNS lookup inside the pool's lock, and the cost of being
+    /// wrong is one extra connection rather than a wrong one.
+    pub host: String,
+    /// TCP port.
+    pub port: u16,
+    /// The version this connection speaks, already negotiated down from the
+    /// profile's advertisement.
+    pub version: Version,
+    /// The negotiated `char` codeset, or `None` for §7.10.2.5's default.
+    pub codeset: Option<codeset::CodeSetId>,
+}
+
+impl Key {
+    /// The key a connection dialed for this profile would land under.
+    pub fn of(profile: &crate::IiopProfile, host: &str, port: u16) -> Key {
+        Key {
+            host: host.to_owned(),
+            port,
+            version: Version::negotiate(profile.version),
+            codeset: negotiated_char_converter(profile).map(|c| c.id()),
+        }
+    }
+}
+
+/// Counters, so a claim about reuse can be checked rather than asserted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PoolStats {
+    /// Connections dialed. The number reuse is supposed to hold down.
+    pub dialed: u64,
+    /// Times an existing connection was handed out instead of dialing.
+    pub reused: u64,
+    /// Connections dropped because they had gone idle.
+    pub idle_evicted: u64,
+    /// Connections dropped because they had faulted.
+    pub faulted_evicted: u64,
+    /// Connections dropped to make room under [`Limits::max_total`].
+    pub pressure_evicted: u64,
+    /// Calls re-sent on a fresh connection after the peer proved it had not
+    /// processed them.
+    pub retried: u64,
+    /// Dials refused because the pool was full and nothing was evictable.
+    pub refused: u64,
+}
+
+#[derive(Debug, Default)]
+struct State {
+    live: HashMap<Key, Vec<Mux>>,
+    /// Dials in progress, counted against the bound while nothing is in the
+    /// map yet. Without this two threads both find room for the last slot.
+    reserved: usize,
+    stats: PoolStats,
+}
+
+impl State {
+    fn total(&self) -> usize {
+        self.live.values().map(Vec::len).sum::<usize>() + self.reserved
+    }
+}
+
+/// A cache of connections, keyed by [`Key`].
+///
+/// Cheap to clone; a clone shares the same connections. `Send + Sync`, so one
+/// pool serves every thread in a process.
+#[derive(Debug, Clone, Default)]
+pub struct Pool {
+    inner: Arc<Inner>,
+}
+
+#[derive(Debug)]
+struct Inner {
+    limits: Limits,
+    state: Guarded<State>,
+}
+
+impl Default for Inner {
+    fn default() -> Self {
+        Inner {
+            limits: Limits::default(),
+            state: Guarded::new("the connection pool", State::default()),
+        }
+    }
+}
+
+impl Pool {
+    /// A pool with the default [`Limits`].
+    pub fn new() -> Pool {
+        Pool::default()
+    }
+
+    /// A pool with limits of your own.
+    pub fn with_limits(limits: Limits) -> Pool {
+        Pool {
+            inner: Arc::new(Inner {
+                limits,
+                state: Guarded::new("the connection pool", State::default()),
+            }),
+        }
+    }
+
+    /// The limits in force.
+    pub fn limits(&self) -> Limits {
+        self.inner.limits
+    }
+
+    /// The counters.
+    pub fn stats(&self) -> PoolStats {
+        self.inner.state.read(|s| s.stats)
+    }
+
+    /// How many connections are held right now.
+    pub fn size(&self) -> usize {
+        self.inner.state.read(|s| s.total())
+    }
+
+    /// Drops every connection, whether idle or not.
+    ///
+    /// The sockets are closed after the lock is released, for the same reason
+    /// eviction defers them: closing is a syscall and nothing that can block
+    /// belongs inside a section.
+    pub fn clear(&self) {
+        let dropped = self.inner.state.write(|s| std::mem::take(&mut s.live));
+        drop(dropped);
+    }
+
+    /// A connection able to carry calls for `ior`, dialing one if the pool has
+    /// none.
+    ///
+    /// Answers with the object key as well, because the connection is shared
+    /// and the key is what makes a call address *this* reference.
+    pub fn acquire(&self, ior: &Ior) -> Result<(Mux, Vec<u8>)> {
+        let object_key = ior.primary()?.object_key.clone();
+        Ok((self.acquire_connection(ior)?, object_key))
+    }
+
+    fn acquire_connection(&self, ior: &Ior) -> Result<Mux> {
+        // Every endpoint this IOR names, in the order `Connection::connect`
+        // would dial them, so a pooled hit on a later endpoint counts as a hit
+        // rather than sending us to dial the first one again.
+        let mut keys = Vec::new();
+        for p in &ior.profiles {
+            for (host, port) in p.endpoints() {
+                keys.push(Key::of(p, &host, port));
+            }
+        }
+        if keys.is_empty() {
+            return Err(Error::NoIiopProfile);
+        }
+
+        // ── step 1: look, and reserve if there is nothing to look at ──
+        let limits = self.inner.limits;
+        let (found, evicted) = self.inner.state.write(|s| {
+            let evicted = sweep(s, limits);
+            for key in &keys {
+                if let Some(m) = pick(s, key, limits) {
+                    s.stats.reused += 1;
+                    return (Some(Ok(m)), evicted);
+                }
+            }
+            // Nothing usable. Make room, then take a slot for the dial.
+            if s.total() >= limits.max_total {
+                let want = s.total() + 1 - limits.max_total;
+                let mut freed = evicted;
+                freed.extend(evict_idle(s, want));
+                if s.total() >= limits.max_total {
+                    s.stats.refused += 1;
+                    return (Some(Err(Error::PoolExhausted { limit: limits.max_total })), freed);
+                }
+                s.reserved += 1;
+                return (None, freed);
+            }
+            s.reserved += 1;
+            (None, evicted)
+        });
+        // Sockets close here, outside the section.
+        drop(evicted);
+        if let Some(outcome) = found {
+            return outcome;
+        }
+
+        // ── step 2: dial with nothing held. `connect` asserts exactly that ──
+        let dialed = Connection::connect(ior, limits.connect_timeout);
+
+        // ── step 3: file it, or give the reservation back ──
+        match dialed {
+            Ok(conn) => {
+                let (host, port) = conn.endpoint();
+                // Keyed on what was actually reached: failover may have landed
+                // on a later profile or an alternate address.
+                let key = match ior
+                    .profiles
+                    .iter()
+                    .find(|p| p.endpoints().iter().any(|(h, o)| h == host && *o == port))
+                {
+                    Some(p) => Key::of(p, host, port),
+                    // Cannot happen — the connection came from these profiles
+                    // — but inventing a key from the primary profile would
+                    // file it under an agreement it does not have, so refuse
+                    // to pool it instead. It still serves this call.
+                    None => {
+                        self.inner.state.write(|s| s.reserved = s.reserved.saturating_sub(1));
+                        return Ok(Mux::over(conn));
+                    }
+                };
+                let mux = Mux::over(conn);
+                self.inner.state.write(|s| {
+                    s.reserved = s.reserved.saturating_sub(1);
+                    s.stats.dialed += 1;
+                    s.live.entry(key).or_default().push(mux.clone());
+                });
+                Ok(mux)
+            }
+            Err(e) => {
+                self.inner.state.write(|s| s.reserved = s.reserved.saturating_sub(1));
+                Err(e)
+            }
+        }
+    }
+
+    /// Drops one connection from the pool. Other holders keep using it until
+    /// they let go; what this guarantees is that nobody *new* gets it.
+    pub fn discard(&self, mux: &Mux) {
+        let dropped = self.inner.state.write(|s| {
+            let mut dropped = Vec::new();
+            for muxes in s.live.values_mut() {
+                let mut i = 0;
+                while i < muxes.len() {
+                    if Mux::same_connection(&muxes[i], mux) {
+                        dropped.push(muxes.remove(i));
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            s.live.retain(|_, v| !v.is_empty());
+            dropped
+        });
+        drop(dropped);
+    }
+
+    /// Invokes `operation` on `ior`, over a pooled connection.
+    ///
+    /// Follows `LOCATION_FORWARD` up to [`MAX_FORWARD_HOPS`], acquiring a
+    /// connection for each new reference — a forward may point at a different
+    /// host, so it is a new pool lookup and not a redirect of this one. Hides
+    /// exactly one class of failure from the caller: a request the peer proved
+    /// it had not processed, which is re-sent once on a fresh connection.
+    pub fn invoke<F>(&self, ior: &Ior, operation: &str, write_args: F) -> Result<Reply>
+    where
+        F: Fn(&mut Encoder),
+    {
+        self.invoke_with(ior, operation, write_args, crate::mux::DEFAULT_CALL_TIMEOUT)
+    }
+
+    /// As [`Pool::invoke`], with the caller's own deadline per attempt.
+    pub fn invoke_with<F>(
+        &self,
+        ior: &Ior,
+        operation: &str,
+        write_args: F,
+        timeout: Duration,
+    ) -> Result<Reply>
+    where
+        F: Fn(&mut Encoder),
+    {
+        let mut target = ior.clone();
+        let mut retried = false;
+        for _ in 0..MAX_FORWARD_HOPS {
+            let (mux, key) = self.acquire(&target)?;
+            match mux.call_on(&key, operation, &write_args, timeout) {
+                Ok(Sent::Reply(reply)) => return Ok(*reply),
+                Ok(Sent::Forward(next)) => {
+                    target = *next;
+                }
+                Err(Failed { error, unsent }) => {
+                    // The connection is out either way: a fault means it can
+                    // no longer be framed, and an `unsent` failure means the
+                    // peer has gone or is going.
+                    if !mux.is_usable() {
+                        self.discard(&mux);
+                    }
+                    if unsent && !retried {
+                        // §13.5.1's promise, spent exactly once. See the
+                        // module docs for why it is not a loop.
+                        retried = true;
+                        self.inner.state.write(|s| s.stats.retried += 1);
+                        continue;
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        Err(Error::TooManyForwards)
+    }
+
+    /// Invokes a `oneway` over a pooled connection.
+    ///
+    /// The same one retry applies and means slightly less here: a oneway that
+    /// was written has no reply to prove anything, so all this can say is that
+    /// the bytes left. That is [`crate::Connection::invoke_oneway`]'s promise
+    /// too.
+    pub fn invoke_oneway<F>(&self, ior: &Ior, operation: &str, write_args: F) -> Result<()>
+    where
+        F: Fn(&mut Encoder),
+    {
+        let mut retried = false;
+        loop {
+            let (mux, key) = self.acquire(ior)?;
+            match mux.call_oneway(&key, operation, &write_args) {
+                Ok(()) => return Ok(()),
+                Err(Failed { error, unsent }) => {
+                    if !mux.is_usable() {
+                        self.discard(&mux);
+                    }
+                    if unsent && !retried {
+                        retried = true;
+                        self.inner.state.write(|s| s.stats.retried += 1);
+                        continue;
+                    }
+                    return Err(error);
+                }
+            }
+        }
+    }
+
+    /// A reference bound to this pool, for code that wants an [`Invoker`].
+    pub fn reference(&self, ior: Ior) -> Reference {
+        Reference { pool: self.clone(), ior, endian: Endian::native() }
+    }
+}
+
+/// Drops faulted and idle connections. Returns them for the caller to drop
+/// outside the lock.
+fn sweep(s: &mut State, limits: Limits) -> Vec<Mux> {
+    let mut dropped = Vec::new();
+    for muxes in s.live.values_mut() {
+        let mut i = 0;
+        while i < muxes.len() {
+            let m = &muxes[i];
+            // Both questions are answered from atomics — taking the mux's own
+            // lock in here would be a second section and the tripwire would
+            // fire. See `mux`'s module docs.
+            let faulted = !m.is_usable();
+            let idle = m.in_flight() == 0 && m.idle_for() > limits.max_idle;
+            if faulted {
+                s.stats.faulted_evicted += 1;
+                dropped.push(muxes.remove(i));
+            } else if idle {
+                s.stats.idle_evicted += 1;
+                dropped.push(muxes.remove(i));
+            } else {
+                i += 1;
+            }
+        }
+    }
+    s.live.retain(|_, v| !v.is_empty());
+    dropped
+}
+
+/// Drops up to `want` idle connections to make room, least recently used
+/// first. Busy connections are never taken: a caller is on them.
+fn evict_idle(s: &mut State, want: usize) -> Vec<Mux> {
+    let mut dropped = Vec::new();
+    for _ in 0..want {
+        let mut oldest: Option<(Key, usize, Duration)> = None;
+        for (key, muxes) in s.live.iter() {
+            for (i, m) in muxes.iter().enumerate() {
+                if m.in_flight() != 0 {
+                    continue;
+                }
+                let idle = m.idle_for();
+                if oldest.as_ref().is_none_or(|(_, _, best)| idle > *best) {
+                    oldest = Some((key.clone(), i, idle));
+                }
+            }
+        }
+        match oldest {
+            Some((key, i, _)) => {
+                if let Some(muxes) = s.live.get_mut(&key) {
+                    dropped.push(muxes.remove(i));
+                    s.stats.pressure_evicted += 1;
+                }
+            }
+            None => break,
+        }
+    }
+    s.live.retain(|_, v| !v.is_empty());
+    dropped
+}
+
+/// Picks a connection for `key`, or `None` if one should be dialed.
+///
+/// Prefers the least loaded, and prefers dialing over piling calls onto a busy
+/// connection until the endpoint is at its own bound — at which point sharing
+/// is the answer, because that is what multiplexing is for.
+fn pick(s: &State, key: &Key, limits: Limits) -> Option<Mux> {
+    let muxes = s.live.get(key)?;
+    let best = muxes
+        .iter()
+        .filter(|m| m.is_usable())
+        .min_by_key(|m| m.in_flight())
+        .cloned()
+        .filter(|m| m.multiplexes() || m.in_flight() == 0)?;
+    if best.in_flight() >= limits.soft_in_flight && muxes.len() < limits.max_per_endpoint {
+        return None; // room to spread the load; dial instead
+    }
+    Some(best)
+}
+
+/// A reference plus the pool that will carry its calls, so generated stubs —
+/// which are generic over [`Invoker`] — run over pooled, multiplexed
+/// connections without knowing it.
+#[derive(Debug, Clone)]
+pub struct Reference {
+    pool: Pool,
+    ior: Ior,
+    endian: Endian,
+}
+
+impl Reference {
+    /// The reference being called.
+    pub fn ior(&self) -> &Ior {
+        &self.ior
+    }
+
+    /// Sets the byte order requests are encoded in. Advisory: the connection
+    /// was dialed with its own, and this only affects connections dialed
+    /// afterwards.
+    pub fn set_endian(&mut self, endian: Endian) {
+        self.endian = endian;
+    }
+}
+
+impl Invoker for Reference {
+    fn endian(&self) -> Endian {
+        self.endian
+    }
+
+    fn invoke<F: Fn(&mut Encoder)>(&mut self, operation: &str, write_args: F) -> Result<Reply> {
+        self.pool.invoke(&self.ior, operation, write_args)
+    }
+
+    fn invoke_oneway<F: Fn(&mut Encoder)>(&mut self, operation: &str, write_args: F) -> Result<()> {
+        self.pool.invoke_oneway(&self.ior, operation, write_args)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{IiopProfile, TaggedComponent};
+
+    /// A `TAG_CODE_SETS` body advertising UTF-8 for `char`, which is what a
+    /// client here negotiates to — so a profile carrying it and one without it
+    /// really do end up on different connections.
+    fn code_sets_component() -> Vec<u8> {
+        let mut e = Encoder::encapsulation(Endian::Little);
+        e.put_u32(codeset::CodeSetId::UTF_8.0); // native char
+        e.put_u32(1);
+        e.put_u32(codeset::CodeSetId::UTF_8.0); // conversion
+        e.put_u32(codeset::CodeSetId::UTF_16.0); // native wchar
+        e.put_u32(0);
+        e.finish().expect("encapsulation encodes")
+    }
+
+    fn profile(host: &str, port: u16, minor: u8) -> IiopProfile {
+        IiopProfile {
+            version: Version { major: 1, minor },
+            host: host.into(),
+            port,
+            object_key: b"key".to_vec(),
+            components: Vec::new(),
+        }
+    }
+
+    /// The key is the endpoint *plus what was negotiated once*. Two profiles
+    /// that differ only in version, or only in published codeset, must not
+    /// share a connection.
+    #[test]
+    fn the_key_separates_versions_and_codesets() {
+        let a = profile("h", 1, 2);
+        let b = profile("h", 1, 0);
+        assert_ne!(Key::of(&a, "h", 1), Key::of(&b, "h", 1), "version is part of the key");
+
+        let mut with_codeset = profile("h", 1, 2);
+        with_codeset
+            .components
+            .push(TaggedComponent { tag: codeset::TAG_CODE_SETS, data: code_sets_component() });
+        assert_ne!(
+            Key::of(&a, "h", 1),
+            Key::of(&with_codeset, "h", 1),
+            "a negotiated codeset is per connection, so it is part of the key"
+        );
+        assert_eq!(Key::of(&a, "h", 1), Key::of(&profile("h", 1, 2), "h", 1));
+    }
+
+    /// The object key is deliberately *not* in it: one connection serves every
+    /// object behind an endpoint, which is the whole reason pooling pays.
+    #[test]
+    fn the_object_key_is_not_part_of_the_key() {
+        let mut a = profile("h", 1, 2);
+        let mut b = profile("h", 1, 2);
+        a.object_key = b"one".to_vec();
+        b.object_key = b"another".to_vec();
+        assert_eq!(Key::of(&a, "h", 1), Key::of(&b, "h", 1));
+    }
+
+    /// An empty IOR has no endpoint to key on, and must say so rather than
+    /// dialing something.
+    #[test]
+    fn an_ior_without_a_profile_is_refused() {
+        let pool = Pool::new();
+        let nil = Ior { type_id: String::new(), profiles: Vec::new() };
+        assert!(matches!(pool.acquire(&nil), Err(Error::NoIiopProfile)));
+        assert_eq!(pool.size(), 0);
+    }
+}

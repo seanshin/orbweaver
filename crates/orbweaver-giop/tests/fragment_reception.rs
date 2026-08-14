@@ -7,6 +7,24 @@
 //! one way only. We fragment, they reassemble. Our *reader* has only ever been
 //! fed our own writer's output.
 //!
+//! **Amended 2026-08-14, and the amendment matters more than the file.** That
+//! paragraph is wrong about omniORB. `spike-mux` asked omniORB 4.3.4 for a
+//! 1 MB `sequence<octet>` and it answered in **two** pieces — a leading `Reply`
+//! with the more-fragments bit and one `Fragment` — reproducibly, at GIOP 1.2
+//! *and* at 1.1, with no configuration. So a peer does fragment; it simply had
+//! never been asked for a reply big enough. JacORB 3.9 still does not, at any
+//! version, for the same request.
+//!
+//! Two things follow. The 1.2 reassembler has now been fed a real peer's
+//! fragments and not only our own emitter's, which is the independent evidence
+//! this file was written to stand in for. And at 1.1 the same reply is
+//! *refused* — `Error::FragmentUnsupported`, because a 1.1 `Fragment` carries
+//! no request id — which is a live interop limit against a stock omniORB
+//! rather than a theoretical one. The hand-built streams below are still the
+//! oracle for every shape a peer *may* send; what changed is that "no peer
+//! fragments" was an assumption nobody had tested with a large enough
+//! argument.
+//!
 //! That is a weak test of a receiver, because one emitter produces one shape.
 //! A conformant peer may legally split at any 8-aligned boundary, including
 //! ones that land in the middle of a request header, and may send fragments
