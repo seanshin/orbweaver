@@ -1088,6 +1088,27 @@ else
   fail_total=$((fail_total+1))
 fi
 
+# ── R7: an IOR that is dialable from where the client actually is ───────────
+hr "NAT rewriting — the address a container publishes is not the one it bound"
+# assumption D already measured that a server publishes a routable-but-local
+# address. Inside a container that address is the namespace's, and a client
+# outside cannot dial it. The spike constructs both real failures — refused and
+# timed out — because loopback alone cannot show this one.
+nat=$(./spikes/nat_rewrite.sh 2>&1)
+if printf '%s' "$nat" | grep -q "nat rewriting: PASS"; then
+  echo "  ok   unrewritten IOR fails to dial, rewritten one completes; key, version and"
+  echo "       an undecodable profile all survive untouched"
+  if printf '%s' "$nat" | grep -q "unmeasured (skipped): [1-9]"; then
+    echo "  SKIPPED  the container probe has never run here — no docker, and it is"
+    echo "           counted rather than read as evidence"
+    skipped=$((skipped+1))
+  fi
+else
+  echo "  FAIL NAT rewriting"
+  printf '%s' "$nat" | grep -i "FAIL" | head -3 | sed 's/^/       /'
+  fail_total=$((fail_total+1))
+fi
+
 # ── The whole path, end to end ──────────────────────────────────────────────
 hr "end-to-end — requirement → contract → both halves → guarded call"
 # Every part is measured somewhere above; this is the only check that runs them
