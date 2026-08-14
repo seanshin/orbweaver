@@ -1,0 +1,50 @@
+# Container probe for risk R7 — UNRUN. See run.sh.
+#
+# The point of the topology: the servant and the client sit on **separate**
+# Docker networks, which the daemon isolates from each other. The servant's own
+# address is therefore genuinely unreachable from the client — not "unreachable
+# because nothing is listening", which is all a single host can show — and the
+# only way in is the port published on the host. That is a NAT boundary, and it
+# is the thing `spikes/nat_rewrite.sh` cannot construct without Docker.
+#
+#   client ──(outside)──> host:5555 ──published──> server:5555 ──(inside)
+#
+# The reference the servant publishes decides whether that path is usable:
+# its own `inside` address is not, `host.docker.internal:5555` is.
+
+name: orbweaver-nat
+
+services:
+  server:
+    build:
+      context: ../..
+      dockerfile: spikes/nat/Dockerfile
+    environment:
+      NAT_MODE: ${NAT_MODE:-published}
+      # Unset in naive mode: with no map the servant publishes the address it
+      # bound, which is the failure this probe exists to show.
+      ORBWEAVER_PUBLISH_MAP: ${ORBWEAVER_PUBLISH_MAP:-}
+    networks: [inside]
+    ports:
+      - "5555:5555"
+    volumes:
+      - ./shared:/shared
+
+  client:
+    build:
+      context: ../..
+      dockerfile: spikes/nat/Dockerfile
+    environment:
+      NAT_MODE: call
+    networks: [outside]
+    # The route the client is allowed to have: the host, and nothing on the
+    # servant's network.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./shared:/shared
+    profiles: [manual]
+
+networks:
+  inside:
+  outside:

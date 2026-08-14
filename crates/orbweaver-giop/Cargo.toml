@@ -72,3 +72,7 @@ path = "src/bin/spike_events.rs"
 [[bin]]
 name = "spike-concurrent"
 path = "src/bin/spike_concurrent.rs"
+
+[[bin]]
+name = "spike-nat"
+path = "src/bin/spike_nat.rs"

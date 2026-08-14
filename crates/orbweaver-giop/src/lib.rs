@@ -34,6 +34,7 @@ pub mod csiv2;
 pub mod event_server;
 pub mod naming;
 pub mod naming_server;
+pub mod nat;
 pub mod server;
 pub mod ssliop;
 pub mod typecode;
@@ -434,7 +435,14 @@ impl IiopProfile {
     }
 }
 
-/// A parsed Interoperable Object Reference.
+/// A parsed Interoperable Object Reference — the *dialing* view.
+///
+/// This type answers "where do I connect", so [`Ior::read_from`] keeps
+/// `TAG_INTERNET_IOP` profiles and drops every other tag. That makes it lossy
+/// by construction: re-emitting a parsed `Ior` loses a `TAG_MULTIPLE_COMPONENTS`
+/// or vendor profile the original carried. Anything that must preserve a
+/// reference — endpoint rewriting above all — works on [`nat::RawIor`], which
+/// keeps every profile verbatim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ior {
     /// Repository ID of the most-derived interface, empty for a nil reference.
@@ -449,22 +457,7 @@ impl Ior {
     /// §7.6.9 defines the prefix case-insensitively and states that the case
     /// of a stringified IOR is not significant.
     pub fn parse(s: &str) -> Result<Self> {
-        let s = s.trim();
-        let hex = s
-            .get(..4)
-            .filter(|p| p.eq_ignore_ascii_case("IOR:"))
-            .map(|_| &s[4..])
-            .ok_or(Error::BadIor("missing 'IOR:' prefix"))?;
-        if hex.is_empty() || hex.len() % 2 != 0 {
-            return Err(Error::BadIor("hex body has odd or zero length"));
-        }
-        let mut bytes = Vec::with_capacity(hex.len() / 2);
-        for pair in hex.as_bytes().chunks(2) {
-            let hi = hex_nibble(pair[0]).ok_or(Error::BadIor("non-hex digit"))?;
-            let lo = hex_nibble(pair[1]).ok_or(Error::BadIor("non-hex digit"))?;
-            bytes.push((hi << 4) | lo);
-        }
-        Self::from_encapsulation(&bytes)
+        Self::from_encapsulation(&ior_hex_bytes(s)?)
     }
 
     /// Parses the CDR encapsulation that a stringified IOR wraps.
@@ -526,19 +519,50 @@ impl Ior {
     pub fn to_stringified(&self) -> Result<String> {
         let mut e = Encoder::encapsulation(Endian::Little);
         self.write_to(&mut e)?;
-        let bytes = e.finish().map_err(Error::Cdr)?;
-        let mut out = String::with_capacity(4 + bytes.len() * 2);
-        out.push_str("IOR:");
-        for b in bytes {
-            out.push_str(&format!("{b:02x}"));
-        }
-        Ok(out)
+        Ok(hex_ior(&e.finish().map_err(Error::Cdr)?))
     }
 
     /// The first IIOP profile, which is the one dialed first.
     pub fn primary(&self) -> Result<&IiopProfile> {
         self.profiles.first().ok_or(Error::NoIiopProfile)
     }
+}
+
+/// The bytes behind an `IOR:<hex>` string.
+///
+/// §7.6.9 defines the prefix case-insensitively and states that the case of a
+/// stringified IOR is not significant. Shared with [`nat::RawIor`] so the two
+/// views of a reference cannot disagree about what a valid string is.
+pub(crate) fn ior_hex_bytes(s: &str) -> Result<Vec<u8>> {
+    let s = s.trim();
+    let hex = s
+        .get(..4)
+        .filter(|p| p.eq_ignore_ascii_case("IOR:"))
+        .map(|_| &s[4..])
+        .ok_or(Error::BadIor("missing 'IOR:' prefix"))?;
+    if hex.is_empty() || hex.len() % 2 != 0 {
+        return Err(Error::BadIor("hex body has odd or zero length"));
+    }
+    let mut bytes = Vec::with_capacity(hex.len() / 2);
+    for pair in hex.as_bytes().chunks(2) {
+        let hi = hex_nibble(pair[0]).ok_or(Error::BadIor("non-hex digit"))?;
+        let lo = hex_nibble(pair[1]).ok_or(Error::BadIor("non-hex digit"))?;
+        bytes.push((hi << 4) | lo);
+    }
+    Ok(bytes)
+}
+
+/// The `IOR:<hex>` string for an encapsulation.
+pub(crate) fn hex_ior(bytes: &[u8]) -> String {
+    use fmt::Write;
+    let mut out = String::with_capacity(4 + bytes.len() * 2);
+    out.push_str("IOR:");
+    for b in bytes {
+        // `write!` into a String cannot fail; the Result is discarded rather
+        // than unwrapped so this stays panic-free by construction.
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 }
 
 const fn hex_nibble(c: u8) -> Option<u8> {
