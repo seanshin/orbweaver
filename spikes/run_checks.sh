@@ -1494,7 +1494,8 @@ hr "static generation — stubs from the registry, oracle: static equals dynamic
 gen_fail=0
 GEN_OUT=$(mktemp -d)/genout
 if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
-     corpus/golden/*.idl spikes/echo.idl >/tmp/orbweaver-gen.log 2>&1; then
+     corpus/golden/*.idl corpus/services/*.idl spikes/echo.idl \
+     >/tmp/orbweaver-gen.log 2>&1; then
   n_items=$(grep -o 'generated [0-9]* item' /tmp/orbweaver-gen.log | grep -o '[0-9]*')
   echo "  ok   $n_items item(s) generated from the golden corpus plus the fixture"
   grep '^skipped' /tmp/orbweaver-gen.log | sed 's/^/  note /'
