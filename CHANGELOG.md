@@ -8,6 +8,63 @@ records what changed and, where it matters, what it changes on the wire.
 
 ---
 
+## Unreleased
+
+Since v0.2.0. The wire-behaviour section leads again, for the same reason.
+
+### ⚠ Wire behaviour changed / 와이어 동작 변경
+
+- **`::CORBA::TypeCode` loaded as `void`.** The front end predeclares the name
+  for checking, the registry resolves against the spec's own definitions where
+  it is absent, and it fell through to `void` — silently, for months. An
+  operation returning a TypeCode generated `-> ()` and **marshalled nothing at
+  a peer expecting one**. `CLAUDE.md` requires that spelling, which is what
+  made the gap read as support. Found by the generated-servant batch, which
+  could not express `describe_interface` and said so rather than emitting an
+  empty reply.
+- **A refusal claimed the call had completed.** `Guarded` raised system
+  exceptions with a literal `0` — `COMPLETED_YES` — so every refused caller was
+  told its call had run. A separate path from the transposed enum fixed in
+  v0.2.0, and now that quota refusals are `TRANSIENT`, it was an invitation to
+  retry attached to "it already happened".
+
+### Added / 추가
+
+- **Multi-object generated skeletons**: `knows()` required with no default,
+  identity as an explicit `Target` argument, and **71 pinned cases answering
+  byte-identically to the hand-written Interface Repository facade**, down to a
+  minted reference's object key and port — with `ifr.rs` unmodified as the
+  oracle.
+- **IOR rewriting for NAT and containers** (R7): profiles and
+  `TAG_ALTERNATE_IIOP_ADDRESS` rewritten, the object key refused as a target
+  because it is identity rather than a route, an undecodable profile preserved
+  byte for byte. Both real socket failures constructed. The container probe is
+  written and **has never executed** — counted as a skip.
+- **The quota interceptor seat**, with the window taken as a host-supplied
+  label rather than from a clock, and refusals typed `TRANSIENT` when they
+  renew and `NO_PERMISSION` when they do not.
+- **The audit ledger leaves the process** in serving mode; it used to be
+  drained only under `--dry-run`.
+- **`#pragma prefix`/`version`/`ID`** and an S4 report for an explicit ID that
+  is not a repository id.
+- **D005** (PROPOSED): contract stability, and the argument that semantic drift
+  is worse than identifier drift.
+
+### Fixed / 수정
+
+- **An unknown latency is not a fast one.** An offer registered over the wire
+  carried `latency_p50: 0.0`, which did not merely fail to match
+  `latency_p50 < 20` — it **matched**, so a latency-ordered router preferred
+  exactly the experts nobody had measured. Matching is now three-valued and
+  unknown sorts after every known value.
+- The generator inverted a repository id into a Rust module path, emitting
+  `pub mod acme.com` for prefixed IDL.
+- The `*.log` ignore swallowed the end-to-end provenance record, which only a
+  fresh clone could reveal — the third time a blanket ignore has taken a
+  committed artefact.
+
+---
+
 ## v0.2.0 — 2026-08-14
 
 Phase 4 substantially landed; five CORBA services served on our own POA; the
