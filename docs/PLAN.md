@@ -340,6 +340,8 @@ Curated per-operation tools remain available as an opt-in for small, stable, hig
 
 **S4 is the safety belt of the whole system.** An LLM writes plausible IDL that may be semantically wrong; an IDL compiler rejects syntactically wrong IDL every time without exception. That asymmetry — probabilistic synthesis, deterministic verification — is what makes the trust model work. Everything upstream of S4 is allowed to be uncertain because S4 is not.
 
+**What S4 does not gate: repeatability.** Running S1–S3 twice over one unchanged requirement, with unchanged prompts, produced two different contracts and both passed every gate — different names, a different parameter type, and an authorization scope that drifted from the one the requirement states literally ([`pipeline-runs/2026-08-14-end-to-end.md`](pipeline-runs/2026-08-14-end-to-end.md), Cause A). What S2 is allowed to choose, and what a regeneration owes an already-registered contract, is a policy question open as [`decisions/D005-contract-stability.md`](decisions/D005-contract-stability.md) (**PROPOSED**).
+
 ### 4.7 The object model
 
 Everything so far treats a target as an address plus an operation name. That is
