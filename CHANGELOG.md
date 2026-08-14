@@ -27,8 +27,38 @@ Since v0.2.0. The wire-behaviour section leads again, for the same reason.
   told its call had run. A separate path from the transposed enum fixed in
   v0.2.0, and now that quota refusals are `TRANSIENT`, it was an invitation to
   retry attached to "it already happened".
+- **A deferred IFR operation answered "no such operation".** `ifr.rs` refused
+  the ten IR operations it defers with `BAD_OPERATION`, which is byte-for-byte
+  what an operation nobody thought about answers — so a client could not tell a
+  decision from a gap, and `SERVICES-COVERAGE.md` could only tell them apart by
+  searching this repository for a written reason. They answer **`NO_IMPLEMENT`**
+  now: `NO_PERMISSION` is policy, `NO_IMPLEMENT` is deferred, `BAD_OPERATION` is
+  "not an operation of the object you addressed". Affects `contents`, `lookup`,
+  `lookup_name`, `describe_contents`, `describe`, `_get_defined_in`,
+  `_get_containing_repository`, `get_canonical_typecode`, `get_primitive`,
+  `_get_type`.
+  *유예 연산은 이제 `NO_IMPLEMENT`로 답한다 — 와이어가 유예와 누락을 구분한다.*
 
 ### Added / 추가
+
+- **`Contained::_get_version` is served.** It answered `BAD_OPERATION` while its
+  write half `_set_version` answered `NO_PERMISSION` — "the operation exists and
+  the answer is no" — on a version the facade parses out of every repository id
+  it handles. The two were the wrong way round by `ifr.rs`'s own argument. The
+  read answers now; the write is still refused. `corpus/services/ir-subset.idl`
+  declares the attribute, so the generated skeleton serves it too and the
+  byte-for-byte comparison in `ifr_shape.rs` covers it.
+- **Constants carry their value, and are generated.** `Entry::Const` recorded
+  the type and not the value, so `orbweaver-gen` skipped every constant — which
+  the end-to-end run met concretely when a contract declared its authorization
+  scope as a `const string` so a servant could name it, and the servant could
+  not. The registry now folds the expression **once, where the names are**
+  (`const long OFFSET = MAX_RETRIES * 2;` needs both arithmetic and IDL's
+  outward scope resolution), coerces it to the declared type, and stores an
+  evaluated `ConstValue`. An expression it cannot fold stores **no value** and
+  the generator skips that item with a reason — never a guessed zero. A
+  `string` constant is emitted as `&str`, since Rust has no `const String`.
+  *상수는 값을 갖는다 — 레지스트리가 한 번 접고, 접을 수 없으면 값을 만들지 않는다.*
 
 - **Attribute accessors are gated and visible.** `allow_interface` made
   `_get_balance` callable while the policy resolved scopes only through

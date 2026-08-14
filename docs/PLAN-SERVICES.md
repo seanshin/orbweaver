@@ -190,7 +190,7 @@ loudly — the registry is populated from IDL through S4, never over the wire.
 | Standard | `CORBA::Repository`, `Contained`, `IRObject`, `InterfaceDef` |
 | Consumers | a foreign DII client; integration's conformance harness |
 | Landed | `orbweaver-registry::ifr::RepositoryServer` + `spike-ifr` |
-| Served | `lookup_id`; `_get_id`/`_get_name`/`_get_absolute_name`/`_get_def_kind`; `describe_interface`, `_get_base_interfaces`, `is_a`; `_is_a`/`_non_existent` |
+| Served | `lookup_id`; `_get_id`/`_get_name`/`_get_absolute_name`/`_get_version`/`_get_def_kind`; `describe_interface`, `_get_base_interfaces`, `is_a`; `_is_a`/`_non_existent` |
 
 It sits in `orbweaver-registry`, not `orbweaver-giop`: the facade needs the
 registry's facts, and the dependency edge runs registry → giop. One object key
@@ -204,11 +204,32 @@ for `gc10::Both` and `tms::TrackManager`**, including parameter modes,
 `OP_ONEWAY`, a raised exception's members, a `tk_alias`→`tk_sequence`→
 `tk_struct` return type, and `CORBA.NO_PERMISSION` from `create_module`.
 
-Not doing (until a consumer appears): `Container::contents`/`lookup`,
-`Contained::describe`, `_get_defined_in`/`_get_containing_repository` — all
-`BAD_OPERATION`. Every mutating operation is `NO_PERMISSION` permanently, not
+Not doing (until a consumer appears): `Container::contents`/`lookup`/
+`lookup_name`/`describe_contents`, `Contained::describe`, `_get_defined_in`/
+`_get_containing_repository`, `Repository::get_canonical_typecode`/
+`get_primitive`, `IDLType::_get_type` — all **`NO_IMPLEMENT`** as of
+2026-08-14. Every mutating operation is `NO_PERMISSION` permanently, not
 pending: a writable IFR would be a second ingestion path with none of S4's
 gates on it.
+
+**Why the deferrals stopped answering `BAD_OPERATION`.** They answered it until
+§8.1 was written, and that is exactly what made §8.1 necessary: `BAD_OPERATION`
+says "no such operation", which is byte-for-byte what an operation nobody
+thought about says, so the only thing separating a decision from a gap was a
+sentence in a document the client cannot read. `NO_IMPLEMENT` is the
+specification's answer for an operation that exists and has no implementation
+here, which is what a deferral *is*. Three refusals, three facts, on the wire:
+`NO_PERMISSION` is policy, `NO_IMPLEMENT` is deferred, `BAD_OPERATION` is "not
+an operation of the object you addressed — try another reference". The reasons
+stay written down, because the wire says *that* an operation is deferred and
+never *why*.
+
+유예 연산이 `BAD_OPERATION`을 그만둔 이유: 그 답은 "그런 연산 없음"이며, 아무도
+생각해보지 않은 연산의 답과 바이트 단위로 같다. `NO_IMPLEMENT`는 "연산은 있고
+여기 구현이 없다"는 명세의 답이고, 그것이 유예의 정의다. 이제 와이어에서
+`NO_PERMISSION`(정책) · `NO_IMPLEMENT`(유예) · `BAD_OPERATION`(그런 연산 없음)
+셋이 구분된다. 이유는 여전히 문서에 적는다 — 와이어는 *유예됐다*까지만 말하고
+*왜*는 말하지 않으므로.
 
 ## 8. Exclusions, with reasons / 명시적 제외
 
@@ -238,16 +259,21 @@ decided", it says so rather than inventing a rationale after the fact.
 | Absent | Verdict |
 |---|---|
 | `NamingContextExt::to_url` | **A gap, and an odd one**: the client half already ships — `crate::naming` *parses* `corbaname:`, and `to_url` produces one. It should be served; the omission was not a decision. |
-| `Repository::get_canonical_typecode`, `get_primitive` | **Deferred, reason now recorded**: both hand out `TypeCode`s the registry never stored — a canonical form and the primitives table — so serving them means minting type information rather than reporting it, which is the one thing a read-only facade must not do. |
-| `Container::lookup_name`, `describe_contents` | **Deferred, same class as §7's five**: they enumerate a container's contents, and `describe_interface` already carries what a client wanted from them. Listed with the others rather than left absent. |
-| `Contained::_get_version` | **A defect, not a deferral.** Its write half `_set_version` answers `NO_PERMISSION` — "the operation exists and the answer is no" — while its read half says "no such operation", on data the registry already parses out of every repository id. Backwards by `ifr.rs`'s own argument. To be fixed. |
-| `IDLType::_get_type` | **Deferred with the same reason as `describe_interface`'s absence used to have**: it returns a `TypeCode`, and until recently the registry loaded `::CORBA::TypeCode` as `void`. That is fixed, so this one is now merely unimplemented rather than unimplementable. |
+| `Repository::get_canonical_typecode`, `get_primitive` | **Deferred, reason now recorded**: both hand out `TypeCode`s the registry never stored — a canonical form and the primitives table — so serving them means minting type information rather than reporting it, which is the one thing a read-only facade must not do. **Answers `NO_IMPLEMENT` since 2026-08-14.** |
+| `Container::lookup_name`, `describe_contents` | **Deferred, same class as §7's five**: they enumerate a container's contents, and `describe_interface` already carries what a client wanted from them. Listed with the others rather than left absent. **Answers `NO_IMPLEMENT` since 2026-08-14 — and so do §7's five, which is what "same class" now means on the wire and not only on paper.** |
+| `Contained::_get_version` | **Was a defect, not a deferral. Fixed 2026-08-14: it is served.** Its write half `_set_version` answered `NO_PERMISSION` — "the operation exists and the answer is no" — while its read half said "no such operation", on data the registry already parses out of every repository id. Backwards by `ifr.rs`'s own argument. The read now answers the version from the id and the write is still refused. |
+| `IDLType::_get_type` | **Deferred with the same reason as `describe_interface`'s absence used to have**: it returns a `TypeCode`, and until recently the registry loaded `::CORBA::TypeCode` as `void`. That is fixed, so this one is now merely unimplemented rather than unimplementable. **Answers `NO_IMPLEMENT` since 2026-08-14.** |
 | `moe::Router::select`, `dispatch` | **Split, and only half is undecided** — reasoned in [`PLAN-MOE.md`](PLAN-MOE.md) §4.6. `select` returns references only, is pure control plane, and its absence is a **gap**. `dispatch` (and `Expert::process`) carry an `Activation`, which is control-plane-legal only under the reading that `Tensor` holds a handle rather than a payload — a reading that lives in a corpus comment, binds nothing, and is enforced by nothing. Committing to it is the decision. |
 
 **부재 12건에 대한 문장.** 와이어는 숙고된 거부와 잊힌 거부를 구분하지 못하므로,
 아무도 문장을 쓰지 않은 `BAD_OPERATION`은 정의상 공백이다. `to_url`과
-`_get_version`은 **결함**이고(고칠 것), 나머지는 이유를 붙여 유예하며,
-`moe::Router`는 **미결정**이라고 적는다 — 사후에 근거를 지어내지 않는다.
+`_get_version`은 **결함**이고, 나머지는 이유를 붙여 유예하며, `moe::Router`는
+**미결정**이라고 적는다 — 사후에 근거를 지어내지 않는다.
+
+**2026-08-14 갱신.** `_get_version`은 **서빙되고**(읽기는 답하고 쓰기는 계속
+`NO_PERMISSION`), IFR의 유예 연산 10개는 `BAD_OPERATION`이 아니라
+`NO_IMPLEMENT`로 답한다 — 이제 와이어 자체가 유예와 누락을 구분한다. §7 참조.
+나머지 항목(`to_url`, `moe::Router`)은 이 배치의 범위 밖이며 그대로 남는다.
 
 ## 9. Fixture & dependency policy / 픽스처·의존성 정책
 

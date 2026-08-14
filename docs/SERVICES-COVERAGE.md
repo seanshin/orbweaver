@@ -225,6 +225,26 @@ has the two backwards.
 리포지터리 ID에서 버전을 파싱하고 있다. 읽기 전용 파사드가 두 방향을 거꾸로
 답하고 있는 셈이다.
 
+> **Acted on 2026-08-14, after this sweep and not re-measured by it.** `ifr.rs`
+> now serves `_get_version` (the write half is still `NO_PERMISSION`), and the
+> ten operations it defers — `contents`, `lookup`, `lookup_name`,
+> `describe_contents`, `describe`, `_get_defined_in`,
+> `_get_containing_repository`, `get_canonical_typecode`, `get_primitive`,
+> `_get_type` — answer **`NO_IMPLEMENT`** instead of `BAD_OPERATION`, so the
+> distinction §2 says the wire cannot make is one the wire now makes for this
+> service. The table above is the state the sweep measured; the new answers are
+> covered by `ifr.rs`'s own tests and by `spike-ifr`, and a re-run of
+> `./spikes/service_sweep.sh` is what would turn them back into a measurement
+> here. It has not been run: this batch had no omniORB fixture available
+> (`omniidl` absent), and an unmeasured check is not a pass.
+>
+> **2026-08-14 조치, 이 스윕으로 재측정되지 않음.** `_get_version`은 서빙되고,
+> 유예 연산 10개는 `NO_IMPLEMENT`로 답한다 — §2가 "와이어는 구분하지 못한다"고
+> 적은 그 구분을 이 서비스에서는 와이어가 한다. 위 표는 스윕이 측정한 상태이며,
+> 새 답은 단위 테스트와 `spike-ifr`가 검증한다. `service_sweep.sh` 재실행이
+> 이것을 다시 *측정*으로 만들 것이나, 이 배치에서는 omniORB 픽스처가 없어
+> 실행하지 못했다.
+
 ## 6. MoE control plane (`corpus/golden/22`) — 7 of 12
 
 Objects addressed: `moe::ExpertRegistry` and `moe::ExpertLoader`, held open by
@@ -330,7 +350,8 @@ explained by nothing. That is the number this document exists to produce.
 4. **`_get_version` answers `BAD_OPERATION` while `_set_version` answers
    `NO_PERMISSION`.** By `ifr.rs`'s own argument that is backwards: the write
    half says "the operation exists and the answer is no" and the read half says
-   "no such operation", on data the registry demonstrably holds.
+   "no such operation", on data the registry demonstrably holds. *Repaired
+   2026-08-14 — see the note in §5; the repair is not re-measured here.*
 5. **`corpus/golden/22` declares twelve operations and `PLAN-SERVICES.md` §3
    accounts for seven.** `moe::Router::select`/`dispatch` are declared in a
    landed contract, served by nothing, and named in no plan — not even in

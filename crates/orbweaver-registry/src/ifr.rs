@@ -23,18 +23,62 @@
 //! | Interface | Operations |
 //! |---|---|
 //! | `Repository` | `lookup_id` |
-//! | `Contained` | `_get_id`, `_get_name`, `_get_absolute_name` |
+//! | `Contained` | `_get_id`, `_get_name`, `_get_absolute_name`, `_get_version` |
 //! | `IRObject` | `_get_def_kind` |
 //! | `InterfaceDef` | `describe_interface`, `_get_base_interfaces`, `is_a` |
 //! | `CORBA::Object` | `_is_a`, `_non_existent` |
 //!
 //! `describe_interface` is the operation that matters: one call and a DII
-//! client has every signature it needs. `Container::contents`/`lookup`,
-//! `Contained::describe`, `_get_defined_in` and `_get_containing_repository`
-//! are **not** served — they answer `BAD_OPERATION` rather than being
-//! half-served, per PLAN-SERVICES §1 rule 2. `describe_interface`'s
-//! `defined_in` member already carries the containing module's repository id,
-//! which is what a client wanted `_get_defined_in` for.
+//! client has every signature it needs.
+//!
+//! `_get_version` is served because the registry has the answer and the write
+//! half already refused it properly. It was absent until 2026-08-14, which
+//! `docs/SERVICES-COVERAGE.md` §5 caught by driving all 44 declared IR
+//! operations over the wire: `_set_version` answered `NO_PERMISSION` — "the
+//! operation exists and the answer is no" — while `_get_version` answered
+//! `BAD_OPERATION`, "no such operation", on a version this facade parses out
+//! of every repository id it handles. A read-only facade with those two
+//! backwards is the sharpest kind of wrong: it refuses the write on purpose and
+//! denies the read by accident.
+//!
+//! # Deferred operations answer `NO_IMPLEMENT`, and why that is not pedantry
+//!
+//! [`is_deferred`] lists the IR operations this facade knows about and has
+//! decided not to implement — `Container::contents`/`lookup`/`lookup_name`/
+//! `describe_contents`, `Contained::describe`/`_get_defined_in`/
+//! `_get_containing_repository`, `Repository::get_canonical_typecode`/
+//! `get_primitive`, and `IDLType::_get_type`. Each answers `NO_IMPLEMENT`.
+//!
+//! They used to answer `BAD_OPERATION`, with the reasons written in this
+//! module and in `docs/PLAN-SERVICES.md` §7 — and that is precisely the defect
+//! `SERVICES-COVERAGE.md` was written to find: **the wire could not tell a
+//! considered deferral from an oversight.** Both answered "no such operation",
+//! so the only thing separating a decision from a gap was whether somebody had
+//! written a sentence in a document the client cannot read. Twelve of 107
+//! declared operations across the five services were in exactly that state.
+//!
+//! `NO_IMPLEMENT` is the specification's answer for an operation that exists
+//! on the interface and has no implementation here, which is what a deferral
+//! *is*. The three answers are now three different facts, on the wire, with no
+//! document needed to tell them apart:
+//!
+//! | answer | means |
+//! |---|---|
+//! | `NO_PERMISSION` | the operation exists, is implementable, and is refused as policy (every mutating operation) |
+//! | `NO_IMPLEMENT` | the operation exists in the contract; this facade has not implemented it, on purpose |
+//! | `BAD_OPERATION` | there is no such operation on the object addressed — try a different reference |
+//!
+//! The reasons stay written down, because the wire says *that* an operation is
+//! deferred and never *why*: `contents`/`lookup`/`lookup_name`/
+//! `describe_contents` enumerate a container and `describe_interface` already
+//! carries what a client wanted from them; `describe`, `_get_defined_in` and
+//! `_get_containing_repository` likewise (`describe_interface`'s `defined_in`
+//! member is the containing module's repository id); `get_canonical_typecode`
+//! and `get_primitive` would have to **mint** `TypeCode`s the registry never
+//! stored — a canonical form and the primitives table — which is the one thing
+//! a facade that only reports must not do; `_get_type` is merely unimplemented,
+//! and was unimplementable until the registry stopped loading
+//! `::CORBA::TypeCode` as `void`.
 //!
 //! # Why every mutating operation is refused with `NO_PERMISSION`
 //!
@@ -167,6 +211,10 @@ pub const IR_OBJECT_ID: &str = "IDL:omg.org/CORBA/IRObject:1.0";
 pub const OBJECT_ID: &str = "IDL:omg.org/CORBA/Object:1.0";
 /// The system exception every mutating operation is refused with.
 pub const NO_PERMISSION: &str = "IDL:omg.org/CORBA/NO_PERMISSION:1.0";
+/// The system exception a **deferred** operation is refused with — declared by
+/// the contract, deliberately not implemented here. See the module docs for why
+/// this is not `BAD_OPERATION`.
+pub const NO_IMPLEMENT: &str = "IDL:omg.org/CORBA/NO_IMPLEMENT:1.0";
 
 /// The infix that separates the root key from the repository id it addresses.
 const KEY_INFIX: &str = "/ifr/";
@@ -543,6 +591,45 @@ fn refused() -> SystemException {
     SystemException { id: NO_PERMISSION.into(), minor: 0, completed: Completion::No }
 }
 
+/// A `NO_IMPLEMENT` refusal: the operation is in the contract and this facade
+/// has decided not to implement it.
+fn not_implemented() -> SystemException {
+    SystemException { id: NO_IMPLEMENT.into(), minor: 0, completed: Completion::No }
+}
+
+/// Whether `op` is an IR operation this facade deliberately does not implement.
+///
+/// An explicit list rather than a shape, and that is the difference from
+/// [`is_mutating`]: the mutating surface is defined by a naming convention the
+/// specification will keep, while a deferral is a decision somebody made about
+/// one named operation. Matching a *shape* here would quietly capture the next
+/// revision's new operations as "deferred on purpose", which is the exact
+/// confusion this list exists to end. An operation nobody has decided about
+/// stays `BAD_OPERATION` — and that, per `docs/SERVICES-COVERAGE.md`, is a
+/// finding rather than a state to be comfortable in.
+///
+/// Every entry has its reason in the module docs; if one is ever implemented,
+/// it comes off this list and into the match in [`RepositoryServer::handle`].
+pub fn is_deferred(op: &str) -> bool {
+    matches!(
+        op,
+        // Container
+        "contents"
+            | "lookup"
+            | "lookup_name"
+            | "describe_contents"
+            // Contained
+            | "describe"
+            | "_get_defined_in"
+            | "_get_containing_repository"
+            // Repository
+            | "get_canonical_typecode"
+            | "get_primitive"
+            // IDLType
+            | "_get_type"
+    )
+}
+
 /// Whether `op` mutates the repository, and so must be refused.
 ///
 /// Matched by shape rather than by an exhaustive list: the IR's mutating
@@ -869,6 +956,10 @@ impl RepositoryServer {
             (Target::Entry(id), "_get_id") => out.put_str(id),
             (Target::Entry(id), "_get_name") => out.put_str(&self.contained_of(id).0),
             (Target::Entry(id), "_get_absolute_name") => out.put_str(&self.absolute_name_of(id)),
+            // The read half of `version`. The write half is `_set_version`,
+            // refused `NO_PERMISSION` above with every other mutator, and the
+            // two answers have to agree that the operation exists at all.
+            (Target::Entry(id), "_get_version") => out.put_str(&self.contained_of(id).2),
             (Target::Entry(id), "describe_interface") => {
                 self.describe_interface(id)?
                     .write_to(out)
@@ -896,6 +987,14 @@ impl RepositoryServer {
                 let asked = args.get_string().map_err(|_| SystemException::marshal())?;
                 out.put_bool(self.registry.is_a(id, &asked));
             }
+            // A deferral and an oversight are different facts, so they get
+            // different answers. Unlike the mutating refusal this happens
+            // *after* target resolution on purpose: a stale reference should
+            // hear that its object is gone (`OBJECT_NOT_EXIST`, actionable)
+            // rather than a policy statement about an operation it will never
+            // reach — and no client retries a deferral elsewhere, which is the
+            // retry the earlier ordering exists to stop.
+            _ if is_deferred(&req.operation) => return Err(not_implemented()),
             _ => return Err(SystemException::bad_operation()),
         }
         Ok(())
@@ -1307,22 +1406,94 @@ mod tests {
         }
     }
 
-    /// Everything mutating is NO_PERMISSION — the policy refusal — and
-    /// everything outside the served subset is BAD_OPERATION. The two must
-    /// not be confused: one says "never", the other says "not here".
+    /// Three refusals, three meanings, and the wire tells them apart without a
+    /// document: `NO_PERMISSION` is policy, `NO_IMPLEMENT` is a deferral,
+    /// `BAD_OPERATION` is "no such operation — try another reference".
+    ///
+    /// The middle row is the repair. Every deferred operation used to answer
+    /// `BAD_OPERATION`, which is byte-for-byte what an operation nobody had
+    /// thought about answers, so `docs/SERVICES-COVERAGE.md` could only
+    /// separate them by searching the repository for a written reason.
     #[test]
-    fn mutating_operations_are_refused_and_unserved_ones_are_bad_operation() {
+    fn the_three_refusals_are_distinguishable_on_the_wire() {
         let served = Served::start();
         let mut repo = served.repository();
-        for op in ["create_interface", "create_struct", "_set_id", "destroy", "move"] {
+        for op in
+            ["create_interface", "create_struct", "_set_id", "_set_version", "destroy", "move"]
+        {
             let err = repo.invoke(op, |e| e.put_str("anything")).unwrap_err();
             expect_system(err, NO_PERMISSION, op);
         }
-        for op in ["contents", "lookup", "describe", "_get_containing_repository"] {
+        for op in [
+            "contents",
+            "lookup",
+            "lookup_name",
+            "describe_contents",
+            "describe",
+            "_get_defined_in",
+            "_get_containing_repository",
+            "get_canonical_typecode",
+            "get_primitive",
+            "_get_type",
+        ] {
+            let err = repo.invoke(op, |e| e.put_str("anything")).unwrap_err();
+            expect_system(err, NO_IMPLEMENT, op);
+            assert!(is_deferred(op), "{op} answers NO_IMPLEMENT but is not on the list");
+        }
+        for op in ["no_such_operation", "describe_interface", "is_a"] {
             let err = repo.invoke(op, |e| e.put_str("anything")).unwrap_err();
             expect_system(err, BAD_OPERATION, op);
         }
         served.shutdown(repo);
+    }
+
+    /// The read half of `version`, on the data the facade already parses out of
+    /// every repository id.
+    ///
+    /// Measured backwards on 2026-08-14: `_set_version` answered
+    /// `NO_PERMISSION` ("the operation exists and the answer is no") while
+    /// `_get_version` answered `BAD_OPERATION` ("no such operation"), which is
+    /// the two the wrong way round by this module's own argument. The write
+    /// half is still refused — it is in the loop above — and the read half now
+    /// answers.
+    #[test]
+    fn the_version_a_repository_id_carries_is_readable_and_still_not_writable() {
+        let served = Served::start();
+        let mut def = served.entry("IDL:gc10/Both:1.0");
+        let reply = def.invoke_nullary("_get_version").unwrap();
+        assert_eq!(reply.body().unwrap().get_string().unwrap(), "1.0");
+
+        let err = def.invoke("_set_version", |e| e.put_str("2.0")).unwrap_err();
+        expect_system(err, NO_PERMISSION, "_set_version");
+        drop(def);
+
+        // On a non-interface entry too: `version` is a `Contained` accessor,
+        // not an `InterfaceDef` one.
+        let mut payload = served.entry("IDL:gc10/Payload:1.0");
+        let reply = payload.invoke_nullary("_get_version").unwrap();
+        assert_eq!(reply.body().unwrap().get_string().unwrap(), "1.0");
+        drop(payload);
+
+        // But not on the repository itself, which is a `Container`, not a
+        // `Contained` — there is genuinely no such operation there.
+        let mut repo = served.repository();
+        let err = repo.invoke_nullary("_get_version").unwrap_err();
+        expect_system(err, BAD_OPERATION, "_get_version on the Repository");
+        served.shutdown(repo);
+    }
+
+    /// A version that is not `1.0` comes from the id, not from a default.
+    #[test]
+    fn the_version_follows_a_pragma_version() {
+        let registry = registry_from_idl(
+            "module m {\n  interface Aged { void tick(); };\n#pragma version Aged 2.3\n};",
+        )
+        .expect("versioned IDL loads");
+        let ifr = RepositoryServer::new("127.0.0.1", 1, ROOT.to_vec(), registry);
+        let id = "IDL:m/Aged:2.3";
+        let ids: Vec<&RepositoryId> = ifr.registry().ids().collect();
+        assert!(ifr.registry().get(id).is_some(), "the pragma did not set the id: {ids:?}");
+        assert_eq!(ifr.contained_of(id).2, "2.3");
     }
 
     /// A refusal must not depend on the reference being valid, or a client

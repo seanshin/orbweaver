@@ -23,6 +23,12 @@
 //! counts skips separately from failures: a deferred wire type is a decision,
 //! not a defect.
 //!
+//! A constant is skipped the same way, and only for the two reasons that are
+//! genuinely about it: the registry could not evaluate its expression (see
+//! [`orbweaver_registry::ConstValue`]), or its type has no `const` form in Rust
+//! (`wstring`, `long double`). *Every* constant used to be skipped, because the
+//! registry recorded the type and not the value; it records the value now.
+//!
 //! # Both halves of one contract
 //!
 //! Every interface produces a **client stub** (here) and a **server skeleton**
@@ -40,7 +46,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use orbweaver_giop::typecode::{TypeCode, UnionCase};
-use orbweaver_registry::{AttributeSig, Entry, OperationSig, ParamDirection, Registry};
+use orbweaver_registry::{AttributeSig, ConstValue, Entry, OperationSig, ParamDirection, Registry};
 
 /// What one file's generation produced.
 #[derive(Debug, Default)]
@@ -49,7 +55,8 @@ pub struct Generated {
     pub source: String,
     /// Items emitted.
     pub emitted: usize,
-    /// Items skipped, with the reason (deferred wire types, constants).
+    /// Items skipped, with the reason: a deferred wire type, or a constant
+    /// whose value did not fold or whose type has no `const` form in Rust.
     pub skipped: Vec<(String, String)>,
 }
 
@@ -490,11 +497,7 @@ pub fn emit(registry: &Registry, root: &str) -> Generated {
                 let skel = skeleton::emit_skeleton(registry, id, cx)?;
                 Ok(format!("{stub}\n{skel}"))
             }),
-            Some(Entry::Const { .. }) => {
-                Err("constants are not generated yet: the registry records the type but not the \
-                 value"
-                    .to_owned())
-            }
+            Some(Entry::Const { tc, value }) => emit_const(registry, id, tc, value.as_ref(), cx),
             None => continue,
         };
         match code {
@@ -526,7 +529,14 @@ pub fn emit(registry: &Registry, root: &str) -> Generated {
     // negotiable — and the output is the part a consumer actually reads.
     let _ = writeln!(src, "#![forbid(unsafe_code)]");
     let _ = writeln!(src, "#![deny(missing_docs)]");
-    let _ = writeln!(src, "#![allow(non_camel_case_types, non_snake_case, dead_code)]");
+    // `non_upper_case_globals` joined the list when constants started being
+    // emitted: `const long maxRetries = 3;` is legal IDL and its Rust name is
+    // the author's, not ours to re-case — renaming it would break the one thing
+    // a constant is for, which is being referred to by the name in the contract.
+    let _ = writeln!(
+        src,
+        "#![allow(non_camel_case_types, non_snake_case, non_upper_case_globals, dead_code)]"
+    );
     let _ = writeln!(src);
     for (id, why) in &out.skipped {
         let _ = writeln!(src, "// skipped {id}: {why}");
@@ -564,11 +574,21 @@ fn write_modules(
     children.sort();
     children.dedup();
     for child in children {
-        let _ = writeln!(src, "{pad}/// IDL module `{child}`.");
-        let _ = writeln!(src, "{pad}pub mod {} {{", ident(child));
-        let _ = writeln!(src, "{pad}    use orbweaver_gen::rt::{{self, Cdr}};");
         let mut next = at.to_vec();
         next.push(child.clone());
+        let _ = writeln!(src, "{pad}/// IDL module `{child}`.");
+        let _ = writeln!(src, "{pad}pub mod {} {{", ident(child));
+        // Only when something in this module actually names it. A constant is
+        // the first item kind that touches neither `rt` nor `Cdr`, so a module
+        // holding nothing but constants — or nothing but child modules, which
+        // was always possible and never happened to occur — would have carried
+        // an unused import, and generated code is built with `-D warnings`.
+        if by_module
+            .get(&next)
+            .is_some_and(|items| items.iter().any(|i| i.contains("rt::") || i.contains("Cdr")))
+        {
+            let _ = writeln!(src, "{pad}    use orbweaver_gen::rt::{{self, Cdr}};");
+        }
         write_modules(src, by_module, &next, depth + 1);
         let _ = writeln!(src, "{pad}}}");
     }
@@ -666,6 +686,158 @@ fn emit_type(id: &str, tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
             Err(why) => why,
             Ok(_) => format!("unexpected top-level type {other:?}"),
         }),
+    }
+}
+
+/// One IDL constant, as a Rust `const`.
+///
+/// Constants were a named non-goal until 2026-08-14 — *"the registry records
+/// the type but not the value"* — and the registry now records the value, so
+/// the reason is gone. The end-to-end run is what made the omission concrete:
+/// a generated contract declared its authorization scope as a `const string`
+/// precisely so a servant could refer to it by name, and the servant could not.
+fn emit_const(
+    registry: &Registry,
+    id: &str,
+    tc: &TypeCode,
+    value: Option<&ConstValue>,
+    cx: &Cx<'_>,
+) -> Result<String, String> {
+    let Some(value) = value else {
+        return Err("the registry could not evaluate its expression, and stores no value \
+                    rather than a guess — see orbweaver_registry::ConstValue"
+            .to_owned());
+    };
+    let name = cx.path_of(id).last().cloned().unwrap_or_default();
+    let Form { ty, literal, note } = const_form(tc, value, cx)?;
+    let mut s = String::new();
+    if let Some(desc) = registry.annotations(id).and_then(|a| a.get("ai_desc")) {
+        doc(&mut s, desc);
+        doc(&mut s, "");
+    }
+    doc(&mut s, &format!("IDL constant `{id}`."));
+    if let Some(note) = note {
+        doc(&mut s, "");
+        doc(&mut s, note);
+    }
+    let _ = writeln!(s, "pub const {}: {ty} = {literal};", ident(&name));
+    Ok(s)
+}
+
+/// How one constant is spelled in Rust.
+struct Form {
+    ty: String,
+    literal: String,
+    /// A sentence for the generated documentation where the Rust type is not
+    /// simply [`rust_type`]'s answer.
+    note: Option<&'static str>,
+}
+
+/// The Rust type and literal for a constant, or why there is none.
+///
+/// The type is [`rust_type`]'s answer for the declared IDL type — so a constant
+/// can be passed straight to a generated operation that takes that type — with
+/// one documented exception. `string` maps to `String`, and Rust cannot build a
+/// `String` in a `const` initializer, so a string constant is the borrowed
+/// `&str`; `String: PartialEq<&str>` and `.to_string()` cover both things a
+/// caller does with one. An IDL alias keeps its alias in the annotation
+/// everywhere else, since `pub type Name = String;` is the same type.
+fn const_form(tc: &TypeCode, v: &ConstValue, cx: &Cx<'_>) -> Result<Form, String> {
+    let plain = |ty: String, literal: String| Form { ty, literal, note: None };
+    let resolved = tc.resolve_alias();
+    Ok(match (resolved, v) {
+        (TypeCode::Boolean, ConstValue::Bool(b)) => plain(rust_type(tc, cx)?, b.to_string()),
+        (
+            TypeCode::Octet
+            | TypeCode::Char
+            | TypeCode::Short
+            | TypeCode::UShort
+            | TypeCode::Long
+            | TypeCode::ULong
+            | TypeCode::LongLong
+            | TypeCode::ULongLong,
+            ConstValue::Int(i),
+        ) => plain(rust_type(tc, cx)?, i.to_string()),
+        // `{:?}` on a float is Rust's own shortest round-tripping form, and it
+        // always carries a `.` or an exponent — so it is always a float
+        // literal and never an integer one that would not type-check. The
+        // registry has already refused anything not finite in the declared
+        // width, so no literal here can be out of range.
+        (TypeCode::Float, ConstValue::Float(f)) => {
+            plain(rust_type(tc, cx)?, format!("{:?}", *f as f32))
+        }
+        (TypeCode::Double, ConstValue::Float(f)) => plain(rust_type(tc, cx)?, format!("{f:?}")),
+        (TypeCode::String(_), ConstValue::Str(s)) => Form {
+            ty: "&str".to_owned(),
+            literal: string_literal(s),
+            note: Some(
+                "Rust has no `const String`, so a `string` constant is the borrowed form. \
+                 `.to_string()` where an owned value is wanted; `String` compares against \
+                 `&str` directly.",
+            ),
+        },
+        (TypeCode::WChar, ConstValue::Int(i)) => {
+            let c = u32::try_from(*i)
+                .ok()
+                .and_then(char::from_u32)
+                .ok_or_else(|| format!("{i} is not a code point"))?;
+            plain(rust_type(tc, cx)?, format!("orbweaver_gen::rt::WChar({})", char_literal(c)))
+        }
+        (TypeCode::Enum { id, .. }, ConstValue::Enum { member, .. }) => {
+            plain(rust_type(tc, cx)?, format!("{}::{}", rust_path(id, cx), ident(member)))
+        }
+        // Both are values Rust can hold and cannot *write down*: `rt::WString`
+        // owns a `String`, and a `long double` is sixteen bytes of an encoding
+        // no literal produces. Skipped with the reason rather than emitted as
+        // a lazily-initialised near-miss.
+        (TypeCode::WString(_), _) => {
+            return Err("a `wstring` constant has no const form: `rt::WString` owns a `String`, \
+                        which Rust cannot build in a const initializer"
+                .to_owned());
+        }
+        (TypeCode::LongDouble, _) => {
+            return Err("a `long double` constant has no const form: the value is 16 bytes of an \
+                        encoding no Rust literal produces (§4.4)"
+                .to_owned());
+        }
+        (tc, v) => return Err(format!("no const form for {v:?} declared as {tc:?}")),
+    })
+}
+
+/// A Rust string literal. Non-ASCII text stays as itself — the emitted file is
+/// UTF-8, and escaping a Korean string would only make it unreadable.
+fn string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        push_escaped(&mut out, c, '"');
+    }
+    out.push('"');
+    out
+}
+
+fn char_literal(c: char) -> String {
+    let mut out = String::from("'");
+    push_escaped(&mut out, c, '\'');
+    out.push('\'');
+    out
+}
+
+fn push_escaped(out: &mut String, c: char, quote: char) {
+    match c {
+        '\\' => out.push_str("\\\\"),
+        '\n' => out.push_str("\\n"),
+        '\r' => out.push_str("\\r"),
+        '\t' => out.push_str("\\t"),
+        '\0' => out.push_str("\\0"),
+        c if c == quote => {
+            out.push('\\');
+            out.push(c);
+        }
+        c if c.is_control() => {
+            let _ = write!(out, "\\u{{{:x}}}", c as u32);
+        }
+        c => out.push(c),
     }
 }
 
@@ -1003,6 +1175,100 @@ mod tests {
         assert!(!g.source.contains("struct Invoice"), "{}", g.source);
     }
 
+    // ── constants ───────────────────────────────────────────────────────────
+
+    /// `corpus/golden/14-modules-constants.idl`, generated. Every constant in
+    /// it, including the one whose value is an expression over another
+    /// constant resolved outwards from an inner module.
+    #[test]
+    fn constants_are_emitted_with_the_rust_type_of_their_idl_type() {
+        let src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../corpus/golden/14-modules-constants.idl"),
+        )
+        .expect("gc14");
+        let spec = orbweaver_idl::parse(&src).expect("parses");
+        let mut r = Registry::new();
+        r.load(&spec).expect("loads");
+        let g = emit(&r, "g");
+        assert!(g.skipped.is_empty(), "{:?}", g.skipped);
+        for want in [
+            "pub const MAX_RETRIES: i32 = 3;",
+            "pub const EPSILON: f64 = 0.0001;",
+            "pub const VERSION: &str = \"1.2\";",
+            "pub const STRICT: bool = true;",
+            // `MAX_RETRIES * 2`, folded by the registry: the generator does no
+            // arithmetic and resolves no names.
+            "pub const OFFSET: i32 = 6;",
+        ] {
+            assert!(g.source.contains(want), "missing {want}\n{}", g.source);
+        }
+    }
+
+    /// The types that are not simply `rust_type`'s answer, and the ones that
+    /// have no `const` form at all — each said out loud rather than emitted as
+    /// something that does not compile.
+    #[test]
+    fn a_constants_rust_type_follows_its_idl_type_with_one_documented_exception() {
+        let g = generate(
+            "module m {\n\
+               enum Colour { RED, GREEN, BLUE };\n\
+               const Colour  FALLBACK = BLUE;\n\
+               const octet   MASK  = 0xF0;\n\
+               const char    TAB   = '\\t';\n\
+               const wchar   HAN   = '한';\n\
+               const float   RATIO = 0.5;\n\
+               const unsigned long long BIG = 4294967296;\n\
+               const string  QUOTED = \"say \\\"hi\\\"\";\n\
+               typedef string Name;\n\
+               const Name    WHO = \"orbweaver\";\n\
+             };",
+        );
+        assert!(g.skipped.is_empty(), "{:?}", g.skipped);
+        for want in [
+            "pub const FALLBACK: crate::g::m::Colour = crate::g::m::Colour::BLUE;",
+            "pub const MASK: u8 = 240;",
+            "pub const TAB: u8 = 9;",
+            "pub const HAN: orbweaver_gen::rt::WChar = orbweaver_gen::rt::WChar('한');",
+            "pub const RATIO: f32 = 0.5;",
+            "pub const BIG: u64 = 4294967296;",
+            "pub const QUOTED: &str = \"say \\\"hi\\\"\";",
+            // A `string` alias is still a `&str`: `pub type Name = String;`
+            // and Rust has no `const String`.
+            "pub const WHO: &str = \"orbweaver\";",
+        ] {
+            assert!(g.source.contains(want), "missing {want}\n{}", g.source);
+        }
+    }
+
+    /// A value the registry could not fold, and a type with no const form, are
+    /// skips with reasons — the same shape `fixed` uses, and for the same
+    /// reason: a wrong constant compiles.
+    #[test]
+    fn a_constant_with_no_value_or_no_const_form_is_skipped_with_a_reason() {
+        let g = generate("module m { const octet TOO_BIG = 300; };");
+        assert_eq!(g.skipped.len(), 1, "{:?}", g.skipped);
+        assert!(g.skipped[0].1.contains("could not evaluate"), "{:?}", g.skipped);
+        // The id still appears — in the `// skipped …` line the generator
+        // writes at the top of every file, which is the point of a skip.
+        assert!(!g.source.contains("pub const TOO_BIG"), "{}", g.source);
+        assert!(g.source.contains("// skipped IDL:m/TOO_BIG:1.0"), "{}", g.source);
+
+        let g = generate("module m { const wstring W = \"wide\"; };");
+        assert_eq!(g.skipped.len(), 1, "{:?}", g.skipped);
+        assert!(g.skipped[0].1.contains("no const form"), "{:?}", g.skipped);
+    }
+
+    /// A module of nothing but constants must not carry an unused import.
+    /// Constants are the first item kind that names neither `rt` nor `Cdr`, and
+    /// generated code is built under `-D warnings`.
+    #[test]
+    fn a_module_of_only_constants_imports_nothing() {
+        let g = generate("module m { const long ONLY = 1; };");
+        assert!(g.source.contains("pub const ONLY: i32 = 1;"), "{}", g.source);
+        assert!(!g.source.contains("use orbweaver_gen::rt"), "unused import: {}", g.source);
+    }
+
     #[test]
     fn attributes_become_accessors_with_the_underscore_wire_names() {
         let g = generate(
@@ -1084,15 +1350,14 @@ mod tests {
             let g = emit(&r, "g");
             let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
             let deferred = stem.contains("deferred");
-            // Constants are a named non-goal of this batch (the registry keeps
-            // the type, not the value); everything else must generate.
-            let unexpected: Vec<_> = g
-                .skipped
-                .iter()
-                .filter(|(_, why)| !why.contains("constants are not generated"))
-                .collect();
-            if !deferred && !unexpected.is_empty() {
-                failures.push(format!("{stem}: skipped {unexpected:?}"));
+            // This filter used to exempt every constant, because constants were
+            // a named non-goal: "the registry records the type but not the
+            // value". The registry records the value now, `14-modules-constants`
+            // generates all five of its constants, and the exemption is gone —
+            // the only files that may skip are the ones whose names say they
+            // are deferred wire types.
+            if !deferred && !g.skipped.is_empty() {
+                failures.push(format!("{stem}: skipped {:?}", g.skipped));
             }
             if g.emitted == 0 && !deferred {
                 failures.push(format!("{stem}: emitted nothing"));

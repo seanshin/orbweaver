@@ -81,6 +81,69 @@ pub enum Entry {
     Const {
         /// Its type.
         tc: TypeCode,
+        /// Its value, evaluated against that type, or `None` when the registry
+        /// could not evaluate it. See [`ConstValue`] for what "value" means
+        /// here and why it is not the expression.
+        value: Option<ConstValue>,
+    },
+}
+
+/// The value of an IDL constant: an **evaluated literal**, not the expression.
+///
+/// # Why evaluated, and evaluated here
+///
+/// `const long OFFSET = MAX_RETRIES * 2;` is the whole argument. Storing the
+/// expression would mean every consumer — the Rust generator, the MCP bridge,
+/// anything that wants to *print* a contract — carries its own constant folder
+/// **and** its own copy of IDL's outward scope resolution, because `MAX_RETRIES`
+/// is only findable from the name table the registry builds while it loads.
+/// That is the duplication `orbweaver-gen`'s "never encoding rules" rule
+/// forbids for marshalling, applied to arithmetic: three folders will disagree,
+/// and the one that disagrees silently is the one that ships.
+///
+/// So folding happens once, where the names are, and consumers read a value.
+///
+/// # What happens to an expression that cannot be folded
+///
+/// `value` is `None` and **nothing is invented**. The registry never stores a
+/// guessed zero, and a consumer that cannot emit without a value must say so
+/// the way [`orbweaver_gen`] says it for a deferred wire type — as a skip with
+/// a reason, not as a plausible wrong number. It is `None` in exactly three
+/// cases: an operand the folder cannot evaluate (an unresolved name, a name
+/// that is neither a constant nor an enumerator, a form the folder does not
+/// implement), an operation that has no answer (division or modulo by zero,
+/// an overflowing negation), and a result outside the declared type's range
+/// (`const octet O = 300`), which is an IDL error the checker reports and this
+/// module refuses to launder into a truncated byte.
+///
+/// A value that folded is exactly what the declared type says: the coercion
+/// runs before storage, so a consumer never has to ask whether an `Int` under a
+/// `double` means 3 or 3.0.
+///
+/// [`orbweaver_gen`]: https://docs.rs/orbweaver-gen
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConstValue {
+    /// Every integer type, and `char`/`wchar`/`octet` as the code point they
+    /// denote — the declared [`TypeCode`] says which of those it is, so a
+    /// second variant would only be a second way to be wrong about it.
+    Int(i64),
+    /// `float` and `double`, unrounded: a `float` constant keeps the value as
+    /// written, and narrowing to `f32` is the consumer's to do at the point it
+    /// emits one. Never infinite and never NaN — neither is expressible in IDL
+    /// and an expression that produced one did not fold.
+    Float(f64),
+    /// `boolean`.
+    Bool(bool),
+    /// `string` and `wstring`, as the source spelled it.
+    Str(String),
+    /// A constant whose declared type is an enum.
+    Enum {
+        /// Repository id of the enum the enumerator belongs to.
+        id: RepositoryId,
+        /// The enumerator's name.
+        member: String,
+        /// Its ordinal, which is what travels on the wire.
+        ordinal: u32,
     },
 }
 
@@ -350,6 +413,19 @@ impl Registry {
         }
     }
 
+    /// The value of a registered constant, or `None` if `id` is not a constant
+    /// or its expression did not fold ([`ConstValue`] says when that happens).
+    ///
+    /// The two `None`s are deliberately not distinguished here: a caller that
+    /// needs to tell "not a constant" from "a constant with no value" is asking
+    /// about the entry, and [`Registry::get`] answers that.
+    pub fn const_value(&self, id: &str) -> Option<&ConstValue> {
+        match self.entries.get(id) {
+            Some(Entry::Const { value, .. }) => value.as_ref(),
+            _ => None,
+        }
+    }
+
     /// The interface registered under `id`.
     pub fn interface(&self, id: &str) -> Option<&InterfaceEntry> {
         match self.entries.get(id) {
@@ -478,6 +554,13 @@ struct NameTable {
     paths: HashMap<String, Vec<String>>,
     /// Definitions by canonical path, for deriving a `TypeCode` on demand.
     defs: HashMap<String, DefRef>,
+    /// Lowercased qualified *enumerator* name to the enum that declares it,
+    /// its spelling and its ordinal.
+    ///
+    /// Enumerators live in the enclosing scope, so `paths` already finds one —
+    /// but from an enumerator's own path there is no way back to its enum, and
+    /// a constant folding `RED` needs exactly that.
+    enumerators: HashMap<String, (Vec<String>, String, u32)>,
 }
 
 #[derive(Clone)]
@@ -535,10 +618,13 @@ impl NameTable {
                 Definition::Enum(e) => {
                     self.defs.insert(key, DefRef::Enum(e.clone()));
                     // Enumerators live in the enclosing scope.
-                    for m in &e.members {
+                    for (i, m) in e.members.iter().enumerate() {
                         let mut ep = path.to_vec();
                         ep.push(m.text.clone());
-                        self.paths.insert(qualified(&ep).to_lowercase(), ep);
+                        let ekey = qualified(&ep).to_lowercase();
+                        self.enumerators
+                            .insert(ekey.clone(), (p.clone(), m.text.clone(), i as u32));
+                        self.paths.insert(ekey, ep);
                     }
                 }
                 Definition::Typedef(t) => {
@@ -639,8 +725,13 @@ impl Builder<'_> {
                 }
                 Definition::Const(c) => {
                     let tc = self.type_of(path, &c.ty);
+                    // Folded against the *enclosing* scope, which is where the
+                    // constant's own expression resolves names from, and in
+                    // source order, which is the order IDL requires a constant
+                    // to be declared before it is used.
+                    let value = self.const_value(path, &c.value, &tc);
                     self.register_annotations(&id, &c.annotations);
-                    self.reg.define_local(id, Entry::Const { tc });
+                    self.reg.define_local(id, Entry::Const { tc, value });
                 }
                 other => {
                     if let Some(tc) = self.derive(&p) {
@@ -659,6 +750,61 @@ impl Builder<'_> {
         let map: BTreeMap<String, String> =
             ann.iter().map(|a| (a.key.clone(), a.value.clone())).collect();
         self.reg.annotations.insert(id.to_owned(), map);
+    }
+
+    /// A constant's value: folded, then coerced to the declared type.
+    ///
+    /// `None` rather than a guess, in every case [`ConstValue`] lists.
+    fn const_value(&self, scope: &[String], e: &ConstExpr, tc: &TypeCode) -> Option<ConstValue> {
+        coerce(self.fold(scope, e)?, tc.resolve_alias())
+    }
+
+    /// Evaluates a constant expression, with no reference to the declared type.
+    fn fold(&self, scope: &[String], e: &ConstExpr) -> Option<ConstValue> {
+        Some(match e {
+            ConstExpr::Int(v) => ConstValue::Int(*v),
+            ConstExpr::Float(v) => ConstValue::Float(*v),
+            ConstExpr::Str(s) => ConstValue::Str(s.clone()),
+            // A character literal folds to its code point; whether that is a
+            // `char`, a `wchar` or an `octet` is the declared type's business.
+            ConstExpr::Char(c) => ConstValue::Int(*c as i64),
+            ConstExpr::Bool(b) => ConstValue::Bool(*b),
+            ConstExpr::Name(n) => self.fold_name(scope, n)?,
+            ConstExpr::Unary { op, operand } => match (*op, self.fold(scope, operand)?) {
+                ("+", v) => v,
+                ("-", ConstValue::Int(v)) => ConstValue::Int(v.checked_neg()?),
+                ("-", ConstValue::Float(v)) => ConstValue::Float(-v),
+                ("~", ConstValue::Int(v)) => ConstValue::Int(!v),
+                _ => return None,
+            },
+            ConstExpr::Binary { op, left, right } => {
+                match (self.fold(scope, left)?, self.fold(scope, right)?) {
+                    // Integer arithmetic stays integer — `7 / 2` is 3 in IDL as
+                    // it is in C, and folding it as a float would make
+                    // `const long H = 7 / 2;` refuse to coerce back.
+                    (ConstValue::Int(a), ConstValue::Int(b)) => ConstValue::Int(int_op(op, a, b)?),
+                    (a, b) => ConstValue::Float(float_op(op, as_f64(&a)?, as_f64(&b)?)?),
+                }
+            }
+        })
+    }
+
+    /// A name in a constant expression: another constant, or an enumerator.
+    fn fold_name(&self, scope: &[String], n: &ScopedName) -> Option<ConstValue> {
+        let path = self.names.resolve(scope, n)?;
+        // A constant already registered — source order is what makes this
+        // enough, and IDL's declare-before-use rule is what makes source order
+        // enough. A forward reference is illegal IDL and folds to `None`.
+        if let Some(Entry::Const { value, .. }) = self.reg.entries.get(&self.id_for(&path)) {
+            return value.clone();
+        }
+        let (enum_path, member, ordinal) =
+            self.names.enumerators.get(&qualified(&path).to_lowercase())?;
+        Some(ConstValue::Enum {
+            id: self.id_for(enum_path),
+            member: member.clone(),
+            ordinal: *ordinal,
+        })
     }
 
     fn interface_entry(&mut self, path: &[String], i: &Interface) -> InterfaceEntry {
@@ -930,6 +1076,86 @@ fn annotations_of(d: &Definition) -> &[orbweaver_idl::lex::Annotation] {
 
 fn to_map(ann: &[orbweaver_idl::lex::Annotation]) -> BTreeMap<String, String> {
     ann.iter().map(|a| (a.key.clone(), a.value.clone())).collect()
+}
+
+/// Integer arithmetic, checked. `None` is "there is no answer", never a wrap:
+/// a constant that silently wrapped would be a wrong number with a repository
+/// id on it.
+fn int_op(op: &str, a: i64, b: i64) -> Option<i64> {
+    match op {
+        "+" => a.checked_add(b),
+        "-" => a.checked_sub(b),
+        "*" => a.checked_mul(b),
+        "/" => a.checked_div(b),
+        "%" => a.checked_rem(b),
+        "|" => Some(a | b),
+        "&" => Some(a & b),
+        "^" => Some(a ^ b),
+        "<<" => u32::try_from(b).ok().and_then(|s| a.checked_shl(s)),
+        ">>" => u32::try_from(b).ok().and_then(|s| a.checked_shr(s)),
+        _ => None,
+    }
+}
+
+/// Floating arithmetic. The bitwise operators are integer-only in IDL, so they
+/// have no float arm at all rather than a coerced one.
+fn float_op(op: &str, a: f64, b: f64) -> Option<f64> {
+    let v = match op {
+        "+" => a + b,
+        "-" => a - b,
+        "*" => a * b,
+        "/" => a / b,
+        _ => return None,
+    };
+    v.is_finite().then_some(v)
+}
+
+fn as_f64(v: &ConstValue) -> Option<f64> {
+    match v {
+        ConstValue::Int(i) => Some(*i as f64),
+        ConstValue::Float(f) => Some(*f),
+        _ => None,
+    }
+}
+
+/// Fits a folded value to its declared type, or refuses.
+///
+/// `tc` is already alias-resolved. Refusing is the point: `const octet O = 300`
+/// is an IDL error, and a registry that stored 44 would hand every consumer a
+/// number no author wrote.
+fn coerce(v: ConstValue, tc: &TypeCode) -> Option<ConstValue> {
+    let in_range = |i: i64, lo: i64, hi: i64| (lo..=hi).contains(&i).then_some(ConstValue::Int(i));
+    match (tc, &v) {
+        (TypeCode::Boolean, ConstValue::Bool(_)) => Some(v),
+        (TypeCode::Octet | TypeCode::Char, ConstValue::Int(i)) => in_range(*i, 0, 0xFF),
+        // A `wchar` is a code point, so the range is Unicode's and the
+        // surrogate half is excluded — `char::from_u32` is the authority, and
+        // it is the same call the generator has to make to spell one.
+        (TypeCode::WChar, ConstValue::Int(i)) => {
+            u32::try_from(*i).ok().and_then(char::from_u32).map(|c| ConstValue::Int(c as i64))
+        }
+        (TypeCode::Short, ConstValue::Int(i)) => in_range(*i, i16::MIN.into(), i16::MAX.into()),
+        (TypeCode::UShort, ConstValue::Int(i)) => in_range(*i, 0, u16::MAX.into()),
+        (TypeCode::Long, ConstValue::Int(i)) => in_range(*i, i32::MIN.into(), i32::MAX.into()),
+        (TypeCode::ULong, ConstValue::Int(i)) => in_range(*i, 0, u32::MAX.into()),
+        (TypeCode::LongLong, ConstValue::Int(_)) => Some(v),
+        // The AST carries `i64`, so `unsigned long long` above `i64::MAX` never
+        // reaches here as a positive number at all; the range check is the half
+        // that can be enforced, and it is enforced.
+        (TypeCode::ULongLong, ConstValue::Int(i)) => (*i >= 0).then_some(v),
+        (TypeCode::Float, ConstValue::Int(_) | ConstValue::Float(_)) => {
+            let f = as_f64(&v)?;
+            ((f as f32).is_finite()).then_some(ConstValue::Float(f))
+        }
+        (TypeCode::Double, ConstValue::Int(_) | ConstValue::Float(_)) => {
+            let f = as_f64(&v)?;
+            f.is_finite().then_some(ConstValue::Float(f))
+        }
+        (TypeCode::String(_) | TypeCode::WString(_), ConstValue::Str(_)) => Some(v),
+        // An enumerator only fits the enum that declares it.
+        (TypeCode::Enum { id, .. }, ConstValue::Enum { id: from, .. }) if id == from => Some(v),
+        _ => None,
+    }
 }
 
 /// Evaluates the constant forms that appear as bounds and dimensions.
@@ -1312,6 +1538,97 @@ mod tests {
         assert_eq!(op.annotations["ai_effect"], "destructive");
         assert_eq!(op.annotations["ai_authz"], "bank.transfer.write");
         assert_eq!(op.params[0].annotations["ai_unit"], "KRW");
+    }
+
+    // ── constants ───────────────────────────────────────────────────────────
+
+    /// The registry records the *value*, not only the type. It used to record
+    /// only the type, and `orbweaver-gen` skipped every constant because of it
+    /// — measured end to end when a contract declared its authorization scope
+    /// as a `const string` so a servant could name it, and the servant could
+    /// not.
+    #[test]
+    fn constants_carry_their_evaluated_value() {
+        let r = load(
+            "module gc14 {\n\
+               const long    MAX_RETRIES = 3;\n\
+               const double  EPSILON     = 0.0001;\n\
+               const string  VERSION     = \"1.2\";\n\
+               const boolean STRICT      = TRUE;\n\
+               module inner { const long OFFSET = MAX_RETRIES * 2; };\n\
+             };",
+        );
+        assert_eq!(r.const_value("IDL:gc14/MAX_RETRIES:1.0"), Some(&ConstValue::Int(3)));
+        assert_eq!(r.const_value("IDL:gc14/EPSILON:1.0"), Some(&ConstValue::Float(0.0001)));
+        assert_eq!(r.const_value("IDL:gc14/VERSION:1.0"), Some(&ConstValue::Str("1.2".into())));
+        assert_eq!(r.const_value("IDL:gc14/STRICT:1.0"), Some(&ConstValue::Bool(true)));
+        // The one that needs both halves: arithmetic, and a name resolved
+        // outwards from an inner module.
+        assert_eq!(r.const_value("IDL:gc14/inner/OFFSET:1.0"), Some(&ConstValue::Int(6)));
+        assert!(matches!(
+            r.get("IDL:gc14/VERSION:1.0"),
+            Some(Entry::Const { tc: TypeCode::String(0), .. })
+        ));
+    }
+
+    /// The value is coerced to the declared type before it is stored, so a
+    /// consumer never has to ask whether an integer under a `double` meant 3
+    /// or 3.0 — and an enumerator constant keeps the enum it belongs to.
+    #[test]
+    fn a_value_is_stored_as_the_declared_type_says() {
+        let r = load(
+            "module m {\n\
+               enum Colour { RED, GREEN, BLUE };\n\
+               const Colour DEFAULT_COLOUR = GREEN;\n\
+               const double WHOLE = 3;\n\
+               const long   HALVED = 7 / 2;\n\
+               const octet  MASK = 0xF0;\n\
+               const char   TAB = '\\t';\n\
+               const long   SHIFTED = 1 << 4 | 3;\n\
+               const long   INVERTED = ~0;\n\
+             };",
+        );
+        assert_eq!(
+            r.const_value("IDL:m/DEFAULT_COLOUR:1.0"),
+            Some(&ConstValue::Enum {
+                id: "IDL:m/Colour:1.0".into(),
+                member: "GREEN".into(),
+                ordinal: 1
+            })
+        );
+        assert_eq!(r.const_value("IDL:m/WHOLE:1.0"), Some(&ConstValue::Float(3.0)));
+        assert_eq!(
+            r.const_value("IDL:m/HALVED:1.0"),
+            Some(&ConstValue::Int(3)),
+            "integer division"
+        );
+        assert_eq!(r.const_value("IDL:m/MASK:1.0"), Some(&ConstValue::Int(0xF0)));
+        assert_eq!(r.const_value("IDL:m/TAB:1.0"), Some(&ConstValue::Int(9)), "a char is its code");
+        // The rest of the operator table the parser can produce.
+        assert_eq!(r.const_value("IDL:m/SHIFTED:1.0"), Some(&ConstValue::Int(19)), "1 << 4 | 3");
+        assert_eq!(r.const_value("IDL:m/INVERTED:1.0"), Some(&ConstValue::Int(-1)));
+    }
+
+    /// What the registry does with an expression it cannot evaluate: it stores
+    /// no value at all. Not a zero, not an empty string — a `None` a consumer
+    /// has to notice.
+    #[test]
+    fn an_expression_that_does_not_fold_stores_no_value() {
+        for (src, why) in [
+            ("module m { const long X = NOT_DECLARED; };", "an unresolved name"),
+            ("module m { const long X = 1 / 0; };", "no answer exists"),
+            ("module m { const octet X = 300; };", "outside the declared type's range"),
+            ("module m { const short X = 40000; };", "outside the declared type's range"),
+            ("module m { const long X = Y; const long Y = 1; };", "used before it is declared"),
+            ("module m { struct S { long a; }; const long X = S; };", "not a constant"),
+        ] {
+            let r = load(src);
+            assert!(
+                matches!(r.get("IDL:m/X:1.0"), Some(Entry::Const { value: None, .. })),
+                "{why}: {src} stored {:?}",
+                r.get("IDL:m/X:1.0")
+            );
+        }
     }
 
     #[test]

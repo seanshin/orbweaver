@@ -8,7 +8,7 @@
 #![cfg_attr(rustfmt, rustfmt::skip)]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
-#![allow(non_camel_case_types, non_snake_case, dead_code)]
+#![allow(non_camel_case_types, non_snake_case, non_upper_case_globals, dead_code)]
 
 /// IDL module `gc24`.
 pub mod gc24 {
