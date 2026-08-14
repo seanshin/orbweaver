@@ -170,7 +170,7 @@ Each of these produced a phantom failure during Phase 0. They will recur.
 ## Commands
 
 ```bash
-cargo test --workspace          # ~1040 tests across twelve crates
+cargo test --workspace          # ~1200 tests across twelve crates
 ./spikes/run_checks.sh          # the harness; exit code is the verdict, one run at a time
 ```
 
@@ -182,7 +182,8 @@ Wait for the lock rather than removing it. *하네스는 머신 전역 락을 �
 **Gates, in the order they get run:**
 
 ```bash
-cargo run -q --bin sidl-validate -- <files>.idl   # S4: syntax, semantics, fix hints
+cargo run -q --bin sidl-validate -- [-I <dir>]... <files>.idl   # S4: syntax,
+                                # semantics, fix hints; #include resolved first
 cargo run -q -p orbweaver-test --bin contract-check -- corpus/golden/*.idl
                                 # property (defects) + annotation advice (never gates)
 cargo run -q --bin idl-diff -- <released>.idl <proposed>.idl   # §5.3, exit 1 on breaking
@@ -199,6 +200,8 @@ cargo run -q --bin repository-ids -- corpus/pragma/*.idl   # ids, to diff agains
 ./spikes/service_sweep.sh       # every declared operation of the five servants, over the wire
 ./spikes/end_to_end.sh          # requirement → contract → both halves → guarded call
 ./spikes/nat_rewrite.sh         # R7: an IOR dialable from where the client actually is
+./spikes/estate/run.sh --tsv    # thirteen legacy contracts, ingestion to agent call
+cargo run -q --bin gen-python -- --out <dir> <files>.idl   # the second target
 cargo run -q -p orbweaver-console --bin orbweaver-console -- catalog <file>.idl --text
 ```
 
@@ -227,7 +230,15 @@ corpus/pragma/              repository-id cases, diffed against omniidl
 corpus/requirements/        assumption B benchmark, frozen before generation
 corpus/queries/             the frozen search benchmark (v1 stays frozen; v2 is widened)
 corpus/annotations/         assumption C probes
+corpus/include/             the first multi-file cases — resolution, prefix scope,
+                            guards, cycles. Every other corpus file is
+                            self-contained, which is why #include was skipped
+                            rather than resolved for six phases with nothing red
 corpus/divergences.tsv      where the front ends disagree, with which one we follow
+spikes/estate/              thirteen legacy contracts that include each other,
+                            four prefix styles, nothing annotated — consumer-
+                            shaped, and a gate. It gates nothing itself, which
+                            is what lets it measure the path
 spikes/                     fixtures, servers, the harness, and the measurement scripts
 docs/                       ARCHITECTURE (as built) · PLAN(.ko) · COMPONENTS (measured)
                             PLAN-MOE · PLAN-SERVICES · PLAN-DEFERRED · SERVICES-COVERAGE

@@ -104,10 +104,21 @@ load-bearing enough to have caused one:
 
 ## 3. The type path / 타입 경로
 
-IDL text → `idl::parse` → `Registry` → `TypeCode` → `dynamic::{encode,decode}`.
-Nothing downstream ever parses IDL again; the registry is the single
-representation, which is why the same `TypeCode` serves generated stubs, the
-dynamic invoker, the IFR facade and the property tests.
+IDL *file* → `idl::preprocess_file` → `Unit` → `idl::parse` → `Registry` →
+`TypeCode` → `dynamic::{encode,decode}`. Nothing downstream ever parses IDL
+again; the registry is the single representation, which is why the same
+`TypeCode` serves generated stubs, the dynamic invoker, the IFR facade and the
+property tests.
+
+The first arrow is newer than the rest and worth its own line. A contract in
+the field is a **directory**, not a file: it includes its neighbours, and a
+`#pragma prefix` runs to the end of *its own file* rather than of the
+translation unit. So resolution happens before parsing and produces a `Unit`
+that remembers which file each line came from — a diagnostic reported against
+an offset into a splice nobody has is not a location. Anything that takes a
+resolved unit takes the `Unit`, never its text: the guard directives of every
+included file are still in there, and four `#ifndef` blocks in one string is
+conditional compilation rather than an include guard.
 
 Two representational choices matter more than they look:
 
@@ -155,9 +166,21 @@ surface an agent sees. Under it:
   never see a refusal.
 - **A refusal never reaches the wire.** The guard answers `NO_PERMISSION`
   before anything is sent, and the audit line it writes holds nothing dialable.
+- **Silence is not consent.** An operation whose contract states no `ai_effect`
+  is refused, not allowed and not queued for approval: an approval is a human
+  saying yes to a *described* call, and nobody can say yes to a call whose
+  effect nobody stated. An operator who has decided what an estate's silences
+  mean says so once, per exposure, with `--assume-effect` — and every allow
+  resting on that declaration carries it, so an audit can find them. A missing
+  annotation and a *misspelled* one are deliberately different: the typo
+  reaches a human, because somebody was annotating and got one wrong.
+- **The described surface is the surface reached.** `describe_interface`
+  resolves inheritance, because an agent shown eleven operations that can
+  invoke thirteen is planning against a surface that is not the one it has.
 
-**에이전트는 다이얼 가능한 주소를 쥐지 않는다.** 그리고 **체인은 한 번만
-결정한다** — 미리보기와 실제 게이트가 같은 walk를 감싸므로 어긋날 수 없다.
+**에이전트는 다이얼 가능한 주소를 쥐지 않는다.** **체인은 한 번만 결정한다** —
+미리보기와 실제 게이트가 같은 walk를 감싼다. 그리고 **침묵은 동의가 아니다** —
+효과를 말하지 않은 오퍼레이션은 허용도 승인 대기도 아니고 거부된다.
 
 ---
 
@@ -221,6 +244,15 @@ improvement to somebody who did not know why:
 - **No SIDL on ingested contracts.** An annotation inferred from a foreign
   service is a claim, not a fact, so an ingested interface cannot satisfy the
   guard's gates by accident.
+- **No C preprocessor.** `#include` and the `#ifndef`/`#define`/`#endif` guard
+  idiom are handled; `#if`, `#ifdef`, `#define X v` and the rest are **refused
+  with a diagnostic naming what to run first**, never skipped. Skipping a
+  conditional compiles every arm at once, which is a silent misparse — the
+  worst available outcome, because it produces a plausible contract rather than
+  an error.
+- **No guard at the Python bridge.** `orbweaver-py-bridge` invokes; the policy
+  lives in `orbweaver-mcp`. A second enforcement point is a second place to get
+  it wrong and a second place to forget to update.
 
 **의도적으로 없는 것들.** 각각은 결정이며, 이유를 모르는 사람에게는 전부 개선처럼
 보인다.
@@ -245,6 +277,16 @@ catches a class the one below cannot:
    against the same enum, and only an ORB we did not write could disagree.
 5. **Differential compilers** — omniidl and JacORB's IDL compiler over the
    whole corpus, with divergences recorded rather than reconciled.
+6. **A consumer-shaped input** — `spikes/estate/`: thirteen legacy contracts
+   that include each other, four prefix styles, an acquired company's prefix
+   inheriting our base, nothing annotated. This layer exists because the four
+   above it all run over `corpus/`, and **every corpus file is self-contained
+   and annotated**. That is not a gap in coverage, it is a gap in *shape*: a
+   defect that needs two files to appear cannot be caught by any number of
+   one-file cases, however thorough. It gates nothing itself — no stage takes
+   it as input — which is exactly what lets it measure the path rather than
+   participate in it. Its first run found eight root causes, six of which no
+   test here could have gone red on.
 
 The harness (`spikes/run_checks.sh`) is the merge gate, and its exit code is
 the verdict. Two rules give the number meaning: **an unmeasured check is a
@@ -252,9 +294,10 @@ failure, never a pass** — absent fixtures are counted as skips and named — a
 **a batch reports its first-pass rate and its round count separately**, because
 they measure different things.
 
-**약한 주장부터 다섯 계층.** 각 계층은 아래 계층이 잡을 수 없는 부류를 잡는다.
-특히 4계층(외부 피어)만이 규격 오독을 잡는다 — 우리 양쪽 끝이 같은 오독을
-공유하면 3계층까지는 전부 통과한다.
+**약한 주장부터 여섯 계층.** 각 계층은 아래 계층이 잡을 수 없는 부류를 잡는다.
+4계층(외부 피어)만이 규격 오독을 잡는다 — 우리 양쪽 끝이 같은 오독을 공유하면
+3계층까지는 전부 통과한다. 6계층은 **모양**의 공백을 잡는다: 파일 두 개가 있어야
+드러나는 결함은 한 파일짜리 사례를 아무리 많이 쌓아도 잡히지 않는다.
 
 ---
 
@@ -269,4 +312,5 @@ they measure different things.
 | What is excluded, and what would un-defer it | [`PLAN-DEFERRED.md`](PLAN-DEFERRED.md) |
 | Why each dependency question was answered as it was | [`decisions/`](decisions/) |
 | What the pipeline does *not* guarantee about a regeneration | [`decisions/D005-contract-stability.md`](decisions/D005-contract-stability.md) |
-| What each phase measured | `PHASE0.md` … `PHASE5.md` |
+| What each phase measured | `PHASE0.md` … `PHASE6.md` |
+| What a real legacy estate does to the whole path | [`pipeline-runs/2026-08-14-estate.md`](pipeline-runs/2026-08-14-estate.md) |

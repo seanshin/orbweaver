@@ -10,6 +10,161 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+_Nothing yet._
+
+---
+
+## v0.4.0 — 2026-08-14
+
+The release a **consumer-shaped input** produced. Thirteen legacy contracts
+that include each other, four `#pragma prefix` styles, an acquired company's
+prefix inheriting our base, one file with no prefix at all, and nothing
+annotated anywhere — the shape an estate actually has, rather than the shape
+`corpus/` has. It found eight root causes in one pass, **six of which no test
+in this repository could ever have gone red on**, because every corpus file is
+self-contained and every corpus file is annotated.
+
+Two of them change what a deployment does. They lead.
+
+이번 릴리즈는 **소비자 모양의 입력**이 만들었다. 서로 include 하는 13개의 레거시
+계약, prefix 스타일 넷, 주석은 어디에도 없음. 근본원인 8건이 한 번에 나왔고 그중
+**6건은 이 저장소의 어떤 테스트도 빨갛게 될 수 없던 것**이다. 코퍼스 파일은 전부
+self-contained이고 전부 주석이 달려 있기 때문이다.
+
+### ⚠ Behaviour changed / 동작 변경
+
+- **An unannotated operation is now refused, where it used to be allowed.**
+  The bridge asked `annotations.get("ai_effect")?`, so a *misspelled* effect
+  required approval and a *missing* one did not. Expose the estate's twelve
+  interfaces with no scopes and the answer was **`allow=76, refuse=0`** —
+  `SHUTDOWN`, `purge`, `void_invoice` and a writable attribute's setter among
+  them. `COMPONENTS.md` recorded this hole for *ingested* contracts; it was a
+  property of **any** unannotated one, which is what every legacy estate is.
+  And S4 advised fifty-two times over that estate that the bridge *"must assume
+  it needs approval"* — measured false. One part of the system stated the safe
+  rule while the mechanism did the opposite.
+
+  Closed means **refused**, with its own `Denied::EffectUnstated`. Not
+  approval-required: an approval is a human saying yes to a *described* call,
+  nobody can say yes to a call whose effect nobody stated, and one `--approve`
+  would otherwise unlock a whole estate at once. Not not-exposed: the operator
+  did expose it, and saying otherwise sends them into the allowlist to debug a
+  contract problem.
+
+  **Upgrading:** a contract that annotates its operations is unaffected
+  (`end_to_end.sh` still reads `allow=2 need_scope=1`, unmoved). A contract
+  that does not needs either `//@ ai_effect:` on its operations or the
+  exposure's new **`--assume-effect <value>`** — the operator's single
+  declaration of what that estate's silence means, run through the same
+  recognition a contract's own value gets. Not seventy-six approvals. Every
+  allow resting on it says so: `assumed: true`, `effect_stated_by: "exposure"`,
+  and a startup line counts the silence.
+
+  Absent and unrecognised are now deliberately different, in the direction that
+  costs something: a typo reaches a human, because somebody was annotating and
+  got one wrong; a silence goes back to the contract, because there is nothing
+  there to say yes to.
+  *주석 없는 오퍼레이션은 이제 거부된다. 침묵은 허가가 아니다.*
+
+- **A `CloseConnection` between fragments is neither corruption nor a clean
+  retry.** Both existing answers were false statements about the stream.
+  `Desynchronized` says the peer is broken and the connection is corrupt, about
+  a well-framed orderly goodbye — the client gives up on a service that was
+  merely restarting. But `ConnectionClosed` hands the caller §13.5.1's promise
+  that outstanding messages *were not processed and may be safely resent*, and
+  that promise is about messages **without replies**. A peer that had already
+  sent the leading piece of a reply demonstrably processed that request;
+  re-sending a non-idempotent operation on that promise runs it twice, silently,
+  on a pooled connection.
+
+  So the retry fact is **per caller, not per connection**.
+  `Error::InterruptedMidReassembly` carries what arrived and what was
+  outstanding, `Fault::unsent` is false for the cut call and true for every
+  other waiter, and `Error::is_orderly_close()` decides teardown against
+  corruption on a value rather than on a message string. At GIOP 1.1
+  `FragmentUnsupported` wins and the close is left *unread* — 1.1's refusal is
+  permanent for that peer and a close is retryable, so preferring the close
+  sends the pool round to hear the same thing again. A `MessageError` mid-chain
+  is a report rather than corruption, but §9.4.8 gives it no body, so it names
+  nothing and makes **no** request re-sendable. The serving loop stopped
+  answering a goodbye with a `MessageError`, and stopped answering a
+  `MessageError` with a `MessageError`, which was a two-ORB loop.
+
+  **Unmeasured, and named as such:** the shape needs a peer to shut down
+  between two writes of one reply, and neither fixture exposes that window.
+  What *is* measured is the regression — omniORB 4.3.4's real 1.2 fragments
+  still reassemble.
+
+- **`describe_interface` reports the resolved surface.** Ten of twelve estate
+  interfaces inherit; the agent was shown 11 operations, the guard judged 13,
+  the servant served 13. Nothing was allowed that policy forbade — but the
+  description an agent plans against was not the surface it could reach, and a
+  reviewer reading it did not know the rest was there. Three walks became one,
+  public, so nothing has an excuse to write a fifth.
+
+### Added / 추가
+
+- **`#include` resolves.** Eleven of thirteen estate files failed our own S4
+  while `omniidl` accepted all thirteen, and the ~90 diagnostics were one
+  thing: a name declared in an included file reported as undeclared. Quoted
+  includes resolve against the including file's own directory, angled against
+  `-I`, and the working directory is **never** searched — a validator run from
+  a build directory would otherwise resolve differently from the same validator
+  run from the source tree, and the difference would surface as a repository id
+  rather than as an error. Once-only by canonical path, so **guards are not
+  required** (the estate measured that real IDL in the wild has none), with
+  non-blocking advice when an unguarded file repeats, because a deployed
+  compiler rejects what we accept and being quietly laxer is worse than saying
+  so. Cycles name the loop; a missing file lists every path searched; a
+  diagnostic reports the included file's own line with the chain.
+
+  The prefix rule across a file boundary was **measured, not reasoned** — two
+  probes through `omniidl -Wbinline` say the includer's prefix does not enter
+  and the included file's does not escape. Thirteen roots, 49 ids, all agreeing
+  with `omniidl`. Full C preprocessing stays out and is **refused rather than
+  skipped**: skipping `#if` compiles every arm at once, which is a silent
+  misparse.
+
+  `sidl-validate` takes `-I` and resolves before validating, which moves the
+  estate's per-file acceptance from **2/13 to 13/13**. One of the original two
+  passed *because* its include was silently skipped — the defect wearing a pass.
+  *`#include`가 해석된다. 코퍼스 파일이 전부 self-contained이라 여섯 페이즈 동안
+  아무 테스트도 빨갛게 되지 않았다.*
+
+- **A Python client target.** The point of a second target language is not the
+  language — it is that a second target is the only thing separating the IDL
+  mapping from what happened to be convenient in Rust. It paid immediately: the
+  **Rust** emitter's keyword list was missing Rust's own reserved words, so a
+  contract naming `yield` emitted `fn yield()` and did not compile. No
+  emitter's escaping had ever been *executed*, because no corpus file named a
+  target language's reserved word until `28-target-keywords.idl` did.
+
+  The seam is a **local process, not FFI**: generated Python renders arguments
+  as AnyJSON v1 and hands them to `orbweaver-py-bridge`. No new dependency, no
+  second wire implementation, `cargo tree` unchanged. **D007 is PROPOSED**, not
+  adopted, and compares it against a PyO3 extension module (a new dependency
+  class *and* an `unsafe_code` question at the boundary) and pure-Python
+  CDR/GIOP. Mapping implemented against the OMG specification and *compared*
+  against `omniidl -bpython` — 129 scope names and 100 operation names agree,
+  and no name exists on our side that `omniidl` does not also produce.
+  Comparing is not deriving.
+
+  Measured: 28 golden contracts and 12 services generate, import and execute —
+  73 values and 100 calls round-tripped, both byte orders, 0 divergences; a
+  generated Python client completed 12 real calls against the omniORB fixture.
+
+- **D005 option B — a regeneration is diffed against what is registered.**
+  "Registered" is a directory the run is pointed at, which is what a previous
+  run's output already is. The S5 catalog was rejected because `register()`
+  builds it *after* S4 out of the artifacts S4 just gated, so an item would be
+  diffed against itself. An absent contract is **counted and printed**, never
+  silence; a registered-but-unreadable one is an error.
+
+  What B cannot see is measured rather than asserted: a regeneration keeping
+  every identifier and changing only `//@ ai_authz` is compatible by §5.3 and
+  passes, with option C refusing it in the same test. That is why C landed
+  first, and why the harness runs both.
+
 - **Declared bounds are enforced by generated code**, at the same refusal point
   the dynamic path uses, and the §8 oracle gained the reading that would have
   caught the gap: for a value that violates its contract, the two paths must
@@ -18,17 +173,87 @@ records what changed and, where it matters, what it changes on the wire.
   it while arguing about something else.
 - **D005 option C**: a scope-shaped token the requirement states verbatim must
   survive to the `//@ ai_authz` S3 emits, checked by string equality with no
-  model. It compares against the whole file's scopes so it survives S2's
-  rename, and it fires on the regeneration that keeps every name and changes
-  only the scope — the case that passes all eight end-to-end hops today.
-  Finding recorded rather than smoothed: **none of the twenty frozen
+  model. Finding recorded rather than smoothed: **none of the twenty frozen
   requirements states a scope literally**, so the benchmark cannot exercise the
-  rule at all.
+  rule at all — and of six naturally-phrased new ones, **three do not trip it
+  either**. Korean prose, `ROLE_REGISTRAR` and `warehouse/robot/estop` are all
+  ordinary ways to state a permission and all invisible to the rule, so a
+  project with any of those house styles gets no binding and gets it silently.
+  Not patched: accepting `ROLE_REGISTRAR` accepts every upper-case constant.
 - **D005 and D006 approved.** `Expert::process` and `Router::dispatch` are
   excluded; the bound is their return path via a new versioned interface.
+- **The content interceptor seat can read the arguments.** The chain was *not*
+  moved after mapping, which is the fix people reach for: a chain there answers
+  a mapping error before a policy refusal, turning failures into an oracle for
+  the shape of operations the caller may not call. `CallContext` carries the
+  agent's arguments unmapped instead. The static path supplies `None`, which is
+  §4.7's bypass wearing a safety label and is now in the module docs rather
+  than left to be discovered.
 - **IF2's two stores are joinable** (`CallStats::merge`) and deliberately not
   joined: a static call is evidence a path *already has* a stub, so folding it
   in would have the promotion policy recommend promoting it again.
+
+### Fixed / 수정
+
+- **A gate found only what it could not load.** `Workspace::load` resolves
+  `<id>.sidl.idl` **or** `<id>.idl` — a documented fallback for a contract no
+  annotation stage ever saw — but discovery globbed only the annotated suffix,
+  so the fallback was unreachable and `--only s4` over a directory of legacy
+  `.idl` found nothing. The estate's workaround was to rename, which then made
+  the run's attribution line report a contract with **no annotations in it** as
+  annotated, because that line asked the filename; and because `gen-corpus`
+  derives its module name from the file stem, the rename put a pipeline-stage
+  suffix into a generated module name (`f_ESTATE_sidl`). Three symptoms, one
+  cause — a name treated as evidence about content. The third needed no fix of
+  its own.
+- **The fix hint mangled qualified names**, printing `qualify it with
+  ``Module::::```. The cause was in the *parser*, not the printer: `scoped_name`
+  gave a scoped name the span of its **first token**, so
+  `::MFS::Common::StringList` sliced to `"::"`. Three sites had it; the estate
+  saw one. Splitting `unknown-scoped-name` off `unknown-name` makes the advice
+  right as well as the text — "qualify it with its module" is meaningless for a
+  name that is already qualified.
+- **`validate(&str)` was the corpus's self-contained shape written into an
+  API.** Handing it a resolved unit's *text* refuses it: thirteen files' guard
+  directives are still in there, and four `#ifndef` blocks in one string is
+  conditional compilation rather than an include guard. `validate_unit` takes
+  the unit.
+- **A file-scope `#pragma prefix` leaks across a splice.** A prefix runs to the
+  end of its *file*; after concatenation there is one file, so a deliberately
+  prefix-less contract inherited the previous one's prefix and five repository
+  ids came out **well-formed and wrong**. Nothing errors on our side — only a
+  peer disagrees, and then `_is_a` fails and an `--expose` allowlist names an
+  interface no object has, which reads exactly like a permissions mistake. The
+  rule is one line, *each file begins with the empty prefix*, and it was
+  written nowhere because until a set existed there was nowhere to write it.
+- **`spikes/echo.idl` states an effect on every operation.** They are all reads
+  — the interface has no state — but "obviously a read" is not something a
+  bridge can see. The harness caught it; the fixture was written when silence
+  was an allow.
+
+### Known limits / 알려진 한계
+
+- **An agent cannot read an Interface Repository through AnyJSON.** §4.5 has no
+  form for `::CORBA::TypeCode`, so `corpus/services/ir_subset` loses ten items
+  including `describe_interface` — and the MCP agent path speaks the same
+  mapping. Recorded, not fixed: §4.5 is a specification decision, not a Python
+  problem.
+- **The dry-run survey is correct and hard to read.** Closing the effect gate
+  took it from 7,253 bytes of uniform `allow` to 31,957 bytes with real signal,
+  and the growth is *entirely* 64 verbatim copies of one `why` sentence. One
+  reason per **class** rather than per row would put it near 8 KB with strictly
+  more signal. A report shape, not a gate.
+- **`--assume-effect` is a real widening and is meant to be.** It is one
+  operator declaration covering every silence in an exposure. That is the point
+  — the alternative is seventy-six approvals and a human who learns to click
+  through them — but it is written into every allow that rests on it so an
+  audit can find them.
+- The Python target is **clients only**. A Python servant needs the bridge to
+  call *back* into Python, which is a second protocol direction.
+- Cross-front-end portability of the include semantics is **unmeasured** — TAO
+  and JacORB were absent. An `#include` inside a module whose file sets a
+  prefix is exercised by no file we have. Hard links to the same content are
+  two files to the resolver.
 
 ---
 
