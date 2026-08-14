@@ -105,6 +105,16 @@ impl From<LexError> for ParseError {
 /// Result of a parse.
 pub type Result<T> = std::result::Result<T, ParseError>;
 
+/// One span covering two, keeping the start's line and column.
+///
+/// Used wherever a node spans more than one token. A node whose span covers
+/// only its first token cannot be sliced out of the source, and every consumer
+/// that tries gets a *plausible* wrong answer rather than an obvious one —
+/// which is exactly how the corrupted fix hints of RC-2 survived.
+fn span_over(start: Span, end: Span) -> Span {
+    Span { start: start.start, end: end.end.max(start.end), line: start.line, column: start.column }
+}
+
 /// Parses a whole IDL source file.
 pub fn parse(src: &str) -> Result<Spec> {
     let tokens = Lexer::new(src).tokenize()?;
@@ -775,14 +785,30 @@ impl Parser {
 
     // ── types ───────────────────────────────────────────────────────────────
 
+    /// A scoped name, spanning **all** of it.
+    ///
+    /// The span used to be the first token's alone, which is wrong for every
+    /// qualified name and catastrophically wrong for an absolute one: for
+    /// `::MFS::Common::StringList` it covered the leading `::` and nothing
+    /// else, so every consumer that slices the source with the span read the
+    /// text `"::"`. `orbweaver-forge` builds its fix hint that way, which is
+    /// how the estate got ~90 diagnostics advising the reader to *"qualify `::`
+    /// with `Module::::`"* — the error line right and the actionable half
+    /// wrong (`docs/pipeline-runs/2026-08-14-estate.md`, RC-2). A span is the
+    /// extent of the thing it points at; anything less makes every span-slicing
+    /// consumer wrong in its own way, which is why this is fixed here rather
+    /// than in the consumer that noticed.
     fn scoped_name(&mut self) -> Result<ScopedName> {
-        let span = self.peek().span;
+        let start = self.peek().span;
         let absolute = self.eat_punct("::");
+        let mut end = self.peek().span;
         let mut parts = vec![self.expect_ident()?.text];
         while self.eat_punct("::") {
-            parts.push(self.expect_ident()?.text);
+            let t = self.expect_ident()?;
+            end = t.span;
+            parts.push(t.text);
         }
-        Ok(ScopedName { absolute, parts, span })
+        Ok(ScopedName { absolute, parts, span: span_over(start, end) })
     }
 
     fn type_spec(&mut self) -> Result<TypeSpec> {
@@ -952,20 +978,37 @@ impl Parser {
             Tok::Char(v) => Ok(ConstExpr::Char(v)),
             Tok::Ident(s) if s == "TRUE" => Ok(ConstExpr::Bool(true)),
             Tok::Ident(s) if s == "FALSE" => Ok(ConstExpr::Bool(false)),
+            // Both arms span the whole name, for the reason `scoped_name`
+            // spells out: a span that stops at the first token is a span that
+            // slices to the wrong text.
             Tok::Ident(s) => {
                 let mut parts = vec![s];
-                let span = t.span;
+                let mut end = t.span;
                 while self.eat_punct("::") {
-                    parts.push(self.expect_ident()?.text);
+                    let n = self.expect_ident()?;
+                    end = n.span;
+                    parts.push(n.text);
                 }
-                Ok(ConstExpr::Name(ScopedName { absolute: false, parts, span }))
+                Ok(ConstExpr::Name(ScopedName {
+                    absolute: false,
+                    parts,
+                    span: span_over(t.span, end),
+                }))
             }
             Tok::Punct("::") => {
-                let mut parts = vec![self.expect_ident()?.text];
+                let first = self.expect_ident()?;
+                let mut end = first.span;
+                let mut parts = vec![first.text];
                 while self.eat_punct("::") {
-                    parts.push(self.expect_ident()?.text);
+                    let n = self.expect_ident()?;
+                    end = n.span;
+                    parts.push(n.text);
                 }
-                Ok(ConstExpr::Name(ScopedName { absolute: true, parts, span: t.span }))
+                Ok(ConstExpr::Name(ScopedName {
+                    absolute: true,
+                    parts,
+                    span: span_over(t.span, end),
+                }))
             }
             other => Err(ParseError {
                 message: format!("expected a constant expression, found {other}"),
@@ -988,6 +1031,67 @@ mod tests {
 
     fn id(src: &str, qualified: &str) -> String {
         ids(src).get(qualified).cloned().unwrap_or_else(|| panic!("{qualified} was not overridden"))
+    }
+
+    /// The text a scoped name's span slices out of the source.
+    ///
+    /// This is the property RC-2 turned on. Anything that renders a diagnostic
+    /// by slicing the source with the span — `orbweaver-forge`'s fix hints do —
+    /// reads exactly this, so it is asserted as the string it must be rather
+    /// than as an offset.
+    fn spanned_type_of_member(src: &str) -> String {
+        let spec = parse(src).expect("parses");
+        let mut found = None;
+        for d in &spec.definitions {
+            if let Definition::Module(m) = d {
+                for inner in &m.definitions {
+                    if let Definition::Struct(s) = inner
+                        && let Some(members) = &s.members
+                        && let TypeSpec::Named(n) = &members[0].ty
+                    {
+                        found = Some(n.span);
+                    }
+                }
+            }
+        }
+        let span = found.expect("a struct member with a named type");
+        src[span.start..span.end].to_owned()
+    }
+
+    /// A qualified name's span covers the whole name, not its first token.
+    ///
+    /// Before this, the span of `::MFS::Common::StringList` was the leading
+    /// `::` alone, so every consumer that sliced the source with it read `"::"`
+    /// — which is how the estate's fix hints came to advise qualifying `::`
+    /// with `Module::::` (`docs/pipeline-runs/2026-08-14-estate.md`, RC-2). The
+    /// relative form was wrong in the same way and quieter about it: it sliced
+    /// to `MFS`, which looks like a name and is not the one in the message.
+    #[test]
+    fn a_scoped_names_span_covers_all_of_it() {
+        assert_eq!(spanned_type_of_member("module m { struct S { ::a::b::C x; }; };"), "::a::b::C");
+        assert_eq!(spanned_type_of_member("module m { struct S { a::b::C x; }; };"), "a::b::C");
+        assert_eq!(spanned_type_of_member("module m { struct S { ::C x; }; };"), "::C");
+        // The unqualified case was already right and must stay right.
+        assert_eq!(spanned_type_of_member("module m { struct S { C x; }; };"), "C");
+        // Whitespace inside a scoped name is legal and the span still ends at
+        // the last component rather than at the last token it happened to see.
+        assert_eq!(spanned_type_of_member("module m { struct S { a :: b x; }; };"), "a :: b");
+    }
+
+    /// The same property for a scoped name in a constant expression, which is
+    /// parsed by a different function and was wrong in both of its arms.
+    #[test]
+    fn a_scoped_name_in_a_const_expression_spans_all_of_it() {
+        for (src, want) in [
+            ("module m { const long L = ::a::B; };", "::a::B"),
+            ("module m { const long L = a::B; };", "a::B"),
+        ] {
+            let spec = parse(src).expect("parses");
+            let Definition::Module(md) = &spec.definitions[0] else { panic!("module") };
+            let Definition::Const(c) = &md.definitions[0] else { panic!("const") };
+            let ConstExpr::Name(n) = &c.value else { panic!("a name, got {:?}", c.value) };
+            assert_eq!(&src[n.span.start..n.span.end], want);
+        }
     }
 
     /// The measured defect this batch closed: without the pragma we said

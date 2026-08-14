@@ -1,0 +1,15 @@
+// ---------------------------------------------------------------------------
+// A `#include` that resolves to nothing.  The requirement is that it is a
+// diagnostic listing every path searched — the silent skip this directory
+// exists to remove is what turned one missing file into a diagnostic per name
+// the file declared.
+//
+// 해석되지 않는 `#include`.  탐색한 경로를 전부 나열하는 진단이어야 한다.
+// 조용히 건너뛰는 것이 바로 이 디렉터리가 없애려는 결함이다.
+// ---------------------------------------------------------------------------
+
+#include "not-here.idl"
+
+module Orphan {
+    typedef long Ignored;
+};

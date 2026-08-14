@@ -1,0 +1,30 @@
+// ---------------------------------------------------------------------------
+// The file everybody includes.
+//
+// NO INCLUDE GUARD, ON PURPOSE.  The thirteen-file estate in spikes/estate/
+// measured that real IDL in the wild does not have them: six of its thirteen
+// files were rejected by omniidl for double declarations before their author
+// added guards.  A front end that only works on IDL somebody has already
+// tidied is not much use on the IDL that motivated it, so this file stays
+// untidy and `service.idl` includes it through two paths.
+//
+// 인클루드 가드가 **일부러** 없다.  실제 자산의 IDL에는 가드가 없다는 것을
+// spikes/estate/ 가 측정했다.
+// ---------------------------------------------------------------------------
+
+#pragma prefix "meridian.example"
+
+module Freight {
+
+    typedef string StampText;
+
+    struct AuditMark {
+        StampText written_at;
+        string    by_whom;
+    };
+
+    exception NotFound {
+        string what;
+    };
+
+};

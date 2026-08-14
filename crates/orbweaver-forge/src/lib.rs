@@ -199,9 +199,29 @@ impl Report {
 
 /// Runs every in-process check over one file.
 pub fn validate(src: &str) -> Report {
+    validate_checked(src, orbweaver_idl::check(src))
+}
+
+/// S4 over an already-resolved translation unit.
+///
+/// The string form is the whole corpus's shape — one self-contained file — and
+/// nothing noticed for six phases, because no corpus file has ever had an
+/// `#include`. A real estate is a directory, and re-checking a resolved unit's
+/// *text* refuses it: the guard directives of thirteen files are still in
+/// there, and four `#ifndef` blocks in one string is conditional compilation
+/// rather than an include guard. So a caller that has resolved the includes
+/// hands the unit in instead of handing the text back.
+pub fn validate_unit(unit: &orbweaver_idl::include::Unit) -> Report {
+    validate_checked(&unit.text, orbweaver_idl::check_unit(unit))
+}
+
+fn validate_checked(
+    src: &str,
+    checked: std::result::Result<orbweaver_idl::ast::Spec, Vec<orbweaver_idl::Diagnostic>>,
+) -> Report {
     let mut findings = Vec::new();
 
-    match orbweaver_idl::check(src) {
+    match checked {
         Err(diags) => {
             // Parsing and semantics have already run; nothing downstream can
             // say anything trustworthy about a file that failed them.

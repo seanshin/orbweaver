@@ -1,0 +1,24 @@
+// ---------------------------------------------------------------------------
+// A file that reopens another file's module and carries NO `#pragma prefix`.
+//
+// This is the prefix-scope case, and it is the whole point of the directory.
+// `common.idl` sets `meridian.example` at its own file scope; that prefix runs
+// to the end of THAT FILE and no further, so everything declared here is
+// unprefixed even though `Freight` is the same module.  Concatenating the two
+// files instead of including them silently gives these declarations
+// `meridian.example` too — a well-formed repository id that no peer agrees
+// with, and nothing warns (spikes/estate/, RC-4).
+//
+// 파일 스코프 `#pragma prefix`는 그 파일 끝까지만 유효하다.  같은 모듈을 다시
+// 열어도 접두사는 넘어오지 않는다.  이어 붙이면 조용히 넘어온다.
+// ---------------------------------------------------------------------------
+
+#include "common.idl"
+
+module Freight {
+
+    typedef sequence<StampText> StampList;
+
+    enum Urgency { LOW, NORMAL, HIGH };
+
+};

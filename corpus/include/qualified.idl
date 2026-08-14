@@ -1,0 +1,30 @@
+// ---------------------------------------------------------------------------
+// A root with no prefix of its own that names an included file's types with a
+// fully-qualified `::`-form.
+//
+// Two things are pinned here.  First, identity: nothing declared in this file
+// may pick up `common.idl`'s `meridian.example`, so `Depot::Bay` is
+// `IDL:Depot/Bay:1.0` while `Freight::AuditMark` keeps its prefix — measured
+// against omniidl.  Second, diagnostics: `::Freight::AuditMark` is the name
+// shape whose span used to cover the leading `::` and nothing else, which is
+// how ~90 estate diagnostics came to advise qualifying `::` with `Module::::`
+// (spikes/estate/, RC-2).  Here it resolves, so the shape is exercised on the
+// success path too; the failure path is in the crate's own tests.
+//
+// 접두사 없는 루트가 인클루드된 타입을 `::` 정규화 이름으로 참조한다.
+// 식별자와 진단 두 가지를 동시에 고정한다.
+// ---------------------------------------------------------------------------
+
+#include "common.idl"
+
+module Depot {
+
+    interface Bay {
+
+        ::Freight::AuditMark last_check();
+
+        void record(in ::Freight::StampText note) raises (::Freight::NotFound);
+
+    };
+
+};

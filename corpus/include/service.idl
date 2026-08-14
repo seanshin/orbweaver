@@ -1,0 +1,33 @@
+// ---------------------------------------------------------------------------
+// The same unguarded file reached through two paths: directly, and again
+// through `types.idl`.
+//
+// We splice `common.idl` once and raise non-blocking advice naming the missing
+// guard.  omniidl REJECTS this file — a C preprocessor includes it twice and
+// every declaration in it clashes.  That divergence is deliberate and is
+// recorded in cases.tsv: an IDL file included twice can only duplicate a
+// declaration, never add one, so once-only loses nothing, and refusing here
+// would make the front end useless on exactly the estates it exists for.
+//
+// 같은 무가드 파일을 두 경로로 도달한다.  우리는 한 번만 붙이고 가드가 없다고
+// 조언한다.  omniidl은 거부한다 — 의도된 불일치이며 cases.tsv에 기록되어 있다.
+// ---------------------------------------------------------------------------
+
+#include "common.idl"
+#include "types.idl"
+
+#pragma prefix "meridian.example"
+
+module Freight {
+
+    interface Consignment {
+
+        StampList history() raises (NotFound);
+
+        Urgency urgency_of(in StampText reference) raises (NotFound);
+
+        void annotate(in AuditMark mark);
+
+    };
+
+};

@@ -1,0 +1,20 @@
+// ---------------------------------------------------------------------------
+// Conditional compilation, which this front end REFUSES rather than skips.
+//
+// Skipping `#ifdef` compiles every arm at once, which is a silent misparse and
+// the worst of the three available answers.  omniidl compiles this file
+// (its preprocessor evaluates the condition); we decline and say what to run
+// first.  A clear refusal is a legitimate answer and is recorded in cases.tsv;
+// a silent misparse is not.
+//
+// 조건부 컴파일은 **거부**한다.  건너뛰면 모든 분기를 동시에 컴파일하는 조용한
+// 오독이 된다.  omniidl은 컴파일하고 우리는 거부한다 — 의도된 불일치다.
+// ---------------------------------------------------------------------------
+
+#ifdef OW_DEBUG
+typedef long DebugId;
+#endif
+
+module Cond {
+    typedef long Plain;
+};

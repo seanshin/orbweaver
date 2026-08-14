@@ -1,0 +1,19 @@
+// ---------------------------------------------------------------------------
+// Half of a mutual include.  Guarded, because an unguarded loop does not
+// terminate under a C preprocessor at all and there would be no oracle verdict
+// to compare against.  We follow it once and say so; the requirement is that
+// this terminates with a diagnostic naming the loop rather than exhausting the
+// stack.
+//
+// 상호 인클루드의 한쪽.  종료되고, 루프를 이름으로 지적한다.
+// ---------------------------------------------------------------------------
+#ifndef _OW_CYCLE_A_IDL_
+#define _OW_CYCLE_A_IDL_
+
+#include "cycle-b.idl"
+
+module Loop {
+    typedef long Alpha;
+};
+
+#endif // _OW_CYCLE_A_IDL_

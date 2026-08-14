@@ -1130,6 +1130,21 @@ else
   fail_total=$((fail_total+1))
 fi
 
+# ── corpus/include: the first multi-file cases the corpus has ever had ──────
+# Every other corpus file is self-contained, which is exactly why `#include`
+# was skipped rather than resolved for six phases and nothing went red. The
+# manifest drives the gate, so a case is added by adding a row.
+hr "corpus/include — resolution, prefix scope across a file boundary, guards, cycles"
+inc=$(cargo test -q -p orbweaver-idl --test include_corpus 2>&1)
+if printf '%s' "$inc" | grep -q "^test result: ok"; then
+  echo "  ok   $(printf '%s' "$inc" | grep -oE '[0-9]+ passed' | head -1) over \
+$(awk 'NF && $1 !~ /^#/' corpus/include/cases.tsv | wc -l | tr -d ' ') manifest case(s)"
+else
+  echo "  FAIL corpus/include"
+  printf '%s' "$inc" | grep -A3 panicked | head -8 | sed 's/^/       /'
+  fail_total=$((fail_total+1))
+fi
+
 # ── The estate: thirteen legacy contracts through the whole path ────────────
 # Consumer-shaped, not a gate — nothing under spikes/estate/ is any stage's
 # input, which is what lets it measure the path instead of participating in

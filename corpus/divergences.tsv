@@ -29,6 +29,24 @@
 # 파일별 알려진 오라클 불일치. 규격이 엄격한 곳에서 특정 컴파일러가 느슨한 경우처럼
 # 실재하고 영구적인 불일치를 사유와 함께 기록한다. 등록은 실패 면제일 뿐 보고 면제가
 # 아니며, 더 이상 발생하지 않는 등록도 함께 지적된다.
+#
+# ── Divergences that are NOT rows here ──────────────────────────────────────
+#
+# `corpus/include/` holds the multi-file cases, and `differential.sh` does not
+# examine that directory — it enumerates golden, negative, requirements and
+# spikes by name, and half of `corpus/include/` is leaf files that mean nothing
+# on their own. A row here for a file it never runs would be reported as a
+# stale exemption on every single run, so the two deliberate divergences that
+# directory carries live in `corpus/include/cases.tsv` beside the files they
+# describe, with the same columns and the same obligation to state a reason.
+# They point in opposite directions and both are named there:
+#   service.idl      we ACCEPT what omniidl rejects  (unguarded double include)
+#   conditional.idl  we REFUSE what omniidl compiles (conditional compilation)
+#
+# `corpus/include/`의 다중 파일 케이스는 `differential.sh`가 검사하지 않으므로
+# 여기에 행을 두면 매 실행마다 "더 이상 발생하지 않는 등록"으로 보고된다. 그
+# 두 건의 의도적 불일치는 파일 옆 `corpus/include/cases.tsv`에 같은 의무로
+# 기록되어 있다 — 한 건은 우리가 더 느슨하고, 한 건은 더 엄격하다.
 
 n02-identifier-clash.idl	jacorb_idl	accept	CORBA 3.4 §7.2.3 makes identifier collisions case-insensitive, so `Position position` is illegal. omniidl rejects it; JacORB 3.9 does not enforce the rule at all. We follow the specification and omniidl. This is the project's dominant generation failure, and finding that a widely deployed compiler accepts it is a reason to be stricter, not looser: IDL that builds under JacORB can fail under omniORB.
 n10-operation-name-clash.idl	jacorb_idl	accept	The same rule in its operation-name shape (`Blob blob()`). JacORB 3.9 does not enforce it; omniidl does. Same verdict, same reason.

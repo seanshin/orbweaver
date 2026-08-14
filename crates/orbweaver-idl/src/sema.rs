@@ -630,21 +630,93 @@ impl Analyser {
                     }
                 }
                 None => {
-                    let hint = if d.name.parts.len() == 1
-                        && matches!(d.name.last(), "TypeCode" | "Object" | "ValueBase")
-                    {
-                        format!(" — write '::CORBA::{}' to reach the predefined one", d.name.last())
-                    } else {
-                        String::new()
-                    };
+                    let (rule, hint) = self.unknown_name_advice(d.scope, &d.name);
                     self.diagnostics.push(Diagnostic {
                         message: format!("{:?} is not declared{hint}", d.name.text()),
                         span: d.name.span,
-                        rule: "unknown-name",
+                        rule,
                     });
                 }
             }
         }
+    }
+
+    /// The rule to file an unresolved name under, and what to say about it.
+    ///
+    /// **A qualified name gets its own rule.** The generic advice for an
+    /// unknown name is *"declare it, or qualify it with its module"*, which is
+    /// right for `AuditStamp` and meaningless for `::MFS::Common::StringList` —
+    /// it is already qualified, and the consumer that renders that advice
+    /// (`orbweaver-forge`) has no way to tell the two apart from the rule name
+    /// alone. It printed *"qualify it with `Module::::`"* ~90 times over the
+    /// estate (`docs/pipeline-runs/2026-08-14-estate.md`, RC-2). The wrong
+    /// *text* came from a wrong span, fixed in [`crate::parse`]; the wrong
+    /// *advice* is this: two different diagnoses were sharing one rule, so
+    /// they now do not, and the advice for the qualified case is written here
+    /// where the analyser knows which component actually failed.
+    fn unknown_name_advice(&self, scope: usize, n: &ScopedName) -> (&'static str, String) {
+        // The most common cause of a name that resolves nowhere, once a unit
+        // can span files at all, is that the file declaring it was never
+        // included. Phrased as a condition, because it is not the only cause.
+        const ELSEWHERE: &str = "if it is declared in another file, this translation unit has no \
+                                 `#include` that reaches that file";
+        if n.parts.len() == 1 && !n.absolute {
+            if matches!(n.last(), "TypeCode" | "Object" | "ValueBase") {
+                return (
+                    "unknown-name",
+                    format!(" — write '::CORBA::{}' to reach the predefined one", n.last()),
+                );
+            }
+            return ("unknown-name", format!(" — {ELSEWHERE}"));
+        }
+        let (failed, container) = self.first_unresolved_part(scope, n);
+        let where_it_looked = match container {
+            Some(path) if !path.is_empty() => format!("is not declared in {path:?}"),
+            Some(_) => "is not declared at global scope".to_owned(),
+            None => "is not in scope here".to_owned(),
+        };
+        ("unknown-scoped-name", format!(" — {:?} {where_it_looked}; {ELSEWHERE}", n.parts[failed]))
+    }
+
+    /// Which component of a scoped name stopped resolving, and the qualified
+    /// name of the scope it was looked for in (`None` when the first component
+    /// was searched outwards from here rather than inside anything).
+    fn first_unresolved_part(&self, scope: usize, n: &ScopedName) -> (usize, Option<String>) {
+        let Some(first) = n.parts.first() else { return (0, None) };
+        let mut sym = if n.absolute {
+            match self.lookup_in(0, first) {
+                Some(s) => s,
+                None => return (0, Some(String::new())),
+            }
+        } else {
+            match self.lookup_upwards(scope, first) {
+                Some(s) => s,
+                None => return (0, None),
+            }
+        };
+        for (i, part) in n.parts.iter().enumerate().skip(1) {
+            let container = self.scope_path(sym.scope);
+            match sym.scope.and_then(|sc| self.lookup_in(sc, part)) {
+                Some(next) => sym = next,
+                None => return (i, Some(container)),
+            }
+        }
+        (n.parts.len() - 1, Some(self.scope_path(sym.scope)))
+    }
+
+    /// The `A::B` path of a scope, for a message that says where it looked.
+    fn scope_path(&self, scope: Option<usize>) -> String {
+        let mut parts = Vec::new();
+        let mut cur = scope;
+        while let Some(id) = cur {
+            if self.scopes[id].name.is_empty() {
+                break;
+            }
+            parts.push(self.scopes[id].name.clone());
+            cur = self.scopes[id].parent;
+        }
+        parts.reverse();
+        parts.join("::")
     }
 
     /// Resolves a possibly-qualified name from `scope`.
@@ -766,6 +838,42 @@ mod tests {
         let d = diags("module m { struct S { Widget w; }; };");
         assert_eq!(d.len(), 1, "{d:?}");
         assert_eq!(d[0].rule, "unknown-name");
+    }
+
+    /// An unresolved **qualified** name is a different diagnosis from an
+    /// unresolved bare one, and files under a different rule.
+    ///
+    /// The generic advice for `unknown-name` is *"qualify it with its module"*,
+    /// which is meaningless for a name that is already qualified — the estate
+    /// printed it ~90 times as *"qualify `::` with `Module::::`"*
+    /// (`docs/pipeline-runs/2026-08-14-estate.md`, RC-2). Half of that was a
+    /// wrong span, fixed in `parse`; the other half was two diagnoses sharing
+    /// one rule, which is this.
+    #[test]
+    fn an_unresolved_qualified_name_names_the_component_that_failed() {
+        let d = diags("module m { struct S { ::Elsewhere::Common::Widget w; }; };");
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].rule, "unknown-scoped-name");
+        assert!(d[0].message.contains("::Elsewhere::Common::Widget"), "{}", d[0].message);
+        assert!(d[0].message.contains("\"Elsewhere\""), "{}", d[0].message);
+        assert!(d[0].message.contains("#include"), "{}", d[0].message);
+
+        // A name whose *leading* components resolve says which one broke, and
+        // where it looked — the reader would otherwise re-check the whole path.
+        let d = diags("module outer { module inner { }; struct S { outer::inner::Widget w; }; };");
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].rule, "unknown-scoped-name");
+        assert!(d[0].message.contains("\"Widget\""), "{}", d[0].message);
+        assert!(d[0].message.contains("outer::inner"), "{}", d[0].message);
+    }
+
+    /// A bare unknown name keeps the old rule, because the old advice is right
+    /// for it and the consumers that render it are not ours to change.
+    #[test]
+    fn an_unresolved_bare_name_keeps_its_rule() {
+        let d = diags("module m { struct S { Widget w; }; };");
+        assert_eq!(d[0].rule, "unknown-name");
+        assert!(d[0].message.contains("#include"), "{}", d[0].message);
     }
 
     /// `TypeCode` is not in the global scope, and the message says where it is.

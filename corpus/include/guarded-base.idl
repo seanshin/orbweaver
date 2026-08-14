@@ -1,0 +1,18 @@
+// ---------------------------------------------------------------------------
+// A file that DOES carry a guard, so that the guarded and unguarded paths are
+// both measured rather than one of them being assumed.  Reaching this file
+// twice is silent: that is what the guard means, and advice about it would be
+// noise.
+//
+// 가드가 있는 파일.  두 번 도달해도 조용하다 — 가드의 의미가 그것이다.
+// ---------------------------------------------------------------------------
+#ifndef _OW_GUARDED_BASE_IDL_
+#define _OW_GUARDED_BASE_IDL_
+
+#pragma prefix "vault.example"
+
+module Vault {
+    typedef long KeyId;
+};
+
+#endif // _OW_GUARDED_BASE_IDL_

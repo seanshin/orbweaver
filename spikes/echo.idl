@@ -1,5 +1,10 @@
 // Peer interface for the Phase 0 interop spike. Deliberately covers the
 // alignment cases that break hand-written CDR encoders.
+//
+// Every operation states an effect. They are all reads — this interface has
+// no state to change — but "obviously a read" is not something a bridge can
+// see, and an unstated effect is now a refusal rather than an allow. That is
+// the whole point: the contract says so, or nobody may act on it.
 module spike {
   struct Ragged {
     octet  a;
@@ -17,17 +22,33 @@ module spike {
     //@ ai_desc: Adds two signed 32-bit integers
     //@ ai_effect: read_only
     long   add(in long a, in long b);
+    //@ ai_desc: Returns the string it was given, unchanged
+    //@ ai_effect: read_only
     string echo_string(in string msg);
+    //@ ai_desc: Multiplies a double by another and returns the product
+    //@ ai_effect: read_only
     double scale(in double v, in double by);
+    //@ ai_desc: Returns the struct it was given, exercising CDR alignment
+    //@ ai_effect: read_only
     Ragged echo_ragged(in Ragged v);
+    //@ ai_desc: Returns the any it was given, exercising TypeCode round-trip
+    //@ ai_effect: read_only
     any    echo_any(in any v);
+    //@ ai_desc: Returns a sequence of the requested number of octets
+    //@ ai_effect: read_only
     Payload blob(in unsigned long size);
     //@ ai_desc: Sums the payload's octets modulo 2^31-1
     //@ ai_authz: echo:blob
     //@ ai_effect: read_only
     long    blob_sum(in Payload b);
+    //@ ai_desc: Returns the wide string it was given, exercising codesets
+    //@ ai_effect: read_only
     wstring echo_wstring(in wstring w);
+    //@ ai_desc: Returns a reference to this same object
+    //@ ai_effect: read_only
     Echo    get_self();
+    //@ ai_desc: Whether another reference denotes this same object
+    //@ ai_effect: read_only
     boolean same_as(in Echo other);
   };
 };

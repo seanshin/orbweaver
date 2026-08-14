@@ -1,0 +1,17 @@
+// ---------------------------------------------------------------------------
+// The angled form, which must NOT look beside the including file.
+//
+// `#include <common.idl>` resolves only along the search path, so this file is
+// accepted with `-I corpus/include` and rejected without it — even though
+// `common.idl` is its next-door neighbour.  That asymmetry is the C convention
+// CORBA IDL inherits, and getting it wrong makes an estate resolve differently
+// depending on which directory the validator was invoked from.
+//
+// 꺾쇠 형식은 인클루드하는 파일 옆을 보지 않는다.  `-I` 없이는 거부된다.
+// ---------------------------------------------------------------------------
+
+#include <common.idl>
+
+module Angled {
+    typedef ::Freight::StampText Label;
+};

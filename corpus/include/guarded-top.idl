@@ -1,0 +1,19 @@
+// ---------------------------------------------------------------------------
+// Reaches `guarded-base.idl` twice, directly and through `guarded-mid.idl`.
+// Guarded, so both we and omniidl accept it and we say nothing about it.
+//
+// `guarded-base.idl`에 두 경로로 도달한다.  가드가 있으므로 양쪽 다 받아들인다.
+// ---------------------------------------------------------------------------
+#ifndef _OW_GUARDED_TOP_IDL_
+#define _OW_GUARDED_TOP_IDL_
+
+#include "guarded-base.idl"
+#include "guarded-mid.idl"
+
+module Vault {
+    interface Locker {
+        KeyIds list_keys();
+    };
+};
+
+#endif // _OW_GUARDED_TOP_IDL_

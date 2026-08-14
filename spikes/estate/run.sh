@@ -101,13 +101,19 @@ done
 say "first-pass: $s1_ok/$N files accepted standing alone"
 row s1-per-file accepted "$s1_ok"
 row s1-per-file total "$N"
-# This is a measurement of the front end, not of the estate: `orbweaver-idl`
-# skips `#include` rather than resolving it, so any file naming a type declared
-# elsewhere cannot be validated alone. Recorded as a number rather than as a
-# failure, because it is the finding.
+# This was 2/13 when the estate was written, and it was a measurement of the
+# front end rather than of the estate: `orbweaver-idl` skipped `#include`
+# instead of resolving it, so any file naming a type declared elsewhere could
+# not be validated alone. One of the two that passed passed *because* its
+# include was skipped, which is the defect wearing a pass. Resolution landed in
+# the front end and `sidl-validate` grew `-I`; the estate resolves with no `-I`
+# at all, because the quoted form searches the including file's own directory.
+# Asserted rather than noted — the whole point of the row is that it moved.
 if [ "$s1_ok" -lt "$N" ]; then
-    note "$((N - s1_ok)) file(s) reference a type declared in another file"
-    note "the front end skips #include (crates/orbweaver-idl/src/lex.rs) — see the run record"
+    fail "$((N - s1_ok)) of $N file(s) no longer validate standing alone"
+    note "each names a type declared in another file; #include resolution should cover it"
+else
+    pass "every file validates standing alone, includes resolved"
 fi
 
 # ── Stage 2: the conformance oracle, over each file on its own ───────────────

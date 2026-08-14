@@ -1,0 +1,46 @@
+# What each root file in this directory is filed under, and what omniidl says
+# about the same file. Driven by crates/orbweaver-idl/tests/include_corpus.rs.
+#
+# The other corpus directories hold single self-contained files, which is
+# exactly why `#include` was skipped by this front end for six phases without
+# anything noticing: no corpus case could exercise a cross-file reference, so
+# the gap was invisible by construction rather than by accident. These files
+# only mean anything as a set, so they get a directory and a manifest instead
+# of a glob.
+#
+# 다른 코퍼스 디렉터리는 전부 자기완결적인 단일 파일이다. 그래서 `#include`
+# 미해석 결함이 여섯 페이즈 동안 보이지 않았다 — 우연이 아니라 구조적으로.
+# 이 파일들은 집합으로만 의미가 있으므로 glob이 아니라 매니페스트를 가진다.
+#
+# The `omniidl` column is a **measurement taken on 2026-08-14**, not an
+# expectation: the oracle was run over each root and its verdict recorded. Two
+# rows disagree with it on purpose and both are stated as such — one where we
+# accept what it rejects, one where we refuse what it compiles. Neither is a
+# bug to be fixed later; both are decisions, and a decision that is not written
+# down becomes a bug the next time somebody reads the code.
+#
+# `omniidl` 열은 기대값이 아니라 2026-08-14에 실제로 측정한 결과다. 두 행은
+# 의도적으로 오라클과 갈리며, 갈리는 방향과 이유를 각각 적어 두었다.
+#
+# Files that are only ever included (`cycle-b.idl` is also a root; the rest of
+# the leaves are reachable from a root) are not listed as roots of their own
+# unless they are also valid alone.
+#
+# Columns: root <TAB> search <TAB> ours <TAB> rule <TAB> omniidl <TAB> why
+#   search   none | self      whether the case needs `-I corpus/include`
+#   ours     accept | accept+advice | reject
+#   rule     the diagnostic rule expected, or `-`
+
+common.idl	none	accept	-	accept	The shared file, standing alone. No guard, on purpose.
+types.idl	none	accept	-	accept	Reopens common.idl's module through an include and carries no prefix of its own. THE prefix-scope case: Freight::StampList must be IDL:Freight/StampList:1.0 while Freight::AuditMark one file away keeps IDL:meridian.example/Freight/AuditMark:1.0. Both compilers agree, measured with omniidl -Wbinline.
+qualified.idl	none	accept	-	accept	A root with no prefix naming an included file's types as ::Freight::AuditMark. Pins both that the prefix does not leak into it and that the `::`-qualified name shape resolves.
+service.idl	none	accept+advice	include-unguarded-repeat	reject	DELIBERATE DIVERGENCE, we are laxer. common.idl is reached twice, directly and through types.idl, and has no guard. A C preprocessor splices it twice and omniidl reports every declaration in it as a clash; we splice it once and raise advice naming the missing guard. Including an IDL file twice can only duplicate a declaration, never add one, so once-only loses nothing — and requiring guards would make the front end useless on the estates it exists for, which measured six of thirteen files unguarded. The advice is what keeps us from being quietly laxer than a deployed compiler.
+guarded-base.idl	none	accept	-	accept	The guarded leaf, standing alone.
+guarded-mid.idl	none	accept	-	accept	Guarded, no prefix of its own: Vault::KeyIds is unprefixed while Vault::KeyId is not.
+guarded-top.idl	none	accept	-	accept	Reaches guarded-base.idl twice through two paths. Guarded, so the repeat is silent and both compilers accept — the control for the service.idl row.
+cycle-a.idl	none	accept+advice	include-cycle	accept	A mutual include. The requirement is termination with a diagnostic naming the loop, not a stack overflow. Guarded, so omniidl compiles it; advice rather than an error for the same reason.
+cycle-b.idl	none	accept+advice	include-cycle	accept	The same loop entered from the other end, because a cycle that only terminates from one direction is not terminating.
+orphan.idl	none	reject	include-not-found	reject	A #include that resolves to nothing is a diagnostic listing every path searched. The silent skip this directory exists to remove is what turned one missing file into a diagnostic per name that file declared.
+conditional.idl	none	reject	unsupported-directive	accept	DELIBERATE DIVERGENCE, we are stricter. omniidl runs a real preprocessor and compiles this; we refuse. Skipping #ifdef compiles every arm at once, which is a silent misparse and the worst of the three answers available. The diagnostic names what to run first (`cpp -P`, `omniidl -E`). A clear refusal is a legitimate answer; a silent misparse is not.
+angled.idl	none	reject	include-not-found	reject	`#include <common.idl>` must NOT find the sibling file. Both compilers refuse it with no include path.
+angled.idl	self	accept	-	accept	The same file with the directory on the search path. The asymmetry between "" and <> is the C convention CORBA IDL inherits; getting it wrong makes an estate resolve differently depending on where the validator was invoked from.

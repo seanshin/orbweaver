@@ -1,0 +1,15 @@
+// ---------------------------------------------------------------------------
+// The other half.  See cycle-a.idl.
+//
+// 나머지 한쪽.
+// ---------------------------------------------------------------------------
+#ifndef _OW_CYCLE_B_IDL_
+#define _OW_CYCLE_B_IDL_
+
+#include "cycle-a.idl"
+
+module Loop {
+    typedef long Beta;
+};
+
+#endif // _OW_CYCLE_B_IDL_

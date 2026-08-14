@@ -16,10 +16,19 @@
 //! following token, the same mechanism SIDL annotations use, so the parser
 //! sees them in source order without the grammar having to admit `#`.
 //!
-//! Every other `#` directive is still skipped: `#include`, `#define`, the
-//! preprocessor's `# 12 "file.idl"` line markers, and any `#pragma` whose name
-//! we do not recognise ([`Pragma::Other`], kept so a reader can see it was
-//! seen and ignored rather than mistaken for a comment).
+//! Every other `#` directive is skipped **here**: the preprocessor's
+//! `# 12 "file.idl"` line markers, an include guard's `#ifndef`/`#define`, and
+//! any `#pragma` whose name we do not recognise ([`Pragma::Other`], kept so a
+//! reader can see it was seen and ignored rather than mistaken for a comment).
+//!
+//! `#include` used to be in that list, and being in it was a defect rather than
+//! a simplification: a type declared one file away was simply an unknown name,
+//! which rejected 11 of the 13 files of the estate in `spikes/estate/` that
+//! `omniidl` accepts. It is resolved before the lexer runs now — see
+//! [`crate::include`], which also refuses the conditional directives rather
+//! than skipping them, because skipping `#ifdef` compiles every arm at once.
+//! By the time a token stream exists, an `#include` line has already been
+//! replaced by the file it named.
 
 use std::fmt;
 
@@ -429,11 +438,11 @@ impl<'a> Lexer<'a> {
                 }
                 Some('/') if self.peek_at(1) == Some('/') => self.line_comment(),
                 Some('/') if self.peek_at(1) == Some('*') => self.block_comment()?,
-                // Preprocessor directives. Full preprocessing is a separate
-                // problem; a line beginning with # is skipped so that files
-                // carrying #include still tokenize rather than failing on the
-                // first line — except `#pragma`, which is lifted out because
-                // it decides repository ids.
+                // Preprocessor directives. `crate::include` runs first and has
+                // already resolved every `#include` and refused every
+                // conditional, so what reaches here is line markers, an
+                // include guard's own lines, and `#pragma` — which is lifted
+                // out rather than skipped, because it decides repository ids.
                 Some('#') if self.at_line_start() => self.directive()?,
                 _ => return Ok(()),
             }

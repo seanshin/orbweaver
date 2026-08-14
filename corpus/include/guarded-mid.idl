@@ -1,0 +1,16 @@
+// ---------------------------------------------------------------------------
+// The middle of the chain.  It has a guard and no prefix, so `Vault::KeyIds`
+// is unprefixed while `Vault::KeyId` one file away is not.
+//
+// 체인 중간.  가드는 있고 접두사는 없다.
+// ---------------------------------------------------------------------------
+#ifndef _OW_GUARDED_MID_IDL_
+#define _OW_GUARDED_MID_IDL_
+
+#include "guarded-base.idl"
+
+module Vault {
+    typedef sequence<KeyId> KeyIds;
+};
+
+#endif // _OW_GUARDED_MID_IDL_
