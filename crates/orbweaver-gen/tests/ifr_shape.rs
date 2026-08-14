@@ -686,7 +686,7 @@ fn the_generated_skeleton_answers_what_the_hand_written_servant_answers() {
                      generated:    {got:?}",
                     c.what,
                     c.op,
-                    &c.args,
+                    c.args,
                     String::from_utf8_lossy(&c.key)
                 ));
             }
