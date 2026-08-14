@@ -423,6 +423,33 @@ fn diff_type(id: &RepositoryId, a: &TypeCode, b: &TypeCode, out: &mut Vec<Change
                 }
             }
         }
+        // A bound is not an encoding. `sequence<octet>` and `sequence<octet, 64>`
+        // put the same bytes on the wire — a length and the elements — so the
+        // catch-all's sentence about a receiver having no way to notice is
+        // false here, and it is false in the direction that matters: a bound
+        // change fails *loudly*, with a refusal, where the class that sentence
+        // describes is §5.3's measured horror of a peer returning the wrong
+        // member and raising nothing. Still Breaking — tightening refuses a
+        // sender that was conformant yesterday, loosening refuses a receiver
+        // that is conformant today — but a diagnostic that misdirects an
+        // operator toward the silent class costs more than it saves.
+        (a, b)
+            if bounds_of(a.resolve_alias()).is_some()
+                && bounds_of(a.resolve_alias()) != bounds_of(b.resolve_alias())
+                && same_shape(a.resolve_alias(), b.resolve_alias()) =>
+        {
+            out.push(Change {
+                id: id.clone(),
+                what: format!(
+                    "bound changed from {} to {}",
+                    render_bound(bounds_of(a.resolve_alias())),
+                    render_bound(bounds_of(b.resolve_alias()))
+                ),
+                why: "the bytes are unchanged; what changes is what a conformant peer may send \
+                      or accept, so the failure is a refusal rather than a silent misread",
+                verdict: Verdict::Breaking,
+            });
+        }
         _ => out.push(Change {
             id: id.clone(),
             what: "type definition changed".into(),
@@ -432,9 +459,84 @@ fn diff_type(id: &RepositoryId, a: &TypeCode, b: &TypeCode, out: &mut Vec<Change
     }
 }
 
+/// Whether two types differ only in a way a bound can explain — a sequence of
+/// the same element type, or the same string kind. A `sequence<octet>` becoming
+/// a `sequence<long>` is not a bound change however the bounds compare.
+fn same_shape(a: &TypeCode, b: &TypeCode) -> bool {
+    match (a, b) {
+        (TypeCode::Sequence { element: ea, .. }, TypeCode::Sequence { element: eb, .. }) => {
+            ea == eb
+        }
+        (TypeCode::String(_), TypeCode::String(_)) => true,
+        (TypeCode::WString(_), TypeCode::WString(_)) => true,
+        _ => false,
+    }
+}
+
+/// The declared bound of a bounded type, or `None` for one that has no bound
+/// to change. Zero means unbounded in `TypeCode`, and is rendered as such.
+fn bounds_of(tc: &TypeCode) -> Option<u32> {
+    match tc {
+        TypeCode::Sequence { bound, .. } | TypeCode::String(bound) | TypeCode::WString(bound) => {
+            Some(*bound)
+        }
+        _ => None,
+    }
+}
+
+fn render_bound(b: Option<u32>) -> String {
+    match b {
+        Some(0) | None => "unbounded".to_owned(),
+        Some(n) => n.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A bound change is Breaking and **not** the silent class. The bytes are
+    /// identical — a length and the elements — so the catch-all's sentence
+    /// about a receiver having no way to notice is false here, and false in
+    /// the direction that misleads: this failure is a refusal, while the class
+    /// that sentence describes is §5.3's measured case of a peer returning the
+    /// wrong member and raising nothing.
+    #[test]
+    fn a_bound_change_is_breaking_but_not_silent() {
+        let out = diff(
+            &reg("module m { typedef sequence<octet> Blob; };"),
+            &reg("module m { typedef sequence<octet, 64> Blob; };"),
+        );
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].verdict, Verdict::Breaking);
+        assert!(out[0].what.contains("unbounded to 64"), "{}", out[0].what);
+        assert!(out[0].why.contains("refusal"), "{}", out[0].why);
+        assert!(!out[0].why.contains("no way to notice"), "{}", out[0].why);
+    }
+
+    /// Loosening is breaking too, and for the other party: a receiver bounded
+    /// at 64 refuses what a newly unbounded sender may now send.
+    #[test]
+    fn loosening_a_bound_is_breaking_for_the_receiver() {
+        let out = diff(
+            &reg("module m { typedef string<32> Name; };"),
+            &reg("module m { typedef string Name; };"),
+        );
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(out[0].what.contains("32 to unbounded"), "{}", out[0].what);
+    }
+
+    /// And a change a bound cannot explain keeps the silent-class message,
+    /// because that one is true of it.
+    #[test]
+    fn changing_the_element_type_is_still_the_silent_class() {
+        let out = diff(
+            &reg("module m { typedef sequence<octet> Blob; };"),
+            &reg("module m { typedef sequence<long> Blob; };"),
+        );
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(out[0].why.contains("no way to notice"), "{}", out[0].why);
+    }
 
     fn reg(src: &str) -> Registry {
         let spec = orbweaver_idl::parse(src).expect("parses");
