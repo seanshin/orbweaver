@@ -695,7 +695,7 @@ produces), and **oracle** (what verifies the whole batch deterministically).
   `SharedDispatch` is `&self`/`Sync`, all five servants ported with a sharing
   decision argued per servant, and the lock discipline enforced by
   `orbweaver_giop::guarded` rather than documented). Remaining: ~~fragment
-  *reception*~~ (no peer fragments, so the specification is the oracle:
+  *reception*~~, ~~request multiplexing~~, ~~connection pooling~~ (no peer fragments, so the specification is the oracle:
   hand-built §9.4.9 streams found two reception bugs), request multiplexing,
   connection pooling, `#pragma prefix`.
 

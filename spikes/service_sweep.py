@@ -344,6 +344,29 @@ class Conn:
         return out
 
     def call(self, key, operation, write_args=None, raw_body=None):
+        """One request, re-sent once if the peer closes the connection.
+
+        §13.5.1: the requests outstanding when a `CloseConnection` arrives
+        "were not processed, and may be safely resent on a new connection" —
+        a promise about processing, not about idempotence, which is exactly
+        what makes one re-send correct and a second one a hot loop against a
+        server that is refusing. Treating the close as a failed measurement
+        was this driver reading a normal wire event as a fault: it appeared
+        only under harness load, where a servant is slow enough to reach a
+        condition that closes, and never in three standalone runs.
+        """
+        try:
+            return self._call_once(key, operation, write_args, raw_body)
+        except EOFError:
+            self.reconnect()
+            return self._call_once(key, operation, write_args, raw_body)
+
+    def reconnect(self):
+        self.close()
+        self.sock = socket.create_connection((self.ref.host, self.ref.port), TIMEOUT)
+        self.sock.settimeout(TIMEOUT)
+
+    def _call_once(self, key, operation, write_args=None, raw_body=None):
         rid = self.next_id
         self.next_id += 1
 
