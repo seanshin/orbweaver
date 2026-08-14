@@ -114,10 +114,20 @@
 //! send is a stage that can call: the gate becomes a caller, past its own gate,
 //! which is §4.7's bypass rebuilt inside the thing that exists to prevent it.
 //!
-//! The chain also runs **before** the arguments are decoded, so no stage sees
-//! them. That is what leaves [`SEAT_SAFETY_CONTENT`] empty rather than merely
-//! unimplemented: filling it is a change to where the chain runs, not just a
-//! stage to write.
+//! The chain runs **before** the arguments are decoded, and it stays there. It
+//! used to follow that no stage could see them, and that is what left
+//! [`SEAT_SAFETY_CONTENT`] empty. The fix was not to move the chain — a chain
+//! after mapping answers a *mapping* error before a *policy* refusal, which
+//! turns failures into an oracle for the shape of operations the caller may not
+//! call — but to hand a stage the arguments **unmapped**, exactly as the agent
+//! sent them ([`CallContext::arguments`]).
+//!
+//! **On the dynamic path only.** A generated stub gives the wire a closure that
+//! writes bytes, so the static path supplies `None` and a content rule is
+//! enforced on one path and absent on the other. That is §4.7's bypass wearing
+//! a safety label, and it is written here rather than left for somebody to
+//! discover: closing it means `Invoker::invoke` carrying arguments as data,
+//! across three crates.
 //!
 //! # What the content seat cannot see, stated precisely
 //!
@@ -155,16 +165,19 @@
 //!    [`Exposure::check_call`]'s ordering paragraph protects. So the shape is
 //!    two chains, before and after decode, and this one keeps its place.
 //!
-//! And the tempting occupant, refused: a stage that reads the operation name,
-//! or the declared parameter types, or an annotation on a parameter, is a
-//! **contract** filter — and the contract half of the safety seat is already
-//! occupied by [`ApprovalInterceptor`]. Registering one under a name that says
-//! `content` would report screening of the argument values, which it has not
-//! got, and the seat would stop being a plan and become a claim. It stays
-//! empty. `the_content_seat_is_blind_to_the_arguments_measured` runs a real
-//! session whose arguments carry a marker and asserts a stage at the seat never
-//! sees it — so the day somebody widens [`CallContext`], that test fails and
-//! the seat gets revisited instead of quietly staying empty.
+//! And the tempting occupant, still refused: a stage that reads only the
+//! operation name, the declared parameter types or an annotation is a
+//! **contract** filter, and that half of the safety seat is already occupied by
+//! [`ApprovalInterceptor`]. Registering one under a name that says `content`
+//! would report screening of argument values it does not do.
+//!
+//! What changed is that a real content stage is now *possible*:
+//! `the_content_seat_can_read_the_arguments_measured` runs a session whose
+//! arguments carry a marker and asserts a stage at the seat **does** see it —
+//! the exact inverse of the assertion it replaces, whose failure message said a
+//! `CallContext` field would end the blindness. The crate ships no occupant,
+//! because what to screen for is a policy only a deployment has, and this crate
+//! owes it the mechanism rather than the rule.
 //!
 //! # Asking the chain without calling anything
 //!
@@ -178,6 +191,7 @@
 
 use std::cmp::Ordering;
 
+use orbweaver_dynamic::json::Json;
 use orbweaver_registry::Registry;
 
 use crate::guard::{
@@ -263,6 +277,30 @@ pub struct CallContext<'a> {
     pub operation: &'a str,
     /// What the *host* has approved, never what the agent claims.
     pub approval: Approval,
+    /// The arguments the agent sent, **before** they are mapped onto the
+    /// contract's types — `None` on any path that has none to offer.
+    ///
+    /// This is what fills [`SEAT_SAFETY_CONTENT`], and the shape matters. The
+    /// seat was empty because the chain runs before arguments are decoded, and
+    /// the fix people reach for — run the chain after mapping — is the wrong
+    /// one: a chain there answers a *mapping* error before a *policy* refusal,
+    /// which turns failures into an oracle for the shape of operations the
+    /// caller may not call. Passing the unmapped JSON keeps the chain where it
+    /// is and still gives a stage the values.
+    ///
+    /// **The static path supplies `None`, and that is a real gap rather than a
+    /// detail.** A generated stub hands its arguments to the wire as a closure
+    /// that writes bytes; there is no data for a stage to read. So a content
+    /// rule is enforced on the dynamic path and absent on the compiled one,
+    /// which is §4.7's bypass wearing a safety label — stated here because a
+    /// half-enforced gate that nobody documents is worse than an empty seat.
+    /// Closing it means `Invoker::invoke` carrying arguments as data, which is
+    /// a three-crate change.
+    ///
+    /// **정적 경로는 `None`을 준다.** 생성 스텁은 인자를 바이트로 쓰는 클로저로
+    /// 넘기므로 스테이지가 읽을 데이터가 없다. 내용 규칙이 동적 경로에서만
+    /// 강제된다는 뜻이며, 문서화되지 않은 반쪽 게이트는 빈 좌석보다 나쁘다.
+    pub arguments: Option<&'a Json>,
 }
 
 /// What a stage answers when it is asked to let a call through.
@@ -1435,7 +1473,7 @@ mod tests {
         operation: &'a str,
         approval: Approval,
     ) -> CallContext<'a> {
-        CallContext { registry: reg, caller, target: ACCOUNT, operation, approval }
+        CallContext { registry: reg, caller, target: ACCOUNT, operation, approval, arguments: None }
     }
 
     /// PLAN-MOE F4's first oracle: the order is pinned, not incidental.
@@ -1534,6 +1572,7 @@ mod tests {
             target: forged,
             operation: "balance",
             approval: Approval::default(),
+            arguments: None,
         };
         chain.unresolved(&call, "no live reference is held under that handle");
         assert_eq!(chain.audit().len(), 1);
@@ -1631,13 +1670,17 @@ mod tests {
             if let Some(c) = ctx.caller {
                 seen.push_str(&format!(" caller={} scopes={:?}", c.principal, c.scopes));
             }
-            // The arguments' *contract* is reachable through the registry: the
-            // parameter names, their declared types, their annotations. Their
-            // values are not reachable at all.
+            // The arguments' *contract* comes from the registry — parameter
+            // names, declared types, annotations — and since `CallContext`
+            // grew an `arguments` field their **values** come with the call,
+            // unmapped, exactly as the agent sent them.
             if let Some((_, sig)) = ctx.registry.resolve_operation(ctx.target, ctx.operation) {
                 for p in &sig.params {
                     seen.push_str(&format!(" param={}", p.name));
                 }
+            }
+            if let Some(args) = ctx.arguments {
+                seen.push_str(&format!(" args={args}"));
             }
             self.0.borrow_mut().push(seen);
             Outcome::Proceed
@@ -1654,7 +1697,7 @@ mod tests {
     /// that fails the day [`CallContext`] grows an argument field, which is the
     /// day the seat can be filled honestly.
     #[test]
-    fn the_content_seat_is_blind_to_the_arguments_measured() {
+    fn the_content_seat_can_read_the_arguments_measured() {
         use orbweaver_giop::{Connection, IiopProfile, Ior, Version};
 
         use crate::session::Session;
@@ -1696,12 +1739,21 @@ mod tests {
 
         let seen = seen.borrow().join("\n");
         assert!(seen.contains("operation=deposit"), "the stage must have run: {seen:?}");
-        assert!(seen.contains("param=cents"), "it can read the contract of the argument: {seen}");
+        assert!(seen.contains("param=cents"), "it reads the contract of the argument: {seen}");
+        // This assertion is the inverse of the one it replaces, and that is the
+        // point of the change rather than a regression: the seat was empty
+        // because a stage there could not see a value, and the old test said in
+        // its own failure message that a `CallContext` field would end that.
         assert!(
-            !seen.contains(MARKER),
-            "and it cannot read the argument. If this ever fails, CallContext has grown a \
-             field and SEAT_SAFETY_CONTENT can stop being empty:\n{seen}"
+            seen.contains(MARKER),
+            "the stage must be able to read what the agent actually sent:\n{seen}"
         );
+        // And the chain still ran *before* mapping — the argument is a string
+        // where the contract wants a `long`, so mapping fails afterwards. That
+        // ordering is what keeps a mapping error from answering ahead of a
+        // policy refusal and turning failures into an oracle for the shape of
+        // operations a caller may not call.
+        assert!(seen.contains("\"cents\""), "the value arrives unmapped: {seen}");
     }
 
     /// Records what ran and in which phase, so the unwinding discipline can be
@@ -1896,6 +1948,7 @@ mod tests {
             target: "cap_00000000000000000000000000000000",
             operation: "balance",
             approval: Approval::default(),
+            arguments: None,
         };
         chain.unresolved(&forged, "no live reference is held under that handle");
 

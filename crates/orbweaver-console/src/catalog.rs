@@ -286,7 +286,10 @@ fn requirement(
     operation: &str,
     approval: Approval,
 ) -> Requires {
-    let ctx = CallContext { registry, caller: None, target, operation, approval };
+    // The console asks what the gate *would* do; it never sends arguments,
+    // so there are none to screen and `None` is the true answer rather than a
+    // placeholder.
+    let ctx = CallContext { registry, caller: None, target, operation, approval, arguments: None };
     let prediction = dryrun::predict(chain, &ctx);
     let Some((_, outcome)) = prediction.chain().stages().find(|(name, _)| *name == STAGE_SCOPES)
     else {

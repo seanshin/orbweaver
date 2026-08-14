@@ -477,6 +477,7 @@ mod tests {
             target,
             operation,
             approval: Approval { destructive_approved: true },
+            arguments: None,
         }
     }
 
@@ -727,6 +728,7 @@ mod tests {
             target: ACCOUNT,
             operation: "close",
             approval: Approval::default(),
+            arguments: None,
         };
         for _ in 0..3 {
             assert!(chain.run(&unapproved).is_err(), "destructive and unapproved");

@@ -277,6 +277,7 @@ impl<'r, C: Invoker> Guarded<'r, C> {
             target: self.id.as_str(),
             operation,
             approval: self.approval,
+            arguments: None,
         };
         crate::dryrun::predict(&mut self.chain, &ctx)
     }
@@ -301,6 +302,7 @@ impl<'r, C: Invoker> Invoker for Guarded<'r, C> {
             target: self.id.as_str(),
             operation,
             approval: self.approval,
+            arguments: None,
         };
         if let Err(why) = self.chain.run(&ctx) {
             return Err(refusal(&why));
@@ -327,6 +329,7 @@ impl<'r, C: Invoker> Invoker for Guarded<'r, C> {
             target: self.id.as_str(),
             operation,
             approval: self.approval,
+            arguments: None,
         };
         if let Err(why) = self.chain.run(&ctx) {
             return Err(refusal(&why));

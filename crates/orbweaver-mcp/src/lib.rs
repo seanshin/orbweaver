@@ -318,6 +318,7 @@ impl<'a> Bridge<'a> {
             target: id,
             operation,
             approval,
+            arguments: None,
         };
         dryrun::predict(&mut self.chain, &ctx).to_json()
     }
@@ -433,6 +434,7 @@ impl<'a> Bridge<'a> {
                 target: handle,
                 operation,
                 approval,
+                arguments: None,
             };
             self.chain.unresolved(&ctx, &refused.to_string());
             return Err(refused);
@@ -450,6 +452,11 @@ impl<'a> Bridge<'a> {
             target: id.as_str(),
             operation,
             approval,
+            // The agent's own arguments, unmapped. The chain still runs before
+            // anything is decoded — which is what keeps a mapping error from
+            // answering ahead of a policy refusal — and a content stage can
+            // nonetheless read what was actually sent.
+            arguments: Some(args),
         };
         // A refusal has already unwound through the chain by the time `run`
         // returns, audit line and counter included.

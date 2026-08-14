@@ -419,6 +419,7 @@ pub fn survey(
                 target: id.as_str(),
                 operation: operation.as_str(),
                 approval,
+                arguments: None,
             };
             let prediction = predict(chain, &ctx);
             let at = Would::ALL.iter().position(|w| *w == prediction.would()).unwrap_or_default();
@@ -532,7 +533,7 @@ mod tests {
         operation: &'a str,
         approval: Approval,
     ) -> CallContext<'a> {
-        CallContext { registry: reg, caller, target: ACCOUNT, operation, approval }
+        CallContext { registry: reg, caller, target: ACCOUNT, operation, approval, arguments: None }
     }
 
     /// The property the whole feature stands on, and the one an operator is

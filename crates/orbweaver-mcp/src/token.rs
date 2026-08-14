@@ -1240,6 +1240,7 @@ mod tests {
                 target: "IDL:parkinglot/ParkingControl:1.0",
                 operation: "open_barrier",
                 approval: Approval::default(),
+                arguments: None,
             },
         );
         assert_eq!(p.would(), Would::NeedScope, "the outage, as the gate spells it");
@@ -1423,6 +1424,7 @@ mod tests {
             target: ACCOUNT,
             operation: "balance",
             approval: Approval::default(),
+            arguments: None,
         };
 
         gate.stamp(epoch(900));
@@ -1461,6 +1463,7 @@ mod tests {
                 target: ACCOUNT,
                 operation: "balance",
                 approval: Approval::default(),
+                arguments: None,
             };
             assert_eq!(chain.run(&call(&alice)).is_ok(), expired_ok, "{unstamped:?}");
             // A caller with no expiry is the exchange's recorded decision and is
@@ -1485,6 +1488,7 @@ mod tests {
                     target: ACCOUNT,
                     operation: "balance",
                     approval: Approval::default(),
+                    arguments: None,
                 })
                 .is_ok()
         );

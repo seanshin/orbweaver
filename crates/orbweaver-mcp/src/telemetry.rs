@@ -608,6 +608,7 @@ mod tests {
             target: ACCOUNT,
             operation: "balance",
             approval: Approval::default(),
+            arguments: None,
         };
         chain.run(&ctx).expect("exposed");
         chain.completed(&ctx, true);
@@ -677,6 +678,7 @@ mod tests {
             target: ACCOUNT,
             operation: nasty,
             approval: Approval::default(),
+            arguments: None,
         };
         chain.run(&ctx).unwrap_err();
 
@@ -717,6 +719,7 @@ mod tests {
             target: ACCOUNT,
             operation: "balance",
             approval: Approval::default(),
+            arguments: None,
         };
         chain.run(&ctx).expect("the gate is unaffected by the sink");
         chain.completed(&ctx, true);
@@ -906,6 +909,7 @@ mod tests {
             target: ACCOUNT,
             operation: "balance",
             approval: Approval::default(),
+            arguments: None,
         };
         chain.run(&ctx).unwrap_err();
         chain.dry_run(&ctx);
@@ -926,6 +930,7 @@ mod tests {
             target: ACCOUNT,
             operation: "balance",
             approval: Approval::default(),
+            arguments: None,
         };
         chain.run(&ctx).unwrap_err();
         assert_eq!(chain.trace_mut().expect("installed").emitted(), 1);

@@ -1412,6 +1412,9 @@ mod tests {
             target,
             operation: "wipe",
             approval: Approval { destructive_approved: true },
+            // This premise is about the quota keying on the target, which no
+            // argument affects.
+            arguments: None,
         };
         assert!(matches!(quota.before(&call("IDL:m/Base:1.0")), Outcome::Proceed));
         assert!(matches!(quota.before(&call("IDL:m/Base:1.0")), Outcome::Refuse(_)), "the limit");
