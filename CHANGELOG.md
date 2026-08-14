@@ -50,6 +50,22 @@ could serve as one.
 
 ### Added / 추가
 
+- **The end-to-end path, measured as one path** (`spikes/end_to_end.sh`, in the
+  harness): a fresh requirement → S1–S5 → both generated halves → a servant on
+  our POA → an agent-shaped caller through the guard, with a scope refusal
+  visible in the transcript. **185 hand-written product lines against 778
+  generated.** Composing it produced the release's most useful finding — see
+  *Known limits*.
+- **`#pragma prefix` / `version` / `ID`** — repository ids now match omniidl on
+  a 25-id corpus, prefixes and all. Before this, every legacy IDL file (the OMG
+  recommends a reverse-DNS prefix) would have given us a different identity for
+  every type than the peer had, while looking correct locally.
+- **`orbweaver-console`** — catalog, contract diff and D004 traces as
+  self-contained HTML, no web framework and no template engine.
+- **D004 tier 1 telemetry** — one span record per decision, no clock, and a
+  credential structurally unable to reach a line.
+- **S3i** — annotations inferred for ingested contracts, which never occupy a
+  key a gate reads until a human approves them.
 - **CORBA services on our POA**: CosNaming server, CosEvent push channel
   (bounded queue, dead consumers disconnected with **drops counted**),
   Trading wire surface for the MoE control plane, a read-only Interface
@@ -117,6 +133,15 @@ Stated because an absence that is not written down reads as a feature:
 - The embedding synonym class, the TAO oracle column and the SSLIOP peer proof
   are **unmeasured**, each for a stated reason, and the harness counts them as
   skips rather than passes.
+- **The pipeline is not reproducible across runs, and nothing catches it.**
+  Re-running S1–S3 on the same requirement with the same prompts passed every
+  gate 1/1 again and produced a different contract: different module and
+  operation names, a different parameter type, and an authorization scope that
+  drifted from the one the requirement literally states. An identity provider
+  issuing the stated scope against such a contract refuses every legitimate
+  caller. Recorded in `docs/pipeline-runs/2026-08-14-end-to-end.md`; the fix
+  needs a decision about what S2 may choose, so it is named rather than
+  patched.
 
 ---
 
