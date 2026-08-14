@@ -649,8 +649,11 @@ produces), and **oracle** (what verifies the whole batch deterministically).
 
 #### Stream C — Transport security and token exchange (rest of Phase 5)
 
-- **What:** SSLIOP / TLS transport (transport-identity row of §4.8);
-  OAuth2/JWT → `Caller` token exchange at the bridge; mid-connection
+- **What:** ~~SSLIOP / TLS transport~~ (landed behind an off-by-default
+  feature; the peer proof is measured BLOCKED, `spikes/tls/PEER-STATUS.md`);
+  ~~OAuth2/JWT → `Caller` token exchange~~ (landed as a seam — the verifier is
+  a trait this project does not implement, because a verifier wrong in the
+  accepting direction interoperates perfectly and no oracle we own sees it); mid-connection
   re-establishment on token expiry (R17); catalogue marking for targets that
   cannot enforce.
 - **Depends on:** csiv2 module and `Caller` seam (landed). TLS needs a
