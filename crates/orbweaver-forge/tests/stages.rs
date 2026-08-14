@@ -16,7 +16,8 @@ use std::path::PathBuf;
 
 use orbweaver_forge::ingest::{Brief, Effect, Entity, Field, OperationSketch};
 use orbweaver_forge::pipeline::{
-    ItemStatus, Pipeline, Stage, StageId, Workspace, gate_for, run_batch, run_pipeline,
+    ItemStatus, Pipeline, Stage, StageId, ValidateStage, Workspace, gate_for, run_batch,
+    run_pipeline,
 };
 use orbweaver_forge::{Report, validate};
 
@@ -249,6 +250,7 @@ fn a_failure_is_attributed_to_the_stage_that_caused_it() {
         ingest: Some(&mut ingest),
         synthesize: Some(&mut synthesize),
         annotate: Some(&mut annotate),
+        validate: ValidateStage::default(),
         first: StageId::Ingest,
         last: StageId::Validate,
         max_rounds: 1,
@@ -282,6 +284,7 @@ fn each_stage_leaves_its_own_artifact_and_s4_gates_the_last() {
         ingest: Some(&mut ingest),
         synthesize: Some(&mut synthesize),
         annotate: Some(&mut annotate),
+        validate: ValidateStage::default(),
         first: StageId::Ingest,
         last: StageId::Validate,
         max_rounds: 1,
@@ -314,6 +317,7 @@ fn an_edited_brief_reaches_s2_on_a_rerun_that_skips_s1() {
         ingest: Some(&mut ingest),
         synthesize: None,
         annotate: None,
+        validate: ValidateStage::default(),
         first: StageId::Ingest,
         last: StageId::Ingest,
         max_rounds: 1,
@@ -343,6 +347,7 @@ fn an_edited_brief_reaches_s2_on_a_rerun_that_skips_s1() {
         ingest: None,
         synthesize: Some(&mut synthesize),
         annotate: None,
+        validate: ValidateStage::default(),
         first: StageId::Synthesize,
         last: StageId::Validate,
         max_rounds: 1,
@@ -406,6 +411,7 @@ fn a_stage_with_no_producer_is_skipped_out_loud() {
         ingest: None,
         synthesize: Some(&mut synthesize),
         annotate: None,
+        validate: ValidateStage::default(),
         first: StageId::Synthesize,
         last: StageId::Validate,
         max_rounds: 1,
@@ -431,6 +437,7 @@ fn a_range_that_can_run_nothing_is_refused() {
         ingest: None,
         synthesize: None,
         annotate: None,
+        validate: ValidateStage::default(),
         first: StageId::Annotate,
         last: StageId::Annotate,
         max_rounds: 1,
@@ -456,6 +463,7 @@ fn resuming_and_running_through_produce_the_same_artifacts() {
             ingest: Some(&mut ingest),
             synthesize: Some(&mut synthesize),
             annotate: Some(&mut annotate),
+            validate: ValidateStage::default(),
             first,
             last: StageId::Validate,
             max_rounds: 1,
@@ -591,6 +599,7 @@ fn a_failed_items_artifact_is_still_written() {
         ingest: None,
         synthesize: None,
         annotate: Some(&mut annotate),
+        validate: ValidateStage::default(),
         first: StageId::Annotate,
         last: StageId::Validate,
         max_rounds: 1,

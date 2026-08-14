@@ -226,6 +226,114 @@ fn the_binding_cannot_fire_on_the_requirements_corpus() {
     assert_eq!(scope_tokens(&read("spikes/e2e/requirement.txt")), ["gate:operate"]);
 }
 
+/// The repair for the finding the run record left open: a second requirement
+/// set, **beside** the frozen twenty, that can actually exercise the rule.
+///
+/// # Why a second set and not six more files in `inputs/`
+///
+/// `corpus/requirements/inputs/` is frozen before generation on purpose, and
+/// the frozen twenty are the denominator every assumption-B number ever
+/// reported is over. Adding to it would silently change a number earlier
+/// reports quote. `corpus/queries/` set the precedent for exactly this
+/// situation: `search-v1.tsv` stayed frozen and `search-v2.tsv` was added
+/// beside it, containing every v1 line **verbatim** plus the new cases, with
+/// both run and both reported. `inputs-v2/` is that shape — the twenty copied
+/// byte for byte, plus six requirements that state a permission.
+///
+/// **v1은 얼어 있고 v2가 그 옆에 선다.** v2는 v1 스무 건을 그대로 포함하므로 두
+/// 버전의 수치는 비교 가능하다.
+#[test]
+fn the_v2_requirement_set_contains_the_frozen_twenty_verbatim() {
+    let v1 = root().join("corpus/requirements/inputs");
+    let v2 = root().join("corpus/requirements/inputs-v2");
+    let names = |dir: &Path| -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "txt"))
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect();
+        names.sort();
+        names
+    };
+
+    let (frozen, widened) = (names(&v1), names(&v2));
+    assert_eq!(frozen.len(), 20, "the frozen benchmark is twenty requirements");
+    assert_eq!(widened.len(), 26, "v2 is those twenty plus the six that state a permission");
+    for name in &frozen {
+        assert!(widened.contains(name), "v2 must contain every v1 item: {name} is missing");
+        assert_eq!(
+            std::fs::read(v1.join(name)).expect("v1"),
+            std::fs::read(v2.join(name)).expect("v2"),
+            "{name} differs between v1 and v2 — copied, never re-judged, or the two \
+             versions stop being comparable"
+        );
+    }
+}
+
+/// What the new set measures, and the finding it produced.
+///
+/// Six requirements, each naming a permission the way a requirement in its
+/// domain would, written in one pass before the scanner was run over any of
+/// them. **Three trip the rule and three do not**, and the three that do not
+/// are the more valuable half: they are the natural ways of stating a
+/// permission that [`orbweaver_forge::ingest::scope_shaped`] cannot see, and
+/// each one is a requirement whose stated permission binds nothing.
+///
+/// - `R24` states it in Korean prose — *보안 책임자 권한*. No token at all.
+/// - `R25` states it as `ROLE_REGISTRAR`, the Spring/Java convention, which is
+///   upper case and has no separator.
+/// - `R26` states it as `warehouse/robot/estop`, slash-separated, which several
+///   real ACL systems use.
+///
+/// This is the rule's documented limit, now with a corpus behind it rather than
+/// a sentence: the binding covers **one lexical convention**, and a project
+/// whose house style is any of the other three gets silence. Widening the
+/// predicate is not obviously right — `ROLE_REGISTRAR` is one token away from
+/// any other upper-case constant — so it is recorded as a measurement rather
+/// than patched.
+///
+/// **세 건은 발화하고 세 건은 침묵한다.** 침묵하는 세 건이 더 중요한 결과다:
+/// 산문·대문자·슬래시 표기는 모두 실제로 쓰이는 권한 표기이며 규칙이 보지 못한다.
+#[test]
+fn the_v2_set_states_permissions_and_three_natural_forms_are_invisible() {
+    let dir = root().join("corpus/requirements/inputs-v2");
+    let tokens = |name: &str| -> Vec<String> {
+        scope_tokens(&std::fs::read_to_string(dir.join(name)).expect(name))
+    };
+
+    let binds: BTreeMap<&str, Vec<String>> =
+        ["R21.txt", "R22.txt", "R23.txt", "R24.txt", "R25.txt", "R26.txt"]
+            .into_iter()
+            .map(|name| (name, tokens(name)))
+            .collect();
+    for (name, found) in &binds {
+        println!("{name}: {found:?}");
+    }
+
+    assert_eq!(binds["R21.txt"], ["pharmacy.prescription.write"], "a dotted permission");
+    assert_eq!(binds["R22.txt"], ["grid:breaker_control"], "a colon permission with an underscore");
+    assert_eq!(binds["R23.txt"], ["billing.refund.approve"], "three dotted segments");
+
+    assert!(binds["R24.txt"].is_empty(), "Korean prose states a permission and binds nothing");
+    assert!(binds["R25.txt"].is_empty(), "ROLE_REGISTRAR is upper case and has no separator");
+    assert!(binds["R26.txt"].is_empty(), "warehouse/robot/estop is slash-separated");
+
+    // And the twenty copied into v2 are still silent, so v2's fires are the six
+    // new items' and nothing leaked from the frozen set.
+    let mut frozen_fires = 0;
+    for n in 1..=20 {
+        if !tokens(&format!("R{n:02}.txt")).is_empty() {
+            frozen_fires += 1;
+        }
+    }
+    println!(
+        "corpus/requirements/inputs-v2: 3/26 requirement(s) contain a scope-shaped token \
+         (0/20 frozen, 3/6 new)"
+    );
+    assert_eq!(frozen_fires, 0);
+}
+
 /// The plumbing, end to end with a scripted producer: S3's second input reaches
 /// the prompt, and S3's gate reaches the same token.
 ///
