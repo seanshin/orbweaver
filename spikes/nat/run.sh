@@ -10,7 +10,14 @@
 # cheap: the single thing this probe adds over the host-only measurement is a
 # client that genuinely cannot route to the servant's own address.
 #
+#   ./spikes/nat/preflight.sh    # whether this machine can run it, and what is
+#                                # missing if not — measured, not asserted
 #   ./spikes/nat/run.sh
+#
+# Its sibling `spikes/nat/k8s/` is the same assertion against a Deployment
+# behind a Service, dialed from outside the cluster. That one also translates
+# the *port* (a NodePort is not the port the servant bound), which this one
+# does not; it is equally unrun.
 #
 # Expected outcome, which is the assertion:
 #   naive      the servant publishes its container address; the client's dial

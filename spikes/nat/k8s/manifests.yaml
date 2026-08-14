@@ -1,0 +1,161 @@
+# Kubernetes half of the R7 probe — ***NEVER EXECUTED.***
+#
+# Written on a machine with no cluster and no way to make one (no container
+# engine, and `multipass launch` refused for want of disk: "Available disk
+# (974639104 bytes) below minimum for this image (3758096384 bytes)"). Nothing
+# here is evidence. `spikes/nat/k8s/run.sh` drives it, `spikes/nat_rewrite.sh`
+# counts it as a SKIP, and the first person to run it should expect to fix it
+# rather than to confirm it.
+#
+# ── What this adds over the compose probe ────────────────────────────────────
+#
+# `spikes/nat/compose.yaml` isolates two Docker networks, so the servant's own
+# address is simply unreachable. Kubernetes is the deployment R7 was written
+# for and it is a *harder* case in two ways this file exercises and that one
+# does not:
+#
+#   1. **The published port is not the bound port.** A NodePort is allocated
+#      from 30000-32767 while the servant binds 5555, so the reference must
+#      carry a translated port as well as a translated host. That is the
+#      `to_port` half of an `EndpointMap` rule, and nothing has ever dialed it.
+#   2. **The published address is the Service's, not the pod's.** A pod IP is
+#      the address the ORB believes it has, and it is correct — briefly, and
+#      only from inside. It changes on every restart. The Service is the stable
+#      identity, and the map is how the servant is told so.
+#
+# ── The trap this topology is built to avoid ─────────────────────────────────
+#
+# **The client must be outside the cluster.** Pod-to-pod networking is flat by
+# default: a client pod dials a pod IP perfectly well, so an in-cluster client
+# would make the *naive* case SUCCEED and the probe would report a pass having
+# demonstrated nothing. (A NetworkPolicy does not fix this unless the CNI
+# enforces one, and kind's default kindnet does not.) So the client runs on the
+# host and reaches the servant only through the NodePort — exactly the path a
+# real out-of-cluster CORBA client takes, and the path that makes the pod IP in
+# a naive reference useless.
+#
+# A run where both cases succeed has not demonstrated the fix. It has
+# demonstrated that the client was not outside, which is a broken probe.
+#
+#   kubectl apply -f manifests.yaml     # run.sh does this, and the rest
+#
+# The image is the one `spikes/nat/Dockerfile` builds — the same three-mode
+# entrypoint the compose probe uses, unchanged, because `naive` (bind and
+# publish this container's own address) and `published` (bind wide, publish
+# through ORBWEAVER_PUBLISH_MAP) are the same two cases here. It is side-loaded
+# (`kind load` / `minikube image load`), never pushed: no registry is needed and
+# publishing images is a licensing question this probe has no reason to open.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: orbweaver-nat
+  labels:
+    app.kubernetes.io/name: orbweaver-nat
+data:
+  # `run.sh` replaces this whole ConfigMap once per case, because the published
+  # address is not knowable until the node's address is. The values below are
+  # the shape, not a working configuration — the host is deliberately an
+  # unusable placeholder so that applying this file by hand cannot look like a
+  # pass.
+  #
+  #   nat-mode     naive | published   (entrypoint.sh)
+  #   publish-map  ORBWEAVER_PUBLISH_MAP, read by EndpointMap::from_env
+  nat-mode: "published"
+  publish-map: "0.0.0.0:5555=REPLACE-WITH-A-NODE-ADDRESS:30555"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orbweaver-nat
+  labels:
+    app.kubernetes.io/name: orbweaver-nat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: orbweaver-nat
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: orbweaver-nat
+    spec:
+      containers:
+        - name: spike-nat
+          image: orbweaver/spike-nat:probe
+          # Side-loaded into the cluster, so never go looking for a registry.
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NAT_MODE
+              valueFrom:
+                configMapKeyRef:
+                  name: orbweaver-nat
+                  key: nat-mode
+            - name: ORBWEAVER_PUBLISH_MAP
+              valueFrom:
+                configMapKeyRef:
+                  name: orbweaver-nat
+                  key: publish-map
+            # Not consumed by `spike-nat`; present because the naive case is
+            # about this value and a reader should see where it comes from.
+            # `entrypoint.sh` takes it from `hostname -i` instead, which is
+            # what an ORB with no configuration actually does.
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          ports:
+            - name: iiop
+              containerPort: 5555
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+          # TCP, not a call: readiness here means "the listener exists", which
+          # is all the probe needs before it reads the reference out. Whether a
+          # client can *use* that reference is the measurement, and asserting it
+          # from inside the pod would answer it in the wrong routing domain.
+          readinessProbe:
+            tcpSocket:
+              port: 5555
+            initialDelaySeconds: 1
+            periodSeconds: 2
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+      volumes:
+        # The servant writes its reference here and `run.sh` reads it out with
+        # `kubectl exec`. It deliberately does not outlive the pod: a stale IOR
+        # from a previous case is the one way this probe could report a pass
+        # for a reference nobody published.
+        - name: shared
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orbweaver-nat
+  labels:
+    app.kubernetes.io/name: orbweaver-nat
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: orbweaver-nat
+  ports:
+    - name: iiop
+      protocol: TCP
+      # What the Service is called on the cluster network. An *in-cluster*
+      # client would be published `orbweaver-nat.<namespace>.svc:5555` instead,
+      # and the map would say so — a DNS name is a legal IIOP profile host and
+      # `Rule` compares hostnames case-insensitively, so nothing else changes.
+      port: 5555
+      targetPort: iiop
+      # Pinned rather than allocated, because the map has to be written before
+      # the servant starts and an allocated port is not known until after the
+      # Service exists. Must be inside --service-node-port-range (default
+      # 30000-32767); a cluster with a narrowed range will reject this and the
+      # error will say so.
+      nodePort: 30555
