@@ -98,14 +98,14 @@ fn dummy(key: &[u8]) -> Ior {
 fn run(out_path: &str, hold: bool) -> Result<(), Box<dyn std::error::Error>> {
     let server = Server::bind("127.0.0.1:0", b"NameService".to_vec())?;
     let port = server.local_addr()?.port();
-    let mut ns = NamingServer::new("127.0.0.1", port, b"NameService".to_vec());
+    let ns = NamingServer::new("127.0.0.1", port, b"NameService".to_vec());
     let root = ns.root_ior();
     std::fs::write(out_path, root.to_stringified()?)?;
     println!("listening on 127.0.0.1:{port}");
     println!("IOR written to {out_path}");
     println!("READY");
     std::thread::spawn(move || {
-        let _ = server.serve(&mut ns, || false);
+        let _ = server.serve_shared(&ns, || false);
     });
 
     let mut ctx = NamingContext::connect(&root, T)?;

@@ -107,18 +107,43 @@
 //!
 //! One serving limit the harness must respect, inherited from [`Server`]:
 //! `--hold` is stopped by killing it — `destroy` is refused, so there is no
-//! remote shutdown. The one-connection-at-a-time limit this note used to
-//! carry is gone (stream E): connections are served concurrently, though
-//! dispatch is still serialized behind one servant, so a slow operation
-//! delays other clients even though it no longer excludes them.
+//! remote shutdown. The one-connection-at-a-time limit this note used to carry
+//! is gone, and so is the serialized-dispatch limit that replaced it.
+//!
+//! # Sharing: no lock at all, and the policy is why
+//!
+//! This is the one servant in the batch that implements [`SharedDispatch`]
+//! with **no synchronisation whatsoever**, and it is not an optimisation — it
+//! is what the refusal policy above already bought and nobody had collected.
+//! Every mutating operation answers `NO_PERMISSION` because the registry's
+//! only ingestion path is reviewed IDL through S4; a servant that refuses
+//! every write is a servant with no mutable state; a servant with no mutable
+//! state needs no lock. `&self` and a `Sync` [`Registry`] are the whole
+//! implementation.
+//!
+//! So the IFR facade scales with cores rather than with contention: N clients
+//! walking `describe_interface` over a large repository — the expensive
+//! operation here, since it assembles every inherited operation and attribute
+//! — run at once, all the way down, with nothing between them. It is worth
+//! noticing which decision paid for that. The write refusal was made for
+//! provenance reasons in a different batch, and the concurrency is a
+//! consequence of it, not of anything done here.
+//!
+//! Two things follow that a future editor must keep true. Adding a cache
+//! (memoising `describe_interface`, say) would add mutable state and therefore
+//! a lock, and would trade this property for a smaller one. And making the
+//! registry replaceable at run time would do the same. If either becomes worth
+//! it, the state goes behind [`orbweaver_giop::guarded::Guarded`] and this
+//! section gets rewritten — not quietly widened.
 //!
 //! [`Dispatch`]: orbweaver_giop::server::Dispatch
+//! [`SharedDispatch`]: orbweaver_giop::server::SharedDispatch
 //! [`Server`]: orbweaver_giop::server::Server
 
 use std::collections::BTreeSet;
 
 use orbweaver_cdr::{Decoder, Encoder};
-use orbweaver_giop::server::{Completion, Dispatch, Request, SystemException};
+use orbweaver_giop::server::{Completion, Dispatch, Request, SharedDispatch, SystemException};
 use orbweaver_giop::typecode::{self, TypeCode};
 use orbweaver_giop::{IiopProfile, Ior, Result, Version};
 
@@ -818,11 +843,7 @@ impl RepositoryServer {
         }
     }
 
-    fn handle(
-        &mut self,
-        req: &Request,
-        out: &mut Encoder,
-    ) -> std::result::Result<(), SystemException> {
+    fn handle(&self, req: &Request, out: &mut Encoder) -> std::result::Result<(), SystemException> {
         // Refusal comes before target resolution on purpose: `create_module`
         // against a key we never derived must answer NO_PERMISSION, not
         // OBJECT_NOT_EXIST. The second reads as "try a different reference",
@@ -881,14 +902,14 @@ impl RepositoryServer {
     }
 }
 
-impl Dispatch for RepositoryServer {
+impl SharedDispatch for RepositoryServer {
     /// The root key and every key derived from a registered repository id.
     fn knows(&self, object_key: &[u8]) -> bool {
         object_key == self.root.as_slice()
             || self.id_from_key(object_key).is_some_and(|id| self.registry.get(id).is_some())
     }
 
-    /// No [`dispatch_body`](Dispatch::dispatch_body) override, deliberately.
+    /// No `dispatch_body` override, deliberately.
     ///
     /// F6's naming servant needed one because CosNaming declares user
     /// exceptions; the read-only IR subset declares none — `lookup_id`
@@ -896,12 +917,32 @@ impl Dispatch for RepositoryServer {
     /// have no `raises` clause. Every refusal here is therefore a *system*
     /// exception, so the trait's default `dispatch_body` is already correct
     /// and an override would add a branch nothing can reach.
+    ///
+    /// Nor is there a `serve_one` override: `knows` and `dispatch` read state
+    /// that cannot change between them, so there is nothing for a lock to make
+    /// atomic.
+    fn dispatch(
+        &self,
+        request: &Request,
+        out: &mut Encoder,
+    ) -> std::result::Result<(), SystemException> {
+        self.handle(request, out)
+    }
+}
+
+/// The `&mut self` shape too, forwarding, so a caller already written against
+/// [`Server::serve`](orbweaver_giop::server::Server::serve) keeps working.
+impl Dispatch for RepositoryServer {
+    fn knows(&self, object_key: &[u8]) -> bool {
+        SharedDispatch::knows(self, object_key)
+    }
+
     fn dispatch(
         &mut self,
         request: &Request,
         out: &mut Encoder,
     ) -> std::result::Result<(), SystemException> {
-        self.handle(request, out)
+        SharedDispatch::dispatch(self, request, out)
     }
 }
 
@@ -971,10 +1012,12 @@ mod tests {
     /// with the last client still open — the F6 pattern. Sequential is now a
     /// choice rather than a constraint: since stream E the server accepts
     /// concurrent connections, and these tests have nothing to learn from
-    /// overlapping them (`server.rs` measures the overlap itself).
+    /// overlapping them — except
+    /// `concurrent_clients_walk_the_repository_at_once`, which does.
     struct Served {
         server: RepositoryServer,
         root: Ior,
+        stats: orbweaver_giop::server::ServerStats,
         stop: Arc<AtomicBool>,
         thread: Option<std::thread::JoinHandle<()>>,
     }
@@ -983,15 +1026,16 @@ mod tests {
         fn start() -> Self {
             let server = Server::bind("127.0.0.1:0", ROOT.to_vec()).unwrap();
             let port = server.local_addr().unwrap().port();
-            let mut ifr = facade(port);
+            let ifr = Arc::new(facade(port));
             let root = ifr.root_ior();
-            let handle = ifr.clone();
+            let handle = (*ifr).clone();
+            let stats = server.stats();
             let stop = Arc::new(AtomicBool::new(false));
             let flag = stop.clone();
             let thread = std::thread::spawn(move || {
-                server.serve(&mut ifr, || flag.load(Ordering::SeqCst)).unwrap();
+                server.serve_shared(&*ifr, || flag.load(Ordering::SeqCst)).unwrap();
             });
-            Served { server: handle, root, stop, thread: Some(thread) }
+            Served { server: handle, root, stats, stop, thread: Some(thread) }
         }
 
         fn repository(&self) -> Connection {
@@ -1007,6 +1051,51 @@ mod tests {
             drop(last);
             self.thread.take().unwrap().join().unwrap();
         }
+    }
+
+    /// The facade locks nothing, so N clients walk it at once — including
+    /// through `describe_interface`, which is the expensive operation here
+    /// because it assembles every inherited operation and attribute.
+    ///
+    /// Two things are asserted, and the second is the one that needs the
+    /// lock-free shape: every client gets **exactly** the answer a
+    /// single-threaded client gets (no torn state), and the server's
+    /// `peak_at_servant` reaches N. That counter is a weak witness in general
+    /// — it counts callers waiting for a servant's lock as well as the one
+    /// holding it — but for a servant with **no lock at all** there is nothing
+    /// to wait on, so N inside `serve_one` is N executing. This is the one
+    /// servant in the batch where that shortcut is sound, which is worth
+    /// stating in the place a reader might copy it from.
+    #[test]
+    fn concurrent_clients_walk_the_repository_at_once() {
+        const N: usize = 6;
+        const EACH: usize = 3;
+        let served = Served::start();
+        let want = described("IDL:gc10/Both:1.0");
+
+        std::thread::scope(|scope| {
+            for i in 0..N {
+                let served = &served;
+                let want = &want;
+                scope.spawn(move || {
+                    for _ in 0..EACH {
+                        let mut entry = served.entry("IDL:gc10/Both:1.0");
+                        let reply = entry.invoke_nullary("describe_interface").unwrap();
+                        let got =
+                            decode_full_interface_description(&mut reply.body().unwrap()).unwrap();
+                        assert_eq!(&got, want, "client {i} saw a different repository");
+                    }
+                });
+            }
+        });
+
+        assert!(
+            served.stats.peak_active() >= 2,
+            "the clients never overlapped: peak was {}",
+            served.stats.peak_active()
+        );
+        let last = served.repository();
+        served.shutdown(last);
     }
 
     fn described(id: &str) -> FullInterfaceDescription {
@@ -1038,9 +1127,12 @@ mod tests {
         assert_eq!(ifr.id_from_key(ROOT), None, "the root is not an entry");
         assert_eq!(ifr.id_from_key(b"Elsewhere/ifr/IDL:gc10/Both:1.0"), None, "wrong root");
 
-        assert!(ifr.knows(ROOT));
-        assert!(ifr.knows(&both));
-        assert!(!ifr.knows(&ifr.entry_key("IDL:gc10/Absent:1.0")), "unregistered id");
+        assert!(SharedDispatch::knows(&ifr, ROOT));
+        assert!(SharedDispatch::knows(&ifr, &both));
+        assert!(
+            !SharedDispatch::knows(&ifr, &ifr.entry_key("IDL:gc10/Absent:1.0")),
+            "unregistered id"
+        );
     }
 
     // ── CDR round trip ──────────────────────────────────────────────────────
@@ -1238,7 +1330,7 @@ mod tests {
     /// policy exists to stop.
     #[test]
     fn a_mutating_call_on_an_unknown_key_is_still_no_permission() {
-        let mut ifr = facade(1);
+        let ifr = facade(1);
         let req = request_on(b"InterfaceRepository/ifr/IDL:gc10/Nope:1.0", "create_module");
         let mut out = Encoder::new(Endian::Little);
         assert_eq!(ifr.dispatch(&req, &mut out).unwrap_err().id, NO_PERMISSION);

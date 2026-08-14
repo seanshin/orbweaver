@@ -123,14 +123,23 @@ fn octets_in(reply: Reply) -> Result<Vec<u8>, Error> {
 }
 
 /// Serves `svc` for the length of `window`, then hands it back.
-fn serve_window<F>(server: &Server, svc: &mut TenantService, probe: &Ior, r: &mut Report, window: F)
+///
+/// The scoped thread used to *borrow the servant mutably* for the window, so
+/// the compiler stopped a control-loop step running while the wire was open.
+/// Concurrent dispatch (stream E) removed that borrow — the servant is shared
+/// by reference now — so the exclusion is no longer free. It is preserved by
+/// shape instead: `window` is handed only the report, never the service, so
+/// the only thing that can reach `svc` during the window is a wire call.
+/// Widening that closure to take the service would be a real change in what
+/// this spike measures, not a convenience.
+fn serve_window<F>(server: &Server, svc: &TenantService, probe: &Ior, r: &mut Report, window: F)
 where
     F: FnOnce(&mut Report),
 {
     let stop = AtomicBool::new(false);
     std::thread::scope(|scope| {
         let serving = scope.spawn(|| {
-            server.serve(svc, || stop.load(Ordering::SeqCst)).expect("the server ran");
+            server.serve_shared(svc, || stop.load(Ordering::SeqCst)).expect("the server ran");
         });
         window(r);
         // The flag goes up after the window's last connection has closed, so
@@ -174,7 +183,7 @@ fn main() -> std::process::ExitCode {
 fn run() -> Result<u32, Box<dyn std::error::Error>> {
     let server = Server::bind("127.0.0.1:0", b"MoE".to_vec())?;
     let port = server.local_addr()?.port();
-    let mut svc = TenantService::new("127.0.0.1", port, "MoE");
+    let svc = TenantService::new("127.0.0.1", port, "MoE");
     let mut r = Report { failures: 0 };
 
     // ── out of band: what the contract declares no operation for ────────────
@@ -205,7 +214,7 @@ fn run() -> Result<u32, Box<dyn std::error::Error>> {
     println!("\nwindow 1 — the wire is open");
     let mut models: Vec<Ior> = Vec::new();
     let mut base_ref: Option<Ior> = None;
-    serve_window(&server, &mut svc, &factory_a, &mut r, |r| {
+    serve_window(&server, &svc, &factory_a, &mut r, |r| {
         on(r, "acme's factory", &factory_a, |r, c| {
             match c.invoke("create", |e| {
                 manifest("acme", "1.0", "eu-west", "acme-default").write_to(e)
@@ -414,7 +423,7 @@ fn run() -> Result<u32, Box<dyn std::error::Error>> {
 
     // ── window 2: policy, residency, and a real retire ──────────────────────
     println!("\nwindow 2 — the wire is open again");
-    serve_window(&server, &mut svc, &factory_a, &mut r, |r| {
+    serve_window(&server, &svc, &factory_a, &mut r, |r| {
         on(r, "acme-default", &default_a, |r, c| {
             match c
                 .invoke("authorize", |e| {
@@ -518,10 +527,10 @@ fn run() -> Result<u32, Box<dyn std::error::Error>> {
     println!("\nafter the windows — the audit trails");
     let acme = svc.audit_log("acme");
     let globex = svc.audit_log("globex");
-    for e in acme {
+    for e in &acme {
         println!("        acme   {:?} {} {}", e.domain, e.request_id, e.event);
     }
-    for e in globex {
+    for e in &globex {
         println!("        globex {:?} {} {}", e.domain, e.request_id, e.event);
     }
     r.check(

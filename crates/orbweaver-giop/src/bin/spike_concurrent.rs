@@ -117,13 +117,13 @@ fn serve_naming(cap: usize) -> Result<Served, Box<dyn std::error::Error>> {
     let mut server = Server::bind("127.0.0.1:0", b"NameService".to_vec())?;
     server.set_max_connections(cap);
     let port = server.local_addr()?.port();
-    let mut ns = NamingServer::new("127.0.0.1", port, b"NameService".to_vec());
+    let ns = NamingServer::new("127.0.0.1", port, b"NameService".to_vec());
     let root = ns.root_ior();
     let stats = server.stats();
     let stop = std::sync::Arc::new(AtomicBool::new(false));
     let flag = std::sync::Arc::clone(&stop);
     let thread = std::thread::spawn(move || {
-        let _ = server.serve(&mut ns, move || flag.load(Ordering::SeqCst));
+        let _ = server.serve_shared(&ns, move || flag.load(Ordering::SeqCst));
     });
     Ok(Served { root, stats, stop, thread: Some(thread) })
 }

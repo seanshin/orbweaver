@@ -1973,13 +1973,14 @@ mod tests {
         let served = registry_from_idl(IDL).expect("golden-shaped IDL loads");
         let server = Server::bind("127.0.0.1:0", b"InterfaceRepository".to_vec()).unwrap();
         let port = server.local_addr().unwrap().port();
-        let mut facade =
+        let facade =
             RepositoryServer::new("127.0.0.1", port, b"InterfaceRepository".to_vec(), served);
         let root = facade.root_ior();
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
-        let thread =
-            std::thread::spawn(move || server.serve(&mut facade, || flag.load(Ordering::SeqCst)));
+        let thread = std::thread::spawn(move || {
+            server.serve_shared(&facade, || flag.load(Ordering::SeqCst))
+        });
 
         let mut reg = Registry::new();
         let report = ingest(

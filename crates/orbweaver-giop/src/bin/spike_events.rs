@@ -55,9 +55,12 @@
 //! connection or several, and other clients may hold sessions alongside it —
 //! `spike-concurrent` measures that overlap, and
 //! `concurrent_suppliers_and_outbound_delivery_do_not_deadlock` proves it
-//! against this channel's outbound pushes. The serving limit that remains is
-//! dispatch: one servant behind one mutex, one operation at a time, so a slow
-//! consumer's push still holds the next operation up.
+//! against this channel's outbound pushes. Since stream E's second batch the
+//! channel is a `SharedDispatch` servant, so two operations run at once and a
+//! slow consumer is bounded by the delivery thread's push timeout alone —
+//! `an_inbound_push_is_served_while_an_outbound_push_is_blocked` is the test
+//! that holds an outbound push open on purpose and serves inbound work
+//! through it.
 //!
 //! Measured at landing (2026-08-13, omniORBpy 4.3.4): the snippet
 //! printed `received: [57, 58]` then `PASS` — an ORB we did not write
@@ -118,11 +121,11 @@ struct Consumer {
 fn start_consumer(key: &[u8]) -> Consumer {
     let server = Server::bind("127.0.0.1:0", key.to_vec()).expect("bind consumer");
     let port = server.local_addr().expect("addr").port();
-    let mut servant = PushConsumerServant::new(key.to_vec());
+    let servant = PushConsumerServant::new(key.to_vec());
     let ior = servant.ior("127.0.0.1", port);
     let sink = servant.sink();
     std::thread::spawn(move || {
-        let _ = server.serve(&mut servant, || false);
+        let _ = server.serve_shared(&servant, || false);
     });
     Consumer { ior, sink }
 }
@@ -175,9 +178,9 @@ fn run(out_path: &str, hold: bool) -> Result<(), Box<dyn std::error::Error>> {
     let stop = Arc::new(AtomicBool::new(false));
     let flag = stop.clone();
     std::thread::spawn({
-        let mut servant = channel;
+        let servant = channel;
         move || {
-            let _ = server.serve(&mut servant, || flag.load(Ordering::SeqCst));
+            let _ = server.serve_shared(&servant, || flag.load(Ordering::SeqCst));
         }
     });
 

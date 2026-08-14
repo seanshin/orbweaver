@@ -85,12 +85,19 @@ load-bearing enough to have caused one:
   refused rather than guessed at. No available peer emits fragments, which is
   why reception is measured against hand-built streams from §9.4.9 rather than
   against a peer.
-- **Concurrency stops at dispatch.** Connections are served concurrently, one
-  thread each, capped at 64 with the refusal spoken as §9.4.7's
-  `CloseConnection`. Dispatch itself is serialized behind one servant, so a
-  slow operation delays every client though it no longer excludes them.
+- **Concurrency reaches into the servant.** Connections are served
+  concurrently, one thread each, capped at 64 with the refusal spoken as
+  §9.4.7's `CloseConnection`; and `SharedDispatch` servants answer two calls at
+  once, so a slow operation no longer delays a concurrent caller. What each
+  servant does about that is its own decision — no lock (the IFR facade), an
+  `RwLock` over one consistency domain (naming, tenancy), one mutex over two
+  halves that must agree (the expert control plane) — under one discipline:
+  at most one lock held per thread, nothing blocking inside it, enforced by
+  `orbweaver_giop::guarded` and by a tripwire in the outbound client path.
+  `Server::serve` keeps the `&mut self` `Dispatch` shape and keeps serializing
+  it, which is what every generated skeleton still uses.
 
-**정렬 원점**, **1.2 한정 재조립**, **디스패치에서 멈추는 동시성** — 이 세 사실이
+**정렬 원점**, **1.2 한정 재조립**, **서번트 안까지 닿는 동시성** — 이 세 사실이
 이 경로의 버그 대부분을 결정한다.
 
 ---

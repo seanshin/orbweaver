@@ -127,7 +127,7 @@ fn run(ior_path: &str, idl_paths: &[&str], hold: bool) -> Fallible {
 
     let server = Server::bind("127.0.0.1:0", ROOT.to_vec())?;
     let port = server.local_addr()?.port();
-    let mut facade = RepositoryServer::new("127.0.0.1", port, ROOT.to_vec(), registry);
+    let facade = RepositoryServer::new("127.0.0.1", port, ROOT.to_vec(), registry);
     let keys = facade.clone();
     let root = facade.root_ior();
     std::fs::write(ior_path, root.to_stringified()?)?;
@@ -135,7 +135,7 @@ fn run(ior_path: &str, idl_paths: &[&str], hold: bool) -> Fallible {
     println!("IOR written to {ior_path}");
     println!("READY");
     std::thread::spawn(move || {
-        let _ = server.serve(&mut facade, || false);
+        let _ = server.serve_shared(&facade, || false);
     });
 
     // ── lookup_id, both outcomes ──
