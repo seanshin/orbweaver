@@ -203,8 +203,8 @@ could serve as one.
 
 Stated because an absence that is not written down reads as a feature:
 
-- Dispatch is serialized behind one servant, so a slow operation delays every
-  client though it no longer excludes them.
+- Request multiplexing and connection pooling are not implemented: one
+  request at a time per connection, and a new connection per reference.
 - A generated skeleton has no object keys, so one servant per process; the
   naming server's multi-context shape is not yet generatable.
 - Ingested contracts carry no SIDL, so the guard's gates have nothing to key

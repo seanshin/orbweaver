@@ -177,6 +177,49 @@
 //!   operation for any of them. Inventing a wire `grant` would be inventing an
 //!   authorization surface — the one thing a servant must never do quietly.
 //!
+//! # Sharing: one `RwLock` over the whole graph, and why not one per tenant
+//!
+//! This servant implements [`SharedDispatch`], so two calls may run at once.
+//! The obvious sharding — a lock per tenant, since tenancy is the whole point
+//! of the module — is **not** what it does, and the reason is worth stating
+//! because it looks like the natural answer:
+//!
+//! - **`create` is not confined to one tenant's maps.** It mints into
+//!   `policies`, `experts` and `models`, inserts the *shared* base into
+//!   `bases`, and takes a serial from `next_serial` — a counter that is global
+//!   by design, because §4's fourth claim is that a serial is never reused and
+//!   a per-tenant counter would make "never reused" a per-tenant property
+//!   instead. Sharding would put one operation across two locks, which is the
+//!   ordering hazard [`orbweaver_giop::guarded`] exists to make impossible.
+//! - **The duplicate-version check reads every model**, not one tenant's. It
+//!   could be indexed per tenant; the point is that today's isolation proof
+//!   holds over one consistent view of the graph, and a sharded version would
+//!   need its own proof rather than inheriting this one. Isolation is the
+//!   property this module is *for*, so it does not get re-argued to save a
+//!   lock.
+//!
+//! What it does take is the **read** half. `get_manifest`, `describe`,
+//! `adapter_delta`, `get_tenant_id`, `authorize`, `check_residency` and
+//! `_is_a` change nothing, and they are the operations a tenant's control loop
+//! and its policy decision point actually call in a loop. Those now overlap —
+//! with each other and with another tenant's — while `create`, `retire`,
+//! `deploy`, `bind_expert`, `set_policy`, `infer`, `audit`, `process` and
+//! `base` take the write half. (`infer`, `process`, `audit` and `base` are
+//! writes because they *append to the audit log*, which is state; the module
+//! docs already note that `audit` changes state while carrying no `ai_effect`
+//! annotation, and this is where that observation has a consequence.)
+//!
+//! Nothing here dials anything — reference arguments are resolved by key and
+//! never invoked, which §4 states as a security property and which happens
+//! also to mean no outbound call can be made from inside the lock.
+//!
+//! One thing stopped being unreachable. `knows` and the dispatch are two
+//! separate looks at the graph, so a model can be retired between them: the
+//! `OBJECT_NOT_EXIST` arms below, written as exceptions rather than `expect`s
+//! precisely because a wire-reachable servant must have no panic path, are now
+//! *reachable* rather than merely defensive. The comment on them was right for
+//! a reason that has changed.
+//!
 //! # An observation for the contract owner
 //!
 //! corpus/golden/23's annotations do not cover every operation: `get_manifest`,
@@ -192,7 +235,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbweaver_cdr::{Decoder, Encoder};
-use orbweaver_giop::server::{Completion, Dispatch, Request, SystemException};
+use orbweaver_giop::guarded::Guarded;
+use orbweaver_giop::server::{Completion, Dispatch, Request, SharedDispatch, SystemException};
 use orbweaver_giop::{IiopProfile, Ior, Version};
 
 use crate::expert_service::EXPERT_ID;
@@ -515,11 +559,14 @@ struct PolicyObject {
 /// distinct *objects* — one key each, one repository id each, [`Dispatch::knows`]
 /// answering for all of them — because the contract declares four interfaces
 /// and a client narrows to one.
+/// Everything this service serves, behind one lock.
+///
+/// See the module docs on sharing for why it is one lock over the whole graph
+/// and not one per tenant. Nothing immutable lives here: the key prefix and
+/// the published address are constants a reader must never take a lock to
+/// look at.
 #[derive(Debug)]
-pub struct TenantService {
-    host: String,
-    port: u16,
-    base: String,
+struct TenantState {
     factories: BTreeSet<Vec<u8>>,
     models: BTreeMap<Vec<u8>, Model>,
     experts: BTreeMap<Vec<u8>, ExpertObject>,
@@ -535,46 +582,34 @@ pub struct TenantService {
     audits: BTreeMap<String, Vec<AuditEntry>>,
     crossings: BTreeMap<String, u64>,
     /// Never reset and never reused, so a reference to a retired model can
-    /// never land on a later one.
+    /// never land on a later one. Global rather than per tenant, which is one
+    /// of the reasons the lock is global too.
     next_serial: u64,
 }
 
-impl TenantService {
-    /// A service whose references point at `host:port`, with every key it
-    /// mints under `base`.
-    ///
-    /// `host` is separate from the bind address on purpose — Phase 0
-    /// assumption D. `base` must not be empty; it may contain anything else,
-    /// because key parsing anchors on the full `<base>/t/` prefix rather than
-    /// searching for it.
-    pub fn new(host: impl Into<String>, port: u16, base: impl Into<String>) -> Self {
-        Self {
-            host: host.into(),
-            port,
-            base: base.into(),
-            factories: BTreeSet::new(),
-            models: BTreeMap::new(),
-            experts: BTreeMap::new(),
-            policies: BTreeMap::new(),
-            bases: BTreeSet::new(),
-            nodes: BTreeMap::new(),
-            audits: BTreeMap::new(),
-            crossings: BTreeMap::new(),
-            next_serial: 1,
-        }
-    }
+/// The key prefix, and the arithmetic that turns names into object keys.
+///
+/// Split out from the state because it is a **constant**, and because every
+/// operation that mints or resolves needs it while holding the lock: a key
+/// built inside the section from a value that cannot change is not shared
+/// state, and treating it as such would put the whole key space behind the
+/// same contention as the graph.
+#[derive(Debug)]
+struct Keys {
+    base: String,
+}
 
-    /// Points the references this service mints at a different address.
-    ///
-    /// For a server bound to port 0, where the port is only known after the
-    /// bind.
-    pub fn publish_at(&mut self, host: impl Into<String>, port: u16) {
-        self.host = host.into();
-        self.port = port;
-    }
+/// `moe::enterprise`'s four interfaces, served together — see the type docs
+/// below the state it holds.
+#[derive(Debug)]
+pub struct TenantService {
+    host: String,
+    port: u16,
+    keys: Keys,
+    state: Guarded<TenantState>,
+}
 
-    // ── keys ────────────────────────────────────────────────────────────────
-
+impl Keys {
     fn factory_key(&self, tenant: &str) -> Vec<u8> {
         format!("{}/t/{tenant}/factory", self.base).into_bytes()
     }
@@ -593,6 +628,13 @@ impl TenantService {
 
     fn base_key(&self, base_model: &str) -> Vec<u8> {
         format!("{}/shared/base/{base_model}", self.base).into_bytes()
+    }
+
+    /// The base model a shared-base key names.
+    fn base_name(&self, key: &[u8]) -> Option<String> {
+        let s = std::str::from_utf8(key).ok()?;
+        let prefix = format!("{}/shared/base/", self.base);
+        s.strip_prefix(&prefix).map(str::to_owned)
     }
 
     /// Parses a key this service could have minted.
@@ -629,6 +671,51 @@ impl TenantService {
         };
         Some(Addressed { tenant: Some(tenant.to_owned()), kind })
     }
+}
+
+impl TenantService {
+    /// A service whose references point at `host:port`, with every key it
+    /// mints under `base`.
+    ///
+    /// `host` is separate from the bind address on purpose — Phase 0
+    /// assumption D. `base` must not be empty; it may contain anything else,
+    /// because key parsing anchors on the full `<base>/t/` prefix rather than
+    /// searching for it.
+    pub fn new(host: impl Into<String>, port: u16, base: impl Into<String>) -> Self {
+        Self {
+            host: host.into(),
+            port,
+            keys: Keys { base: base.into() },
+            state: Guarded::new(
+                "the tenant object graph",
+                TenantState {
+                    factories: BTreeSet::new(),
+                    models: BTreeMap::new(),
+                    experts: BTreeMap::new(),
+                    policies: BTreeMap::new(),
+                    bases: BTreeSet::new(),
+                    nodes: BTreeMap::new(),
+                    audits: BTreeMap::new(),
+                    crossings: BTreeMap::new(),
+                    next_serial: 1,
+                },
+            ),
+        }
+    }
+
+    /// Points the references this service mints at a different address.
+    ///
+    /// For a server bound to port 0, where the port is only known after the
+    /// bind. Still `&mut self` while everything else became `&self`, and
+    /// deliberately: the published address is a construction-time property,
+    /// and the exclusive borrow is the type system saying *before you share
+    /// it* — a reference already handed to a client cannot be un-minted, so
+    /// changing the address mid-service would only produce two answers to
+    /// "where is this object".
+    pub fn publish_at(&mut self, host: impl Into<String>, port: u16) {
+        self.host = host.into();
+        self.port = port;
+    }
 
     fn ior_for(&self, type_id: &str, key: &[u8]) -> Ior {
         Ior {
@@ -654,12 +741,12 @@ impl TenantService {
     /// MCP boundary, as a capability handle rather than as the IOR.
     ///
     /// `None` for a tenant id that cannot be part of a key.
-    pub fn provision_factory(&mut self, tenant: &str) -> Option<Ior> {
+    pub fn provision_factory(&self, tenant: &str) -> Option<Ior> {
         if !is_key_safe(tenant) {
             return None;
         }
-        let key = self.factory_key(tenant);
-        self.factories.insert(key.clone());
+        let key = self.keys.factory_key(tenant);
+        self.state.write(|s| s.factories.insert(key.clone()));
         Some(self.ior_for(MODEL_FACTORY_ID, &key))
     }
 
@@ -673,7 +760,7 @@ impl TenantService {
     ///
     /// `None` if any component cannot be part of a key.
     pub fn provision_expert(
-        &mut self,
+        &self,
         tenant: &str,
         capability: &str,
         base_model: &str,
@@ -683,18 +770,24 @@ impl TenantService {
         if !is_key_safe(tenant) || !is_key_safe(capability) || !is_key_safe(base_model) {
             return None;
         }
-        self.bases.insert(self.base_key(base_model));
-        let key = self.expert_key(tenant, capability);
-        self.experts.insert(
-            key.clone(),
-            ExpertObject {
-                tenant: tenant.to_owned(),
-                capability: capability.to_owned(),
-                base_model: base_model.to_owned(),
-                cost,
-                delta: delta.to_vec(),
-            },
-        );
+        let base = self.keys.base_key(base_model);
+        let key = self.keys.expert_key(tenant, capability);
+        // One section for both inserts: an expert whose shared base is not
+        // there yet is a `base()` that dangles, and the two must never be
+        // observable apart.
+        self.state.write(|s| {
+            s.bases.insert(base);
+            s.experts.insert(
+                key.clone(),
+                ExpertObject {
+                    tenant: tenant.to_owned(),
+                    capability: capability.to_owned(),
+                    base_model: base_model.to_owned(),
+                    cost,
+                    delta: delta.to_vec(),
+                },
+            );
+        });
         Some(self.ior_for(ENTERPRISE_EXPERT_ID, &key))
     }
 
@@ -702,8 +795,8 @@ impl TenantService {
     ///
     /// The only source of truth `check_residency` has. An undeclared node is
     /// refused rather than assumed local — see the module docs.
-    pub fn declare_node(&mut self, node: &str, region: &str) {
-        self.nodes.insert(node.to_owned(), region.to_owned());
+    pub fn declare_node(&self, node: &str, region: &str) {
+        self.state.write(|s| s.nodes.insert(node.to_owned(), region.to_owned()));
     }
 
     /// Grants `principal` the capability `target` inside one of `tenant`'s
@@ -713,60 +806,69 @@ impl TenantService {
     /// would be an authorization surface this contract does not declare, and a
     /// servant that invents one has quietly become the policy decision point.
     /// `false` if the domain does not exist.
-    pub fn grant(&mut self, tenant: &str, domain: &str, principal: &str, target: &str) -> bool {
-        let key = self.policy_key(tenant, domain);
-        match self.policies.get_mut(&key) {
+    pub fn grant(&self, tenant: &str, domain: &str, principal: &str, target: &str) -> bool {
+        let key = self.keys.policy_key(tenant, domain);
+        self.state.write(|s| match s.policies.get_mut(&key) {
             Some(p) => p.grants.insert((principal.to_owned(), target.to_owned())),
             None => false,
-        }
+        })
     }
 
     // ── read-only views, for a control loop and for tests ───────────────────
+    //
+    // Every one of these returns an **owned** value. Returning a borrow would
+    // mean returning the lock guard that keeps it alive, and a guard the
+    // caller holds is a lock held across whatever the caller does next — which
+    // is the one thing `orbweaver_giop::guarded` exists to prevent.
 
     /// A reference to `tenant`'s `PolicyDomain` named `domain`, if it exists.
     pub fn policy_reference(&self, tenant: &str, domain: &str) -> Option<Ior> {
-        let key = self.policy_key(tenant, domain);
-        self.policies.contains_key(&key).then(|| self.ior_for(POLICY_DOMAIN_ID, &key))
+        let key = self.keys.policy_key(tenant, domain);
+        self.state
+            .read(|s| s.policies.contains_key(&key))
+            .then(|| self.ior_for(POLICY_DOMAIN_ID, &key))
     }
 
     /// A reference to `tenant`'s `EnterpriseExpert` for `capability`.
     pub fn expert_reference(&self, tenant: &str, capability: &str) -> Option<Ior> {
-        let key = self.expert_key(tenant, capability);
-        self.experts.contains_key(&key).then(|| self.ior_for(ENTERPRISE_EXPERT_ID, &key))
+        let key = self.keys.expert_key(tenant, capability);
+        self.state
+            .read(|s| s.experts.contains_key(&key))
+            .then(|| self.ior_for(ENTERPRISE_EXPERT_ID, &key))
     }
 
     /// A reference to the shared base expert for `base_model`, typed
     /// `::moe::Expert` — the same reference every tenant on that base gets.
     pub fn shared_base_reference(&self, base_model: &str) -> Option<Ior> {
-        let key = self.base_key(base_model);
-        self.bases.contains(&key).then(|| self.ior_for(EXPERT_ID, &key))
+        let key = self.keys.base_key(base_model);
+        self.state.read(|s| s.bases.contains(&key)).then(|| self.ior_for(EXPERT_ID, &key))
     }
 
     /// The manifest of the model at `key`, if it is still served.
-    pub fn manifest_at(&self, key: &[u8]) -> Option<&Manifest> {
-        self.models.get(key).map(|m| &m.manifest)
+    pub fn manifest_at(&self, key: &[u8]) -> Option<Manifest> {
+        self.state.read(|s| s.models.get(key).map(|m| m.manifest.clone()))
     }
 
     /// `tenant`'s audit trail, oldest first.
-    pub fn audit_log(&self, tenant: &str) -> &[AuditEntry] {
-        self.audits.get(tenant).map_or(&[], Vec::as_slice)
+    pub fn audit_log(&self, tenant: &str) -> Vec<AuditEntry> {
+        self.state.read(|s| s.audits.get(tenant).cloned().unwrap_or_default())
     }
 
     /// How many times `tenant` has crossed its own boundary through `base()`.
     pub fn base_crossings(&self, tenant: &str) -> u64 {
-        self.crossings.get(tenant).copied().unwrap_or(0)
+        self.state.read(|s| s.crossings.get(tenant).copied().unwrap_or(0))
     }
 
     /// How many objects this service currently serves — the number `retire`
     /// decrements and nothing else does.
     pub fn served(&self) -> usize {
-        self.factories.len()
-            + self.models.len()
-            + self.experts.len()
-            + self.policies.len()
-            + self.bases.len()
+        self.state.read(|s| {
+            s.factories.len() + s.models.len() + s.experts.len() + s.policies.len() + s.bases.len()
+        })
     }
+}
 
+impl TenantState {
     fn record(&mut self, tenant: &str, domain: &str, ctx: &CallContext, event: &str) {
         self.audits.entry(tenant.to_owned()).or_default().push(AuditEntry {
             domain: domain.to_owned(),
@@ -790,6 +892,7 @@ impl TenantService {
     /// to refute identity anyway.
     fn resolve(
         &self,
+        keys: &Keys,
         tenant: &str,
         argument: Option<Ior>,
         want: Kind,
@@ -801,7 +904,7 @@ impl TenantService {
         // Not a key we mint, or the shared base, which names no tenant and is
         // therefore inert as an argument — the module docs' bound on the
         // `base()` crossing.
-        let Some(addressed) = self.parse(&key) else {
+        let Some(addressed) = keys.parse(&key) else {
             return Err(system(BAD_PARAM));
         };
         let Some(owner) = addressed.tenant else {
@@ -824,8 +927,17 @@ impl TenantService {
         if served { Ok(key) } else { Err(system(OBJECT_NOT_EXIST)) }
     }
 
-    /// `ComposedModel create(in Manifest m)`.
-    fn create(&mut self, tenant: &str, m: Manifest) -> Result<Ior, SystemException> {
+    /// `ComposedModel create(in Manifest m)`, returning the new model's key.
+    ///
+    /// The key and not the reference: minting an `Ior` needs the published
+    /// address, which lives outside the lock because it cannot change. The
+    /// caller wraps it once the section has closed.
+    fn create(
+        &mut self,
+        keys: &Keys,
+        tenant: &str,
+        m: Manifest,
+    ) -> Result<Vec<u8>, SystemException> {
         // Cross-tenant creation, refused before anything is validated: the
         // answer must not depend on whether the other tenant's manifest was
         // well formed.
@@ -850,7 +962,7 @@ impl TenantService {
         {
             return Err(system(BAD_PARAM));
         }
-        let pkey = self.policy_key(tenant, &m.policy_domain);
+        let pkey = keys.policy_key(tenant, &m.policy_domain);
         match self.policies.get(&pkey) {
             Some(p) if p.region != m.residency_region => return Err(system(BAD_PARAM)),
             Some(_) => {}
@@ -870,7 +982,7 @@ impl TenantService {
         // adapter bytes arrive out of band, and refusing here would make the
         // order in which a deployment does two unrelated things load bearing.
         for capability in &m.experts {
-            let key = self.expert_key(tenant, capability);
+            let key = keys.expert_key(tenant, capability);
             self.experts.entry(key).or_insert_with(|| ExpertObject {
                 tenant: tenant.to_owned(),
                 capability: capability.clone(),
@@ -879,38 +991,41 @@ impl TenantService {
                 delta: Vec::new(),
             });
         }
-        self.bases.insert(self.base_key(&m.base_model));
+        self.bases.insert(keys.base_key(&m.base_model));
         let serial = self.next_serial;
         self.next_serial += 1;
-        let key = self.model_key(tenant, serial);
+        let key = keys.model_key(tenant, serial);
         let domain = m.policy_domain.clone();
         let version = m.version.clone();
         self.models.insert(key.clone(), Model { manifest: m, deployed: false });
         self.record(tenant, &domain, &CallContext::default(), &format!("create {version}"));
-        Ok(self.ior_for(COMPOSED_MODEL_ID, &key))
+        Ok(key)
     }
 
     /// `ComposedModel clone_model(in ComposedModel src, in string new_version)`.
     fn clone_model(
         &mut self,
+        keys: &Keys,
         tenant: &str,
         src: Option<Ior>,
         new_version: &str,
-    ) -> Result<Ior, SystemException> {
-        let key = self.resolve(tenant, src, Kind::Model)?;
+    ) -> Result<Vec<u8>, SystemException> {
+        let key = self.resolve(keys, tenant, src, Kind::Model)?;
         let source = self.models.get(&key).ok_or_else(SystemException::object_not_exist)?;
         let mut manifest = source.manifest.clone();
         manifest.version = new_version.to_owned();
         // Through `create`, so a clone gets the same validation, the same
         // duplicate-version refusal and the same fresh serial as an original.
         // A clone is *not* deployed: it is a new object, and deployment is a
-        // decision about a particular one.
-        self.create(tenant, manifest)
+        // decision about a particular one. Both halves happen inside the one
+        // section the caller opened, so no other request can slip between the
+        // read of the source and the mint of the copy.
+        self.create(keys, tenant, manifest)
     }
 
     /// `void retire(in ComposedModel m)`. `ai_effect: destructive`, and it is.
-    fn retire(&mut self, tenant: &str, m: Option<Ior>) -> Result<(), SystemException> {
-        let key = self.resolve(tenant, m, Kind::Model)?;
+    fn retire(&mut self, keys: &Keys, tenant: &str, m: Option<Ior>) -> Result<(), SystemException> {
+        let key = self.resolve(keys, tenant, m, Kind::Model)?;
         // `resolve` already proved this is served, so the `ok_or_else` arms
         // here and below are unreachable — written as an exception rather than
         // an `expect` because a servant reached from the wire must have no
@@ -930,8 +1045,8 @@ impl TenantService {
     }
 
     /// `void deploy(in ComposedModel m)`.
-    fn deploy(&mut self, tenant: &str, m: Option<Ior>) -> Result<(), SystemException> {
-        let key = self.resolve(tenant, m, Kind::Model)?;
+    fn deploy(&mut self, keys: &Keys, tenant: &str, m: Option<Ior>) -> Result<(), SystemException> {
+        let key = self.resolve(keys, tenant, m, Kind::Model)?;
         let model = self.models.get_mut(&key).ok_or_else(SystemException::object_not_exist)?;
         if model.deployed {
             return Err(system(BAD_INV_ORDER));
@@ -946,11 +1061,12 @@ impl TenantService {
     /// `void bind_expert(in EnterpriseExpert ex)`.
     fn bind_expert(
         &mut self,
+        keys: &Keys,
         tenant: &str,
         model_key: &[u8],
         ex: Option<Ior>,
     ) -> Result<(), SystemException> {
-        let expert_key = self.resolve(tenant, ex, Kind::Expert)?;
+        let expert_key = self.resolve(keys, tenant, ex, Kind::Expert)?;
         let expert = self.experts.get(&expert_key).ok_or_else(SystemException::object_not_exist)?;
         let (capability, base_model) = (expert.capability.clone(), expert.base_model.clone());
         let model = self.models.get_mut(model_key).ok_or_else(SystemException::object_not_exist)?;
@@ -971,11 +1087,12 @@ impl TenantService {
     /// `void set_policy(in PolicyDomain p)`.
     fn set_policy(
         &mut self,
+        keys: &Keys,
         tenant: &str,
         model_key: &[u8],
         p: Option<Ior>,
     ) -> Result<(), SystemException> {
-        let policy_key = self.resolve(tenant, p, Kind::Policy)?;
+        let policy_key = self.resolve(keys, tenant, p, Kind::Policy)?;
         let policy =
             self.policies.get(&policy_key).ok_or_else(SystemException::object_not_exist)?;
         let (name, region) = (policy.name.clone(), policy.region.clone());
@@ -1011,10 +1128,10 @@ impl TenantService {
     }
 
     /// `::moe::Expert base()` — the crossing, made visible.
-    fn base(&mut self, expert_key: &[u8]) -> Result<Ior, SystemException> {
+    fn base(&mut self, keys: &Keys, expert_key: &[u8]) -> Result<Vec<u8>, SystemException> {
         let expert = self.experts.get(expert_key).ok_or_else(SystemException::object_not_exist)?;
         let (tenant, base_model) = (expert.tenant.clone(), expert.base_model.clone());
-        let key = self.base_key(&base_model);
+        let key = keys.base_key(&base_model);
         if !self.bases.contains(&key) {
             // Unreachable through any path that mints an expert, both of which
             // mint the base too — but a dangling reference is the one answer
@@ -1028,7 +1145,25 @@ impl TenantService {
             &CallContext::default(),
             &format!("base crossing to {base_model}"),
         );
-        Ok(self.ior_for(EXPERT_ID, &key))
+        Ok(key)
+    }
+
+    /// The expert at `key`, or `OBJECT_NOT_EXIST`.
+    ///
+    /// Every one of these exists so that no path reachable from the wire can
+    /// index a map and panic. `Server`'s `knows` has already vouched for the
+    /// key — but under concurrent dispatch that vouching happened in a
+    /// *separate* look at the graph, so a `retire` in between is real and this
+    /// arm is now reachable rather than merely defensive. An unreachable arm
+    /// that returns an exception cost nothing; a reachable one that panicked
+    /// would have cost the connection.
+    fn expert_at(&self, key: &[u8]) -> Result<&ExpertObject, SystemException> {
+        self.experts.get(key).ok_or_else(SystemException::object_not_exist)
+    }
+
+    /// The policy domain at `key`, or `OBJECT_NOT_EXIST`.
+    fn policy_at(&self, key: &[u8]) -> Result<&PolicyObject, SystemException> {
+        self.policies.get(key).ok_or_else(SystemException::object_not_exist)
     }
 }
 
@@ -1051,6 +1186,104 @@ impl TenantService {
         }
     }
 
+    /// Parses a key this service could have minted. Needs no lock: the key
+    /// prefix is a constant.
+    fn parse(&self, key: &[u8]) -> Option<Addressed> {
+        self.keys.parse(key)
+    }
+
+    /// The key of a model that may or may not exist — for a test that needs to
+    /// address one that never did.
+    #[cfg(test)]
+    fn model_key(&self, tenant: &str, serial: u64) -> Vec<u8> {
+        self.keys.model_key(tenant, serial)
+    }
+
+    /// The region a tenant's policy domain governs, if the domain exists.
+    ///
+    /// A read accessor rather than a test reaching into the map: the map is
+    /// behind a lock now, and a test that could borrow through it could hold
+    /// it. The tests that used `svc.policies[&key].region` ask this instead.
+    #[cfg(test)]
+    fn policy_region(&self, tenant: &str, domain: &str) -> Option<String> {
+        let key = self.keys.policy_key(tenant, domain);
+        self.state.read(|s| s.policies.get(&key).map(|p| p.region.clone()))
+    }
+
+    /// The region a declared node is in, if it was declared.
+    #[cfg(test)]
+    fn node_region(&self, node: &str) -> Option<String> {
+        self.state.read(|s| s.nodes.get(node).cloned())
+    }
+
+    // ── the wire operations, each one lock section deep ─────────────────────
+    //
+    // This layer exists so that **taking the lock happens in exactly one place
+    // per operation**. `handle` decodes and replies; these open the section
+    // and delegate to `TenantState`, which does the work with no idea that a
+    // lock exists. The rule to keep is that nothing in this block calls
+    // anything else in this block: nesting two would be a torn request and a
+    // re-entrant lock, and `orbweaver_giop::guarded` refuses the second.
+
+    fn create(&self, tenant: &str, m: Manifest) -> Result<Ior, SystemException> {
+        let key = self.state.write(|s| s.create(&self.keys, tenant, m))?;
+        Ok(self.ior_for(COMPOSED_MODEL_ID, &key))
+    }
+
+    fn clone_model(
+        &self,
+        tenant: &str,
+        src: Option<Ior>,
+        new_version: &str,
+    ) -> Result<Ior, SystemException> {
+        let key = self.state.write(|s| s.clone_model(&self.keys, tenant, src, new_version))?;
+        Ok(self.ior_for(COMPOSED_MODEL_ID, &key))
+    }
+
+    fn retire(&self, tenant: &str, m: Option<Ior>) -> Result<(), SystemException> {
+        self.state.write(|s| s.retire(&self.keys, tenant, m))
+    }
+
+    fn deploy(&self, tenant: &str, m: Option<Ior>) -> Result<(), SystemException> {
+        self.state.write(|s| s.deploy(&self.keys, tenant, m))
+    }
+
+    fn bind_expert(
+        &self,
+        tenant: &str,
+        model_key: &[u8],
+        ex: Option<Ior>,
+    ) -> Result<(), SystemException> {
+        self.state.write(|s| s.bind_expert(&self.keys, tenant, model_key, ex))
+    }
+
+    fn set_policy(
+        &self,
+        tenant: &str,
+        model_key: &[u8],
+        p: Option<Ior>,
+    ) -> Result<(), SystemException> {
+        self.state.write(|s| s.set_policy(&self.keys, tenant, model_key, p))
+    }
+
+    /// A write, because it appends to the audit log — see the module docs on
+    /// which operations are reads and why `audit` being one of the writers is
+    /// worth noticing.
+    fn infer(
+        &self,
+        tenant: &str,
+        model_key: &[u8],
+        x: Activation,
+        ctx: &CallContext,
+    ) -> Result<Activation, SystemException> {
+        self.state.write(|s| s.infer(tenant, model_key, x, ctx))
+    }
+
+    fn base(&self, expert_key: &[u8]) -> Result<Ior, SystemException> {
+        let key = self.state.write(|s| s.base(&self.keys, expert_key))?;
+        Ok(self.ior_for(EXPERT_ID, &key))
+    }
+
     /// `_is_a`, answered per object.
     ///
     /// `EnterpriseExpert : ::moe::Expert`, so its objects answer for both —
@@ -1064,9 +1297,18 @@ impl TenantService {
             || (*kind == Kind::Expert && want == EXPERT_ID)
     }
 
-    fn handle(&mut self, req: &Request, out: &mut Encoder) -> Result<(), SystemException> {
+    /// Serves one operation.
+    ///
+    /// Arguments are decoded before any lock is taken; each arm then opens
+    /// exactly one section — `read` where the operation changes nothing,
+    /// `write` where it does — and the reply is written from what the section
+    /// returned. Two sections in one operation would be a torn request *and* a
+    /// re-entrant lock, and [`orbweaver_giop::guarded`] refuses the second.
+    fn handle(&self, req: &Request, out: &mut Encoder) -> Result<(), SystemException> {
         let mut args = req.body().map_err(|_| SystemException::marshal())?;
-        // `Server` has already refused any key `knows` rejects, so this parses.
+        // `Server` has already refused any key `knows` rejects — in a separate
+        // look at the graph, so this can still fail if the object was retired
+        // in between, which is why it is a `?` and not an `expect`.
         let addressed =
             self.parse(&req.object_key).ok_or_else(SystemException::object_not_exist)?;
 
@@ -1113,14 +1355,14 @@ impl TenantService {
                 _ => Err(SystemException::bad_operation()),
             },
             Kind::Model => match req.operation.as_str() {
-                "get_manifest" => {
-                    let model = self
+                "get_manifest" => self.state.read(|s| {
+                    let model = s
                         .models
                         .get(&req.object_key)
                         .ok_or_else(SystemException::object_not_exist)?;
                     model.manifest.write_to(out);
                     Ok(())
-                }
+                }),
                 "infer" => {
                     let x =
                         Activation::read_from(&mut args).map_err(|_| SystemException::marshal())?;
@@ -1144,60 +1386,72 @@ impl TenantService {
                 "authorize" => {
                     let principal = args.get_string().map_err(|_| SystemException::marshal())?;
                     let target = args.get_string().map_err(|_| SystemException::marshal())?;
-                    let policy = self.policy_at(&req.object_key)?;
-                    // Default-deny: an ungranted pair is `false`, never an
-                    // error — `authorize` is a question, and refusing to
-                    // answer it is not the same as answering no.
-                    out.put_bool(policy.grants.contains(&(principal, target)));
+                    let granted = self.state.read(|s| {
+                        // Default-deny: an ungranted pair is `false`, never an
+                        // error — `authorize` is a question, and refusing to
+                        // answer it is not the same as answering no.
+                        Ok(s.policy_at(&req.object_key)?.grants.contains(&(principal, target)))
+                    })?;
+                    out.put_bool(granted);
                     Ok(())
                 }
                 "check_residency" => {
                     let node = args.get_string().map_err(|_| SystemException::marshal())?;
-                    let policy = self.policy_at(&req.object_key)?;
-                    // Default-deny: a node nobody declared cannot be shown to
-                    // be in region, and "unknown" answering true is how a
-                    // residency guarantee quietly becomes decoration.
-                    out.put_bool(self.nodes.get(&node) == Some(&policy.region));
+                    let in_region = self.state.read(|s| {
+                        let region = &s.policy_at(&req.object_key)?.region;
+                        // Default-deny: a node nobody declared cannot be shown
+                        // to be in region, and "unknown" answering true is how
+                        // a residency guarantee quietly becomes decoration.
+                        Ok(s.nodes.get(&node) == Some(region))
+                    })?;
+                    out.put_bool(in_region);
                     Ok(())
                 }
                 "audit" => {
                     let ctx = CallContext::read_from(&mut args)
                         .map_err(|_| SystemException::marshal())?;
                     let event = args.get_string().map_err(|_| SystemException::marshal())?;
-                    let name = self.policy_at(&req.object_key)?.name.clone();
-                    self.record(&tenant, &name, &ctx, &event);
-                    Ok(())
+                    self.state.write(|s| {
+                        let name = s.policy_at(&req.object_key)?.name.clone();
+                        s.record(&tenant, &name, &ctx, &event);
+                        Ok(())
+                    })
                 }
                 _ => Err(SystemException::bad_operation()),
             },
             Kind::Expert => match req.operation.as_str() {
                 "get_tenant_id" => {
-                    out.put_str(&self.expert_at(&req.object_key)?.tenant);
+                    let owner =
+                        self.state.read(|s| Ok(s.expert_at(&req.object_key)?.tenant.clone()))?;
+                    out.put_str(&owner);
                     Ok(())
                 }
                 "base" => {
                     let r = self.base(&req.object_key)?;
                     put_reference(out, Some(&r)).map_err(|_| SystemException::marshal())
                 }
-                "adapter_delta" => {
-                    out.put_octet_seq(&self.expert_at(&req.object_key)?.delta);
+                "adapter_delta" => self.state.read(|s| {
+                    out.put_octet_seq(&s.expert_at(&req.object_key)?.delta);
                     Ok(())
-                }
+                }),
                 // Inherited from `::moe::Expert`. Served, because inheritance
                 // is part of the contract and a half-served interface is worse
                 // than an unserved one.
-                "describe" => {
-                    let expert = self.expert_at(&req.object_key)?;
+                "describe" => self.state.read(|s| {
+                    let expert = s.expert_at(&req.object_key)?;
                     Capability { id: expert.capability.clone(), cost: expert.cost }.write_to(out);
                     Ok(())
-                }
+                }),
                 "process" => {
                     let x =
                         Activation::read_from(&mut args).map_err(|_| SystemException::marshal())?;
                     let ctx = CallContext::read_from(&mut args)
                         .map_err(|_| SystemException::marshal())?;
-                    let capability = self.expert_at(&req.object_key)?.capability.clone();
-                    self.record(&tenant, "", &ctx, &format!("process {capability}"));
+                    self.state.write(|s| {
+                        let capability = s.expert_at(&req.object_key)?.capability.clone();
+                        s.record(&tenant, "", &ctx, &format!("process {capability}"));
+                        Ok::<(), SystemException>(())
+                    })?;
                     // Unchanged: PLAN-MOE §5, as for `infer`.
                     x.write_to(out);
                     Ok(())
@@ -1207,6 +1461,7 @@ impl TenantService {
             Kind::Base => match req.operation.as_str() {
                 "describe" => {
                     let name = self
+                        .keys
                         .base_name(&req.object_key)
                         .ok_or_else(SystemException::object_not_exist)?;
                     // cost 0.0 and not a guess — see the module docs.
@@ -1229,45 +1484,36 @@ impl TenantService {
             },
         }
     }
-
-    /// The expert at `key`, or `OBJECT_NOT_EXIST`.
-    ///
-    /// Every one of these exists so that no path reachable from the wire can
-    /// index a map and panic: `Server::knows` has already vouched for the key,
-    /// so the failure arm is unreachable, and an unreachable arm that returns
-    /// an exception costs nothing while an unreachable `expect` costs the
-    /// whole connection on the day the invariant is wrong.
-    fn expert_at(&self, key: &[u8]) -> Result<&ExpertObject, SystemException> {
-        self.experts.get(key).ok_or_else(SystemException::object_not_exist)
-    }
-
-    /// The policy domain at `key`, or `OBJECT_NOT_EXIST`.
-    fn policy_at(&self, key: &[u8]) -> Result<&PolicyObject, SystemException> {
-        self.policies.get(key).ok_or_else(SystemException::object_not_exist)
-    }
-
-    /// The base model a shared-base key names.
-    fn base_name(&self, key: &[u8]) -> Option<String> {
-        let s = std::str::from_utf8(key).ok()?;
-        let prefix = format!("{}/shared/base/", self.base);
-        s.strip_prefix(&prefix).map(str::to_owned)
-    }
 }
 
-impl Dispatch for TenantService {
+impl SharedDispatch for TenantService {
     /// Many object keys, one servant — see the type docs. A retired model's
     /// key is not here any more, which is what turns `retire` into a real
     /// `OBJECT_NOT_EXIST` for both `Request` and `LocateRequest`.
     fn knows(&self, object_key: &[u8]) -> bool {
-        self.factories.contains(object_key)
-            || self.models.contains_key(object_key)
-            || self.experts.contains_key(object_key)
-            || self.policies.contains_key(object_key)
-            || self.bases.contains(object_key)
+        self.state.read(|s| {
+            s.factories.contains(object_key)
+                || s.models.contains_key(object_key)
+                || s.experts.contains_key(object_key)
+                || s.policies.contains_key(object_key)
+                || s.bases.contains(object_key)
+        })
+    }
+
+    fn dispatch(&self, request: &Request, out: &mut Encoder) -> Result<(), SystemException> {
+        self.handle(request, out)
+    }
+}
+
+/// The `&mut self` shape too, forwarding, so a caller already written against
+/// [`Server::serve`](orbweaver_giop::server::Server::serve) keeps working.
+impl Dispatch for TenantService {
+    fn knows(&self, object_key: &[u8]) -> bool {
+        SharedDispatch::knows(self, object_key)
     }
 
     fn dispatch(&mut self, request: &Request, out: &mut Encoder) -> Result<(), SystemException> {
-        self.handle(request, out)
+        SharedDispatch::dispatch(self, request, out)
     }
 }
 
@@ -1400,7 +1646,7 @@ mod tests {
 
     /// Two tenants, each with a factory, an expert and a model.
     fn two_tenants() -> (TenantService, Ior, Ior, Vec<u8>, Vec<u8>) {
-        let mut svc = TenantService::new("127.0.0.1", 4002, "MoE");
+        let svc = TenantService::new("127.0.0.1", 4002, "MoE");
         let a = svc.provision_factory("acme").unwrap();
         let b = svc.provision_factory("globex").unwrap();
         svc.provision_expert("acme", "math", "llama-70b", 1.5, b"acme-delta").unwrap();
@@ -1414,6 +1660,87 @@ mod tests {
 
     fn key_of(ior: &Ior) -> Vec<u8> {
         ior.primary().unwrap().object_key.clone()
+    }
+
+    /// Isolation is the property this module exists for, so it is the property
+    /// concurrency has to be shown not to have cost.
+    ///
+    /// Two tenants' clients hammer the servant at once — reads on both sides,
+    /// creates on both sides, and a stream of cross-tenant attempts that must
+    /// all be refused. Afterwards: every model belongs to the tenant that
+    /// created it, no audit line has crossed, and the serial counter handed
+    /// out no number twice. The last one is the interesting check under
+    /// concurrency: a global counter read and incremented under one lock
+    /// cannot collide, and a per-tenant one would have had to prove itself
+    /// again.
+    #[test]
+    fn concurrent_tenants_neither_collide_nor_leak() {
+        const N: usize = 4;
+        const EACH: usize = 8;
+        let (svc, _, _, model_a, model_b) = two_tenants();
+
+        std::thread::scope(|scope| {
+            for i in 0..N {
+                let svc = &svc;
+                let (model_a, model_b) = (&model_a, &model_b);
+                scope.spawn(move || {
+                    let (mine, theirs, other_model) = if i % 2 == 0 {
+                        ("acme", "globex", model_b)
+                    } else {
+                        ("globex", "acme", model_a)
+                    };
+                    for step in 0..EACH {
+                        // A create of my own, with a version nobody else uses.
+                        let version = format!("{mine}-{i}-{step}");
+                        let region = if mine == "acme" { "eu-west" } else { "us-east" };
+                        let made = svc
+                            .create(
+                                mine,
+                                Manifest {
+                                    tenant_id: mine.to_owned(),
+                                    base_model: "llama-70b".into(),
+                                    experts: vec![],
+                                    policy_domain: format!("{mine}-default"),
+                                    version: version.clone(),
+                                    residency_region: region.into(),
+                                },
+                            )
+                            .expect("a tenant may always create its own model");
+                        // A read of my own, which must be mine.
+                        let got = svc.manifest_at(&key_of(&made)).expect("just created");
+                        assert_eq!(got.tenant_id, mine);
+                        assert_eq!(got.version, version);
+                        // And a crossing, which must always be refused.
+                        let stolen = svc.ior_for(COMPOSED_MODEL_ID, other_model);
+                        assert_eq!(
+                            svc.retire(mine, Some(stolen)).unwrap_err().id,
+                            NO_PERMISSION,
+                            "{mine} reached into {theirs} on step {step}"
+                        );
+                    }
+                });
+            }
+        });
+
+        // Nothing crossed: every audit line in a tenant's log is that
+        // tenant's, and the two originals are untouched.
+        for (tenant, other) in [("acme", "globex"), ("globex", "acme")] {
+            assert!(
+                !svc.audit_log(tenant).iter().any(|e| e.event.contains(other)),
+                "{tenant}'s log mentions {other}"
+            );
+        }
+        assert!(svc.manifest_at(&model_a).is_some(), "acme's model survived every attempt");
+        assert!(svc.manifest_at(&model_b).is_some(), "globex's model survived every attempt");
+
+        // No serial was handed out twice: every create returned a distinct
+        // key, so the count of models is exactly what was created.
+        let created = N * EACH + 2;
+        assert_eq!(
+            svc.served(),
+            created + 2 /* factories */ + 2 /* experts */ + 2 /* policy domains */ + 1, /* shared base */
+            "a serial collision or a lost create"
+        );
     }
 
     /// Every key names exactly one tenant, and parses back to it. The shared
@@ -1432,7 +1759,7 @@ mod tests {
             let a = svc.parse(&key).expect("a key we minted parses");
             assert_eq!(a.tenant.as_deref(), Some("acme"), "{:?}", String::from_utf8_lossy(&key));
             assert_eq!(a.kind, kind);
-            assert!(svc.knows(&key));
+            assert!(SharedDispatch::knows(&svc, &key));
         }
         let shared = svc.shared_base_reference("llama-70b").unwrap();
         let parsed = svc.parse(&key_of(&shared)).unwrap();
@@ -1445,7 +1772,7 @@ mod tests {
     /// another tenant's object.
     #[test]
     fn a_tenant_cannot_forge_a_key_out_of_manifest_strings() {
-        let mut svc = TenantService::new("h", 1, "MoE");
+        let svc = TenantService::new("h", 1, "MoE");
         assert!(svc.provision_factory("globex/model/1").is_none(), "a slashed tenant id");
         assert!(svc.provision_factory("").is_none(), "an empty tenant id");
         svc.provision_factory("acme").unwrap();
@@ -1473,7 +1800,7 @@ mod tests {
     /// is the whole hole.
     #[test]
     fn no_reference_argument_crosses_a_tenant() {
-        let (mut svc, _, _, model_a, model_b) = two_tenants();
+        let (svc, _, _, model_a, model_b) = two_tenants();
         let expert_a = svc.expert_reference("acme", "math").unwrap();
         let policy_a = svc.policy_reference("acme", "acme-default").unwrap();
         let model_a_ior = svc.ior_for(COMPOSED_MODEL_ID, &model_a);
@@ -1512,7 +1839,7 @@ mod tests {
             "create with another tenant's manifest"
         );
         // Nothing moved: acme's model is intact and globex gained nothing.
-        assert_eq!(svc.manifest_at(&model_a), Some(&manifest("acme", "1.0", "eu-west")));
+        assert_eq!(svc.manifest_at(&model_a), Some(manifest("acme", "1.0", "eu-west")));
         assert!(svc.manifest_at(&model_b).unwrap().experts.is_empty());
     }
 
@@ -1522,7 +1849,7 @@ mod tests {
     /// neighbour's objects one probe at a time.
     #[test]
     fn a_cross_tenant_refusal_does_not_disclose_existence() {
-        let (mut svc, _, _, model_a, _) = two_tenants();
+        let (svc, _, _, model_a, _) = two_tenants();
         let real = svc.ior_for(COMPOSED_MODEL_ID, &model_a);
         let never = svc.ior_for(COMPOSED_MODEL_ID, &svc.model_key("acme", 9_999));
         assert_eq!(svc.retire("globex", Some(real)).unwrap_err().id, NO_PERMISSION, "exists");
@@ -1539,11 +1866,14 @@ mod tests {
     /// so a stale reference cannot land on the replacement.
     #[test]
     fn retire_removes_the_object_and_its_serial_is_never_reused() {
-        let (mut svc, _, _, model_a, model_b) = two_tenants();
+        let (svc, _, _, model_a, model_b) = two_tenants();
         let ior_a = svc.ior_for(COMPOSED_MODEL_ID, &model_a);
-        assert!(svc.knows(&model_a));
+        assert!(SharedDispatch::knows(&svc, &model_a));
         svc.retire("acme", Some(ior_a.clone())).unwrap();
-        assert!(!svc.knows(&model_a), "the key is gone, so the Server says OBJECT_NOT_EXIST");
+        assert!(
+            !SharedDispatch::knows(&svc, &model_a),
+            "the key is gone, so the Server says OBJECT_NOT_EXIST"
+        );
         assert_eq!(svc.manifest_at(&model_a), None);
         assert_eq!(
             svc.retire("acme", Some(ior_a)).unwrap_err().id,
@@ -1551,11 +1881,11 @@ mod tests {
             "retiring twice says gone, not bad argument"
         );
         // The other tenant is untouched.
-        assert!(svc.knows(&model_b));
+        assert!(SharedDispatch::knows(&svc, &model_b));
         // A replacement gets a fresh serial, so the retired reference stays dead.
         let replacement = svc.create("acme", manifest("acme", "1.0", "eu-west")).unwrap();
         assert_ne!(key_of(&replacement), model_a, "a retired serial is never reused");
-        assert!(!svc.knows(&model_a));
+        assert!(!SharedDispatch::knows(&svc, &model_a));
         // The tenant's expert and policy domain survive: they are the tenant's,
         // not the model's, and no operation in the contract destroys them.
         assert!(svc.expert_reference("acme", "math").is_some());
@@ -1568,7 +1898,7 @@ mod tests {
     /// `::moe::Expert` and nothing narrower.
     #[test]
     fn the_shared_base_crosses_the_boundary_visibly_and_reaches_nothing() {
-        let (mut svc, _, _, model_a, _) = two_tenants();
+        let (svc, _, _, model_a, _) = two_tenants();
         let ka = key_of(&svc.expert_reference("acme", "math").unwrap());
         let kb = key_of(&svc.expert_reference("globex", "math").unwrap());
 
@@ -1609,18 +1939,17 @@ mod tests {
     /// the default-deny answer for a node nobody declared.
     #[test]
     fn check_residency_refuses_a_node_outside_the_manifests_region() {
-        let (mut svc, _, _, _, _) = two_tenants();
+        let (svc, _, _, _, _) = two_tenants();
         svc.declare_node("gpu-eu-1", "eu-west");
         svc.declare_node("gpu-us-1", "us-east");
         let region_of = |svc: &TenantService, tenant: &str| {
-            let key = svc.policy_key(tenant, &format!("{tenant}-default"));
-            svc.policies[&key].region.clone()
+            svc.policy_region(tenant, &format!("{tenant}-default")).expect("the domain exists")
         };
         assert_eq!(region_of(&svc, "acme"), "eu-west");
         assert_eq!(region_of(&svc, "globex"), "us-east");
         let allows = |svc: &TenantService, tenant: &str, node: &str| {
-            let key = svc.policy_key(tenant, &format!("{tenant}-default"));
-            svc.nodes.get(node) == Some(&svc.policies[&key].region)
+            svc.node_region(node).is_some()
+                && svc.node_region(node) == svc.policy_region(tenant, &format!("{tenant}-default"))
         };
         assert!(allows(&svc, "acme", "gpu-eu-1"), "in region");
         assert!(!allows(&svc, "acme", "gpu-us-1"), "another region is refused");
@@ -1632,7 +1961,7 @@ mod tests {
     /// not move a model into a domain whose region its manifest does not claim.
     #[test]
     fn a_policy_domain_and_a_manifest_may_not_disagree_about_the_region() {
-        let (mut svc, _, _, model_a, _) = two_tenants();
+        let (svc, _, _, model_a, _) = two_tenants();
         let mut second = manifest("acme", "2.0", "us-east");
         second.policy_domain = "acme-default".into();
         assert_eq!(svc.create("acme", second).unwrap_err().id, BAD_PARAM, "one domain, one region");
@@ -1651,7 +1980,7 @@ mod tests {
     /// capability twice would make the manifest's sequence a multiset.
     #[test]
     fn bind_expert_refuses_a_foreign_base_and_a_repeat() {
-        let (mut svc, _, _, model_a, _) = two_tenants();
+        let (svc, _, _, model_a, _) = two_tenants();
         svc.provision_expert("acme", "vision", "mistral-8x7b", 1.0, b"").unwrap();
         let other_base = svc.expert_reference("acme", "vision").unwrap();
         assert_eq!(
@@ -1673,7 +2002,7 @@ mod tests {
     /// the property the per-tenant log exists to make checkable.
     #[test]
     fn an_audit_trail_holds_one_tenants_calls_and_no_others() {
-        let (mut svc, _, _, model_a, model_b) = two_tenants();
+        let (svc, _, _, model_a, model_b) = two_tenants();
         let ior_a = svc.ior_for(COMPOSED_MODEL_ID, &model_a);
         let ior_b = svc.ior_for(COMPOSED_MODEL_ID, &model_b);
         svc.deploy("acme", Some(ior_a)).unwrap();
@@ -1696,7 +2025,7 @@ mod tests {
     /// second `deploy` says so too.
     #[test]
     fn infer_refuses_until_the_model_is_deployed() {
-        let (mut svc, _, _, model_a, _) = two_tenants();
+        let (svc, _, _, model_a, _) = two_tenants();
         let ior = svc.ior_for(COMPOSED_MODEL_ID, &model_a);
         let ctx = CallContext::default();
         assert_eq!(
@@ -1713,7 +2042,7 @@ mod tests {
     /// undeployed object with the source's manifest and a new version.
     #[test]
     fn clone_model_mints_a_fresh_undeployed_object() {
-        let (mut svc, _, _, model_a, _) = two_tenants();
+        let (svc, _, _, model_a, _) = two_tenants();
         let ior = svc.ior_for(COMPOSED_MODEL_ID, &model_a);
         let math = svc.expert_reference("acme", "math").unwrap();
         svc.bind_expert("acme", &model_a, Some(math)).unwrap();
@@ -1792,7 +2121,7 @@ mod tests {
     /// binds.
     #[test]
     fn the_isolation_properties_hold_over_the_wire() {
-        let mut svc = TenantService::new("127.0.0.1", 0, "MoE");
+        let svc = TenantService::new("127.0.0.1", 0, "MoE");
         let factory_a = svc.provision_factory("acme").unwrap();
         let factory_b = svc.provision_factory("globex").unwrap();
         svc.provision_expert("acme", "math", "llama-70b", 1.5, b"acme-delta").unwrap();
@@ -1970,11 +2299,14 @@ mod tests {
     #[test]
     fn an_unknown_object_key_is_not_ours() {
         let (svc, _, _, model_a, _) = two_tenants();
-        assert!(svc.knows(&model_a));
-        assert!(!svc.knows(b"MoE"), "the base prefix alone names nothing");
-        assert!(!svc.knows(b"MoE/t/acme/model/9999"), "a plausible key we never minted");
-        assert!(!svc.knows(b"MoE/t/nobody/factory"));
-        assert!(!svc.knows(b"NameService"));
+        assert!(SharedDispatch::knows(&svc, &model_a));
+        assert!(!SharedDispatch::knows(&svc, b"MoE"), "the base prefix alone names nothing");
+        assert!(
+            !SharedDispatch::knows(&svc, b"MoE/t/acme/model/9999"),
+            "a plausible key we never minted"
+        );
+        assert!(!SharedDispatch::knows(&svc, b"MoE/t/nobody/factory"));
+        assert!(!SharedDispatch::knows(&svc, b"NameService"));
         assert!(svc.parse(b"MoE/t/acme").is_none(), "a truncated key parses as nothing");
         assert!(svc.parse(b"other/t/acme/factory").is_none(), "another service's prefix");
     }

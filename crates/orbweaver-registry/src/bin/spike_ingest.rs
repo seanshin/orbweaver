@@ -393,11 +393,11 @@ fn self_facade() -> Result<Ior, Box<dyn std::error::Error>> {
     let registry = ingest_local_idl()?;
     let server = Server::bind("127.0.0.1:0", b"InterfaceRepository".to_vec())?;
     let port = server.local_addr()?.port();
-    let mut facade =
+    let facade =
         RepositoryServer::new("127.0.0.1", port, b"InterfaceRepository".to_vec(), registry);
     let root = facade.root_ior();
     std::thread::spawn(move || {
-        let _ = server.serve(&mut facade, || false);
+        let _ = server.serve_shared(&facade, || false);
     });
     Ok(root)
 }

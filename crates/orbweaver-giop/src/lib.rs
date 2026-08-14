@@ -32,6 +32,7 @@
 pub mod codeset;
 pub mod csiv2;
 pub mod event_server;
+pub mod guarded;
 pub mod naming;
 pub mod naming_server;
 pub mod nat;
@@ -1641,6 +1642,7 @@ impl Connection {
     where
         F: Fn(&mut Encoder),
     {
+        guarded::assert_nothing_held("a oneway invocation");
         if self.poisoned {
             return Err(Error::Desynchronized);
         }
@@ -1669,6 +1671,9 @@ impl Connection {
     where
         F: Fn(&mut Encoder),
     {
+        // Waiting for a reply is the longest block a servant can take, so this
+        // is where holding a lock hurts most. See `crate::guarded`.
+        guarded::assert_nothing_held("an invocation");
         for _ in 0..MAX_FORWARD_HOPS {
             match self.invoke_once(operation, &write_args)? {
                 Outcome::Done(reply) => return Ok(reply),
@@ -1832,6 +1837,11 @@ enum Outcome {
 /// what turns "the peer never answered the ClientHello" into an error instead
 /// of a hang.
 fn dial_configured(host: &str, port: u16, timeout: Duration) -> Result<TcpStream> {
+    // The single funnel every outbound connection — cleartext and TLS —
+    // passes through, which is why the lock tripwire lives here rather than in
+    // each `connect*`. A servant dialling from inside its own lock is the
+    // cross-process deadlock `event_server` documents; see `crate::guarded`.
+    guarded::assert_nothing_held("connecting to a peer");
     let stream = dial(host, port, timeout)?;
     stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(timeout))?;

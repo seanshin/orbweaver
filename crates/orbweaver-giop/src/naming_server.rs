@@ -37,19 +37,52 @@
 //! reply whose `body()` starts at that repository id, and the unit tests
 //! decode every raised exception through it, both byte orders.
 //!
+//! # Sharing: one `RwLock` over the whole tree
+//!
+//! This servant implements [`SharedDispatch`], so two calls into it may run at
+//! once. The sharing decision is a per-servant one and this is the argument
+//! for *this* servant:
+//!
+//! - **One lock, not one per context.** A `resolve` walks several contexts and
+//!   a `bind_new_context` writes two — the child it mints and the parent it
+//!   binds into. Locking per context would mean holding two at once, which is
+//!   the lock-ordering problem [`crate::guarded`]'s discipline exists to make
+//!   impossible, and it would let a walk observe a half-applied bind. The tree
+//!   is one consistency domain, so it gets one lock.
+//! - **`RwLock`, not `Mutex`.** A naming service is read-dominated by
+//!   construction: `resolve`, `resolve_str`, `list`, `to_name`, `to_string`,
+//!   `_is_a` and `knows` are the traffic, and `bind`/`unbind` are
+//!   configuration. Those reads now overlap, which is the whole point of the
+//!   batch — a slow `list` over a large context no longer delays a `resolve`
+//!   on an unrelated one.
+//! - **Nothing blocking inside it.** Naming *stores* references and never
+//!   dials one: there is no [`crate::Connection`] anywhere in this module, so
+//!   the "no lock across an outbound call" rule is satisfied structurally
+//!   rather than by care. If a future `bind_context` chains a resolve over the
+//!   wire, that call must happen outside the lock and the tripwire in
+//!   [`crate::guarded`] will say so.
+//!
+//! One consequence, stated because it is now reachable: `knows` and the
+//! dispatch are two separate looks at the tree, so a context could in
+//! principle be unbound between them. Contexts are never destroyed here, so
+//! today the window is empty — and `table()` answers `OBJECT_NOT_EXIST`
+//! rather than panicking either way.
+//!
 //! [`NamingContext::bind_new_context`]: crate::naming::NamingContext::bind_new_context
 //! [`Server`]: crate::server::Server
+//! [`SharedDispatch`]: crate::server::SharedDispatch
 
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 
 use orbweaver_cdr::Encoder;
 
+use crate::guarded::Guarded;
 use crate::naming::{
     NAMING_CONTEXT_EXT_ID, NameComponent, parse_stringified_name, read_name, stringify_name,
     write_name,
 };
-use crate::server::{Dispatch, DispatchBody, Request, SystemException};
+use crate::server::{Dispatch, DispatchBody, Request, SharedDispatch, SystemException};
 use crate::{IiopProfile, Ior, Version};
 
 /// Repository id of the plain (pre-Ext) naming context interface. `_is_a`
@@ -156,26 +189,63 @@ fn nil_ref() -> Ior {
     Ior { type_id: String::new(), profiles: Vec::new() }
 }
 
+/// The whole context tree, and the only mutable state this servant has.
+///
+/// It is one consistency domain behind one lock — see the module docs on
+/// sharing for why a lock per context would be both a lock-ordering hazard
+/// and a torn `walk`.
+#[derive(Debug)]
+struct Tree {
+    contexts: BTreeMap<Vec<u8>, Bindings>,
+    minted: u64,
+}
+
+impl Tree {
+    /// Creates an unbound context under `root` and returns its fresh object
+    /// key.
+    fn mint_context(&mut self, root: &[u8]) -> Vec<u8> {
+        self.minted += 1;
+        let mut key = root.to_vec();
+        key.extend_from_slice(format!("/_ctx{}", self.minted).as_bytes());
+        self.contexts.insert(key.clone(), Bindings::new());
+        key
+    }
+
+    /// The binding table of the context behind `key`. Contexts are never
+    /// destroyed, so a missing key means the request addressed an object
+    /// this server never minted.
+    fn table(&self, key: &[u8]) -> Result<&Bindings, Raise> {
+        self.contexts.get(key).ok_or_else(|| Raise::System(SystemException::object_not_exist()))
+    }
+
+    fn table_mut(&mut self, key: &[u8]) -> Result<&mut Bindings, Raise> {
+        self.contexts.get_mut(key).ok_or_else(|| Raise::System(SystemException::object_not_exist()))
+    }
+}
+
 /// An in-memory CosNaming servant behind [`Server`].
 ///
 /// One instance serves a whole context *tree*: the root context is the
 /// object key the [`Server`] was bound with, and every context minted by
 /// `bind_new_context`/`new_context` is a further key on the same dispatch —
-/// which is why [`Dispatch::knows`] is answered from the context table
+/// which is why [`SharedDispatch::knows`] is answered from the context table
 /// rather than defaulted.
 ///
-/// `host` and `port` are what go into minted context references, and are the
+/// `host`, `port` and the root key are set at construction and never change,
+/// so they live outside the lock: what a reference *points at* is not part of
+/// what the tree *holds*, and taking a lock to read a constant would be the
+/// serialization this batch removes, reintroduced by habit. They are the
 /// caller's to publish correctly (Phase 0 assumption D: the bind address and
 /// the publishable address differ behind NAT).
 ///
 /// [`Server`]: crate::server::Server
+/// [`SharedDispatch::knows`]: crate::server::SharedDispatch::knows
 #[derive(Debug)]
 pub struct NamingServer {
     host: String,
     port: u16,
     root: Vec<u8>,
-    contexts: BTreeMap<Vec<u8>, Bindings>,
-    minted: u64,
+    tree: Guarded<Tree>,
 }
 
 impl NamingServer {
@@ -184,7 +254,12 @@ impl NamingServer {
     pub fn new(host: impl Into<String>, port: u16, root_key: Vec<u8>) -> Self {
         let mut contexts = BTreeMap::new();
         contexts.insert(root_key.clone(), Bindings::new());
-        Self { host: host.into(), port, root: root_key, contexts, minted: 0 }
+        Self {
+            host: host.into(),
+            port,
+            root: root_key,
+            tree: Guarded::new("the naming tree", Tree { contexts, minted: 0 }),
+        }
     }
 
     /// The root context's object key — what the [`Server`] must be bound
@@ -215,26 +290,118 @@ impl NamingServer {
         }
     }
 
-    /// Creates an unbound context and returns its fresh object key.
-    fn mint_context(&mut self) -> Vec<u8> {
-        self.minted += 1;
-        let mut key = self.root.clone();
-        key.extend_from_slice(format!("/_ctx{}", self.minted).as_bytes());
-        self.contexts.insert(key.clone(), Bindings::new());
-        key
+    /// The reference a resolved binding hands back. A context is named by its
+    /// key, so its reference is minted here — outside the lock, from fields
+    /// that cannot change.
+    fn ior_of(&self, bound: Bound) -> Ior {
+        match bound {
+            Bound::Object(ior) => ior,
+            Bound::Context(key) => self.ior_for(&key),
+        }
     }
 
-    /// The binding table of the context behind `key`. Contexts are never
-    /// destroyed, so a missing key means the request addressed an object
-    /// this server never minted.
-    fn table(&self, key: &[u8]) -> Result<&Bindings, Raise> {
-        self.contexts.get(key).ok_or_else(|| Raise::System(SystemException::object_not_exist()))
+    /// Dispatches one operation, writing the result body into `out`.
+    ///
+    /// The lock is taken **once per operation** — the whole of one request is
+    /// one look at the tree, which is what the server's own mutex used to
+    /// give and what keeps a `walk` from observing a half-applied `bind`. It
+    /// is a read for the read-only surface and a write for the four
+    /// operations that change something; nothing here calls out, so nothing
+    /// blocking happens inside either.
+    ///
+    /// Invariant every arm keeps: nothing is written into `out` until the
+    /// operation can no longer raise a *user* exception, because the buffer
+    /// travels whole under a single reply status. (A system exception after
+    /// a partial write is fine — the server discards `out` on that path.)
+    fn handle(&self, req: &Request, out: &mut Encoder) -> Result<(), Raise> {
+        let mut args = req.body().map_err(|_| marshal())?;
+        match req.operation.as_str() {
+            "_is_a" => {
+                let id = args.get_string().map_err(|_| marshal())?;
+                out.put_bool(matches!(
+                    id.as_str(),
+                    NAMING_CONTEXT_EXT_ID | NAMING_CONTEXT_ID | "IDL:omg.org/CORBA/Object:1.0"
+                ));
+            }
+            "_non_existent" => out.put_bool(false),
+            "resolve" => {
+                let name = read_name(&mut args).map_err(|_| marshal())?;
+                let bound = self.tree.read(|t| t.resolve_from(&req.object_key, &name))?;
+                self.ior_of(bound).write_to(out).map_err(|_| marshal())?;
+            }
+            "resolve_str" => {
+                let s = args.get_string().map_err(|_| marshal())?;
+                let name = parse_stringified_name(&s).map_err(|_| UserExc::InvalidName)?;
+                let bound = self.tree.read(|t| t.resolve_from(&req.object_key, &name))?;
+                self.ior_of(bound).write_to(out).map_err(|_| marshal())?;
+            }
+            "bind" | "rebind" => {
+                let name = read_name(&mut args).map_err(|_| marshal())?;
+                let obj = Ior::read_from(&mut args).map_err(|_| marshal())?;
+                let overwrite = req.operation == "rebind";
+                self.tree.write(|t| {
+                    t.bind_from(&req.object_key, &name, Bound::Object(obj), overwrite)
+                })?;
+            }
+            "unbind" => {
+                let name = read_name(&mut args).map_err(|_| marshal())?;
+                self.tree.write(|t| t.unbind_from(&req.object_key, &name))?;
+            }
+            "bind_new_context" => {
+                let name = read_name(&mut args).map_err(|_| marshal())?;
+                let key = self
+                    .tree
+                    .write(|t| t.bind_new_context_from(&self.root, &req.object_key, &name))?;
+                self.ior_for(&key).write_to(out).map_err(|_| marshal())?;
+            }
+            "new_context" => {
+                let key = self.tree.write(|t| t.mint_context(&self.root));
+                self.ior_for(&key).write_to(out).map_err(|_| marshal())?;
+            }
+            "list" => {
+                let how_many = args.get_u32().map_err(|_| marshal())?;
+                // Written from inside the read section: copying the bindings
+                // out first would double a large context in memory to save a
+                // lock that other readers can hold at the same time anyway.
+                self.tree.read(|t| {
+                    let table = t.table(&req.object_key)?;
+                    let take = (how_many as usize).min(table.len());
+                    out.put_u32(take as u32);
+                    for ((id, kind), bound) in table.iter().take(take) {
+                        write_name(out, &[NameComponent { id: id.clone(), kind: kind.clone() }]);
+                        out.put_u32(match bound {
+                            Bound::Object(_) => BINDING_OBJECT,
+                            Bound::Context(_) => BINDING_CONTEXT,
+                        });
+                    }
+                    Ok::<(), Raise>(())
+                })?;
+                // The stub: always a nil iterator, even when `take` truncated
+                // the list — see the module docs for why that is accepted.
+                nil_ref().write_to(out).map_err(|_| marshal())?;
+            }
+            "to_name" => {
+                let s = args.get_string().map_err(|_| marshal())?;
+                let name = parse_stringified_name(&s).map_err(|_| UserExc::InvalidName)?;
+                if name.is_empty() {
+                    return Err(UserExc::InvalidName.into());
+                }
+                write_name(out, &name);
+            }
+            "to_string" => {
+                let name = read_name(&mut args).map_err(|_| marshal())?;
+                if name.is_empty() {
+                    return Err(UserExc::InvalidName.into());
+                }
+                out.put_str(&stringify_name(&name));
+            }
+            _ => return Err(SystemException::bad_operation().into()),
+        }
+        Ok(())
     }
+}
 
-    fn table_mut(&mut self, key: &[u8]) -> Result<&mut Bindings, Raise> {
-        self.contexts.get_mut(key).ok_or_else(|| Raise::System(SystemException::object_not_exist()))
-    }
-
+impl Tree {
     /// Walks every component but the last, context to context, and returns
     /// the final context's key plus the last component.
     ///
@@ -272,12 +439,11 @@ impl NamingServer {
         Ok((ctx, last.clone()))
     }
 
-    fn resolve_from(&self, start: &[u8], name: &[NameComponent]) -> Result<Ior, Raise> {
+    fn resolve_from(&self, start: &[u8], name: &[NameComponent]) -> Result<Bound, Raise> {
         let (ctx, last) = self.walk(start, name)?;
         match self.table(&ctx)?.get(&slot(&last)) {
             None => Err(UserExc::NotFound { why: WHY_MISSING_NODE, rest: vec![last] }.into()),
-            Some(Bound::Object(ior)) => Ok(ior.clone()),
-            Some(Bound::Context(k)) => Ok(self.ior_for(k)),
+            Some(bound) => Ok(bound.clone()),
         }
     }
 
@@ -320,113 +486,31 @@ impl NamingServer {
 
     fn bind_new_context_from(
         &mut self,
+        root: &[u8],
         start: &[u8],
         name: &[NameComponent],
-    ) -> Result<Ior, Raise> {
+    ) -> Result<Vec<u8>, Raise> {
         // Occupancy is checked before minting, or a failed bind would leak an
         // unreachable context.
         let (ctx, last) = self.walk(start, name)?;
         if self.table(&ctx)?.contains_key(&slot(&last)) {
             return Err(UserExc::AlreadyBound.into());
         }
-        let key = self.mint_context();
+        let key = self.mint_context(root);
         self.table_mut(&ctx)?.insert(slot(&last), Bound::Context(key.clone()));
-        Ok(self.ior_for(&key))
-    }
-
-    /// Dispatches one operation, writing the result body into `out`.
-    ///
-    /// Invariant every arm keeps: nothing is written into `out` until the
-    /// operation can no longer raise a *user* exception, because the buffer
-    /// travels whole under a single reply status. (A system exception after
-    /// a partial write is fine — the server discards `out` on that path.)
-    fn handle(&mut self, req: &Request, out: &mut Encoder) -> Result<(), Raise> {
-        let mut args = req.body().map_err(|_| marshal())?;
-        match req.operation.as_str() {
-            "_is_a" => {
-                let id = args.get_string().map_err(|_| marshal())?;
-                out.put_bool(matches!(
-                    id.as_str(),
-                    NAMING_CONTEXT_EXT_ID | NAMING_CONTEXT_ID | "IDL:omg.org/CORBA/Object:1.0"
-                ));
-            }
-            "_non_existent" => out.put_bool(false),
-            "resolve" => {
-                let name = read_name(&mut args).map_err(|_| marshal())?;
-                let ior = self.resolve_from(&req.object_key, &name)?;
-                ior.write_to(out).map_err(|_| marshal())?;
-            }
-            "resolve_str" => {
-                let s = args.get_string().map_err(|_| marshal())?;
-                let name = parse_stringified_name(&s).map_err(|_| UserExc::InvalidName)?;
-                let ior = self.resolve_from(&req.object_key, &name)?;
-                ior.write_to(out).map_err(|_| marshal())?;
-            }
-            "bind" | "rebind" => {
-                let name = read_name(&mut args).map_err(|_| marshal())?;
-                let obj = Ior::read_from(&mut args).map_err(|_| marshal())?;
-                let overwrite = req.operation == "rebind";
-                self.bind_from(&req.object_key, &name, Bound::Object(obj), overwrite)?;
-            }
-            "unbind" => {
-                let name = read_name(&mut args).map_err(|_| marshal())?;
-                self.unbind_from(&req.object_key, &name)?;
-            }
-            "bind_new_context" => {
-                let name = read_name(&mut args).map_err(|_| marshal())?;
-                let ior = self.bind_new_context_from(&req.object_key, &name)?;
-                ior.write_to(out).map_err(|_| marshal())?;
-            }
-            "new_context" => {
-                let key = self.mint_context();
-                self.ior_for(&key).write_to(out).map_err(|_| marshal())?;
-            }
-            "list" => {
-                let how_many = args.get_u32().map_err(|_| marshal())?;
-                let table = self.table(&req.object_key)?;
-                let take = (how_many as usize).min(table.len());
-                out.put_u32(take as u32);
-                for ((id, kind), bound) in table.iter().take(take) {
-                    write_name(out, &[NameComponent { id: id.clone(), kind: kind.clone() }]);
-                    out.put_u32(match bound {
-                        Bound::Object(_) => BINDING_OBJECT,
-                        Bound::Context(_) => BINDING_CONTEXT,
-                    });
-                }
-                // The stub: always a nil iterator, even when `take` truncated
-                // the list — see the module docs for why that is accepted.
-                nil_ref().write_to(out).map_err(|_| marshal())?;
-            }
-            "to_name" => {
-                let s = args.get_string().map_err(|_| marshal())?;
-                let name = parse_stringified_name(&s).map_err(|_| UserExc::InvalidName)?;
-                if name.is_empty() {
-                    return Err(UserExc::InvalidName.into());
-                }
-                write_name(out, &name);
-            }
-            "to_string" => {
-                let name = read_name(&mut args).map_err(|_| marshal())?;
-                if name.is_empty() {
-                    return Err(UserExc::InvalidName.into());
-                }
-                out.put_str(&stringify_name(&name));
-            }
-            _ => return Err(SystemException::bad_operation().into()),
-        }
-        Ok(())
+        Ok(key)
     }
 }
 
-impl Dispatch for NamingServer {
+impl SharedDispatch for NamingServer {
     /// One dispatch answers for the whole context tree: the root key and
     /// every key `bind_new_context`/`new_context` minted.
     fn knows(&self, object_key: &[u8]) -> bool {
-        self.contexts.contains_key(object_key)
+        self.tree.read(|t| t.contexts.contains_key(object_key))
     }
 
     fn dispatch_body(
-        &mut self,
+        &self,
         request: &Request,
         out: &mut Encoder,
     ) -> std::result::Result<DispatchBody, SystemException> {
@@ -445,11 +529,10 @@ impl Dispatch for NamingServer {
     /// The narrow entry point cannot carry a user exception, so one arriving
     /// here gets the standard mapping: `UNKNOWN`, OMG minor 1.
     /// [`Server`](crate::server::Server)
-    /// never takes this path — it calls [`Dispatch::dispatch_body`] — but
-    /// the trait requires the method and lying with `NO_EXCEPTION` would be
-    /// worse.
+    /// never takes this path — it calls `dispatch_body` — but the trait
+    /// requires the method and lying with `NO_EXCEPTION` would be worse.
     fn dispatch(
-        &mut self,
+        &self,
         request: &Request,
         out: &mut Encoder,
     ) -> std::result::Result<(), SystemException> {
@@ -457,6 +540,33 @@ impl Dispatch for NamingServer {
             DispatchBody::Return => Ok(()),
             DispatchBody::UserException => Err(SystemException::unknown_user_exception()),
         }
+    }
+}
+
+/// The `&mut self` shape as well, so a caller with a
+/// [`Server::serve`](crate::server::Server::serve) already written keeps
+/// working — serialized, as that path always was. Every method forwards to
+/// the shared one, so there is exactly one implementation of the naming
+/// semantics and no second copy to drift.
+impl Dispatch for NamingServer {
+    fn knows(&self, object_key: &[u8]) -> bool {
+        SharedDispatch::knows(self, object_key)
+    }
+
+    fn dispatch_body(
+        &mut self,
+        request: &Request,
+        out: &mut Encoder,
+    ) -> std::result::Result<DispatchBody, SystemException> {
+        SharedDispatch::dispatch_body(self, request, out)
+    }
+
+    fn dispatch(
+        &mut self,
+        request: &Request,
+        out: &mut Encoder,
+    ) -> std::result::Result<(), SystemException> {
+        SharedDispatch::dispatch(self, request, out)
     }
 }
 
@@ -509,13 +619,13 @@ mod tests {
         fn start() -> Self {
             let server = Server::bind("127.0.0.1:0", b"NameService".to_vec()).unwrap();
             let port = server.local_addr().unwrap().port();
-            let mut ns = NamingServer::new("127.0.0.1", port, b"NameService".to_vec());
+            let ns = Arc::new(NamingServer::new("127.0.0.1", port, b"NameService".to_vec()));
             let root = ns.root_ior();
             let stats = server.stats();
             let stop = Arc::new(AtomicBool::new(false));
             let flag = stop.clone();
             let thread = std::thread::spawn(move || {
-                server.serve(&mut ns, move || flag.load(Ordering::SeqCst)).unwrap();
+                server.serve_shared(&*ns, move || flag.load(Ordering::SeqCst)).unwrap();
             });
             Served { root, stats, stop, thread: Some(thread) }
         }
@@ -762,9 +872,11 @@ mod tests {
     /// Each client binds its own name while the others are connected, then
     /// waits at a deadline-bounded rendezvous before resolving what its
     /// neighbours bound — so a server that served one connection at a time
-    /// would fail here on the deadline rather than hang. The naming tree is
-    /// one servant behind one mutex, which is what makes the concurrent binds
-    /// safe without the servant locking anything itself.
+    /// would fail here on the deadline rather than hang. The binds are made
+    /// safe by the tree's own `RwLock` — the servant's, not the server's,
+    /// since stream E's second batch — which is what
+    /// `concurrent_resolvers_overlap_with_a_writer_without_tearing_the_tree`
+    /// exercises from the other side.
     #[test]
     fn concurrent_clients_bind_and_resolve_without_taking_turns() {
         const N: usize = 5;
@@ -811,6 +923,68 @@ mod tests {
         served.shutdown(last);
     }
 
+    /// Readers overlap; a writer excludes them; and the tree is consistent
+    /// afterwards either way.
+    ///
+    /// The naming service is read-dominated, which is why its lock is an
+    /// `RwLock` — so this is the test that says the read half is real. N
+    /// clients resolve the same name repeatedly while one client rebinds it
+    /// underneath them, and every resolve must return **one of the two
+    /// bindings**, never a torn one and never a failure. Then the writer's
+    /// last value is what everybody sees.
+    ///
+    /// The deadline lives in the client sockets and in the join: a lock
+    /// inversion here would show up as a test that fails on a read timeout,
+    /// not as one that hangs.
+    #[test]
+    fn concurrent_resolvers_overlap_with_a_writer_without_tearing_the_tree() {
+        const N: usize = 5;
+        const EACH: usize = 20;
+        let served = Served::start();
+        let mut writer = served.client();
+        let first = dummy(b"first");
+        let second = dummy(b"second");
+        writer.bind(&[nc("target")], &first).unwrap();
+
+        std::thread::scope(|scope| {
+            for i in 0..N {
+                let served = &served;
+                let (first, second) = (&first, &second);
+                scope.spawn(move || {
+                    let mut c = served.client();
+                    for _ in 0..EACH {
+                        let got = c.resolve(&[nc("target")]).unwrap();
+                        let key = got.primary().unwrap().object_key.clone();
+                        assert!(
+                            key == first.primary().unwrap().object_key
+                                || key == second.primary().unwrap().object_key,
+                            "reader {i} saw a binding that was never written: {key:?}"
+                        );
+                    }
+                });
+            }
+            // The writer runs the whole time the readers do.
+            for _ in 0..EACH {
+                writer.rebind(&[nc("target")], &second).unwrap();
+                writer.rebind(&[nc("target")], &first).unwrap();
+            }
+            writer.rebind(&[nc("target")], &second).unwrap();
+        });
+
+        let settled = writer.resolve(&[nc("target")]).unwrap();
+        assert_eq!(
+            settled.primary().unwrap().object_key,
+            second.primary().unwrap().object_key,
+            "the last write must be what the tree settled on"
+        );
+        assert!(
+            served.stats.peak_active() >= N as u64,
+            "the readers never overlapped: peak was {}",
+            served.stats.peak_active()
+        );
+        served.shutdown(writer);
+    }
+
     /// The narrow `dispatch` entry point cannot carry a user exception, so it
     /// maps one to the standard UNKNOWN. Direct call — no server involved.
     #[test]
@@ -828,7 +1002,7 @@ mod tests {
         let msg = crate::read_message(&mut &wire[..], DEFAULT_MAX_MESSAGE_SIZE).unwrap();
         let req = crate::server::decode_request(msg).unwrap();
 
-        let mut ns = NamingServer::new("127.0.0.1", 1, b"NameService".to_vec());
+        let ns = NamingServer::new("127.0.0.1", 1, b"NameService".to_vec());
         let mut out = Encoder::new(Endian::Little);
         let err = ns.dispatch(&req, &mut out).unwrap_err();
         assert_eq!(err.id, crate::server::UNKNOWN);

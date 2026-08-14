@@ -8,11 +8,13 @@
 //!
 //! # Why the control loop is not a second thread
 //!
-//! The serving windows are a control-flow choice, not a limit of the server:
-//! since stream E connections are served concurrently, but *dispatch* is
-//! still serialized behind one servant, so a control loop that ran while the
-//! wire was open would contend for the same lock rather than run beside it.
-//! The window shape keeps the two phases legible. Instead the spike opens a serving
+//! The serving windows are a control-flow choice, not a limit of the server.
+//! They were close to being one: until stream E's second batch the servant was
+//! borrowed mutably for the window, so a control loop could not run beside the
+//! wire even in principle. It can now — the service is shared by reference and
+//! locks its own state — and the windows stay anyway, because what they buy is
+//! legibility: each phase's effects are attributable to that phase. Instead
+//! the spike opens a serving
 //! window, does the wire work, closes it, and runs the out-of-band control
 //! steps with the servant back in hand. That is not a workaround: §5 puts
 //! residency transitions at *batch and statistics period*, and "between
@@ -116,17 +118,22 @@ fn exception_id(result: Result<orbweaver_giop::Reply, Error>) -> String {
 
 /// Serves `svc` for the length of `window`, then hands it back.
 ///
-/// The scoped thread borrows the servant for the window, so the compiler —
-/// not a convention — is what stops a control-loop step running while the
-/// wire is open.
-fn serve_window<F>(server: &Server, svc: &mut ExpertService, probe: &Ior, r: &mut Report, window: F)
+/// The scoped thread used to *borrow the servant mutably* for the window, so
+/// the compiler stopped a control-loop step running while the wire was open.
+/// Concurrent dispatch (stream E) removed that borrow — the servant is shared
+/// by reference now — so the exclusion is no longer free. It is preserved by
+/// shape instead: `window` is handed only the report, never the service, so
+/// the only thing that can reach `svc` during the window is a wire call.
+/// Widening that closure to take the service would be a real change in what
+/// this spike measures, not a convenience.
+fn serve_window<F>(server: &Server, svc: &ExpertService, probe: &Ior, r: &mut Report, window: F)
 where
     F: FnOnce(&mut Report),
 {
     let stop = AtomicBool::new(false);
     std::thread::scope(|scope| {
         let serving = scope.spawn(|| {
-            server.serve(svc, || stop.load(Ordering::SeqCst)).expect("the server ran");
+            server.serve_shared(svc, || stop.load(Ordering::SeqCst)).expect("the server ran");
         });
         window(r);
         // The flag goes up after the window's last connection has closed, so
@@ -163,7 +170,7 @@ fn run() -> Result<u32, Box<dyn std::error::Error>> {
 
     let server = Server::bind("127.0.0.1:0", b"MoE/registry".to_vec())?;
     let port = server.local_addr()?.port();
-    let mut svc = ExpertService::new("127.0.0.1", port, b"MoE", policy, cold_below);
+    let svc = ExpertService::new("127.0.0.1", port, b"MoE", policy, cold_below);
     let registry_ior = svc.registry_ior();
     let loader_ior = svc.loader_ior();
     let mut r = Report { failures: 0 };
@@ -182,7 +189,7 @@ fn run() -> Result<u32, Box<dyn std::error::Error>> {
 
     // ── window 1: registration and the loading requests ─────────────────────
     println!("\nwindow 1 — the wire is open");
-    serve_window(&server, &mut svc, &registry_ior, &mut r, |r| {
+    serve_window(&server, &svc, &registry_ior, &mut r, |r| {
         let mut reg = match Connection::connect(&registry_ior, T) {
             Ok(c) => c,
             Err(e) => {
@@ -288,24 +295,24 @@ fn run() -> Result<u32, Box<dyn std::error::Error>> {
     // cannot either; it arrives from outside, per window.
     svc.observe_free_memory(50);
     r.eq(
-        svc.store().get("expert-code").map(|o| o.mem_footprint),
+        svc.with_store(|s| s.get("expert-code").map(|o| o.mem_footprint)),
         Some(60),
         "the heartbeat's footprint is in the offer store",
     );
     r.eq(
-        svc.store().get("expert-code").map(|o| o.route_freq),
+        svc.with_store(|s| s.get("expert-code").map(|o| o.route_freq)),
         Some(FREQ_SCALE),
         "…and the store's routing counter, not the 99.0 the expert claimed",
     );
     r.check(
-        svc.reference_for("expert-math") == Some(&expert_ref("expert-math")),
+        svc.reference_for("expert-math") == Some(expert_ref("expert-math")),
         "the registered Expert reference is held for a router to hand back",
     );
 
     // ── window 2: the guarded eviction ──────────────────────────────────────
     println!("\nwindow 2 — the wire is open again");
     let loader_ior2 = loader_ior.clone();
-    serve_window(&server, &mut svc, &registry_ior, &mut r, |r| {
+    serve_window(&server, &svc, &registry_ior, &mut r, |r| {
         let mut ldr = match Connection::connect(&loader_ior2, T) {
             Ok(c) => c,
             Err(e) => {
@@ -356,15 +363,23 @@ fn run() -> Result<u32, Box<dyn std::error::Error>> {
     // heartbeat's footprint is what ends it is asserted properly in
     // `the_heartbeat_is_what_changes_the_decision`, where both footprints can
     // be run; here it is one number in one run and is not claimed as more.)
-    r.eq(svc.loader().status("expert-code"), Some(Residency::Offloaded), "expert-code offloaded");
-    r.eq(svc.loader().status("expert-math"), Some(Residency::Active), "expert-math still ACTIVE");
     r.eq(
-        svc.loader().status("expert-vision"),
+        svc.with_loader(|l| l.status("expert-code")),
+        Some(Residency::Offloaded),
+        "expert-code offloaded",
+    );
+    r.eq(
+        svc.with_loader(|l| l.status("expert-math")),
+        Some(Residency::Active),
+        "expert-math still ACTIVE",
+    );
+    r.eq(
+        svc.with_loader(|l| l.status("expert-vision")),
         Some(Residency::Resident),
         "expert-vision still RESIDENT",
     );
     r.eq(
-        svc.store().get("expert-code").map(|o| o.residency),
+        svc.with_store(|s| s.get("expert-code").map(|o| o.residency)),
         Some(Residency::Offloaded),
         "the offer store mirrors what the loader actually did",
     );

@@ -684,15 +684,24 @@ produces), and **oracle** (what verifies the whole batch deterministically).
 - **What:** the carried-forward list, now mostly landed: ~~`LocateRequest`~~,
   ~~`CancelRequest`/`CloseConnection` send~~, ~~multi-profile failover~~,
   ~~`TAG_ALTERNATE_IIOP_ADDRESS`~~ (all measured against both peers,
-  2026-08-13/14), ~~concurrent connections~~ (one servant behind one mutex,
-  cap 64, refusal spoken as §9.4.7's `CloseConnection`). Remaining: ~~fragment
+  2026-08-13/14), ~~concurrent connections~~ (cap 64, refusal spoken as
+  §9.4.7's `CloseConnection`), ~~concurrent **dispatch**~~ (2026-08-14: the
+  cross-crate batch this list said not to smuggle into a giop-only one —
+  `SharedDispatch` is `&self`/`Sync`, all five servants ported with a sharing
+  decision argued per servant, and the lock discipline enforced by
+  `orbweaver_giop::guarded` rather than documented). Remaining: ~~fragment
   *reception*~~ (no peer fragments, so the specification is the oracle:
   hand-built §9.4.9 streams found two reception bugs), request multiplexing,
-  connection pooling, `#pragma prefix`, and the limit concurrency did **not** remove —
-  **dispatch is still serialized**, so a slow operation delays every client
-  even though it no longer excludes them. Lifting that means `Dispatch: Sync`
-  and interior mutability in every servant, which is a cross-crate batch and
-  should not be smuggled into a giop-only one.
+  connection pooling, `#pragma prefix`.
+
+  One measurement from that batch is worth carrying forward, because it is the
+  kind of mistake the next concurrency change will make too: the server-side
+  counter written to witness overlap (`ServerStats::peak_at_servant`) sits
+  *outside* the servant's own lock, so it counts callers queued for that lock
+  as well as the one holding it — and reached N on a serialized server. A
+  counter outside the lock cannot tell overlap from queueing; the witness has
+  to be a rendezvous the servant can only complete when calls really are
+  simultaneous. The negative control found this, not review.
 - **Depends on:** nothing. Pure `orbweaver-giop` work.
 - **Batch unit:** one capability across **both peers and all three GIOP
   versions** at once.

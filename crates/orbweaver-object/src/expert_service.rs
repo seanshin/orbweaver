@@ -66,13 +66,47 @@
 //! | `Capability::route_freq` | the store | `OfferStore::heartbeat` already refuses to let a heartbeat rewrite routing history; letting `register_expert` seed it would be the same hole on the other side |
 //! | pins | both, set together | the loader's guard is still the authority, but pinning only one copy lets the policy propose evictions the guard will always refuse |
 //!
+//! # Sharing: one lock, because the mirror is an invariant across two halves
+//!
+//! This servant implements [`SharedDispatch`], so two calls may run at once.
+//! The sharing decision is the strictest in the batch and the reason is
+//! already written down two sections above: **the offer store and the
+//! residency machine are two copies of one truth**, kept in step by
+//! `mirror_residency` at a single choke point, and that section records what
+//! happened the last time they were allowed to drift — the control plane
+//! quietly stopped deciding, with nothing failing loudly.
+//!
+//! So: **one lock over the store, the loader, the reference table and the
+//! reported free memory, taken once per operation.** Not one per map. A reader
+//! that saw a mirrored loader and an unmirrored store would see exactly the
+//! desynchronisation the choke point exists to prevent, and two locks would
+//! also be two locks to order (see [`orbweaver_giop::guarded`], whose whole
+//! discipline is that a thread never holds two).
+//!
+//! **Not an `RwLock` read path worth speaking of, either.** Of the wire
+//! surface, only `status` and `_is_a` do not mutate: `prefetch`, `evict` and
+//! `pin` all move the machine, `heartbeat` rewrites the offer, and
+//! `apply_policy` decides, applies, mirrors and decays. This servant is a
+//! writer, and saying so is more useful than a read path that would almost
+//! never be taken. What concurrency buys it is that its callers no longer
+//! queue behind *other servants* in the same process — and that `status`, the
+//! one a control loop polls, no longer waits behind a heartbeat.
+//!
+//! Nothing here dials anything: the `Expert` reference is
+//! [`Registered::reference`], held verbatim and never invoked, so no outbound
+//! call can be made from inside the lock and the tripwire has nothing to fire
+//! on. A future `Router::select` that *does* dial must do it after the lock
+//! closes, with the reference copied out.
+//!
 //! [`Decision`]: orbweaver_trading::policy::Decision
 //! [`Offer`]: orbweaver_trading::Offer
+//! [`SharedDispatch`]: orbweaver_giop::server::SharedDispatch
 
 use std::collections::BTreeMap;
 
 use orbweaver_cdr::{Decoder, Encoder};
-use orbweaver_giop::server::{Completion, Dispatch, Request, SystemException};
+use orbweaver_giop::guarded::Guarded;
+use orbweaver_giop::server::{Completion, Dispatch, Request, SharedDispatch, SystemException};
 use orbweaver_giop::{IiopProfile, Ior, Version};
 use orbweaver_trading::policy::{Decision, LoadingPolicy};
 use orbweaver_trading::{FREQ_SCALE, Offer, OfferStore, Residency, StoreError};
@@ -322,14 +356,29 @@ struct Registered {
     contract_version: String,
 }
 
+/// The four things that must move together, and therefore share one lock.
+///
+/// See the module docs on sharing: the store's residency and the loader's are
+/// two copies of one truth, `refs` is keyed by the same expert ids, and
+/// `free_memory` is what the eviction guard reads. A reader holding any three
+/// of them without the fourth can see a control plane mid-mirror.
+#[derive(Debug)]
+struct ExpertState {
+    store: OfferStore,
+    loader: ExpertLoader,
+    refs: BTreeMap<String, Registered>,
+    free_memory: u64,
+}
+
 /// `moe::ExpertRegistry` and `moe::ExpertLoader`, served together.
 ///
 /// Two interfaces and one servant, because they are two views of one state:
 /// registering an expert has to create it in *both* the offer store and the
 /// residency machine, and nothing could keep two servants' halves in step
 /// without a shared owner. They stay two *objects* — distinct object keys,
-/// distinct repository ids, [`Dispatch::knows`] answering for both — because
-/// the contract declares two interfaces and a client narrows to one of them.
+/// distinct repository ids, [`SharedDispatch::knows`] answering for both —
+/// because the contract declares two interfaces and a client narrows to one
+/// of them.
 ///
 /// This is not a POA-hosted object set. [`crate::Poa`] mints one repository
 /// id per adapter, and these two references claim different ids; the POA does
@@ -341,12 +390,13 @@ pub struct ExpertService {
     port: u16,
     registry_key: Vec<u8>,
     loader_key: Vec<u8>,
-    store: OfferStore,
-    loader: ExpertLoader,
-    refs: BTreeMap<String, Registered>,
+    /// Constant after construction, so it stays outside the lock: the §6
+    /// policy is configuration, not state, and taking a lock to read
+    /// configuration is the serialization this batch removed, put back by
+    /// habit.
     policy: LoadingPolicy,
     cold_below: u64,
-    free_memory: u64,
+    state: Guarded<ExpertState>,
 }
 
 impl ExpertService {
@@ -373,15 +423,21 @@ impl ExpertService {
             port,
             registry_key: key("/registry"),
             loader_key: key("/loader"),
-            store: OfferStore::new(),
-            loader: ExpertLoader::new(),
-            refs: BTreeMap::new(),
             policy,
             cold_below,
-            // No snapshot has been reported yet. Zero is the safe start: it
-            // is below every sane low watermark, so the guard's *other* three
-            // conditions still have to hold before anything is evicted.
-            free_memory: 0,
+            state: Guarded::new(
+                "the expert control plane",
+                ExpertState {
+                    store: OfferStore::new(),
+                    loader: ExpertLoader::new(),
+                    refs: BTreeMap::new(),
+                    // No snapshot has been reported yet. Zero is the safe
+                    // start: it is below every sane low watermark, so the
+                    // guard's *other* three conditions still have to hold
+                    // before anything is evicted.
+                    free_memory: 0,
+                },
+            ),
         }
     }
 
@@ -418,30 +474,39 @@ impl ExpertService {
         }
     }
 
-    /// The offer store, for queries and for tests. Read-only: every mutation
-    /// has to go through an operation that keeps the loader in step.
-    pub fn store(&self) -> &OfferStore {
-        &self.store
+    /// Reads the offer store. Read-only: every mutation has to go through an
+    /// operation that keeps the loader in step.
+    ///
+    /// A closure and not a `&OfferStore`, because handing out a reference
+    /// would mean handing out the lock guard that keeps it alive — and a guard
+    /// a caller holds is a lock held for as long as the caller likes, across
+    /// whatever it does next. Copy out what you need; the store's own getters
+    /// return owned values or `Copy` ones.
+    pub fn with_store<R>(&self, f: impl FnOnce(&OfferStore) -> R) -> R {
+        self.state.read(|s| f(&s.store))
     }
 
-    /// The residency machine, read-only, for the same reason.
-    pub fn loader(&self) -> &ExpertLoader {
-        &self.loader
+    /// Reads the residency machine, for the same reason and under the same
+    /// rule.
+    pub fn with_loader<R>(&self, f: impl FnOnce(&ExpertLoader) -> R) -> R {
+        self.state.read(|s| f(&s.loader))
     }
 
     /// The reference `register_expert` was given for `id` — what a router
     /// hands back when it selects this expert.
-    pub fn reference_for(&self, id: &str) -> Option<&Ior> {
-        self.refs.get(id).map(|r| &r.reference)
+    pub fn reference_for(&self, id: &str) -> Option<Ior> {
+        self.state.read(|s| s.refs.get(id).map(|r| r.reference.clone()))
     }
 
     /// The capability this service would report for `id`, with the loader's
     /// residency rather than the one the expert last claimed.
     pub fn capability_of(&self, id: &str) -> Option<Capability> {
-        let offer = self.store.get(id)?;
-        let registered = self.refs.get(id)?;
-        let state = self.loader.status(id).unwrap_or(offer.residency);
-        Some(Capability::from_offer(offer, state, &registered.contract_version))
+        self.state.read(|s| {
+            let offer = s.store.get(id)?;
+            let registered = s.refs.get(id)?;
+            let state = s.loader.status(id).unwrap_or(offer.residency);
+            Some(Capability::from_offer(offer, state, &registered.contract_version))
+        })
     }
 
     /// Records the free accelerator memory the control loop observed.
@@ -451,8 +516,8 @@ impl ExpertService {
     /// A wire `evict` is evaluated against the *last reported* snapshot, so a
     /// control loop that never reports one gets a service that never evicts,
     /// which is the right failure direction.
-    pub fn observe_free_memory(&mut self, bytes: u64) {
-        self.free_memory = bytes;
+    pub fn observe_free_memory(&self, bytes: u64) {
+        self.state.write(|s| s.free_memory = bytes);
     }
 
     /// Records one routing hit against `id`'s decayed counter — §6's feedback
@@ -461,8 +526,8 @@ impl ExpertService {
     /// Deliberately not a wire operation: it fires per routed call, and a
     /// per-call operation on this contract is the per-token surface §5
     /// forbids. It arrives in-process from the router instead.
-    pub fn record_hit(&mut self, id: &str) -> bool {
-        self.store.add_hit(id)
+    pub fn record_hit(&self, id: &str) -> bool {
+        self.state.write(|s| s.store.add_hit(id))
     }
 
     /// PREFETCHING → RESIDENT: the weight copy finished.
@@ -470,18 +535,18 @@ impl ExpertService {
     /// No wire operation either, and for a different reason: nothing calls
     /// this from outside because nothing outside performs the copy. Whoever
     /// does — in this repository, the spike standing in for it — reports here.
-    pub fn complete_load(&mut self, id: &str) -> Result<Residency, TransitionError> {
-        self.transition(|l| l.complete_load(id))
+    pub fn complete_load(&self, id: &str) -> Result<Residency, TransitionError> {
+        self.state.write(|s| s.transition(|l| l.complete_load(id)))
     }
 
     /// A call began on `id`: RESIDENT → ACTIVE, or one more inflight.
-    pub fn begin_call(&mut self, id: &str) -> Result<Residency, TransitionError> {
-        self.transition(|l| l.begin_call(id))
+    pub fn begin_call(&self, id: &str) -> Result<Residency, TransitionError> {
+        self.state.write(|s| s.transition(|l| l.begin_call(id)))
     }
 
     /// A call on `id` finished.
-    pub fn end_call(&mut self, id: &str) -> Result<Residency, TransitionError> {
-        self.transition(|l| l.end_call(id))
+    pub fn end_call(&self, id: &str) -> Result<Residency, TransitionError> {
+        self.state.write(|s| s.transition(|l| l.end_call(id)))
     }
 
     /// One batch window: decide, apply, mirror, decay.
@@ -508,20 +573,27 @@ impl ExpertService {
     /// Step 4 makes two consecutive applications differ: the second sees
     /// decayed counters, because a window closed. That is the semantics, not
     /// an accident — call it once per window.
-    pub fn apply_policy(&mut self, free_memory: u64) -> Vec<Applied> {
-        self.free_memory = free_memory;
-        let decisions: Vec<Decision> =
-            self.policy.decide(&self.store, free_memory, &self.loader.inflight_ids());
-        let stats = self.window();
-        let applied = self.loader.apply(&decisions, &stats);
-        self.mirror_residency();
-        self.store.decay_all();
-        applied
+    /// One window is one lock section: the four steps below are exactly the
+    /// invariant the module docs describe, and a reader between any two of
+    /// them would see the drift the choke point exists to prevent.
+    pub fn apply_policy(&self, free_memory: u64) -> Vec<Applied> {
+        self.state.write(|s| {
+            s.free_memory = free_memory;
+            let decisions: Vec<Decision> =
+                self.policy.decide(&s.store, free_memory, &s.loader.inflight_ids());
+            let stats = s.window(&self.policy, self.cold_below);
+            let applied = s.loader.apply(&decisions, &stats);
+            s.mirror_residency();
+            s.store.decay_all();
+            applied
+        })
     }
+}
 
+impl ExpertState {
     /// The window the eviction guard reads, from the last reported snapshot.
-    fn window(&self) -> BatchStats {
-        BatchStats::from_store(&self.store, &self.policy, self.free_memory, self.cold_below)
+    fn window(&self, policy: &LoadingPolicy, cold_below: u64) -> BatchStats {
+        BatchStats::from_store(&self.store, policy, self.free_memory, cold_below)
     }
 
     /// Runs one loader transition and mirrors the result into the store.
@@ -627,8 +699,13 @@ impl ExpertService {
         self.transition(|l| l.request_prefetch(id)).map(|_| ()).map_err(|e| refuse(&e))
     }
 
-    fn evict(&mut self, id: &str) -> Result<(), SystemException> {
-        let stats = self.window();
+    fn evict(
+        &mut self,
+        id: &str,
+        policy: &LoadingPolicy,
+        cold_below: u64,
+    ) -> Result<(), SystemException> {
+        let stats = self.window(policy, cold_below);
         self.transition(|l| l.evict(id, &stats)).map(|_| ()).map_err(|e| refuse(&e))
     }
 
@@ -648,9 +725,53 @@ impl ExpertService {
         // lie locally and this is the same refusal on the wire.
         self.loader.status(id).ok_or_else(|| system(BAD_PARAM, Completion::No))
     }
+}
+
+/// The wire operations, each one lock section deep.
+///
+/// This layer exists so that **taking the lock happens in exactly one place
+/// per operation**. `handle` decodes and replies; these open the section and
+/// delegate to [`ExpertState`], which does the work with no idea that a lock
+/// exists. Nesting two of them would be a torn request and a re-entrant lock,
+/// and [`orbweaver_giop::guarded`] refuses the second — so the rule to keep is
+/// that nothing in this block calls anything else in this block.
+impl ExpertService {
+    fn register_expert(&self, reference: Ior, cap: &Capability) -> Result<(), SystemException> {
+        self.state.write(|s| s.register_expert(reference, cap))
+    }
+
+    fn deregister(&self, reference: &Ior) -> Result<(), SystemException> {
+        self.state.write(|s| s.deregister(reference))
+    }
+
+    fn heartbeat(&self, reference: Ior, cap: &Capability) -> Result<(), SystemException> {
+        self.state.write(|s| s.heartbeat(reference, cap))
+    }
+
+    fn prefetch(&self, id: &str) -> Result<(), SystemException> {
+        self.state.write(|s| s.prefetch(id))
+    }
+
+    fn evict(&self, id: &str) -> Result<(), SystemException> {
+        self.state.write(|s| s.evict(id, &self.policy, self.cold_below))
+    }
+
+    fn pin(&self, id: &str) -> Result<(), SystemException> {
+        self.state.write(|s| s.pin(id))
+    }
+
+    /// The one read on this surface, and the one a control loop polls: it no
+    /// longer waits behind a heartbeat.
+    fn status(&self, id: &str) -> Result<Residency, SystemException> {
+        self.state.read(|s| s.status(id))
+    }
 
     /// Serves one operation, writing the reply body into `out`.
-    fn handle(&mut self, req: &Request, out: &mut Encoder) -> Result<(), SystemException> {
+    ///
+    /// Arguments are decoded *before* the lock is taken and the reply is
+    /// written *after* it closes, so the section covers the state change and
+    /// nothing else.
+    fn handle(&self, req: &Request, out: &mut Encoder) -> Result<(), SystemException> {
         let mut args = req.body().map_err(|_| SystemException::marshal())?;
         let on_registry = req.object_key == self.registry_key;
 
@@ -726,14 +847,28 @@ impl ExpertService {
     }
 }
 
-impl Dispatch for ExpertService {
-    /// Two object keys, one servant — see the type docs.
+impl SharedDispatch for ExpertService {
+    /// Two object keys, one servant — see the type docs. Both are constants
+    /// set at construction, so this answers without taking the lock: a
+    /// `LocateRequest` cannot be delayed by a heartbeat.
     fn knows(&self, object_key: &[u8]) -> bool {
         object_key == self.registry_key || object_key == self.loader_key
     }
 
-    fn dispatch(&mut self, request: &Request, out: &mut Encoder) -> Result<(), SystemException> {
+    fn dispatch(&self, request: &Request, out: &mut Encoder) -> Result<(), SystemException> {
         self.handle(request, out)
+    }
+}
+
+/// The `&mut self` shape too, forwarding, so a caller already written against
+/// [`Server::serve`](orbweaver_giop::server::Server::serve) keeps working.
+impl Dispatch for ExpertService {
+    fn knows(&self, object_key: &[u8]) -> bool {
+        SharedDispatch::knows(self, object_key)
+    }
+
+    fn dispatch(&mut self, request: &Request, out: &mut Encoder) -> Result<(), SystemException> {
+        SharedDispatch::dispatch(self, request, out)
     }
 }
 
@@ -787,6 +922,59 @@ mod tests {
 
     fn service() -> ExpertService {
         ExpertService::new("127.0.0.1", 4001, b"MoE", policy(), COLD_BELOW)
+    }
+
+    /// The mirror is an invariant across two halves, so it is what
+    /// concurrency has to be shown not to have broken.
+    ///
+    /// Registrations, heartbeats, transitions and status polls all run at
+    /// once. Afterwards every expert must be in the store *and* the loader,
+    /// with the two agreeing about residency — which is the exact
+    /// desynchronisation the module docs record as having happened once
+    /// already, silently, when the mirror was not at a single choke point.
+    /// One lock over both halves is what makes it impossible rather than
+    /// merely fixed, and this is the test that says so under load.
+    #[test]
+    fn concurrent_registrations_keep_the_store_and_the_loader_in_step() {
+        const N: usize = 4;
+        const EACH: usize = 6;
+        let svc = service();
+
+        std::thread::scope(|scope| {
+            for i in 0..N {
+                let svc = &svc;
+                scope.spawn(move || {
+                    for step in 0..EACH {
+                        let id = format!("expert-{i}-{step}");
+                        svc.register_expert(expert_ref(&id), &cap(&id, 10)).unwrap();
+                        // Move it, so the loader and the store must both learn.
+                        svc.prefetch(&id).unwrap();
+                        svc.complete_load(&id).unwrap();
+                        // A heartbeat, which rewrites the offer and must not
+                        // rewrite the residency the loader owns.
+                        svc.heartbeat(expert_ref(&id), &cap(&id, 20)).unwrap();
+                        // And a read from another expert's point of view.
+                        assert!(svc.status(&id).is_ok());
+                    }
+                });
+            }
+        });
+
+        let total = N * EACH;
+        assert_eq!(svc.with_store(|s| s.len()), total, "an offer was lost");
+        for (id, state) in svc.with_loader(|l| l.states()) {
+            assert_eq!(
+                svc.with_store(|s| s.get(&id).map(|o| o.residency)),
+                Some(state),
+                "{id}: the store and the loader disagree — the mirror tore"
+            );
+            assert_eq!(state, Residency::Resident, "{id}: every expert finished loading");
+        }
+        assert_eq!(
+            svc.with_store(|s| s.get("expert-0-0").unwrap().mem_footprint),
+            20,
+            "the heartbeat landed"
+        );
     }
 
     // ── the wire layout ─────────────────────────────────────────────────────
@@ -851,7 +1039,7 @@ mod tests {
     /// owns are the store's answer, not the sender's.
     #[test]
     fn a_capability_round_trips_through_the_offer_store_minus_what_it_cannot_carry() {
-        let mut svc = service();
+        let svc = service();
         let mut sent = cap("expert-math", 4096);
         sent.state = Residency::Active; // an expert claiming to be busy
         sent.route_freq = 99.0; // …with a routing history it invented
@@ -868,7 +1056,7 @@ mod tests {
         assert_eq!(got.state, Residency::Offloaded, "the loader is the authority on state");
         assert_eq!(got.route_freq, 0.0, "the store owns routing history");
         // The two members the contract has no room for.
-        let offer = svc.store().get("expert-math").unwrap();
+        let offer = svc.with_store(|s| s.get("expert-math").cloned()).unwrap();
         // `None`, not a placeholder. The placeholder version of this test
         // asserted `""` and `0.0` and passed while that `0.0` satisfied every
         // `latency_p50 <` bound a query could ask on the wire path.
@@ -976,14 +1164,18 @@ mod tests {
             .expect("prefetch is oneway");
             assert_eq!(do_status(&mut ldr, name).unwrap(), Residency::Prefetching, "{name}");
         }
-        let mut svc = served.shutdown(ldr);
+        let svc = served.shutdown(ldr);
 
-        assert_eq!(svc.store().get("expert-code").unwrap().mem_footprint, 60, "heartbeat landed");
+        assert_eq!(
+            svc.with_store(|s| s.get("expert-code").unwrap().mem_footprint),
+            60,
+            "heartbeat landed"
+        );
         // …and 0.9 is not 0.9 on the other side: the contract declares
         // `float`, so the offer's f64 holds what an f32 could carry. Pinned
         // as the f32 widening rather than papered over with a tolerance,
         // because the lossy step is the contract's, not an arithmetic slip.
-        assert_eq!(svc.store().get("expert-code").unwrap().load, f64::from(0.9_f32));
+        assert_eq!(svc.with_store(|s| s.get("expert-code").unwrap().load), f64::from(0.9_f32));
 
         // The copies land, one call arrives, and the routing history that the
         // feedback loop (never the wire) owns is recorded.
@@ -1010,13 +1202,13 @@ mod tests {
                 outcome: Ok(Residency::Offloaded),
             }]
         );
-        assert_eq!(svc.loader().status("expert-code"), Some(Residency::Offloaded));
+        assert_eq!(svc.with_loader(|l| l.status("expert-code")), Some(Residency::Offloaded));
         assert_eq!(
-            svc.store().get("expert-code").unwrap().residency,
+            svc.with_store(|s| s.get("expert-code").unwrap().residency),
             Residency::Offloaded,
             "the store mirrors what the loader actually did"
         );
-        assert_eq!(svc.store().get("expert-math").unwrap().residency, Residency::Active);
+        assert_eq!(svc.with_store(|s| s.get("expert-math").unwrap().residency), Residency::Active);
     }
 
     /// The regression for the drift that made the test above fail the first
@@ -1028,14 +1220,14 @@ mod tests {
     /// after every operation and not only at the end of a window.
     #[test]
     fn the_offer_store_never_lags_the_state_machine() {
-        let mut svc = service();
+        let svc = service();
         for name in ["expert-a", "expert-b"] {
             svc.register_expert(expert_ref(name), &cap(name, 10)).unwrap();
         }
         let agree = |svc: &ExpertService, what: &str| {
-            for (id, state) in svc.loader().states() {
+            for (id, state) in svc.with_loader(|l| l.states()) {
                 assert_eq!(
-                    svc.store().get(&id).map(|o| o.residency),
+                    svc.with_store(|s| s.get(&id).map(|o| o.residency)),
                     Some(state),
                     "{what}: {id} disagrees"
                 );
@@ -1062,7 +1254,7 @@ mod tests {
     #[test]
     fn the_heartbeat_is_what_changes_the_decision() {
         let prepared = |heartbeat: bool| {
-            let mut svc = service();
+            let svc = service();
             for (name, mem) in [("expert-code", 30), ("expert-vision", 100)] {
                 svc.register_expert(expert_ref(name), &cap(name, mem)).unwrap();
                 svc.prefetch(name).unwrap();
@@ -1107,7 +1299,7 @@ mod tests {
     fn a_oneway_prefetch_writes_no_reply_bytes() {
         for version in [Version::V1_0, Version::V1_1, Version::V1_2] {
             for endian in [Endian::Big, Endian::Little] {
-                let mut svc = service();
+                let svc = service();
                 svc.register_expert(expert_ref("expert-a"), &cap("expert-a", 10)).unwrap();
                 let served = Served::start(svc);
                 let addr = served.loader.primary().unwrap();
@@ -1199,7 +1391,7 @@ mod tests {
     /// is `BAD_INV_ORDER` (the request was wrong, not merely early).
     #[test]
     fn each_refusal_reaches_the_wire_as_its_own_exception() {
-        let mut svc = service();
+        let svc = service();
         for name in ["expert-hot", "expert-cold", "expert-busy", "expert-pinned"] {
             svc.register_expert(expert_ref(name), &cap(name, 10)).unwrap();
         }
@@ -1248,28 +1440,28 @@ mod tests {
     /// watermark rather than the zero a fresh service starts at.
     #[test]
     fn without_memory_pressure_eviction_is_transient() {
-        let mut svc = service();
+        let svc = service();
         svc.register_expert(expert_ref("expert-a"), &cap("expert-a", 10)).unwrap();
         svc.prefetch("expert-a").unwrap();
         svc.complete_load("expert-a").unwrap();
         svc.observe_free_memory(10_000);
         let err = svc.evict("expert-a").unwrap_err();
         assert_eq!(err.id, TRANSIENT);
-        assert_eq!(svc.loader().status("expert-a"), Some(Residency::Resident));
+        assert_eq!(svc.with_loader(|l| l.status("expert-a")), Some(Residency::Resident));
     }
 
     /// Registering twice would reset the residency and the routing history,
     /// and both halves must refuse it — the store's and the loader's.
     #[test]
     fn a_duplicate_registration_refuses_and_leaves_both_halves_untouched() {
-        let mut svc = service();
+        let svc = service();
         svc.register_expert(expert_ref("expert-a"), &cap("expert-a", 10)).unwrap();
         svc.record_hit("expert-a");
         let err = svc.register_expert(expert_ref("expert-a"), &cap("expert-a", 999)).unwrap_err();
         assert_eq!(err.id, BAD_PARAM);
-        assert_eq!(svc.store().get("expert-a").unwrap().mem_footprint, 10);
-        assert_eq!(svc.store().get("expert-a").unwrap().route_freq, FREQ_SCALE);
-        assert_eq!(svc.store().len(), 1);
+        assert_eq!(svc.with_store(|s| s.get("expert-a").unwrap().mem_footprint), 10);
+        assert_eq!(svc.with_store(|s| s.get("expert-a").unwrap().route_freq), FREQ_SCALE);
+        assert_eq!(svc.with_store(|s| s.len()), 1);
     }
 
     /// `deregister` has only the reference to go on, so the reference table,
@@ -1277,7 +1469,7 @@ mod tests {
     /// re-announced an address is what keeps the lookup working afterwards.
     #[test]
     fn deregistration_is_by_reference_and_clears_all_three_halves() {
-        let mut svc = service();
+        let svc = service();
         svc.register_expert(expert_ref("expert-a"), &cap("expert-a", 10)).unwrap();
 
         // A reference to the same object at a different address: §7.2.1 lets
@@ -1285,21 +1477,21 @@ mod tests {
         let mut moved = expert_ref("expert-a");
         moved.profiles[0].host = "192.0.2.99".into();
         assert_eq!(svc.deregister(&moved).unwrap_err().id, BAD_PARAM);
-        assert_eq!(svc.store().len(), 1, "the refusal changed nothing");
+        assert_eq!(svc.with_store(|s| s.len()), 1, "the refusal changed nothing");
 
         // The heartbeat is how an expert that moved says so.
         svc.heartbeat(moved.clone(), &cap("expert-a", 10)).unwrap();
-        assert_eq!(svc.reference_for("expert-a"), Some(&moved));
+        assert_eq!(svc.reference_for("expert-a"), Some(moved.clone()));
         svc.deregister(&moved).unwrap();
-        assert!(svc.store().get("expert-a").is_none());
-        assert_eq!(svc.loader().status("expert-a"), None, "the loader forgot it too");
+        assert!(svc.with_store(|s| s.get("expert-a").is_none()));
+        assert_eq!(svc.with_loader(|l| l.status("expert-a")), None, "the loader forgot it too");
         assert_eq!(svc.reference_for("expert-a"), None);
     }
 
     /// Forgetting an expert with a call inflight would strand the caller.
     #[test]
     fn deregistration_waits_for_an_inflight_call() {
-        let mut svc = service();
+        let svc = service();
         let r = expert_ref("expert-a");
         svc.register_expert(r.clone(), &cap("expert-a", 10)).unwrap();
         svc.prefetch("expert-a").unwrap();
@@ -1314,11 +1506,11 @@ mod tests {
     /// keeps proposing an eviction the guard will always refuse.
     #[test]
     fn pinning_reaches_both_the_loader_and_the_store() {
-        let mut svc = service();
+        let svc = service();
         svc.register_expert(expert_ref("expert-a"), &cap("expert-a", 10)).unwrap();
         svc.pin("expert-a").unwrap();
-        assert!(svc.loader().is_pinned("expert-a"));
-        assert!(svc.store().is_pinned("expert-a"));
+        assert!(svc.with_loader(|l| l.is_pinned("expert-a")));
+        assert!(svc.with_store(|s| s.is_pinned("expert-a")));
     }
 
     /// Both objects answer `_is_a` for their own interface and for
@@ -1358,9 +1550,9 @@ mod tests {
     #[test]
     fn an_unknown_object_key_is_not_ours() {
         let svc = service();
-        assert!(svc.knows(svc.registry_key()));
-        assert!(svc.knows(svc.loader_key()));
-        assert!(!svc.knows(b"MoE"), "the base key alone names neither object");
-        assert!(!svc.knows(b"NameService"));
+        assert!(SharedDispatch::knows(&svc, svc.registry_key()));
+        assert!(SharedDispatch::knows(&svc, svc.loader_key()));
+        assert!(!SharedDispatch::knows(&svc, b"MoE"), "the base key alone names neither object");
+        assert!(!SharedDispatch::knows(&svc, b"NameService"));
     }
 }

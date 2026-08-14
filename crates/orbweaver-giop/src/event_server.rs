@@ -58,6 +58,15 @@
 //!    job it will attempt, unlocks, invokes, and re-locks only to record the
 //!    outcome. [`ChannelState::take_next`] and [`ChannelState::record`] are
 //!    the two halves; nothing between them touches the mutex.
+//!
+//!    **This rule is now enforced rather than observed.** Concurrent dispatch
+//!    (stream E) makes it easier to violate, not harder: the servant side is
+//!    no longer single-file behind the server's mutex, so a `push` arriving
+//!    while a delivery is in flight is the ordinary case rather than the rare
+//!    one. [`Shared::lock`] therefore returns a guard that registers with
+//!    [`crate::guarded`], and every outbound `connect`/`invoke` refuses to
+//!    block while one is open — in a debug build, by panicking in the test
+//!    that did it.
 //! 2. **A dead or slow consumer must not wedge the channel.** Each proxy has
 //!    its own bounded queue ([`DEFAULT_QUEUE_LIMIT`]); on overflow the
 //!    **oldest** event is dropped, counted in [`ChannelStats::dropped`] and
@@ -100,7 +109,8 @@ use std::time::{Duration, Instant};
 
 use orbweaver_cdr::{Encoder, Endian};
 
-use crate::server::{Dispatch, DispatchBody, Request, SystemException};
+use crate::guarded::{Guarded, Section};
+use crate::server::{Dispatch, DispatchBody, Request, SharedDispatch, SystemException};
 use crate::typecode::{self, Any, TypeCode};
 use crate::{Connection, IiopProfile, Ior, Result, Version};
 
@@ -446,7 +456,19 @@ impl ChannelState {
     }
 }
 
+/// The name this channel's lock section is reported under when the discipline
+/// is violated. See [`crate::guarded`].
+const CHANNEL_LOCK: &str = "the event channel's state";
+
 /// The mutex plus the two condition variables the delivery loop waits on.
+///
+/// A [`crate::guarded::Guarded`] would be the ordinary choice for a servant's
+/// state, and it is what the other servants in this batch use — but a
+/// `Condvar` cannot wait on a closure, and this channel's delivery loop and
+/// its `wait_idle` both need one. So the mutex stays, and the discipline is
+/// joined from the other end: [`Shared::lock`] hands back a guard that
+/// registers a [`Section`], so this module's rule 1 is enforced by the same
+/// tripwire that enforces everybody else's.
 #[derive(Debug)]
 struct Shared {
     state: Mutex<ChannelState>,
@@ -456,13 +478,57 @@ struct Shared {
     progress: Condvar,
 }
 
+/// The channel state, held — and *registered as held*, which is the point.
+///
+/// There is no way to reach [`ChannelState`] except through one of these, and
+/// no way to hold one across an outbound call without
+/// [`crate::guarded::assert_nothing_held`] firing from inside `connect` or
+/// `invoke`. Rule 1 of the module docs stops being a rule people remember.
+#[derive(Debug)]
+struct Held<'a> {
+    // Declared first so the mutex is released before the section is closed:
+    // the marker must outlive what it marks, or there is an instant where a
+    // thread holds the lock and the tripwire cannot see it.
+    state: MutexGuard<'a, ChannelState>,
+    section: Section,
+}
+
+impl std::ops::Deref for Held<'_> {
+    type Target = ChannelState;
+
+    fn deref(&self) -> &ChannelState {
+        &self.state
+    }
+}
+
+impl std::ops::DerefMut for Held<'_> {
+    fn deref_mut(&mut self) -> &mut ChannelState {
+        &mut self.state
+    }
+}
+
 impl Shared {
     /// A poisoned mutex here means a servant panicked mid-operation. The state
     /// behind it is a set of independent counters and queues, none of which is
     /// left half-updated by an unwind, so recovering is better than turning
     /// one panic into a permanently dead channel.
-    fn lock(&self) -> MutexGuard<'_, ChannelState> {
-        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    fn lock(&self) -> Held<'_> {
+        let section = Section::enter(CHANNEL_LOCK);
+        Held { state: self.state.lock().unwrap_or_else(|e| e.into_inner()), section }
+    }
+
+    /// Waits on `cv` until it is notified or `left` elapses, handing the lock
+    /// back afterwards.
+    ///
+    /// The [`Section`] is carried *through* the wait rather than closed and
+    /// reopened. A condvar wait releases the mutex, so nothing is excluded
+    /// while it runs — but the thread is still inside a critical section it
+    /// intends to resume, and an outbound call from in there is the same
+    /// mistake as one made with the mutex in hand.
+    fn wait<'a>(&'a self, cv: &Condvar, held: Held<'a>, left: Duration) -> Held<'a> {
+        let Held { state, section } = held;
+        let (state, _) = cv.wait_timeout(state, left).unwrap_or_else(|e| e.into_inner());
+        Held { state, section }
     }
 }
 
@@ -528,9 +594,7 @@ impl ChannelHandle {
             let Some(left) = deadline.checked_duration_since(Instant::now()) else {
                 return false;
             };
-            let (next, _) =
-                self.shared.progress.wait_timeout(state, left).unwrap_or_else(|e| e.into_inner());
-            state = next;
+            state = self.shared.wait(&self.shared.progress, state, left);
         }
     }
 
@@ -546,9 +610,7 @@ impl ChannelHandle {
             let Some(left) = deadline.checked_duration_since(Instant::now()) else {
                 return false;
             };
-            let (next, _) =
-                self.shared.progress.wait_timeout(state, left).unwrap_or_else(|e| e.into_inner());
-            state = next;
+            state = self.shared.wait(&self.shared.progress, state, left);
         }
     }
 
@@ -704,14 +766,12 @@ fn delivery_loop(shared: Arc<Shared>, timeout: Duration) {
                 if let Some(job) = state.take_next() {
                     break job;
                 }
-                let (next, _) = shared
-                    .wake
-                    .wait_timeout(state, Duration::from_millis(50))
-                    .unwrap_or_else(|e| e.into_inner());
-                state = next;
+                state = shared.wait(&shared.wake, state, Duration::from_millis(50));
             }
         };
-        // ── no lock is held across this call. See the module docs. ──
+        // ── no lock is held across this call. See the module docs. The block
+        // above ends here, which closes the lock section; `deliver` connects
+        // and invokes, and both would refuse to run if it had not. ──
         let outcome = deliver(&mut conns, &job, timeout);
         shared.lock().record(&job.proxy, outcome);
         shared.progress.notify_all();
@@ -751,6 +811,25 @@ impl Target {
 /// `host` and `port` are what go into minted references and are the caller's
 /// to publish correctly (Phase 0 assumption D: the bind address and the
 /// publishable address differ behind NAT).
+///
+/// # Sharing: the lock was already here
+///
+/// This servant needed no new state to implement [`SharedDispatch`]. It has
+/// been interior-mutable since it was written, because the delivery thread and
+/// the serving thread have always been two threads over one [`Shared`]; the
+/// `&mut self` on its old `Dispatch` was a formality the type system asked for
+/// and the implementation never used. Concurrent dispatch simply adds more
+/// threads on the side that already existed.
+///
+/// The sharing decision is therefore **one `Mutex`, not an `RwLock`**: almost
+/// every operation here writes (a `push` enqueues, an `obtain_*` mints, a
+/// `connect_*` attaches), the two condition variables are bound to it, and a
+/// reader-writer lock would buy nothing for `_is_a` alone. What the batch
+/// actually buys this servant is that a slow *consumer* — the thing this
+/// module spends its bounded queue and its push timeout on — is now on the
+/// delivery thread's clock only, with no server-wide mutex behind it.
+///
+/// [`SharedDispatch`]: crate::server::SharedDispatch
 #[derive(Debug)]
 pub struct EventChannelServer {
     host: String,
@@ -863,11 +942,7 @@ impl EventChannelServer {
     /// Invariant every arm keeps, inherited from F6: nothing is written into
     /// `out` until the operation can no longer raise a *user* exception,
     /// because the buffer travels whole under a single reply status.
-    fn invoke_operation(
-        &mut self,
-        req: &Request,
-        out: &mut Encoder,
-    ) -> std::result::Result<(), Raise> {
+    fn invoke_operation(&self, req: &Request, out: &mut Encoder) -> std::result::Result<(), Raise> {
         let target = self
             .route(&req.object_key)
             .ok_or_else(|| Raise::System(SystemException::object_not_exist()))?;
@@ -1017,7 +1092,7 @@ fn capture_event(args: &mut orbweaver_cdr::Decoder<'_>) -> std::result::Result<E
     Ok(Event { any: Any { tc, value, endian: args.endian() }, value_align })
 }
 
-impl Dispatch for EventChannelServer {
+impl SharedDispatch for EventChannelServer {
     /// One dispatch answers for the channel, both admins and every minted
     /// proxy — the F6 shape, answered from the proxy tables rather than
     /// defaulted.
@@ -1026,7 +1101,7 @@ impl Dispatch for EventChannelServer {
     }
 
     fn dispatch_body(
-        &mut self,
+        &self,
         request: &Request,
         out: &mut Encoder,
     ) -> std::result::Result<DispatchBody, SystemException> {
@@ -1045,7 +1120,7 @@ impl Dispatch for EventChannelServer {
     /// The narrow entry point cannot carry a user exception, so one arriving
     /// here gets the standard mapping: `UNKNOWN`, OMG minor 1.
     fn dispatch(
-        &mut self,
+        &self,
         request: &Request,
         out: &mut Encoder,
     ) -> std::result::Result<(), SystemException> {
@@ -1056,33 +1131,66 @@ impl Dispatch for EventChannelServer {
     }
 }
 
+/// The `&mut self` shape too, forwarding, so a caller already written against
+/// [`crate::server::Server::serve`] keeps working — serialized, as that path
+/// always was.
+impl Dispatch for EventChannelServer {
+    fn knows(&self, object_key: &[u8]) -> bool {
+        SharedDispatch::knows(self, object_key)
+    }
+
+    fn dispatch_body(
+        &mut self,
+        request: &Request,
+        out: &mut Encoder,
+    ) -> std::result::Result<DispatchBody, SystemException> {
+        SharedDispatch::dispatch_body(self, request, out)
+    }
+
+    fn dispatch(
+        &mut self,
+        request: &Request,
+        out: &mut Encoder,
+    ) -> std::result::Result<(), SystemException> {
+        SharedDispatch::dispatch(self, request, out)
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // A CosEventComm::PushConsumer of our own
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// What a [`PushConsumerServant`] has been told, in arrival order.
+#[derive(Debug, Default)]
+struct SinkState {
+    events: Vec<Any>,
+    disconnected: bool,
+}
 
 /// Where a [`PushConsumerServant`] puts what it receives.
 ///
 /// Cloning shares the storage, so a test or a spike keeps a view of a sink
 /// whose servant has been moved into a serving thread.
+///
+/// **One lock, not two.** The arrived events and the disconnect flag were
+/// separate mutexes, which is two locks a consumer could come to hold at once
+/// — the shape [`crate::guarded`] refuses. They are one struct behind one
+/// [`Guarded`] now, which is also the truthful model: "what this consumer was
+/// told" is one thing.
 #[derive(Debug, Clone, Default)]
 pub struct EventSink {
-    events: Arc<Mutex<Vec<Any>>>,
-    disconnected: Arc<Mutex<bool>>,
+    state: Arc<Guarded<SinkState>>,
 }
 
 impl EventSink {
     /// An empty sink.
     pub fn new() -> Self {
-        Self::default()
-    }
-
-    fn lock(&self) -> MutexGuard<'_, Vec<Any>> {
-        self.events.lock().unwrap_or_else(|e| e.into_inner())
+        EventSink { state: Arc::new(Guarded::new("an event sink", SinkState::default())) }
     }
 
     /// How many events have arrived.
     pub fn len(&self) -> usize {
-        self.lock().len()
+        self.state.read(|s| s.events.len())
     }
 
     /// Whether nothing has arrived.
@@ -1092,12 +1200,12 @@ impl EventSink {
 
     /// A copy of everything received, in arrival order.
     pub fn snapshot(&self) -> Vec<Any> {
-        self.lock().clone()
+        self.state.read(|s| s.events.clone())
     }
 
     /// Whether `disconnect_push_consumer` has been called on the servant.
     pub fn is_disconnected(&self) -> bool {
-        *self.disconnected.lock().unwrap_or_else(|e| e.into_inner())
+        self.state.read(|s| s.disconnected)
     }
 
     /// Waits for at least `n` events. Returns whether they arrived in time.
@@ -1155,13 +1263,16 @@ impl PushConsumerServant {
     }
 }
 
-impl Dispatch for PushConsumerServant {
+/// A consumer is the simplest sharing shape there is: its whole state is the
+/// sink, the sink is already shared by clone, and nothing it does calls out.
+/// Two `push`es from two suppliers now land concurrently.
+impl SharedDispatch for PushConsumerServant {
     fn knows(&self, object_key: &[u8]) -> bool {
         object_key == self.key
     }
 
     fn dispatch(
-        &mut self,
+        &self,
         request: &Request,
         out: &mut Encoder,
     ) -> std::result::Result<(), SystemException> {
@@ -1175,15 +1286,29 @@ impl Dispatch for PushConsumerServant {
             "push" => {
                 // The `any` is the whole body, so its value runs to the end —
                 // the same reasoning as `capture_event`, from the other side.
+                // Decoded *before* the lock is taken, so a large event does
+                // not hold the sink shut while it is parsed.
                 let event = capture_event(&mut args).map_err(|_| SystemException::marshal())?;
-                self.sink.lock().push(event.any);
+                self.sink.state.write(|s| s.events.push(event.any));
             }
-            "disconnect_push_consumer" => {
-                *self.sink.disconnected.lock().unwrap_or_else(|e| e.into_inner()) = true;
-            }
+            "disconnect_push_consumer" => self.sink.state.write(|s| s.disconnected = true),
             _ => return Err(SystemException::bad_operation()),
         }
         Ok(())
+    }
+}
+
+impl Dispatch for PushConsumerServant {
+    fn knows(&self, object_key: &[u8]) -> bool {
+        SharedDispatch::knows(self, object_key)
+    }
+
+    fn dispatch(
+        &mut self,
+        request: &Request,
+        out: &mut Encoder,
+    ) -> std::result::Result<(), SystemException> {
+        SharedDispatch::dispatch(self, request, out)
     }
 }
 
@@ -1334,14 +1459,18 @@ mod tests {
         fn start_paused() -> Self {
             let server = Server::bind("127.0.0.1:0", b"EventChannel".to_vec()).unwrap();
             let port = server.local_addr().unwrap().port();
-            let mut channel = EventChannelServer::new("127.0.0.1", port, b"EventChannel".to_vec());
+            let channel =
+                Arc::new(EventChannelServer::new("127.0.0.1", port, b"EventChannel".to_vec()));
             let ior = channel.channel_ior();
             let handle = channel.handle();
             let stats = server.stats();
             let stop = Arc::new(AtomicBool::new(false));
             let flag = stop.clone();
+            // `serve_shared`: the channel answers two calls at once now, which
+            // is what makes the delivery/serving overlap tests below test the
+            // thing they claim to.
             let thread = std::thread::spawn(move || {
-                server.serve(&mut channel, move || flag.load(Ordering::SeqCst)).unwrap();
+                server.serve_shared(&*channel, move || flag.load(Ordering::SeqCst)).unwrap();
             });
             Served { channel: ior, handle, delivery: None, stats, stop, thread: Some(thread) }
         }
@@ -1408,13 +1537,13 @@ mod tests {
         fn start(key: &[u8]) -> Self {
             let server = Server::bind("127.0.0.1:0", key.to_vec()).unwrap();
             let port = server.local_addr().unwrap().port();
-            let mut servant = PushConsumerServant::new(key.to_vec());
+            let servant = Arc::new(PushConsumerServant::new(key.to_vec()));
             let ior = servant.ior("127.0.0.1", port);
             let sink = servant.sink();
             let stop = Arc::new(AtomicBool::new(false));
             let flag = stop.clone();
             let thread = std::thread::spawn(move || {
-                server.serve(&mut servant, || flag.load(Ordering::SeqCst)).unwrap();
+                server.serve_shared(&*servant, || flag.load(Ordering::SeqCst)).unwrap();
             });
             Consumer { ior, sink, stop, thread: Some(thread) }
         }
@@ -1694,6 +1823,141 @@ mod tests {
         true
     }
 
+    /// A consumer that **stops inside `push`** until it is let go.
+    ///
+    /// It exists to hold the channel's delivery thread inside an outbound
+    /// invocation on purpose, so that the inbound side can be tested while
+    /// that call is genuinely in flight. Everything about the hazard depends
+    /// on those two things being simultaneous, and a fast consumer cannot
+    /// guarantee they ever are.
+    struct BlockingConsumer {
+        key: Vec<u8>,
+        entered: Arc<std::sync::atomic::AtomicUsize>,
+        release: Arc<AtomicBool>,
+    }
+
+    impl crate::server::SharedDispatch for BlockingConsumer {
+        fn knows(&self, object_key: &[u8]) -> bool {
+            object_key == self.key
+        }
+
+        fn dispatch(
+            &self,
+            request: &Request,
+            out: &mut Encoder,
+        ) -> std::result::Result<(), SystemException> {
+            let mut args = request.body().map_err(|_| SystemException::marshal())?;
+            match request.operation.as_str() {
+                "_is_a" => {
+                    let id = args.get_string().map_err(|_| SystemException::marshal())?;
+                    out.put_bool(id == PUSH_CONSUMER_ID || id == CORBA_OBJECT_ID);
+                }
+                "_non_existent" => out.put_bool(false),
+                "push" => {
+                    self.entered.fetch_add(1, Ordering::SeqCst);
+                    // Deadline-bounded: a test that forgets to release must
+                    // fail, not hang.
+                    let until = Instant::now() + T;
+                    while !self.release.load(Ordering::SeqCst) && Instant::now() < until {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                }
+                "disconnect_push_consumer" => {}
+                _ => return Err(SystemException::bad_operation()),
+            }
+            Ok(())
+        }
+    }
+
+    /// **The hazard, pinned.** An inbound `push` must be served while the
+    /// channel's own outbound `push` is blocked.
+    ///
+    /// This is rule 1 of the module docs stated as an experiment rather than
+    /// as an intention. The delivery thread is parked inside an outbound
+    /// invocation — really inside it, witnessed by the consumer's own counter,
+    /// not inferred from a sleep — and while it is parked, S suppliers push
+    /// into the channel concurrently. If any lock were held across that
+    /// outbound call, every one of them would block until the consumer let go,
+    /// and the deadline would fail the test instead of hanging it.
+    ///
+    /// Concurrent dispatch is what makes this worth re-testing: the servant
+    /// side is no longer single-file, so an inbound `push` and an outbound one
+    /// are now ordinarily simultaneous rather than rarely so.
+    #[test]
+    fn an_inbound_push_is_served_while_an_outbound_push_is_blocked() {
+        const S: usize = 3;
+        let entered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let release = Arc::new(AtomicBool::new(false));
+
+        let server = Server::bind("127.0.0.1:0", b"BlockingConsumer".to_vec()).unwrap();
+        let port = server.local_addr().unwrap().port();
+        let consumer_ior = Ior {
+            type_id: PUSH_CONSUMER_ID.into(),
+            profiles: vec![IiopProfile {
+                version: Version::V1_2,
+                host: "127.0.0.1".into(),
+                port,
+                object_key: b"BlockingConsumer".to_vec(),
+                components: Vec::new(),
+            }],
+        };
+        let servant = Arc::new(BlockingConsumer {
+            key: b"BlockingConsumer".to_vec(),
+            entered: Arc::clone(&entered),
+            release: Arc::clone(&release),
+        });
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let consumer_thread = std::thread::spawn(move || {
+            server.serve_shared(&*servant, || flag.load(Ordering::SeqCst)).unwrap();
+        });
+
+        // A channel whose push timeout is long enough that the blocked
+        // consumer is *held*, not timed out from under the test.
+        let served = Served::start_paused();
+        let shared = Arc::clone(&served.handle.shared);
+        let delivery = std::thread::spawn(move || delivery_loop(shared, T));
+        served.consumer_proxy(&consumer_ior);
+
+        // One event, which the delivery thread will carry into the consumer
+        // and get stuck in.
+        served.handle.publish(&TypeCode::ULong, Endian::Big, |e| e.put_u32(1)).unwrap();
+        let until = Instant::now() + T;
+        while entered.load(Ordering::SeqCst) == 0 && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(entered.load(Ordering::SeqCst), 1, "the outbound push never started");
+
+        // ── the assertion: inbound work proceeds while that call is stuck ──
+        std::thread::scope(|scope| {
+            for s in 0..S {
+                let served = &served;
+                scope.spawn(move || {
+                    let mut proxy = served.supplier_proxy();
+                    client::push(&mut proxy, &TypeCode::ULong, move |e| e.put_u32(100 + s as u32))
+                        .expect("an inbound push must not wait for an outbound one");
+                });
+            }
+        });
+
+        release.store(true, Ordering::SeqCst);
+        assert!(
+            served.handle.wait_until(T, |st| st.accepted > S as u64),
+            "the channel did not take every inbound event: {:?}",
+            served.handle.stats()
+        );
+
+        let last = served.channel_conn();
+        // Stop the delivery loop explicitly and join it: a test that leaves a
+        // thread pushing into a torn-down fixture is the harness rule about
+        // unmeasured things in another costume.
+        served.handle.stop();
+        delivery.join().unwrap();
+        served.shutdown(last);
+        stop.store(true, Ordering::SeqCst);
+        consumer_thread.join().unwrap();
+    }
+
     /// Rule 1 of the module docs — no lock may be held across an outbound
     /// call — against a server that now serves its connections concurrently.
     ///
@@ -1705,9 +1969,12 @@ mod tests {
     /// deadlock a failed test rather than a hung suite.
     ///
     /// What is proved is that inbound serving and outbound delivery overlap
-    /// without deadlocking. What is *not* proved, and must not be read in, is
-    /// parallel dispatch: the channel servant still handles one operation at
-    /// a time behind the server's mutex.
+    /// without deadlocking. Since stream E's second batch the channel is
+    /// served through `serve_shared`, so the suppliers' `push` calls really do
+    /// enter the servant together rather than taking turns behind the server's
+    /// mutex — but this test does not *witness* that, and does not claim to.
+    /// `an_inbound_push_is_served_while_an_outbound_push_is_blocked` below is
+    /// the one that pins it, by blocking the outbound call on purpose.
     #[test]
     fn concurrent_suppliers_and_outbound_delivery_do_not_deadlock() {
         const S: usize = 4;
@@ -1858,7 +2125,7 @@ mod tests {
     /// maps one to the standard UNKNOWN. Direct call — no server involved.
     #[test]
     fn a_user_exception_through_plain_dispatch_maps_to_unknown() {
-        let mut channel = EventChannelServer::new("127.0.0.1", 1, b"EventChannel".to_vec());
+        let channel = EventChannelServer::new("127.0.0.1", 1, b"EventChannel".to_vec());
         // A minted but unconnected ProxyPushConsumer: pushing into it raises
         // Disconnected, which this entry point cannot carry.
         let key = channel.mint("ppc");

@@ -31,40 +31,53 @@
 //! simply impossible. [`Server::serve`] now spawns a thread per accepted
 //! connection, inside a [`std::thread::scope`] so nothing outlives the call.
 //!
-//! ## How the servant is shared, and what that does not buy
+//! ## How the servant is shared
 //!
-//! **One servant, behind one mutex.** [`Dispatch`] is `&mut self`-shaped, and
-//! the servants in this workspace hold the *authoritative* state of the
-//! service they front — the naming tree, the channel's proxy tables, the
-//! repository. Giving each connection its own copy would fork that state, so
-//! the servant stays single and every connection thread takes the same lock
-//! for the duration of one message. The alternative — requiring
-//! `Dispatch: Sync` with interior mutability per servant — buys more, and
-//! costs a rewrite of every servant in three crates that this footprint may
-//! not touch; it stays available as a later batch, because nothing here
-//! depends on the lock being where it is.
+//! **One servant, shared by reference, with a lock of its own or none at
+//! all.** [`SharedDispatch`] is `&self`-shaped: [`Server::serve_shared`] hands
+//! every connection thread the same `&D` and calls into it without taking
+//! anything, so two calls to one servant proceed **concurrently**. What each
+//! servant does about that is the servant's decision, argued in its own
+//! module: the IFR facade is read-only by policy and locks nothing at all; the
+//! naming tree and the tenant graph take an [`RwLock`](crate::guarded::Guarded)
+//! whose read half is the whole read-only surface; the event channel already
+//! had a mutex it shares with its delivery thread. There is no one answer here
+//! because the five servants do not have one sharing shape.
 //!
-//! What the mutex buys is exactly one thing: **connections are concurrent**.
-//! Ten clients may be connected, mid-session, holding their own sockets and
-//! their own GIOP state, and each is answered.
+//! That is the limit stream E left in place, and this is where it is lifted.
+//! Until this batch, one servant sat behind one mutex taken per message: ten
+//! clients could hold sessions, but a servant that blocked for a second
+//! blocked all ten for that second. Connections were concurrent; dispatch was
+//! not.
 //!
-//! What it does **not** buy, said plainly because the difference is easy to
-//! oversell: **dispatch is still serialized**. A servant that blocks for a
-//! second inside `dispatch` blocks every other client for that second. That
-//! is a different limit from the one being removed — "only one client may be
-//! connected" is gone; "only one operation runs at a time" is not — and a
-//! slow servant is still a slow service. The lock is taken per message, not
-//! per connection, so an *idle* connection costs nobody anything.
+//! ## The lock discipline, and why it is not a convention
 //!
-//! One re-entrancy is forbidden by that choice: a servant that, from inside
-//! `dispatch`, calls back into **its own** server waits for a lock its own
-//! caller holds. It does not wedge the server — the inner call is bounded by
-//! the client read timeout [`crate::Connection`] sets, fails, and serving
-//! continues — but it cannot succeed. Calling *another* server in the same
-//! process, which is what the event channel's delivery loop does, is fine and
-//! is proved by test; see `event_server`'s rule that no lock may be held
-//! across an outbound call, which this module's lock obeys by being released
-//! before the reply is even written.
+//! Concurrency inside a servant is where deadlock comes from, and the hazard
+//! this workspace already met — `event_server` pushing outbound while it
+//! serves inbound — gets *easier* to hit, not harder, when two calls run at
+//! once. So the rule is enforced rather than written down:
+//! [`crate::guarded`] counts open lock sections per thread, refuses a second
+//! one, and the outbound client path refuses to block while one is open. Read
+//! that module before adding a lock to a servant.
+//!
+//! ## The compatibility path, which still serializes
+//!
+//! [`Dispatch`] — the `&mut self` trait every generated skeleton implements —
+//! has not moved. [`Server::serve`] still takes `&mut D` and still wraps it in
+//! [`Serialized`], a mutex taken per message, so those servants behave exactly
+//! as they did: **dispatch serialized, connections concurrent**. It is a
+//! compatibility path and it is honest about being one; a servant that wants
+//! the concurrency implements [`SharedDispatch`].
+//!
+//! One re-entrancy is forbidden by *that* path and not by the other: a
+//! `Dispatch` servant that, from inside `dispatch`, calls back into its own
+//! server waits for the [`Serialized`] mutex its own caller holds. It does not
+//! wedge the server — the inner call is bounded by the client read timeout
+//! [`crate::Connection`] sets, fails, and serving continues — but it cannot
+//! succeed. A [`SharedDispatch`] servant holding no lock has no such limit,
+//! which is asserted rather than assumed. Calling *another* server in the same
+//! process, which is what the event channel's delivery loop does, is fine on
+//! both paths and is proved by test.
 //!
 //! ## The cap
 //!
@@ -479,15 +492,19 @@ pub enum DispatchBody {
     UserException,
 }
 
-/// What a servant does with an invocation.
+/// What a servant does with an invocation, one operation at a time.
 ///
-/// One servant answers every connection: [`Server::serve`] holds it behind a
-/// mutex and takes that mutex for the duration of one message, so an
-/// implementation still sees `&mut self` and still runs one operation at a
-/// time. Two consequences worth stating where they will be read: a servant
-/// needs no locking of its own, and a servant that blocks — a long
-/// computation, an outbound call — blocks every other client for as long as
-/// it blocks. See the module docs.
+/// The `&mut self` shape is the compatibility path and the one every
+/// generated skeleton implements. [`Server::serve`] wraps it in
+/// [`Serialized`] and takes that mutex for the duration of one message, so an
+/// implementation needs no locking of its own — and a servant that blocks (a
+/// long computation, an outbound call) blocks every other client for as long
+/// as it blocks.
+///
+/// **A servant that wants two calls to run at once implements
+/// [`SharedDispatch`] instead**, which is `&self`-shaped and takes nothing.
+/// The five servants in this workspace all do; see [`crate::guarded`] for the
+/// lock discipline that comes with the privilege.
 pub trait Dispatch {
     /// Handles `request`, writing the reply body into `out`.
     ///
@@ -532,6 +549,207 @@ pub trait Dispatch {
     }
 }
 
+/// Forwards to the servant behind a mutable reference, so a `&mut D` can be
+/// handed to anything that wants a `Dispatch`.
+///
+/// [`Server::serve`] needs it: it takes `&mut D` and puts it in a
+/// [`Serialized`], which is a `Dispatch` container.
+impl<D: Dispatch + ?Sized> Dispatch for &mut D {
+    fn dispatch(
+        &mut self,
+        request: &Request,
+        out: &mut Encoder,
+    ) -> std::result::Result<(), SystemException> {
+        (**self).dispatch(request, out)
+    }
+
+    fn dispatch_body(
+        &mut self,
+        request: &Request,
+        out: &mut Encoder,
+    ) -> std::result::Result<DispatchBody, SystemException> {
+        (**self).dispatch_body(request, out)
+    }
+
+    fn knows(&self, object_key: &[u8]) -> bool {
+        (**self).knows(object_key)
+    }
+
+    fn forward(&mut self, request: &Request) -> Option<crate::Ior> {
+        (**self).forward(request)
+    }
+}
+
+/// What a servant does with an invocation when **two of them may be running at
+/// once**.
+///
+/// This is [`Dispatch`] with the exclusivity removed: `&self`, `Sync`, and no
+/// lock taken on the servant's behalf. It is the trait that lifts the limit
+/// stream E left in place — a slow operation no longer delays a concurrent
+/// caller, because there is nothing between the two calls to delay them.
+///
+/// # What an implementation owes
+///
+/// 1. **Interior mutability, or none.** A servant with no mutable state (the
+///    IFR facade, which refuses every write as policy) implements this with no
+///    synchronisation at all. Everything else puts its state behind
+///    [`crate::guarded::Guarded`] — or, where a `Condvar` is involved, its own
+///    mutex joined to the same discipline.
+/// 2. **One lock, taken once per request.** Under [`Dispatch`] the server's
+///    mutex made a request one indivisible look at the servant. Keeping that —
+///    taking the servant's own lock once, at the top, for the whole operation —
+///    is what preserves per-request atomicity. Taking it twice inside one
+///    operation is both a torn request and a re-entrant lock, and
+///    [`crate::guarded`] refuses the second.
+/// 3. **Nothing blocking inside the lock.** See [`crate::guarded`]; the
+///    outbound client path enforces it.
+///
+/// # What is no longer true, and matters
+///
+/// [`SharedDispatch::knows`] and [`SharedDispatch::dispatch_body`] are two
+/// separate looks at the servant, where the [`Serialized`] path made them one.
+/// A key can therefore be retired between them, so the "unreachable"
+/// `OBJECT_NOT_EXIST` arm inside a servant's dispatch is now genuinely
+/// reachable — which is why every servant here has one instead of an `expect`.
+pub trait SharedDispatch: Sync {
+    /// Handles `request`, writing the reply body into `out`.
+    ///
+    /// Returning `Err` produces a system-exception reply. Returning `Ok` with
+    /// nothing written produces an empty `NO_EXCEPTION` reply, which is what a
+    /// `void` operation looks like.
+    fn dispatch(
+        &self,
+        request: &Request,
+        out: &mut Encoder,
+    ) -> std::result::Result<(), SystemException>;
+
+    /// As [`SharedDispatch::dispatch`], but able to label what it wrote a user
+    /// exception. This is the method [`Server`] actually calls.
+    fn dispatch_body(
+        &self,
+        request: &Request,
+        out: &mut Encoder,
+    ) -> std::result::Result<DispatchBody, SystemException> {
+        self.dispatch(request, out).map(|()| DispatchBody::Return)
+    }
+
+    /// Whether this servant answers to `object_key`.
+    fn knows(&self, _object_key: &[u8]) -> bool {
+        true
+    }
+
+    /// A reference to redirect this request to, instead of serving it.
+    fn forward(&self, _request: &Request) -> Option<crate::Ior> {
+        None
+    }
+
+    /// One whole request — the method [`Server`] calls, and the unit of
+    /// atomicity.
+    ///
+    /// The default composes the three above, which is right for a servant
+    /// whose `knows` is a key comparison and whose dispatch re-checks what it
+    /// addresses (every servant in this workspace does, deliberately: see the
+    /// trait docs on the arm that stopped being unreachable). A servant that
+    /// needs `knows` and `dispatch` to see the *same* state overrides this and
+    /// takes its lock once around both — which is exactly what
+    /// [`Serialized`] does, and why the compatibility path still gives one
+    /// request one indivisible look at the servant.
+    fn serve_one(
+        &self,
+        request: &Request,
+        out: &mut Encoder,
+    ) -> std::result::Result<Served, SystemException> {
+        if !self.knows(&request.object_key) {
+            return Ok(Served::UnknownObject);
+        }
+        if let Some(to) = self.forward(request) {
+            return Ok(Served::Forward(to));
+        }
+        self.dispatch_body(request, out).map(Served::Body)
+    }
+}
+
+/// What a servant did with one request, before the reply status is chosen.
+#[derive(Debug)]
+pub enum Served {
+    /// A body was written; this says which reply status it travels under.
+    Body(DispatchBody),
+    /// Not answered here: redirect the caller (§9.4.3.2).
+    Forward(crate::Ior),
+    /// The servant does not answer to this object key.
+    UnknownObject,
+}
+
+/// A [`Dispatch`] servant made shareable by serializing it — the
+/// compatibility path, and the whole of what the previous batch had.
+///
+/// One mutex, taken per message, around a servant that still sees `&mut self`.
+/// Connections overlap; operations do not. It is deliberately *not* joined to
+/// [`crate::guarded`]'s discipline: a `Dispatch` servant calling out from
+/// inside `dispatch` is holding this mutex by construction, that is the
+/// documented shape of the path, and a tripwire that fires on every legitimate
+/// use of a compatibility path is a tripwire people learn to ignore.
+#[derive(Debug, Default)]
+pub struct Serialized<D> {
+    servant: Mutex<D>,
+}
+
+impl<D: Dispatch> Serialized<D> {
+    /// Wraps `servant`, which will answer one call at a time.
+    pub fn new(servant: D) -> Self {
+        Serialized { servant: Mutex::new(servant) }
+    }
+
+    /// The servant back, once nothing is serving it.
+    pub fn into_inner(self) -> D {
+        self.servant.into_inner().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl<D: Dispatch + Send> SharedDispatch for Serialized<D> {
+    fn dispatch(
+        &self,
+        request: &Request,
+        out: &mut Encoder,
+    ) -> std::result::Result<(), SystemException> {
+        lock(&self.servant).dispatch(request, out)
+    }
+
+    fn dispatch_body(
+        &self,
+        request: &Request,
+        out: &mut Encoder,
+    ) -> std::result::Result<DispatchBody, SystemException> {
+        lock(&self.servant).dispatch_body(request, out)
+    }
+
+    fn knows(&self, object_key: &[u8]) -> bool {
+        lock(&self.servant).knows(object_key)
+    }
+
+    fn forward(&self, request: &Request) -> Option<crate::Ior> {
+        lock(&self.servant).forward(request)
+    }
+
+    /// The lock spans knows/forward/dispatch — one request is one indivisible
+    /// look at the servant, which is what this path has always given and what
+    /// composing the three separately would have quietly taken away.
+    fn serve_one(
+        &self,
+        request: &Request,
+        out: &mut Encoder,
+    ) -> std::result::Result<Served, SystemException> {
+        let mut servant = lock(&self.servant);
+        if !servant.knows(&request.object_key) {
+            return Ok(Served::UnknownObject);
+        }
+        if let Some(to) = servant.forward(request) {
+            return Ok(Served::Forward(to));
+        }
+        servant.dispatch_body(request, out).map(Served::Body)
+    }
+}
+
 /// How many connections one [`Server`] serves at once before refusing.
 ///
 /// Sixty-four is a bound, not a capacity estimate: it is far above the
@@ -557,6 +775,8 @@ struct Counters {
     refused: AtomicU64,
     active: AtomicU64,
     peak: AtomicU64,
+    dispatching: AtomicU64,
+    peak_dispatching: AtomicU64,
 }
 
 /// A live view of one [`Server`]'s connection counters.
@@ -590,6 +810,44 @@ impl ServerStats {
     /// The high-water mark of [`ServerStats::active`] — the measured overlap.
     pub fn peak_active(&self) -> u64 {
         self.counters.peak.load(Ordering::Relaxed)
+    }
+
+    /// Requests that have reached the servant and not yet returned.
+    ///
+    /// **Read the boundary carefully, because it is not what the name might
+    /// suggest.** This counts requests inside
+    /// [`SharedDispatch::serve_one`] — which, for a servant that takes a lock
+    /// of its own, includes the ones *waiting* for that lock. Under
+    /// [`Serialized`] all N callers are counted here while exactly one of them
+    /// is executing.
+    ///
+    /// That was measured, not assumed: the first version of this counter was
+    /// named for concurrent dispatch and asserted on as proof of it, and the
+    /// negative control refuted it by reaching N on a serialized server. A
+    /// counter outside the servant's lock cannot tell overlap from queueing.
+    /// What it *is* good for is queue depth — how many callers are piled up at
+    /// a servant — which is the number a slow servant makes interesting.
+    ///
+    /// The witness for real overlap has to be **inside** the servant: a
+    /// rendezvous that cannot complete unless N calls are executing together,
+    /// or a counter the servant itself keeps past its own lock. The tests use
+    /// both; see `a_blocking_operation_no_longer_delays_a_concurrent_caller`.
+    pub fn at_servant(&self) -> u64 {
+        self.counters.dispatching.load(Ordering::Relaxed)
+    }
+
+    /// The high-water mark of [`ServerStats::at_servant`] — peak queue depth
+    /// at the servant, with the caveat spelled out there.
+    pub fn peak_at_servant(&self) -> u64 {
+        self.counters.peak_dispatching.load(Ordering::Relaxed)
+    }
+
+    /// Counts one request into the servant, and out again on drop — including
+    /// the drop an unwinding panic performs.
+    fn dispatching_now(&self) -> Dispatching<'_> {
+        let n = self.counters.dispatching.fetch_add(1, Ordering::AcqRel) + 1;
+        self.counters.peak_dispatching.fetch_max(n, Ordering::Relaxed);
+        Dispatching { counters: &self.counters }
     }
 
     /// Takes a slot if the cap allows, counting the outcome either way.
@@ -629,6 +887,18 @@ struct Slot {
 impl Drop for Slot {
     fn drop(&mut self) {
         self.stats.counters.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// One request inside the servant, counted out on drop.
+#[derive(Debug)]
+struct Dispatching<'a> {
+    counters: &'a Counters,
+}
+
+impl Drop for Dispatching<'_> {
+    fn drop(&mut self) {
+        self.counters.dispatching.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -785,32 +1055,51 @@ impl Server {
         })
     }
 
-    /// Serves connections concurrently until `stop` returns true.
+    /// Serves connections concurrently, **serializing dispatch**, until `stop`
+    /// returns true.
     ///
-    /// Each accepted connection gets a thread; `dispatch` is shared between
-    /// them behind a mutex taken per message, so connections overlap and
-    /// operations do not (module docs). Over [`Server::max_connections`] a
-    /// connection is refused with a `CloseConnection` and counted in
-    /// [`ServerStats::refused`].
-    ///
-    /// `stop` is polled by the accept loop and by every connection thread at
-    /// [`STOP_POLL`]. A stop that lands mid-connection ends it with an
-    /// orderly `CloseConnection` (§9.4.10) rather than a bare TCP close, so
-    /// the peer knows its unanswered requests were not processed and may
-    /// re-send them elsewhere. `serve` returns only once every connection
-    /// thread has ended, so nothing it started outlives it.
-    ///
-    /// A servant that panics still ends the server, exactly as it did when
-    /// there was one loop: the panic surfaces from `serve` when the scope
-    /// joins. What does *not* happen is the other connections dying with it —
-    /// a poisoned servant mutex is recovered rather than propagated, because
-    /// one bad request must not take the service down.
+    /// The compatibility path: `dispatch` is `&mut self`-shaped, so it goes
+    /// behind a [`Serialized`] mutex taken per message and connections overlap
+    /// while operations do not. A servant that wants two calls at once
+    /// implements [`SharedDispatch`] and is served by
+    /// [`Server::serve_shared`]; everything else about the two is identical,
+    /// because this one is written in terms of that one.
     pub fn serve<D, S>(&self, dispatch: &mut D, stop: S) -> Result<()>
     where
         D: Dispatch + Send,
         S: Fn() -> bool + Sync,
     {
-        let servant = Mutex::new(dispatch);
+        self.serve_shared(&Serialized::new(dispatch), stop)
+    }
+
+    /// Serves connections concurrently until `stop` returns true, with
+    /// **dispatch concurrent too**.
+    ///
+    /// Each accepted connection gets a thread and every one of them calls
+    /// straight into `dispatch`, which takes whatever lock it needs (or none)
+    /// for itself — so a servant that blocks no longer delays the callers it
+    /// is not blocking on. Over [`Server::max_connections`] a connection is
+    /// refused with a `CloseConnection` and counted in
+    /// [`ServerStats::refused`]; the overlap inside the servant is counted in
+    /// [`ServerStats::peak_dispatching`].
+    ///
+    /// `stop` is polled by the accept loop and by every connection thread at
+    /// [`STOP_POLL`]. A stop that lands mid-connection ends it with an
+    /// orderly `CloseConnection` (§9.4.10) rather than a bare TCP close, so
+    /// the peer knows its unanswered requests were not processed and may
+    /// re-send them elsewhere. `serve_shared` returns only once every
+    /// connection thread has ended, so nothing it started outlives it.
+    ///
+    /// A servant that panics still ends the server: the panic surfaces here
+    /// when the scope joins. What does *not* happen is the other connections
+    /// dying with it — a poisoned lock is recovered rather than propagated,
+    /// because one bad request must not take the service down.
+    pub fn serve_shared<D, S>(&self, dispatch: &D, stop: S) -> Result<()>
+    where
+        D: SharedDispatch,
+        S: Fn() -> bool + Sync,
+    {
+        let servant: &dyn SharedDispatch = dispatch;
         let stop = &stop;
         let outcome = std::thread::scope(|scope| -> Result<()> {
             // Polled rather than blocking, so a raised flag is noticed
@@ -839,7 +1128,6 @@ impl Server {
                         }
                         match self.stats.admit(self.max_connections) {
                             Some(slot) => {
-                                let servant = &servant;
                                 scope.spawn(move || {
                                     let _slot = slot;
                                     // One bad client must not take the
@@ -889,18 +1177,16 @@ impl Server {
     /// The servant is exclusively this connection's for the call, which is
     /// what makes this usable for a hand-rolled accept loop; [`Server::serve`]
     /// shares one servant across many of these instead.
-    pub fn serve_connection<D: Dispatch>(&self, s: TcpStream, d: &mut D) -> Result<()> {
-        let servant = Mutex::new(d);
-        self.serve_connection_until(s, &servant, &|| false)
+    pub fn serve_connection<D: Dispatch + Send>(&self, s: TcpStream, d: &mut D) -> Result<()> {
+        self.serve_connection_until(s, &Serialized::new(d), &|| false)
     }
 
-    /// As [`Server::serve_connection`], taking the shared servant per message
-    /// and ending with an orderly `CloseConnection` when `stop` reports true
-    /// between messages.
-    fn serve_connection_until<D: Dispatch>(
+    /// As [`Server::serve_connection`], on the shared servant, ending with an
+    /// orderly `CloseConnection` when `stop` reports true between messages.
+    fn serve_connection_until(
         &self,
         mut s: TcpStream,
-        servant: &Mutex<&mut D>,
+        servant: &dyn SharedDispatch,
         stop: &dyn Fn() -> bool,
     ) -> Result<()> {
         s.set_nodelay(true)?;
@@ -948,7 +1234,7 @@ impl Server {
             match msg.msg_type {
                 MsgType::LocateRequest => {
                     let lr = decode_locate_request(msg)?;
-                    let status = if lock(servant).knows(&lr.object_key) {
+                    let status = if servant.knows(&lr.object_key) {
                         LocateStatus::ObjectHere
                     } else {
                         LocateStatus::UnknownObject
@@ -958,14 +1244,12 @@ impl Server {
                 }
                 MsgType::Request => {
                     let req = decode_request(msg)?;
-                    // The lock spans knows/forward/dispatch — one request is
-                    // one indivisible look at the servant — and is released
-                    // before the reply is written, so a slow *socket* holds
-                    // nobody up. Only a slow servant does.
-                    let reply = {
-                        let mut servant = lock(servant);
-                        self.handle_request(&req, &mut **servant)?
-                    };
+                    // The servant is entered here and left before the reply is
+                    // written, so a slow *socket* holds nobody up. Whether a
+                    // slow servant does is now the servant's own answer, not
+                    // this loop's: `serve_one` is what takes a lock, if it
+                    // takes one at all.
+                    let reply = self.handle_request(&req, servant)?;
                     if let Some(bytes) = reply {
                         for piece in fragment_message(bytes, self.fragment_threshold)? {
                             s.write_all(&piece)?;
@@ -999,24 +1283,7 @@ impl Server {
         }
     }
 
-    fn handle_request<D: Dispatch>(&self, req: &Request, d: &mut D) -> Result<Option<Vec<u8>>> {
-        if !d.knows(&req.object_key) {
-            return self.reply_exception(req, &SystemException::object_not_exist());
-        }
-        if let Some(to) = d.forward(req) {
-            if !req.expect_reply {
-                // A oneway cannot be redirected; there is no reply to carry the
-                // new address, and inventing one would be worse than serving it.
-                return Ok(None);
-            }
-            return Ok(Some(encode_location_forward(
-                req.version,
-                req.endian,
-                req.request_id,
-                &to,
-            )?));
-        }
-
+    fn handle_request(&self, req: &Request, d: &dyn SharedDispatch) -> Result<Option<Vec<u8>>> {
         // Servants write into a detached buffer, so it too must know where it
         // will land. A 1.0 reply body starts immediately after the header.
         //
@@ -1034,8 +1301,28 @@ impl Server {
             reply_header_len
         };
         let mut out = Encoder::continuing_at(req.endian, body_start);
-        match d.dispatch_body(req, &mut out) {
-            Ok(kind) => {
+        // Counted around the servant call and nothing else, so the number
+        // excludes the framing either side of it. It does *not* exclude a
+        // servant's own lock — see `ServerStats::at_servant` for why that
+        // distinction cost a test.
+        let served = {
+            let _inside = self.stats.dispatching_now();
+            d.serve_one(req, &mut out)
+        };
+        match served {
+            Ok(Served::UnknownObject) => {
+                self.reply_exception(req, &SystemException::object_not_exist())
+            }
+            Ok(Served::Forward(to)) => {
+                if !req.expect_reply {
+                    // A oneway cannot be redirected; there is no reply to carry
+                    // the new address, and inventing one would be worse than
+                    // serving it.
+                    return Ok(None);
+                }
+                Ok(Some(encode_location_forward(req.version, req.endian, req.request_id, &to)?))
+            }
+            Ok(Served::Body(kind)) => {
                 if !req.expect_reply {
                     // A oneway can carry neither a result nor a raised user
                     // exception; dropping both is what the spec requires.
@@ -1261,10 +1548,15 @@ mod tests {
     }
 
     /// A servant for the loopback tests: answers `ping` with 42.
+    ///
+    /// Both shapes, so the same servant can be served concurrently
+    /// ([`Server::serve_shared`]) or serialized ([`Server::serve`]) and the
+    /// tests compare like with like.
     struct Pong;
-    impl Dispatch for Pong {
+
+    impl SharedDispatch for Pong {
         fn dispatch(
-            &mut self,
+            &self,
             req: &Request,
             out: &mut Encoder,
         ) -> std::result::Result<(), SystemException> {
@@ -1275,6 +1567,16 @@ mod tests {
                 }
                 _ => Err(SystemException::bad_operation()),
             }
+        }
+    }
+
+    impl Dispatch for Pong {
+        fn dispatch(
+            &mut self,
+            req: &Request,
+            out: &mut Encoder,
+        ) -> std::result::Result<(), SystemException> {
+            SharedDispatch::dispatch(self, req, out)
         }
     }
 
@@ -1788,11 +2090,15 @@ mod tests {
     /// against the new concurrency.
     ///
     /// The delivery side of a channel invokes *out* while the serving side is
-    /// answering requests *in*. With one servant behind one mutex, that is
-    /// only safe because the mutex belongs to one server: a servant calling a
-    /// second server in the same process must complete, under load, from
-    /// several clients at once. That is what this asserts; the deadline is
-    /// what makes a resurrected deadlock a failure instead of a hung suite.
+    /// answering requests *in*. This is that shape on the **serialized** path,
+    /// where it is only safe because the mutex belongs to one server: a
+    /// servant calling a second server in the same process must complete,
+    /// under load, from several clients at once.
+    /// `an_outbound_call_with_other_calls_in_flight_does_not_deadlock` is the
+    /// same claim on the shared path, and holds the calls open at a gate so
+    /// they are provably simultaneous rather than merely concurrent. Both
+    /// deadlines are what make a resurrected deadlock a failure instead of a
+    /// hung suite.
     #[test]
     fn an_outbound_call_from_inside_dispatch_does_not_deadlock() {
         const N: usize = 4;
@@ -1930,6 +2236,523 @@ mod tests {
         let bye = read_message(&mut idle, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
         assert_eq!(bye.msg_type, MsgType::CloseConnection, "the idle client is told, not dropped");
         assert_eq!(served.stats.active(), 0, "no connection thread outlived serve");
+    }
+
+    // ── concurrent dispatch ──────────────────────────────────────────────────
+    //
+    // The limit stream E left in place, and the tests that say it is gone.
+    // Every one of them bounds itself with a deadline, and every one asserts
+    // against a rendezvous or the server's own counters — never against a
+    // clock. A timing-based overlap test passes on a serialized server that
+    // merely happens to be fast, which makes it not a check at all.
+
+    use crate::guarded::Guarded;
+
+    /// A servant whose operation **blocks for as long as it takes** for `n`
+    /// calls to be inside it at once.
+    ///
+    /// This is the measurable block the batch is about. Under concurrent
+    /// dispatch the gate opens and every caller returns `true`; under
+    /// serialized dispatch the first caller waits out `within` alone, which is
+    /// a failed rendezvous rather than a hung test.
+    ///
+    /// Note where the gate is waited on: **outside** the `Guarded`. Blocking
+    /// inside it would be the discipline violation this module's docs forbid,
+    /// and `guarded`'s tripwire would say so.
+    struct Rendezvous {
+        gate: Gate,
+        within: Duration,
+        /// The witness that counts, kept **by the servant**, past whatever
+        /// lock it takes. `ServerStats::peak_at_servant` cannot do this job:
+        /// it counts callers waiting for a servant's lock as well as the one
+        /// holding it, so it reaches N on a serialized server too. Measured,
+        /// not reasoned about — that is how this field came to exist.
+        inside: AtomicU64,
+        peak_inside: AtomicU64,
+        calls: Guarded<u64>,
+    }
+
+    impl Rendezvous {
+        fn new(n: usize, within: Duration) -> Self {
+            Rendezvous {
+                gate: Gate::new(n),
+                within,
+                inside: AtomicU64::new(0),
+                peak_inside: AtomicU64::new(0),
+                calls: Guarded::new("a test servant", 0),
+            }
+        }
+
+        fn peak_inside(&self) -> u64 {
+            self.peak_inside.load(Ordering::SeqCst)
+        }
+    }
+
+    impl SharedDispatch for Rendezvous {
+        fn dispatch(
+            &self,
+            req: &Request,
+            out: &mut Encoder,
+        ) -> std::result::Result<(), SystemException> {
+            match req.operation.as_str() {
+                "slow" => {
+                    let n = self.inside.fetch_add(1, Ordering::SeqCst) + 1;
+                    self.peak_inside.fetch_max(n, Ordering::SeqCst);
+                    let all_here = self.gate.arrive(self.within);
+                    self.calls.write(|c| *c += 1);
+                    self.inside.fetch_sub(1, Ordering::SeqCst);
+                    out.put_bool(all_here);
+                    Ok(())
+                }
+                _ => Err(SystemException::bad_operation()),
+            }
+        }
+    }
+
+    impl Dispatch for Rendezvous {
+        fn dispatch(
+            &mut self,
+            req: &Request,
+            out: &mut Encoder,
+        ) -> std::result::Result<(), SystemException> {
+            SharedDispatch::dispatch(self, req, out)
+        }
+    }
+
+    /// A server on loopback serving `servant` **concurrently**, with its
+    /// counters readable from the test.
+    fn serving_shared<D>(servant: Arc<D>, cap: usize) -> Loopback
+    where
+        D: SharedDispatch + Send + Sync + 'static,
+    {
+        let mut server = Server::bind("127.0.0.1:0", b"k".to_vec()).unwrap();
+        server.set_max_connections(cap);
+        let addr = server.local_addr().unwrap();
+        let stats = server.stats();
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            server.serve_shared(&*servant, move || flag.load(Ordering::SeqCst)).unwrap();
+        });
+        Loopback { addr, stats, stop, thread: Some(thread) }
+    }
+
+    fn slow_wire(endian: Endian, id: u32) -> Vec<u8> {
+        encode_request(Version::V1_2, endian, id, b"k", "slow", true, |_| {}).unwrap()
+    }
+
+    /// Fires `n` concurrent `slow` calls and returns how many of them saw the
+    /// rendezvous complete.
+    ///
+    /// Both ways of not overlapping are turned into a *readable* failure. A
+    /// serialized server can make a caller miss the gate (it returns `false`
+    /// and the count comes up short) or make it miss its socket deadline
+    /// entirely, because it spent the whole timeout queued behind somebody
+    /// else. The second used to surface as an `unwrap` on a `WouldBlock`,
+    /// which is a true failure with a useless message; it says what it means
+    /// now. Both are bounded, which is the property that matters: the test
+    /// fails, it does not hang.
+    fn slow_callers(served: &Loopback, n: usize, endian: Endian) -> usize {
+        let clients: Vec<_> = (0..n)
+            .map(|i| {
+                let mut c = served.client();
+                std::thread::spawn(move || {
+                    c.write_all(&slow_wire(endian, i as u32)).unwrap();
+                    let msg = read_message(&mut c, DEFAULT_MAX_MESSAGE_SIZE).unwrap_or_else(|e| {
+                        panic!(
+                            "slow caller {i}: no reply within the deadline ({e}) — \
+                             the servant was still busy with somebody else, which is \
+                             exactly what serialized dispatch looks like from outside"
+                        )
+                    });
+                    let reply = crate::decode_reply(msg).unwrap();
+                    assert_eq!(reply.status, ReplyStatus::NoException, "slow caller {i}");
+                    reply.body().unwrap().get_bool().unwrap()
+                })
+            })
+            .collect();
+        clients
+            .into_iter()
+            .map(|t| t.join().unwrap_or(false))
+            .filter(|overlapped| *overlapped)
+            .count()
+    }
+
+    /// **The measurement this batch exists for.** A servant whose operation
+    /// blocks must no longer delay a concurrent caller.
+    ///
+    /// N clients each invoke an operation that cannot return until all N are
+    /// inside the servant together. Two independent witnesses, neither of them
+    /// a clock:
+    ///
+    /// - the **rendezvous**: every caller reports that all N arrived, which is
+    ///   only possible if all N were executing inside `dispatch` at the same
+    ///   instant;
+    /// - the **servant's own high-water mark**, kept past its lock.
+    ///
+    /// `ServerStats::peak_at_servant` is deliberately *not* one of them: it
+    /// counts callers waiting for a servant's lock too, so it reaches N on a
+    /// serialized server as well. That is asserted here as a fact about the
+    /// counter rather than left as a trap for the next reader.
+    ///
+    /// Under the previous design — one servant behind one mutex — the first
+    /// caller would hold the mutex while it waited, the others would never
+    /// enter, and this fails on the gate's deadline. That is not a
+    /// hypothetical: it is
+    /// `the_negative_control_serialized_dispatch_still_delays_every_caller`
+    /// below, which asserts exactly that outcome.
+    #[test]
+    fn a_blocking_operation_no_longer_delays_a_concurrent_caller() {
+        const N: usize = 5;
+        for endian in [Endian::Big, Endian::Little] {
+            let servant = Arc::new(Rendezvous::new(N, DEADLINE));
+            let served = serving_shared(Arc::clone(&servant), DEFAULT_MAX_CONNECTIONS);
+            let overlapped = slow_callers(&served, N, endian);
+            assert_eq!(overlapped, N, "{endian:?}: only {overlapped}/{N} callers met at the gate");
+            assert_eq!(
+                servant.peak_inside(),
+                N as u64,
+                "{endian:?}: the servant saw at most {} calls executing at once, wanted {N}",
+                servant.peak_inside()
+            );
+            assert_eq!(servant.calls.read(|c| *c), N as u64, "{endian:?}: every call completed");
+            assert!(served.stats.peak_at_servant() >= N as u64, "{endian:?}");
+            served.shutdown();
+        }
+    }
+
+    /// **The negative control.** The same servant, the same clients, the same
+    /// assertions — served through the path this batch did *not* change.
+    ///
+    /// [`Server::serve`] wraps a `&mut` servant in [`Serialized`], which is
+    /// precisely the design that was here before: one servant, one mutex,
+    /// taken per message. So this test is the change reverted, and it must
+    /// **fail to overlap** — which it asserts positively, so that the day
+    /// somebody makes `Serialized` concurrent this test says so rather than
+    /// quietly agreeing.
+    ///
+    /// What matters as much as the outcome is the *manner* of it: the gate has
+    /// a short deadline of its own, so serialization produces a completed test
+    /// with a false rendezvous rather than a hung suite. A concurrency test
+    /// that hangs when it fails is a test nobody can read.
+    #[test]
+    fn the_negative_control_serialized_dispatch_still_delays_every_caller() {
+        const N: usize = 4;
+        // Short, because under serialization every caller waits it out in
+        // turn: this bounds the whole test at roughly N × this.
+        const GATE: Duration = Duration::from_millis(300);
+
+        let servant = Arc::new(Rendezvous::new(N, GATE));
+        let mut serialized = AsDispatch(Arc::clone(&servant));
+        let mut server = Server::bind("127.0.0.1:0", b"k".to_vec()).unwrap();
+        server.set_max_connections(DEFAULT_MAX_CONNECTIONS);
+        let addr = server.local_addr().unwrap();
+        let stats = server.stats();
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            // `serve`, not `serve_shared`: the compatibility path, which is
+            // the old behaviour exactly.
+            server.serve(&mut serialized, move || flag.load(Ordering::SeqCst)).unwrap();
+        });
+        let served = Loopback { addr, stats, stop, thread: Some(thread) };
+
+        let overlapped = slow_callers(&served, N, Endian::Big);
+        assert!(
+            overlapped < N,
+            "serialized dispatch must not let {N} callers meet at the gate, but {overlapped} did"
+        );
+        assert_eq!(
+            servant.peak_inside(),
+            1,
+            "serialized dispatch must never have two calls executing in the servant"
+        );
+        // The counter that is *not* the witness, asserted as such: it reaches
+        // N here, where only one call is ever executing, because the other
+        // N-1 are queued on the `Serialized` mutex inside `serve_one`.
+        assert_eq!(
+            served.stats.peak_at_servant(),
+            N as u64,
+            "at_servant counts queued callers, which is exactly why it cannot witness overlap"
+        );
+        // And every caller was still answered — serialized is slow, not broken.
+        assert_eq!(served.stats.accepted(), N as u64);
+        served.shutdown();
+    }
+
+    /// A [`SharedDispatch`] servant reached through the `&mut self` trait, so
+    /// one servant can be served both ways and the negative control compares
+    /// like with like.
+    struct AsDispatch<D>(Arc<D>);
+
+    impl<D: SharedDispatch> Dispatch for AsDispatch<D> {
+        fn dispatch(
+            &mut self,
+            request: &Request,
+            out: &mut Encoder,
+        ) -> std::result::Result<(), SystemException> {
+            SharedDispatch::dispatch(&*self.0, request, out)
+        }
+
+        fn dispatch_body(
+            &mut self,
+            request: &Request,
+            out: &mut Encoder,
+        ) -> std::result::Result<DispatchBody, SystemException> {
+            SharedDispatch::dispatch_body(&*self.0, request, out)
+        }
+
+        fn knows(&self, object_key: &[u8]) -> bool {
+            SharedDispatch::knows(&*self.0, object_key)
+        }
+    }
+
+    /// A [`SharedDispatch`] servant that calls out while holding **no** lock —
+    /// the shape `event_server`'s delivery loop has, written as the rule says
+    /// to write it: copy what you need out of the lock, close it, then call.
+    struct SharedRelay {
+        target: Guarded<crate::Ior>,
+        gate: Gate,
+    }
+
+    impl SharedDispatch for SharedRelay {
+        fn dispatch(
+            &self,
+            req: &Request,
+            out: &mut Encoder,
+        ) -> std::result::Result<(), SystemException> {
+            if req.operation != "relay" {
+                return Err(SystemException::bad_operation());
+            }
+            // The rule, in one line: the target is *copied out* of the lock,
+            // and the section is closed before anything dials. Moving the two
+            // lines below inside the closure would trip `guarded`'s outbound
+            // check rather than deadlocking a deployment.
+            let target = self.target.read(|t| t.clone());
+            // Every caller waits here until they are all in flight, so the
+            // outbound calls genuinely overlap rather than merely happening.
+            let overlapped = self.gate.arrive(DEADLINE);
+            let relayed = (|| -> Result<i32> {
+                let mut conn = crate::Connection::connect(&target, DEADLINE)?;
+                let reply = conn.invoke_nullary("ping")?;
+                reply.body()?.get_i32().map_err(Error::Cdr)
+            })();
+            match relayed {
+                Ok(v) if overlapped => {
+                    out.put_i32(v);
+                    Ok(())
+                }
+                Ok(_) => Err(SystemException::bad_operation()), // never overlapped
+                Err(e) => {
+                    eprintln!("shared relay failed: {e}");
+                    Err(SystemException::unknown_user_exception())
+                }
+            }
+        }
+    }
+
+    /// **The hazard the concurrency batch already fought, re-tested against
+    /// the thing that makes it easier to hit.**
+    ///
+    /// `event_server`'s rule 1 is that no lock may be held across an outbound
+    /// call. Concurrent dispatch does not weaken the rule; it weakens the
+    /// accident that used to hide breaches of it, because the servant side is
+    /// no longer single-file. So: a servant that calls *out* while other calls
+    /// to the same servant are *in flight*, from several clients at once, with
+    /// a deadline on every wait so a resurrected deadlock is a failed test and
+    /// not a hung suite.
+    ///
+    /// The gate inside the servant is what makes "while another call is in
+    /// flight" true rather than hoped for: no caller can reach its outbound
+    /// call until all of them have.
+    #[test]
+    fn an_outbound_call_with_other_calls_in_flight_does_not_deadlock() {
+        const N: usize = 4;
+        let inner = serving_shared(Arc::new(Pong), DEFAULT_MAX_CONNECTIONS);
+        let servant = Arc::new(SharedRelay {
+            target: Guarded::new("a relay's target", ior_at(inner.addr, b"k")),
+            gate: Gate::new(N),
+        });
+        let outer = serving_shared(Arc::clone(&servant), DEFAULT_MAX_CONNECTIONS);
+
+        let clients: Vec<_> = (0..N)
+            .map(|i| {
+                let mut c = outer.client();
+                std::thread::spawn(move || {
+                    let wire =
+                        encode_request(Version::V1_2, Endian::Big, 1, b"k", "relay", true, |_| {})
+                            .unwrap();
+                    c.write_all(&wire).unwrap();
+                    let msg = read_message(&mut c, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+                    let reply = crate::decode_reply(msg).unwrap();
+                    assert_eq!(
+                        reply.status,
+                        ReplyStatus::NoException,
+                        "relay {i}: an overlapping outbound call must complete"
+                    );
+                    assert_eq!(reply.body().unwrap().get_i32().unwrap(), 42, "relay {i}");
+                })
+            })
+            .collect();
+        for t in clients {
+            t.join().unwrap();
+        }
+        assert!(
+            outer.stats.peak_at_servant() >= N as u64,
+            "the outbound calls must have overlapped, not queued: peak was {}",
+            outer.stats.peak_at_servant()
+        );
+        outer.shutdown();
+        inner.shutdown();
+    }
+
+    /// The tripwire is not decoration: the outbound client path really does
+    /// refuse to block while a lock section is open.
+    ///
+    /// Written against a *live* server, so the only reason the connect does
+    /// not happen is the discipline — a connect that would have failed anyway
+    /// proves nothing. `guarded`'s own tests prove the counter; this one
+    /// proves it is wired into [`crate::Connection`].
+    #[test]
+    fn the_outbound_path_refuses_to_dial_from_inside_a_lock_section() {
+        let inner = serving_shared(Arc::new(Pong), DEFAULT_MAX_CONNECTIONS);
+        let held = Guarded::new("a servant that should have copied out", ior_at(inner.addr, b"k"));
+
+        // Outside the section the same dial succeeds, which is what makes the
+        // refusal below attributable to the lock and to nothing else.
+        let ior = held.read(|i| i.clone());
+        let mut ok = crate::Connection::connect(&ior, DEADLINE).unwrap();
+        assert_eq!(ok.invoke_nullary("ping").unwrap().body().unwrap().get_i32().unwrap(), 42);
+        drop(ok);
+
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            held.read(|i| crate::Connection::connect(i, DEADLINE).map(|_| ()))
+        }));
+        assert!(refused.is_err(), "dialling from inside a lock section must be refused");
+        assert_eq!(crate::guarded::section_held(), None, "the unwound section must have closed");
+        inner.shutdown();
+    }
+
+    /// A [`SharedDispatch`] servant calling back into its **own** server.
+    struct SharedSelfCaller {
+        own: crate::Ior,
+    }
+
+    impl SharedDispatch for SharedSelfCaller {
+        fn dispatch(
+            &self,
+            req: &Request,
+            out: &mut Encoder,
+        ) -> std::result::Result<(), SystemException> {
+            match req.operation.as_str() {
+                "ping" => {
+                    out.put_i32(42);
+                    Ok(())
+                }
+                "call_myself" => {
+                    let attempt = (|| -> Result<i32> {
+                        let mut conn = crate::Connection::connect(&self.own, DEADLINE)?;
+                        conn.invoke_nullary("ping")?.body()?.get_i32().map_err(Error::Cdr)
+                    })();
+                    match attempt {
+                        Ok(v) => {
+                            out.put_i32(v);
+                            Ok(())
+                        }
+                        Err(e) => {
+                            eprintln!("self-call failed: {e}");
+                            Err(SystemException::unknown_user_exception())
+                        }
+                    }
+                }
+                _ => Err(SystemException::bad_operation()),
+            }
+        }
+    }
+
+    /// The re-entrancy that [`Serialized`] forbids and [`SharedDispatch`] does
+    /// not — asserted, because "it should work now" is not a measurement.
+    ///
+    /// `a_servant_calling_its_own_server_fails_by_timeout_without_wedging_it`
+    /// pins the other half: on the compatibility path the same call fails on
+    /// its own timeout, because it waits for a mutex its caller holds. A
+    /// servant that holds no lock across the call has no such limit, and the
+    /// difference between the two tests is the whole difference between the
+    /// two paths.
+    #[test]
+    fn a_shared_servant_may_call_back_into_its_own_server() {
+        let server = Server::bind("127.0.0.1:0", b"k".to_vec()).unwrap();
+        let addr = server.local_addr().unwrap();
+        let servant = Arc::new(SharedSelfCaller { own: ior_at(addr, b"k") });
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let held = Arc::clone(&servant);
+        let thread = std::thread::spawn(move || {
+            server.serve_shared(&*held, move || flag.load(Ordering::SeqCst)).unwrap();
+        });
+
+        let mut c = TcpStream::connect(addr).unwrap();
+        c.set_read_timeout(Some(DEADLINE)).unwrap();
+        let wire = encode_request(Version::V1_2, Endian::Big, 1, b"k", "call_myself", true, |_| {})
+            .unwrap();
+        c.write_all(&wire).unwrap();
+        let msg = read_message(&mut c, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+        let reply = crate::decode_reply(msg).unwrap();
+        assert_eq!(reply.status, ReplyStatus::NoException, "a re-entrant call must now succeed");
+        assert_eq!(reply.body().unwrap().get_i32().unwrap(), 42);
+
+        drop(c);
+        stop.store(true, Ordering::SeqCst);
+        thread.join().unwrap();
+    }
+
+    /// Concurrency must not have cost the ordinary guarantees: `knows`,
+    /// oneways, `LocateRequest` and the cap all still behave on the shared
+    /// path, in both byte orders.
+    struct Keyed;
+
+    impl SharedDispatch for Keyed {
+        fn knows(&self, object_key: &[u8]) -> bool {
+            object_key == b"k"
+        }
+
+        fn dispatch(
+            &self,
+            req: &Request,
+            out: &mut Encoder,
+        ) -> std::result::Result<(), SystemException> {
+            SharedDispatch::dispatch(&Pong, req, out)
+        }
+    }
+
+    #[test]
+    fn a_shared_servant_still_answers_locate_and_refuses_a_key_it_does_not_know() {
+        for endian in [Endian::Big, Endian::Little] {
+            let served = serving_shared(Arc::new(Keyed), DEFAULT_MAX_CONNECTIONS);
+            let mut c = served.client();
+
+            let mut e = Encoder::new(endian);
+            let size_at = message_header(&mut e, Version::V1_2, endian, MsgType::LocateRequest);
+            e.put_u32(7);
+            e.put_u16(0);
+            e.put_octet_seq(b"k");
+            let size = (e.len() - HEADER_LEN) as u32;
+            e.patch_u32(size_at, size);
+            c.write_all(&e.finish().unwrap()).unwrap();
+            let msg = read_message(&mut c, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+            assert_eq!(msg.msg_type, MsgType::LocateReply, "{endian:?}");
+
+            let wire =
+                encode_request(Version::V1_2, endian, 3, b"other", "ping", true, |_| {}).unwrap();
+            c.write_all(&wire).unwrap();
+            let msg = read_message(&mut c, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+            let reply = crate::decode_reply(msg).unwrap();
+            assert_eq!(reply.status, ReplyStatus::SystemException, "{endian:?}");
+            assert_eq!(reply.body().unwrap().get_string().unwrap(), OBJECT_NOT_EXIST);
+
+            drop(c);
+            served.shutdown();
+        }
     }
 
     #[test]
