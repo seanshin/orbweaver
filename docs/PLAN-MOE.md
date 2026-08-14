@@ -148,6 +148,45 @@ directions. 요청 검토의 결론: Naming은 서버 절반이, Event는 전부
 없었다 — F6·F7로 편입하고, Transaction·Time·PSS는 사유와 함께 명시적 제외로
 선언한다. 장식용 인터페이스보다 정직한 부재가 낫다.
 
+## 4.5 The Capability gap, and what closing it would cost / 계약 확장 비용
+
+`moe::Capability` carries no `specialization` and no `latency_p50`, so
+`orbweaver-trading`'s constraint queries — the §4.3 half of the control plane —
+cannot be satisfied on either field by an expert that registered over the wire.
+The Trading batch reported this as a gap. Measuring it found something sharper:
+as placeholders, the empty string only lost matches while the **zero won them**,
+because `latency_p50 < 20` is satisfied by an unmeasured latency. A router
+selecting on latency preferred exactly the experts nobody had timed.
+
+The immediate fix is not a contract change: both fields are now `Option`, a
+comparison over an absent field is *unanswerable* rather than false, and an
+unknown value sorts after every known one so "the fastest" is never the one
+nobody measured.
+
+Extending the contract instead was measured with our own tool rather than
+assumed:
+
+```
+$ idl-diff corpus/golden/22-moe-control-plane.idl 22-with-the-two-members.idl
+[BREAKING] IDL:moe/Capability:1.0: member "specialization" added — a CDR member
+           has no tag and no length, so an added one is read as part of
+           whatever followed it
+[BREAKING] IDL:moe/Capability:1.0: member "latency_p50_ms" added
+refused: 2 change(s) break deployed peers        (exit 1)
+```
+
+So the two members cannot be added in place: §5.3 requires a new version of the
+type or an explicit `--approve` with a recorded reason. That is the right price
+and it is not yet worth paying — nothing outside this repository serves
+`moe::Capability`, but the same is true of every contract on the day before
+someone deploys it, and a project that edits released types when it is
+convenient has no §5.3 at all. **The unknown-aware query is the answer until a
+version bump has a reason of its own.**
+
+`moe::Capability`에 두 멤버를 넣는 것은 우리 도구가 **BREAKING으로 거부**한다.
+지금 값을 치를 이유가 없으므로, 답은 계약 확장이 아니라 미지값을 아는 질의다.
+편할 때 released 타입을 고치는 프로젝트에는 §5.3이 아예 없는 것과 같다.
+
 ## 5. What this supplement does not claim / 이 보완이 주장하지 않는 것
 
 No accelerator, no fused kernel, no RDMA exists in this repository; the data
