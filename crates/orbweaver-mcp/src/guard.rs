@@ -10,9 +10,14 @@
 //! difference, which is the point: **which side of the trust boundary a stub
 //! runs on is decided by what it is handed, not by how it was generated.**
 //!
-//! A refusal surfaces as CORBA `NO_PERMISSION` — what a native guard would
+//! A refusal surfaces as a CORBA system exception — what a native guard would
 //! raise, so a stub's caller handles policy the way it already handles the
 //! target's own refusals. The *why* goes to the audit log, where §4.8 wants it.
+//! Which exception is [`refusal_id`]'s single decision: `NO_PERMISSION` for
+//! everything the policy decides, `TRANSIENT` for a [`crate::quota`] budget
+//! that a later window may renew — because "you may not" and "not right now"
+//! are different answers and a retry loop reads the difference off the
+//! repository id, not off the audit log.
 //!
 //! Since F4 the checks themselves live in [`crate::interceptor`]: this file
 //! holds the `Invoker` surface and the `NO_PERMISSION` translation, and the
@@ -26,11 +31,37 @@ use orbweaver_registry::Registry;
 
 use crate::identity::Caller;
 use crate::interceptor::{CallContext, Chain};
-use crate::policy::{Approval, Exposure};
+use crate::policy::{Approval, Denied, Exposure};
 use crate::promote::CallStats;
 
 /// The repository id `NO_PERMISSION` travels under.
 pub const NO_PERMISSION: &str = "IDL:omg.org/CORBA/NO_PERMISSION:1.0";
+
+/// The repository id `TRANSIENT` travels under: **refused now**.
+///
+/// The one CORBA refusal that invites a retry, which is exactly why a
+/// consumption limit ([`crate::quota`]) must not borrow `NO_PERMISSION`'s
+/// spelling. `orbweaver-gen`'s servant runtime already draws the same
+/// distinction for a servant's own refusals, so a stub's caller handles a
+/// bridge-side budget with the code it already has for a target-side one.
+pub const TRANSIENT: &str = "IDL:omg.org/CORBA/TRANSIENT:1.0";
+
+/// `<nobody>`: the caller field of a record about a session nobody is signed
+/// into.
+///
+/// One spelling, so that an audit line, a quota's budget key and an operator's
+/// grep pattern all mean the same thing by it.
+pub const NOBODY: &str = "<nobody>";
+
+/// Which system exception a refusal reaches a caller as.
+///
+/// The **one** place the mapping lives, so that the stub's exception, the
+/// trace's `outcome` and the dry run's classification cannot come to different
+/// conclusions about whether waiting would help. Everything a policy decides is
+/// `NO_PERMISSION`; a spent budget that renews is `TRANSIENT`.
+pub fn refusal_id(why: &Denied) -> &'static str {
+    if why.is_transient() { TRANSIENT } else { NO_PERMISSION }
+}
 
 /// The decision field of an audit line for a call the policy allowed.
 pub const DECISION_ALLOW: &str = "ALLOW";
@@ -79,7 +110,7 @@ pub(crate) fn audit_entry(
     operation: &str,
     why: Option<&str>,
 ) -> String {
-    let caller = caller.map_or("<nobody>", |c| c.principal.as_str());
+    let caller = caller.map_or(NOBODY, |c| c.principal.as_str());
     let mut line = format!("{decision} caller={caller} target={target} operation={operation}");
     if let Some(why) = why {
         line.push_str(" why=");
@@ -110,8 +141,21 @@ pub struct Guarded<'r, C: Invoker = Connection> {
 
 /// The refusal a stub sees. The reason is not in it, deliberately: it is in the
 /// audit log, which is where §4.8 wants it.
-fn no_permission() -> GiopError {
-    GiopError::SystemException { id: NO_PERMISSION.to_owned(), minor: 0, completed: 0 }
+///
+/// Two fields are decided here rather than defaulted:
+///
+/// - the **repository id** comes from [`refusal_id`], so a spent budget arrives
+///   as `TRANSIENT` and everything else as `NO_PERMISSION`;
+/// - the **completion status** is `COMPLETED_NO`, which is §4.11.4's ordinal
+///   **1** — `COMPLETED_YES` is 0 (the transposition `orbweaver-giop` fixed in
+///   its own encoder). This gate refuses *before* anything reaches the wire, so
+///   the operation provably did not run, and saying so is what makes a retry
+///   safe. It used to say 0 here, which told every refused caller its call had
+///   completed; with `TRANSIENT` now reachable that would be actively
+///   dangerous — an invitation to retry attached to a claim that the call
+///   already happened.
+fn refusal(why: &Denied) -> GiopError {
+    GiopError::SystemException { id: refusal_id(why).to_owned(), minor: 0, completed: 1 }
 }
 
 impl<'r, C: Invoker> Guarded<'r, C> {
@@ -194,8 +238,8 @@ impl<'r, C: Invoker> Invoker for Guarded<'r, C> {
             operation,
             approval: self.approval,
         };
-        if self.chain.run(&ctx).is_err() {
-            return Err(no_permission());
+        if let Err(why) = self.chain.run(&ctx) {
+            return Err(refusal(&why));
         }
         let reply = self.conn.invoke(operation, write_args);
         self.chain.completed(&ctx, reply.is_ok());
@@ -216,8 +260,8 @@ impl<'r, C: Invoker> Invoker for Guarded<'r, C> {
             operation,
             approval: self.approval,
         };
-        if self.chain.run(&ctx).is_err() {
-            return Err(no_permission());
+        if let Err(why) = self.chain.run(&ctx) {
+            return Err(refusal(&why));
         }
         let sent = self.conn.invoke_oneway(operation, write_args);
         self.chain.completed(&ctx, sent.is_ok());
@@ -413,6 +457,47 @@ mod tests {
         assert_eq!(g.audit().len(), 3);
         assert!(g.audit()[2].starts_with("REFUSE caller=alice"), "{}", g.audit()[2]);
         assert!(g.audit()[2].contains("quota.rate_limit"), "{}", g.audit()[2]);
+    }
+
+    /// The two refusals a stub can get, told apart by the only thing a stub's
+    /// caller can read: the system exception.
+    ///
+    /// A retry loop cannot see the audit log and must not have to parse a
+    /// reason string. `NO_PERMISSION` means stop; `TRANSIENT` means the budget
+    /// may renew — and both say `COMPLETED_NO`, because this gate refuses
+    /// before anything reaches the wire and a retry is therefore safe.
+    #[test]
+    fn a_spent_budget_refuses_a_stub_with_transient_and_a_policy_refuses_with_no_permission() {
+        use crate::quota::{Quota, Renewal, Scope};
+
+        let reg = registry();
+        let exposure = Exposure::nothing().allow_operation("IDL:bank/Account:1.0", "balance");
+        let mut g = guarded(&reg, exposure, Some(Caller::new("alice")), Approval::default());
+        let quota = Quota::new(1, Scope::Caller, Renewal::Window);
+        assert!(g.chain_mut().quota(quota.clone()));
+
+        let _ = g.invoke("balance", |_| {});
+        let spent = g.invoke("balance", |_| {}).unwrap_err();
+        assert!(
+            matches!(&spent, GiopError::SystemException { id, completed, .. }
+                if id == TRANSIENT && *completed == 1),
+            "a budget that renews invites a retry: {spent}"
+        );
+
+        // The same guard, a refusal the policy made: unchanged.
+        let denied = g.invoke("close", |_| {}).unwrap_err();
+        assert!(
+            matches!(&denied, GiopError::SystemException { id, completed, .. }
+                if id == NO_PERMISSION && *completed == 1),
+            "{denied}"
+        );
+        assert_eq!(g.conn.reached, vec!["balance"], "neither refusal reached the wire");
+
+        // A new window, and the stub is served again — without the guard being
+        // rebuilt or the exposure being touched.
+        assert!(quota.open_window(crate::quota::Window::new("the next hour")));
+        let _ = g.invoke("balance", |_| {});
+        assert_eq!(g.conn.reached, vec!["balance", "balance"]);
     }
 
     #[test]

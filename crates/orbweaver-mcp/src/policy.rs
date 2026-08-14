@@ -91,6 +91,44 @@ pub enum Denied {
         /// What that stage says about it.
         reason: String,
     },
+    /// A consumption budget is spent ([`crate::quota`], §4.5 #2).
+    ///
+    /// **The one variant that is not about permission.** Every other refusal
+    /// here is a statement about what this caller may do, and re-asking cannot
+    /// change it; this one is a statement about what has been *used*, and a
+    /// later window can. That difference is why it is a variant of its own
+    /// rather than an [`Denied::Intercepted`] with a well-chosen sentence:
+    /// [`Denied::is_transient`] has to be answerable by a match, because
+    /// [`crate::guard::refusal_id`] turns it into the system exception a stub's
+    /// caller reads, and a retry decision taken by grepping prose is not one.
+    QuotaExhausted {
+        /// What the budget is counted against, rendered in the audit line's own
+        /// field spelling — `caller=alice target=… operation=…`.
+        budget: String,
+        /// What has been spent against it.
+        used: u64,
+        /// What it allows.
+        limit: u64,
+        /// The window the host last opened, or `-` for a host that has opened
+        /// none. See [`crate::quota::Window`]: there is no clock in this crate.
+        window: String,
+        /// Whether a later window can change this answer — the operator's
+        /// [`crate::quota::Renewal`], not an inference. A stage with no clock
+        /// cannot know that time will pass.
+        renews: bool,
+    },
+}
+
+impl Denied {
+    /// Whether this refusal is a "not right now" rather than a "you may not".
+    ///
+    /// True only for [`Denied::QuotaExhausted`] on a budget that renews.
+    /// [`crate::guard::refusal_id`] is the one place that turns this into a
+    /// repository id, so the answer a stub's caller retries on and the answer
+    /// the trace records cannot disagree.
+    pub fn is_transient(&self) -> bool {
+        matches!(self, Denied::QuotaExhausted { renews: true, .. })
+    }
 }
 
 impl std::fmt::Display for Denied {
@@ -122,6 +160,20 @@ impl std::fmt::Display for Denied {
             Denied::Intercepted { stage, reason } => {
                 write!(f, "the {stage} stage refused this call: {reason}")
             }
+            // The leading token is load-bearing: it is what separates a
+            // consumption refusal from a permission refusal in a log an
+            // operator greps, and the closing clause is what tells a stuck
+            // agent's owner whether waiting is a strategy.
+            Denied::QuotaExhausted { budget, used, limit, window, renews } => write!(
+                f,
+                "quota exhausted: {budget} has used {used} of {limit} calls in window \
+                 {window:?}; {}",
+                if *renews {
+                    "retry in a later window"
+                } else {
+                    "this budget does not renew, so retrying will not help"
+                }
+            ),
         }
     }
 }

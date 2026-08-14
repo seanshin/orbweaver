@@ -5,7 +5,8 @@
 //!                      [--expose <IDL:module/Iface:1.0[.operation]>]... \
 //!                      [--as <principal>] [--scope <scope>]... \
 //!                      [--dry-run [<IDL:module/Iface:1.0>]] \
-//!                      [--trace <path>|-] [--trace-ts <rfc3339>]
+//!                      [--trace <path>|-] [--trace-ts <rfc3339>] \
+//!                      [--quota <calls>] [--quota-scope <everything|caller|interface|operation>]
 //! ```
 //!
 //! Exposure is **default-deny**: with no `--expose`, the server starts, answers
@@ -37,6 +38,45 @@
 //! `SystemTime::now()` would produce a trace nobody could replay, which is the
 //! discipline D004's table cites (`PLAN-DEFERRED.md` §3).
 //!
+//! # `--quota`: a budget for the run, which is the only window this process has
+//!
+//! §4.5 #2's seat, filled by `orbweaver_mcp::quota`. `--quota <calls>` caps how
+//! many calls this session may make, `--quota-scope` says what the cap is
+//! counted against (per caller by default), and the refusal names the
+//! arithmetic and is distinguishable from a policy refusal in both the audit
+//! line and the trace.
+//!
+//! The budget **does not renew**, and that is a statement about this process
+//! rather than a limitation of the mechanism. A renewing quota needs somebody
+//! to open the next window, and a window is a label a *host* supplies —
+//! `orbweaver_mcp::quota::Window`, on the same no-clock discipline as
+//! `--trace-ts`. This process reads no clock and has no window source, so a
+//! budget here is a per-run total and its refusals say `NO_PERMISSION`:
+//! telling an agent to retry in a window that nobody will ever open would be a
+//! lie with a retry loop attached to it. A host that *does* have a clock builds
+//! the same `Quota` with `Renewal::Window` and calls `open_window` itself.
+//!
+//! # The audit ledger goes to stderr, one line per decision
+//!
+//! §4.8 asks for a record of every decision, and until now this process met
+//! that requirement only under `--dry-run`. Serving, the ALLOW/REFUSE lines
+//! accumulated in the chain's audit stage and were **discarded when the process
+//! exited** — the library kept the ledger and the deployment threw it away, so
+//! the requirement was satisfied by a test and not by anything an operator
+//! could read. The end-to-end run found it.
+//!
+//! Now each line is emitted to stderr as it is written, alongside the root
+//! handle and every other diagnostic; stdout stays protocol-only. Emission
+//! happens once the frame that produced it has been handled and *before* its
+//! response is written, and once more after the loop — so neither a client
+//! that reacts to a refusal by killing the process, nor a decision made by the
+//! last frame before EOF, can lose its line.
+//!
+//! It is stderr rather than a file because that is where this process already
+//! puts everything an operator reads, and redirecting a stream is something a
+//! supervisor already knows how to do. A trace goes to `--trace <path>`; the
+//! audit ledger goes where the diagnostics go.
+//!
 //! # stdout is the protocol
 //!
 //! One JSON object per line on stdout and nothing else, ever. Every diagnostic
@@ -52,6 +92,7 @@ use orbweaver_giop::{Connection, Ior};
 use orbweaver_mcp::Bridge;
 use orbweaver_mcp::identity::Caller;
 use orbweaver_mcp::policy::{Approval, Exposure};
+use orbweaver_mcp::quota::{Quota, Renewal, Scope};
 use orbweaver_mcp::session::Session;
 use orbweaver_mcp::telemetry::{CallPath, JsonLines, Timestamp, Trace};
 use orbweaver_registry::Registry;
@@ -75,6 +116,45 @@ fn trace_for(to: &str, ts: Option<&str>, session: &str) -> Result<Trace, String>
     Ok(Trace::new(session, CallPath::Dynamic, ts, JsonLines::new(sink)))
 }
 
+/// §4.5 #2's occupant for this run, or `None` when no `--quota` was given.
+///
+/// [`Renewal::Never`]: this process has no window source, so the honest shape
+/// is a per-run total whose refusals do not invite a retry. See the module
+/// docs.
+fn quota_for(limit: Option<u64>, scope: &str) -> Result<Option<Quota>, String> {
+    let Some(limit) = limit else { return Ok(None) };
+    let scope = match scope {
+        "everything" => Scope::Everything,
+        "caller" => Scope::Caller,
+        "interface" => Scope::Interface,
+        "operation" => Scope::Operation,
+        other => {
+            return Err(format!(
+                "--quota-scope {other:?}: expected everything, caller, interface or operation"
+            ));
+        }
+    };
+    Ok(Some(Quota::new(limit, scope, Renewal::Never)))
+}
+
+/// Emits every audit line written since `from` to stderr, and returns the new
+/// watermark.
+///
+/// A watermark rather than a drain: the chain's audit stage owns its lines and
+/// nothing can take them away from it — `Bridge::audit` is what §7.4 I4's
+/// oracle captures, and a stage a process could empty is a stage a process
+/// could be configured into emptying before anybody read it. The cost is that
+/// the lines are held in memory as well as emitted, which for a long-lived
+/// session is unbounded growth; that is a real limit and it is a bounded
+/// ledger's problem to solve, not this fix's.
+fn emit_audit(bridge: &Bridge<'_>, from: usize) -> usize {
+    let lines = bridge.audit();
+    for line in &lines[from.min(lines.len())..] {
+        eprintln!("{line}");
+    }
+    lines.len()
+}
+
 fn main() -> std::process::ExitCode {
     let mut idls: Vec<String> = Vec::new();
     let mut ior_path: Option<String> = None;
@@ -86,6 +166,8 @@ fn main() -> std::process::ExitCode {
     let mut dry_run_only: Option<String> = None;
     let mut trace_to: Option<String> = None;
     let mut trace_ts: Option<String> = None;
+    let mut quota_limit: Option<u64> = None;
+    let mut quota_scope = "caller".to_owned();
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -106,11 +188,20 @@ fn main() -> std::process::ExitCode {
             }
             "--trace" => next("--trace").map(|v| trace_to = Some(v)),
             "--trace-ts" => next("--trace-ts").map(|v| trace_ts = Some(v)),
+            "--quota" => next("--quota").and_then(|v| match v.parse::<u64>() {
+                Ok(n) => {
+                    quota_limit = Some(n);
+                    Ok(())
+                }
+                Err(e) => Err(format!("--quota {v:?}: {e}")),
+            }),
+            "--quota-scope" => next("--quota-scope").map(|v| quota_scope = v),
             "-h" | "--help" => {
                 eprintln!(
                     "usage: orbweaver-mcp-server --idl <file.idl>... --ior <file> \
                      [--expose <id[.operation]>]... [--as <principal>] [--scope <scope>]... \
-                     [--dry-run[=<id>]] [--trace <path>|-] [--trace-ts <rfc3339>]"
+                     [--dry-run[=<id>]] [--trace <path>|-] [--trace-ts <rfc3339>] \
+                     [--quota <calls>] [--quota-scope <everything|caller|interface|operation>]"
                 );
                 return std::process::ExitCode::SUCCESS;
             }
@@ -198,6 +289,14 @@ fn main() -> std::process::ExitCode {
     let caller = principal
         .map(|p| scopes.iter().fold(Caller::new(p), |c, scope| c.with_scope(scope.clone())));
 
+    let quota = match quota_for(quota_limit, &quota_scope) {
+        Ok(q) => q,
+        Err(e) => {
+            eprintln!("{e}");
+            return std::process::ExitCode::from(2);
+        }
+    };
+
     if dry_run {
         // No IOR is read, no socket is opened, and no handle is issued: the
         // report is a question about the policy and the policy is in memory.
@@ -207,6 +306,15 @@ fn main() -> std::process::ExitCode {
         let mut bridge = Bridge::new(&registry, exposure, session_id.clone());
         if let Some(caller) = caller {
             bridge.set_caller(caller);
+        }
+        // The report is about the chain this deployment would run, so the
+        // quota goes in before the questions are asked. A dry run spends none
+        // of it — `orbweaver_mcp::quota` refunds what a question charges.
+        if let Some(quota) = &quota
+            && !bridge.chain_mut().quota(quota.clone())
+        {
+            eprintln!("no authorization stage to put a quota after");
+            return std::process::ExitCode::from(2);
         }
         // A dry run is traced too, under its own decision tokens: the questions
         // an operator asked before a deployment are exactly what somebody wants
@@ -265,6 +373,19 @@ fn main() -> std::process::ExitCode {
     };
 
     let mut session = Session::new(&registry, exposure, conn, session_id.clone());
+    if let Some(quota) = &quota {
+        if !session.bridge().chain_mut().quota(quota.clone()) {
+            eprintln!("no authorization stage to put a quota after");
+            return std::process::ExitCode::from(2);
+        }
+        // Said out loud at startup: a limit an operator forgot they set is a
+        // limit they will debug as a policy failure.
+        eprintln!(
+            "quota: {} calls per {}, for this run only (this process opens no windows)",
+            quota.limit(),
+            quota.scope()
+        );
+    }
     if let Some(trace_to) = &trace_to {
         match trace_for(trace_to, trace_ts.as_deref(), &session_id) {
             Ok(trace) => {
@@ -301,6 +422,9 @@ fn main() -> std::process::ExitCode {
 
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout().lock();
+    // How much of the ledger has left this process. §4.8's requirement is met
+    // by what an operator can read, not by what the chain remembers.
+    let mut audited = 0usize;
     for line in stdin.lock().lines() {
         let line = match line {
             Ok(l) => l,
@@ -309,7 +433,11 @@ fn main() -> std::process::ExitCode {
                 break;
             }
         };
-        if let Some(response) = session.handle_line(&line) {
+        let response = session.handle_line(&line);
+        // Before the response is written, so a client that reads a refusal and
+        // kills the process cannot beat its own audit line out of the door.
+        audited = emit_audit(session.bridge(), audited);
+        if let Some(response) = response {
             // One write, one newline, one flush. A client is waiting on the
             // newline, and a buffered response is indistinguishable from a hang.
             if writeln!(stdout, "{response}").is_err() || stdout.flush().is_err() {
@@ -317,5 +445,8 @@ fn main() -> std::process::ExitCode {
             }
         }
     }
+    // The loop can leave by `break`, so the last decision is emitted here or
+    // not at all.
+    emit_audit(session.bridge(), audited);
     std::process::ExitCode::SUCCESS
 }
