@@ -14,7 +14,7 @@ Where the built thing disagrees with the plan, the built thing is what is here.
 
 ## 1. The crate graph, and the one rule that shapes it / 크레이트 그래프
 
-Eleven first-party crates and **two external ones** — `encoding_rs` (EUC-KR,
+Twelve first-party crates and **two external ones** — `encoding_rs` (EUC-KR,
 behind the default-on `euc-kr` feature, disclosed under D001) and its `cfg-if`.
 That number is a design output, not an accident: `cargo tree` is checked, and
 every proposal to add a third has produced a decision document instead
@@ -45,6 +45,7 @@ cdr ──────► giop ──────► registry ──────
 - `forge` — the specification pipeline S1–S5.
 - `gen` — static generation: client stubs and server skeletons.
 - `test` — property and contract checks, and the wire fuzz.
+- `console` — the operator's three pages, which render and decide nothing.
 
 **The rule: dependencies point away from the wire, never back.** `registry`
 depends on `giop`; `giop` must never depend on `registry`. This is not
@@ -161,7 +162,7 @@ answer to "what could this input do if it were hostile?"
 | Boundary | The input | What it could do | What holds it |
 |---|---|---|---|
 | **The wire** | bytes from any peer | crash the process, or decode into the wrong value | `unsafe_code = "forbid"` covers memory; panics are separately measured by `wire-fuzz` over the decoders a peer reaches before any policy runs; sizes and nesting are bounded before allocation |
-| **The model** | generated IDL and annotations | put a contract we did not write in front of an agent | S4 gates syntax and semantics and refuses; the contract checker gates *meaning* and only advises, because no checker can prove prose true; S5 registers with exposure **off** |
+| **The model** | generated IDL and annotations | put a contract we did not write in front of an agent | S4 gates syntax and semantics and refuses; the contract checker gates *meaning* and only advises, because no checker can prove prose true; S5 registers with exposure **off**; and an annotation *inferred* about a service we did not write (S3i) is written to `inferred_*` keys that no gate reads, so it cannot gate anything until a human moves it |
 | **The remote IR** | a peer describing types | overwrite a locally-defined contract, or hand us a name that is really markup | ingestion accepts the repository id as the sole identity and derives the rest; overwriting a local entry is refused at the registry boundary; provenance is marked and **contagious upwards** |
 | **The agent** | tool calls | reach what it was not granted; escalate through a reference it was handed | default-deny exposure, per-operation `ai_authz`, approval for destructive effects, capability handles instead of IORs, and the rule that handing out an object reference is itself an authorization question |
 
@@ -206,6 +207,10 @@ improvement to somebody who did not know why:
   unbounded buffer the bounded queue exists to avoid.
 - **No second policy in the console.** It renders what the registry and the
   audit say and decides nothing.
+- **No inferred annotation may gate.** S3i proposes `inferred_effect` and
+  `inferred_authz`; the policy reads `ai_effect` and `ai_authz`. The keys are
+  different on purpose, and `read_only` is refusable but never proposable — a
+  wrong `destructive` costs a click, a wrong `read_only` removes the gate.
 - **No SIDL on ingested contracts.** An annotation inferred from a foreign
   service is a claim, not a fact, so an ingested interface cannot satisfy the
   guard's gates by accident.
@@ -256,4 +261,5 @@ they measure different things.
 | The core CORBA services suite | [`PLAN-SERVICES.md`](PLAN-SERVICES.md) |
 | What is excluded, and what would un-defer it | [`PLAN-DEFERRED.md`](PLAN-DEFERRED.md) |
 | Why each dependency question was answered as it was | [`decisions/`](decisions/) |
+| What the pipeline does *not* guarantee about a regeneration | [`decisions/D005-contract-stability.md`](decisions/D005-contract-stability.md) |
 | What each phase measured | `PHASE0.md` … `PHASE5.md` |
