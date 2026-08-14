@@ -43,9 +43,43 @@ fn main() -> std::process::ExitCode {
         findings.len()
     );
     println!(
-        "  reach: {} uniform, {} mutated, {} truncated; {} input(s) parsed as a GIOP message",
-        reach.uniform, reach.mutated, reach.truncated, reach.parsed
+        "  bytes: {} uniform, {} mutated, {} truncated  ->  {} parsed as a GIOP message, {} as an \
+         IOR encapsulation; {} were valid UTF-8 and {} of those parsed as a stringified IOR",
+        reach.uniform,
+        reach.mutated,
+        reach.truncated,
+        reach.parsed,
+        reach.encapsulations,
+        reach.utf8,
+        reach.stringified_from_bytes
     );
+    println!(
+        "  text:  {} uniform, {} mutated, {} truncated  ->  {} stringified IOR(s), {} trace \
+         span(s), {} repository id(s), {} identifier(s) accepted",
+        reach.text_uniform,
+        reach.text_mutated,
+        reach.text_truncated,
+        reach.stringified_iors,
+        reach.trace_spans,
+        reach.repository_ids,
+        reach.identifiers
+    );
+    // A zero on any of those is not a pass. The exit code cannot say so, so
+    // this does: an unmeasured check is a failure, never a pass (CLAUDE.md).
+    for (what, count) in [
+        ("IOR encapsulations", reach.encapsulations),
+        ("stringified IORs", reach.stringified_iors),
+        ("trace spans", reach.trace_spans),
+        ("repository ids", reach.repository_ids),
+        ("identifiers", reach.identifiers),
+    ] {
+        if count == 0 {
+            println!(
+                "  WARNING: no {what} were reached; the target(s) behind that number returned \
+                 early on every case and their green result measures nothing"
+            );
+        }
+    }
     if findings.is_empty() {
         println!("wire-fuzz: PASS");
         std::process::ExitCode::SUCCESS
