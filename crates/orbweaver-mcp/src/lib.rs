@@ -96,6 +96,42 @@ impl std::fmt::Display for ToolError {
 
 impl std::error::Error for ToolError {}
 
+impl ToolError {
+    /// What this failure is called, in the currency D004's `outcome` column
+    /// speaks — the dynamic path's half of [`interceptor::CallOutcome`].
+    ///
+    /// The transport arm defers to [`interceptor::CallOutcome::of_giop`] rather
+    /// than re-deciding, so a `SystemException` reaching an agent through
+    /// `invoke_operation` and one reaching a stub through
+    /// [`guard::Guarded`] trace under the same id. The one arm that is genuinely
+    /// this path's own is [`invoke::InvokeError::User`], which the dynamic
+    /// invoker decodes into a named exception where the static path still holds
+    /// a raw reply.
+    ///
+    /// A policy refusal or an unknown handle never reaches here — those are
+    /// decided before the call and unwind as
+    /// [`interceptor::CallResult::Refused`] and
+    /// [`interceptor::CallResult::Unresolved`] — but they are classified rather
+    /// than left to a catch-all, because a `_ =>` arm is how the next variant
+    /// gets silently rendered as `-`.
+    pub fn outcome(&self) -> interceptor::CallOutcome<'_> {
+        match self {
+            ToolError::Invoke(invoke::InvokeError::Transport(e)) => {
+                interceptor::CallOutcome::of_giop(e)
+            }
+            ToolError::Invoke(invoke::InvokeError::User(u)) => {
+                interceptor::CallOutcome::UserException { id: &u.id }
+            }
+            // Nothing was raised: the arguments or the reply did not fit the
+            // contract, and the call never produced an exception to quote.
+            ToolError::Invoke(invoke::InvokeError::Marshalling(_)) | ToolError::Mapping(_) => {
+                interceptor::CallOutcome::Failed
+            }
+            ToolError::Denied(_) | ToolError::UnknownHandle(_) => interceptor::CallOutcome::Failed,
+        }
+    }
+}
+
 impl From<Denied> for ToolError {
     fn from(d: Denied) -> Self {
         ToolError::Denied(d)
@@ -411,8 +447,13 @@ impl<'a> Bridge<'a> {
             self.caller.as_ref(),
         );
         // The decision was ALLOW whatever became of the call; the counters
-        // record what became of it. Both happen here, in the one unwinding.
-        self.chain.completed(&ctx, result.is_ok());
+        // record whether it worked and the trace records what it raised. All
+        // of it happens here, in the one unwinding.
+        let outcome = match &result {
+            Ok(_) => interceptor::CallOutcome::Ok,
+            Err(e) => e.outcome(),
+        };
+        self.chain.completed(&ctx, outcome);
         result
     }
 
@@ -422,8 +463,31 @@ impl<'a> Bridge<'a> {
     /// the two return string-equal lines. Lines name the principal and the
     /// operation and never credential material, the same rule as
     /// [`identity::audit_line`].
+    ///
+    /// **Bounded** ([`interceptor::AuditInterceptor`]): the newest
+    /// [`interceptor::DEFAULT_AUDIT_CAPACITY`] lines unless a deployment said
+    /// otherwise, led by an elision marker once anything has been dropped. The
+    /// newest line is never the dropped one, so `audit().last()` — I4's capture
+    /// seam — is always a decision this session actually made.
     pub fn audit(&self) -> &[String] {
         self.chain.audit()
+    }
+
+    /// How many audit lines this session has written in total, dropped ones
+    /// included.
+    ///
+    /// The watermark an emitter holds between frames:
+    /// `orbweaver-mcp-server` writes each new line to stderr as it appears, and
+    /// a plain index into [`Bridge::audit`] would silently re-emit or skip lines
+    /// the moment the ledger dropped one.
+    pub fn audit_written(&self) -> u64 {
+        self.chain.audit_written()
+    }
+
+    /// How many audit lines this session's ledger has dropped — the number the
+    /// elision marker carries, without parsing it.
+    pub fn audit_dropped(&self) -> u64 {
+        self.chain.audit_dropped()
     }
 
     /// The call statistics the promotion policy reads, kept by the chain's
@@ -1549,6 +1613,97 @@ mod tests {
         ) -> Result<(), GiopError> {
             Ok(())
         }
+    }
+
+    /// The dynamic path's half of the widened outcome, arm by arm — including
+    /// the one only this path can produce.
+    ///
+    /// A user exception is decoded into a named exception here where the static
+    /// path still holds a raw reply, so this is where "say so when it is a user
+    /// exception" is measurable. The `-` arms are asserted in the same test, so
+    /// that the claim "`-` now means genuinely unknown" is checked against the
+    /// cases that produce it rather than asserted about them.
+    #[test]
+    fn every_dynamic_failure_names_itself_except_the_ones_with_no_name_to_give() {
+        use interceptor::CallOutcome;
+        use orbweaver_dynamic::invoke::{InvokeError, UserException};
+
+        // A declared exception: named, and known to be the contract's rather
+        // than the ORB's.
+        let overdrawn = ToolError::Invoke(InvokeError::User(UserException {
+            id: "IDL:bank/Overdrawn:1.0".to_owned(),
+            members: None,
+        }));
+        assert_eq!(
+            overdrawn.outcome(),
+            CallOutcome::UserException { id: "IDL:bank/Overdrawn:1.0" },
+            "a user exception says which, and says that it is a user one"
+        );
+        assert_eq!(overdrawn.outcome().as_str(), "IDL:bank/Overdrawn:1.0");
+
+        // A system exception, through the same one classification the static
+        // path uses — so the two paths cannot trace the same refusal
+        // differently.
+        let refused = ToolError::Invoke(InvokeError::Transport(GiopError::SystemException {
+            id: guard::NO_PERMISSION.to_owned(),
+            minor: 0,
+            completed: 1,
+        }));
+        assert_eq!(refused.outcome(), CallOutcome::SystemException { id: guard::NO_PERMISSION });
+
+        // And the arms that legitimately have nothing to name: the call
+        // produced no exception at all.
+        for unnamed in [
+            ToolError::Mapping(orbweaver_dynamic::Error {
+                path: "cents".to_owned(),
+                message: "expected a long".to_owned(),
+            }),
+            ToolError::Invoke(InvokeError::Transport(GiopError::ConnectionClosed)),
+        ] {
+            assert_eq!(unnamed.outcome(), CallOutcome::Failed, "{unnamed}");
+            assert_eq!(unnamed.outcome().as_str(), telemetry::ABSENT);
+        }
+    }
+
+    /// The end of the same seam, through the real bridge: a call the gate
+    /// allowed and argument mapping then failed traces as an `allow` with no
+    /// outcome to name — the honest `-`, on a real session.
+    #[test]
+    fn a_mapping_failure_on_the_dynamic_path_traces_as_allowed_with_an_absent_outcome() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use telemetry::{CallPath, SpanRecord, TelemetrySink, Timestamp, Trace};
+
+        struct Captured(Rc<RefCell<Vec<String>>>);
+        impl TelemetrySink for Captured {
+            fn emit(&mut self, record: &SpanRecord<'_>) {
+                self.0.borrow_mut().push(record.to_line());
+            }
+        }
+
+        let r = registry(AUDIT_IDL);
+        let (_listener, ior) = dummy_target();
+        let mut conn = Connection::connect(&ior, Duration::from_secs(5)).expect("dials");
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let mut b =
+            Bridge::new(&r, Exposure::nothing().allow_interface("IDL:bank/Account:1.0"), "s")
+                .on_behalf_of(Caller::new("alice"));
+        assert!(b.chain_mut().trace(Trace::new(
+            "s",
+            CallPath::Dynamic,
+            Timestamp::unstamped(),
+            Captured(Rc::clone(&lines)),
+        )));
+        let h = b.handles().issue_checked(&ior).expect("issued");
+
+        // `deposit` takes an argument and is given none: allowed by policy,
+        // failed at mapping, nothing reached the wire and nothing raised.
+        let result = b.invoke(&mut conn, h.as_str(), "deposit", &empty_args(), Approval::default());
+        assert!(matches!(result, Err(ToolError::Mapping(_))), "{result:?}");
+        let line = lines.borrow()[0].clone();
+        assert!(line.contains(r#""decision":"allow""#), "{line}");
+        assert!(line.contains(r#""outcome":"-""#), "nothing raised, so nothing is named: {line}");
     }
 
     /// I4's seam, closed: for the same (caller, target, operation) the

@@ -224,6 +224,23 @@ pub const STAGE_TELEMETRY: &str = "telemetry";
 /// §4.5 #5: one line per decision, through the one formatter.
 pub const STAGE_AUDIT: &str = "audit";
 
+/// How many audit lines a [`Chain::standard`] ledger holds before it starts
+/// dropping its oldest — and saying so ([`AuditInterceptor`]).
+///
+/// A ceiling, not a reservation: nothing is allocated up front and a session
+/// that makes ten calls holds ten lines. The number is chosen to be larger than
+/// any single burst this crate can produce on its own — notably
+/// [`crate::Bridge::dry_run_all`], which writes one line per operation in the
+/// catalog and is the one place a legacy-scale estate (§4.6's "few thousand
+/// operations") reaches five figures in one call — so that the shipped default
+/// bounds a long-lived *session* without truncating a single *survey*. Past
+/// that it costs about a hundred bytes a line, held only if written.
+///
+/// A deployment with a different retention requirement sets its own with
+/// [`Chain::audit_capacity`]; this is the number for a deployment that has not
+/// said.
+pub const DEFAULT_AUDIT_CAPACITY: usize = 65_536;
+
 /// Everything a stage may read about the call it is deciding on.
 ///
 /// The contract (`registry`) and the request (`caller`, `target`, `operation`,
@@ -257,19 +274,134 @@ pub enum Outcome {
     Refuse(Denied),
 }
 
+/// What became of a call the gate allowed, in the currency D004's `outcome`
+/// column speaks.
+///
+/// This is the width [`CallResult::Completed`] used to lack. It carried a
+/// `bool`, so the telemetry stage knew *whether* a call failed and never
+/// *which* exception it raised, and D004's `outcome` column had to render `-`
+/// for every failure — a value that meant "not plumbed" while claiming to mean
+/// "nothing to report". Two readers were hurt by that and neither could tell:
+/// a console cannot separate a target's `BAD_OPERATION` from a dropped socket,
+/// and neither can an operator reading the trace of the incident.
+///
+/// The three failing variants are ordered by how much the chain was told, and
+/// **only the last one renders `-`**:
+///
+/// | variant | `outcome` | what the chain was told |
+/// |---|---|---|
+/// | [`CallOutcome::Ok`] | `ok` | the call completed |
+/// | [`CallOutcome::SystemException`] | the repository id | the target's ORB raised it |
+/// | [`CallOutcome::UserException`] | the repository id | the contract declared it |
+/// | [`CallOutcome::Failed`] | [`ABSENT`] | it failed, and nothing named it |
+///
+/// Both exception variants render *a repository id*, which is what keeps the
+/// column inside D004's stated vocabulary — `ok`, a repository id, or `-`. The
+/// distinction between the two lives in the type rather than in the column,
+/// because a reader who needs it can tell a declared exception from a system
+/// one by its id (`IDL:omg.org/CORBA/…` is the ORB's), while a reader who does
+/// not needs one column to grep.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallOutcome<'a> {
+    /// The call completed.
+    Ok,
+    /// The target's ORB raised a CORBA system exception.
+    SystemException {
+        /// Its repository id, e.g. `IDL:omg.org/CORBA/BAD_OPERATION:1.0`.
+        id: &'a str,
+    },
+    /// The target raised an exception its contract declares. Still a failed
+    /// call for [`CallStats`]' purposes — a path that raises is not one to
+    /// freeze into compiled code yet — but a *contractual* one, which is a
+    /// different thing to read in a trace than an ORB's refusal.
+    UserException {
+        /// Its repository id, from the contract rather than from `omg.org`.
+        id: &'a str,
+    },
+    /// The call failed and there is no exception to name: a mapping error
+    /// before anything reached the wire, a dropped connection, a reply that did
+    /// not decode — or a host whose invoker only reports success and failure.
+    ///
+    /// This is the **only** completed-call variant that renders [`ABSENT`], and
+    /// it is why `-` now means genuinely unknown rather than not plumbed.
+    Failed,
+}
+
+impl<'a> CallOutcome<'a> {
+    /// The `outcome` field of a D004 span record: `ok`, a repository id, or
+    /// [`ABSENT`].
+    pub fn as_str(&self) -> &'a str {
+        match self {
+            CallOutcome::Ok => OUTCOME_OK,
+            CallOutcome::SystemException { id } | CallOutcome::UserException { id } => id,
+            CallOutcome::Failed => ABSENT,
+        }
+    }
+
+    /// Whether the call completed, which is the one bit [`CallStats::record`]
+    /// wants: every failure counts alike, however well named.
+    pub fn completed(&self) -> bool {
+        matches!(self, CallOutcome::Ok)
+    }
+
+    /// What a GIOP error names itself, when it names itself at all.
+    ///
+    /// The **one** classification of a transport error for this column, so the
+    /// static and the dynamic path cannot come to different conclusions about
+    /// what a `SystemException` is called — the same discipline
+    /// [`crate::guard::refusal_id`] keeps for the other direction.
+    pub fn of_giop(err: &'a orbweaver_giop::Error) -> Self {
+        match err {
+            orbweaver_giop::Error::SystemException { id, .. } => {
+                CallOutcome::SystemException { id }
+            }
+            orbweaver_giop::Error::UserException { id, .. } => CallOutcome::UserException { id },
+            _ => CallOutcome::Failed,
+        }
+    }
+}
+
+impl From<bool> for CallOutcome<'_> {
+    /// The two-valued form, for a host whose invoker reports success and
+    /// failure and nothing else. `false` is [`CallOutcome::Failed`] — an
+    /// honest "it failed and I was not told why", which is exactly what `-`
+    /// now means.
+    fn from(ok: bool) -> Self {
+        if ok { CallOutcome::Ok } else { CallOutcome::Failed }
+    }
+}
+
+impl<'a> From<&'a orbweaver_giop::Error> for CallOutcome<'a> {
+    fn from(err: &'a orbweaver_giop::Error) -> Self {
+        CallOutcome::of_giop(err)
+    }
+}
+
+impl<'a, T> From<&'a Result<T, orbweaver_giop::Error>> for CallOutcome<'a> {
+    /// What an [`orbweaver_giop::Invoker`] call became, which is what
+    /// [`crate::guard::Guarded`] hands the chain.
+    fn from(result: &'a Result<T, orbweaver_giop::Error>) -> Self {
+        match result {
+            Ok(_) => CallOutcome::Ok,
+            Err(e) => CallOutcome::of_giop(e),
+        }
+    }
+}
+
 /// What became of a call, as the unwinding reports it to the stages that ran.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallResult<'a> {
-    /// Every gate proceeded and the call was made. `ok` is whether it
-    /// completed — a mapping error, a refusal from the target and a dropped
-    /// connection are all `false`, exactly as [`CallStats::record`] wants them.
+    /// Every gate proceeded and the call was made. [`CallOutcome`] is what
+    /// became of it — a mapping error, an exception from the target and a
+    /// dropped connection are all failures for [`CallStats::record`], and are
+    /// told apart for the trace.
     ///
-    /// Note that `ok: false` is still an **allowed** call. The audit line says
-    /// `ALLOW`, because the policy did allow it; what happened afterwards is
-    /// not a policy decision.
+    /// Note that a failed call is still an **allowed** call. The audit line
+    /// says `ALLOW`, because the policy did allow it; what happened afterwards
+    /// is not a policy decision, and the audit line does not carry it.
     Completed {
-        /// Whether the call completed.
-        ok: bool,
+        /// What became of the call.
+        outcome: CallOutcome<'a>,
     },
     /// A stage refused, and the call never reached the target.
     Refused {
@@ -357,8 +489,21 @@ impl DryRun {
 pub enum Record<'a> {
     /// This stage keeps nothing a chain owner needs.
     Nothing,
-    /// Audit lines, oldest first.
-    Lines(&'a [String]),
+    /// A bounded audit ledger: the lines it still holds, and its accounting.
+    ///
+    /// The two counters travel *with* the lines rather than beside them
+    /// because they are the only way to tell a slice of `n` lines from the last
+    /// `n` lines of a longer history, and a reader who has to make a second
+    /// call to find that out is a reader who will forget to.
+    Lines {
+        /// The retained lines, oldest first, led by the elision marker
+        /// ([`crate::guard::elided_count`]) once anything has been dropped.
+        lines: &'a [String],
+        /// How many lines have been written in total, dropped ones included.
+        written: u64,
+        /// How many were dropped to keep the ledger inside its ceiling.
+        dropped: u64,
+    },
     /// Promotion counters.
     Counters(&'a CallStats),
 }
@@ -398,6 +543,24 @@ pub trait Interceptor {
     /// What this stage recorded. Default: nothing.
     fn record(&self) -> Record<'_> {
         Record::Nothing
+    }
+
+    /// Offers this stage a ceiling on how many audit lines it keeps.
+    ///
+    /// `false` from every stage that keeps no ledger, which is all of them but
+    /// [`AuditInterceptor`] — the same "absence is reported, never greened"
+    /// shape as [`Interceptor::attach_trace`], so a host that lowers a bound on
+    /// a chain that has no audit stage is told rather than reassured.
+    ///
+    /// The ceiling is a **retention policy number**, and like the quota's limit
+    /// it is one only an operator has: how much history a deployment must be
+    /// able to show after an incident is not a fact this crate knows. What the
+    /// crate owes them is the mechanism, a default that is bounded rather than
+    /// infinite ([`DEFAULT_AUDIT_CAPACITY`]), and a marker so that whatever
+    /// number they pick, the dropping is visible.
+    fn bound_audit(&mut self, capacity: usize) -> bool {
+        let _ = capacity;
+        false
     }
 
     /// Offers this stage a [`Trace`] to emit span records into (D004 tier 1).
@@ -613,8 +776,13 @@ impl Chain {
 
     /// Unwinds an allowed call: `after` in reverse order over every stage,
     /// since a [`Chain::run`] that returned `Ok` ran all of them.
-    pub fn completed(&mut self, ctx: &CallContext<'_>, ok: bool) {
-        let result = CallResult::Completed { ok };
+    ///
+    /// `outcome` is anything a [`CallOutcome`] can be made from: the whole
+    /// `Result` an [`orbweaver_giop::Invoker`] returned — which is the form
+    /// that names the exception in the trace — or a bare `bool` for a host that
+    /// only knows whether the call worked, which renders `-` and says so.
+    pub fn completed<'o>(&mut self, ctx: &CallContext<'_>, outcome: impl Into<CallOutcome<'o>>) {
+        let result = CallResult::Completed { outcome: outcome.into() };
         for stage in self.stages.iter_mut().rev() {
             stage.interceptor.after(ctx, &result);
         }
@@ -641,16 +809,55 @@ impl Chain {
         }
     }
 
-    /// The audit lines the chain's audit stage kept, oldest first. Empty when
-    /// there is no such stage.
+    /// The audit lines the chain's audit stage still holds, oldest first. Empty
+    /// when there is no such stage.
+    ///
+    /// **Bounded, and the bound is visible.** The ledger keeps its newest
+    /// [`AuditInterceptor::capacity`] lines; once it has dropped any, the first
+    /// element of this slice is the elision marker saying how many
+    /// ([`crate::guard::elided_count`]), so a reader holding nothing but this
+    /// slice can still tell a short history from a truncated one.
+    /// [`Chain::audit_dropped`] answers the same question without parsing.
     pub fn audit(&self) -> &[String] {
-        self.stages
-            .iter()
-            .find_map(|s| match s.interceptor.record() {
-                Record::Lines(lines) => Some(lines),
-                _ => None,
-            })
-            .unwrap_or(&[])
+        self.ledger().map(|(lines, _, _)| lines).unwrap_or(&[])
+    }
+
+    /// How many audit lines this chain has written in total, dropped ones
+    /// included — the number [`Chain::audit`]'s slice would have if nothing
+    /// were ever dropped.
+    ///
+    /// A **watermark** an emitter can hold across calls: unlike an index into
+    /// the slice it does not shift when the ledger drops its oldest, which is
+    /// the bug a bounded ledger hands to anybody who was indexing the unbounded
+    /// one.
+    pub fn audit_written(&self) -> u64 {
+        self.ledger().map_or(0, |(_, written, _)| written)
+    }
+
+    /// How many audit lines the ledger has dropped to stay inside its ceiling.
+    ///
+    /// Zero for every chain that has not overflowed, which is every chain in
+    /// the tests and most chains in a deployment.
+    pub fn audit_dropped(&self) -> u64 {
+        self.ledger().map_or(0, |(_, _, dropped)| dropped)
+    }
+
+    /// Sets the ledger's ceiling, dropping immediately (and marking it) if the
+    /// ledger is already over the new one.
+    ///
+    /// Returns **`false`** when the chain has no audit stage to bound —
+    /// reachable only through [`Chain::empty`] — and changes nothing, so a host
+    /// cannot come away believing it has capped a ledger it has not got. Same
+    /// rule as [`Chain::trace`] and [`Chain::quota`].
+    pub fn audit_capacity(&mut self, capacity: usize) -> bool {
+        self.stages.iter_mut().any(|s| s.interceptor.bound_audit(capacity))
+    }
+
+    fn ledger(&self) -> Option<(&[String], u64, u64)> {
+        self.stages.iter().find_map(|s| match s.interceptor.record() {
+            Record::Lines { lines, written, dropped } => Some((lines, written, dropped)),
+            _ => None,
+        })
     }
 
     /// Puts a [`Trace`] on the telemetry stage, so that every decision this
@@ -804,20 +1011,33 @@ impl Interceptor for ApprovalInterceptor {
 /// | what happened | counted | `decision` | `stage` | `outcome` |
 /// |---|---|---|---|---|
 /// | allowed, completed | call, success | `allow` | `-` | `ok` |
-/// | allowed, failed | call, failure | `allow` | `-` | `-` |
+/// | allowed, target raised a system exception | call, failure | `allow` | `-` | its repository id |
+/// | allowed, target raised a user exception | call, failure | `allow` | `-` | its repository id |
+/// | allowed, failed with nothing to name it | call, failure | `allow` | `-` | `-` |
 /// | refused by a stage | call, failure | `refuse` | the stage | `NO_PERMISSION` |
 /// | refused by a renewing quota | call, failure | `refuse` | [`SEAT_QUOTA`] | `TRANSIENT` |
 /// | handle never resolved | **nothing** | `refuse` | `-` | `-` |
 /// | dry run, would allow | **nothing** | `dryrun-allow` | `-` | `-` |
 /// | dry run, would refuse | **nothing** | `dryrun-refuse` | the stage | `-` |
 ///
-/// Two rows carry `-` where D004's table offers "the system-exception
-/// repository id", and both are honest gaps rather than choices. The chain is
-/// told `ok: false` and never *which* exception (see [`CallResult::Completed`]),
-/// and an unresolved handle is refused by the capability table upstream of every
-/// stage, so naming `NO_PERMISSION` there would claim the policy refused
-/// something it never saw. Filling either in means widening [`CallResult`],
-/// which is a change to this trait's shape and belongs to a batch that says so.
+/// Three rows still carry `-` in `outcome`, and every one of them is now an
+/// **absence rather than a gap** — which is the difference between a column a
+/// reader can trust and one they learn to ignore:
+///
+/// - *failed with nothing to name it* — a mapping error before the wire, a
+///   dropped connection, or a host whose invoker only reports a `bool`. The
+///   call happened and produced no exception to quote.
+/// - *handle never resolved* — refused by the capability table upstream of
+///   every stage. Naming `NO_PERMISSION` here would claim the policy refused
+///   something it never saw.
+/// - *dry run* — a call that did not happen has no outcome; a hypothetical with
+///   one would be a prediction wearing a measurement's clothes.
+///
+/// The first two rows of the failure group were `-` for a different and worse
+/// reason until [`CallOutcome`] landed: the chain was handed a `bool` and could
+/// not have named the exception if it had wanted to. That was reported by the
+/// batch that built this table and fixed by the one that widened
+/// [`CallResult::Completed`].
 ///
 /// The last three rows are the property [`crate::promote`] depends on: **a
 /// hypothetical is traced and never counted.** A dry run that touched
@@ -866,9 +1086,11 @@ impl Interceptor for TelemetryInterceptor {
         // this stage and must not become a condition of it. A `None` trace is
         // the shipped configuration.
         let (decision, stage, outcome) = match result {
-            CallResult::Completed { ok } => {
-                self.stats.record(ctx.target, ctx.operation, *ok);
-                (Decision::Allow, None, if *ok { OUTCOME_OK } else { ABSENT })
+            // The counters take the one bit they want; the trace takes the
+            // whole outcome, which is where the exception's repository id is.
+            CallResult::Completed { outcome } => {
+                self.stats.record(ctx.target, ctx.operation, outcome.completed());
+                (Decision::Allow, None, outcome.as_str())
             }
             // The outcome is the refusal's own repository id, not a constant:
             // a spent [`crate::quota`] budget renders `TRANSIENT` and a policy
@@ -955,20 +1177,138 @@ impl Interceptor for TelemetryInterceptor {
 /// lost on a crash in exchange for one audit stage instead of an audit call at
 /// every point a decision can be made, which is how the format drifted into
 /// two in the first place. It is a real cost and not a free refactor.
-#[derive(Debug, Default)]
+///
+/// # The ledger is bounded, and says when it drops
+///
+/// It used to grow for the life of the session, which the batch that emitted
+/// these lines to stderr recorded as a known limit: a long-lived bridge is a
+/// `Vec<String>` nothing ever shortens. It now keeps its newest
+/// [`AuditInterceptor::capacity`] lines.
+///
+/// **How the bound was chosen matters more than the number.** For an audit
+/// ledger the tempting bound — drop the oldest and carry on — is the one that
+/// quietly stops it being an audit ledger: a reader cannot tell an hour with no
+/// calls from an hour that was dropped, and the two look identical exactly when
+/// somebody is reading the log to find out which it was. So one slot is spent
+/// on an **elision marker** ([`crate::guard::elided_entry`]) that sits where the
+/// dropped lines were and says how many are gone, and the count is also
+/// available as a number ([`Chain::audit_dropped`]) for a reader who would
+/// rather not parse. The alternatives were considered and rejected: refusing
+/// new lines when full loses the *recent* history, which is the half an
+/// incident is about; and a counter with no in-band marker is invisible to
+/// every reader who has only the slice.
+///
+/// Two consequences worth stating plainly. The newest line is never the one
+/// dropped, so `audit().last()` — which is what §7.4 I4's oracle captures — is
+/// always a real decision. And an index into the slice is no longer a stable
+/// reference to a line: an emitter that holds a position across calls must hold
+/// [`Chain::audit_written`] instead, which counts and does not shift.
+#[derive(Debug)]
 pub struct AuditInterceptor {
+    /// The retained lines, oldest first, led by the elision marker once
+    /// `dropped` is non-zero.
     lines: Vec<String>,
+    capacity: usize,
+    written: u64,
+    dropped: u64,
+}
+
+impl Default for AuditInterceptor {
+    fn default() -> Self {
+        Self::with_capacity(DEFAULT_AUDIT_CAPACITY)
+    }
 }
 
 impl AuditInterceptor {
-    /// A stage with an empty log.
+    /// A stage with an empty log, bounded at [`DEFAULT_AUDIT_CAPACITY`].
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Every line it has written, oldest first.
+    /// The same, at a ceiling a deployment chose.
+    ///
+    /// Clamped to at least one line, because the marker itself occupies a slot:
+    /// a ledger with no room to say that it dropped everything is not a smaller
+    /// ledger, it is a silent one.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self { lines: Vec::new(), capacity: capacity.max(1), written: 0, dropped: 0 }
+    }
+
+    /// Every line it still holds, oldest first — the elision marker first of
+    /// all, once anything has been dropped.
     pub fn lines(&self) -> &[String] {
         &self.lines
+    }
+
+    /// The ceiling: the most lines [`AuditInterceptor::lines`] can return,
+    /// marker included.
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// How many lines this stage has written in total, dropped ones included.
+    pub fn written(&self) -> u64 {
+        self.written
+    }
+
+    /// How many it has dropped.
+    pub fn dropped(&self) -> u64 {
+        self.dropped
+    }
+
+    /// Moves the ceiling, eliding straight away if the ledger is already over
+    /// the new one — so lowering a bound is honest about what it costs at the
+    /// moment it is lowered, rather than at the next call.
+    /// Raising it back keeps the count of what is already gone — dropped is
+    /// dropped — and restates the ceiling the marker quotes, so the marker
+    /// never describes a bound that is no longer in force.
+    pub fn set_capacity(&mut self, capacity: usize) {
+        self.capacity = capacity.max(1);
+        self.elide();
+        self.mark();
+    }
+
+    /// Writes one line and keeps the ledger inside its ceiling.
+    fn push(&mut self, line: String) {
+        self.written += 1;
+        self.lines.push(line);
+        self.elide();
+    }
+
+    /// Drops the oldest lines until the ledger fits, and leaves exactly one
+    /// marker in the first slot accounting for every line ever dropped.
+    ///
+    /// One marker rather than one per elision: a reader wants "how much am I
+    /// missing", and a ledger whose oldest half is a list of apologies has
+    /// spent its bound on the wrong thing.
+    fn elide(&mut self) {
+        if self.lines.len() <= self.capacity {
+            return;
+        }
+        let marked = self.dropped > 0;
+        let from = usize::from(marked);
+        // The first elision also has to free the slot the marker will take.
+        let over = self.lines.len() - self.capacity + usize::from(!marked);
+        let take = over.min(self.lines.len() - from);
+        self.lines.drain(from..from + take);
+        self.dropped += take as u64;
+        if !marked {
+            self.lines.insert(0, String::new());
+        }
+        self.mark();
+    }
+
+    /// Rewrites the marker in the first slot from the current accounting.
+    ///
+    /// The one writer of that slot, so the count in the line and the count in
+    /// [`AuditInterceptor::dropped`] cannot come apart — which is the whole
+    /// value of having both.
+    fn mark(&mut self) {
+        if self.dropped > 0 {
+            // Non-empty by construction: the marker holds slot 0 from the first
+            // elision onward, and the ceiling is at least one line.
+            self.lines[0] = crate::guard::elided_entry(self.dropped, self.capacity);
+        }
     }
 }
 
@@ -999,7 +1339,7 @@ impl Interceptor for AuditInterceptor {
                 audit_entry(DECISION_REFUSE, ctx.caller, ctx.target, ctx.operation, Some(why))
             }
         };
-        self.lines.push(line);
+        self.push(line);
     }
 
     /// A dry run is audited, in the one format, under its own decision token.
@@ -1024,11 +1364,16 @@ impl Interceptor for AuditInterceptor {
                 Some(&why.to_string()),
             ),
         };
-        self.lines.push(line);
+        self.push(line);
     }
 
     fn record(&self) -> Record<'_> {
-        Record::Lines(&self.lines)
+        Record::Lines { lines: &self.lines, written: self.written, dropped: self.dropped }
+    }
+
+    fn bound_audit(&mut self, capacity: usize) -> bool {
+        self.set_capacity(capacity);
+        true
     }
 }
 
@@ -1638,6 +1983,154 @@ mod tests {
             Discard
         )));
         assert!(chain.trace_mut().is_none());
+    }
+
+    // --- the bounded ledger, and what a reader can tell from it ---
+
+    /// The bound, and the property that makes it an *audit* bound: a reader
+    /// holding nothing but the slice can tell that lines are missing and how
+    /// many.
+    ///
+    /// Asserted through the elision marker rather than through the counter,
+    /// because the counter is a second call somebody has to know to make and
+    /// the marker is in the reader's hand already.
+    #[test]
+    fn a_bounded_ledger_drops_its_oldest_and_says_how_many_in_the_slice_itself() {
+        let reg = registry(IDL);
+        let mut chain = Chain::empty();
+        chain.push(STAGE_AUDIT, AuditInterceptor::with_capacity(4));
+        chain.push(STAGE_EXPOSURE, ExposureInterceptor::new(Exposure::nothing()));
+
+        for _ in 0..10 {
+            let _ = chain.run(&ctx(&reg, None, "balance", Approval::default()));
+        }
+
+        let lines = chain.audit();
+        assert_eq!(lines.len(), 4, "the ceiling holds: {lines:#?}");
+        assert_eq!(chain.audit_written(), 10, "every decision was written");
+        assert_eq!(chain.audit_dropped(), 7, "and the ledger kept its newest three");
+        // The reader's half: the marker is *in* the slice, at the position the
+        // dropped lines occupied, and it names the count.
+        assert_eq!(crate::guard::elided_count(&lines[0]), Some(7), "{}", lines[0]);
+        assert_eq!(chain.audit_dropped(), crate::guard::elided_count(&lines[0]).expect("marked"));
+        for line in &lines[1..] {
+            assert!(line.starts_with("REFUSE caller=<nobody>"), "{line}");
+            assert_eq!(crate::guard::elided_count(line), None, "only one marker: {line}");
+        }
+        // And the marker cannot be mistaken for a decision by anything that
+        // reads the log: it carries neither field a decision line is read by.
+        assert!(!lines[0].contains("caller=") && !lines[0].contains("operation="), "{}", lines[0]);
+    }
+
+    /// The bound is a retention number an operator sets, and lowering it is
+    /// honest at the moment it is lowered rather than at the next call.
+    ///
+    /// The newest line survives every elision — which is what keeps
+    /// `audit().last()`, §7.4 I4's capture seam, a decision that was really
+    /// made.
+    #[test]
+    fn lowering_the_bound_elides_at_once_and_never_drops_the_newest_line() {
+        let reg = registry(IDL);
+        let mut chain = Chain::standard(Exposure::nothing().allow_interface(ACCOUNT));
+        let call = ctx(&reg, None, "balance", Approval::default());
+        for _ in 0..5 {
+            chain.run(&call).expect("exposed");
+            chain.completed(&call, true);
+        }
+        let newest = chain.audit().last().expect("five lines").clone();
+        assert_eq!(chain.audit().len(), 5, "the default ceiling is nowhere near five");
+        assert_eq!(chain.audit_dropped(), 0);
+
+        assert!(chain.audit_capacity(3), "the standard stack always has an audit stage");
+        assert_eq!(chain.audit().len(), 3);
+        assert_eq!(chain.audit_dropped(), 3);
+        assert_eq!(
+            chain.audit().last(),
+            Some(&newest),
+            "the newest decision is never the dropped one"
+        );
+        assert_eq!(crate::guard::elided_count(&chain.audit()[0]), Some(3));
+
+        // Raised again: what is gone stays gone — a ledger that "un-dropped"
+        // lines by widening would be the one thing worse than dropping them —
+        // and the marker quotes the ceiling now in force rather than the one
+        // that did the dropping.
+        assert!(chain.audit_capacity(10));
+        assert_eq!(chain.audit_dropped(), 3, "dropped is dropped");
+        assert_eq!(chain.audit().len(), 3, "and nothing comes back");
+        assert_eq!(crate::guard::elided_count(&chain.audit()[0]), Some(3));
+        assert!(
+            chain.audit()[0].contains("newest 10 lines"),
+            "the marker must not quote a bound that is no longer in force: {}",
+            chain.audit()[0]
+        );
+    }
+
+    /// Absence is reported, never greened — the same rule [`Chain::trace`] and
+    /// [`Chain::quota`] keep. A host that thinks it capped a ledger it has not
+    /// got is a host that will be surprised by the memory, not by the message.
+    #[test]
+    fn a_chain_without_an_audit_stage_refuses_the_bound() {
+        let mut chain = Chain::empty();
+        chain.push(STAGE_SCOPES, ScopeInterceptor);
+        assert!(!chain.audit_capacity(16));
+        assert_eq!(chain.audit_written(), 0);
+        assert_eq!(chain.audit_dropped(), 0);
+    }
+
+    // --- the widened outcome ---
+
+    /// D004's `outcome` vocabulary, closed: `ok`, a repository id, or `-`.
+    ///
+    /// Pinned as a whole rather than arm by arm because the column's value is
+    /// that a console can read it without knowing which arm produced it, and
+    /// the one arm that may render `-` is the one that genuinely has no name to
+    /// give.
+    #[test]
+    fn an_outcome_is_ok_a_repository_id_or_absent_and_only_one_arm_is_absent() {
+        assert_eq!(CallOutcome::Ok.as_str(), OUTCOME_OK);
+        assert_eq!(
+            CallOutcome::SystemException { id: crate::guard::NO_PERMISSION }.as_str(),
+            crate::guard::NO_PERMISSION
+        );
+        assert_eq!(
+            CallOutcome::UserException { id: "IDL:bank/Overdrawn:1.0" }.as_str(),
+            "IDL:bank/Overdrawn:1.0"
+        );
+        assert_eq!(CallOutcome::Failed.as_str(), ABSENT);
+
+        // Only completion counts as a success; a named failure is still a
+        // failure, which is the one bit `CallStats` wants.
+        assert!(CallOutcome::Ok.completed());
+        for failed in [
+            CallOutcome::SystemException { id: "x" },
+            CallOutcome::UserException { id: "y" },
+            CallOutcome::Failed,
+        ] {
+            assert!(!failed.completed(), "{failed:?}");
+        }
+
+        // The two-valued form a host with a plain invoker still has, and what
+        // it honestly means.
+        assert_eq!(CallOutcome::from(true), CallOutcome::Ok);
+        assert_eq!(CallOutcome::from(false), CallOutcome::Failed);
+
+        // The GIOP classification, from the errors an invoker really returns.
+        let sys = orbweaver_giop::Error::SystemException {
+            id: "IDL:omg.org/CORBA/BAD_OPERATION:1.0".to_owned(),
+            minor: 0,
+            completed: 1,
+        };
+        assert_eq!(
+            CallOutcome::of_giop(&sys).as_str(),
+            "IDL:omg.org/CORBA/BAD_OPERATION:1.0",
+            "a system exception names itself"
+        );
+        assert_eq!(
+            CallOutcome::of_giop(&orbweaver_giop::Error::ConnectionClosed),
+            CallOutcome::Failed,
+            "a dropped connection raised nothing, and `-` is the honest rendering"
+        );
     }
 
     #[test]

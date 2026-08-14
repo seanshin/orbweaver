@@ -234,3 +234,54 @@ fn a_quota_refusal_reaches_the_ledger_and_reads_differently_from_a_policy_refusa
         served.err
     );
 }
+
+/// The bounded ledger, measured where it can actually hurt: the **stream** an
+/// operator keeps must stay complete even when the in-memory ledger is dropping
+/// lines behind it.
+///
+/// This is the test the watermark bug would fail. `emit_audit` used to hold an
+/// index into `Bridge::audit()`; the moment a bounded ledger drops its oldest
+/// line every index means a different line than it did, so an index-based
+/// watermark re-emits the tail once and then skips a line for the rest of the
+/// session. Both failures are invisible to a library test — the chain is
+/// perfectly happy — and both corrupt the one record §4.8 is about. Run with a
+/// ceiling of two against four decisions, it is unmissable.
+#[test]
+fn a_ledger_small_enough_to_drop_still_emits_every_line_exactly_once() {
+    let served = serve(
+        "bounded",
+        &["--expose", &format!("{ACCOUNT}.deposit"), "--audit-capacity", "2"],
+        |h| {
+            vec![
+                call(2, h, "deposit"),
+                call(3, h, "balance"),
+                call(4, h, "deposit"),
+                call(5, h, "balance"),
+            ]
+        },
+    );
+
+    let audit: Vec<&String> =
+        served.err.iter().filter(|l| l.starts_with("ALLOW ") || l.starts_with("REFUSE ")).collect();
+    // Four decisions, in call order, none lost to the ceiling and none doubled
+    // by it — while the ledger held at most two of them at any moment.
+    assert_eq!(audit.len(), 4, "every decision is on the stream once: {:#?}", served.err);
+    for (i, line) in audit.iter().enumerate() {
+        let expected = if i % 2 == 0 { "ALLOW " } else { "REFUSE " };
+        assert!(line.starts_with(expected), "line {i} out of order or duplicated: {line}");
+    }
+    // Nothing was dropped before it left the process: the ceiling bounds what
+    // is *held*, and emission happens per frame, ahead of it.
+    assert!(
+        !served.err.iter().any(|l| l.starts_with("audit: ")),
+        "no line should have been dropped unemitted: {:#?}",
+        served.err
+    );
+    // And the operator was told the ledger is bounded at startup, in the same
+    // stream as the lines it will eventually elide.
+    assert!(
+        served.err.iter().any(|l| l.starts_with("audit ledger: the newest 2 lines")),
+        "{:#?}",
+        served.err
+    );
+}

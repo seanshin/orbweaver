@@ -214,6 +214,24 @@ pub enum PromotionRegression {
         /// The dry-run line that was offered as evidence.
         line: String,
     },
+    /// An audit line is the ledger's **elision marker**: it stands where lines
+    /// used to be, so this position in the history is a hole rather than a
+    /// decision.
+    ///
+    /// The bounded ledger ([`crate::interceptor::AuditInterceptor`]) is what
+    /// makes this reachable, and refusing it is the whole reason the marker is
+    /// in-band. The gate reads what `Bridge::audit` recorded; a gate that
+    /// parsed a gap would either fail to parse it — and report a *malformed*
+    /// line, which is a different and misleading complaint — or, if the marker
+    /// had been written in the decision format, read a caller and an operation
+    /// off it and judge a promotion against lines nobody kept. Unverifiable is
+    /// a refusal, and a truncated history is unverifiable *by name*.
+    TruncatedAudit {
+        /// The elision marker that was offered as evidence.
+        line: String,
+        /// How many lines it says are missing.
+        dropped: u64,
+    },
 }
 
 impl std::fmt::Display for PromotionRegression {
@@ -243,6 +261,12 @@ impl std::fmt::Display for PromotionRegression {
                 f,
                 "that audit line is a dry run and not a call: {line:?}. A promotion is gated on \
                  what the two paths did, never on what they would have done"
+            ),
+            PromotionRegression::TruncatedAudit { line, dropped } => write!(
+                f,
+                "that audit line is the ledger's elision marker for {dropped} dropped line(s), \
+                 not a decision: {line:?}. The history it stands for is gone, so there is \
+                 nothing here to gate a promotion on"
             ),
         }
     }
@@ -287,7 +311,11 @@ fn parse_audit(line: &str) -> Option<AuditContext<'_>> {
 /// `dynamic_audit` and `static_audit` are the audit lines the two paths wrote
 /// for the compared call, in the guard's format. The checks, in order:
 ///
-/// 1. Both audit lines must parse — an unverifiable line refuses. A line from
+/// 1. Neither line may be the ledger's elision marker
+///    ([`PromotionRegression::TruncatedAudit`]), because a marker is a hole in
+///    the history and not a decision — checked first, so a truncated ledger is
+///    refused for what it is rather than reported as a malformed line.
+///    Both lines must then parse — an unverifiable line refuses. A line from
 ///    a [`crate::dryrun`] parses and is still refused, by
 ///    [`PromotionRegression::HypotheticalAudit`]: it records what a path
 ///    *would* have done, and a promotion decided on that is decided on nothing
@@ -305,6 +333,16 @@ pub fn verify_promotion(
     dynamic_audit: &str,
     static_audit: &str,
 ) -> Result<(), PromotionRegression> {
+    // A gap is not evidence, and it is checked before anything is parsed: the
+    // marker deliberately does not carry a `caller=` or an `operation=`, so a
+    // gate that reached the parser first would refuse it as *malformed* and
+    // send whoever reads the error looking for a formatting bug instead of for
+    // a ledger that overflowed.
+    for line in [dynamic_audit, static_audit] {
+        if let Some(dropped) = crate::guard::elided_count(line) {
+            return Err(PromotionRegression::TruncatedAudit { line: line.to_owned(), dropped });
+        }
+    }
     let dynamic = parse_audit(dynamic_audit)
         .ok_or_else(|| PromotionRegression::MalformedAudit { line: dynamic_audit.to_owned() })?;
     let promoted = parse_audit(static_audit)
@@ -502,6 +540,57 @@ mod tests {
         // And in the other position too: neither side may be a prediction.
         let err = verify_promotion(&out, &out.clone(), &real, &hypothetical).unwrap_err();
         assert_eq!(err, PromotionRegression::HypotheticalAudit { line: hypothetical }, "{err}");
+    }
+
+    /// The hazard the *bounded* ledger introduces, closed the same way the dry
+    /// run's was: the gate must refuse a gap by name rather than conclude
+    /// anything from it.
+    ///
+    /// The marker here is one a real bounded ledger wrote, not a string this
+    /// test invented — the same discipline as the dry-run case above, and for
+    /// the same reason: a gate tested against a hand-written approximation of a
+    /// format is a gate tested against the wrong thing.
+    #[test]
+    fn the_ledgers_elision_marker_is_refused_rather_than_judged_as_a_gap() {
+        let reg = registry();
+        let exposure = Exposure::nothing().allow_interface("IDL:bank/Account:1.0");
+        let mut g: Guarded<'_, Recorder> = Guarded::assemble(
+            Recorder { reached: Vec::new() },
+            &reg,
+            exposure,
+            Some(Caller::new("alice")),
+            "IDL:bank/Account:1.0".to_owned(),
+            Approval::default(),
+        );
+        // A ledger with room for the marker and two lines, overflowed.
+        assert!(g.chain_mut().audit_capacity(3));
+        for _ in 0..6 {
+            let _ = g.invoke("balance", |_| {});
+        }
+        assert_eq!(g.audit_written(), 6);
+        assert_eq!(g.audit_dropped(), 4);
+        let marker = g.audit()[0].clone();
+        let real = g.audit().last().expect("a decision survives").clone();
+        assert!(real.starts_with("ALLOW caller=alice"), "{real}");
+
+        let out = outcome(orbweaver_dynamic::Value::Long(42));
+        // Offered where the static line goes...
+        let err = verify_promotion(&out, &out.clone(), &real, &marker).unwrap_err();
+        assert_eq!(
+            err,
+            PromotionRegression::TruncatedAudit { line: marker.clone(), dropped: 4 },
+            "{err}"
+        );
+        // ...and where the dynamic one goes. Neither side may be a hole.
+        let err = verify_promotion(&out, &out.clone(), &marker, &real).unwrap_err();
+        assert_eq!(err, PromotionRegression::TruncatedAudit { line: marker, dropped: 4 }, "{err}");
+
+        // The refusal is *specific*: a truncated ledger is not reported as a
+        // formatting bug, which is what sends an operator looking in the wrong
+        // place. And the surviving lines still gate normally, so a bounded
+        // ledger costs the gate nothing it did not have to lose.
+        verify_promotion(&out, &out.clone(), &real, &real)
+            .expect("the lines the ledger kept are still evidence");
     }
 
     // --- the end-to-end shape: a real Guarded static path's audit line ---
