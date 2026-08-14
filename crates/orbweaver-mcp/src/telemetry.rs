@@ -790,6 +790,105 @@ mod tests {
         assert!(lines[1].contains(&format!("\"outcome\":\"{NO_PERMISSION}\"")), "{}", lines[1]);
     }
 
+    /// The half of D004's `outcome` column that used to be unreachable: an
+    /// allowed call that failed now **names what failed it**, and the audit
+    /// line for the same call is unchanged to the byte.
+    ///
+    /// Both halves are asserted together on purpose. The trace and the ledger
+    /// answer different questions — what happened to the call, and what the
+    /// policy decided — and the failure mode of widening one is that the other
+    /// quietly starts carrying transport facts it was never meant to.
+    #[test]
+    fn a_system_exception_names_itself_in_the_outcome_and_leaves_the_audit_line_alone() {
+        use orbweaver_cdr::{Encoder, Endian};
+        use orbweaver_giop::{Error as GiopError, Invoker, Reply};
+
+        const BAD_OPERATION: &str = "IDL:omg.org/CORBA/BAD_OPERATION:1.0";
+
+        /// A target whose ORB refuses: the first call raises a system
+        /// exception, every later one drops the connection instead — two
+        /// failures the chain used to render identically.
+        struct Refusing {
+            calls: usize,
+        }
+        impl Invoker for Refusing {
+            fn endian(&self) -> Endian {
+                Endian::Big
+            }
+            fn invoke<F: Fn(&mut Encoder)>(
+                &mut self,
+                _operation: &str,
+                _write_args: F,
+            ) -> Result<Reply, GiopError> {
+                self.calls += 1;
+                if self.calls == 1 {
+                    return Err(GiopError::SystemException {
+                        id: BAD_OPERATION.to_owned(),
+                        minor: 0,
+                        completed: 1,
+                    });
+                }
+                Err(GiopError::ConnectionClosed)
+            }
+            fn invoke_oneway<F: Fn(&mut Encoder)>(
+                &mut self,
+                _operation: &str,
+                _write_args: F,
+            ) -> Result<(), GiopError> {
+                Ok(())
+            }
+        }
+
+        let reg = registry(IDL);
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let mut guarded = crate::guard::Guarded::assemble(
+            Refusing { calls: 0 },
+            &reg,
+            Exposure::nothing().allow_operation(ACCOUNT, "balance"),
+            Some(Caller::new("alice")),
+            ACCOUNT.to_owned(),
+            Approval::default(),
+        );
+        assert!(guarded.chain_mut().trace(Trace::new(
+            "s-raised",
+            CallPath::Static,
+            Timestamp::new("2026-08-14T09:00:00Z"),
+            Captured(Rc::clone(&lines)),
+        )));
+
+        let _ = guarded.invoke("balance", |_| {});
+        let _ = guarded.invoke("balance", |_| {});
+
+        let lines = lines.borrow().clone();
+        assert_eq!(lines.len(), 2, "{lines:#?}");
+        // 1. The exception the target raised, in D004's own record, in order.
+        assert_eq!(
+            lines[0],
+            concat!(
+                r#"{"ts":"2026-08-14T09:00:00Z","session":"s-raised","caller":"alice","#,
+                r#""target":"IDL:bank/Account:1.0","operation":"balance","decision":"allow","#,
+                r#""stage":"-","path":"static","outcome":"IDL:omg.org/CORBA/BAD_OPERATION:1.0"}"#
+            ),
+        );
+        // 2. And a failure with nothing to name it is still `-` — which is now
+        //    an absence rather than a column nobody plumbed.
+        assert!(lines[1].contains(r#""outcome":"-""#), "{}", lines[1]);
+        assert!(lines[1].contains(r#""decision":"allow""#), "a failed call was still allowed");
+
+        // The ledger is untouched by any of it: same format, same fields, no
+        // transport facts. Both calls are plain ALLOWs and equal as strings.
+        assert_eq!(
+            guarded.audit(),
+            [
+                "ALLOW caller=alice target=IDL:bank/Account:1.0 operation=balance",
+                "ALLOW caller=alice target=IDL:bank/Account:1.0 operation=balance",
+            ]
+        );
+        // And both count as failures, however well named.
+        assert_eq!(guarded.stats().calls(ACCOUNT, "balance"), 2);
+        assert_eq!(guarded.stats().failures(ACCOUNT, "balance"), 2);
+    }
+
     /// JSON lines to an `io::Write`, which is what the harness captures.
     #[test]
     fn the_json_lines_sink_writes_one_line_per_record_and_counts_them() {

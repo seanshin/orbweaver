@@ -74,6 +74,50 @@ pub const DECISION_DRY_RUN_ALLOW: &str = "DRYRUN-ALLOW";
 /// was made; see [`crate::dryrun`].
 pub const DECISION_DRY_RUN_REFUSE: &str = "DRYRUN-REFUSE";
 
+/// The first field of the **elision marker**: not a decision, but the ledger
+/// saying that decisions are missing from it.
+///
+/// A bounded ledger that drops its oldest lines silently is not an audit
+/// ledger — the one thing a reader must be able to do is tell a quiet period
+/// apart from a hole. [`crate::interceptor::AuditInterceptor`] therefore spends
+/// one of its slots on a line that says how many lines are gone, in the first
+/// position where they used to be, and every reader of the log meets it:
+/// an operator greps `ELIDED`, [`crate::promote::verify_promotion`] refuses it
+/// by name rather than judging a promotion from a gap, and
+/// [`crate::interceptor::Chain::audit_dropped`] answers the same number without
+/// parsing anything.
+///
+/// It is deliberately **not** in [`audit_entry`]'s shape: it carries no
+/// `caller=` and no `operation=`, so a parser written for decision lines
+/// rejects it rather than reading it as one.
+pub const DECISION_ELIDED: &str = "ELIDED";
+
+/// The elision marker, in the one format: `ELIDED dropped=<n> why=…`.
+///
+/// `capacity` is named in the prose because the first question a reader has
+/// after "how many are gone" is "gone why", and the answer is a ceiling
+/// somebody configured rather than a failure.
+pub(crate) fn elided_entry(dropped: u64, capacity: usize) -> String {
+    format!(
+        "{DECISION_ELIDED} dropped={dropped} why=the audit ledger keeps the newest {capacity} \
+         lines and the {dropped} oldest have been dropped"
+    )
+}
+
+/// How many lines an elision marker says are missing, or `None` for a line that
+/// is not one.
+///
+/// The reader's half of [`elided_entry`], public because the marker is meant to
+/// be read outside this crate — a console, a harness, an operator's script —
+/// and a format with only a writer is a format everybody else reverse-engineers.
+pub fn elided_count(line: &str) -> Option<u64> {
+    let mut fields = line.split_whitespace();
+    if fields.next()? != DECISION_ELIDED {
+        return None;
+    }
+    fields.find_map(|f| f.strip_prefix("dropped=")).and_then(|n| n.parse().ok())
+}
+
 /// Whether an audit line's decision field describes a call that never
 /// happened.
 ///
@@ -176,8 +220,23 @@ impl<'r, C: Invoker> Guarded<'r, C> {
     /// material — the same rule as [`crate::identity::audit_line`], and for the
     /// same reason: there is nothing here a line *could* leak, because the
     /// guard never holds a credential.
+    ///
+    /// Bounded: see [`Chain::audit`]. Once anything has been dropped the first
+    /// element is the elision marker ([`elided_count`]), so a reader of this
+    /// slice alone can tell a short history from a truncated one.
     pub fn audit(&self) -> &[String] {
         self.chain.audit()
+    }
+
+    /// How many audit lines this guard has written since it was assembled,
+    /// dropped ones included.
+    pub fn audit_written(&self) -> u64 {
+        self.chain.audit_written()
+    }
+
+    /// How many of them the bounded ledger has dropped.
+    pub fn audit_dropped(&self) -> u64 {
+        self.chain.audit_dropped()
     }
 
     /// What the guard's telemetry stage counted.
@@ -242,7 +301,11 @@ impl<'r, C: Invoker> Invoker for Guarded<'r, C> {
             return Err(refusal(&why));
         }
         let reply = self.conn.invoke(operation, write_args);
-        self.chain.completed(&ctx, reply.is_ok());
+        // The whole result, not `is_ok()`: a system or user exception names
+        // itself in the trace's `outcome` column, and anything else is a
+        // failure the chain was genuinely not told the name of. See
+        // `crate::interceptor::CallOutcome`.
+        self.chain.completed(&ctx, &reply);
         reply
     }
 
@@ -264,7 +327,7 @@ impl<'r, C: Invoker> Invoker for Guarded<'r, C> {
             return Err(refusal(&why));
         }
         let sent = self.conn.invoke_oneway(operation, write_args);
-        self.chain.completed(&ctx, sent.is_ok());
+        self.chain.completed(&ctx, &sent);
         sent
     }
 }

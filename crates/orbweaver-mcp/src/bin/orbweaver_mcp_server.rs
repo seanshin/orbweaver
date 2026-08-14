@@ -7,7 +7,8 @@
 //!                      [--map-scope <token-scope>=<contract-scope>]... [--token-scope <s>]... \
 //!                      [--dry-run [<IDL:module/Iface:1.0>]] \
 //!                      [--trace <path>|-] [--trace-ts <rfc3339>] \
-//!                      [--quota <calls>] [--quota-scope <everything|caller|interface|operation>]
+//!                      [--quota <calls>] [--quota-scope <everything|caller|interface|operation>] \
+//!                      [--audit-capacity <lines>]
 //! ```
 //!
 //! Exposure is **default-deny**: with no `--expose`, the server starts, answers
@@ -99,6 +100,27 @@
 //! supervisor already knows how to do. A trace goes to `--trace <path>`; the
 //! audit ledger goes where the diagnostics go.
 //!
+//! # `--audit-capacity`: the in-memory ledger is bounded, and says so
+//!
+//! Emitting to stderr left the *library's* ledger growing for the life of the
+//! session, which the batch that landed the emission recorded as a known limit.
+//! `orbweaver_mcp::interceptor::AuditInterceptor` now keeps its newest
+//! `--audit-capacity` lines (65,536 by default) and spends one slot on an
+//! elision marker naming how many it dropped — because an audit ledger that
+//! drops lines silently reads exactly like a quiet period, and the two are
+//! indistinguishable at the moment somebody is reading the log to tell them
+//! apart.
+//!
+//! **The two streams answer different questions and only one of them is
+//! bounded.** stderr is the complete ledger: every line is emitted as it is
+//! written, before the frame's response goes out, so it is the record an
+//! operator keeps. The in-memory slice is what `Bridge::audit` hands to §7.4
+//! I4's promotion oracle, and it is bounded because a process that runs for a
+//! week must not be holding every decision it ever made. The marker is what
+//! keeps the second honest about being a window onto the first, and
+//! `promote::verify_promotion` refuses it by name rather than judging a
+//! promotion from a gap.
+//!
 //! # stdout is the protocol
 //!
 //! One JSON object per line on stdout and nothing else, ever. Every diagnostic
@@ -167,16 +189,41 @@ fn quota_for(limit: Option<u64>, scope: &str) -> Result<Option<Quota>, String> {
 /// A watermark rather than a drain: the chain's audit stage owns its lines and
 /// nothing can take them away from it — `Bridge::audit` is what §7.4 I4's
 /// oracle captures, and a stage a process could empty is a stage a process
-/// could be configured into emptying before anybody read it. The cost is that
-/// the lines are held in memory as well as emitted, which for a long-lived
-/// session is unbounded growth; that is a real limit and it is a bounded
-/// ledger's problem to solve, not this fix's.
-fn emit_audit(bridge: &Bridge<'_>, from: usize) -> usize {
+/// could be configured into emptying before anybody read it.
+///
+/// The watermark is `Bridge::audit_written` — a **count of lines ever written**
+/// — and not an index into `Bridge::audit`. That distinction is the whole of
+/// what a bounded ledger costs an emitter: the moment the ledger drops its
+/// oldest line, every index into it means a different line than it did, so an
+/// index-based watermark starts re-emitting the tail and then skips lines
+/// forever after. The count does not move under anybody.
+///
+/// This stream is the complete one. The in-memory ledger keeps its newest
+/// `--audit-capacity` lines and marks what it dropped; stderr has had every
+/// line since the process started, because each is emitted as it is written.
+/// The one way a line could reach the ledger's ceiling before being emitted is
+/// a single frame writing more lines than the whole ceiling, which is reported
+/// here rather than passed over — an audit stream with a silent hole in it is
+/// not an audit stream.
+fn emit_audit(bridge: &Bridge<'_>, from: u64) -> u64 {
     let lines = bridge.audit();
-    for line in &lines[from.min(lines.len())..] {
+    let dropped = bridge.audit_dropped();
+    if dropped > from {
+        eprintln!(
+            "audit: {} line(s) were dropped from the in-memory ledger before this process \
+             emitted them; raise --audit-capacity",
+            dropped - from
+        );
+    }
+    // Absolute position → position in the retained slice. The marker holds the
+    // first slot once anything has been dropped and is skipped here: it stands
+    // for lines this stream already carries, and re-emitting it on every frame
+    // would be noise that says nothing new.
+    let skip = (from.max(dropped) - dropped) as usize + usize::from(dropped > 0);
+    for line in &lines[skip.min(lines.len())..] {
         eprintln!("{line}");
     }
-    lines.len()
+    bridge.audit_written()
 }
 
 fn main() -> std::process::ExitCode {
@@ -195,6 +242,7 @@ fn main() -> std::process::ExitCode {
     let mut trace_ts: Option<String> = None;
     let mut quota_limit: Option<u64> = None;
     let mut quota_scope = "caller".to_owned();
+    let mut audit_capacity: Option<usize> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -237,13 +285,25 @@ fn main() -> std::process::ExitCode {
                 Err(e) => Err(format!("--quota {v:?}: {e}")),
             }),
             "--quota-scope" => next("--quota-scope").map(|v| quota_scope = v),
+            "--audit-capacity" => next("--audit-capacity").and_then(|v| match v.parse::<usize>() {
+                Ok(0) => {
+                    Err("--audit-capacity 0: a ledger that cannot hold a line cannot be one"
+                        .to_owned())
+                }
+                Ok(n) => {
+                    audit_capacity = Some(n);
+                    Ok(())
+                }
+                Err(e) => Err(format!("--audit-capacity {v:?}: {e}")),
+            }),
             "-h" | "--help" => {
                 eprintln!(
                     "usage: orbweaver-mcp-server --idl <file.idl>... --ior <file> \
                      [--expose <id[.operation]>]... [--as <principal>] [--scope <scope>]... \
                      [--map-scope <token>=<contract>]... [--token-scope <scope>]... \
                      [--dry-run[=<id>]] [--trace <path>|-] [--trace-ts <rfc3339>] \
-                     [--quota <calls>] [--quota-scope <everything|caller|interface|operation>]"
+                     [--quota <calls>] [--quota-scope <everything|caller|interface|operation>] \
+                     [--audit-capacity <lines>]"
                 );
                 return std::process::ExitCode::SUCCESS;
             }
@@ -371,6 +431,12 @@ fn main() -> std::process::ExitCode {
         if let Some(caller) = caller {
             bridge.set_caller(caller);
         }
+        if let Some(capacity) = audit_capacity
+            && !bridge.chain_mut().audit_capacity(capacity)
+        {
+            eprintln!("no audit stage to bound");
+            return std::process::ExitCode::from(2);
+        }
         // The report is about the chain this deployment would run, so the
         // quota goes in before the questions are asked. A dry run spends none
         // of it — `orbweaver_mcp::quota` refunds what a question charges.
@@ -457,6 +523,16 @@ fn main() -> std::process::ExitCode {
     };
 
     let mut session = Session::new(&registry, exposure, conn, session_id.clone());
+    if let Some(capacity) = audit_capacity {
+        if !session.bridge().chain_mut().audit_capacity(capacity) {
+            eprintln!("no audit stage to bound");
+            return std::process::ExitCode::from(2);
+        }
+        // Said out loud, like the quota: a ledger that drops lines is something
+        // an operator chose, and the choice belongs in the same stream as the
+        // lines it will eventually elide.
+        eprintln!("audit ledger: the newest {capacity} lines are kept in memory (stderr has all)");
+    }
     if let Some(quota) = &quota {
         if !session.bridge().chain_mut().quota(quota.clone()) {
             eprintln!("no authorization stage to put a quota after");
@@ -508,7 +584,7 @@ fn main() -> std::process::ExitCode {
     let mut stdout = std::io::stdout().lock();
     // How much of the ledger has left this process. §4.8's requirement is met
     // by what an operator can read, not by what the chain remembers.
-    let mut audited = 0usize;
+    let mut audited = 0u64;
     for line in stdin.lock().lines() {
         let line = match line {
             Ok(l) => l,
