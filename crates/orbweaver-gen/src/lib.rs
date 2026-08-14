@@ -47,9 +47,21 @@
 //! argument list a caller passes and the argument list a servant receives
 //! cannot drift apart: there is one place that decides what an operation looks
 //! like in Rust, and both sides read it.
+//!
+//! # A second target language
+//!
+//! [`python`] emits Python clients from the same [`Registry`]. It is not here
+//! because anybody asked for Python: one target cannot tell *the IDL mapping*
+//! apart from *what was convenient in Rust*, and writing the mapping twice is
+//! the only thing that can. It found three such places on its first pass —
+//! among them a `Ref` suffix that exists for Rust's sake, and this file's
+//! keyword list, which was missing `yield` and would have emitted
+//! `fn yield(&mut self)` for a legal IDL contract. `corpus/golden/28-target-
+//! keywords.idl` exists so that neither comes back.
 
 #![deny(missing_docs)]
 
+pub mod python;
 pub mod rt;
 pub mod skeleton;
 
@@ -72,11 +84,21 @@ pub struct Generated {
 }
 
 /// Rust keywords that need escaping when they appear as IDL identifiers.
+///
+/// **Reserved** words are in the list as well as used ones, and that is not
+/// theoretical tidiness: `yield` is a legal IDL operation name and reserved in
+/// Rust, so `fn yield(&mut self)` does not compile. The gap was found by
+/// writing a second target — the Python emitter's keyword list was built from
+/// Python's own reference and the corpus case that came with it was the first
+/// contract in this project to name one. A generated file that fails to
+/// compile is the good outcome here; the list had never been tested because
+/// nothing had ever exercised it.
 const KEYWORDS: &[&str] = &[
     "as", "box", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "fn",
     "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref",
     "return", "static", "struct", "trait", "type", "unsafe", "use", "where", "while", "async",
-    "await", "self", "super",
+    "await", "self", "super", "abstract", "become", "do", "final", "gen", "macro", "override",
+    "priv", "try", "typeof", "unsized", "virtual", "yield",
 ];
 
 pub(crate) fn ident(name: &str) -> String {

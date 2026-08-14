@@ -115,6 +115,13 @@ disclosed BSD-3-Clause.
   capability.) Documenting the rule does not prevent it:
   it has since caught two corpus files and two fixtures, one written by someone
   who had just described the rule in that same file's header.
+- **A target language's reserved words are the generator's problem, not the
+  contract's.** `yield`, `lambda` and `None` are legal IDL and reserved
+  somewhere. Every emitter escapes them, and until
+  `corpus/golden/28-target-keywords.idl` existed no emitter's escaping had ever
+  been *executed* — the Rust list was missing `yield`, so `fn yield()` was
+  emitted and did not compile. Adding a target means adding its keyword list to
+  that file's coverage. *대상 언어의 예약어는 계약이 아니라 생성기의 문제다.*
 - `TypeCode` must be qualified as `::CORBA::TypeCode`.
 - v1 wire support excludes `valuetype`, abstract interfaces and `fixed`. The
   parser accepts them; the wire does not. See `docs/PLAN.md` §4.4.

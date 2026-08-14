@@ -1,6 +1,6 @@
 [package]
 name = "orbweaver-gen"
-description = "Static generation: Rust client stubs from the registry, oracle-checked against the dynamic path"
+description = "Static generation from the registry: Rust stubs and skeletons, Python clients, each oracle-checked against the dynamic path"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -29,3 +29,14 @@ workspace = true
 [[bin]]
 name = "gen-corpus"
 path = "src/bin/gen_corpus.rs"
+
+[[bin]]
+name = "gen-python"
+path = "src/bin/gen_python.rs"
+
+# The Python target's seam. A separate process rather than an extension module:
+# the wire stays in Rust and CPython gains no dependency. See
+# docs/decisions/D007-python-wire-seam.md, which is PROPOSED.
+[[bin]]
+name = "orbweaver-py-bridge"
+path = "src/bin/py_bridge.rs"

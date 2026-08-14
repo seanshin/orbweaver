@@ -71,20 +71,22 @@ pub const OMG_VMCID: u32 = 0x4f4d_0000;
 /// return Err(rt::raise::bad_param().omg_minor(3).did_not_run().into());
 /// ```
 ///
-/// # What a foreign ORB currently reads
+/// # What a foreign ORB reads
 ///
-/// Measured, not assumed, and currently wrong one layer down. §4.11.4 declares
-/// `enum completion_status { COMPLETED_YES, COMPLETED_NO, COMPLETED_MAYBE }`,
-/// so `COMPLETED_YES` is ordinal 0. [`Completion`] numbers it `No = 0,
-/// Yes = 1`, which transposes the first two, and omniORB's Python client reads
-/// a `did_not_run()` raise from a generated skeleton as `CORBA.COMPLETED_YES`
-/// — the exact inversion of "safe to re-send". `MAYBE` is 2 either way.
+/// Measured, not assumed. §4.11.4 declares `enum completion_status {
+/// COMPLETED_YES, COMPLETED_NO, COMPLETED_MAYBE }`, so `COMPLETED_YES` is
+/// ordinal 0. [`Completion`] numbered it `No = 0, Yes = 1` for a while, which
+/// transposed the first two, and omniORB's Python client read a
+/// `did_not_run()` raise from a generated skeleton as `CORBA.COMPLETED_YES` —
+/// the exact inversion of "safe to re-send"; `MAYBE` is 2 either way, which is
+/// why nothing caught it for so long. `orbweaver-giop` fixed the ordinals and
+/// the harness now measures a `did_not_run()` raise arriving as
+/// `COMPLETED_NO`; `tests/servant_faults.rs` pins it so it cannot silently
+/// invert again.
 ///
-/// The defect is in `orbweaver-giop`, not here, and is left to that crate's
-/// owner rather than fixed in passing; `tests/servant_faults.rs` pins the
-/// behaviour as measured so the fix cannot land silently. Until then a
-/// servant's *choice* is carried faithfully by everything in this crate, and
-/// two of its three values are renumbered on the way out.
+/// The lesson outlived the defect and is why the Python target's bridge passes
+/// the ordinal through as a **number**: naming it in a second language would
+/// be a second place to get this numbering wrong.
 #[derive(Debug, Clone)]
 #[must_use = "a raise is not a system exception until its completion status is stated; \
               call .did_not_run(), .ran_to_completion() or .may_have_run()"]

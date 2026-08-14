@@ -1,0 +1,289 @@
+//! `orbweaver-py-bridge` — where a generated Python client meets the wire.
+//!
+//! ```text
+//! orbweaver-py-bridge --idl <file.idl> --ior <IOR:… | path/to/file.ior>
+//! ```
+//!
+//! One JSON document per line in each direction, on stdin and stdout. The
+//! documents are **AnyJSON v1** (`docs/PLAN.md` §4.5) — the mapping this
+//! project already specifies and round-trip tests — so the seam introduced no
+//! new wire format and no second dialect of one.
+//!
+//! ```text
+//! → {"id":"IDL:spike/Echo:1.0","op":"add","args":{"a":40,"b":2}}
+//! ← {"ok":{"returns":42,"outputs":{}}}
+//! ← {"user_exception":{"id":"IDL:bank/Insufficient:1.0","members":{"shortfall":25}}}
+//! ← {"system_exception":{"id":"IDL:omg.org/CORBA/NO_PERMISSION:1.0","minor":0,"completed":1}}
+//! ← {"error":{"message":"…"}}
+//! ```
+//!
+//! # Why this exists rather than an extension module
+//!
+//! Because CDR, GIOP and codeset negotiation exist once, in Rust, and a Python
+//! target that re-implemented them would be a second ORB with a second set of
+//! alignment bugs. Linking Rust into CPython instead would be a new dependency
+//! class and a build-system commitment, which `docs/decisions/` says is not
+//! adopted by writing code; `D007-python-wire-seam.md` states the options and
+//! is PROPOSED.
+//!
+//! # What the bridge is not
+//!
+//! Not a security boundary. It dials the IOR it is given, on behalf of whoever
+//! started it, with no exposure policy and no audit log — the guarded path is
+//! `orbweaver-mcp`'s, and putting a second, weaker one here would be the §4.7
+//! bypass wearing a different hat. It is a transport adapter for a client that
+//! is already inside the trust boundary.
+//!
+//! References are the one exception, and they are not optional: §4.5 cannot
+//! emit an IOR, so an object reference crosses as a **handle** into this
+//! process's table and can be passed back as an argument. A handle is not
+//! dialable and does not outlive the process.
+
+use std::collections::BTreeMap;
+use std::io::{BufRead, Write};
+use std::time::Duration;
+
+use orbweaver_dynamic::anyjson::{self, LocalReferences};
+use orbweaver_dynamic::invoke::{self, InvokeError};
+use orbweaver_dynamic::json::Json;
+use orbweaver_giop::typecode::TypeCode;
+use orbweaver_giop::{Connection, Error as GiopError, Ior};
+use orbweaver_registry::{Entry, OperationSig, ParamDirection, ParamSig, Registry};
+
+fn main() -> std::process::ExitCode {
+    let mut idl: Option<String> = None;
+    let mut ior: Option<String> = None;
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--idl" => idl = args.next(),
+            "--ior" => ior = args.next(),
+            other => {
+                eprintln!("unexpected argument {other:?}");
+                return std::process::ExitCode::from(2);
+            }
+        }
+    }
+    let (Some(idl), Some(ior)) = (idl, ior) else {
+        eprintln!("usage: orbweaver-py-bridge --idl <file.idl> --ior <IOR:… | file>");
+        return std::process::ExitCode::from(2);
+    };
+    match run(&idl, &ior) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("orbweaver-py-bridge: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run(idl_path: &str, ior_arg: &str) -> Result<(), String> {
+    let src = std::fs::read_to_string(idl_path).map_err(|e| format!("{idl_path}: {e}"))?;
+    let spec = orbweaver_idl::check(&src)
+        .map_err(|diags| diags.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"))?;
+    let mut registry = Registry::new();
+    registry.load(&spec).map_err(|e| e.to_string())?;
+    let registry = with_attribute_accessors(&registry);
+
+    let text = match std::fs::read_to_string(ior_arg) {
+        Ok(t) => t.trim().to_owned(),
+        Err(_) => ior_arg.trim().to_owned(),
+    };
+    let ior = Ior::parse(&text).map_err(|e| e.to_string())?;
+    let mut conn = Connection::connect(&ior, Duration::from_secs(10)).map_err(|e| e.to_string())?;
+
+    let mut handles = LocalReferences::new();
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    // The banner is a synchronisation point, not decoration: a client that
+    // wrote a request before the connect finished would block on a reply that
+    // could never come, and "the fixture had not started yet" is the phantom
+    // failure this project has paid for most often.
+    let _ = writeln!(
+        out,
+        "{}",
+        Json::Object(BTreeMap::from([(
+            "ready".to_owned(),
+            Json::Object(BTreeMap::from([
+                ("type_id".to_owned(), Json::String(ior.type_id.clone())),
+                ("idl".to_owned(), Json::String(idl_path.to_owned())),
+            ]))
+        )]))
+    );
+    let _ = out.flush();
+
+    for line in std::io::stdin().lock().lines() {
+        let line = line.map_err(|e| e.to_string())?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let reply = match serve(&mut conn, &registry, &mut handles, &line) {
+            Ok(reply) => reply,
+            Err(message) => object([("error", object([("message", Json::String(message))]))]),
+        };
+        let _ = writeln!(out, "{reply}");
+        let _ = out.flush();
+    }
+    Ok(())
+}
+
+fn object<const N: usize>(fields: [(&str, Json); N]) -> Json {
+    Json::Object(fields.into_iter().map(|(k, v)| (k.to_owned(), v)).collect())
+}
+
+/// One request, from the line that carried it to the line that answers it.
+fn serve(
+    conn: &mut Connection,
+    registry: &Registry,
+    handles: &mut LocalReferences,
+    line: &str,
+) -> Result<Json, String> {
+    let request = Json::parse(line).map_err(|e| e.to_string())?;
+    let id = request.get("id").and_then(Json::as_str).ok_or("a request needs an \"id\"")?;
+    let op = request.get("op").and_then(Json::as_str).ok_or("a request needs an \"op\"")?;
+    let (_, sig) = registry
+        .resolve_operation(id, op)
+        .ok_or_else(|| format!("{id} has no operation {op:?}"))?;
+    let sig = sig.clone();
+
+    let Some(Json::Object(given)) = request.get("args") else {
+        return Err("a request needs an \"args\" object".to_owned());
+    };
+
+    // Arguments are converted before anything is sent, so a bad one is a local
+    // error rather than a half-written message — the same order the dynamic
+    // invoker uses, for the same reason.
+    let mut args: BTreeMap<String, orbweaver_dynamic::Value> = BTreeMap::new();
+    for p in &sig.params {
+        if !matches!(p.direction, ParamDirection::In | ParamDirection::InOut) {
+            continue;
+        }
+        let Some(j) = given.get(&p.name) else {
+            return Err(format!("{op} needs an argument {:?}", p.name));
+        };
+        let v = anyjson::from_json(&p.tc, j, handles)
+            .map_err(|e| format!("argument {}: {e}", p.name))?;
+        args.insert(p.name.clone(), v);
+    }
+
+    match invoke::invoke(conn, registry, id, op, &args) {
+        Ok(outcome) => {
+            let returns = if matches!(sig.returns, TypeCode::Void) {
+                Json::Null
+            } else {
+                anyjson::to_json(&sig.returns, &outcome.returns, handles)
+                    .map_err(|e| format!("the reply's return value: {e}"))?
+            };
+            let mut outputs = BTreeMap::new();
+            for p in &sig.params {
+                if !matches!(p.direction, ParamDirection::Out | ParamDirection::InOut) {
+                    continue;
+                }
+                let Some(v) = outcome.outputs.get(&p.name) else { continue };
+                outputs.insert(
+                    p.name.clone(),
+                    anyjson::to_json(&p.tc, v, handles)
+                        .map_err(|e| format!("out parameter {}: {e}", p.name))?,
+                );
+            }
+            Ok(object([("ok", object([("returns", returns), ("outputs", Json::Object(outputs))]))]))
+        }
+        Err(InvokeError::User(u)) => {
+            let members = match (&u.members, registry.typecode(&u.id)) {
+                (Some(v), Some(tc)) => anyjson::to_json(tc, v, handles)
+                    .map_err(|e| format!("the raised {}: {e}", u.id))?,
+                // An id the registry never heard of still names a contract the
+                // caller was not built against, which is the useful half.
+                _ => Json::Null,
+            };
+            Ok(object([(
+                "user_exception",
+                object([("id", Json::String(u.id.clone())), ("members", members)]),
+            )]))
+        }
+        Err(InvokeError::Transport(GiopError::SystemException { id, minor, completed })) => {
+            Ok(object([(
+                "system_exception",
+                object([
+                    ("id", Json::String(id)),
+                    ("minor", Json::Number(minor.to_string())),
+                    // The ordinal, passed through unchanged. §4.11.4 numbers
+                    // `completion_status` COMPLETED_YES, COMPLETED_NO,
+                    // COMPLETED_MAYBE, and this project has already had those
+                    // first two transposed once — see
+                    // `orbweaver_giop::server::Completion`, where the comment
+                    // is longer than the enum. Naming the value here would be
+                    // a second place to get the same numbering wrong, so the
+                    // bridge reports the number the peer sent.
+                    ("completed", Json::Number(completed.to_string())),
+                ]),
+            )]))
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// A registry in which every attribute's `_get_`/`_set_` accessors are ordinary
+/// operations.
+///
+/// # Why a copy rather than a special case at the call site
+///
+/// `_get_balance` is an operation on the wire (§7.9.1) and is not one in the
+/// registry, which records attributes separately. The dynamic invoker resolves
+/// operations through the registry, so without this the bridge would need its
+/// own marshalling path for accessors — a second place that decides how a call
+/// is written, which is exactly what this crate exists to avoid.
+///
+/// # Why it is not public
+///
+/// The copy is built with [`Registry::define_ingested`], which marks every
+/// entry as having come from a remote Interface Repository. That is a lie the
+/// bridge can afford — it consults nothing about provenance — and one that
+/// `orbweaver-mcp` cannot, since its exposure gate asks exactly that question.
+/// So this stays a private function of one binary rather than a convenience
+/// somebody reaches for at the agent boundary.
+fn with_attribute_accessors(registry: &Registry) -> Registry {
+    const SOURCE: &str = "attribute accessors synthesised by orbweaver-py-bridge";
+    let mut out = Registry::new();
+    for id in registry.ids() {
+        let Some(entry) = registry.get(id) else { continue };
+        let entry = match entry {
+            Entry::Interface(i) => {
+                let mut i = i.clone();
+                for (name, a) in i.attributes.clone() {
+                    i.operations.insert(
+                        format!("_get_{name}"),
+                        OperationSig {
+                            returns: a.tc.clone(),
+                            params: Vec::new(),
+                            raises: Vec::new(),
+                            oneway: false,
+                            annotations: a.annotations.clone(),
+                        },
+                    );
+                    if !a.readonly {
+                        i.operations.insert(
+                            format!("_set_{name}"),
+                            OperationSig {
+                                returns: TypeCode::Void,
+                                params: vec![ParamSig {
+                                    name: "value".into(),
+                                    direction: ParamDirection::In,
+                                    tc: a.tc.clone(),
+                                    annotations: BTreeMap::new(),
+                                }],
+                                raises: Vec::new(),
+                                oneway: false,
+                                annotations: a.annotations.clone(),
+                            },
+                        );
+                    }
+                }
+                Entry::Interface(i)
+            }
+            other => other.clone(),
+        };
+        let _ = out.define_ingested(id.clone(), entry, SOURCE);
+    }
+    out
+}

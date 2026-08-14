@@ -1,0 +1,35 @@
+// 28 — identifiers that are keywords in a target language but not in IDL.
+//
+// Added with the Python target (2026-08-14). Every generator has an escaping
+// rule, and until this file existed nothing in the corpus exercised one: the
+// Rust emitter's keyword list turned out to be missing `yield`, which is
+// reserved in Rust and a perfectly ordinary IDL operation name, so
+// `fn yield(&mut self)` did not compile. The Python mapping escapes with a
+// LEADING underscore (`_lambda`), which `omniidl -bpython` confirms.
+//
+// The names here are chosen to be legal to every gate at once:
+//   * no CORBA 3 keyword (`import`, `local`, `native`, … ) — omniidl warns on
+//     those, and the harness treats a warning on stderr as a failure;
+//   * no case-insensitive clash with a type or an enclosing scope, which is
+//     this project's dominant generation failure.
+module target_kw {
+  //@ ai_desc: Members whose names are reserved words in a target language
+  struct Reserved {
+    long   lambda;
+    long   def;
+    long   global;
+    string class;
+  };
+
+  //@ ai_desc: Operations and parameters whose names are reserved words
+  interface Keywords {
+    //@ ai_desc: Reserved in Rust and in Python, legal in IDL
+    //@ ai_effect: idempotent
+    void yield(in long from, in long pass);
+    //@ ai_desc: `None` is a Python keyword and an ordinary IDL identifier
+    //@ ai_effect: read_only
+    long None();
+    //@ ai_desc: An attribute whose accessor names must survive escaping too
+    readonly attribute Reserved final;
+  };
+};

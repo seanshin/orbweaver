@@ -1130,6 +1130,58 @@ else
   fail_total=$((fail_total+1))
 fi
 
+# ── The Python target: a second language is the only test of the mapping ────
+# Anything the Rust emitter got right by accident shows up here as something
+# Python cannot express, or expresses differently. The seam is a local process
+# (D007, PROPOSED) so CPython gains no dependency and the wire stays in Rust.
+hr "Python client target — generated Python against the omniORB fixture"
+if start_server; then
+  pyout=/tmp/orbweaver-pytarget; rm -rf "$pyout"; mkdir -p "$pyout"
+  if cargo run -q --bin gen-python -- --out "$pyout" spikes/echo.idl >/dev/null 2>&1 \
+     && cargo build -q --bin orbweaver-py-bridge 2>/dev/null; then
+    pyrun=$(python3 crates/orbweaver-gen/python/echo_client.py "$pyout" \
+            spikes/echo.idl spikes/echo.ior ./target/debug/orbweaver-py-bridge 2>&1)
+    case "$pyrun" in
+      *"python target: PASS"*)
+        echo "  ok   $(printf '%s' "$pyrun" | grep -c '^  ok') generated call(s) completed \
+over the wire, no Rust stub involved" ;;
+      *) echo "  FAIL the Python client did not complete its calls"
+         printf '%s' "$pyrun" | tail -12 | sed 's/^/       /'
+         fail_total=$((fail_total+1)) ;;
+    esac
+  else
+    echo "  FAIL gen-python or the bridge did not build"
+    fail_total=$((fail_total+1))
+  fi
+  cleanup
+else
+  echo "  FAIL the omniORB fixture would not start — an unmeasured check is a failure"
+  fail_total=$((fail_total+1))
+fi
+
+# Generated Python is imported, not string-compared: a target that only ever
+# gets diffed is a target nobody has run.
+pybatch=/tmp/orbweaver-pybatch; rm -rf "$pybatch"; mkdir -p "$pybatch"
+golden=$(ls corpus/golden/*.idl | wc -l | tr -d ' ')
+if cargo run -q --bin gen-python -- --out "$pybatch" corpus/golden/*.idl >/dev/null 2>&1; then
+  imported=$(cd "$pybatch" && python3 -c '
+import importlib, pathlib, sys
+sys.path.insert(0, ".")
+ok = 0
+for d in sorted(p.name for p in pathlib.Path(".").iterdir() if p.is_dir()):
+    importlib.import_module(d); ok += 1
+print(ok)' 2>/dev/null)
+  if [ "${imported:-0}" -ge "$golden" ]; then
+    echo "  ok   $imported generated Python package(s) imported, one per golden contract"
+  else
+    echo "  FAIL only ${imported:-0} of $golden golden contracts produced an importable package"
+    fail_total=$((fail_total+1))
+  fi
+else
+  echo "  FAIL gen-python refused the golden corpus"
+  fail_total=$((fail_total+1))
+fi
+
 # ── corpus/include: the first multi-file cases the corpus has ever had ──────
 # Every other corpus file is self-contained, which is exactly why `#include`
 # was skipped rather than resolved for six phases and nothing went red. The
