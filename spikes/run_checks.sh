@@ -1130,6 +1130,22 @@ else
   fail_total=$((fail_total+1))
 fi
 
+# ── D005 option B: a regeneration is diffed against what is registered ──────
+hr "registered-contract diff — an undeclared breaking change is refused"
+# The half option C cannot cover, and vice versa: the differ reads no
+# annotations, so a scope change is compatible by §5.3 and invisible here,
+# while a rename that keeps every scope is invisible to C. Neither subsumes
+# the other, which is why both landed.
+rd=$(cargo test -q -p orbweaver-forge --test registered_diff 2>&1)
+if printf '%s' "$rd" | grep -q "^test result: ok"; then
+  echo "  ok   $(printf '%s' "$rd" | grep -oE '[0-9]+ passed' | head -1) — refuses a breaking
+       regeneration, silent on an additive one, and silent when nothing is registered"
+else
+  echo "  FAIL registered-contract diff"
+  printf '%s' "$rd" | grep -A3 panicked | head -6 | sed 's/^/       /'
+  fail_total=$((fail_total+1))
+fi
+
 # ── Scope drift is loud before a call (stream C, D005's class) ──────────────
 hr "scope drift — a permission name no token can satisfy, reported as an outage"
 # The failure D005 measured is silent by construction: an identity provider
