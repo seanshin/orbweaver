@@ -31,6 +31,7 @@
 #![deny(missing_docs)]
 
 pub mod anyjson;
+pub mod dynany;
 pub mod invoke;
 pub mod json;
 
@@ -605,6 +606,29 @@ fn encode_at(
 fn validate(tc: &TypeCode, v: &Value, p: &Path<'_>, wide: WideCodec) -> Result<()> {
     let mut probe = Encoder::new(orbweaver_cdr::Endian::Little);
     encode_at(&mut probe, tc, v, p, wide)
+}
+
+/// Type-checks `v` against `tc` as if it stood inside `open`, outermost first.
+///
+/// The public entry points start at the root, where a [`TypeCode::Recursive`]
+/// marker has nothing to resolve against. [`dynany`] type-checks a value at a
+/// *cursor*, which may be several levels inside the type the marker names, so
+/// the enclosing types have to be handed back in — they are exactly what the
+/// encoder would have been standing on had it walked there itself. Without
+/// this, mutating one node of a recursive value would be refused for a reason
+/// ("not inside the type it names") that is about the checker rather than
+/// about the value.
+pub(crate) fn check_within(tc: &TypeCode, v: &Value, open: &[&TypeCode]) -> Result<()> {
+    fn go(tc: &TypeCode, v: &Value, open: &[&TypeCode], p: &Path<'_>) -> Result<()> {
+        match open.split_first() {
+            Some((first, rest)) => {
+                let here = p.entering(first);
+                go(tc, v, rest, &here)
+            }
+            None => validate(tc, v, p, default_codec()),
+        }
+    }
+    go(tc, v, open, &Path::root())
 }
 
 fn check_bound(p: &Path<'_>, bound: u32, len: usize, what: &str) -> Result<()> {
