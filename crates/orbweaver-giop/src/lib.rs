@@ -1238,9 +1238,23 @@ fn logical_request_id(
     }
 }
 
+/// How much of a declared body is committed before any of it has arrived.
+///
+/// The bound this buys, in one sentence: **memory committed for an inbound
+/// message stays proportional to the bytes the peer has actually delivered,
+/// plus at most one chunk.** `message_size` above `max_size` is still refused
+/// outright; below it, the ceiling is no longer something a peer can spend by
+/// asserting a number, because the buffer only grows as the body arrives.
+///
+/// 64 KiB is a size, not a limit: large enough that an ordinary message is one
+/// or two `read` calls, small enough that a header from a peer that then goes
+/// quiet costs 64 KiB rather than 64 MiB.
+const BODY_CHUNK: usize = 64 * 1024;
+
 /// Reads exactly one GIOP message, without reassembling anything.
 ///
-/// Rejects a `message_size` above `max_size` before allocating.
+/// Rejects a `message_size` above `max_size` before allocating, and commits
+/// what is below it only as it is received — see [`BODY_CHUNK`].
 pub fn read_one_message(stream: &mut impl Read, max_size: usize) -> Result<RawMessage> {
     let mut header = [0u8; HEADER_LEN];
     stream.read_exact(&mut header)?;
@@ -1279,10 +1293,24 @@ pub fn read_one_message(stream: &mut impl Read, max_size: usize) -> Result<RawMe
         return Err(Error::MessageTooLarge { declared: size, limit: max_size });
     }
 
-    let mut bytes = Vec::with_capacity(HEADER_LEN + size);
+    // Twelve bytes must not buy a 64 MiB allocation. `size` is peer-declared
+    // and, until the body arrives, entirely unbacked: committing and zeroing
+    // it up front let one header — measured, 12 bytes, no body at all — cost
+    // the whole ceiling, on every connection, for free. This is the rule the
+    // sequence decoder already enforces with `validate_count`, arriving
+    // through the reader's door instead of the decoder's, which is exactly why
+    // it was missed here: the reader has no buffer to validate against, so it
+    // must let the bytes themselves do the validating.
+    let mut bytes = Vec::with_capacity(HEADER_LEN + size.min(BODY_CHUNK));
     bytes.extend_from_slice(&header);
-    bytes.resize(HEADER_LEN + size, 0);
-    stream.read_exact(&mut bytes[HEADER_LEN..])?;
+    let mut remaining = size;
+    while remaining > 0 {
+        let chunk = remaining.min(BODY_CHUNK);
+        let at = bytes.len();
+        bytes.resize(at + chunk, 0);
+        stream.read_exact(&mut bytes[at..])?;
+        remaining -= chunk;
+    }
     Ok(RawMessage { msg_type, version, endian, more_fragments, fragments: 1, bytes })
 }
 
@@ -2454,6 +2482,110 @@ mod tests {
                 assert_eq!(limit, DEFAULT_MAX_MESSAGE_SIZE);
             }
             other => panic!("expected MessageTooLarge, got {other:?}"),
+        }
+    }
+
+    /// A GIOP 1.2 header with an arbitrary declared `message_size`.
+    fn header_declaring(size: u32) -> Vec<u8> {
+        let mut h = MAGIC.to_vec();
+        h.extend_from_slice(&[1, 2, 0, 0]); // 1.2, big endian, Request
+        h.extend_from_slice(&size.to_be_bytes());
+        h
+    }
+
+    /// A peer that sends a header, then at most `body` bytes, then goes quiet.
+    /// It records what it was *asked* for, which is the observable side of
+    /// "committed only as it arrives".
+    struct Trickle {
+        head: Vec<u8>,
+        at: usize,
+        body: usize,
+        largest_request: usize,
+        /// Requests for a whole chunk — one per chunk the reader committed.
+        chunks_entered: usize,
+    }
+
+    impl Read for Trickle {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.at >= self.head.len() {
+                self.largest_request = self.largest_request.max(buf.len());
+                if buf.len() == BODY_CHUNK {
+                    self.chunks_entered += 1;
+                }
+            }
+            if self.at < self.head.len() {
+                let n = buf.len().min(self.head.len() - self.at);
+                buf[..n].copy_from_slice(&self.head[self.at..self.at + n]);
+                self.at += n;
+                return Ok(n);
+            }
+            let n = buf.len().min(self.body);
+            buf[..n].fill(0xAA);
+            self.body -= n;
+            Ok(n) // 0 once the body runs out: the peer stopped talking
+        }
+    }
+
+    /// Twelve bytes must not buy a 64 MiB allocation — the Phase 0 audit's
+    /// worst finding, guarded in the sequence decoder and, until this test,
+    /// not in the reader. Measured before the fix with a counting allocator:
+    /// a header declaring 64 MiB and **no body at all** committed and zeroed
+    /// 67,108,875 bytes. After it: 65,548.
+    ///
+    /// A test cannot read `Vec` capacity, and `forbid(unsafe_code)` rules out
+    /// instrumenting the allocator in-tree, so what is asserted here is the
+    /// property that produces the bound — the reader never asks for, and so
+    /// never commits, more than one chunk the peer has not delivered.
+    #[test]
+    fn a_declared_body_is_committed_only_as_it_arrives() {
+        let declared = 64 * 1024 * 1024 - 1;
+        let mut peer = Trickle {
+            head: header_declaring(declared),
+            at: 0,
+            body: 1024,
+            largest_request: 0,
+            chunks_entered: 0,
+        };
+        let r = read_one_message(&mut peer, DEFAULT_MAX_MESSAGE_SIZE);
+        assert!(r.is_err(), "a body that never arrives is not a message");
+        assert!(
+            peer.largest_request <= BODY_CHUNK,
+            "asked for {} bytes in one read; that is what gets committed",
+            peer.largest_request
+        );
+        assert_eq!(
+            peer.chunks_entered, 1,
+            "committed {} chunks for a peer that sent 1024 body bytes of a declared {declared}",
+            peer.chunks_entered
+        );
+    }
+
+    /// The negative control: chunking must not truncate or reorder an honest
+    /// message that is larger than one chunk.
+    #[test]
+    fn a_body_larger_than_one_chunk_still_reads_back_byte_for_byte() {
+        let body: Vec<u8> = (0..(3 * BODY_CHUNK + 7)).map(|i| (i % 251) as u8).collect();
+        let mut wire = header_declaring(body.len() as u32);
+        wire.extend_from_slice(&body);
+        let mut cursor: &[u8] = &wire;
+        let msg = read_one_message(&mut cursor, DEFAULT_MAX_MESSAGE_SIZE).expect("reads");
+        assert_eq!(msg.bytes, wire);
+        assert!(cursor.is_empty(), "read past or short of the message boundary");
+    }
+
+    /// An exact multiple of the chunk must not read one chunk too many, and a
+    /// body of zero must not read at all.
+    #[test]
+    fn chunk_boundaries_are_exact() {
+        for len in [0usize, 1, BODY_CHUNK - 1, BODY_CHUNK, BODY_CHUNK + 1, 2 * BODY_CHUNK] {
+            let body = vec![0x5A; len];
+            let mut wire = header_declaring(len as u32);
+            wire.extend_from_slice(&body);
+            wire.extend_from_slice(b"trailing bytes of the next message");
+            let mut cursor: &[u8] = &wire;
+            let msg = read_one_message(&mut cursor, DEFAULT_MAX_MESSAGE_SIZE).expect("reads");
+            assert_eq!(msg.bytes.len(), HEADER_LEN + len, "len {len}");
+            assert_eq!(cursor, b"trailing bytes of the next message", "len {len}");
         }
     }
 
