@@ -78,7 +78,7 @@ use orbweaver_registry::ifr::{
     RepositoryServer,
 };
 use orbweaver_registry::ingest::{self, Limits, Report};
-use orbweaver_registry::{Entry, OperationSig, Origin, ParamDirection, Registry};
+use orbweaver_registry::{Entry, OperationSig, Origin, ParamDirection, Registry, Strictness};
 
 const T: Duration = Duration::from_secs(5);
 
@@ -380,13 +380,15 @@ fn hostile_battery() -> Fallible {
 }
 
 fn ingest_local_idl() -> Result<Registry, Box<dyn std::error::Error>> {
-    let mut registry = Registry::new();
-    for path in DEFAULT_IDL {
-        let source = std::fs::read_to_string(path)?;
-        let spec = orbweaver_idl::parse(&source).map_err(|e| format!("{path}: {e}"))?;
-        registry.load(&spec)?;
-    }
-    Ok(registry)
+    // The facade this stands up is what the ingest walk reads back, so it has
+    // to hold the whole contract: an unresolved base here would come back as an
+    // interface with no ancestry and the walk would agree with itself about a
+    // graph neither file describes.
+    Ok(orbweaver_registry::registry_from_files(
+        &DEFAULT_IDL,
+        &orbweaver_idl::SearchPath::new(),
+        Strictness::Grammar,
+    )?)
 }
 
 fn self_facade() -> Result<Ior, Box<dyn std::error::Error>> {

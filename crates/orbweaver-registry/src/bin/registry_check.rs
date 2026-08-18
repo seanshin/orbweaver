@@ -5,21 +5,34 @@
 //! the result is the same type description a stock ORB produces for the same
 //! IDL — so this asks a peer for an `any` holding that type and compares.
 //!
-//! Usage: `registry-check <ior-file> <idl-file> <qualified::Name>`
+//! Usage: `registry-check [-I <dir>]... <ior-file> <idl-file> <qualified::Name>`
+//!
+//! The IDL file's `#include`s are resolved before the registry is built: a
+//! `TypeCode` derived from a translation unit with a piece missing is not the
+//! `TypeCode` the peer will send, and the comparison would fail for a reason
+//! that has nothing to do with either encoder.
 
 use std::time::Duration;
 
 use orbweaver_giop::typecode::{self, TypeCode};
 use orbweaver_giop::{Connection, Ior};
-use orbweaver_registry::Registry;
+use orbweaver_idl::SearchPath;
+use orbweaver_registry::{Registry, Strictness, take_include_dirs};
 
 fn main() -> std::process::ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let search = match take_include_dirs(&mut args) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            return std::process::ExitCode::from(2);
+        }
+    };
     if args.len() < 3 {
-        eprintln!("usage: registry-check <ior-file> <idl-file> <qualified::Name>");
+        eprintln!("usage: registry-check [-I <dir>]... <ior-file> <idl-file> <qualified::Name>");
         return std::process::ExitCode::from(2);
     }
-    match run(&args[0], &args[1], &args[2]) {
+    match run(&args[0], &args[1], &args[2], &search) {
         Ok(true) => {
             println!("\nregistry: PASS — derived TypeCode matches the peer's");
             std::process::ExitCode::SUCCESS
@@ -35,11 +48,17 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-fn run(ior_path: &str, idl_path: &str, name: &str) -> Result<bool, Box<dyn std::error::Error>> {
-    let src = std::fs::read_to_string(idl_path)?;
-    let spec = orbweaver_idl::parse(&src).map_err(|e| e.to_string())?;
-    let mut reg = Registry::new();
-    reg.load(&spec)?;
+fn run(
+    ior_path: &str,
+    idl_path: &str,
+    name: &str,
+    search: &SearchPath,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let reg: Registry =
+        orbweaver_registry::registry_from_files(&[idl_path], search, Strictness::Grammar)?;
+    for u in reg.unresolved() {
+        println!("  warning: {u}");
+    }
 
     let id = reg.id_of(name).ok_or_else(|| format!("{name} is not in the registry"))?.clone();
     let derived = reg.typecode(&id).ok_or_else(|| format!("{id} has no TypeCode"))?.clone();

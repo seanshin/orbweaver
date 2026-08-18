@@ -1,0 +1,26 @@
+// ---------------------------------------------------------------------------
+// Revision 1 of the shared header.  The only file that differs between v1 and
+// v2 — `ledger.idl` is byte-identical in both — so a differ that cannot follow
+// a `#include` sees two identical translation units and reports no change.
+//
+// v1과 v2에서 **유일하게** 다른 파일.  `ledger.idl`은 두 리비전이 바이트까지
+// 동일하다.  `#include`를 따라가지 못하는 차분기는 "변경 없음"을 보고한다.
+// ---------------------------------------------------------------------------
+
+#pragma prefix "orbweaver.example"
+
+module Ledger {
+
+    typedef string Reference;
+
+    struct Posting {
+        Reference slip;
+        long      amount_minor;
+    };
+
+    interface Recorded {
+        readonly attribute Reference slip;
+        void restamp(in Reference fresh);
+    };
+
+};

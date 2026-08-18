@@ -31,7 +31,7 @@ use orbweaver_giop::Ior;
 use orbweaver_giop::server::Server;
 use orbweaver_registry::ifr::{RepositoryServer, interface_ids};
 use orbweaver_registry::ingest::{Limits, ingest};
-use orbweaver_registry::{Entry, Registry};
+use orbweaver_registry::{Entry, Registry, Strictness};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 const ROOT_KEY: &[u8] = b"InterfaceRepository";
@@ -314,15 +314,21 @@ fn safe(id: &str) -> String {
     id.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect()
 }
 
+/// Builds the local registry S3i ingests through, `#include`s resolved.
+///
+/// `orbweaver_idl::check` is the *string* entry point and cannot resolve a
+/// relative `#include`; this is the same call through the path entry point, at
+/// the same strictness. The `--idl` paths are what somebody points at their own
+/// estate, and an estate is the one shape that is never a single self-contained
+/// file — inferring annotations for an interface whose base went missing would
+/// propose a contract for less than the interface actually has.
 fn load_idl(paths: &[String]) -> Result<Registry, String> {
-    let mut registry = Registry::new();
-    for path in paths {
-        let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-        let spec = orbweaver_idl::check(&text)
-            .map_err(|d| format!("{path}: rejected by S4 ({} diagnostic(s))", d.len()))?;
-        registry.load(&spec).map_err(|e| format!("{path}: {e}"))?;
-    }
-    Ok(registry)
+    orbweaver_registry::registry_from_files(
+        paths,
+        &orbweaver_idl::SearchPath::new(),
+        Strictness::Checked,
+    )
+    .map_err(|e| e.message)
 }
 
 /// Stands the project's own IR facade up on loopback and returns its reference.

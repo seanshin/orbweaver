@@ -15,8 +15,8 @@
 use std::time::Duration;
 
 use orbweaver_giop::{Connection, Error, Ior};
-use orbweaver_registry::Registry;
 use orbweaver_registry::diff::{Verdict, diff};
+use orbweaver_registry::{Registry, Strictness};
 
 const OK: &str = "ok  ";
 const NO: &str = "FAIL";
@@ -80,12 +80,17 @@ fn verdict(fails: u32) -> std::process::ExitCode {
     }
 }
 
+/// The contract files are given on the command line, so their `#include`s are
+/// resolved the same way `idl-diff` resolves them — this spike exists to check
+/// that the differ's verdicts match the wire, and it can only do that over the
+/// same translation units the differ sees.
 fn load(path: &str) -> Result<Registry, String> {
-    let src = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-    let spec = orbweaver_idl::parse(&src).map_err(|e| format!("{path}: {e}"))?;
-    let mut r = Registry::new();
-    r.load(&spec).map_err(|e| format!("{path}: {e}"))?;
-    Ok(r)
+    orbweaver_registry::registry_from_files(
+        &[path],
+        &orbweaver_idl::SearchPath::new(),
+        Strictness::Grammar,
+    )
+    .map_err(|e| e.message)
 }
 
 /// What the differ says, before anything is deployed.

@@ -70,12 +70,25 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::from(2);
     }
 
-    let baseline = match against.as_deref().map(std::fs::read_to_string) {
-        Some(Ok(s)) => Some(s),
-        Some(Err(e)) => {
-            eprintln!("{}: {e}", against.unwrap_or_default());
-            return std::process::ExitCode::from(2);
-        }
+    // The released contract is resolved too, and for the same reason the
+    // proposal is: `--against` compares two contracts, and comparing a resolved
+    // proposal with an unresolved baseline reports every name the baseline's
+    // headers declared as newly added. Read as a string it was the one file in
+    // this tool that `#include` resolution had not reached.
+    let baseline = match against.as_deref() {
+        Some(path) => match preprocess_file(std::path::Path::new(path), &search) {
+            Ok(u) if u.is_ok() => Some(u.text),
+            Ok(u) => {
+                for d in &u.errors {
+                    eprintln!("{}", u.render(d));
+                }
+                return std::process::ExitCode::from(2);
+            }
+            Err(e) => {
+                eprintln!("{path}: {e}");
+                return std::process::ExitCode::from(2);
+            }
+        },
         None => None,
     };
 
