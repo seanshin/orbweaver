@@ -87,6 +87,48 @@ records what changed and, where it matters, what it changes on the wire.
   `{"_raw": <base64>}`, tagged, because a malformed TypeCode is its producer's
   problem and a renderer that refuses to render it hides the evidence.
 
+### 🔒 Security / 보안
+
+- **An argument value a content stage saw could reach the audit ledger.** The
+  `SEAT_SAFETY_CONTENT` interceptor seat reads argument *values* — that is what
+  it is for — and it can also refuse. Its refusal is `Denied::Intercepted`,
+  whose `reason` is free prose written by whatever stage a deployment
+  installed, and `AuditInterceptor` rendered that prose verbatim. A content
+  filter's most natural sentence names the thing it objected to, so the payload
+  landed in the one artifact this crate writes to disk, retains, and greps.
+
+  Measured, not reasoned: a real session with a marker in an argument produced
+
+  ```
+  REFUSE caller=alice … why=the safety.content stage refused this call:
+         this looked like a credential: {"cents":"pin-s3cret-4242"}
+  ```
+
+  The channel was opened on 2026-08-14 by the batch that filled the seat, which
+  checked that a stage *could* see the arguments and did not check its own
+  second condition — that the audit must not thereby gain a way to log one.
+  `guard.rs`'s claim that an audit line "can carry no credential material:
+  nothing here holds one" was false from that day and left standing.
+
+  **The ledger now takes the stage's name and drops its prose.** Typed refusals
+  are unchanged — their fields are repository ids, operation and scope names,
+  quota arithmetic, none of which can hold a byte the agent sent. The full
+  sentence still reaches the caller, the dry-run report and every observer
+  stage: readers who already hold the arguments. The gate did not move; a
+  refusal still precedes anything being sent.
+
+  **A gate that has to see a secret must not thereby be a gate that publishes
+  one.** Two harness checks: the property, and the shape — an `audit_entry`
+  call site taking a `Denied`'s `Display` — that would reintroduce it.
+
+  내용 좌석은 인자 **값**을 읽는다(그러라고 있는 자리다). 그 좌석의 거부 사유는
+  배포자가 설치한 스테이지가 쓴 자유 산문이고, 원장은 그것을 그대로 실었다 —
+  디스크에 남고 사람이 grep 하는 유일한 산출물에. 실측: 인자에 넣은 PIN이 `why=`에
+  그대로 찍혔다. 좌석을 채운 2026-08-14 배치가 **자기 두 번째 조건을 검사하지
+  않았고**, `guard.rs`의 "자격증명은 담기지 않는다"는 주장은 그날부터 거짓이었다.
+  이제 원장은 스테이지 **이름**만 싣는다. **비밀을 봐야 하는 게이트가 비밀을
+  퍼뜨리는 게이트가 되어서는 안 된다.**
+
 ### ⚠ Behaviour changed / 동작 변경
 
 - **A servant that deliberately does not implement a declared operation now

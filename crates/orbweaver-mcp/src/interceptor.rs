@@ -216,7 +216,6 @@ use orbweaver_registry::Registry;
 
 use crate::guard::{
     DECISION_ALLOW, DECISION_DRY_RUN_ALLOW, DECISION_DRY_RUN_REFUSE, DECISION_REFUSE, audit_entry,
-    audit_reason,
 };
 use crate::identity::Caller;
 use crate::policy::{Approval, Denied, Exposure, Unannotated, effect_refusal, required_scopes};
@@ -1479,11 +1478,15 @@ impl Interceptor for AuditInterceptor {
                 ctx.caller,
                 ctx.target,
                 ctx.operation,
-                Some(&audit_reason(why)),
+                Some(crate::guard::ledger_reason(why)),
             ),
-            CallResult::Unresolved { why } => {
-                audit_entry(DECISION_REFUSE, ctx.caller, ctx.target, ctx.operation, Some(why))
-            }
+            CallResult::Unresolved { why } => audit_entry(
+                DECISION_REFUSE,
+                ctx.caller,
+                ctx.target,
+                ctx.operation,
+                Some(crate::guard::AuditReason::already_rendered(why)),
+            ),
         };
         self.push(line);
     }
@@ -1507,7 +1510,7 @@ impl Interceptor for AuditInterceptor {
                 ctx.caller,
                 ctx.target,
                 ctx.operation,
-                Some(&audit_reason(why)),
+                Some(crate::guard::ledger_reason(why)),
             ),
         };
         self.push(line);

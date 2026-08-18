@@ -154,15 +154,40 @@ pub(crate) fn audit_entry(
     caller: Option<&Caller>,
     target: &str,
     operation: &str,
-    why: Option<&str>,
+    why: Option<AuditReason<'_>>,
 ) -> String {
     let caller = caller.map_or(NOBODY, |c| c.principal.as_str());
     let mut line = format!("{decision} caller={caller} target={target} operation={operation}");
     if let Some(why) = why {
         line.push_str(" why=");
-        line.push_str(why);
+        line.push_str(&why.0);
     }
     line
+}
+
+/// Prose that has been judged fit for the ledger.
+///
+/// A newtype rather than a `&str` because the rule below is not one a reviewer
+/// should have to remember at each new call site, and because the grep that
+/// was going to enforce it **caught its own explanatory comment and missed a
+/// real violation** — a check that is green and measures nothing. There are
+/// exactly two constructors: [`audit_reason`], which decides what a refusal
+/// may say, and [`AuditReason::already_rendered`], for prose that never came
+/// from a [`Denied`] at all. A `Denied` cannot reach this type by `Display`,
+/// so it cannot reach the ledger, and the compiler is what says so.
+///
+/// 문자열 대신 타입인 이유는, 이 규칙을 새 호출 지점마다 사람이 기억해서는
+/// 안 되기 때문이다 — 그리고 이를 지키려던 grep이 **자기 설명 주석을 잡고 진짜
+/// 위반은 놓쳤기** 때문이다. 초록이면서 아무것도 재지 않는 검사였다.
+#[derive(Debug, Clone)]
+pub(crate) struct AuditReason<'a>(std::borrow::Cow<'a, str>);
+
+impl<'a> AuditReason<'a> {
+    /// For prose that is already a rendered message and never held a payload —
+    /// a [`crate::ToolError`], which the caller's own request produced.
+    pub(crate) fn already_rendered(text: &'a str) -> Self {
+        AuditReason(std::borrow::Cow::Borrowed(text))
+    }
 }
 
 /// A refusal as the **ledger** states it, which is not always as the caller
@@ -202,6 +227,12 @@ pub(crate) fn audit_reason(why: &Denied) -> String {
         Denied::Intercepted { stage, .. } => format!("the {stage} stage refused this call"),
         typed => typed.to_string(),
     }
+}
+
+/// [`audit_reason`]'s output, admitted to the ledger. The only path from a
+/// [`Denied`] to an audit line.
+pub(crate) fn ledger_reason(why: &Denied) -> AuditReason<'static> {
+    AuditReason(std::borrow::Cow::Owned(audit_reason(why)))
 }
 
 /// An invoker that checks policy per operation and records every decision.

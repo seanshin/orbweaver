@@ -1106,6 +1106,40 @@ else
 fi
 
 # ── The guard's dry-run: a policy preview that costs nothing ────────────────
+hr "audit ledger — a gate that sees a secret must not publish one"
+# The content seat reads argument *values* (that is what it is for), and it can
+# also refuse. Its refusal is free prose written by whatever stage a deployment
+# installed, and the audit ledger is the one artifact this crate writes to disk,
+# retains and greps. Rendering that prose put the payload there: measured, with
+# a PIN in an argument reaching `why=` verbatim. Two checks, because the second
+# is the one that catches the next call site.
+lk=$(cargo test -q -p orbweaver-mcp --lib -- \
+     an_argument_a_content_stage_saw_cannot_reach_the_ledger \
+     the_ledger_keeps_a_typed_reason_whole_and_a_stages_prose_not_at_all \
+     a_dry_run_offers_a_content_stage_no_arguments_to_judge 2>&1)
+n_lk=$(printf '%s' "$lk" | grep -o '^test result: ok. [0-9]*' | grep -o '[0-9]*$')
+if [ "${n_lk:-0}" = "3" ]; then
+  echo "  ok   a content stage reads the payload; the ledger and the trace do not"
+else
+  # A renamed or deleted test is unmeasured, which is a failure, never a pass.
+  echo "  FAIL the content-seat leak property is failing or no longer measured"
+  printf '%s\n' "$lk" | grep -A3 panicked | head -6 | sed 's/^/       /'
+  fail_total=$((fail_total+1))
+fi
+# The rule is a type, not a grep: `audit_entry` takes an `AuditReason`, and a
+# `Denied` cannot become one by `Display`. The grep this replaced caught its own
+# explanatory comment and, measured, missed a real violation — green, and
+# measuring nothing. What a compiler cannot see is a *third* constructor
+# appearing, so that is what is counted here.
+ctors=$(grep -c 'AuditReason(std::borrow::Cow::' crates/orbweaver-mcp/src/guard.rs)
+if [ "$ctors" = "2" ]; then
+  echo "  ok   AuditReason has exactly two constructors; a Denied reaches the ledger through one"
+else
+  echo "  FAIL AuditReason has $ctors constructor(s), not 2 — a new way into the ledger"
+  grep -n 'AuditReason(std::borrow::Cow::' crates/orbweaver-mcp/src/guard.rs | sed 's/^/       /'
+  fail_total=$((fail_total+1))
+fi
+
 hr "dry-run — the exposure read before it is deployed"
 # No --ior and no peer, which is the whole point: this answers before a
 # deployment exists. Two properties, both cheap. The report is well-formed and
