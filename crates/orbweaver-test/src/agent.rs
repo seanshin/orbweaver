@@ -458,7 +458,10 @@ fn seeds() -> Vec<String> {
         r#"{"_t":"wstring","_v":"😀"}"#.to_owned(),
         r#"{"_t":"string","_v":"\u00"}"#.to_owned(),
         r#"{"_t":"string","_v":"\q"}"#.to_owned(),
-        r#"{"_t":"string","_v":"a b"}"#.to_owned(),
+        // A literal NUL inside a JSON string. Written with an escape rather
+        // than as the byte: one raw NUL made this whole file read as
+        // *binary* to grep, diff and every review tool, for one seed.
+        "{\"_t\":\"string\",\"_v\":\"a\0b\"}".to_owned(),
         r#"{"_t":"wchar","_v":"ab"}"#.to_owned(),
         r#"{"_t":"wchar","_v":""}"#.to_owned(),
         // ── Values, one per arm of `from_json` ──
@@ -579,10 +582,17 @@ pub fn panic_freedom(cases: usize, root: u64) -> Vec<Finding> {
         let (source, text) = make_document(&mut rng, &seeds);
         let doc = Json::parse(&text).ok();
 
-        // The allocation check runs first, and its answer decides which targets
-        // may run at all. A document over budget is a finding whether or not
-        // anything panics, and handing it to a target that would honour the
-        // number is how a fuzz becomes the outage.
+        // `eager_bytes` is a *model* of what a decode would reserve. It selects
+        // which documents are worth asking about; it is not the verdict, and
+        // for one run it was: the `Array` guard landed in `orbweaver-dynamic`
+        // and this went on reporting the same finding, because a static model
+        // cannot see a fix. The verdict is now the decoder's own answer.
+        //
+        // Running the decode on an over-budget document is safe **because** the
+        // guard refuses on the declared count before reserving. If that guard
+        // ever regresses, this line reserves rather than reports — which is a
+        // real hazard and is written down rather than designed around, because
+        // the alternative is a model that lies in both directions.
         let mut over_budget = None;
         if let Some(j) = &doc
             && let Ok(tc) = anyjson::tc_from_json(j, "")
@@ -590,7 +600,21 @@ pub fn panic_freedom(cases: usize, root: u64) -> Vec<Finding> {
             let demanded = eager_bytes(&tc);
             let budget = ALLOCATION_ALLOWANCE.saturating_mul(text.len().max(1) as u128);
             if demanded > budget {
-                over_budget = Some(demanded);
+                // "It returned an error" is not the property. Without the
+                // guard the decode *also* fails — on the first element, for a
+                // truncated stream — so an is_ok() check can never fire and
+                // would be one more green line measuring nothing. The property
+                // is that the refusal is about the **declared count**, which
+                // is the only refusal that happens before the reservation.
+                let probe = [0u8; 8];
+                let mut d = orbweaver_cdr::Decoder::new(&probe, orbweaver_cdr::Endian::Big);
+                let refused_on_the_count = match orbweaver_dynamic::decode(&mut d, &tc) {
+                    Ok(_) => false,
+                    Err(e) => e.message.contains("implausible CDR length prefix"),
+                };
+                if !refused_on_the_count {
+                    over_budget = Some(demanded);
+                }
             }
         }
         if let Some(demanded) = over_budget {
@@ -610,10 +634,10 @@ pub fn panic_freedom(cases: usize, root: u64) -> Vec<Finding> {
                 ),
                 format!(
                     "reproduce with orbweaver_test::agent::run_case({seed:#x}, \
-                     \"anyjson::tc_from_json\"); the document is {}. The reservation is made by \
-                     orbweaver_dynamic's decode_at, whose Array arm calls Vec::with_capacity on \
-                     the length without the validate_count guard its Sequence arm uses; the fix \
-                     belongs there, not here",
+                     \"anyjson::tc_from_json\"); the document is {}. The decoder did not refuse \
+                     on the declared count, so the reservation happens before anything stops it; \
+                     `orbweaver_dynamic`'s `decode_at` guards its `Sequence` and `Array` arms \
+                     with `validate_count` and one of them has stopped",
                     quoted(&text)
                 ),
             );

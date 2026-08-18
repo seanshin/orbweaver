@@ -227,6 +227,26 @@ else
   fail_total=$((fail_total+1))
 fi
 
+hr "agent-fuzz — the parsers a tools/call reaches"
+# An agent is untrusted in this project's threat model exactly as a peer is
+# (R11/R12), and AnyJSON v1.1 put a recursive parser on that boundary —
+# `tc_from_json`, which builds a type out of a document's own numbers. Nobody
+# added it to a fuzzer, including whoever wrote it. Sibling of the wire-fuzz
+# group; neither run's green stands in for the other's.
+if af_out=$(cargo run -q --release -p orbweaver-test --bin agent-fuzz -- --cases 50000 2>&1); then
+  printf '%s\n' "$af_out" | grep -E "documents:|types:|values:" | sed 's/^ */  ..   /'
+  echo "  ok   50k documents over 7 agent-boundary targets: no panic, no unbounded allocation"
+else
+  echo "  FAIL a document an agent could send panics or buys memory"
+  printf '%s\n' "$af_out" | grep -E "FAIL|reproduce with" | head -4 | sed 's/^/       /'
+  fail_total=$((fail_total+1))
+fi
+# A zero reach is a green that measured nothing.
+case "$af_out" in
+  *WARNING:*) echo "  FAIL a fuzz target was never reached"; fail_total=$((fail_total+1)) ;;
+  *)          echo "  ok   every agent-boundary target was reached" ;;
+esac
+
 hr "§5.3 — a breaking change inside an included header reaches the gate"
 # corpus/evolution/v{1,2}/ledger.idl are byte-identical; both breaking changes
 # live in the common.idl they share. Read as strings, the two revisions are
