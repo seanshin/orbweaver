@@ -171,6 +171,60 @@ records what changed and, where it matters, what it changes on the wire.
   that would silently re-encode the repository ids and member names inside
   every `TypeCode`.
 
+### Added / 추가
+
+- **CosEvent serves the pull model's consumer side** — `obtain_pull_supplier`,
+  `connect_pull_consumer`, `pull`, `try_pull`, `disconnect_pull_supplier`. The
+  deferral's reason was *"the same unbounded buffer this module spends its
+  bounded queue avoiding, for no named consumer"*, and **only the second clause
+  survived measurement**: a pull proxy holds events in the same bounded deque,
+  moved by the same knob, dropped oldest-first into the same counter. Nine
+  pushes into a limit of three give `queued=3, dropped=6` on both sides.
+
+  It **drops at the bound and blocks at the empty end**, deliberately and at
+  different ends. Blocking a supplier — CORBA's own answer to a full channel —
+  would let one slow puller wedge the channel for every other consumer.
+  Blocking a caller that asked to wait is what `pull` means; it is bounded,
+  woken by an arriving event, and expires as `TIMEOUT` with **`COMPLETED_NO`**,
+  the load-bearing half: nothing was consumed, so calling again is safe.
+
+  The **supplier** side stays deferred with a rewritten reason — there the
+  channel is the puller, `PullSupplier::pull` is specified to block, and the
+  channel would hold a thread per supplier on somebody else's clock, for no
+  named supplier. `destroy` stays too, its reason moved from outbound calls
+  (which `guarded` now answers) to authorization: it is an **unauthenticated
+  remote operation that ends the channel for every other client**.
+
+  CosEvent 19 → **24 served**, `NO_IMPLEMENT` 9 → 4. **No peer verified any of
+  it** — omniEvents is absent and omniORBpy ships no `ProxyPullSupplier` stubs.
+
+- **The sweep was measuring the wrong object.** It probed the pull operations
+  against a *push* proxy, because no pull proxy could be obtained when that
+  code was written — so the moment they were served it reported the whole
+  `ProxyPullSupplier` interface as **unserved**. A false absence produced by
+  asking the wrong reference, and one that appears exactly when the underlying
+  thing gets better.
+
+- **F5 was already served, so what was missing was the second direction.**
+  `PLAN-SERVICES` §10 listed LifeCycle/Property as never started;
+  `COMPONENTS.md` had it ✅ since 2026-08-14 and coverage measured 16/16 — the
+  fourth "gap" this session that turned out to be closed. What was genuinely
+  missing is one section down in that same document: *no cross-ORB direction*.
+  An omniORB client now calls **all sixteen** through its own stubs. A hole it
+  found: `bind_expert`/`set_policy` take references **no operation returns**.
+
+- **S4 reads an `#include` from the item's own directory.** The thirteen-file
+  estate scored **1/13 (8%)** first-pass, each contract refused for a file
+  sitting beside it, and nothing was red because `estate/run.sh` amalgamates
+  first. **13/13** now, with the exposure worksheet byte-identical to the
+  amalgamated one — the equivalence that script had been assuming.
+
+  The shape is a `Source`, not a path: a model writes IDL that was never a
+  file. Text with no origin still says so in the same words, pinned by a test.
+  Two sites shared the cause, including `DiffOutcome::compared` recording
+  **`true` when the baseline failed to parse** — an unmeasured check reported
+  as a pass, the third found this session.
+
 ### Known limits / 알려진 한계
 
 - **The `char` conversion list stays empty, and that is now measured rather
