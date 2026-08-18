@@ -91,6 +91,16 @@ pub enum Value {
     Any(Box<TypeCode>, Box<Value>),
     /// An object reference, or nil.
     ObjRef(Option<Ior>),
+    /// A `TypeCode` as a value in its own right — `tk_TypeCode`, kind 12.
+    ///
+    /// Distinct from the `TypeCode` inside [`Value::Any`], which describes the
+    /// value beside it. Here the type code *is* the value: it is what
+    /// `::CORBA::TypeCode describe(...)` returns and what every Interface
+    /// Repository description is made of. Without this variant the static
+    /// path carried a type the dynamic path could not, so §8's *static equals
+    /// dynamic* oracle was not weaker for those operations, it was
+    /// inapplicable — see `docs/decisions/D008-anyjson-self-description.md`.
+    TypeCode(Box<TypeCode>),
 }
 
 /// Why a value could not be marshalled or unmarshalled.
@@ -326,6 +336,7 @@ fn kind_of(v: &Value) -> &'static str {
         Value::List(_) => "a list",
         Value::Any(..) => "an any",
         Value::ObjRef(_) => "an object reference",
+        Value::TypeCode(_) => "a typecode",
     }
 }
 
@@ -581,6 +592,11 @@ fn encode_at(
             }
         },
 
+        (TypeCode::TypeCode, Value::TypeCode(carried)) => {
+            orbweaver_giop::typecode::encode(e, carried)
+                .map_err(|err| Error { path: p.render(), message: err.to_string() })
+        }
+
         (t, v) => wrong_kind(p, t, v),
     }
 }
@@ -747,6 +763,11 @@ fn decode_at(d: &mut Decoder<'_>, tc: &TypeCode, p: &Path<'_>, wide: WideCodec) 
             } else {
                 Value::ObjRef(Some(ior))
             }
+        }
+        TypeCode::TypeCode => {
+            let carried = orbweaver_giop::typecode::decode(d)
+                .map_err(|e| Error { path: p.render(), message: e.to_string() })?;
+            Value::TypeCode(Box::new(carried))
         }
         other => return p.fail(format!("cannot decode {} yet", describe(other))),
     })

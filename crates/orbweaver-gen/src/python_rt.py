@@ -213,6 +213,52 @@ class Enum(object):
         return items[name]
 
 
+class TypeCode(object):
+    """A ``::CORBA::TypeCode`` as a value — AnyJSON v1.1's structural form.
+
+    Held as the document rather than as a parsed type, and that is the whole
+    design. A Python client needs a TypeCode for three things: to receive one,
+    to hand it back, and to look at it — ``tc.kind`` answers "what is this",
+    ``tc.form`` is the structure underneath. What it does **not** do is become
+    a descriptor you can marshal a value against; that would mean Python
+    deciding CDR questions, and this package contains no wire (D007).
+
+    One limit is not Python's fault and is written here because this is where
+    somebody meets it: a union's case labels arrive as base64 of raw bytes,
+    whose byte order the TypeCode does not record. Relaying one is exact.
+    Reading one is not yet possible for anybody, in either language.
+    """
+
+    __slots__ = ("form",)
+
+    def __init__(self, form, path=""):
+        if not isinstance(form, (str, dict)):
+            raise MarshalError(path, "a TypeCode is a name or a type object, got %r" % (form,))
+        self.form = form
+
+    @property
+    def kind(self):
+        """``"long"``, ``"struct"``, ``"seq"`` — the shape, in one word."""
+        return self.form if isinstance(self.form, str) else self.form.get("kind")
+
+    @property
+    def id(self):
+        """The repository id, for the kinds that have one."""
+        return None if isinstance(self.form, str) else self.form.get("id")
+
+    def __eq__(self, other):
+        return isinstance(other, TypeCode) and other.form == self.form
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __hash__(self):
+        return hash(repr(self.form))
+
+    def __repr__(self):
+        return "TypeCode(%r)" % (self.kind,)
+
+
 class Union(object):
     """Base of every generated IDL union.
 
@@ -488,6 +534,10 @@ def to_json(desc, value, path=""):
             return base64.b64encode(value.octets).decode("ascii")
         if d == "any":
             return _any_out(value, path)
+        if d == "typecode":
+            if not isinstance(value, TypeCode):
+                raise MarshalError(path, "expected a TypeCode, got %r" % (value,))
+            return value.form
         if d == "void":
             return None
         raise MarshalError(path, "no AnyJSON form for %r" % (d,))
@@ -596,6 +646,8 @@ def from_json(desc, j, path=""):
             return LongDouble(_unbase64(j, path))
         if d == "any":
             return _any_in(j, path)
+        if d == "typecode":
+            return TypeCode(j, path)
         if d == "void":
             return None
         raise MarshalError(path, "no AnyJSON form for %r" % (d,))
@@ -662,12 +714,18 @@ def from_json(desc, j, path=""):
 def _any_in(j, path):
     if not isinstance(j, dict) or "_t" not in j or "_v" not in j:
         raise MarshalError(path, "an any is {\"_t\": <type>, \"_v\": <value>}")
-    inner = _ANY_DESC.get(j["_t"])
+    inner = _ANY_DESC.get(j["_t"]) if isinstance(j["_t"], str) else None
     if inner is None:
+        # AnyJSON v1.1 gives `_t` a structural form and the Rust side both
+        # writes and reads it. This runtime does not yet turn one back into a
+        # descriptor, so it refuses rather than guessing — the same rule the
+        # Rust side follows, applied to the half that is behind. What it must
+        # never do is accept the document and marshal `_v` as something else.
         raise MarshalError(
             path,
-            "unknown type %r; only primitives may cross in an any until the "
-            "registry is consulted" % (j["_t"],))
+            "this runtime reads only a named type in an any's _t; %r is "
+            "AnyJSON v1.1's structural form, which the Python side does not "
+            "yet map to a descriptor (D008)" % (j["_t"],))
     if inner in ("string", "wstring"):
         inner = (inner, 0)
     return (inner, from_json(inner, j["_v"], _member(path, "_v")))

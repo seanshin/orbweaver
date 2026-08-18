@@ -10,6 +10,69 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+### ⚠ Mapping changed / 매핑 변경
+
+- **AnyJSON v1.1: a type describes itself structurally** (D008, approved
+  2026-08-18). `_t` keeps its v1 name for a type whose identity fits in one —
+  `"double"` is still `"double"` and every v1 document still reads and still
+  reproduces the same CDR — and becomes an object where v1 could say nothing,
+  or where the name lost something the wire keeps: `string<5>` and `string`
+  were one word to v1 and are two TypeCodes to a peer. The same representation
+  is now also a **value**, so `::CORBA::TypeCode` crosses.
+
+  Measured before the change: `to_json` wrote `{"_t":"IDL:gc12/Tagged:1.0",…}`
+  and `from_json` **refused that same document**. Not a limitation — an
+  asymmetry, which puts the failure on the return leg in the caller rather than
+  at the boundary that produced it. And `tk_TypeCode` had no `Value` variant at
+  all, so §8's *static equals dynamic* oracle was not weaker for the operations
+  only the static path handled; it was **inapplicable**.
+
+  **`ir-subset` went from 18 generated + 10 skipped to 28 + 0.** The ten
+  included `InterfaceDef` itself — the skip propagated up through every
+  container until `describe_interface`, the operation the IFR facade exists
+  for, could not be generated. The MCP bridge speaks the same mapping, so an
+  **Interface Repository is now readable through the agent path**, asserted by
+  repository id over the real contract in both byte orders.
+
+  **Upgrading:** nothing to do for a v1 producer or consumer; the change is
+  additive and the compatibility claim is tested, not asserted. A Python client
+  gains `_rt.TypeCode` — the document, unread: enough to receive one, hand it
+  back and inspect its `kind`, not enough to marshal a value *described* by
+  one, which would mean Python deciding CDR questions in a package that
+  deliberately contains no wire.
+
+  AnyJSON v1.1: `_t`가 이름 하나에 담기는 타입은 v1 그대로, 그 밖에는 구조가
+  된다. **추가적**이므로 v1 문서는 전부 그대로 읽히며 그 주장은 시험된다.
+  변경 전 실측: 매핑이 자기가 쓴 문서를 자기가 거부했고, `tk_TypeCode`에는
+  `Value`가 없었다. **ir-subset 18+10 → 28+0**, 그 열에는 `InterfaceDef` 자신이
+  들어 있었다.
+
+### Known limits / 알려진 한계
+
+- **A union TypeCode's case labels carry the byte order of the stream they came
+  from, and the TypeCode does not record which.** `typecode.rs` reads them with
+  `get_bytes` and writes them with `put_bytes`; neither knows the endianness.
+  Our own encode and decode agree with each other, which is why nothing is red.
+  A little-endian peer's labels miss **every** branch — measured, in both
+  stream orders — and the refusal says *"no branch of U matches the
+  discriminator"*, blaming the caller's discriminator rather than the label.
+
+  Found while giving §4.5 a structural TypeCode, and **deliberately not fixed
+  there**: it is `orbweaver-giop` work, and it is why a union's labels cross as
+  base64 rather than as values. Turning bytes of unknown order into a number
+  means guessing.
+
+  union 레이블은 디코드한 스트림의 바이트 순서를 그대로 지니고 TypeCode는 그
+  순서를 기록하지 않는다. 우리끼리는 일치하므로 아무것도 빨갛지 않다. 리틀엔디언
+  피어의 레이블은 모든 분기를 빗나가며, 거부 메시지는 레이블이 아니라 호출자를
+  탓한다. **여기서 고치지 않았다** — giop 배치의 몫이다.
+
+- **`_rt.py` reads only a named type in an `any`'s `_t`.** The Rust half reads
+  and writes the structural form; the Python half refuses it by name, with the
+  decision cited, rather than accepting the document and marshalling `_v` as
+  something else — the same rule the Rust side follows, applied to whichever
+  implementation is behind.
+
 ### Added / 추가
 
 - **A decision's status is checked, not just written.**

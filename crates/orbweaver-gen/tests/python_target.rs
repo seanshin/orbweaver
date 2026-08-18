@@ -42,6 +42,7 @@ use orbweaver_dynamic::anyjson::{self, LocalReferences};
 use orbweaver_dynamic::json::Json;
 use orbweaver_dynamic::{Value, encode};
 use orbweaver_gen::python::{descriptor, emit_python};
+use orbweaver_giop::typecode::Member;
 use orbweaver_giop::typecode::TypeCode;
 use orbweaver_giop::{IiopProfile, Ior, Version};
 use orbweaver_registry::{Entry, ParamDirection, Registry};
@@ -131,6 +132,21 @@ fn witness(tc: &TypeCode, visiting: &mut Vec<String>) -> Option<Value> {
             Value::Union { discriminator: Box::new(d), value: Some(Box::new(v?)) }
         }
         TypeCode::Alias { aliased, .. } => witness(aliased, visiting)?,
+        // A TypeCode as a value (D008). Deliberately a constructed one: a
+        // primitive would cross as the same name string v1 already used, so it
+        // would prove nothing about the structural form the ir-subset
+        // descriptions are actually made of.
+        TypeCode::TypeCode => Value::TypeCode(Box::new(TypeCode::Struct {
+            id: "IDL:witness/Described:1.0".into(),
+            name: "Described".into(),
+            members: vec![
+                Member { name: "label".into(), tc: TypeCode::String(12) },
+                Member {
+                    name: "points".into(),
+                    tc: TypeCode::Sequence { element: Box::new(TypeCode::Double), bound: 0 },
+                },
+            ],
+        })),
         _ => return None,
     })
 }

@@ -295,7 +295,7 @@ Settled here so Phase 1 does not relitigate them mid-build.
 
 ### 4.5 AnyJSON — the JSON ↔ `any` mapping
 
-The dynamic path stands on a deterministic, lossless, bidirectional mapping between agent-side JSON and CDR values. Handwaving here produces silent data corruption, so the mapping is a normative spec (**AnyJSON v1**) with property-tested round-trips:
+The dynamic path stands on a deterministic, lossless, bidirectional mapping between agent-side JSON and CDR values. Handwaving here produces silent data corruption, so the mapping is a normative spec (**AnyJSON v1.1**) with property-tested round-trips:
 
 | IDL construct | JSON encoding | Why |
 |---|---|---|
@@ -308,6 +308,8 @@ The dynamic path stands on a deterministic, lossless, bidirectional mapping betw
 | `struct`/`exception` | JSON object, member order preserved from IDL | CDR is positional |
 | `string`/`wstring` | JSON string (UTF-8); codeset conversion happens at the wire | One text representation agent-side |
 | `any` | `{"_t": <TypeCode repr>, "_v": ...}` | Self-description survives the crossing |
+| **`TypeCode` repr** | a **name** for a type whose identity fits in one (`"double"`, `"string"`), otherwise a **structure**: `{"kind": ..., "id": ..., "name": ..., "members"/"element"/"cases": ...}` | v1.1 (D008). A name loses what the wire keeps — `string<5>` and `string` are one word and two TypeCodes — and a repository id needs a registry both ends share, which is the property CDR carries the whole TypeCode to avoid. **Additive**: every v1 document still reads |
+| **`::CORBA::TypeCode` as a value** | the same `<TypeCode repr>`, standing alone | A type code *is* a value here, not a description of the one beside it: it is what `describe()` returns and what every Interface Repository description is made of |
 | **object reference** | `{"_ref": <handle>, "_type": <repository id>}` | A **handle**, never a raw IOR — see §4.7 |
 | **nil reference** | `{"_ref": null}` | Distinct from an absent field |
 | NaN / ±Inf | `{"_f": "nan" \| "+inf" \| "-inf"}` | JSON has no encoding for them |

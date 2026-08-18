@@ -1,14 +1,18 @@
 # D007 — How a generated Python client reaches the wire
 
-**STATUS: PROPOSED** — drafted 2026-08-14 alongside the Python client target
-(`docs/pipeline-runs/2026-08-14-python-target.md`). **Not adopted.** Option A
-is what the target was built on because it needs no new dependency and no
-approval; this document exists because options B and C do, and because the
-choice will be re-opened the moment somebody measures the latency.
+**STATUS: APPROVED** — drafted 2026-08-14 alongside the Python client target
+(`docs/pipeline-runs/2026-08-14-python-target.md`), approved 2026-08-18 by the
+user. **Option A is adopted for v1**: the local bridge process speaking
+AnyJSON, no new dependency, and — the part approval exists to record — **the
+bridge is not a security boundary**; `orbweaver-mcp` is, and a second weaker
+gate at the bridge would be §4.7's bypass in a new place. B stays the named
+return path, re-opened by a recorded per-call measurement and not by taste; C
+stays refused.
 
-**상태: 제안됨** — 2026-08-14 작성, 파이썬 클라이언트 타깃과 함께. **채택 아님.**
-A안은 새 의존성도 승인도 필요 없어 그대로 구현했고, 이 문서가 존재하는 이유는
-B안과 C안이 둘 다 승인을 필요로 하기 때문이다.
+**상태: 승인됨** — 2026-08-14 작성, 2026-08-18 사용자 승인. **v1은 A안 채택**:
+로컬 브리지 프로세스, 새 의존성 없음, 그리고 승인이 기록하려는 핵심 —
+**브리지는 보안 경계가 아니다**(그 역할은 `orbweaver-mcp`가 진다). B안은 측정된
+호출당 비용이 나올 때 재개하는 복귀 경로로 남고, C안은 기각으로 남는다.
 
 ---
 

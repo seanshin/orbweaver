@@ -508,9 +508,32 @@ impl Sampler {
                 }
             }
 
-            // Neither is marshalled in v1 (§4.4), and `TypeCode`/`Principal`
-            // have no `Value` at all. Saying so beats generating something the
-            // encoder will reject and calling it a failure.
+            // `tk_TypeCode` as a value in its own right (D008). The pool is
+            // deliberately not the `any` pool: what is being exercised here is
+            // the TypeCode *encoding* — its own indirections and string
+            // encapsulations — rather than a value described by one, so it
+            // reaches for the constructed shapes the `any` pool leaves out.
+            TypeCode::TypeCode => {
+                let pool = [
+                    TypeCode::Long,
+                    TypeCode::String(0),
+                    TypeCode::WString(64),
+                    TypeCode::Sequence { element: Box::new(TypeCode::Double), bound: 0 },
+                    TypeCode::Array { element: Box::new(TypeCode::Octet), length: 4 },
+                    TypeCode::Alias {
+                        id: "IDL:prop/Meters:1.0".into(),
+                        name: "Meters".into(),
+                        aliased: Box::new(TypeCode::Long),
+                    },
+                    TypeCode::ObjRef { id: "IDL:prop/I:1.0".into(), name: "I".into() },
+                    TypeCode::Any,
+                ];
+                Value::TypeCode(Box::new(pool[self.rng.below(pool.len())].clone()))
+            }
+
+            // `fixed` is not marshalled in v1 (§4.4) and `Principal` has no
+            // `Value` at all. Saying so beats generating something the encoder
+            // will reject and calling it a failure.
             // The recursive arm, resolved against the type it names rather than
             // abandoned. Depth is what terminates this, not the type: at
             // MAX_DEPTH the enclosing sequence has already been forced empty,
@@ -523,7 +546,7 @@ impl Sampler {
                 self.sample(&open)?
             }
 
-            TypeCode::Fixed { .. } | TypeCode::TypeCode | TypeCode::Principal => return None,
+            TypeCode::Fixed { .. } | TypeCode::Principal => return None,
         })
     }
 
@@ -535,7 +558,7 @@ impl Sampler {
     fn can_sample(&self, tc: &TypeCode) -> bool {
         match tc {
             TypeCode::Alias { aliased, .. } => self.can_sample(aliased),
-            TypeCode::Fixed { .. } | TypeCode::TypeCode | TypeCode::Principal => false,
+            TypeCode::Fixed { .. } | TypeCode::Principal => false,
             // Samplable exactly when the type it names is under way and there
             // is depth left to expand it into. `depth + 1` because the caller
             // asking this question is a sequence, and its elements are sampled

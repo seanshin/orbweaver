@@ -219,11 +219,12 @@ pub fn descriptor(tc: &TypeCode) -> Result<String, String> {
         TypeCode::Fixed { digits, scale } => {
             return Err(format!("fixed<{digits},{scale}> is deferred at wire level (§4.4)"));
         }
-        TypeCode::TypeCode => {
-            return Err("::CORBA::TypeCode has no AnyJSON form: §4.5 maps values, and a \
-                        TypeCode is a description of a type rather than a value of one"
-                .to_owned());
-        }
+        // D008: a TypeCode is a value, and its AnyJSON form is the structural
+        // one. Python holds it as `_rt.TypeCode` — the document, unread — which
+        // is enough to receive one, pass one on, and inspect its `kind`; it is
+        // not enough to marshal a value *described* by one, and the runtime
+        // says so rather than guessing.
+        TypeCode::TypeCode => "\"typecode\"".into(),
         other => return Err(format!("no AnyJSON form for {other:?}")),
     })
 }
@@ -235,7 +236,7 @@ pub fn descriptor(tc: &TypeCode) -> Result<String, String> {
 /// Rust client cannot express, and merging the two checks would hide that.
 fn crossable(tc: &TypeCode, visiting: &mut Vec<String>) -> Result<(), String> {
     match tc {
-        TypeCode::Fixed { .. } | TypeCode::TypeCode => descriptor(tc).map(|_| ()),
+        TypeCode::Fixed { .. } => descriptor(tc).map(|_| ()),
         TypeCode::Sequence { element, .. } | TypeCode::Array { element, .. } => {
             crossable(element, visiting)
         }

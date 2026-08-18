@@ -34,7 +34,7 @@
 
 use std::collections::BTreeMap;
 
-use orbweaver_giop::typecode::TypeCode;
+use orbweaver_giop::typecode::{Member, TypeCode, UnionCase};
 
 use crate::json::Json;
 use crate::{Error, Result, Value};
@@ -241,9 +241,14 @@ fn to_json_at(tc: &TypeCode, v: &Value, h: &mut dyn References, p: &str) -> Resu
         ),
 
         (TypeCode::Any, Value::Any(inner_tc, inner)) => Json::Object(BTreeMap::from([
-            ("_t".to_owned(), Json::String(type_name(inner_tc))),
+            ("_t".to_owned(), tc_to_json(inner_tc)),
             ("_v".to_owned(), to_json_at(inner_tc, inner, h, &member(p, "_v"))?),
         ])),
+
+        // A TypeCode standing on its own. The same structural form as `_t`,
+        // in the value position: what `describe()` returns and what every
+        // Interface Repository description is made of.
+        (TypeCode::TypeCode, Value::TypeCode(carried)) => tc_to_json(carried),
 
         // Never an IOR. §4.8's confused deputy starts with a bearer address
         // reaching something that should not have had one.
@@ -403,12 +408,12 @@ fn from_json_at(tc: &TypeCode, j: &Json, h: &dyn References, p: &str) -> Result<
             let (Some(tj), Some(vj)) = (j.get("_t"), j.get("_v")) else {
                 return fail(p, "an any is {\"_t\": <type>, \"_v\": <value>}");
             };
-            let Some(tname) = tj.as_str() else { return wrong(p, "a type name", tj) };
-            let inner = named_type(tname)
-                .ok_or_else(|| Error { path: p.into(), message: format!("unknown type {tname:?}; only primitives may cross in an any until the registry is consulted") })?;
+            let inner = tc_from_json(tj, &member(p, "_t"))?;
             let val = from_json_at(&inner, vj, h, &member(p, "_v"))?;
             Value::Any(Box::new(inner), Box::new(val))
         }
+
+        TypeCode::TypeCode => Value::TypeCode(Box::new(tc_from_json(j, p)?)),
 
         TypeCode::ObjRef { .. } => match j.get("_ref") {
             Some(Json::Null) => Value::ObjRef(None),
@@ -492,6 +497,285 @@ fn float(j: &Json, p: &str) -> Result<f64> {
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+// ── The structural TypeCode form (AnyJSON v1.1, D008) ───────────────────────
+//
+// A type describes itself in the document, so neither end needs a shared
+// registry to read the other's `any` — the property CDR gets by carrying the
+// whole TypeCode inside the encapsulation, and the one a repository id cannot
+// have. Additive: every type v1 could spell keeps its v1 spelling, so a v1
+// document still parses and still reproduces the same CDR. The object form
+// appears only where v1 said nothing at all, or where its name lost something
+// the wire keeps — `string<5>` and `string` are the same word to v1 and
+// different TypeCode bytes to a peer.
+
+/// The v1 name of a type whose whole identity fits in one, or `None`.
+fn short_name(tc: &TypeCode) -> Option<&'static str> {
+    Some(match tc {
+        TypeCode::Boolean => "boolean",
+        TypeCode::Octet => "octet",
+        TypeCode::Char => "char",
+        TypeCode::WChar => "wchar",
+        TypeCode::Short => "short",
+        TypeCode::UShort => "unsigned short",
+        TypeCode::Long => "long",
+        TypeCode::ULong => "unsigned long",
+        TypeCode::LongLong => "long long",
+        TypeCode::ULongLong => "unsigned long long",
+        TypeCode::Float => "float",
+        TypeCode::Double => "double",
+        TypeCode::LongDouble => "long double",
+        TypeCode::String(0) => "string",
+        TypeCode::WString(0) => "wstring",
+        TypeCode::Any => "any",
+        TypeCode::TypeCode => "typecode",
+        TypeCode::Void => "void",
+        TypeCode::Null => "null",
+        _ => return None,
+    })
+}
+
+fn obj(pairs: impl IntoIterator<Item = (&'static str, Json)>) -> Json {
+    Json::Object(pairs.into_iter().map(|(k, v)| (k.to_owned(), v)).collect())
+}
+
+fn named(kind: &'static str, id: &str, name: &str, rest: Vec<(&'static str, Json)>) -> Json {
+    let mut pairs = vec![
+        ("kind", Json::String(kind.to_owned())),
+        ("id", Json::String(id.to_owned())),
+        ("name", Json::String(name.to_owned())),
+    ];
+    pairs.extend(rest);
+    obj(pairs)
+}
+
+fn members_json(ms: &[Member]) -> Json {
+    Json::Array(
+        ms.iter()
+            .map(|m| obj([("name", Json::String(m.name.clone())), ("type", tc_to_json(&m.tc))]))
+            .collect(),
+    )
+}
+
+/// A `TypeCode` as an AnyJSON document.
+pub fn tc_to_json(tc: &TypeCode) -> Json {
+    if let Some(short) = short_name(tc) {
+        return Json::String(short.to_owned());
+    }
+    match tc {
+        TypeCode::String(bound) => {
+            obj([("kind", Json::String("string".into())), ("bound", number(bound))])
+        }
+        TypeCode::WString(bound) => {
+            obj([("kind", Json::String("wstring".into())), ("bound", number(bound))])
+        }
+        TypeCode::Sequence { element, bound } => obj([
+            ("kind", Json::String("seq".into())),
+            ("element", tc_to_json(element)),
+            ("bound", number(bound)),
+        ]),
+        TypeCode::Array { element, length } => obj([
+            ("kind", Json::String("array".into())),
+            ("element", tc_to_json(element)),
+            ("length", number(length)),
+        ]),
+        TypeCode::Fixed { digits, scale } => obj([
+            ("kind", Json::String("fixed".into())),
+            ("digits", number(digits)),
+            ("scale", number(scale)),
+        ]),
+        TypeCode::ObjRef { id, name } => named("objref", id, name, vec![]),
+        TypeCode::Struct { id, name, members } => {
+            named("struct", id, name, vec![("members", members_json(members))])
+        }
+        TypeCode::Except { id, name, members } => {
+            named("except", id, name, vec![("members", members_json(members))])
+        }
+        TypeCode::Enum { id, name, members } => named(
+            "enum",
+            id,
+            name,
+            vec![(
+                "members",
+                Json::Array(members.iter().map(|m| Json::String(m.clone())).collect()),
+            )],
+        ),
+        TypeCode::Alias { id, name, aliased } => {
+            named("alias", id, name, vec![("aliased", tc_to_json(aliased))])
+        }
+        TypeCode::Union { id, name, discriminator, default_index, cases } => named(
+            "union",
+            id,
+            name,
+            vec![
+                ("discriminator", tc_to_json(discriminator)),
+                ("default", number(default_index)),
+                (
+                    "cases",
+                    Json::Array(
+                        cases
+                            .iter()
+                            .map(|c| {
+                                obj([
+                                    // The label stays **base64 of the raw
+                                    // bytes**, and this is the one place the
+                                    // mapping is deliberately not readable.
+                                    //
+                                    // A value would be better and was written
+                                    // first: `"label": 1` is language-neutral,
+                                    // and the Python runtime represents union
+                                    // labels as values, not bytes. It was
+                                    // reverted on a measurement. A label is
+                                    // stored in *the byte order of the stream
+                                    // it was decoded from* (`typecode.rs`
+                                    // reads it with `get_bytes` and writes it
+                                    // with `put_bytes`, neither of which knows
+                                    // the endianness), and the TypeCode does
+                                    // not record which that was — so turning
+                                    // the bytes into a number means guessing.
+                                    // Base64 is exact without guessing, and it
+                                    // is honest about carrying something this
+                                    // mapping cannot yet interpret. When the
+                                    // wire defect is fixed this becomes a
+                                    // value; until then a Python client can
+                                    // relay a union TypeCode and not read one.
+                                    ("label", Json::String(base64(&c.label))),
+                                    ("name", Json::String(c.name.clone())),
+                                    ("type", tc_to_json(&c.tc)),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ),
+            ],
+        ),
+        TypeCode::Recursive(id) => {
+            obj([("kind", Json::String("recursive".into())), ("id", Json::String(id.clone()))])
+        }
+        TypeCode::Principal => obj([("kind", Json::String("principal".into()))]),
+        // Every remaining variant has a short name and returned above.
+        other => Json::String(short_name(other).unwrap_or("void").to_owned()),
+    }
+}
+
+fn field<'a>(j: &'a Json, key: &str, p: &str) -> Result<&'a Json> {
+    j.get(key).ok_or_else(|| Error {
+        path: p.to_owned(),
+        message: format!("a type object needs a {key:?} field"),
+    })
+}
+
+fn text(j: &Json, key: &str, p: &str) -> Result<String> {
+    match field(j, key, p)? {
+        Json::String(s) => Ok(s.clone()),
+        other => wrong(p, &format!("a string for {key:?}"), other),
+    }
+}
+
+fn num<T: std::str::FromStr>(j: &Json, key: &str, p: &str) -> Result<T> {
+    int(field(j, key, p)?, p, key)
+}
+
+/// A `TypeCode` read back out of an AnyJSON document.
+pub fn tc_from_json(j: &Json, p: &str) -> Result<TypeCode> {
+    if let Json::String(name) = j {
+        return named_type(name).ok_or_else(|| Error {
+            path: p.to_owned(),
+            message: format!("unknown type name {name:?}"),
+        });
+    }
+    let Json::Object(_) = j else {
+        return wrong(p, "a type name or a type object", j);
+    };
+    let kind = text(j, "kind", p)?;
+    Ok(match kind.as_str() {
+        "string" => TypeCode::String(num(j, "bound", p)?),
+        "wstring" => TypeCode::WString(num(j, "bound", p)?),
+        "seq" => TypeCode::Sequence {
+            element: Box::new(tc_from_json(field(j, "element", p)?, &member(p, "element"))?),
+            bound: num(j, "bound", p)?,
+        },
+        "array" => TypeCode::Array {
+            element: Box::new(tc_from_json(field(j, "element", p)?, &member(p, "element"))?),
+            length: num(j, "length", p)?,
+        },
+        "fixed" => TypeCode::Fixed { digits: num(j, "digits", p)?, scale: num(j, "scale", p)? },
+        "objref" => TypeCode::ObjRef { id: text(j, "id", p)?, name: text(j, "name", p)? },
+        "struct" => TypeCode::Struct {
+            id: text(j, "id", p)?,
+            name: text(j, "name", p)?,
+            members: members_from_json(field(j, "members", p)?, p)?,
+        },
+        "except" => TypeCode::Except {
+            id: text(j, "id", p)?,
+            name: text(j, "name", p)?,
+            members: members_from_json(field(j, "members", p)?, p)?,
+        },
+        "enum" => TypeCode::Enum {
+            id: text(j, "id", p)?,
+            name: text(j, "name", p)?,
+            members: match field(j, "members", p)? {
+                Json::Array(items) => items
+                    .iter()
+                    .map(|i| match i {
+                        Json::String(s) => Ok(s.clone()),
+                        other => wrong(p, "an enumerator name", other),
+                    })
+                    .collect::<Result<_>>()?,
+                other => return wrong(p, "an array of enumerator names", other),
+            },
+        },
+        "alias" => TypeCode::Alias {
+            id: text(j, "id", p)?,
+            name: text(j, "name", p)?,
+            aliased: Box::new(tc_from_json(field(j, "aliased", p)?, &member(p, "aliased"))?),
+        },
+        "union" => TypeCode::Union {
+            id: text(j, "id", p)?,
+            name: text(j, "name", p)?,
+            discriminator: Box::new(tc_from_json(
+                field(j, "discriminator", p)?,
+                &member(p, "discriminator"),
+            )?),
+            default_index: num(j, "default", p)?,
+            cases: match field(j, "cases", p)? {
+                Json::Array(items) => items
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        let at = index(&member(p, "cases"), i);
+                        Ok(UnionCase {
+                            label: unbase64(field(c, "label", &at)?, &at)?,
+                            name: text(c, "name", &at)?,
+                            tc: tc_from_json(field(c, "type", &at)?, &at)?,
+                        })
+                    })
+                    .collect::<Result<_>>()?,
+                other => return wrong(p, "an array of union cases", other),
+            },
+        },
+        "recursive" => TypeCode::Recursive(text(j, "id", p)?),
+        "principal" => TypeCode::Principal,
+        other => return fail(p, format!("unknown type kind {other:?}")),
+    })
+}
+
+fn members_from_json(j: &Json, p: &str) -> Result<Vec<Member>> {
+    match j {
+        Json::Array(items) => items
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let at = index(&member(p, "members"), i);
+                Ok(Member {
+                    name: text(m, "name", &at)?,
+                    tc: tc_from_json(field(m, "type", &at)?, &at)?,
+                })
+            })
+            .collect(),
+        other => wrong(p, "an array of members", other),
+    }
+}
+
 fn base64(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
@@ -570,6 +854,10 @@ fn type_name(tc: &TypeCode) -> String {
     }
 }
 
+/// The inverse of [`short_name`]. Every name that one produces this one must
+/// accept, or the mapping writes a document it cannot read — the exact defect
+/// D008 was drafted from, reintroduced one table apart. Held to it by
+/// `short_name_and_named_type_are_inverses`.
 fn named_type(name: &str) -> Option<TypeCode> {
     Some(match name {
         "boolean" => TypeCode::Boolean,
@@ -587,6 +875,10 @@ fn named_type(name: &str) -> Option<TypeCode> {
         "long double" => TypeCode::LongDouble,
         "string" => TypeCode::String(0),
         "wstring" => TypeCode::WString(0),
+        "any" => TypeCode::Any,
+        "typecode" => TypeCode::TypeCode,
+        "void" => TypeCode::Void,
+        "null" => TypeCode::Null,
         _ => return None,
     })
 }
@@ -688,6 +980,42 @@ mod tests {
         let j = to_json(&tc, &Value::List(vec![Value::Octet(0xFF), Value::Octet(0x00)]), &mut h)
             .unwrap();
         assert_eq!(j, Json::String("/wA=".into()));
+    }
+
+    /// The two name tables must be inverses. They were not: `short_name`
+    /// emitted `any`, `typecode`, `void` and `null`, and `named_type` knew
+    /// fifteen primitives, so the mapping wrote four names it could not read —
+    /// which is the defect D008 exists for, reintroduced one table apart and
+    /// two hours later. Enumerated rather than spot-checked, because a spot
+    /// check is what missed it.
+    #[test]
+    fn short_name_and_named_type_are_inverses() {
+        for tc in [
+            TypeCode::Boolean,
+            TypeCode::Octet,
+            TypeCode::Char,
+            TypeCode::WChar,
+            TypeCode::Short,
+            TypeCode::UShort,
+            TypeCode::Long,
+            TypeCode::ULong,
+            TypeCode::LongLong,
+            TypeCode::ULongLong,
+            TypeCode::Float,
+            TypeCode::Double,
+            TypeCode::LongDouble,
+            TypeCode::String(0),
+            TypeCode::WString(0),
+            TypeCode::Any,
+            TypeCode::TypeCode,
+            TypeCode::Void,
+            TypeCode::Null,
+        ] {
+            let name = short_name(&tc).unwrap_or_else(|| panic!("{tc:?} has no short name"));
+            let back = named_type(name)
+                .unwrap_or_else(|| panic!("short_name emits {name:?} and named_type refuses it"));
+            assert_eq!(back, tc, "{name:?}");
+        }
     }
 
     #[test]
