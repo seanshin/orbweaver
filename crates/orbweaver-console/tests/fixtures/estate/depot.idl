@@ -1,0 +1,29 @@
+// ---------------------------------------------------------------------------
+// A contract that only means anything because of the header it includes, and
+// that carries no #pragma prefix of its own — the two properties that together
+// made a single-file corpus unable to catch either of this fixture's defects.
+//
+// Its ids must stay unprefixed: the header's prefix ends with the header.
+// ---------------------------------------------------------------------------
+#ifndef _CONSOLE_DEPOT_IDL_
+#define _CONSOLE_DEPOT_IDL_
+
+#include "common.idl"
+
+module DepotOps {
+
+    typedef unsigned long StockLevel;
+
+    interface StockControl : ::Common::Describable {
+
+        StockLevel on_hand(in string sku);
+
+        void reconcile(in string sku, in StockLevel counted);
+
+        // Empty string means every depot, which is how the 2014 outage
+        // happened.
+        void purge(in string depot);
+    };
+};
+
+#endif // _CONSOLE_DEPOT_IDL_

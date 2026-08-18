@@ -1,0 +1,32 @@
+// ---------------------------------------------------------------------------
+// The shared header of a small estate, in the shape spikes/estate/ has:
+// a #pragma prefix of its own, an interface everything inherits, and not one
+// SIDL annotation anywhere. Nothing here says what an operation does, because
+// nobody who wrote it had ever heard of an agent.
+//
+// This is a *fixture of this crate*, deliberately not spikes/estate/: that
+// estate is a consumer and "nothing here is allowed to become a gate's input"
+// (spikes/estate/run.sh). The shape is copied; the files are not.
+// ---------------------------------------------------------------------------
+#ifndef _CONSOLE_COMMON_IDL_
+#define _CONSOLE_COMMON_IDL_
+
+#pragma prefix "meridian.example"
+
+module Common {
+
+    typedef string ISODate;
+    typedef sequence<string> StringList;
+
+    exception SystemFault {
+        long   code;
+        string detail;
+    };
+
+    interface Describable {
+        readonly attribute string label;
+        string describe();
+    };
+};
+
+#endif // _CONSOLE_COMMON_IDL_

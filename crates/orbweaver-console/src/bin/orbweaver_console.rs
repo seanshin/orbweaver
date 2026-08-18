@@ -1,12 +1,18 @@
 //! `orbweaver-console` — the operator's three questions, rendered.
 //!
 //! ```text
-//! orbweaver-console catalog <file.idl>... [--expose <id>] [--expose-op <id> <op>]
-//!                           [--caller <principal>] [--scope <scope>] [--approved]
+//! orbweaver-console catalog <file.idl>... [-I <dir>]... [--expose <id>]
+//!                           [--expose-op <id> <op>] [--caller <principal>]
+//!                           [--scope <scope>] [--approved]
 //!                           [--html <out.html>] [--text]
-//! orbweaver-console diff    <released.idl> <proposed.idl> [--html <out.html>] [--text]
+//! orbweaver-console diff    <released.idl> <proposed.idl> [-I <dir>]...
+//!                           [--html <out.html>] [--text]
 //! orbweaver-console traces  <spans.jsonl>... [--html <out.html>] [--text]
 //! ```
+//!
+//! `-I` is `sidl-validate`'s flag and means the same thing: another directory
+//! to resolve `#include` against. The quoted form searches the including file's
+//! own directory first, so an estate stored as one tree needs no `-I` at all.
 //!
 //! Exit status: 0 rendered, 2 could not run.
 //!
@@ -22,7 +28,8 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use orbweaver_console::{catalog, contract, traces};
+use orbweaver_console::{catalog, contract, load, traces};
+use orbweaver_idl::include::SearchPath;
 use orbweaver_mcp::identity::Caller;
 use orbweaver_mcp::interceptor::Chain;
 use orbweaver_mcp::policy::{Approval, Exposure};
@@ -30,11 +37,16 @@ use orbweaver_registry::Registry;
 
 const USAGE: &str = "\
 usage:
-  orbweaver-console catalog <file.idl>... [--expose <id>] [--expose-op <id> <op>]
-                            [--caller <principal>] [--scope <scope>] [--approved]
+  orbweaver-console catalog <file.idl>... [-I <dir>]... [--expose <id>]
+                            [--expose-op <id> <op>] [--caller <principal>]
+                            [--scope <scope>] [--approved]
                             [--html <out.html>] [--text]
-  orbweaver-console diff    <released.idl> <proposed.idl> [--html <out.html>] [--text]
+  orbweaver-console diff    <released.idl> <proposed.idl> [-I <dir>]...
+                            [--html <out.html>] [--text]
   orbweaver-console traces  <spans.jsonl>... [--html <out.html>] [--text]
+
+-I adds a directory to resolve #include against, as sidl-validate does. Every
+file is read as a translation unit: what it includes is part of what it says.
 
 The console renders what the registry, the differ and the audit already
 decided. It takes no decision of its own and exits 0 whether the news is good
@@ -97,10 +109,14 @@ fn catalog_command(args: Vec<String>) -> Result<(), String> {
     let mut scopes: Vec<String> = Vec::new();
     let mut approval = Approval::default();
     let mut out = Output { html: None, text: false };
+    let mut search = SearchPath::new();
 
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
+            "-I" => {
+                search.push(need(&mut it, "-I <dir>")?);
+            }
             "--expose" => exposure = exposure.allow_interface(need(&mut it, "--expose <id>")?),
             "--expose-op" => {
                 let id = need(&mut it, "--expose-op <id> <operation>")?;
@@ -122,7 +138,7 @@ fn catalog_command(args: Vec<String>) -> Result<(), String> {
 
     let mut registry = Registry::new();
     for file in &files {
-        load_into(&mut registry, file)?;
+        load_into(&mut registry, file, &search)?;
     }
 
     let caller = principal.map(|p| scopes.iter().fold(Caller::new(p), |c, s| c.with_scope(s)));
@@ -139,9 +155,13 @@ fn catalog_command(args: Vec<String>) -> Result<(), String> {
 fn diff_command(args: Vec<String>) -> Result<(), String> {
     let mut files = Vec::new();
     let mut out = Output { html: None, text: false };
+    let mut search = SearchPath::new();
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
+            "-I" => {
+                search.push(need(&mut it, "-I <dir>")?);
+            }
             "--html" => out.html = Some(PathBuf::from(need(&mut it, "--html <path>")?)),
             "--text" => out.text = true,
             flag if flag.starts_with("--") => return Err(format!("unknown option {flag:?}")),
@@ -152,10 +172,13 @@ fn diff_command(args: Vec<String>) -> Result<(), String> {
         return Err(format!("diff needs exactly two IDL files\n\n{USAGE}"));
     };
 
+    // Both sides resolve their own includes. A revision that only changed a
+    // shared header would otherwise diff as no change at all, which is the
+    // §5.3 verdict an operator would most regret trusting.
     let mut old = Registry::new();
-    load_into(&mut old, released)?;
+    load_into(&mut old, released, &search)?;
     let mut new = Registry::new();
-    load_into(&mut new, proposed)?;
+    load_into(&mut new, proposed, &search)?;
 
     let view = contract::ContractDiff::new(released, proposed, &old, &new);
     out.deliver(|| contract::render_html(&view), || contract::render_text(&view))
@@ -190,8 +213,15 @@ fn need(args: &mut impl Iterator<Item = String>, what: &str) -> Result<String, S
     args.next().filter(|v| !v.is_empty()).ok_or_else(|| format!("{what} needs a value"))
 }
 
-fn load_into(registry: &mut Registry, path: &str) -> Result<(), String> {
-    let src = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-    let spec = orbweaver_idl::parse(&src).map_err(|e| format!("{path}: {e}"))?;
-    registry.load(&spec).map_err(|e| format!("{path}: {e}"))
+/// Loads one root file and everything it includes.
+///
+/// The resolver's advice — a cycle, a re-inclusion — goes to stderr rather than
+/// onto a page: it is a fact about how the estate is stored, not about what an
+/// agent may reach, and stdout belongs to the view.
+fn load_into(registry: &mut Registry, path: &str, search: &SearchPath) -> Result<(), String> {
+    let advice = load::load_into(registry, std::path::Path::new(path), search)?;
+    for note in advice {
+        eprintln!("note: {note}");
+    }
+    Ok(())
 }
