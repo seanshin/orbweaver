@@ -751,20 +751,27 @@ Running streams in parallel does not relax §5.1 — it sharpens two rules:
 
 | Layer | Method | Pass criterion |
 |---|---|---|
-| Wire protocol | Round-trip against TAO, omniORB, JacORB | 100% of the interop matrix |
+| Wire protocol | Round-trip against **omniORB and JacORB**, both directions — the interop matrix is those two peers × {our client → peer server, peer client → our server}, and `run_checks.sh` has one group per cell | All four cells measured and green; an absent fixture is reported `SKIPPED` and counted unmeasured, never passing |
 | CDR encoding | Differential against reference ORBs on the golden corpus | Byte-identical |
 | IDL syntax | Differential compile against tao_idl and omniidl | Zero unexplained disagreements |
-| IDL semantics | Naming lint, annotation coverage | Coverage ≥ 90% |
+| IDL semantics | `sidl-validate` naming and semantic rules over the corpus; S3's own annotation gate over everything the pipeline emits | Zero S4 errors; zero `s3/missing-ai_desc`/`-ai_effect`/`-ai_authz` on pipeline output — annotation completeness is gated at 100% *there*, and **no run computes an annotation-coverage percentage over an arbitrary contract set** |
 | Backward compatibility | Semantic diff, breaking-change detection | Zero unapproved breaking changes |
 | Dynamic invocation | DII round-trip over the golden corpus | 100% lossless |
 | Generated code | Compile, contract tests, static result equals dynamic result | Zero mismatches |
-| End to end | Pilot integration with a real legacy system | ≥80% reduction versus manual |
-| AI quality | 100-case requirement regression benchmark, every release | Release blocked on a drop in first-pass rate |
+| End to end | `spikes/estate/run.sh` — thirteen legacy-shaped contracts through nine stages, ingestion to agent call | Every stage measured and every assertion held; a stage that cannot be measured is a failure, never a skip. This measures **path completion, not effort saved** |
+| AI quality | `forge-pipeline` over `corpus/requirements/inputs` (20, frozen) and `corpus/requirements/inputs-v2` (26 — those 20 byte-for-byte plus 6), every release | Both sets run; per-stage first-pass rate and round count recorded under `docs/pipeline-runs/`, compared at release review against the previous release's record. One case is 5.0 points at n = 20, so a "drop" smaller than that is not a signal |
 | Codesets | Korean-text round-trips (EUC-KR / UTF-8 / UTF-16) against every fixture ORB | 100% lossless |
 | AnyJSON | `any → JSON → any` across the golden corpus | Byte-identical CDR |
 | Performance | `call-bench`: dynamic path vs static stub, four operation shapes over one loopback connection shared by both clients, calls interleaved | Every series measured and both paths agreeing on every answer; p50 ratios reported, and judged against §11 at release review |
 
 **Benchmark discipline.** The AI benchmark is frozen and versioned; a hold-out subset is never touched during prompt development, and cases rotate between releases so the pipeline is not tuned to its own exam.
+
+**On four rows this table carried as criteria and could not test.** Each named a number nothing computed. They are restated above against what the tree contains — counted on 2026-08-18, not recalled — and whatever is left over is kept as an **aspiration in §11**, with a trigger, rather than as a criterion here.
+
+- **Wire protocol** named **TAO** as a round-trip peer. `tao_idl` is an optional *front-end* oracle in `spikes/differential.sh` — absent on the machine this was written on, where the script reports it `SKIPPED` and counts it unmeasured — and nothing in the tree round-trips against TAO at the wire level. The peers that exist are omniORB and JacORB, in both directions, with a `run_checks.sh` group per cell, so "100% of the interop matrix" now names the four cells it means. A TAO wire peer becomes aspiration **A6**.
+- **IDL semantics** asked for **annotation coverage ≥ 90%**, and nothing has ever computed it. `contract-check`'s annotation output is advice that exits 0 by construction — a byte instability is a defect in code we wrote, an annotation smell is an opinion about prose somebody else wrote, and the two must not share an exit code — and no run in this tree prints a coverage percentage at all. What *does* gate is narrower and stricter: S3's own check raises `s3/missing-ai_desc`, `s3/missing-ai_effect` and `s3/missing-ai_authz` at Error severity, so every operation the pipeline emits carries all three or the stage fails; and at the MCP boundary an operation with no stated `ai_effect` is refused rather than allowed. **The 90% was not lowered to a number today's code happens to reach.** The arithmetic is trivial and the denominator is not — coverage of *which* contracts, counted over operations or over parameters too — and inventing one to make the row green is precisely the failure this revision is about. Aspiration **A3**.
+- **End to end** promised **"pilot integration with a real legacy system, ≥80% reduction versus manual"**. There is no pilot, no cooperative owner and no logged manual baseline — §1.1's "days–weeks" is an estimate table with no source and no procedure for taking the number — so the percentage has no denominator and no run could fail it. `spikes/estate/run.sh` is the nearest thing in the tree and measures a different quantity: thirteen contracts with the texture of a fifteen-year-old estate, through nine stages, every stage asserted. It reads no clock at any point. The row now claims that and only that; the pilot is aspiration **A5**.
+- **AI quality** asked for a **100-case** benchmark. `corpus/requirements/inputs` holds 20 and `inputs-v2` holds 26, counted 2026-08-18, and v1 is frozen on purpose — it is the denominator of every assumption-B number this project has published, so it is not being grown to satisfy a sentence. The pass criterion is the testable half and survives with two corrections. "First-pass rate" is singular, and the benchmark stopped producing one number on 2026-08-13 when the stages were split: a run yields one rate per stage, and quoting a single figure hides which stage moved. And at n = 20 one case is five percentage points, so an unqualified "a drop" fires on a single item. 100 cases is aspiration **A7**.
 
 **On the performance row.** It has said *LAN* since v0.2 and what exists is loopback. `call-bench` (`crates/orbweaver-test/src/bin/call_bench.rs`) runs both clients in one process, over one loopback connection, against our own servant — so the row now says loopback. A LAN hop, a NIC or a foreign peer adds its cost to **both** columns, so the *ratio* §11 targets survives the move and the absolute microseconds do not; a LAN run, a foreign ORB and anything concurrent stay unmeasured. `run_checks.sh` runs the benchmark at `--samples 200` and fails only when a series cannot be measured or the two paths disagree on an answer — both defects on any machine at any speed. The ratio target is not gated there: see §11.
 
@@ -795,7 +802,7 @@ Putting an AI bridge in front of legacy CORBA widens the attack surface in ways 
 | **R2** | **No IFR deployed in the target environment** — common in practice | High | High | Registry is first-party and populated from IDL source. Offline mode operates from IDL text alone |
 | **R3** | **IIOP is insecure by default** — GIOP/IIOP is plaintext on 683/tcp; CSIv2+TLS integration is a known source of cross-vendor incompatibility | High | High | TLS mandatory on new paths. Legacy wrapped in mTLS tunnels or sidecars to avoid depending on foreign ORB configuration. Penetration test as a Phase 5 gate |
 | **R4** | LLM hallucinates IDL | Medium | High | Compile gate blocks 100% of syntactic errors. Semantic errors caught by contract tests and human review queue |
-| **R5** | Specification defects dominate, per AutoMCP | Medium | High | Annotation coverage is a KPI; registration blocked below threshold. Gaps back-inferred from traffic observation |
+| **R5** | Specification defects dominate, per AutoMCP | Medium | High | S3's gate refuses any pipeline output missing `ai_desc`, `ai_effect` or `ai_authz`, and the MCP boundary refuses an operation whose effect is unstated. **A coverage *rate* is not computed and blocks no registration** — §11 A3. Gaps back-inferred from traffic observation |
 | **R6** | CORBA expertise is scarce | Medium | High | Secure at least one experienced ORB engineer or external advisor. Accumulate operational knowledge internally |
 | **R7** | **IOR addressing under NAT/containers** — an internal IP baked into an IOR is uncallable externally | Medium | High | Endpoint rewriting templated into every deployment. Hazard verified in Phase 0 assumption D; the rewriter is `orbweaver_giop::nat` plus `Server::ior_mapped`, measured by dialing in `spikes/nat_rewrite.sh` (docs/PHASE6.md). A real routing domain remains unmeasured — the container probe under `spikes/nat/` is written and unrun |
 | **R8** | Scope growth from building the ORB core | Medium | Medium | Phases 1–2 are strictly wire and compiler work with no AI scope creep. GIOP 1.2 over TCP only in v1 |
@@ -837,24 +844,42 @@ Because the OMG specifications are open, this is achievable rather than aspirati
 
 ## 11. Success metrics
 
-| Metric | Baseline | Target |
-|---|---|---|
-| Time to define a new interface | 3–10 days | < 1 hour |
-| Time to bind a new service (dynamic path) | 2–4 weeks | < 10 minutes |
-| IDL first-pass compile rate | — | ≥ 85% |
-| Compile rate within three self-repair rounds | — | ≥ 98% |
-| Semantic annotation coverage | 0% | ≥ 90% |
-| Contract tests auto-generated | 0% | ≥ 80% |
-| Breaking changes caught pre-merge | Manual | 100% |
-| Interop matrix pass rate | — | 100% |
-| Dynamic-path overhead vs static stub — `call-bench` p50 ratio, loopback, n ≥ 2000 per path per shape after 300 warm-up pairs | 1.06–1.07× on the widest shape (`echo_many`, 64 × 24 B strings), twelve-core laptop under load ~3–4, 2026-08-18 | ≤ 1.5× on **every** shape; no absolute-latency clause |
-| Human intervention across the pipeline | 100% | ≤ 15% |
+| Metric | Baseline | Target | Instrument that takes the number |
+|---|---|---|---|
+| Time to define a new interface | 3–10 days — §1.1 estimate, never measured | < 1 hour | **none** — aspiration **A1** |
+| Time to bind a new service (dynamic path) | 2–4 weeks — §1.1 estimate, never measured | < 10 minutes | **none** — aspiration **A2** |
+| IDL first-pass compile rate | — | ≥ 85% | `forge-pipeline` over `corpus/requirements/inputs`; **one rate per stage**, recorded under `docs/pipeline-runs/` |
+| Compile rate within three self-repair rounds | — | ≥ 98% | the same run's round counts, at `--max-rounds 3` |
+| Semantic annotation coverage | 0% | ≥ 90% | **none** — no run computes a coverage percentage; what is gated instead is in §8. Aspiration **A3** |
+| Contract tests auto-generated | 0% | ≥ 80% | **none**, and *unaudited at this revision* — named here rather than restated, so the next batch finds it stated instead of implied |
+| Breaking changes caught pre-merge | Manual | 100% | `idl-diff` (§5.3), gated by `run_checks.sh` |
+| Interop matrix pass rate | — | 100% | the four cells §8 names, one `run_checks.sh` group per cell |
+| Dynamic-path overhead vs static stub — `call-bench` p50 ratio, loopback, n ≥ 2000 per path per shape after 300 warm-up pairs | 1.06–1.07× on the widest shape (`echo_many`, 64 × 24 B strings), twelve-core laptop under load ~3–4, 2026-08-18 | ≤ 1.5× on **every** shape; no absolute-latency clause | `call-bench --samples 2000 --max-ratio 1.5` at release review; not gated by `run_checks.sh` |
+| Human intervention across the pipeline | 100% | ≤ 15% | **none** — aspiration **A4** |
 
 **Reading the performance row.** From v0.2 until this revision it read *"≤ 5 ms added and ≤ 3× static (LAN echo, p50)"*, and nothing could pass or fail it. It named no operation shape and no payload — measured overhead ranges 1.00× to 1.07× across four shapes and a fifth shape would move it either way. It gave no sample count, no machine, and no percentile discipline beyond "p50". And its two clauses disagree by three orders of magnitude: on a ~21µs call, "≤ 5 ms added" allows 240 entire calls of overhead where "≤ 3× static" allows 42µs, so which clause binds is a completely different test. The row above instead names the benchmark, the shapes it fixes — `add` (two longs), `echo_text` at 16 B and at 4 KiB, `echo_many` (64 × 24 B strings) — the transport, the sample count and the warm-up, so that two runs measure the same thing.
 
 **Why 1.5× and not 1.1×.** Measured 2026-08-18 on one twelve-core laptop under load ~3–4, at n = 2000 per path per shape and again at a shorter n = 400: p50 added is 0.1–0.6µs on the scalar shape, 0.4µs at 16 B, 0.5µs at 4 KiB and 1.9–2.0µs at 64 strings — ratios 1.00–1.03×, 1.02×, 1.02× and 1.06–1.07×. Those p50s move by a few tenths of a microsecond between runs of the same binary on a busy machine, which is ±0.02–0.03× of ratio; a 1.1× target would therefore sit a couple of noise widths above today's widest figure and would fail on the day the machine was busy rather than the day the ORB got slower, and a threshold that teaches everyone to re-run it is worse than no threshold. 1.5× is roughly ten microseconds of added cost on this transport: more than any plausible per-call change costs — D009's codeset indirection measured ~31 ns **per string**, so it would take some 300 strings in one call to reach it — and still tight enough to fail the changes that would matter, an extra round trip, a per-call lookup that touches the filesystem, or a copy that scales with payload bytes. The retired 3× would have sat quietly through the dynamic path becoming twice as expensive. Loopback is also the least forgiving denominator this ratio has: a slower transport adds its fixed cost to both columns, so the same absolute overhead reads as a *smaller* ratio in the field — a figure that passes here passes on a LAN.
 
 **What this target does not cover.** Loopback, not a LAN. Our own server and our own skeleton in the same process, not a foreign ORB. One call at a time on one connection — nothing here says what either path does under concurrency. One machine class, which is why the absolute microseconds are reported and deliberately not made part of the target. The ratio is **not** gated by `run_checks.sh`; that run gates on measurement only (§8). It is checked at release review on an otherwise idle machine with `cargo run -q --release -p orbweaver-test --bin call-bench -- --samples 2000 --max-ratio 1.5`, which fails per shape and is off by default, and the figure is recorded together with the machine it came from. On the machine above `--max-ratio 1.5` exits 0 at `--samples 400`.
+
+### Aspirations — stated, and with no instrument
+
+A table where some rows are gates and others are wishes, with nothing telling them apart, is worse than either: the reader cannot tell which claims the project is standing behind. The last column above is what tells them apart, and the rows reading **none** are collected here — together with the two §8 rows that were the same thing in the verification table.
+
+These are not deleted. They are why the project exists, and a plan that hides its intent in order to look rigorous has traded one dishonesty for another. What each gets instead is what [`PLAN-DEFERRED.md`](PLAN-DEFERRED.md) requires of a deferral: an **observable trigger**, not a feeling. "If we need it" is not a trigger.
+
+| ID | Aspiration | What is missing | Observable trigger |
+|---|---|---|---|
+| **A1** | Time to define a new interface < 1 hour | No clock is read anywhere in the pipeline, and the 3–10 day baseline is an estimate in §1.1 with no source and no procedure | A pilot owner who will log **both** paths on the *same* interface — the automated run and the hand-written one — so the ratio has a denominator taken the same way twice |
+| **A2** | Time to bind a new service < 10 minutes | As A1 | As A1, on a service the owner has not already bound by hand |
+| **A3** | Semantic annotation coverage ≥ 90% | Nothing computes a coverage percentage. `contract-check`'s annotation output is advice that never gates, deliberately, and S3's gate is all-or-nothing on pipeline output rather than a rate over a corpus | The first contract set that must be **reported on** rather than gated — an ingested estate whose owner asks how much of it an agent can actually read. That question fixes the denominator, which is the hard half |
+| **A4** | Human intervention across the pipeline ≤ 15% | No run counts human touches, and nothing defines the denominator — touches per contract, per operation and per release are three different metrics | The first pipeline run in which every human touch is *already* a record — an MCP approval, a review-queue item, a hand edit — so the numerator can be counted without instrumenting the humans |
+| **A5** | Pilot integration with a real legacy system, ≥80% reduction versus manual (was §8 *End to end*) | No pilot, no cooperative owner, no logged manual baseline. `spikes/estate/run.sh` measures path completion over contracts we wrote, not effort saved on contracts somebody maintains | A real estate with an owner who accepts both the measurement and the blast radius. A1 and A2 are this same trigger seen from the other end, and one pilot satisfies all three |
+| **A6** | TAO as a wire round-trip peer (was named in §8 *Wire protocol*) | `tao_idl` is a front-end oracle only, optional in `spikes/differential.sh` and absent here; no TAO **server** fixture exists anywhere in the tree | A peer that runs TAO — a pilot, or a CI image that can carry it without ever being published (§10, fixture hygiene) |
+| **A7** | A 100-case requirement benchmark (was §8 *AI quality*) | 20 frozen cases in `inputs/` and 26 in `inputs-v2/`, counted 2026-08-18. v1 stays frozen because it is the denominator of every published assumption-B figure | The benchmark being used to **gate** a release rather than report one. That needs an independent evaluator first: generator and evaluator are still the same model, so every rate here is indicative and §8's criterion is a comparison, not a threshold |
+
+**A7 first, if any of them.** It is the only one of the seven that needs no outside party — no pilot owner, no fixture the licensing boundary complicates — so it is the only one this project can move on its own. A5 and A6 both wait on somebody else, and A1, A2 and A4 wait on A5.
 
 ---
 
