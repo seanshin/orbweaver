@@ -1,5 +1,6 @@
-//! First-party CosEvent **push-model** channel: `CosEventChannelAdmin` plus
-//! the `CosEventComm` push pair (PLAN-SERVICES §4).
+//! First-party CosEvent channel: `CosEventChannelAdmin` plus the
+//! `CosEventComm` push pair, and — since the deferral below was re-measured —
+//! the **consumer side of the pull model** (PLAN-SERVICES §4).
 //!
 //! The oracle direction was settled by measurement, not preference:
 //! `brew info omnievents` reports *"No available formula"*, so no reference
@@ -17,6 +18,7 @@
 //! | `SupplierAdmin` | `obtain_push_consumer` |
 //! | `ProxyPushSupplier` | `connect_push_consumer`, `disconnect_push_supplier` |
 //! | `ProxyPushConsumer` | `connect_push_supplier`, `push`, `disconnect_push_consumer` |
+//! | `ProxyPullSupplier` | `connect_pull_consumer`, `pull`, `try_pull`, `disconnect_pull_supplier` |
 //!
 //! plus `_is_a`/`_non_existent` on every one of them, because every ORB probes
 //! before it trusts a narrow. Each admin and each proxy is a **distinct object
@@ -25,22 +27,86 @@
 //!
 //! # What is refused, and why
 //!
-//! - **The pull model.** `obtain_pull_supplier`, `obtain_pull_consumer`,
-//!   `ProxyPullSupplier::pull`/`try_pull` and their connect operations all
-//!   answer `BAD_OPERATION`. Pull inverts the flow control: the channel would
-//!   have to *hold* events until somebody asks, which is the same unbounded
-//!   buffer this module spends its bounded queue avoiding, for no named
-//!   consumer (PLAN-SERVICES §4 scopes v1 to push). Refusing loudly is rule 2
-//!   of PLAN-SERVICES §1.
-//! - **`EventChannel::destroy`.** Refused, the F6 `destroy` precedent.
-//!   Destroying a channel means calling `disconnect_push_consumer` back on
-//!   every attached consumer — outbound invocations, from inside a servant,
-//!   whose failures have nowhere to go — and then invalidating object keys
-//!   that other references still name. Nothing in stream F destroys a
-//!   channel; the channel lives as long as the process. The honest
-//!   alternative to a half-implementation is a refusal that says so.
+//! - **The *supplier* side of the pull model** — `obtain_pull_consumer`,
+//!   `connect_pull_supplier`, `disconnect_pull_consumer` — answers
+//!   `NO_IMPLEMENT`. This is the direction in which the **channel** is the
+//!   puller: a `ProxyPullConsumer` exists to invoke `pull` on a supplier's own
+//!   reference, and `CosEventComm::PullSupplier::pull` is specified to block
+//!   until that supplier has something to give. Every outbound call this
+//!   module makes today is bounded by [`DEFAULT_PUSH_TIMEOUT`] and is expected
+//!   to return; a blocking `pull` is expected *not* to, so the channel would
+//!   hold a thread per connected supplier on somebody else's clock, with no
+//!   bound it owns. Polling `try_pull` instead bounds the call but makes the
+//!   channel invent an interval — latency traded against wasted invocations —
+//!   **for no named supplier**: nothing in this workspace is a `PullSupplier`,
+//!   F3 and F4 publish in-process, and remote suppliers push.
+//!
+//!   The clause this bullet used to open with did not survive being measured.
+//!   "The same unbounded buffer this module spends its bounded queue avoiding"
+//!   described a design nobody had to choose: a `ProxyPullSupplier` holds
+//!   events in the same [`DEFAULT_QUEUE_LIMIT`] deque a `ProxyPushSupplier`
+//!   already holds them in, discards the same oldest event, and counts it in
+//!   the same [`ChannelStats::dropped`]. Only the second clause — *for no
+//!   named consumer* — was load-bearing, and it is false on the consumer side
+//!   and still true on the supplier side, which is why the two halves parted.
+//! - **`EventChannel::destroy`.** Still refused, and the reason has changed.
+//!   Half of the old one is answered: [`crate::guarded`] now catches a lock
+//!   held across a callback structurally rather than by care, and the delivery
+//!   thread is already the place this module makes outbound calls with nothing
+//!   held — `destroy` could enqueue the `disconnect_push_consumer` callbacks
+//!   there and return, and the failures would have somewhere to go. What is
+//!   not answered got sharper instead of softer. `destroy` is an
+//!   **unauthenticated remote operation that ends the channel for every other
+//!   client**, and this servant has no notion of who is calling; the object
+//!   keys it would invalidate are bound into a [`crate::server::Server`] it
+//!   does not own, so a destroyed channel cannot be recreated without
+//!   restarting the process. [`ChannelHandle::stop`] already gives in-process
+//!   shutdown to the one caller with a reason to want it. No caller, and a
+//!   remote footgun with no authorization story: the F6 `destroy` precedent
+//!   stands.
 //! - **Typed channels** (`CosTypedEventChannelAdmin`). Out of scope entirely;
 //!   events are `any`.
+//!
+//! # Pulling: the two questions a queue drained from the far end asks
+//!
+//! A `ProxyPullSupplier` is a queue this channel fills and a consumer empties,
+//! so it has to answer two things the push path answers elsewhere.
+//!
+//! 1. **At the bound it drops the oldest; it never blocks a supplier.** The
+//!    bound is [`DEFAULT_QUEUE_LIMIT`], shared with the push proxies and moved
+//!    by the same [`ChannelHandle::set_queue_limit`], and an overflow is
+//!    counted in the same [`ChannelStats::dropped`] and logged per event. The
+//!    specification's own answer to a full channel — block the supplier — was
+//!    considered and rejected here for the reason rule 2 of the fan-out
+//!    section already gives: a supplier blocked by one slow puller is one
+//!    consumer wedging the channel for every other consumer, which is the
+//!    failure this module is built around avoiding. `pull` blocks the *caller*
+//!    that asked to wait, which is the one thread that consented to it.
+//! 2. **At the reply it can refuse, and it says so in a counter.** The push
+//!    path relays an `any`'s value bytes verbatim by adopting the event's byte
+//!    order on the outbound connection — it originates that message, so it may
+//!    choose. A reply may not: its byte order is the request's, chosen by the
+//!    peer and framed by [`crate::server::Server`]. So an event captured in one
+//!    byte order cannot be handed to a puller asking in the other, exactly as
+//!    it cannot be relayed to a landing offset of a different alignment. Both
+//!    are one predicate, [`relay_check`], used by the delivery thread and by
+//!    `pull` alike; a refusal counts in [`ChannelStats::unrelayable`], the
+//!    event is discarded and counted in [`ChannelStats::dropped`], and the
+//!    puller is handed the next event rather than an exception — the channel's
+//!    limitation is not the caller's fault, the same distinction
+//!    [`ChannelState::record`] already draws on the push side.
+//!
+//! `pull` blocks, per `CosEventComm`, but bounded by [`DEFAULT_PULL_BLOCK`]
+//! and woken early by an arriving event, by a disconnect and by
+//! [`ChannelHandle::stop`]. On expiry it raises `TIMEOUT` with
+//! `COMPLETED_NO` — nothing was consumed, so a client that calls `pull` again
+//! has the unbounded block the specification describes, while a client that
+//! has gone away stops costing a serving thread. Note the shape this needs:
+//! under [`crate::server::Server::serve_shared`] a blocked `pull` occupies one
+//! connection's thread and no more, but under the serialized
+//! [`crate::server::Server::serve`] it occupies the only one, and the `push`
+//! that would satisfy it cannot be served until the block expires. Serve a
+//! channel with pull consumers on the shared path.
 //!
 //! # Fan-out: the part that is not hand-waved
 //!
@@ -135,6 +201,13 @@ pub const PROXY_PUSH_CONSUMER_ID: &str = "IDL:omg.org/CosEventChannelAdmin/Proxy
 pub const PUSH_CONSUMER_ID: &str = "IDL:omg.org/CosEventComm/PushConsumer:1.0";
 /// Repository id of `CosEventComm::PushSupplier`.
 pub const PUSH_SUPPLIER_ID: &str = "IDL:omg.org/CosEventComm/PushSupplier:1.0";
+/// Repository id of `CosEventChannelAdmin::ProxyPullSupplier` — the object a
+/// *consumer* pulls out of.
+pub const PROXY_PULL_SUPPLIER_ID: &str = "IDL:omg.org/CosEventChannelAdmin/ProxyPullSupplier:1.0";
+/// Repository id of `CosEventComm::PullConsumer`, the reference a pulling
+/// consumer may hand us. It is never dialled — see `connect_pull_consumer` —
+/// so unlike a `PushConsumer` a nil one is legal.
+pub const PULL_CONSUMER_ID: &str = "IDL:omg.org/CosEventComm/PullConsumer:1.0";
 /// Repository id of `CORBA::Object`, which `_is_a` answers true for everywhere.
 pub const CORBA_OBJECT_ID: &str = "IDL:omg.org/CORBA/Object:1.0";
 
@@ -168,6 +241,23 @@ pub const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 /// at most this long by any one consumer, and the servant thread is never held
 /// at all.
 pub const DEFAULT_PUSH_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long a `pull` blocks before raising `TIMEOUT`.
+///
+/// `CosEventComm::pull` blocks until an event is available, with no bound at
+/// all. An unbounded block is a serving thread a vanished client can hold for
+/// the life of the process, so the block is bounded and the expiry is reported
+/// as `TIMEOUT`/`COMPLETED_NO`: nothing was consumed, so a client that calls
+/// `pull` again is indistinguishable from one that blocked the whole time,
+/// and a client that does not call again stops costing anything.
+pub const DEFAULT_PULL_BLOCK: Duration = Duration::from_secs(5);
+
+/// How long a blocked `pull` waits between re-checks of its own proxy.
+///
+/// Every state change that matters notifies `wake`, so this is insurance
+/// against a missed notification rather than the mechanism — the same 50ms
+/// the delivery loop uses, and for the same reason.
+const PULL_POLL: Duration = Duration::from_millis(50);
 
 /// Object-key suffix of the channel's `ConsumerAdmin`.
 const CONSUMER_ADMIN_SUFFIX: &[u8] = b"/consumerAdmin";
@@ -237,6 +327,21 @@ fn bad_param() -> Raise {
     })
 }
 
+/// `TIMEOUT`, for a `pull` that reached [`DEFAULT_PULL_BLOCK`] with nothing to
+/// hand back.
+///
+/// `COMPLETED_NO` is the load-bearing half: it says no event was consumed, so
+/// a retry cannot lose one. That is what makes a bounded `pull` a faithful
+/// stand-in for the specification's unbounded one rather than a truncation of
+/// it.
+fn pull_timed_out() -> Raise {
+    Raise::System(SystemException {
+        id: "IDL:omg.org/CORBA/TIMEOUT:1.0".into(),
+        minor: 0,
+        completed: crate::server::Completion::No,
+    })
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // State
 // ─────────────────────────────────────────────────────────────────────────────
@@ -263,6 +368,29 @@ struct ProxySupplier {
     /// Bounded, drop-oldest. Only the delivery thread drains it.
     queue: VecDeque<Arc<Event>>,
     consecutive_failures: u32,
+}
+
+/// A `ProxyPullSupplier`: the channel's outbound half towards one consumer
+/// that asks rather than one that is called.
+///
+/// The same bounded, drop-oldest deque a [`ProxySupplier`] has — that
+/// sameness is the whole finding of the deferral this implements — but drained
+/// by the consumer's own `pull`/`try_pull` instead of by the delivery thread,
+/// so there is no connection, no timeout and no failure count here. There is
+/// nothing to fail: the channel never dials a pulling consumer.
+#[derive(Debug, Default)]
+struct ProxyPullSupplier {
+    /// Whether `connect_pull_consumer` has been called. Its own flag and not
+    /// `consumer.is_some()`, because a nil `PullConsumer` is legal — the
+    /// reference exists only so the proxy could call `disconnect_pull_consumer`
+    /// back, which the standard makes optional and this channel never does.
+    connected: bool,
+    /// The consumer's reference, when it gave a non-nil one. Recorded and not
+    /// dialled; see the module docs on why the supplier side of pull is not
+    /// served.
+    consumer: Option<Ior>,
+    /// Bounded, drop-oldest. Only a `pull`/`try_pull` drains it.
+    queue: VecDeque<Arc<Event>>,
 }
 
 /// A `ProxyPushConsumer`: the channel's inbound half from one supplier.
@@ -298,19 +426,31 @@ pub struct ChannelStats {
     /// Events refused delivery because the destination's CDR alignment
     /// differs from where the `any` was captured. See the module docs.
     pub unrelayable: u64,
-    /// Events sitting in proxy queues right now.
+    /// Events handed to a consumer by `pull` or `try_pull`.
+    ///
+    /// The pull counterpart of `delivered`, and separate from it on purpose:
+    /// one number counts what the channel managed to push out, the other what
+    /// a consumer came and took. Adding them would hide which half is moving.
+    pub pulled: u64,
+    /// Events sitting in proxy queues right now — push and pull alike, because
+    /// a queued event is a queued event whichever end will drain it.
     pub queued: usize,
-    /// Proxies with a consumer reference attached.
+    /// Push proxies with a consumer reference attached.
     pub consumers_connected: usize,
+    /// Pull proxies a consumer has connected itself to.
+    pub pull_consumers_connected: usize,
 }
 
 /// Everything both the servant thread and the delivery thread touch.
 #[derive(Debug)]
 struct ChannelState {
     proxy_suppliers: BTreeMap<Vec<u8>, ProxySupplier>,
+    proxy_pull_suppliers: BTreeMap<Vec<u8>, ProxyPullSupplier>,
     proxy_consumers: BTreeMap<Vec<u8>, ProxyConsumer>,
     minted: u64,
     queue_limit: usize,
+    /// How long a `pull` blocks before it raises `TIMEOUT`.
+    pull_block: Duration,
     stopped: bool,
     /// Round-robin cursor, so one busy proxy cannot starve the others.
     cursor: Vec<u8>,
@@ -337,9 +477,11 @@ impl ChannelState {
     fn new() -> Self {
         Self {
             proxy_suppliers: BTreeMap::new(),
+            proxy_pull_suppliers: BTreeMap::new(),
             proxy_consumers: BTreeMap::new(),
             minted: 0,
             queue_limit: DEFAULT_QUEUE_LIMIT,
+            pull_block: DEFAULT_PULL_BLOCK,
             stopped: false,
             cursor: Vec::new(),
             in_flight: 0,
@@ -348,9 +490,12 @@ impl ChannelState {
     }
 
     fn refresh_gauges(&mut self) {
-        self.stats.queued = self.proxy_suppliers.values().map(|p| p.queue.len()).sum();
+        self.stats.queued = self.proxy_suppliers.values().map(|p| p.queue.len()).sum::<usize>()
+            + self.proxy_pull_suppliers.values().map(|p| p.queue.len()).sum::<usize>();
         self.stats.consumers_connected =
             self.proxy_suppliers.values().filter(|p| p.consumer.is_some()).count();
+        self.stats.pull_consumers_connected =
+            self.proxy_pull_suppliers.values().filter(|p| p.connected).count();
     }
 
     fn stats(&mut self) -> ChannelStats {
@@ -358,6 +503,13 @@ impl ChannelState {
         self.stats
     }
 
+    /// Whether the **delivery thread** has nothing left to do.
+    ///
+    /// Pull queues are deliberately not part of this. They are drained by a
+    /// consumer's own `pull`, on a schedule this process does not control, so
+    /// counting them would make [`ChannelHandle::wait_idle`] wait for a
+    /// stranger — a caller asking "has everything I published gone out?" would
+    /// block on a consumer that has simply not come back yet.
     fn idle(&self) -> bool {
         self.in_flight == 0
             && self.proxy_suppliers.values().all(|p| p.queue.is_empty() || p.consumer.is_none())
@@ -388,6 +540,55 @@ impl ChannelState {
                     String::from_utf8_lossy(key),
                     self.stats.dropped
                 );
+            }
+        }
+        // The pull proxies take the same event under the same bound. That the
+        // two loops are the same loop is the measured answer to the deferral:
+        // a pull queue was never going to be a different buffer.
+        for (key, proxy) in self.proxy_pull_suppliers.iter_mut() {
+            if !proxy.connected {
+                continue;
+            }
+            proxy.queue.push_back(Arc::clone(&event));
+            while proxy.queue.len() > limit {
+                proxy.queue.pop_front();
+                self.stats.dropped += 1;
+                eprintln!(
+                    "orbweaver: event channel dropped the oldest event for pull proxy {} \
+                     (queue limit {limit}, {} dropped in total)",
+                    String::from_utf8_lossy(key),
+                    self.stats.dropped
+                );
+            }
+        }
+    }
+
+    /// The next event `key`'s puller may have, skipping any this channel
+    /// cannot hand back at `at` in a stream of `endian`.
+    ///
+    /// An event that cannot be relayed is **discarded and counted**, not
+    /// returned as an error: the mismatch is this module's limitation, not the
+    /// caller's request, which is the distinction [`ChannelState::record`]
+    /// already draws for the push path. Returning it as an exception would
+    /// also wedge the queue permanently — the same event would fail the same
+    /// way on every retry.
+    fn take_pull_event(&mut self, key: &[u8], at: usize, endian: Endian) -> Option<Arc<Event>> {
+        loop {
+            let event = self.proxy_pull_suppliers.get_mut(key)?.queue.pop_front()?;
+            match relay_check(&event, at, endian) {
+                Ok(()) => {
+                    self.stats.pulled += 1;
+                    return Some(event);
+                }
+                Err(why) => {
+                    self.stats.unrelayable += 1;
+                    self.stats.dropped += 1;
+                    eprintln!(
+                        "orbweaver: event channel cannot hand an event to the puller on {}: \
+                         {why}; the event was dropped",
+                        String::from_utf8_lossy(key)
+                    );
+                }
             }
         }
     }
@@ -549,9 +750,19 @@ impl ChannelHandle {
         self.shared.lock().stats()
     }
 
-    /// Overrides the per-consumer queue bound.
+    /// Overrides the per-consumer queue bound, for push and pull proxies
+    /// alike — they share it, which is the point.
     pub fn set_queue_limit(&self, events: usize) {
         self.shared.lock().queue_limit = events.max(1);
+    }
+
+    /// Overrides how long a `pull` blocks before raising `TIMEOUT`.
+    ///
+    /// Takes effect for calls that arrive after it; a `pull` already blocking
+    /// keeps the deadline it entered with, because moving somebody else's
+    /// deadline underneath them is how a "timeout" becomes unbounded again.
+    pub fn set_pull_block(&self, block: Duration) {
+        self.shared.lock().pull_block = block;
     }
 
     /// Publishes an event from inside this process, with no socket involved.
@@ -614,17 +825,24 @@ impl ChannelHandle {
         }
     }
 
-    /// Stops the delivery thread. Queued events are not delivered; they are
-    /// counted as dropped, because pretending a stopped channel delivered them
-    /// would be exactly the silent truncation this module refuses.
+    /// Stops the delivery thread and the channel with it. Queued events are
+    /// not delivered; they are counted as dropped, because pretending a
+    /// stopped channel delivered them would be exactly the silent truncation
+    /// this module refuses. Pull queues are emptied and counted the same way,
+    /// and a `pull` blocked on a stopped channel is woken and answered
+    /// `Disconnected` rather than left to time out.
     pub fn stop(&self) {
         let mut state = self.shared.lock();
         state.stopped = true;
-        let abandoned: usize = state.proxy_suppliers.values().map(|p| p.queue.len()).sum();
+        let abandoned: usize = state.proxy_suppliers.values().map(|p| p.queue.len()).sum::<usize>()
+            + state.proxy_pull_suppliers.values().map(|p| p.queue.len()).sum::<usize>();
         if abandoned > 0 {
             state.stats.dropped += abandoned as u64;
             eprintln!("orbweaver: event channel stopped with {abandoned} undelivered event(s)");
             for proxy in state.proxy_suppliers.values_mut() {
+                proxy.queue.clear();
+            }
+            for proxy in state.proxy_pull_suppliers.values_mut() {
                 proxy.queue.clear();
             }
         }
@@ -688,6 +906,36 @@ fn outbound_any_alignment(conn: &Connection) -> usize {
     }
 }
 
+/// Whether `event`'s captured value bytes may be written verbatim at offset
+/// `at` into a stream of byte order `endian`.
+///
+/// One predicate for both directions. The delivery thread asks it about an
+/// outbound request body and `pull` asks it about a reply body, and they have
+/// to agree: an `any` captured raw carries padding computed for exactly one
+/// alignment and is only readable in exactly one byte order. Two copies of
+/// this rule would be two chances to relax one of them.
+fn relay_check(event: &Event, at: usize, endian: Endian) -> std::result::Result<(), String> {
+    let any = &event.any;
+    if endian != any.endian {
+        return Err(format!(
+            "the event was captured {:?}-endian and this stream is {endian:?}-endian",
+            any.endian
+        ));
+    }
+    let mut probe = Encoder::continuing_at(endian, at);
+    if typecode::encode(&mut probe, &any.tc).is_err() {
+        return Err("the TypeCode did not re-encode".into());
+    }
+    let value_landing = (at + probe.len()) % 8;
+    if value_landing != event.value_align {
+        return Err(format!(
+            "value captured at alignment {} would land at {value_landing}",
+            event.value_align
+        ));
+    }
+    Ok(())
+}
+
 /// One outbound `push`, with **no lock held** — see the module docs.
 fn deliver(
     conns: &mut HashMap<Vec<u8>, (Ior, Connection)>,
@@ -726,16 +974,8 @@ fn deliver(
     if landing == usize::MAX {
         return Outcome::Unrelayable("the outbound request header did not encode".into());
     }
-    let mut probe = Encoder::continuing_at(any.endian, landing);
-    if typecode::encode(&mut probe, &any.tc).is_err() {
-        return Outcome::Unrelayable("the TypeCode did not re-encode".into());
-    }
-    let value_landing = (landing + probe.len()) % 8;
-    if value_landing != job.event.value_align {
-        return Outcome::Unrelayable(format!(
-            "value captured at alignment {} would land at {value_landing}",
-            job.event.value_align
-        ));
+    if let Err(why) = relay_check(&job.event, landing, conn.endian()) {
+        return Outcome::Unrelayable(why);
     }
 
     let result = conn.invoke("push", |e| {
@@ -790,6 +1030,7 @@ enum Target {
     SupplierAdmin,
     ProxySupplier,
     ProxyConsumer,
+    ProxyPullSupplier,
 }
 
 impl Target {
@@ -800,6 +1041,7 @@ impl Target {
             Target::SupplierAdmin => SUPPLIER_ADMIN_ID,
             Target::ProxySupplier => PROXY_PUSH_SUPPLIER_ID,
             Target::ProxyConsumer => PROXY_PUSH_CONSUMER_ID,
+            Target::ProxyPullSupplier => PROXY_PULL_SUPPLIER_ID,
         }
     }
 }
@@ -929,6 +1171,9 @@ impl EventChannelServer {
         if state.proxy_consumers.contains_key(key) {
             return Some(Target::ProxyConsumer);
         }
+        if state.proxy_pull_suppliers.contains_key(key) {
+            return Some(Target::ProxyPullSupplier);
+        }
         None
     }
 
@@ -981,6 +1226,15 @@ impl EventChannelServer {
                 let key = self.mint("pps");
                 self.shared.lock().proxy_suppliers.insert(key.clone(), ProxySupplier::default());
                 self.ior_for(&key, PROXY_PUSH_SUPPLIER_ID).write_to(out).map_err(|_| marshal())?;
+            }
+
+            (Target::ConsumerAdmin, "obtain_pull_supplier") => {
+                let key = self.mint("pls");
+                self.shared
+                    .lock()
+                    .proxy_pull_suppliers
+                    .insert(key.clone(), ProxyPullSupplier::default());
+                self.ior_for(&key, PROXY_PULL_SUPPLIER_ID).write_to(out).map_err(|_| marshal())?;
             }
 
             // ── SupplierAdmin ──
@@ -1072,11 +1326,120 @@ impl EventChannelServer {
                 }
             }
 
-            // The pull model and `destroy` are declared by `CosEventComm` and
-            // `CosEventChannelAdmin` and deliberately not served, so the wire
-            // says `NO_IMPLEMENT`: a client can tell that from an oversight,
-            // and `BAD_OPERATION` — "no such operation" — could not, which left
-            // the difference in this module's header where no caller reads it.
+            // ── ProxyPullSupplier: the pulling consumer's end ──
+            (Target::ProxyPullSupplier, "connect_pull_consumer") => {
+                // A nil `PullConsumer` is legal here, and the asymmetry with
+                // `connect_push_consumer` — which answers `BAD_PARAM` — is
+                // real rather than an inconsistency: that reference is the
+                // address delivery is sent to, and this one is never dialled
+                // at all. It exists only so the proxy could call
+                // `disconnect_pull_consumer` back, which the standard makes
+                // optional and this channel does not do.
+                let consumer = Ior::read_from(&mut args).map_err(|_| marshal())?;
+                let mut state = self.shared.lock();
+                let proxy = state
+                    .proxy_pull_suppliers
+                    .get_mut(&req.object_key)
+                    .ok_or_else(|| Raise::System(SystemException::object_not_exist()))?;
+                if proxy.connected {
+                    return Err(UserExc::AlreadyConnected.into());
+                }
+                proxy.connected = true;
+                proxy.consumer = if consumer.is_nil() { None } else { Some(consumer) };
+            }
+            (Target::ProxyPullSupplier, "pull" | "try_pull") => {
+                // Measured, never recomputed: `out` is the real reply body
+                // encoder, positioned where the body will land in the message,
+                // so `position()` is the `any`'s true CDR offset. The reply's
+                // byte order is the request's and not ours to change, which is
+                // the half of `relay_check` the push path never exercises.
+                let blocking = req.operation == "pull";
+                let at = out.position();
+                let endian = out.endian();
+
+                let mut state = self.shared.lock();
+                let deadline = Instant::now() + state.pull_block;
+                let event = loop {
+                    let connected = state
+                        .proxy_pull_suppliers
+                        .get(&req.object_key)
+                        .ok_or_else(|| Raise::System(SystemException::object_not_exist()))?
+                        .connected;
+                    if !connected || state.stopped {
+                        // §2.1.1: pulling from a proxy nothing is connected to
+                        // is `Disconnected`, and a stopped channel is the same
+                        // answer for the same reason — no more events are
+                        // coming from here.
+                        return Err(UserExc::Disconnected.into());
+                    }
+                    if let Some(event) = state.take_pull_event(&req.object_key, at, endian) {
+                        break Some(event);
+                    }
+                    if !blocking {
+                        break None;
+                    }
+                    let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+                        return Err(pull_timed_out());
+                    };
+                    // The mutex is released for the duration of this wait, so
+                    // a supplier's `push` is served while a `pull` blocks —
+                    // which is the only reason a blocking `pull` can ever be
+                    // satisfied at all.
+                    state = self.shared.wait(&self.shared.wake, state, left.min(PULL_POLL));
+                };
+                // Released before anything is marshalled: a large `any` must
+                // not hold the channel shut while it is written out.
+                drop(state);
+
+                if let Some(event) = event {
+                    // `relay_check` proved this encodes, at this offset, in
+                    // this byte order.
+                    typecode::encode_any_at_same_alignment(out, &event.any)
+                        .map_err(|_| marshal())?;
+                    if !blocking {
+                        out.put_bool(true);
+                    }
+                } else {
+                    // `try_pull` with nothing to give: §2.1.1 says the `any`
+                    // returned is `tk_null` and `has_event` is false. The
+                    // return value precedes the `out` parameter on the wire,
+                    // so the boolean is what tells a decoder where the value
+                    // ended — an `any` has no length prefix of its own.
+                    typecode::encode(out, &TypeCode::Null).map_err(|_| marshal())?;
+                    out.put_bool(false);
+                }
+                self.shared.progress.notify_all();
+            }
+            (Target::ProxyPullSupplier, "disconnect_pull_supplier") => {
+                let mut state = self.shared.lock();
+                if let Some(proxy) = state.proxy_pull_suppliers.get_mut(&req.object_key) {
+                    let abandoned = proxy.queue.len() as u64;
+                    proxy.queue.clear();
+                    proxy.connected = false;
+                    proxy.consumer = None;
+                    state.stats.dropped += abandoned;
+                    if abandoned > 0 {
+                        eprintln!(
+                            "orbweaver: event channel disconnected pull proxy {} with \
+                             {abandoned} queued event(s) dropped",
+                            String::from_utf8_lossy(&req.object_key)
+                        );
+                    }
+                }
+                drop(state);
+                // A `pull` blocked on this proxy is waiting on `wake`; it has
+                // to learn it was disconnected rather than sit out its
+                // deadline. The key stays known and reconnectable, the same
+                // choice the push proxy and F6's unbound contexts make.
+                self.shared.wake.notify_all();
+            }
+
+            // The supplier side of the pull model and `destroy` are declared by
+            // `CosEventComm` and `CosEventChannelAdmin` and deliberately not
+            // served, so the wire says `NO_IMPLEMENT`: a client can tell that
+            // from an oversight, and `BAD_OPERATION` — "no such operation" —
+            // could not, which left the difference in this module's header
+            // where no caller reads it.
             (_, op) if is_deferred(op) => return Err(SystemException::no_implement().into()),
             // Anything else is a name no interface of this object declares.
             _ => return Err(SystemException::bad_operation().into()),
@@ -1087,22 +1450,23 @@ impl EventChannelServer {
 
 /// The event-service operations this server knows about and does not serve.
 ///
-/// The reasons are in this module's header: pull inverts the flow control and
-/// would need the unbounded buffer the bounded queue exists to avoid, and
-/// `destroy` means calling back out to every attached consumer from inside a
-/// servant, where a failure has nowhere to go.
+/// The reasons are in this module's header, and both were re-argued rather
+/// than restated: the **supplier** side of pull would make the channel invoke
+/// a specified-to-block `pull` on a reference it does not control, for no
+/// supplier that exists; `destroy` is an unauthenticated remote operation that
+/// would end the channel for every other client and cannot be undone without
+/// restarting the process.
+///
+/// The **consumer** side of pull left this list once it was measured: it is
+/// the same bounded queue drained from the other end, which is what the old
+/// reason claimed it could not be. Anything removed from here must gain a
+/// served arm in [`EventChannelServer::invoke_operation`] in the same change,
+/// or the operation silently degrades from a stated refusal to
+/// `BAD_OPERATION`, which says "no such operation" and is a lie.
 pub fn is_deferred(op: &str) -> bool {
     matches!(
         op,
-        "obtain_pull_supplier"
-            | "obtain_pull_consumer"
-            | "connect_pull_consumer"
-            | "connect_pull_supplier"
-            | "disconnect_pull_supplier"
-            | "disconnect_pull_consumer"
-            | "pull"
-            | "try_pull"
-            | "destroy"
+        "obtain_pull_consumer" | "connect_pull_supplier" | "disconnect_pull_consumer" | "destroy"
     )
 }
 
@@ -1391,6 +1755,11 @@ pub mod client {
         reference(conn, "obtain_push_consumer")
     }
 
+    /// `ConsumerAdmin::obtain_pull_supplier`.
+    pub fn obtain_pull_supplier(conn: &mut Connection) -> Result<Ior> {
+        reference(conn, "obtain_pull_supplier")
+    }
+
     /// `ProxyPushSupplier::connect_push_consumer`.
     pub fn connect_push_consumer(conn: &mut Connection, consumer: &Ior) -> Result<()> {
         let consumer = consumer.clone();
@@ -1408,6 +1777,63 @@ pub mod client {
             let _ = supplier.write_to(e);
         })?;
         Ok(())
+    }
+
+    /// `ProxyPullSupplier::connect_pull_consumer`. A nil `consumer` is legal
+    /// and is what a consumer that only intends to pull should send: the
+    /// reference is never dialled.
+    pub fn connect_pull_consumer(conn: &mut Connection, consumer: &Ior) -> Result<()> {
+        let consumer = consumer.clone();
+        conn.invoke("connect_pull_consumer", move |e| {
+            let _ = consumer.write_to(e);
+        })?;
+        Ok(())
+    }
+
+    /// `ProxyPullSupplier::disconnect_pull_supplier`.
+    pub fn disconnect_pull_supplier(conn: &mut Connection) -> Result<()> {
+        conn.invoke_nullary("disconnect_pull_supplier")?;
+        Ok(())
+    }
+
+    /// `PullSupplier::pull` — blocks until an event is available.
+    ///
+    /// The `any` is the whole reply body, so its value runs to the end. That
+    /// is the same reasoning `capture_event` uses from the other side, and it
+    /// is the only way an `any`'s length can be known: CDR gives it no prefix.
+    ///
+    /// A server-side block that expires surfaces as `TIMEOUT` with
+    /// `COMPLETED_NO`, which means no event was consumed — calling `pull`
+    /// again is safe and is how a caller that really wants to wait forever
+    /// waits forever.
+    pub fn pull(conn: &mut Connection) -> Result<Any> {
+        let reply = conn.invoke_nullary("pull")?;
+        let mut body = reply.body()?;
+        let tc = typecode::decode(&mut body)?;
+        let endian = body.endian();
+        let len = body.remaining();
+        let value = body.get_bytes(len).map_err(crate::Error::Cdr)?.to_vec();
+        Ok(Any { tc, value, endian })
+    }
+
+    /// `PullSupplier::try_pull` — `None` when the channel had nothing.
+    ///
+    /// The reply body is the `any` return value **followed by** the `out
+    /// boolean`, in that order (§9.4.2: the return value precedes the out
+    /// parameters). So the value ends one octet before the body does, and that
+    /// octet is what says so — an `any` with no length prefix at the end of a
+    /// body knows where it stops only because the caller knows what follows.
+    pub fn try_pull(conn: &mut Connection) -> Result<Option<Any>> {
+        let reply = conn.invoke_nullary("try_pull")?;
+        let mut body = reply.body()?;
+        let tc = typecode::decode(&mut body)?;
+        let endian = body.endian();
+        let len = body.remaining().checked_sub(1).ok_or(crate::Error::Cdr(
+            orbweaver_cdr::Error::Malformed("a try_pull reply with no has_event flag"),
+        ))?;
+        let value = body.get_bytes(len).map_err(crate::Error::Cdr)?.to_vec();
+        let has_event = body.get_bool().map_err(crate::Error::Cdr)?;
+        Ok(has_event.then_some(Any { tc, value, endian }))
     }
 
     /// `ProxyPushSupplier::disconnect_push_supplier`.
@@ -1760,14 +2186,37 @@ mod tests {
     }
 
     /// The pull model and `destroy` are refused loudly, not half-served.
+    /// The deferral list, on the wire and in the predicate, after the pull
+    /// model was split in two.
+    ///
+    /// What is still refused answers `NO_IMPLEMENT` — a decision a client can
+    /// read. What is no longer refused answers with a *reference*, which is
+    /// the only unambiguous evidence that the arm exists: an operation removed
+    /// from [`is_deferred`] without an arm behind it would degrade to
+    /// `BAD_OPERATION`, and this test would see the difference.
     #[test]
-    fn the_pull_model_and_destroy_answer_no_implement() {
+    fn the_supplier_side_of_pull_and_destroy_answer_no_implement() {
+        for op in
+            ["obtain_pull_consumer", "connect_pull_supplier", "disconnect_pull_consumer", "destroy"]
+        {
+            assert!(super::is_deferred(op), "{op} must stay on the deferral list");
+        }
+        for op in [
+            "obtain_pull_supplier",
+            "connect_pull_consumer",
+            "pull",
+            "try_pull",
+            "disconnect_pull_supplier",
+        ] {
+            assert!(!super::is_deferred(op), "{op} is served now and must be off the list");
+        }
+
         let served = Served::start();
         let mut conn = served.channel_conn();
         let consumers = client::for_consumers(&mut conn).unwrap();
         let suppliers = client::for_suppliers(&mut conn).unwrap();
 
-        for op in ["destroy", "obtain_pull_supplier", "pull", "try_pull"] {
+        for op in ["destroy", "obtain_pull_consumer", "disconnect_pull_consumer"] {
             match conn.invoke_nullary(op) {
                 Err(Error::SystemException { id, .. }) => {
                     assert_eq!(id, crate::server::NO_IMPLEMENT, "{op}");
@@ -1777,29 +2226,38 @@ mod tests {
         }
         drop(conn);
 
-        for (ior, ops) in [
-            (&consumers, ["obtain_pull_supplier", "obtain_push_consumer"]),
-            (&suppliers, ["obtain_pull_consumer", "obtain_push_supplier"]),
-        ] {
-            let mut c = served.dial(ior);
-            for op in ops {
-                match c.invoke_nullary(op) {
-                    Err(Error::SystemException { id, .. }) => {
-                        let want = if super::is_deferred(op) {
-                            crate::server::NO_IMPLEMENT
-                        } else {
-                            crate::server::BAD_OPERATION
-                        };
-                        assert_eq!(id, want, "{op}");
-                    }
-                    other => {
-                        panic!("expected a refusal for {op} on {}, got {other:?}", ior.type_id)
-                    }
-                }
+        // The ConsumerAdmin mints a pull supplier now; the SupplierAdmin's own
+        // pull operation is still a stated refusal, and an operation belonging
+        // to neither admin is `BAD_OPERATION` — the distinction that made
+        // `NO_IMPLEMENT` worth having.
+        let mut c = served.dial(&consumers);
+        let pls = client::obtain_pull_supplier(&mut c).unwrap();
+        assert_eq!(pls.type_id, PROXY_PULL_SUPPLIER_ID);
+        assert_ne!(
+            pls.primary().unwrap().object_key,
+            served.channel.primary().unwrap().object_key,
+            "a pull proxy is its own object"
+        );
+        drop(c);
+
+        let mut c = served.dial(&suppliers);
+        match c.invoke_nullary("obtain_pull_consumer") {
+            Err(Error::SystemException { id, .. }) => {
+                assert_eq!(id, crate::server::NO_IMPLEMENT);
             }
+            other => panic!("expected NO_IMPLEMENT for obtain_pull_consumer, got {other:?}"),
         }
-        let last = served.channel_conn();
-        served.shutdown(last);
+        match c.invoke_nullary("obtain_pull_supplier") {
+            Err(Error::SystemException { id, .. }) => {
+                assert_eq!(
+                    id,
+                    crate::server::BAD_OPERATION,
+                    "a SupplierAdmin does not declare obtain_pull_supplier"
+                );
+            }
+            other => panic!("expected BAD_OPERATION, got {other:?}"),
+        }
+        served.shutdown(c);
     }
 
     /// An `any` survives the whole path — the supplier's client, our servant's
