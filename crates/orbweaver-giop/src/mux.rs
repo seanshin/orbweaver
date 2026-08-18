@@ -589,7 +589,15 @@ struct Inner {
 
     /// Allocated under the write half, so id order is wire order.
     next_id: AtomicU32,
-    char_converter: Option<codeset::Converter>,
+    /// What §7.10.2 produced for `char` data here. Carried across from the
+    /// `Connection` this took over, so a `Mux` declares and refuses exactly
+    /// what that connection would have.
+    char_codeset: crate::CharCodeset,
+    /// Whether some caller has undertaken to convert `char` data itself; see
+    /// [`Mux::convert_chars`]. Shared, because the undertaking is about the
+    /// connection rather than about one caller: everyone writing to this wire
+    /// writes under the one `CodeSets` context it sent.
+    caller_converts_chars: AtomicBool,
     /// §7.10.2.5 negotiates once per connection, so exactly one request may
     /// carry the `CodeSets` context. Taken under the write half, which is what
     /// makes "the first request written" and "the request carrying the
@@ -621,7 +629,8 @@ impl Mux {
             next_id,
             max_message_size,
             poisoned,
-            char_converter,
+            char_codeset,
+            caller_converts_chars,
             codeset_context_pending,
             fragment_threshold,
             ..
@@ -656,7 +665,8 @@ impl Mux {
                 fragment_threshold,
                 multiplexes,
                 next_id: AtomicU32::new(next_id),
-                char_converter,
+                char_codeset,
+                caller_converts_chars: AtomicBool::new(caller_converts_chars),
                 codeset_pending: AtomicBool::new(codeset_context_pending),
                 in_flight: AtomicUsize::new(0),
                 faulted: AtomicBool::new(poisoned),
@@ -707,11 +717,26 @@ impl Mux {
 
     /// The converter for `char` data on this connection (§7.10.2.5's
     /// ISO-8859-1 when nothing was negotiated).
+    ///
+    /// **Reading it does not make it apply**; see [`Mux::convert_chars`].
     pub fn char_converter(&self) -> codeset::Converter {
-        self.inner.char_converter.unwrap_or_else(|| {
+        self.inner.char_codeset.agreed().unwrap_or_else(|| {
             codeset::Converter::new(codeset::CodeSetId::ISO_8859_1)
                 .expect("ISO-8859-1 is always supported")
         })
+    }
+
+    /// Takes responsibility for converting `char` data on this connection, and
+    /// returns the converter to do it with.
+    ///
+    /// [`Connection::convert_chars`] with one difference that follows from a
+    /// `Mux` being shared: the undertaking binds every caller on this wire, not
+    /// only the one that asked. It has to — there is one connection, one
+    /// `CodeSets` context, and one meaning for the octets under it.
+    pub fn convert_chars(&self) -> Result<codeset::Converter> {
+        let c = self.inner.char_codeset.usable()?;
+        self.inner.caller_converts_chars.store(true, Ordering::SeqCst);
+        Ok(c)
     }
 
     /// Whether this connection can still carry calls.
@@ -926,6 +951,16 @@ impl Inner {
     where
         F: Fn(&mut Encoder),
     {
+        // The `CodeSets` context and the octets under it must describe the same
+        // bytes. Checked before the write half is even taken, and marked unsent
+        // because nothing has been written: this is a refusal to speak, not a
+        // failure while speaking.
+        if let Err(e) =
+            self.char_codeset.may_send(self.caller_converts_chars.load(Ordering::SeqCst))
+        {
+            return Err(failed(e, true));
+        }
+
         let mut tx = self.wire.tx().lock().unwrap_or_else(|e| e.into_inner());
 
         let id = {
@@ -967,7 +1002,7 @@ impl Inner {
             }
         };
 
-        let contexts = match (took_context, self.char_converter) {
+        let contexts = match (took_context, self.char_codeset.agreed()) {
             (true, Some(c)) => {
                 let ctx = codeset::CodeSetContext {
                     char_data: c.id(),

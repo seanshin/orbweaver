@@ -231,6 +231,7 @@ pub struct Request {
     pub operation: String,
     /// Whether the peer expects a reply. False for `oneway`.
     pub expect_reply: bool,
+    contexts: Vec<crate::ServiceContext>,
     raw: Vec<u8>,
     body_at: usize,
 }
@@ -241,6 +242,36 @@ impl Request {
         let mut d = Decoder::new(&self.raw, self.endian);
         d.seek_to(self.body_at)?;
         Ok(d)
+    }
+
+    /// Every `IOP::ServiceContext` the peer attached, in the order it sent
+    /// them.
+    ///
+    /// These were parsed and dropped on the floor until this batch, which made
+    /// the codeset half of §7.10.2 a one-way street: we published what we could
+    /// read and never looked at what the client said it was sending.
+    pub fn service_contexts(&self) -> &[crate::ServiceContext] {
+        &self.contexts
+    }
+
+    /// The `CodeSets` context (§7.10.2.5), if the peer sent a readable one.
+    ///
+    /// `None` is not "no opinion". §7.10.2.5 is explicit that *"if no char
+    /// transmission code set is specified in the code set service context, then
+    /// the char transmission code set is considered to be ISO 8859-1 for
+    /// backward compatibility"* — so an absent context is a peer declaring
+    /// Latin-1, which is what omniORB does when the reference it dialed carried
+    /// no `TAG_CODE_SETS` (measured; see [`crate::codeset::server_component`]).
+    /// A servant that cares about text above ASCII must treat `None` as
+    /// ISO-8859-1 rather than as UTF-8.
+    ///
+    /// A malformed body reads as `None` for the reason §9.7.2 gives about
+    /// components generally: what cannot be understood is not thereby fatal.
+    pub fn code_sets(&self) -> Option<crate::codeset::CodeSetContext> {
+        self.contexts
+            .iter()
+            .find(|c| c.id == crate::codeset::SERVICE_ID_CODE_SETS)
+            .and_then(|c| crate::codeset::CodeSetContext::parse(&c.data).ok())
     }
 }
 
@@ -259,6 +290,7 @@ pub fn decode_request(msg: RawMessage) -> Result<Request> {
     let expect_reply;
     let object_key;
     let operation;
+    let contexts;
 
     if version.is_1_2_layout() {
         request_id = d.get_u32()?;
@@ -274,9 +306,9 @@ pub fn decode_request(msg: RawMessage) -> Result<Request> {
         }
         object_key = d.get_octet_seq()?.to_vec();
         operation = String::from_utf8_lossy(d.get_string_bytes()?).into_owned();
-        skip_service_contexts(&mut d)?;
+        contexts = read_service_contexts(&mut d)?;
     } else {
-        skip_service_contexts(&mut d)?;
+        contexts = read_service_contexts(&mut d)?;
         request_id = d.get_u32()?;
         expect_reply = d.get_bool()?;
         if version.has_reserved_octets() {
@@ -295,17 +327,29 @@ pub fn decode_request(msg: RawMessage) -> Result<Request> {
         d.offset()
     };
 
-    Ok(Request { version, endian, request_id, object_key, operation, expect_reply, raw, body_at })
+    Ok(Request {
+        version,
+        endian,
+        request_id,
+        object_key,
+        operation,
+        expect_reply,
+        contexts,
+        raw,
+        body_at,
+    })
 }
 
-fn skip_service_contexts(d: &mut Decoder<'_>) -> Result<()> {
+fn read_service_contexts(d: &mut Decoder<'_>) -> Result<Vec<crate::ServiceContext>> {
     let n = d.get_u32()?;
     let n = d.validate_count(n, 8)?;
+    let mut out = Vec::with_capacity(n);
     for _ in 0..n {
-        let _id = d.get_u32()?;
-        let _data = d.get_octet_seq()?;
+        let id = d.get_u32()?;
+        let data = d.get_octet_seq()?.to_vec();
+        out.push(crate::ServiceContext { id, data });
     }
-    Ok(())
+    Ok(out)
 }
 
 fn message_header(e: &mut Encoder, version: Version, endian: Endian, ty: MsgType) -> usize {
@@ -1043,7 +1087,12 @@ impl Server {
                 host: host.to_owned(),
                 port,
                 object_key: self.object_key.clone(),
-                components: Vec::new(),
+                // §7.10.2.4: an IIOP profile with no `TAG_CODE_SETS` says the
+                // server is ISO-8859-1 for `char` and has **no `wchar`
+                // support at all**, so a conformant client refuses to marshal
+                // a `wstring` to it rather than calling. Publishing what we
+                // actually speak is what makes those operations reachable.
+                components: vec![crate::codeset::server_component()],
             }],
         })
     }
