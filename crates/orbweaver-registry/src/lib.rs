@@ -209,6 +209,7 @@ impl std::fmt::Display for Unresolved {
         let what = match self.kind {
             UnresolvedKind::Base => "base interface",
             UnresolvedKind::Raises => "raised exception",
+            UnresolvedKind::Type => "type name",
         };
         write!(f, "{}: {what} `{}` is not declared in this unit", self.at, self.name)
     }
@@ -224,6 +225,18 @@ pub enum UnresolvedKind {
     /// A name in an operation's `raises` clause. It costs the caller the
     /// ability to recognise the exception it is handed.
     Raises,
+    /// A name used as a type — a member's, a parameter's, a return value's, a
+    /// sequence element's. It costs the *bytes*: an unresolved type became
+    /// `void` in the `TypeCode`, and `void` marshals nothing where a peer
+    /// expects a value.
+    ///
+    /// Added when the fix for inherited-scope resolution made the question
+    /// "what does a marker mean" answerable: measured, `idl-diff` accepted
+    /// `corpus/negative/n04-unknown-type.idl` — `struct S { Widget w; };` —
+    /// and exited 0, because only bases and `raises` were ever recorded. The
+    /// marker was not ambiguous; it was incomplete, which reads the same from
+    /// the gate's side. *마커는 모호했던 것이 아니라 불완전했다.*
+    Type,
 }
 
 /// An operation's shape, which is what a dynamic invoker needs to build a call.
@@ -774,6 +787,17 @@ struct NameTable {
     /// but from an enumerator's own path there is no way back to its enum, and
     /// a constant folding `RED` needs exactly that.
     enumerators: HashMap<String, (Vec<String>, String, u32)>,
+    /// Lowercased qualified interface name to its direct bases, each paired
+    /// with the scope the base name was *written* in.
+    ///
+    /// Needed because an interface's scope is not only what it declares:
+    /// CORBA §3.15.2 resolves an unqualified name "while taking into
+    /// consideration inheritance relationships among interfaces", so the name
+    /// table cannot answer a lookup without the inheritance graph. Recording
+    /// the base as written — rather than resolved — is what lets a base
+    /// declared later in the file still be found, which is the same reason
+    /// this table exists at all.
+    bases: HashMap<String, Vec<(Vec<String>, ScopedName)>>,
 }
 
 #[derive(Clone)]
@@ -807,6 +831,13 @@ impl NameTable {
                         self.defs.insert(key.clone(), DefRef::Interface);
                     }
                     if let Some(body) = &i.body {
+                        // A forward declaration carries no bases, so only a
+                        // body may set them — and a body arriving after one
+                        // replaces nothing, since the two agree.
+                        self.bases.insert(
+                            key.to_lowercase(),
+                            i.bases.iter().map(|b| (path.to_vec(), b.clone())).collect(),
+                        );
                         let nested: Vec<Definition> = body
                             .iter()
                             .filter_map(|m| match m {
@@ -855,12 +886,124 @@ impl NameTable {
     }
 
     /// Resolves a reference from `scope` outwards, IDL-style.
+    ///
+    /// CORBA 2.3 §3.15.2 (§7.19.2 in CORBA 3.4), *Scoping Rules and Name
+    /// Resolution*: "A name can be used in an unqualified form within a
+    /// particular scope; it will be resolved by successively searching farther
+    /// out in enclosing scopes, **while taking into consideration inheritance
+    /// relationships among interfaces**." The spec's own worked example fixes
+    /// the order, and the order is the whole rule — for `N::Y : M::B` it
+    /// searches
+    ///
+    /// 1. the scope of `N::Y`,
+    /// 2. the scope of `N::Y`'s base `M::B` — the inherited scope,
+    /// 3. the scope of module `N`,
+    /// 4. the global scope,
+    ///
+    /// so a name declared in the base wins over the same name in the enclosing
+    /// module. A base's scope is searched *before* stepping outward, not after.
+    ///
+    /// This walked lexical scopes only, which is why
+    /// `corpus/services/gen-naming-subset.idl` — `NamingContextExt :
+    /// NamingContext` raising the `NotFound` its base declares, exactly as OMG
+    /// writes it — recorded five [`Unresolved`] markers and made `idl-diff`
+    /// exit 2 over a contract omniidl and JacORB both accept. A gate that cries
+    /// wolf gets bypassed.
+    ///
+    /// Inheritance is a graph, so the walk is one too: a base's bases count
+    /// (§3.15.1 admits an identifier "inherited into" a scope, without limiting
+    /// how far), a diamond contributes one name rather than two because
+    /// "[t]wo shadow copies of the same original ... introduce a single name
+    /// into the derived interface and don't conflict with each other", and a
+    /// cycle terminates — `seen` gives both.
+    ///
+    /// **Ambiguity is not decided here.** The spec makes the *same* name
+    /// inherited from two *different* originals an error that must be qualified
+    /// at the use site; diagnosing it is `orbweaver_idl::sema`'s job, and this
+    /// follows declaration order the way that checker does. A registry that
+    /// refused to resolve would turn a front-end diagnostic into a silent
+    /// hole here.
+    ///
+    /// *상속 범위는 바깥 범위보다 먼저 탐색된다 (CORBA §3.15.2). 모호성 판정은
+    /// 프론트엔드의 몫이다.*
     fn resolve(&self, scope: &[String], name: &ScopedName) -> Option<Vec<String>> {
+        if name.absolute {
+            return self.resolve_rooted(&[], &name.parts);
+        }
+        // Try the innermost scope first, then each enclosing one.
+        for cut in (0..=scope.len()).rev() {
+            if let Some(p) = self.resolve_rooted(&scope[..cut], &name.parts) {
+                return Some(p);
+            }
+        }
+        None
+    }
+
+    /// `parts` read as a qualified name rooted at `scope`, with no widening.
+    ///
+    /// §3.15.1: a qualified name is resolved "by first resolving the qualifier
+    /// `<scoped-name>` to a scope S, and then locating the definition of
+    /// `<identifier>` within S. The identifier must be directly defined in S or
+    /// (if S is an interface) inherited into S. The `<identifier>` is not
+    /// searched for in enclosing scopes." Hence [`Self::lookup`] per component
+    /// rather than one lookup of the joined name: `NamingContextExt::NotFound`
+    /// names something real even though nothing is declared at that path.
+    fn resolve_rooted(&self, scope: &[String], parts: &[String]) -> Option<Vec<String>> {
+        let (first, rest) = parts.split_first()?;
+        let mut path = self.lookup(scope, first)?;
+        for part in rest {
+            path = self.lookup(&path, part)?;
+        }
+        Some(path)
+    }
+
+    /// One identifier, in one scope and in every scope that scope inherits.
+    fn lookup(&self, scope: &[String], ident: &str) -> Option<Vec<String>> {
+        self.lookup_seen(scope, ident, &mut BTreeSet::new())
+    }
+
+    fn lookup_seen(
+        &self,
+        scope: &[String],
+        ident: &str,
+        seen: &mut BTreeSet<String>,
+    ) -> Option<Vec<String>> {
+        let here = qualified(scope).to_lowercase();
+        let mut key = here.clone();
+        if !key.is_empty() {
+            key.push_str("::");
+        }
+        key.push_str(&ident.to_lowercase());
+        if let Some(p) = self.paths.get(&key) {
+            return Some(p.clone());
+        }
+        // Only an interface has anything to inherit; for everything else the
+        // lookup ends here and this reduces to what it always did.
+        if !seen.insert(here.clone()) {
+            return None;
+        }
+        for (at, base) in self.bases.get(&here).into_iter().flatten() {
+            // A base's *own* name is never itself an inherited one: the IDL
+            // grammar has no interface declaration inside an interface body,
+            // so every interface name sits in a module or at file scope.
+            // Resolving it lexically is therefore complete, and it is also
+            // what keeps this recursion finite — the only way back into
+            // `lookup_seen` is through `seen`.
+            let Some(base_path) = self.resolve_lexical(at, base) else { continue };
+            if let Some(p) = self.lookup_seen(&base_path, ident, seen) {
+                return Some(p);
+            }
+        }
+        None
+    }
+
+    /// Enclosing scopes only. See [`Self::lookup_seen`] for why a base name
+    /// needs no more than this.
+    fn resolve_lexical(&self, scope: &[String], name: &ScopedName) -> Option<Vec<String>> {
         let tail = name.parts.join("::").to_lowercase();
         if name.absolute {
             return self.paths.get(&tail).cloned();
         }
-        // Try the innermost scope first, then each enclosing one.
         for cut in (0..=scope.len()).rev() {
             let mut key = scope[..cut].join("::").to_lowercase();
             if !key.is_empty() {
@@ -1279,8 +1422,15 @@ impl Builder<'_> {
                 None if is_corba_typecode(n) => TypeCode::TypeCode,
                 // An unresolved name is a semantic error the checker already
                 // reports; producing `void` here keeps the registry loadable
-                // for tooling that wants to show what *did* resolve.
-                None => TypeCode::Void,
+                // for tooling that wants to show what *did* resolve — but it
+                // is recorded, for the same reason a base or a `raises` is.
+                // `void` where a type belongs marshals nothing, and a gate
+                // reading a graph with a member typed `void` by accident is
+                // deciding from evidence it does not have.
+                None => {
+                    self.note_unresolved(&qualified(scope), UnresolvedKind::Type, n);
+                    TypeCode::Void
+                }
             },
         }
     }

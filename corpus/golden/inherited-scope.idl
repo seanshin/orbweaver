@@ -1,0 +1,85 @@
+// Names declared in a base, used unqualified in a derived interface.
+//
+// CORBA 2.3 §3.15.2 (§7.19.2 in CORBA 3.4): an unqualified name "will be
+// resolved by successively searching farther out in enclosing scopes, **while
+// taking into consideration inheritance relationships among interfaces**." The
+// spec's own worked example fixes the order — the derived interface's scope,
+// then its bases' scopes, then the enclosing module, then global — and the
+// order is the whole rule, because a base's declaration beats an enclosing
+// module's declaration of the same name.
+//
+// This file exists because `corpus/services/gen-naming-subset.idl` is the only
+// contract in the corpus that inherits a name rather than declaring it, and it
+// carries a `#pragma prefix`, so it lives under `corpus/services/` where the
+// type-system sweeps do not reach it. The registry's resolver walked lexical
+// scopes only; the gap was therefore reachable by exactly one file, and what it
+// broke was the §5.3 release gate: `idl-diff` refused a contract omniidl and
+// JacORB both accept. A gate that cries wolf gets bypassed.
+//
+// *상속된 이름은 바깥 범위보다 먼저 탐색된다. 이 파일이 그 규칙의 코퍼스다.*
+//
+// Deliberately unnumbered: it was added by a repair rather than by the numbered
+// type-system sweep, and a number would have collided with parallel work.
+//
+// `contract-check` reports two `inherited-destructive-splits-the-quota`
+// advisories over this file. They are inherent to the shape it exists to carry
+// — a destructive operation reachable under five repository ids is what a
+// four-deep diamond *is* — and redeclaring the operations to silence them would
+// delete the inheritance this file is about. The negative control lives next
+// door in `corpus/negative/inherited-scope-leak.idl`.
+module gc_inh {
+
+  // Shadowed on purpose. Inside `Root` and anything derived from it, `Ticket`
+  // is Root's string; `char`-vs-`string` is the spec's own way of showing which
+  // scope won, and here it is `long`-vs-`string`.
+  typedef long Ticket;
+
+  //@ ai_desc: Declares the names the interfaces below only inherit
+  interface Root {
+    typedef string Ticket;
+
+    enum Grade { routine, urgent };
+
+    exception Denied {
+      Grade level;
+      Ticket blamed;
+    };
+
+    //@ ai_desc: A ticket issued from this scope's own declarations
+    //@ ai_effect: destructive
+    //@ ai_authz: gc_inh.ticket.issue
+    Ticket issue(in Grade level) raises (Denied);
+  };
+
+  //@ ai_desc: One link away: every name below is inherited, none is declared
+  interface Middle : Root {
+    //@ ai_desc: Returns Root::Ticket — the string — not gc_inh::Ticket
+    //@ ai_effect: destructive
+    //@ ai_authz: gc_inh.ticket.issue
+    Ticket reissue(in Grade level) raises (Denied);
+  };
+
+  //@ ai_desc: Two links away, so a base's base has to count
+  interface Leaf : Middle {
+    //@ ai_desc: Resolution walks Leaf, Middle, then Root
+    //@ ai_effect: read_only
+    Ticket confirm() raises (Denied);
+  };
+
+  //@ ai_desc: The other arm of the diamond
+  interface Sideways : Root {
+    //@ ai_desc: Nothing new; it exists to reach Root by a second path
+    //@ ai_effect: read_only
+    Ticket peek() raises (Denied);
+  };
+
+  // §3.15.2: "[t]wo shadow copies of the same original ... introduce a single
+  // name into the derived interface and don't conflict with each other."
+  //@ ai_desc: A diamond, where Denied and Ticket arrive twice from one original
+  interface Joined : Leaf, Sideways {
+    //@ ai_desc: Must resolve once, and must not loop
+    //@ ai_effect: destructive
+    //@ ai_authz: gc_inh.ticket.issue
+    Ticket settle(in Grade level) raises (Denied);
+  };
+};
