@@ -682,3 +682,151 @@ fn a_reply_uses_the_agreement_its_request_arrived_under() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// D009 §8 batch 4: why the `char` conversion list is still empty
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The decision conditions a non-empty list on producing **a peer advertising
+// ISO-8859-1 without UTF-8 in its conversion list**. `spikes/codeset_peer_probe.py`
+// went looking, across every code-set option either installed ORB has:
+// five omniORB 4.3.4 configurations and five JacORB 3.9 configurations, ten
+// measured, and every one of them reaches UTF-8. Neither ORB exposes any
+// option that names the *conversion* list at all — omniORB's are
+// `nativeCharCodeSet`/`defaultCharCodeSet`, JacORB's are
+// `jacorb.native_char_codeset`/`jacorb.native_wchar_codeset` — so the list is
+// a property of the build, not of the configuration, and the peer the decision
+// asks for cannot be produced here.
+//
+// The constants below are the second half of that measurement,
+// `spikes/codeset_advertise_probe.py`: a listener publishing a component we
+// choose, called by an unmodified peer, with the request octets decoded. They
+// are what makes the empty list a measured position rather than a cautious one.
+
+/// JacORB 3.9's `TAG_CODE_SETS` body under
+/// `-Djacorb.native_char_codeset=ISO8859_1`, read out of its own IOR.
+///
+/// The nearest thing either installed ORB has to the peer D009 asks for — and
+/// it still lists UTF-8, which is exactly why it is not that peer.
+const JACORB_ISO_8859_1_COMPONENT: &[u8] = &[
+    0x00, 0x00, 0x00, 0x00, // big-endian encapsulation flag + pad
+    0x00, 0x01, 0x00, 0x01, // char native 0x00010001 ISO-8859-1
+    0x00, 0x00, 0x00, 0x02, // two conversions
+    0x00, 0x01, 0x00, 0x0f, // ISO-8859-15
+    0x05, 0x01, 0x00, 0x01, // UTF-8  ← the reason batch 4 is blocked
+    0x00, 0x01, 0x01, 0x09, // wchar native UTF-16
+    0x00, 0x00, 0x00, 0x02, // two conversions
+    0x05, 0x01, 0x00, 0x01, // UTF-8
+    0x00, 0x01, 0x01, 0x00, // UCS-2
+];
+
+/// The octets that JacORB client actually put on the wire for `"café"` when we
+/// advertised **today's** empty conversion list: UTF-8, five octets.
+const MEASURED_AGAINST_TODAYS_LIST: &[u8] = &[0x63, 0x61, 0x66, 0xC3, 0xA9];
+
+/// The same client, the same text, when the advertisement offered ISO-8859-1:
+/// four octets, because it took our offer over its own UTF-8 fallback.
+const MEASURED_AGAINST_THE_PROPOSED_LIST: &[u8] = &[0x63, 0x61, 0x66, 0xE9];
+
+/// And `"함정 전투체계"` over that same offered codeset. JacORB did not refuse
+/// text ISO-8859-1 cannot carry: it truncated each character to its low octet
+/// and raised nothing.
+const MEASURED_KOREAN_UNDER_ISO_8859_1: &[u8] = &[0x68, 0x15, 0x20, 0x04, 0x2C, 0xB4, 0xC4];
+
+/// The list is empty because no peer needs it, and this test is where that
+/// stops being a comment.
+///
+/// Growing `for_char.conversions` fails here, which is the intended place to
+/// meet D009 §8 row 4: re-run `spikes/codeset_peer_probe.py`, and if it exits 1
+/// a peer that cannot reach UTF-8 now exists and this test is what should
+/// change. If it exits 0, the advertisement is still one we cannot demonstrate.
+#[test]
+fn the_char_conversion_list_stays_empty_until_a_peer_needs_it() {
+    let ours = codeset::server_component_info();
+    assert_eq!(ours.for_char.native, Some(CodeSetId::UTF_8));
+    assert!(
+        ours.for_char.conversions.is_empty(),
+        "a conversion we advertise is a conversion a peer may hold us to. \
+         D009 §8 row 4 admits a non-empty list only against a peer advertising \
+         ISO-8859-1 *without* UTF-8; ten configurations of two ORBs were \
+         measured and all ten reach UTF-8 (spikes/codeset_peer_probe.py)"
+    );
+
+    // Every peer component pinned in this file reaches UTF-8 against the empty
+    // list, including the one that comes closest to needing a conversion.
+    for (who, body) in [
+        ("omniORB", OMNIORB_COMPONENT),
+        ("JacORB", JACORB_COMPONENT),
+        ("JacORB native ISO-8859-1", JACORB_ISO_8859_1_COMPONENT),
+    ] {
+        let peer = CodeSetComponentInfo::parse(body).expect("parses").for_char;
+        assert!(peer.supports(CodeSetId::UTF_8), "{who} was supposed to reach UTF-8");
+        assert_eq!(
+            codeset::negotiate(&peer, &ours.for_char).unwrap_or_else(|e| panic!("{who}: {e}")),
+            CodeSetId::UTF_8,
+            "{who} calling us"
+        );
+    }
+}
+
+/// What advertising ISO-8859-1 would have cost, measured rather than argued.
+///
+/// The two ORBs resolve §7.10.2.6's open case in opposite directions, and the
+/// empty list is what keeps that ambiguity out of reach:
+///
+/// - **omniORB 4.3.4** kept transmitting UTF-8 either way — our native set is
+///   in its conversion list and it prefers converting to it.
+/// - **JacORB 3.9 with native `char` ISO-8859-1** moved from UTF-8 to
+///   ISO-8859-1 the moment we offered the conversion, because §7.10.2.6 lets a
+///   client take the server's offer of its own native set first.
+///
+/// The second is a downgrade, and a silent one: asked to send Korean over the
+/// codeset it had just moved to, JacORB truncated each character to one octet
+/// and raised nothing. This crate's `Converter` refuses the same conversion,
+/// which is the difference the test asserts.
+#[test]
+fn offering_iso_8859_1_would_lower_what_a_peer_transmits() {
+    let peer = CodeSetComponentInfo::parse(JACORB_ISO_8859_1_COMPONENT).expect("parses").for_char;
+
+    // Today: the peer reaches UTF-8, and the octets it sent are UTF-8's.
+    assert_eq!(
+        codeset::negotiate(&peer, &codeset::server_component_info().for_char).expect("negotiates"),
+        CodeSetId::UTF_8
+    );
+    assert_eq!(MEASURED_AGAINST_TODAYS_LIST, "caf\u{e9}".as_bytes());
+
+    // The proposal: our component with ISO-8859-1 offered.
+    let proposed = CodeSetComponent {
+        native: Some(CodeSetId::UTF_8),
+        conversions: vec![CodeSetId::ISO_8859_1],
+    };
+
+    // Our own rule answers UTF-8 — §7.10.2.6 permits both, and this crate
+    // breaks the tie by repertoire so that Korean text survives.
+    let ours = codeset::negotiate(&peer, &proposed).expect("negotiates");
+    assert_eq!(ours, CodeSetId::UTF_8, "our tie-break keeps the wider repertoire");
+
+    // JacORB answered the other way on the same two components. The octets it
+    // sent are exactly what this crate's ISO-8859-1 encoder produces, so the
+    // disagreement is about *which* codeset to choose, not about how to encode
+    // in it — and only our empty list keeps the disagreement unreachable.
+    let latin1 = codeset::Converter::new(CodeSetId::ISO_8859_1).expect("iso-8859-1");
+    assert_eq!(
+        latin1.encode("caf\u{e9}").expect("café fits Latin-1"),
+        MEASURED_AGAINST_THE_PROPOSED_LIST
+    );
+    assert_ne!(
+        MEASURED_AGAINST_THE_PROPOSED_LIST, MEASURED_AGAINST_TODAYS_LIST,
+        "the advertisement changed the octets on the wire, which is the cost"
+    );
+
+    // And the cost is data, not just bytes: over that codeset the peer sent
+    // seven octets for seven Korean characters and reported nothing wrong.
+    const KOREAN: &str = "함정 전투체계";
+    assert!(
+        latin1.encode(KOREAN).is_err(),
+        "this crate refuses what JacORB silently truncated to \
+         {MEASURED_KOREAN_UNDER_ISO_8859_1:02x?}"
+    );
+    assert_ne!(MEASURED_KOREAN_UNDER_ISO_8859_1, KOREAN.as_bytes());
+}
