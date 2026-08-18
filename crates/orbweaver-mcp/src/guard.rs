@@ -147,6 +147,8 @@ pub fn is_hypothetical(decision: &str) -> bool {
 ///
 /// Like [`crate::identity::audit_line`], a line names the principal and the
 /// operation and can carry no credential material: nothing here holds one.
+/// `why` is the one field that is prose rather than an identifier, which is why
+/// it comes from [`audit_reason`] and not from a [`Denied`]'s `Display`.
 pub(crate) fn audit_entry(
     decision: &str,
     caller: Option<&Caller>,
@@ -161,6 +163,45 @@ pub(crate) fn audit_entry(
         line.push_str(why);
     }
     line
+}
+
+/// A refusal as the **ledger** states it, which is not always as the caller
+/// hears it.
+///
+/// Every refusal this crate types renders here exactly as it does anywhere
+/// else: its fields are the contract and the request — repository ids,
+/// operation names, scope names, a budget's arithmetic — and none of them can
+/// hold a byte the agent sent. [`Denied::Intercepted`] is the exception, and it
+/// is the reason this function exists rather than a call to `to_string`.
+///
+/// `Intercepted::reason` is free prose written by a stage a deployment
+/// installed. That was inert while no stage could see an argument value; it
+/// stopped being inert when [`crate::interceptor::CallContext`] grew an
+/// `arguments` field, because the seat that field exists for —
+/// [`crate::interceptor::SEAT_SAFETY_CONTENT`] — is precisely the stage that
+/// holds the values, and a content filter's most natural sentence is *"`cents`
+/// looked like a credential: `pin-…`"*. Rendering that into the ledger would
+/// put the payload in the one artifact of this crate that is written to disk,
+/// retained, and grepped by people who are not the caller. **A gate that has to
+/// see a secret must not thereby be a gate that publishes one.**
+///
+/// So the ledger takes the stage's *name* and drops its prose. Nothing is lost
+/// that identifies the decision: the line still says who was refused, on what,
+/// for which operation, and by which stage, which is what a reader correlates
+/// on. The full sentence still reaches [`Denied`]'s `Display` — the caller's
+/// error, the [`crate::dryrun`] report, and the `CallResult::Refused { why }`
+/// every observer stage is handed — so the diagnosis goes to whoever already
+/// holds the arguments, and only to them.
+///
+/// 감사 원장은 스테이지의 **이름**만 싣고 산문은 버린다. 내용 필터는 인자 값을
+/// 보는 유일한 스테이지이므로, 그 산문을 그대로 기록하면 게이트가 곧 유출
+/// 경로가 된다. 전체 문장은 호출자에게만 간다 — 인자를 이미 가진 쪽이다.
+pub(crate) fn audit_reason(why: &Denied) -> String {
+    match why {
+        // The stage, and not one word it wrote.
+        Denied::Intercepted { stage, .. } => format!("the {stage} stage refused this call"),
+        typed => typed.to_string(),
+    }
 }
 
 /// An invoker that checks policy per operation and records every decision.

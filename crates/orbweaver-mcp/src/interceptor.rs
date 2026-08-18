@@ -27,7 +27,7 @@
 //! | 1 | 인증·인가 | [`SEAT_EXPIRY`] | [`crate::token::Expiry`], installed by a deployment |
 //! | 1 | 인증·인가 | [`STAGE_EXPOSURE`], [`STAGE_SCOPES`] | the default-deny allowlist and `ai_authz` |
 //! | 2 | 쿼터·레이트 리밋 | [`SEAT_QUOTA`] | [`crate::quota::Quota`], installed by a deployment |
-//! | 3 | 안전 필터 | [`STAGE_APPROVAL`], [`SEAT_SAFETY_CONTENT`] | the destructive-effect approval only |
+//! | 3 | 안전 필터 | [`STAGE_APPROVAL`], [`SEAT_SAFETY_CONTENT`] | the destructive-effect approval; the content seat is fillable and ships empty |
 //! | 4 | 텔레메트리 | [`STAGE_TELEMETRY`] | call counts into [`CallStats`], and D004's span records |
 //! | 5 | 감사 로그 | [`STAGE_AUDIT`] | the one audit formatter |
 //!
@@ -54,14 +54,17 @@
 //!   number only an operator has. What the crate owes them is the mechanism,
 //!   the refusal shape and the arithmetic in the message; what it must not do
 //!   is choose the number.
-//! - **[`SEAT_SAFETY_CONTENT`] (§4.5 #3) has no occupant, and this batch did
-//!   not give it one.** [`STAGE_APPROVAL`] fills the half of the safety seat
-//!   that reads the *contract* (`ai_effect: destructive` needs a human). The
-//!   half that reads the *arguments* — prompt-injection screening, PII in an
-//!   `in` parameter, a payload that is fine to send to one target and not
-//!   another — is empty, and it is empty for a reason that is now measured
-//!   rather than merely asserted: see *What the content seat cannot see*,
-//!   below, and `the_content_seat_is_blind_to_the_arguments_measured`.
+//! - **[`SEAT_SAFETY_CONTENT`] (§4.5 #3) ships no occupant, and it is no longer
+//!   empty for want of the facts.** [`STAGE_APPROVAL`] fills the half of the
+//!   safety seat that reads the *contract* (`ai_effect: destructive` needs a
+//!   human). The half that reads the *arguments* — prompt-injection screening,
+//!   PII in an `in` parameter, a payload that is fine to send to one target and
+//!   not another — can now be written: [`CallContext::arguments`] carries what
+//!   the agent sent, unmapped, on the dynamic path. What the crate does not
+//!   ship is the *rule*, for the same reason it does not ship the quota's
+//!   number. What it does ship, and must, is the boundary that comes with the
+//!   capability: see *What the content seat sees, and what the ledger does
+//!   not*, below.
 //! - **Telemetry is half-occupied.** §4.5 asks for 지연·토큰·비용 — latency,
 //!   tokens, cost. [`TelemetryInterceptor`] records counts and, since D004 tier
 //!   1, one [`crate::telemetry`] span record per decision. Neither is a
@@ -129,41 +132,53 @@
 //! discover: closing it means `Invoker::invoke` carrying arguments as data,
 //! across three crates.
 //!
-//! # What the content seat cannot see, stated precisely
+//! # What the content seat sees, and what the ledger does not
 //!
-//! A stage at [`SEAT_SAFETY_CONTENT`] gets a [`CallContext`], and a
-//! [`CallContext`] is **everything that is declared and nothing that is sent**:
-//! the catalog, the principal and its scopes, the repository id the capability
-//! table resolved, the operation name, and the host's approval. From those it
-//! can read the whole contract of the call — the parameter names, their
-//! declared types, their annotations. It cannot read one byte of what is
-//! actually being passed.
+//! A stage at [`SEAT_SAFETY_CONTENT`] gets a [`CallContext`]: the catalog, the
+//! principal and its scopes, the repository id the capability table resolved,
+//! the operation name, the host's approval — and, on the dynamic path,
+//! [`CallContext::arguments`], the JSON the agent sent, before it is mapped
+//! onto the contract's types. It can read the whole contract of the call *and*
+//! the values, which is what a content filter needs and could not have.
 //!
-//! That is not a gap in the type. On the **dynamic** path the arguments do
-//! exist as JSON one frame away, in [`crate::Bridge::invoke`], and putting them
-//! in the context is one field. On the **static** path they do not exist as
-//! data at all: [`orbweaver_giop::Invoker::invoke`] takes them as
-//! `F: Fn(&mut Encoder)` — a closure that *writes* them — so the only way for a
-//! stage to see a value is to run that closure into an encoder and get back
-//! untyped CDR it would then have to re-decode against the operation's
-//! `TypeCode`s, marshalling every call twice to inspect it once.
+//! Three things follow, and the third is the one a security review asks about.
 //!
-//! Three consequences, which are the answer to *what would it take*:
+//! 1. **The static path is still blind, and that is a real gap.**
+//!    [`orbweaver_giop::Invoker::invoke`] takes arguments as
+//!    `F: Fn(&mut Encoder)` — a closure that *writes* them — so on that path
+//!    there is no data to hand a stage, and [`crate::guard::Guarded`] supplies
+//!    `None`. A content rule is therefore enforced on the dynamic path and
+//!    absent on the compiled one, which is §4.7's bypass wearing a safety
+//!    label. Closing it means `Invoker::invoke` carrying arguments as data,
+//!    across three crates. **It is reported here, not made here**, and a
+//!    deployment that installs a content stage must read this paragraph before
+//!    it reports coverage.
+//! 2. **The chain still runs before the arguments are decoded, and stays
+//!    there.** The tempting fix — run the chain after argument mapping — is the
+//!    wrong one: a chain there answers a *mapping* error before a *policy*
+//!    refusal, which turns the failure an agent sees into an oracle for the
+//!    shape of operations it may not call, precisely what
+//!    [`Exposure::check_call`]'s ordering paragraph protects. Passing the
+//!    arguments **unmapped** buys the capability without moving the gate, so
+//!    the refusal still happens before anything is encoded or sent. If a stage
+//!    ever needs the *mapped* values, the shape is a second insertion point
+//!    after decode, not this chain relocated.
+//! 3. **Seeing a value must not become publishing one.** The stage that holds
+//!    the payload is also a stage that refuses, and a refusal is what the audit
+//!    ledger writes down. Every refusal this crate types renders from
+//!    identifiers — repository ids, operation and scope names, a budget's
+//!    arithmetic — but [`Denied::Intercepted`] carries free prose a deployment
+//!    wrote, and *"`cents` looked like a credential: `pin-…`"* is the most
+//!    natural sentence a content filter has. So the ledger takes the stage's
+//!    name and drops its prose (`crate::guard::audit_reason`): the line still
+//!    says who, what, which operation and which stage, and the sentence still
+//!    reaches the caller, the [`crate::dryrun`] report and every observer
+//!    stage — readers who already hold the arguments.
+//!    `an_argument_a_content_stage_saw_cannot_reach_the_ledger` measures it
+//!    with a stage that tries, on a real session.
 //!
-//! 1. **A dynamic-only content filter is worse than none.** A gate a generated
-//!    stub walks past is §4.7's bypass — the thing [`crate::guard::Guarded`]
-//!    exists to close — and it would be worse for being reported as coverage.
-//! 2. **A both-paths content filter needs `Invoker`'s signature to change**, in
-//!    `orbweaver-giop`, so that arguments arrive as data rather than as a
-//!    closure. That is a change to an ORB-core crate and to *when* marshalling
-//!    happens relative to the gate. **It is reported here, not made here.**
-//! 3. **It should be a second insertion point, not a moved chain.** Today an
-//!    unexposed operation is refused without its arguments ever being looked
-//!    at; a chain that ran after argument mapping would answer a mapping error
-//!    before a policy refusal, which turns the failure an agent sees into an
-//!    oracle for the shape of operations it may not call — precisely what
-//!    [`Exposure::check_call`]'s ordering paragraph protects. So the shape is
-//!    two chains, before and after decode, and this one keeps its place.
+//! 게이트가 값을 **보는** 것과 값을 **남기는** 것은 다르다. 원장은 스테이지
+//! 이름만 싣는다.
 //!
 //! And the tempting occupant, still refused: a stage that reads only the
 //! operation name, the declared parameter types or an annotation is a
@@ -171,13 +186,18 @@
 //! [`ApprovalInterceptor`]. Registering one under a name that says `content`
 //! would report screening of argument values it does not do.
 //!
-//! What changed is that a real content stage is now *possible*:
 //! `the_content_seat_can_read_the_arguments_measured` runs a session whose
-//! arguments carry a marker and asserts a stage at the seat **does** see it —
-//! the exact inverse of the assertion it replaces, whose failure message said a
-//! `CallContext` field would end the blindness. The crate ships no occupant,
-//! because what to screen for is a policy only a deployment has, and this crate
-//! owes it the mechanism rather than the rule.
+//! arguments carry a marker and asserts a stage at the seat **does** see it.
+//! The crate ships no occupant, because what to screen for is a policy only a
+//! deployment has, and this crate owes it the mechanism rather than the rule —
+//! the same line [`SEAT_QUOTA`] draws about its number.
+//!
+//! One limit of the mechanism, stated because a reader will otherwise assume
+//! the opposite: [`Chain::dry_run`] synthesizes a context with no arguments, so
+//! **a dry run cannot predict a content stage's answer** — it can only report
+//! that the stage was reached. A prediction about a payload nobody has sent is
+//! not one this crate will fabricate;
+//! `a_dry_run_offers_a_content_stage_no_arguments_to_judge` pins it.
 //!
 //! # Asking the chain without calling anything
 //!
@@ -196,6 +216,7 @@ use orbweaver_registry::Registry;
 
 use crate::guard::{
     DECISION_ALLOW, DECISION_DRY_RUN_ALLOW, DECISION_DRY_RUN_REFUSE, DECISION_REFUSE, audit_entry,
+    audit_reason,
 };
 use crate::identity::Caller;
 use crate::policy::{Approval, Denied, Exposure, Unannotated, effect_refusal, required_scopes};
@@ -1450,12 +1471,15 @@ impl Interceptor for AuditInterceptor {
             CallResult::Completed { .. } => {
                 audit_entry(DECISION_ALLOW, ctx.caller, ctx.target, ctx.operation, None)
             }
+            // `audit_reason`, never `why.to_string()`: a stage at
+            // [`SEAT_SAFETY_CONTENT`] sees the argument values, so its free
+            // prose is the one field of a line that could carry one.
             CallResult::Refused { why, .. } => audit_entry(
                 DECISION_REFUSE,
                 ctx.caller,
                 ctx.target,
                 ctx.operation,
-                Some(&why.to_string()),
+                Some(&audit_reason(why)),
             ),
             CallResult::Unresolved { why } => {
                 audit_entry(DECISION_REFUSE, ctx.caller, ctx.target, ctx.operation, Some(why))
@@ -1483,7 +1507,7 @@ impl Interceptor for AuditInterceptor {
                 ctx.caller,
                 ctx.target,
                 ctx.operation,
-                Some(&why.to_string()),
+                Some(&audit_reason(why)),
             ),
         };
         self.push(line);
@@ -1818,6 +1842,159 @@ mod tests {
         // policy refusal and turning failures into an oracle for the shape of
         // operations a caller may not call.
         assert!(seen.contains("\"cents\""), "the value arrives unmapped: {seen}");
+    }
+
+    /// A content filter that **tries** to write down what it saw — the failure
+    /// mode a real one has, not a hypothetical one. Its refusal reason is the
+    /// offending argument, quoted, which is the sentence anybody would write.
+    struct WouldLeak;
+
+    impl Interceptor for WouldLeak {
+        fn before(&mut self, ctx: &CallContext<'_>) -> Outcome {
+            let seen = ctx.arguments.map_or_else(|| "<none>".to_owned(), Json::to_string);
+            Outcome::Refuse(Denied::Intercepted {
+                stage: SEAT_SAFETY_CONTENT.to_owned(),
+                reason: format!("this looked like a credential: {seen}"),
+            })
+        }
+    }
+
+    /// **The leak test for the seat that can now see values.**
+    ///
+    /// Filling [`SEAT_SAFETY_CONTENT`] gave one stage the argument values, and
+    /// that stage also refuses — so the audit ledger, which writes refusals
+    /// down, gained a path from a payload into a durable, grepped artifact.
+    /// This drives a real session whose argument carries a marker, installs a
+    /// stage that puts the marker into its refusal, and asserts the marker
+    /// reaches the stage and reaches neither the ledger nor the trace.
+    ///
+    /// Three positive controls, so that a bridge which recorded nothing cannot
+    /// pass: the stage must have seen the marker, the ledger must hold a
+    /// `REFUSE` line naming the stage, and the caller — who sent the argument
+    /// in the first place — must still get the whole sentence.
+    #[test]
+    fn an_argument_a_content_stage_saw_cannot_reach_the_ledger() {
+        use orbweaver_giop::{Connection, IiopProfile, Ior, Version};
+
+        use crate::session::Session;
+        use crate::telemetry::{CallPath, Timestamp};
+
+        const MARKER: &str = "pin-s3cret-4242";
+
+        let reg: &'static Registry = Box::leak(Box::new(registry(IDL)));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binds");
+        let ior = Ior {
+            type_id: ACCOUNT.into(),
+            profiles: vec![IiopProfile {
+                version: Version::V1_2,
+                host: "127.0.0.1".into(),
+                port: listener.local_addr().expect("bound").port(),
+                object_key: b"acct-1".to_vec(),
+                components: Vec::new(),
+            }],
+        };
+        let conn = Connection::connect(&ior, std::time::Duration::from_secs(5)).expect("dials");
+
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let exposure = Exposure::nothing().allow_operation(ACCOUNT, "deposit");
+        let mut session = Session::new(reg, exposure, conn, "s-ledger")
+            .on_behalf_of(Caller::new("alice").with_scope("accounts:write"));
+        assert!(session.bridge().chain_mut().trace(Trace::new(
+            "s-ledger",
+            CallPath::Dynamic,
+            Timestamp::new("2026-08-14T09:00:00Z"),
+            Captured(Rc::clone(&lines)),
+        )));
+        assert!(session.bridge().chain_mut().insert_after(
+            STAGE_APPROVAL,
+            SEAT_SAFETY_CONTENT,
+            WouldLeak
+        ));
+        let handle = session.bridge().handles().issue_checked(&ior).expect("issued");
+
+        session.handle_line(r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#);
+        let reply = session
+            .handle_line(&format!(
+                r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"invoke_operation","arguments":{{"handle":"{handle}","operation":"deposit","arguments":{{"cents":"{MARKER}"}}}}}}}}"#
+            ))
+            .expect("a refusal is answered");
+
+        // The caller gets the whole sentence. It is not a leak: this reader is
+        // the one that sent the argument, and a refusal it cannot act on is a
+        // gate that teaches nothing.
+        assert!(reply.contains(MARKER), "the caller must still be told why: {reply}");
+
+        let audit = session.bridge().audit().join("\n");
+        let emitted = lines.borrow().join("\n");
+        assert!(!audit.is_empty(), "a ledger that wrote nothing proves nothing");
+        assert!(!emitted.is_empty(), "a trace that emitted nothing proves nothing");
+        // The decision is on the record and attributed…
+        assert!(audit.contains("REFUSE caller=alice"), "{audit}");
+        assert!(audit.contains(SEAT_SAFETY_CONTENT), "the ledger must name the stage: {audit}");
+        assert!(emitted.contains(SEAT_SAFETY_CONTENT), "the trace must name the stage: {emitted}");
+        // …and the payload is not.
+        for line in [&audit, &emitted] {
+            assert!(!line.contains(MARKER), "an argument value reached a record:\n{line}");
+            assert!(!line.contains("looked like a credential"), "stage prose was copied:\n{line}");
+        }
+    }
+
+    /// [`crate::guard::audit_reason`]'s two halves, without a session in the
+    /// way: a typed refusal keeps every word, and an intercepted one keeps only
+    /// its stage. The first half is what stops this from being a change that
+    /// quietly makes every refusal less useful.
+    #[test]
+    fn the_ledger_keeps_a_typed_reason_whole_and_a_stages_prose_not_at_all() {
+        let typed = Denied::MissingScope {
+            id: ACCOUNT.to_owned(),
+            operation: "deposit".to_owned(),
+            required: "accounts:write".to_owned(),
+        };
+        assert_eq!(crate::guard::audit_reason(&typed), typed.to_string());
+
+        let stage = Denied::Intercepted {
+            stage: SEAT_SAFETY_CONTENT.to_owned(),
+            reason: "cents was pin-s3cret-4242".to_owned(),
+        };
+        let ledger = crate::guard::audit_reason(&stage);
+        assert_eq!(ledger, format!("the {SEAT_SAFETY_CONTENT} stage refused this call"));
+        assert!(!ledger.contains("pin-s3cret"), "{ledger}");
+        // The caller's rendering is untouched: one refusal, two audiences.
+        assert!(stage.to_string().contains("pin-s3cret-4242"), "{stage}");
+    }
+
+    /// A dry run is asked before a call exists, so it has no arguments to offer
+    /// and a content stage has nothing to judge. Stated as a test because the
+    /// opposite is what a reader assumes: a `Would::Allow` for an operation
+    /// behind a content filter is a policy verdict, not a safety one.
+    #[test]
+    fn a_dry_run_offers_a_content_stage_no_arguments_to_judge() {
+        struct Recording(Rc<RefCell<Vec<bool>>>);
+        impl Interceptor for Recording {
+            fn before(&mut self, ctx: &CallContext<'_>) -> Outcome {
+                self.0.borrow_mut().push(ctx.arguments.is_some());
+                Outcome::Proceed
+            }
+        }
+
+        let reg = registry(IDL);
+        let saw = Rc::new(RefCell::new(Vec::new()));
+        // `balance` is read-only and asks for no scope, so every built-in gate
+        // proceeds and the content stage is actually reached.
+        let mut bridge = crate::Bridge::new(
+            &reg,
+            Exposure::nothing().allow_operation(ACCOUNT, "balance"),
+            "s-dry",
+        );
+        assert!(bridge.chain_mut().insert_after(
+            STAGE_APPROVAL,
+            SEAT_SAFETY_CONTENT,
+            Recording(Rc::clone(&saw))
+        ));
+
+        let report = bridge.dry_run(ACCOUNT, "balance", Approval::default());
+        assert!(report.to_string().contains("allow"), "the stage was reached: {report}");
+        assert_eq!(*saw.borrow(), [false], "a prediction must not invent a payload");
     }
 
     /// Records what ran and in which phase, so the unwinding discipline can be
