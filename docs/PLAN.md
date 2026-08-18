@@ -762,9 +762,11 @@ Running streams in parallel does not relax §5.1 — it sharpens two rules:
 | AI quality | 100-case requirement regression benchmark, every release | Release blocked on a drop in first-pass rate |
 | Codesets | Korean-text round-trips (EUC-KR / UTF-8 / UTF-16) against every fixture ORB | 100% lossless |
 | AnyJSON | `any → JSON → any` across the golden corpus | Byte-identical CDR |
-| Performance | LAN echo benchmark, dynamic path vs static stub | Within §11 targets |
+| Performance | `call-bench`: dynamic path vs static stub, four operation shapes over one loopback connection shared by both clients, calls interleaved | Every series measured and both paths agreeing on every answer; p50 ratios reported, and judged against §11 at release review |
 
 **Benchmark discipline.** The AI benchmark is frozen and versioned; a hold-out subset is never touched during prompt development, and cases rotate between releases so the pipeline is not tuned to its own exam.
+
+**On the performance row.** It has said *LAN* since v0.2 and what exists is loopback. `call-bench` (`crates/orbweaver-test/src/bin/call_bench.rs`) runs both clients in one process, over one loopback connection, against our own servant — so the row now says loopback. A LAN hop, a NIC or a foreign peer adds its cost to **both** columns, so the *ratio* §11 targets survives the move and the absolute microseconds do not; a LAN run, a foreign ORB and anything concurrent stay unmeasured. `run_checks.sh` runs the benchmark at `--samples 200` and fails only when a series cannot be measured or the two paths disagree on an answer — both defects on any machine at any speed. The ratio target is not gated there: see §11.
 
 ---
 
@@ -845,8 +847,14 @@ Because the OMG specifications are open, this is achievable rather than aspirati
 | Contract tests auto-generated | 0% | ≥ 80% |
 | Breaking changes caught pre-merge | Manual | 100% |
 | Interop matrix pass rate | — | 100% |
-| Dynamic-path overhead vs static stub (LAN echo, p50) | — | ≤ 5 ms added and ≤ 3× static |
+| Dynamic-path overhead vs static stub — `call-bench` p50 ratio, loopback, n ≥ 2000 per path per shape after 300 warm-up pairs | 1.06–1.07× on the widest shape (`echo_many`, 64 × 24 B strings), twelve-core laptop under load ~3–4, 2026-08-18 | ≤ 1.5× on **every** shape; no absolute-latency clause |
 | Human intervention across the pipeline | 100% | ≤ 15% |
+
+**Reading the performance row.** From v0.2 until this revision it read *"≤ 5 ms added and ≤ 3× static (LAN echo, p50)"*, and nothing could pass or fail it. It named no operation shape and no payload — measured overhead ranges 1.00× to 1.07× across four shapes and a fifth shape would move it either way. It gave no sample count, no machine, and no percentile discipline beyond "p50". And its two clauses disagree by three orders of magnitude: on a ~21µs call, "≤ 5 ms added" allows 240 entire calls of overhead where "≤ 3× static" allows 42µs, so which clause binds is a completely different test. The row above instead names the benchmark, the shapes it fixes — `add` (two longs), `echo_text` at 16 B and at 4 KiB, `echo_many` (64 × 24 B strings) — the transport, the sample count and the warm-up, so that two runs measure the same thing.
+
+**Why 1.5× and not 1.1×.** Measured 2026-08-18 on one twelve-core laptop under load ~3–4, at n = 2000 per path per shape and again at a shorter n = 400: p50 added is 0.1–0.6µs on the scalar shape, 0.4µs at 16 B, 0.5µs at 4 KiB and 1.9–2.0µs at 64 strings — ratios 1.00–1.03×, 1.02×, 1.02× and 1.06–1.07×. Those p50s move by a few tenths of a microsecond between runs of the same binary on a busy machine, which is ±0.02–0.03× of ratio; a 1.1× target would therefore sit a couple of noise widths above today's widest figure and would fail on the day the machine was busy rather than the day the ORB got slower, and a threshold that teaches everyone to re-run it is worse than no threshold. 1.5× is roughly ten microseconds of added cost on this transport: more than any plausible per-call change costs — D009's codeset indirection measured ~31 ns **per string**, so it would take some 300 strings in one call to reach it — and still tight enough to fail the changes that would matter, an extra round trip, a per-call lookup that touches the filesystem, or a copy that scales with payload bytes. The retired 3× would have sat quietly through the dynamic path becoming twice as expensive. Loopback is also the least forgiving denominator this ratio has: a slower transport adds its fixed cost to both columns, so the same absolute overhead reads as a *smaller* ratio in the field — a figure that passes here passes on a LAN.
+
+**What this target does not cover.** Loopback, not a LAN. Our own server and our own skeleton in the same process, not a foreign ORB. One call at a time on one connection — nothing here says what either path does under concurrency. One machine class, which is why the absolute microseconds are reported and deliberately not made part of the target. The ratio is **not** gated by `run_checks.sh`; that run gates on measurement only (§8). It is checked at release review on an otherwise idle machine with `cargo run -q --release -p orbweaver-test --bin call-bench -- --samples 2000 --max-ratio 1.5`, which fails per shape and is off by default, and the figure is recorded together with the machine it came from. On the machine above `--max-ratio 1.5` exits 0 at `--samples 400`.
 
 ---
 
