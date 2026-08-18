@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 #![allow(non_camel_case_types, non_snake_case, non_upper_case_globals, dead_code)]
+#![allow(clippy::wrong_self_convention, clippy::should_implement_trait, clippy::len_without_is_empty, clippy::too_many_arguments)]
 
 /// IDL module `CORBA`.
 pub mod CORBA {
@@ -463,7 +464,7 @@ pub mod CORBA {
     }
     impl<S: ContainedObject> ContainedObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { Self::default() }
+        pub fn new() -> Self { <Self as std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
         pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
@@ -1006,7 +1007,7 @@ pub mod CORBA {
     }
     impl<S: ContainerObject> ContainerObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { Self::default() }
+        pub fn new() -> Self { <Self as std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
         pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
@@ -1597,7 +1598,7 @@ pub mod CORBA {
     }
     impl<S: IDLTypeObject> IDLTypeObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { Self::default() }
+        pub fn new() -> Self { <Self as std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
         pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
@@ -2054,7 +2055,7 @@ pub mod CORBA {
     }
     impl<S: IRObjectObject> IRObjectObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { Self::default() }
+        pub fn new() -> Self { <Self as std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
         pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
@@ -2669,7 +2670,7 @@ pub mod CORBA {
     }
     impl<S: InterfaceDefObject> InterfaceDefObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { Self::default() }
+        pub fn new() -> Self { <Self as std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
         pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
@@ -3242,7 +3243,7 @@ pub mod CORBA {
     }
     impl<S: ModuleDefObject> ModuleDefObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { Self::default() }
+        pub fn new() -> Self { <Self as std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
         pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
@@ -3864,7 +3865,7 @@ pub mod CORBA {
     }
     impl<S: RepositoryObject> RepositoryObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { Self::default() }
+        pub fn new() -> Self { <Self as std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
         pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {

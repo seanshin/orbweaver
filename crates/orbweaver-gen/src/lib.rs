@@ -596,6 +596,30 @@ pub fn emit(registry: &Registry, root: &str) -> Generated {
         src,
         "#![allow(non_camel_case_types, non_snake_case, non_upper_case_globals, dead_code)]"
     );
+    // The four clippy lints below are about a method's **name** and its
+    // **arity**, and a generated method has neither to give: the name is the
+    // operation's and the arity is the parameter list's. This is the same class
+    // as the reserved-word rule — a target language's conventions are the
+    // generator's problem and never the contract's — so it is answered the same
+    // way, once, in the preamble rather than per emitted item.
+    //
+    // Measured, on a probe interface declaring one operation per lint:
+    //
+    //   wrong_self_convention   `to_*`, `from_*`, `into_*`, `as_*`, `is_*`
+    //   should_implement_trait  `next`, `eq`, `add`, … a std trait's method name
+    //   len_without_is_empty    `len`, without an `is_empty` IDL never declares
+    //   too_many_arguments      any operation with more than six parameters
+    //
+    // `CosNaming::NamingContextExt` alone trips the first with `to_string`,
+    // `to_name` and `to_url`, which is how this was found: a consumer building
+    // generated code with warnings-as-errors could not compile the real OMG
+    // naming contract. Renaming to satisfy a lint would break the mapping,
+    // which is the one thing generated code exists to preserve.
+    let _ = writeln!(
+        src,
+        "#![allow(clippy::wrong_self_convention, clippy::should_implement_trait, \
+         clippy::len_without_is_empty, clippy::too_many_arguments)]"
+    );
     let _ = writeln!(src);
     for (id, why) in &out.skipped {
         let _ = writeln!(src, "// skipped {id}: {why}");
