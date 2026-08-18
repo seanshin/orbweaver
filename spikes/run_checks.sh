@@ -227,6 +227,45 @@ else
   fail_total=$((fail_total+1))
 fi
 
+hr "§5.3 — a breaking change inside an included header reaches the gate"
+# corpus/evolution/v{1,2}/ledger.idl are byte-identical; both breaking changes
+# live in the common.idl they share. Read as strings, the two revisions are
+# indistinguishable, so idl-diff printed "no change" and **exited 0** over a
+# retyped struct member and a removed inherited operation. The §5.3 gate was
+# waving through the one shape of breaking change a real estate produces.
+# Captured then matched, never piped into grep -q.
+ev_fail=0
+ev_out=$(cargo run -q --bin idl-diff -- \
+         corpus/evolution/v1/ledger.idl corpus/evolution/v2/ledger.idl 2>&1); ev_rc=$?
+if [ "$ev_rc" -eq 1 ] && printf '%s' "$ev_out" | grep -q "amount_minor" \
+   && printf '%s' "$ev_out" | grep -q "restamp"; then
+  echo "  ok   both header-only breaking changes are named and the release is refused"
+else
+  echo "  FAIL a breaking change in a shared header does not reach the differ (exit $ev_rc)"
+  printf '%s\n' "$ev_out" | head -3 | sed 's/^/       /'; ev_fail=1
+fi
+# The negative control, or the check above could pass for the wrong reason.
+cargo run -q --bin idl-diff -- \
+  corpus/evolution/v1/ledger.idl corpus/evolution/v1/ledger.idl >/dev/null 2>&1
+if [ $? -eq 0 ]; then
+  echo "  ok   a contract compared with itself is still accepted"
+else
+  echo "  FAIL idl-diff refuses a contract compared with itself"; ev_fail=1
+fi
+# And an unresolvable include must be "could not run", never a verdict: a diff
+# of two partial graphs says nothing about the contracts it did not read.
+ev_orphan=$(mktemp -d "${TMPDIR:-/tmp}/ow-orphan-XXXXXX")
+cp corpus/evolution/v1/ledger.idl "$ev_orphan/"
+ev2=$(cargo run -q --bin idl-diff -- \
+      "$ev_orphan/ledger.idl" corpus/evolution/v2/ledger.idl 2>&1); ev2_rc=$?
+if [ "$ev2_rc" -eq 2 ] && printf '%s' "$ev2" | grep -q "common.idl"; then
+  echo "  ok   an unresolvable include is reported as unmeasured, not as a verdict"
+else
+  echo "  FAIL a missing header produced a release verdict (exit $ev2_rc)"; ev_fail=1
+fi
+rm -rf "$ev_orphan"
+[ "$ev_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
 hr "DynAny — every corpus type taken apart and put back together"
 # §8's discipline applied to the mutation API: a value walked component by
 # component and reassembled must produce identical CDR, both byte orders and
