@@ -29,6 +29,7 @@
 #![deny(missing_docs)]
 
 use std::fmt;
+use std::sync::Arc;
 
 /// Byte order of a CDR stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,6 +149,49 @@ const fn wire_long_double(v: [u8; 16], endian: Endian) -> [u8; 16] {
 // Encoder
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Transmission codeset (D009)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Converts narrow text between Rust's `str` and the octets a stream carries.
+///
+/// # Why this is a trait here and the tables are not
+///
+/// A CORBA connection negotiates a *transmission codeset* per §13.10, and a
+/// stream that does not know its own is a stream whose text is a guess. The
+/// tables that answer it are 1300 lines in `orbweaver-giop::codeset`, need a
+/// GIOP `Version`, and optionally pull `encoding_rs` for EUC-KR — a
+/// BSD-3-Clause obligation disclosed in `NOTICE` under D001. This crate has
+/// **zero dependencies** and knows nothing of GIOP, deliberately, and
+/// `run_checks.sh` tests the promise that `--no-default-features` drops that
+/// obligation. So the stream gets a slot and a trait; the knowledge stays
+/// where it already is.
+///
+/// # What this does *not* cover
+///
+/// **Framing.** [`Encoder::put_string_bytes`] and
+/// [`Decoder::get_string_bytes`] keep the length prefix, the trailing NUL and
+/// the embedded-NUL refusal, and those three rules stay in one place. A codec
+/// that owned them would be a second opinion about whether the NUL is counted.
+///
+/// **Wide text.** A `wstring`'s framing itself varies with the GIOP version
+/// and the BOM, so it cannot live in a crate that has no version to consult.
+/// `orbweaver-giop::codeset::WideCodec` owns that end to end.
+///
+/// # 한국어
+///
+/// 연결은 전송 코드셋을 협상하며, 자기 코드셋을 모르는 스트림의 텍스트는
+/// 추측이다. 그 표는 GIOP 쪽에 있고 라이선스 의무를 동반하므로, 이 크레이트는
+/// **슬롯과 트레이트만** 얻는다. 프레이밍은 이미 한 곳에 있으니 그대로 두고,
+/// 넓은 문자열은 버전을 알아야 하므로 여기 오지 않는다.
+pub trait TextCodec: Send + Sync + fmt::Debug {
+    /// The octets this codeset uses for `s`, or why it cannot represent it.
+    fn encode_narrow(&self, s: &str) -> Result<Vec<u8>>;
+
+    /// The text `bytes` carry, or why they are not valid in this codeset.
+    fn decode_narrow(&self, bytes: &[u8]) -> Result<String>;
+}
+
 /// Writes CDR-encoded values into a growable buffer.
 ///
 /// Write methods do not return a `Result`, because threading one through every
@@ -156,7 +200,16 @@ const fn wire_long_double(v: [u8; 16], endian: Endian) -> [u8; 16] {
 /// ignored, and [`Encoder::finish`] surfaces it. A caller cannot get bytes out
 /// without confronting the error.
 #[derive(Debug, Clone)]
+
 pub struct Encoder {
+    /// The transmission codeset for narrow text, or `None` for UTF-8 (D009).
+    ///
+    /// `Arc`, not `&dyn`: this struct has no lifetime parameter, and giving it
+    /// one would change all 145 of its construction sites and `Cdr::put`'s
+    /// signature besides — the churn the decision used to reject the
+    /// alternative. `None` costs nothing and is exactly the behaviour that
+    /// shipped before this field existed.
+    codec: Option<Arc<dyn TextCodec>>,
     buf: Vec<u8>,
     endian: Endian,
     /// Offset that counts as position zero for alignment purposes.
@@ -169,7 +222,14 @@ pub struct Encoder {
 impl Encoder {
     /// A new encoder whose alignment origin is the start of its buffer.
     pub fn new(endian: Endian) -> Self {
-        Self { buf: Vec::with_capacity(256), endian, origin: 0, virtual_offset: 0, poison: None }
+        Self {
+            codec: None,
+            buf: Vec::with_capacity(256),
+            endian,
+            origin: 0,
+            virtual_offset: 0,
+            poison: None,
+        }
     }
 
     /// An encoder that aligns as though `offset` bytes already preceded it.
@@ -185,6 +245,7 @@ impl Encoder {
     /// 1.1 body, where it does not.
     pub fn continuing_at(endian: Endian, offset: usize) -> Self {
         Self {
+            codec: None,
             buf: Vec::with_capacity(256),
             endian,
             origin: 0,
@@ -199,6 +260,26 @@ impl Encoder {
         let mut e = Self::new(endian);
         e.put_u8(endian.as_flag());
         e
+    }
+
+    /// Attaches the transmission codeset for narrow text (D009).
+    ///
+    /// **An encapsulation does not inherit it, and that is deliberate.**
+    /// [`Encoder::encapsulation`] starts from [`Encoder::new`], so a nested
+    /// encapsulation begins with no codec — UTF-8 — and the caller attaches
+    /// one only if the thing inside really is negotiated text. The alternative,
+    /// inheriting, silently re-encodes every string in every `TypeCode`
+    /// encapsulation, whose repository ids and member names are the contract's
+    /// own identifiers and are not the peer's text at all. §9.3.1.6 makes the
+    /// same distinction the other way for `wchar`, which is always the 1.2
+    /// form inside an encapsulation whatever the message says.
+    ///
+    /// 캡슐화는 코덱을 **물려받지 않는다.** 물려받으면 `TypeCode` 캡슐화 안의
+    /// 저장소 id와 멤버 이름 — 피어의 텍스트가 아니라 계약 자신의 식별자 — 까지
+    /// 조용히 다시 인코딩된다.
+    pub fn with_codec(mut self, codec: Option<Arc<dyn TextCodec>>) -> Self {
+        self.codec = codec;
+        self
     }
 
     /// The byte order this encoder writes.
@@ -438,9 +519,20 @@ impl Encoder {
         self.put_u8(0);
     }
 
-    /// Writes a `str` as an IDL `string` using its UTF-8 bytes.
+    /// Writes a `str` as an IDL `string`, in the stream's transmission
+    /// codeset.
+    ///
+    /// With no codec attached this is the UTF-8 it has always been. The
+    /// framing — the length counting the NUL, the embedded-NUL refusal — stays
+    /// here either way; a codec supplies octets, not a field.
     pub fn put_str(&mut self, v: &str) {
-        self.put_string_bytes(v.as_bytes());
+        match self.codec.clone() {
+            None => self.put_string_bytes(v.as_bytes()),
+            Some(c) => match c.encode_narrow(v) {
+                Ok(bytes) => self.put_string_bytes(&bytes),
+                Err(e) => self.poison(e),
+            },
+        }
     }
 
     /// Writes a `sequence<octet>`: a length prefix then the raw bytes.
@@ -466,6 +558,9 @@ impl Encoder {
 /// Reads CDR-encoded values from a byte slice.
 #[derive(Debug, Clone)]
 pub struct Decoder<'a> {
+    /// See [`Encoder::codec`]. `None` is UTF-8, which is what every stream
+    /// carried before D009.
+    codec: Option<Arc<dyn TextCodec>>,
     buf: &'a [u8],
     pos: usize,
     endian: Endian,
@@ -475,7 +570,7 @@ pub struct Decoder<'a> {
 impl<'a> Decoder<'a> {
     /// A decoder over `buf` whose alignment origin is the start of the slice.
     pub fn new(buf: &'a [u8], endian: Endian) -> Self {
-        Self { buf, pos: 0, endian, origin: 0 }
+        Self { codec: None, buf, pos: 0, endian, origin: 0 }
     }
 
     /// A decoder over an encapsulation, reading the leading byte-order flag
@@ -485,7 +580,15 @@ impl<'a> Decoder<'a> {
             return Err(Error::Truncated { need: 1, have: 0 });
         }
         let endian = Endian::try_from_flag(buf[0])?;
-        Ok(Self { buf, pos: 1, endian, origin: 0 })
+        Ok(Self { codec: None, buf, pos: 1, endian, origin: 0 })
+    }
+
+    /// Attaches the transmission codeset for narrow text. See
+    /// [`Encoder::with_codec`], including why an encapsulation does not
+    /// inherit it.
+    pub fn with_codec(mut self, codec: Option<Arc<dyn TextCodec>>) -> Self {
+        self.codec = codec;
+        self
     }
 
     /// The byte order this decoder reads.
@@ -703,10 +806,19 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    /// Reads an IDL `string` and interprets it as UTF-8.
+    /// Reads an IDL `string` in the stream's transmission codeset.
+    ///
+    /// With no codec attached this is the strict UTF-8 it has always been,
+    /// `Error::BadUtf8` and all. One method rather than two: a
+    /// `get_string_with_codec` beside a `get_string` is a seam, and the seam
+    /// is where the two answers drift apart.
     pub fn get_string(&mut self) -> Result<String> {
+        let codec = self.codec.clone();
         let bytes = self.get_string_bytes()?;
-        std::str::from_utf8(bytes).map(str::to_owned).map_err(|_| Error::BadUtf8)
+        match codec {
+            None => std::str::from_utf8(bytes).map(str::to_owned).map_err(|_| Error::BadUtf8),
+            Some(c) => c.decode_narrow(bytes),
+        }
     }
 
     /// Reads a `sequence<octet>`.

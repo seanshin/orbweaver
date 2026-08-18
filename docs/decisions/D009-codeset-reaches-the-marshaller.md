@@ -148,11 +148,29 @@ product, permanently unreachable by a peer without UTF-8.
 
 The first draft left this to the implementor. It cannot be:
 
-- **The codec owns the whole field, including the length prefix and the NUL.**
-  A CDR `string` is `ulong` octets-including-NUL, then the octets. Splitting
-  that between `Encoder::put_str` and a converter is how the two disagree about
-  whether the NUL is counted. `put_str`/`get_string` remain as the `None` path
-  and gain a doc line saying so.
+- **The codec owns the octets; the stream keeps the framing — for narrow text.**
+  *Corrected 2026-08-18, during batch 1, by reading the code this paragraph was
+  about.* The draft said the codec owns the whole field including the length
+  and the NUL. It should not: `Encoder::put_string_bytes` and
+  `Decoder::get_string_bytes` **already** separate framing from encoding, and
+  the framing carries three rules — the length counts the NUL, an embedded NUL
+  is `Error::EmbeddedNul`, a zero length is malformed — that exist in exactly
+  one place today. Handing them to every codec is how they stop agreeing.
+  `spike_interop.rs:226`, the one caller that converts correctly, already uses
+  this seam. So: `fn encode_narrow(&str) -> Vec<u8>` / `fn decode_narrow(&[u8])
+  -> String`, and `put_str`/`get_string` consult the slot with `None` meaning
+  UTF-8.
+
+- **Wide text is the other way round, and that asymmetry is the design.** A
+  `wstring`'s framing *itself* varies — GIOP 1.1 versus 1.2, and the BOM — which
+  is why `WideCodec` exists and does its own framing. `orbweaver-cdr` has no
+  wide-string support at all and must not grow any: it would have to learn a
+  GIOP version. Batch 1 therefore covers **narrow text only**; batch 3 unifies
+  where the wide codec is *stored*, not what it is.
+
+  *좁은 문자열: 코덱은 옥텟만, 프레이밍은 스트림이 지킨다 — 초안이 틀렸고, 그
+  문단이 다루는 코드를 읽어서 고쳤다. 넓은 문자열은 프레이밍 자체가 버전에 따라
+  달라 정반대다. 이 비대칭이 설계다.*
 - **Alignment stays the stream's.** The codec is called with the encoder
   already positioned; it must not align, because an encapsulation's origin is
   the stream's business and §9.4's alignment origin rule is already subtle
