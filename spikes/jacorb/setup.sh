@@ -24,7 +24,9 @@ export PATH="$JAVA_HOME_21/bin:$PATH"
 
 mkdir -p lib gen classes
 M=https://repo1.maven.org/maven2
-fetch() { [ -s "lib/$2" ] || curl -sfL --max-time 120 -o "lib/$2" "$M/$1"; }
+# `--retry` covers the transient 5xx/timeout class; a single 503 from the
+# mirror once failed the whole interop job with curl exit 22 (CI 2026-08-18).
+fetch() { [ -s "lib/$2" ] || curl -sfL --retry 3 --retry-delay 2 --max-time 120 -o "lib/$2" "$M/$1"; }
 
 fetch org/jacorb/jacorb/3.9/jacorb-3.9.jar                                            jacorb.jar
 fetch org/jacorb/jacorb-omgapi/3.9/jacorb-omgapi-3.9.jar                              jacorb-omgapi.jar

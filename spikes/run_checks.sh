@@ -768,7 +768,12 @@ else
   fail_total=$((fail_total+1))
 fi
 cleanup
-if start_server -ORBendPoint giop:tcp::40404 -ORBendPointPublish giop:tcp:127.0.0.1:40404; then
+# The fixed port sits below every ephemeral range in use here — Linux hands
+# out 32768–60999, macOS 49152–65535 — because the harness makes a few thousand
+# outbound connections before this line and the kernel may have lent any port
+# in that range to one of them. It was 40404, and CI failed to bind it in two
+# of ten runs: "Address in use?" from a fixture that had done nothing wrong.
+if start_server -ORBendPoint giop:tcp::24404 -ORBendPointPublish giop:tcp:127.0.0.1:24404; then
   rewritten=$(cargo run -q --bin spike-dump -- spikes/echo.ior ping little 1 2>&1)
   echo "  rewritten publish: $(echo "$rewritten" | head -1)"
   if echo "$rewritten" | grep -q RESPONSE; then

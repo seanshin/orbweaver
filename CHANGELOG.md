@@ -427,6 +427,40 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **CI had been red for ten consecutive runs while the local harness was
+  green, on three causes, none of them in the code.** Found by reading the
+  runs before planning the next batch rather than after landing it.
+
+  1. `spikes/union_label_capture.py` compared the recorded omniORB union
+     TypeCodes to the live peer **byte for byte, exempting only offsets 9..12**
+     — the padding the local peer happened to leave non-zero. CI's omniORB,
+     built from source on Linux, leaves different garbage after the
+     repository-id string and before every 8-aligned label (`U` at 29; `W`
+     at 52, 76, 118, 119), and the script called that a change in the peer.
+     Every one of those offsets is padding the specification says nothing
+     about — CLAUDE.md's *compare decoded values, never raw buffers* rule,
+     broken by a script written the same week the rule was cited. The mask is
+     now **derived by walking the encapsulation** (§9.4.2 layout, alignment
+     restarting at the encapsulation's first byte); a byte the walker does not
+     understand raises rather than being treated as padding. Negative control:
+     flipping a repository-id byte → `FAIL … differ at [16]`; flipping byte 29
+     → `ok`.
+  2. The R7 endpoint-rewriting fixture bound a **fixed port inside Linux's
+     ephemeral range** (40404 ∈ 32768–60999). The harness makes a few thousand
+     outbound connections first, so in two of ten runs the kernel had already
+     lent that port to one of them: *"Failed to bind to address :: port
+     40404. Address in use?"* Now 24404, below both kernels' ranges. Negative
+     control: holding 24404 reproduces the exact CI text; releasing it, the
+     fixture serves.
+  3. `spikes/jacorb/setup.sh` fetched five jars with a single `curl -f`; one
+     transient mirror error (exit 22) failed the whole interop job. `--retry 3`.
+
+  **CI가 열 런 연속 빨강이었고 로컬 하네스는 초록이었다 — 원인 셋, 코드에는
+  없음.** 유니온 레이블 캡처는 패딩을 오프셋 목록(9..12)으로 예외 처리했고
+  CI의 omniORB는 다른 자리에 쓰레기를 남겼다 — 이제 인캡슐레이션을 걸어서
+  마스크를 만든다. R7 픽스처의 고정 포트가 리눅스 임시 포트 범위 안에 있었고
+  (40404), 이제 두 커널 범위 아래(24404). JacORB jar 다운로드에 재시도.
+
 - **The §5.3 release gate accepted a struct member with no type, and refused a
   contract both oracles accept.** Two faces of one omission, found by asking
   what a marker means rather than by fixing what was reported.
