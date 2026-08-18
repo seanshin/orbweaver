@@ -206,6 +206,27 @@ else
   fail_total=$((fail_total+1))
 fi
 
+hr "union case labels — a peer's bytes, not only our own"
+# Our encode and decode agreed with each other in any byte order, so 1200 tests
+# stayed green while a long long discriminated union from omniORB could not be
+# decoded at all. The recording in the giop test is the regression case; this
+# group checks the recording still describes what the live peer writes, because
+# a recording nobody re-takes is a claim about the past.
+ulc_out=$(python3 spikes/union_label_capture.py 2>&1); ulc_rc=$?
+printf '%s\n' "$ulc_out" | sed 's/^  /  /'
+if [ "$ulc_rc" -eq 2 ]; then
+  skipped=$((skipped+1))
+elif [ "$ulc_rc" -ne 0 ]; then
+  echo "  FAIL the recorded peer bytes no longer match the live peer"
+  fail_total=$((fail_total+1))
+fi
+if cargo test -q -p orbweaver-giop --test union_labels_from_a_peer >/dev/null 2>&1; then
+  echo "  ok   the recorded union TypeCodes decode, and re-encode to the peer's bytes"
+else
+  echo "  FAIL a union TypeCode from a little-endian peer does not round-trip"
+  fail_total=$((fail_total+1))
+fi
+
 hr "decision status — one source of truth, restated nowhere stale"
 # A decision's status lives in docs/decisions/D00N-*.md. Five other documents
 # restate it, and restatements drift: the first run of this gate found seven,

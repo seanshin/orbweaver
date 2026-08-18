@@ -1,5 +1,12 @@
 # 2026-08-18 — AnyJSON says what a type is
 
+> **Superseded in one place, the same day.** §2 argues that a union's labels
+> must cross as base64 because their byte order is unknowable, and ends "the day
+> the wire defect is fixed". That was this day:
+> [`2026-08-18-union-labels.md`](2026-08-18-union-labels.md) fixed it and labels
+> now cross as values. The argument below is kept as written — it is why the
+> next batch existed — and this note is here so nobody reads it as current.
+>
 > Batch 2 of the order agreed on 2026-08-18. Decisions: [`D008`](../decisions/D008-anyjson-self-description.md)
 > (approved, option B) after [`D007`](../decisions/D007-python-wire-seam.md)
 > (approved, option A), in that order because D008 depends on the seam's

@@ -132,6 +132,64 @@ fn a_union_typecode_keeps_its_labels_exactly() {
     let v = Value::TypeCode(Box::new(u.clone()));
     cdr_survives(&TypeCode::TypeCode, &v);
     survives(&TypeCode::TypeCode, &v);
+
+    // Exactly, and also *readably*. Round-tripping alone would pass just as
+    // well on base64, which is what this carried until the byte order of a
+    // label became knowable — so the document is asserted, not just the trip.
+    let mut h = LocalReferences::new();
+    let text = to_json(&TypeCode::TypeCode, &v, &mut h).unwrap().to_string();
+    assert!(text.contains("\"label\":1"), "a label should read as its value: {text}");
+    assert!(text.contains("\"label\":2"), "a label should read as its value: {text}");
+    assert!(!text.contains("_raw"), "no label here is undecodable: {text}");
+}
+
+/// An enum discriminator's labels read as enumerator *names*, which is the
+/// point of writing them as values: `"RED"` says what `[0,0,0,0]` cannot.
+#[test]
+fn an_enum_discriminated_union_labels_by_name() {
+    let colour = TypeCode::Enum {
+        id: "IDL:m/Colour:1.0".into(),
+        name: "Colour".into(),
+        members: vec!["RED".into(), "GREEN".into()],
+    };
+    let u = TypeCode::Union {
+        id: "IDL:m/V:1.0".into(),
+        name: "V".into(),
+        discriminator: Box::new(colour),
+        default_index: -1,
+        cases: vec![UnionCase { label: vec![0, 0, 0, 1], name: "g".into(), tc: TypeCode::Long }],
+    };
+    let v = Value::TypeCode(Box::new(u));
+    cdr_survives(&TypeCode::TypeCode, &v);
+    survives(&TypeCode::TypeCode, &v);
+
+    let mut h = LocalReferences::new();
+    let text = to_json(&TypeCode::TypeCode, &v, &mut h).unwrap().to_string();
+    assert!(text.contains("\"label\":\"GREEN\""), "{text}");
+}
+
+/// The `_raw` fallback, executed rather than merely written. A label whose
+/// bytes do not decode as its discriminator means the TypeCode is malformed;
+/// this mapping renders it tagged instead of refusing, because a renderer that
+/// will not render the evidence is how a malformed contract gets blamed on the
+/// reader. Written and never run is how `corpus/golden/28` found the Rust
+/// emitter's keyword list missing `yield`.
+#[test]
+fn a_label_that_does_not_decode_crosses_tagged_and_comes_back_exact() {
+    let u = TypeCode::Union {
+        id: "IDL:m/Bad:1.0".into(),
+        name: "Bad".into(),
+        // A `string` cannot be a discriminator; a label under one cannot decode.
+        discriminator: Box::new(TypeCode::String(0)),
+        default_index: -1,
+        cases: vec![UnionCase { label: vec![9, 9, 9, 9], name: "x".into(), tc: TypeCode::Long }],
+    };
+    let v = Value::TypeCode(Box::new(u));
+    let mut h = LocalReferences::new();
+    let j = to_json(&TypeCode::TypeCode, &v, &mut h).expect("to_json");
+    let text = j.to_string();
+    assert!(text.contains("_raw"), "an undecodable label should be tagged: {text}");
+    assert_eq!(from_json(&TypeCode::TypeCode, &j, &h).expect("from_json"), v, "{text}");
 }
 
 /// Every v1 document this project could produce must still parse and still

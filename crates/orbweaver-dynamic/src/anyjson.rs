@@ -34,6 +34,8 @@
 
 use std::collections::BTreeMap;
 
+use orbweaver_cdr::{Decoder, Encoder, Endian};
+
 use orbweaver_giop::typecode::{Member, TypeCode, UnionCase};
 
 use crate::json::Json;
@@ -616,29 +618,19 @@ pub fn tc_to_json(tc: &TypeCode) -> Json {
                             .iter()
                             .map(|c| {
                                 obj([
-                                    // The label stays **base64 of the raw
-                                    // bytes**, and this is the one place the
-                                    // mapping is deliberately not readable.
-                                    //
-                                    // A value would be better and was written
-                                    // first: `"label": 1` is language-neutral,
-                                    // and the Python runtime represents union
-                                    // labels as values, not bytes. It was
-                                    // reverted on a measurement. A label is
-                                    // stored in *the byte order of the stream
-                                    // it was decoded from* (`typecode.rs`
-                                    // reads it with `get_bytes` and writes it
-                                    // with `put_bytes`, neither of which knows
-                                    // the endianness), and the TypeCode does
-                                    // not record which that was — so turning
-                                    // the bytes into a number means guessing.
-                                    // Base64 is exact without guessing, and it
-                                    // is honest about carrying something this
-                                    // mapping cannot yet interpret. When the
-                                    // wire defect is fixed this becomes a
-                                    // value; until then a Python client can
-                                    // relay a union TypeCode and not read one.
-                                    ("label", Json::String(base64(&c.label))),
+                                    // The label is the discriminator's own value,
+                                    // written the way §4.5 writes any value of
+                                    // that type: `1`, `"RED"`, `true`. It was
+                                    // base64 of the raw bytes for exactly as
+                                    // long as those bytes had no knowable byte
+                                    // order — a label was stored in the order
+                                    // of the stream it arrived in and the
+                                    // TypeCode did not record which. The wire
+                                    // fix in `orbweaver-giop` made them
+                                    // canonical, so a mapping whose whole
+                                    // justification is that a type describes
+                                    // itself stopped carrying an opaque blob.
+                                    ("label", label_json(&c.label, discriminator)),
                                     ("name", Json::String(c.name.clone())),
                                     ("type", tc_to_json(&c.tc)),
                                 ])
@@ -729,34 +721,73 @@ pub fn tc_from_json(j: &Json, p: &str) -> Result<TypeCode> {
             name: text(j, "name", p)?,
             aliased: Box::new(tc_from_json(field(j, "aliased", p)?, &member(p, "aliased"))?),
         },
-        "union" => TypeCode::Union {
-            id: text(j, "id", p)?,
-            name: text(j, "name", p)?,
-            discriminator: Box::new(tc_from_json(
-                field(j, "discriminator", p)?,
-                &member(p, "discriminator"),
-            )?),
-            default_index: num(j, "default", p)?,
-            cases: match field(j, "cases", p)? {
+        "union" => {
+            let disc = tc_from_json(field(j, "discriminator", p)?, &member(p, "discriminator"))?;
+            let cases = match field(j, "cases", p)? {
                 Json::Array(items) => items
                     .iter()
                     .enumerate()
                     .map(|(i, c)| {
                         let at = index(&member(p, "cases"), i);
                         Ok(UnionCase {
-                            label: unbase64(field(c, "label", &at)?, &at)?,
+                            label: label_bytes(field(c, "label", &at)?, &disc, &at)?,
                             name: text(c, "name", &at)?,
                             tc: tc_from_json(field(c, "type", &at)?, &at)?,
                         })
                     })
                     .collect::<Result<_>>()?,
                 other => return wrong(p, "an array of union cases", other),
-            },
-        },
+            };
+            TypeCode::Union {
+                id: text(j, "id", p)?,
+                name: text(j, "name", p)?,
+                discriminator: Box::new(disc),
+                default_index: num(j, "default", p)?,
+                cases,
+            }
+        }
         "recursive" => TypeCode::Recursive(text(j, "id", p)?),
         "principal" => TypeCode::Principal,
         other => return fail(p, format!("unknown type kind {other:?}")),
     })
+}
+
+/// A union case label as the value it stands for.
+///
+/// `UnionCase::label` holds the discriminator marshalled big-endian, which is
+/// what `orbweaver_giop::typecode` normalises to at the wire. Decoding it here
+/// is therefore a decode of known bytes in a known order, not a guess — which
+/// is the whole difference between this and the base64 it replaced.
+///
+/// A label that will not decode is not a reason to fail the document: it means
+/// the TypeCode is malformed in a way its own producer should answer for, and
+/// a JSON rendering that refuses to render it hides the evidence. Those fall
+/// back to base64, tagged, so the shape stays readable and the oddity stays
+/// visible.
+fn label_json(label: &[u8], disc: &TypeCode) -> Json {
+    let mut d = Decoder::new(label, Endian::Big);
+    match crate::decode(&mut d, disc) {
+        Ok(v) => {
+            let mut none = LocalReferences::new();
+            to_json_at(disc, &v, &mut none, "").unwrap_or_else(|_| raw_label(label))
+        }
+        Err(_) => raw_label(label),
+    }
+}
+
+fn raw_label(label: &[u8]) -> Json {
+    Json::Object(BTreeMap::from([("_raw".to_owned(), Json::String(base64(label)))]))
+}
+
+/// The inverse: a label value back to the canonical big-endian bytes.
+fn label_bytes(j: &Json, disc: &TypeCode, p: &str) -> Result<Vec<u8>> {
+    if let Some(raw) = j.get("_raw") {
+        return unbase64(raw, p);
+    }
+    let v = from_json_at(disc, j, &LocalReferences::new(), p)?;
+    let mut e = Encoder::new(Endian::Big);
+    crate::encode(&mut e, disc, &v)?;
+    e.finish().map_err(|err| Error { path: p.to_owned(), message: err.to_string() })
 }
 
 fn members_from_json(j: &Json, p: &str) -> Result<Vec<Member>> {

@@ -47,25 +47,47 @@ records what changed and, where it matters, what it changes on the wire.
   `Value`가 없었다. **ir-subset 18+10 → 28+0**, 그 열에는 `InterfaceDef` 자신이
   들어 있었다.
 
+### ⚠ Wire behaviour changed / 와이어 동작 변경
+
+- **A union `TypeCode`'s case labels are aligned and byte-order-normalised.**
+  A label is the discriminator marshalled in its own type. It was read with
+  `get_bytes` and written with `put_bytes` — neither of which knows the
+  endianness, and neither of which aligns — so it carried the byte order of
+  whatever stream produced it. Our encode and decode agreed with each other in
+  any order, which is why 1200 tests were green while, against the fixture peer
+  on this host:
+
+  - a `long long` discriminated union **could not be decoded at all**, and said
+    so as `"string length must include the NUL"` — pointing four fields past
+    the fault, at a string, because an unaligned 8-byte read shifted everything
+    after it;
+  - a `long` discriminated union decoded and then missed **every** branch, in
+    both stream orders, with a refusal that blamed the caller's discriminator.
+
+  `UnionCase::label` is now always big-endian and conversion happens at the
+  wire. Both cases are pinned as the bytes omniORB actually wrote, and the
+  regression test also **re-encodes them back to the peer's bytes** — the check
+  our own round trip could not perform, because it agreed with itself.
+
+  **Upgrading:** anything holding a `UnionCase::label` built by hand for a
+  little-endian stream was already wrong on the wire and is now wrong in the
+  type; build labels big-endian. Nothing else changes.
+
+  union 레이블은 판별자를 그 타입으로 마샬링한 것인데, 정렬 없이 원바이트로
+  읽고 썼기에 **온 스트림의 바이트 순서를 그대로** 지녔다. 우리끼리는 일치했으므로
+  1200건이 초록이었다: `long long` union은 **디코드조차 되지 않았고**(진단은 네
+  필드 뒤의 문자열을 가리켰다), `long` union은 **모든 분기를 빗나가며** 호출자를
+  탓했다. 이제 레이블은 항상 빅엔디언이고 변환은 와이어에서 일어난다. 피어가
+  실제로 쓴 바이트를 고정했고, **그 바이트로 되돌려 인코딩되는지**까지 검사한다.
+
+- **AnyJSON writes a union's case labels as values, not base64.** They were
+  base64 for exactly as long as their byte order was unknowable — one commit.
+  An enum discriminator's labels now read `"label":"GREEN"` rather than four
+  bytes that say nothing. A label that will not decode falls back to
+  `{"_raw": <base64>}`, tagged, because a malformed TypeCode is its producer's
+  problem and a renderer that refuses to render it hides the evidence.
+
 ### Known limits / 알려진 한계
-
-- **A union TypeCode's case labels carry the byte order of the stream they came
-  from, and the TypeCode does not record which.** `typecode.rs` reads them with
-  `get_bytes` and writes them with `put_bytes`; neither knows the endianness.
-  Our own encode and decode agree with each other, which is why nothing is red.
-  A little-endian peer's labels miss **every** branch — measured, in both
-  stream orders — and the refusal says *"no branch of U matches the
-  discriminator"*, blaming the caller's discriminator rather than the label.
-
-  Found while giving §4.5 a structural TypeCode, and **deliberately not fixed
-  there**: it is `orbweaver-giop` work, and it is why a union's labels cross as
-  base64 rather than as values. Turning bytes of unknown order into a number
-  means guessing.
-
-  union 레이블은 디코드한 스트림의 바이트 순서를 그대로 지니고 TypeCode는 그
-  순서를 기록하지 않는다. 우리끼리는 일치하므로 아무것도 빨갛지 않다. 리틀엔디언
-  피어의 레이블은 모든 분기를 빗나가며, 거부 메시지는 레이블이 아니라 호출자를
-  탓한다. **여기서 고치지 않았다** — giop 배치의 몫이다.
 
 - **`_rt.py` reads only a named type in an `any`'s `_t`.** The Rust half reads
   and writes the structural form; the Python half refuses it by name, with the

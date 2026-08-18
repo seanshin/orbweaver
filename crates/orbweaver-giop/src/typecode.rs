@@ -376,8 +376,10 @@ fn encode_inner(
                     encode_inner(e, discriminator, seen, depth + 1)?;
                     e.put_i32(*default_index);
                     e.put_u32(cases.len() as u32);
+                    let label_len = discriminator_width(discriminator);
                     for c in cases {
-                        e.put_bytes(&c.label);
+                        e.align_to(label_len.min(8));
+                        e.put_bytes(&canonical_label(&c.label, e.endian()));
                         e.put_str(&c.name);
                         encode_inner(e, &c.tc, seen, depth + 1)?;
                     }
@@ -573,7 +575,15 @@ fn decode_complex(
                 let label_len = discriminator_width(&discriminator);
                 let mut cases = Vec::with_capacity(n);
                 for _ in 0..n {
-                    let label = d.get_bytes(label_len)?.to_vec();
+                    // A label is the discriminator marshalled in its own type,
+                    // so it aligns like one. Reading it as raw bytes with no
+                    // alignment worked for a `long` only because the case count
+                    // in front of it happened to leave the stream 4-aligned;
+                    // omniORB's `long long` union could not be decoded at all,
+                    // and said so as "string length must include the NUL" four
+                    // fields later.
+                    d.align_to(label_len.min(8))?;
+                    let label = canonical_label(d.get_bytes(label_len)?, d.endian());
                     let cname = get_string(d)?;
                     cases.push(UnionCase {
                         label,
@@ -631,6 +641,27 @@ fn decode_complex(
 
 fn get_string(d: &mut Decoder<'_>) -> Result<String> {
     Ok(String::from_utf8_lossy(d.get_string_bytes()?).into_owned())
+}
+
+/// A union case label, converted between the wire's byte order and ours.
+///
+/// A label is a discriminator value marshalled in the discriminator's own
+/// type, so it arrives in the byte order of the stream that carried it. Stored
+/// raw, that made the same union mean two different things depending on which
+/// peer described it: labels from a little-endian ORB missed **every** branch,
+/// in both directions, and the refusal blamed the caller's discriminator
+/// rather than the label — measured against omniORB, which is little-endian on
+/// this host and on most.
+///
+/// `UnionCase::label` is therefore always **big-endian**, matching the order
+/// `orbweaver_dynamic` encodes its probe in, and conversion happens exactly at
+/// the wire. The function is its own inverse, which is why one of it serves
+/// both directions.
+fn canonical_label(bytes: &[u8], wire: Endian) -> Vec<u8> {
+    match wire {
+        Endian::Big => bytes.to_vec(),
+        Endian::Little => bytes.iter().rev().copied().collect(),
+    }
 }
 
 /// Bytes a union discriminator label occupies on the wire.
