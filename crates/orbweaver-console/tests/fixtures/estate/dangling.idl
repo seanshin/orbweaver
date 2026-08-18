@@ -1,0 +1,11 @@
+// An estate always has one of these: a file whose header moved, or was never
+// checked in, or lives on a build machine's include path. The console must say
+// which include resolved to nothing, on the line that wrote it, rather than
+// drawing whatever survived.
+#include "nowhere.idl"
+
+module Orphan {
+    interface Lost {
+        void call();
+    };
+};

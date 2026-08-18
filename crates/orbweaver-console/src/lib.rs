@@ -46,6 +46,13 @@
 //! here computes one, and tests in [`traces`] and [`catalog`] assert that
 //! nothing does.
 //!
+//! **What is drawn is a translation unit, not a file.** [`load`] resolves
+//! `#include` before anything is registered. A corpus of self-contained files
+//! cannot tell the two apart; a thirteen-file estate can, and did — the
+//! per-file path catalogued 58 of the estate's 76 reachable operations and said
+//! nothing about the 18. See [`load`] for the measurement and for why loading
+//! stops at syntax rather than running S4's gate.
+//!
 //! # The untrusted input this crate exists downstream of
 //!
 //! Since remote IFR ingestion the catalog holds repository ids, interface names
@@ -76,4 +83,5 @@
 pub mod catalog;
 pub mod contract;
 pub mod html;
+pub mod load;
 pub mod traces;

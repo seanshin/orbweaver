@@ -38,7 +38,7 @@
 //! [`StageOutcome::NotReached`]: orbweaver_mcp::interceptor::StageOutcome
 
 use orbweaver_dynamic::json::Json;
-use orbweaver_mcp::dryrun;
+use orbweaver_mcp::dryrun::{self, Would};
 use orbweaver_mcp::identity::Caller;
 use orbweaver_mcp::interceptor::{CallContext, Chain, STAGE_SCOPES, StageOutcome};
 use orbweaver_mcp::policy::{Approval, Denied, Exposure};
@@ -153,6 +153,23 @@ pub struct Catalog {
     pub scopes: Vec<String>,
     /// Whether a host approval was in hand for the predictions.
     pub destructive_approved: bool,
+    /// What this exposure declares an operation whose contract states no
+    /// `ai_effect` is to be treated as — `"refuse"`, or the effect an operator
+    /// assumed for the silences. The survey states it once at the top because
+    /// it conditions every row underneath it, and a page of rows read under
+    /// the wrong one is a page read wrong. Carried as the gate's own string.
+    pub unannotated_effect: String,
+    /// The gate's answer for every operation in the catalog, tallied in
+    /// [`Would::ALL`] order and named in the gate's own vocabulary.
+    ///
+    /// Summed from each interface's own `summary`, which the survey computes;
+    /// addition is the only thing done to it here. It exists because the
+    /// counts beside it are *properties of the contracts* — how many are
+    /// exposed, how many are marked destructive — and on an estate that
+    /// annotates nothing, every one of those is zero while the gate is
+    /// refusing every operation it is asked about. A summary of zeroes reads
+    /// as "nothing to worry about" and was, measurably, the opposite.
+    pub would_counts: Vec<(String, usize)>,
     /// Every interface in the registry, sorted by repository id.
     pub interfaces: Vec<InterfaceRow>,
     /// Ids the exposure allowlists that the catalog does not have — a typo, a
@@ -184,6 +201,27 @@ impl Catalog {
         self.interfaces.iter().flat_map(|i| &i.operations).filter(|o| o.destructive()).count()
     }
 
+    /// Every operation the gate was asked about.
+    pub fn operation_count(&self) -> usize {
+        self.would_counts.iter().map(|(_, n)| n).sum()
+    }
+
+    /// How the exposure's declaration about unannotated operations reads.
+    ///
+    /// Two sentences rather than a word, because "refuse" alone has been read
+    /// as "the gate refused something" instead of "the gate refuses these".
+    pub fn unannotated_sentence(&self) -> String {
+        match self.unannotated_effect.as_str() {
+            "refuse" => "An operation whose contract states no ai_effect is refused: this \
+                         exposure declares no assumption for the silences."
+                .to_owned(),
+            effect => format!(
+                "An operation whose contract states no ai_effect is treated as {effect} — an \
+                 operator declared that assumption for this exposure."
+            ),
+        }
+    }
+
     /// How many operations name a scope the gate enforces.
     pub fn gated_count(&self) -> usize {
         self.interfaces
@@ -209,6 +247,7 @@ pub fn build(
     approval: Approval,
 ) -> Catalog {
     let mut interfaces = Vec::new();
+    let mut totals = [0usize; Would::ALL.len()];
     let ids: Vec<String> = registry
         .ids()
         .filter(|id| registry.interface(id).is_some())
@@ -243,6 +282,15 @@ pub fn build(
             });
         }
 
+        // The interface's own tally, as the survey counted it. Read rather
+        // than recounted from the rows above: two counts of the same thing are
+        // two things to keep in agreement.
+        if let Some(summary) = entry.get("summary") {
+            for (slot, would) in totals.iter_mut().zip(Would::ALL) {
+                *slot += summary.get(would.name()).and_then(count).unwrap_or(0);
+            }
+        }
+
         interfaces.push(InterfaceRow {
             exposed: flag(entry, "exposed"),
             known: flag(entry, "known"),
@@ -268,6 +316,19 @@ pub fn build(
             .map(str::to_owned)
             .collect(),
         destructive_approved: approval.destructive_approved,
+        // Stated by the survey whether or not anything is exposed, which is
+        // what makes it readable on a page nobody has allowlisted anything on
+        // yet — the page an operator opens first.
+        unannotated_effect: whole
+            .get("unannotated_effect")
+            .and_then(Json::as_str)
+            .unwrap_or("unstated")
+            .to_owned(),
+        would_counts: Would::ALL
+            .iter()
+            .zip(totals)
+            .map(|(w, n)| (w.name().to_owned(), n))
+            .collect(),
         unknown_exposures: unknown_exposures.collect(),
         interfaces,
     }
@@ -324,6 +385,16 @@ fn string(value: &Json, key: &str) -> Option<String> {
 
 fn flag(value: &Json, key: &str) -> bool {
     matches!(value.get(key), Some(Json::Bool(true)))
+}
+
+/// A count the survey wrote. A number that will not read back is left out
+/// rather than guessed at zero: a zero is a measurement and this would not be
+/// one.
+fn count(value: &Json) -> Option<usize> {
+    match value {
+        Json::Number(text) => text.parse().ok(),
+        _ => None,
+    }
 }
 
 /// Renders the catalog as one self-contained HTML file.
@@ -383,6 +454,31 @@ fn header_card(catalog: &Catalog) -> Markup {
         &format!("Predictions run for {} — {scopes}, {approval}.", catalog.caller),
     );
     inner.push(Markup::element("div", "summary", stats));
+    inner.push(Markup::labelled("p", "note", &catalog.unannotated_sentence()));
+
+    // The counts above are properties of the contracts; these are the gate's
+    // answers. On a contract set that annotates nothing the first row is all
+    // zeroes and this one is not, which is the whole reason it is here.
+    let mut answers = Markup::empty();
+    for (would, n) in &catalog.would_counts {
+        let kind = match would.as_str() {
+            // Neither of these is a problem to flag: one is the point of an
+            // exposure and the other is the posture everything starts in.
+            "allow" | "not_exposed" => "",
+            _ if *n > 0 => "warn",
+            _ => "",
+        };
+        answers.push(stat(kind, *n, would));
+    }
+    inner.push(Markup::labelled(
+        "p",
+        "",
+        &format!(
+            "What the gate would answer for each of the {} operations it was asked about:",
+            catalog.operation_count()
+        ),
+    ));
+    inner.push(Markup::element("div", "summary", answers));
     Markup::element("div", "card", inner)
 }
 
@@ -430,8 +526,17 @@ fn interface_card(iface: &InterfaceRow) -> Markup {
              ai_authz have nothing to key on here.",
         ));
     }
-    if let Some(desc) = &iface.ai_desc {
-        inner.push(Markup::labelled("p", "desc", desc));
+    match &iface.ai_desc {
+        Some(desc) => inner.push(Markup::labelled("p", "desc", desc)),
+        // Drawn, not skipped. A card with no prose on it looks like a card
+        // whose prose was short; a legacy estate has none anywhere, and an
+        // operator deciding what an agent may reach is entitled to know that
+        // the contract told them nothing rather than to infer it from a gap.
+        None => inner.push(Markup::labelled(
+            "p",
+            "absent",
+            "no ai_desc — the contract says nothing about what this interface is for",
+        )),
     }
 
     inner.push(operations_table(&iface.operations));
@@ -468,17 +573,22 @@ fn operations_table(operations: &[OperationRow]) -> Markup {
 
         cells.push(Markup::element("td", "", requires_cell(&op.requires)));
 
+        // An em dash where an effect belongs is the page inviting a reader to
+        // supply the meaning, and on a contract that annotates nothing every
+        // cell in this column is that dash. The words are the same words the
+        // text mode has always used, and the same absence D004's trace fields
+        // are rendered with: absent is a rendering, never a default.
         let mut effect = match &op.effect {
             Some(effect) => Markup::labelled("span", "badge b-destructive", effect),
-            None => Markup::labelled("span", "absent", "—"),
+            None => Markup::labelled("span", "absent", "none stated"),
         };
         if let Some(approver) = &op.approver {
             effect.push(Markup::labelled("div", "note", &format!("approver: {approver}")));
         }
         cells.push(Markup::element("td", "", effect));
 
-        cells.push(Markup::element("td", "", optional(op.stage.as_deref(), "—")));
-        cells.push(Markup::element("td", "", optional(op.why.as_deref(), "—")));
+        cells.push(Markup::element("td", "", optional(op.stage.as_deref(), "no stage refused")));
+        cells.push(Markup::element("td", "", optional(op.why.as_deref(), "nothing refused it")));
 
         rows.push(Markup::element("tr", "", cells));
     }
@@ -503,10 +613,14 @@ fn requires_cell(requires: &Requires) -> Markup {
     }
 }
 
-fn optional(value: Option<&str>, dash: &str) -> Markup {
+/// A cell whose value may be absent, with the absence in words.
+///
+/// `absent` is a sentence and never a dash: a dash is a shape a reader gives
+/// their own meaning to, and every reader gives it a different one.
+fn optional(value: Option<&str>, absent: &str) -> Markup {
     match value {
         Some(v) => Markup::text(v),
-        None => Markup::labelled("span", "absent", dash),
+        None => Markup::labelled("span", "absent", absent),
     }
 }
 
@@ -530,6 +644,14 @@ pub fn render_text(catalog: &Catalog) -> String {
         catalog.destructive_count(),
         catalog.gated_count(),
     ));
+    out.push_str(&format!("unannotated-effect={}\n", catalog.unannotated_effect));
+    let answers: Vec<String> =
+        catalog.would_counts.iter().map(|(would, n)| format!("{would}={n}")).collect();
+    out.push_str(&format!(
+        "gate over {} operations: {}\n",
+        catalog.operation_count(),
+        answers.join(" ")
+    ));
     for id in &catalog.unknown_exposures {
         out.push_str(&format!("! allowlisted and not in the catalog: {id}\n"));
     }
@@ -541,8 +663,9 @@ pub fn render_text(catalog: &Catalog) -> String {
             None => "from IDL".to_owned(),
         };
         out.push_str(&format!("\n{} [{exposure}] [{origin}]\n", iface.id));
-        if let Some(desc) = &iface.ai_desc {
-            out.push_str(&format!("  desc: {desc}\n"));
+        match &iface.ai_desc {
+            Some(desc) => out.push_str(&format!("  desc: {desc}\n")),
+            None => out.push_str("  desc: absent\n"),
         }
         if iface.operations.is_empty() {
             out.push_str("  (no operations)\n");
@@ -741,6 +864,26 @@ mod tests {
         assert!(text.contains("effect=destructive"), "{text}");
         assert!(text.contains("requires=accounts:write"), "{text}");
         assert!(text.contains("effect=absent"), "{text}");
+    }
+
+    /// The tally is the survey's, and it covers exactly the rows on the page —
+    /// a summary that counted a different set than the table under it would be
+    /// two answers to one question.
+    #[test]
+    fn the_gates_tally_covers_every_row_on_the_page() {
+        let r = registry(IDL);
+        let c = catalog(&r, Exposure::nothing().allow_interface(ACCOUNT), None);
+        let rows: usize = c.interfaces.iter().map(|i| i.operations.len()).sum();
+        assert_eq!(c.operation_count(), rows);
+        let counts: std::collections::BTreeMap<&str, usize> =
+            c.would_counts.iter().map(|(w, n)| (w.as_str(), *n)).collect();
+        // Two of Account's three are allowed for nobody: `deposit` wants a
+        // scope and `close` wants a human. Ledger is not exposed at all.
+        assert_eq!(counts["allow"], 1, "{counts:?}");
+        assert_eq!(counts["need_authentication"], 1, "{counts:?}");
+        assert_eq!(counts["need_approval"], 1, "{counts:?}");
+        assert_eq!(counts["not_exposed"], 1, "{counts:?}");
+        assert_eq!(c.unannotated_effect, "refuse", "the default posture is stated, not assumed");
     }
 
     /// No timing anywhere: D004 fixes no duration field and says why, and a

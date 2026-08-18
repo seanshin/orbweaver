@@ -143,6 +143,38 @@ fn ai_desc_prose_containing_markup_renders_as_text() {
     assert_inert(&catalog::render_html(&view), "catalog with a hostile ai_desc");
 }
 
+/// **A contract's own text becomes a repository id.** `#pragma prefix` takes an
+/// arbitrary string and the front end puts it in front of every id in the file,
+/// so a *locally authored* contract — `Origin::Idl`, through S4, nothing
+/// ingested anywhere — can put markup on the page.
+///
+/// Every case above needed a peer to be hostile. This one needs a file, which
+/// is why it took an estate with four different prefix styles to think of: the
+/// corpus's prefixes are all well-formed domain names and nothing about them
+/// suggests the field is free text. It is free text.
+///
+/// The payload here carries no `"`, because a quote ends the pragma's string
+/// and the front end says so. That is a limit on this vector and not a defence:
+/// an element and an entity get through intact, which is all an injection
+/// needs.
+#[test]
+fn a_pragma_prefix_containing_markup_renders_as_text() {
+    let payload = "<script>alert(1)</script>&";
+    let idl =
+        format!("#pragma prefix \"{payload}\"\nmodule m {{ interface I {{ void go(); }}; }};");
+    let spec = orbweaver_idl::parse(&idl).expect("parses");
+    let mut registry = Registry::new();
+    registry.load(&spec).expect("loads");
+
+    let ids: Vec<&str> = registry.ids().map(String::as_str).collect();
+    let hostile =
+        ids.iter().find(|id| id.contains("<script>")).expect("the prefix is in front of the id");
+    assert_eq!(registry.origin(hostile), Some(orbweaver_registry::Origin::Idl));
+
+    let view = catalog_of(&registry, Exposure::nothing().allow_interface(*hostile));
+    assert_inert(&catalog::render_html(&view), "catalog with a hostile #pragma prefix");
+}
+
 /// An allowlist line an operator pasted from somewhere is data too, and it
 /// reaches the page through a different path — the unknown-exposure list.
 #[test]
