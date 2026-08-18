@@ -271,6 +271,46 @@ records what changed and, where it matters, what it changes on the wire.
   something else — the same rule the Rust side follows, applied to whichever
   implementation is behind.
 
+### Fixed / 수정
+
+- **The §5.3 release gate accepted a struct member with no type, and refused a
+  contract both oracles accept.** Two faces of one omission, found by asking
+  what a marker means rather than by fixing what was reported.
+
+  `Registry`'s resolver joined an unqualified name onto *lexical* prefixes
+  only, so a `raises` declared in a base interface did not resolve from a
+  derived one. `corpus/services/gen-naming-subset.idl` — `NamingContextExt :
+  NamingContext`, exactly as the OMG writes it — produced five unresolved
+  markers and **exit 2**, while `omniidl` and JacORB both accept the file. A
+  gate that cries wolf gets bypassed, which makes that worse than the defect
+  the include work had just fixed.
+
+  CORBA 3.4 §7.19.2 fixes the order and the order *is* the rule: an
+  unqualified name is searched in the current scope, then in **inherited**
+  scopes, then outward through enclosing ones — so a base's declaration beats
+  an enclosing module's declaration of the same name. A base's base counts, a
+  diamond contributes one name, and a cycle terminates.
+
+  Asking what `Unresolved` meant then found the other face. It recorded bases
+  and `raises` and **not types**, so an unresolved type name silently became
+  `TypeCode::Void`: `module n04 { struct S { Widget w; }; };` diffed as *"no
+  change … nothing here breaks a deployed peer"*, **exit 0**. `void` marshals
+  nothing where a peer expects a value. The marker now means one thing — *this
+  translation unit declares no such name* — and both cases exit 2.
+
+  The negative control is the point of the design: a **sibling** interface
+  using another's `typedef` must still fail, because a resolver that "fixed"
+  inheritance by searching every interface in the unit passes every positive
+  case and only fails that one. Both oracles reject it too.
+
+  Nothing had ever run `idl-diff` over the corpus, which is why a gate could
+  refuse a valid contract unnoticed. The harness does now, with both controls.
+
+  §5.3 게이트가 **타입 없는 구조체 멤버를 통과시키고**, 두 오라클이 받아들이는
+  계약을 거부하고 있었다. 하나의 누락이 가진 두 얼굴이다 — 보고된 것을 고치는
+  대신 *마커가 무엇을 뜻하는가*를 물어서 나왔다. 음성 대조군이 설계의 핵심이다:
+  **형제** 인터페이스의 스코프는 여전히 새면 안 된다.
+
 ### Added / 추가
 
 - **`idl-diff` resolves what it is asked to diff.** The §5.3 release gate was

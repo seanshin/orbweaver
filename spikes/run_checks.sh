@@ -439,6 +439,45 @@ else
   fail_total=$((fail_total+1))
 fi
 
+hr "release gate — idl-diff accepts what both oracles accept"
+# The check whose absence let the gate refuse a valid contract: nothing had ever
+# run idl-diff over the corpus. A contract diffed against itself is "no change"
+# by construction, so a non-zero exit here is the gate refusing a file rather
+# than finding a breaking change. `gen-naming-subset.idl` — inherited `raises`,
+# exactly as the OMG writes it — exited 2 while omniidl and JacORB both
+# accepted it, and a gate that cries wolf gets bypassed.
+gate_refused=""
+for f in corpus/golden/*.idl corpus/services/*.idl corpus/pragma/*.idl; do
+  gout=$(cargo run -q --bin idl-diff -- "$f" "$f" 2>&1); grc=$?
+  if [ "$grc" -ne 0 ]; then
+    gate_refused="$gate_refused
+       $(basename "$f") rc=$grc: $(printf '%s' "$gout" | head -2 | tail -1)"
+  fi
+done
+if [ -z "$gate_refused" ]; then
+  echo "  ok   the §5.3 gate issues a verdict on every contract the oracles accept"
+else
+  echo "  FAIL the gate refused contracts it must be able to diff:$gate_refused"
+  fail_total=$((fail_total+1))
+fi
+# Two negative controls, or the check above passes by never refusing anything.
+# The sibling case is the one that matters: a resolver that "fixed" inheritance
+# by searching every interface in the unit passes every positive case and fails
+# only this.
+for nctl in corpus/negative/inherited-scope-leak.idl corpus/negative/n04-unknown-type.idl; do
+  if [ ! -f "$nctl" ]; then
+    echo "  FAIL $nctl is missing — the control is unmeasured, which is a failure"
+    fail_total=$((fail_total+1)); continue
+  fi
+  cargo run -q --bin idl-diff -- "$nctl" "$nctl" >/dev/null 2>&1
+  if [ $? -eq 2 ]; then
+    echo "  ok   still exits 2 on $(basename "$nctl")"
+  else
+    echo "  FAIL $(basename "$nctl") no longer refused; the gate has stopped checking"
+    fail_total=$((fail_total+1))
+  fi
+done
+
 hr "the records keep up with the code"
 # A gate for decision *statuses* went in on 2026-08-18. It checks one field and
 # does not check whether the documents that describe the code were opened at
