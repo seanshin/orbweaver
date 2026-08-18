@@ -33,10 +33,13 @@
 //   * `CannotProceed`. Declared by OMG with a `NamingContext` member; this
 //     servant never raises it, and an exception that is never raised adds a
 //     fault variant that can never be measured.
-//   * `NotEmpty` on `destroy`. `destroy` is declared — so the servant can
-//     answer `NO_IMPLEMENT` for it, which is only expressible for an operation
-//     the contract declares — but it is never served, so its raise clause has
-//     no reachable body.
+//   * ~~`NotEmpty` on `destroy`~~ — **added 2026-08-18**. The note here used
+//     to say `destroy` was declared so the servant could answer
+//     `NO_IMPLEMENT`, and that its raise clause had no reachable body. The
+//     deferral was re-examined and turned out to be a description of the
+//     servant rather than an obstacle: contexts lived as long as the process
+//     *because* nothing removed a key. `destroy` is served now, so the clause
+//     has a body and the contract carries it.
 //   * `BindingIterator`'s `next_one`/`next_n`. `list` always answers with a
 //     nil iterator (see that servant's header), so the interface exists here
 //     only to give the `out` parameter a type.
@@ -111,6 +114,10 @@ module CosNaming {
     //@ ai_desc: Something is already bound under that name in this context
     exception AlreadyBound {};
 
+    //@ ai_desc: The context still holds bindings, so discarding it would
+    //@ ai_desc: strand them
+    exception NotEmpty {};
+
     //@ ai_desc: The name is empty or does not parse
     exception InvalidName {};
 
@@ -155,10 +162,10 @@ module CosNaming {
     //@ ai_authz: cosnaming.context.bind
     NamingContext bind_new_context(in Name n) raises (NotFound, AlreadyBound, InvalidName);
 
-    //@ ai_desc: Discards this context
+    //@ ai_desc: Discards this context, which must already be empty
     //@ ai_effect: destructive
     //@ ai_authz: cosnaming.context.destroy
-    void destroy();
+    void destroy() raises (NotEmpty);
 
     //@ ai_desc: Up to how_many of this context's own bindings
     //@ ai_effect: read_only

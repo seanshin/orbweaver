@@ -602,7 +602,7 @@ pub mod CosNaming {
             let __r0 = Cdr::get(&mut __body)?;
             Ok(__r0)
         }
-        /// Discards this context
+        /// Discards this context, which must already be empty
         ///
         /// `destroy` on the wire.
         pub fn destroy(&mut self) -> Result<(), rt::GiopError> {
@@ -719,6 +719,8 @@ pub mod CosNaming {
         AlreadyBound(crate::emitted::f_gen_naming_subset::CosNaming::NamingContext::AlreadyBound),
         /// IDL exception `IDL:omg.org/CosNaming/NamingContext/InvalidName:1.0`.
         InvalidName(crate::emitted::f_gen_naming_subset::CosNaming::NamingContext::InvalidName),
+        /// IDL exception `IDL:omg.org/CosNaming/NamingContext/NotEmpty:1.0`.
+        NotEmpty(crate::emitted::f_gen_naming_subset::CosNaming::NamingContext::NotEmpty),
         /// IDL exception `IDL:omg.org/CosNaming/NamingContext/NotFound:1.0`.
         NotFound(crate::emitted::f_gen_naming_subset::CosNaming::NamingContext::NotFound),
     }
@@ -737,6 +739,7 @@ pub mod CosNaming {
                 }
                 (Self::AlreadyBound(__a), Self::AlreadyBound(__b)) => __a == __b,
                 (Self::InvalidName(__a), Self::InvalidName(__b)) => __a == __b,
+                (Self::NotEmpty(__a), Self::NotEmpty(__b)) => __a == __b,
                 (Self::NotFound(__a), Self::NotFound(__b)) => __a == __b,
                 _ => false,
             }
@@ -750,6 +753,7 @@ pub mod CosNaming {
                 Self::System(_) => None,
                 Self::AlreadyBound(_) => Some("IDL:omg.org/CosNaming/NamingContext/AlreadyBound:1.0"),
                 Self::InvalidName(_) => Some("IDL:omg.org/CosNaming/NamingContext/InvalidName:1.0"),
+                Self::NotEmpty(_) => Some("IDL:omg.org/CosNaming/NamingContext/NotEmpty:1.0"),
                 Self::NotFound(_) => Some("IDL:omg.org/CosNaming/NamingContext/NotFound:1.0"),
             }
         }
@@ -771,6 +775,11 @@ pub mod CosNaming {
                 }
                 Self::InvalidName(__v) => {
                     __out.put_str("IDL:omg.org/CosNaming/NamingContext/InvalidName:1.0");
+                    __v.put(__out).map_err(|_| rt::SystemException::marshal())?;
+                    Ok(rt::DispatchBody::UserException)
+                }
+                Self::NotEmpty(__v) => {
+                    __out.put_str("IDL:omg.org/CosNaming/NamingContext/NotEmpty:1.0");
                     __v.put(__out).map_err(|_| rt::SystemException::marshal())?;
                     Ok(rt::DispatchBody::UserException)
                 }
@@ -976,7 +985,7 @@ pub mod CosNaming {
         ///
         /// `bind_new_context` on the wire.
         fn bind_new_context(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, NamingContextFault>;
-        /// Discards this context
+        /// Discards this context, which must already be empty
         ///
         /// `destroy` on the wire.
         fn destroy(&mut self, __at: &NamingContextTarget<'_>) -> Result<(), NamingContextFault>;
@@ -1031,7 +1040,7 @@ pub mod CosNaming {
         ///
         /// `bind_new_context` on the wire.
         fn bind_new_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, NamingContextFault>;
-        /// Discards this context
+        /// Discards this context, which must already be empty
         ///
         /// `destroy` on the wire.
         fn destroy(&mut self) -> Result<(), NamingContextFault>;
@@ -1438,7 +1447,7 @@ pub mod CosNaming {
             let __r0 = Cdr::get(&mut __body)?;
             Ok(__r0)
         }
-        /// Discards this context
+        /// Discards this context, which must already be empty
         ///
         /// `destroy` on the wire.
         pub fn destroy(&mut self) -> Result<(), rt::GiopError> {
@@ -1613,6 +1622,8 @@ pub mod CosNaming {
         AlreadyBound(crate::emitted::f_gen_naming_subset::CosNaming::NamingContext::AlreadyBound),
         /// IDL exception `IDL:omg.org/CosNaming/NamingContext/InvalidName:1.0`.
         InvalidName(crate::emitted::f_gen_naming_subset::CosNaming::NamingContext::InvalidName),
+        /// IDL exception `IDL:omg.org/CosNaming/NamingContext/NotEmpty:1.0`.
+        NotEmpty(crate::emitted::f_gen_naming_subset::CosNaming::NamingContext::NotEmpty),
         /// IDL exception `IDL:omg.org/CosNaming/NamingContext/NotFound:1.0`.
         NotFound(crate::emitted::f_gen_naming_subset::CosNaming::NamingContext::NotFound),
         /// IDL exception `IDL:omg.org/CosNaming/NamingContextExt/InvalidAddress:1.0`.
@@ -1633,6 +1644,7 @@ pub mod CosNaming {
                 }
                 (Self::AlreadyBound(__a), Self::AlreadyBound(__b)) => __a == __b,
                 (Self::InvalidName(__a), Self::InvalidName(__b)) => __a == __b,
+                (Self::NotEmpty(__a), Self::NotEmpty(__b)) => __a == __b,
                 (Self::NotFound(__a), Self::NotFound(__b)) => __a == __b,
                 (Self::InvalidAddress(__a), Self::InvalidAddress(__b)) => __a == __b,
                 _ => false,
@@ -1647,6 +1659,7 @@ pub mod CosNaming {
                 Self::System(_) => None,
                 Self::AlreadyBound(_) => Some("IDL:omg.org/CosNaming/NamingContext/AlreadyBound:1.0"),
                 Self::InvalidName(_) => Some("IDL:omg.org/CosNaming/NamingContext/InvalidName:1.0"),
+                Self::NotEmpty(_) => Some("IDL:omg.org/CosNaming/NamingContext/NotEmpty:1.0"),
                 Self::NotFound(_) => Some("IDL:omg.org/CosNaming/NamingContext/NotFound:1.0"),
                 Self::InvalidAddress(_) => Some("IDL:omg.org/CosNaming/NamingContextExt/InvalidAddress:1.0"),
             }
@@ -1669,6 +1682,11 @@ pub mod CosNaming {
                 }
                 Self::InvalidName(__v) => {
                     __out.put_str("IDL:omg.org/CosNaming/NamingContext/InvalidName:1.0");
+                    __v.put(__out).map_err(|_| rt::SystemException::marshal())?;
+                    Ok(rt::DispatchBody::UserException)
+                }
+                Self::NotEmpty(__v) => {
+                    __out.put_str("IDL:omg.org/CosNaming/NamingContext/NotEmpty:1.0");
                     __v.put(__out).map_err(|_| rt::SystemException::marshal())?;
                     Ok(rt::DispatchBody::UserException)
                 }
@@ -1879,7 +1897,7 @@ pub mod CosNaming {
         ///
         /// `bind_new_context` on the wire.
         fn bind_new_context(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, NamingContextExtFault>;
-        /// Discards this context
+        /// Discards this context, which must already be empty
         ///
         /// `destroy` on the wire.
         fn destroy(&mut self, __at: &NamingContextExtTarget<'_>) -> Result<(), NamingContextExtFault>;
@@ -1950,7 +1968,7 @@ pub mod CosNaming {
         ///
         /// `bind_new_context` on the wire.
         fn bind_new_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, NamingContextExtFault>;
-        /// Discards this context
+        /// Discards this context, which must already be empty
         ///
         /// `destroy` on the wire.
         fn destroy(&mut self) -> Result<(), NamingContextExtFault>;
@@ -2404,6 +2422,20 @@ pub mod CosNaming {
         pub struct InvalidName {
         }
         impl Cdr for InvalidName {
+            fn put(&self, _e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
+                Ok(())
+            }
+            fn get(_d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+                Ok(Self {
+                })
+            }
+        }
+
+        /// IDL exception `IDL:omg.org/CosNaming/NamingContext/NotEmpty:1.0`.
+        #[derive(Debug, Clone, PartialEq)]
+        pub struct NotEmpty {
+        }
+        impl Cdr for NotEmpty {
             fn put(&self, _e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
                 Ok(())
             }

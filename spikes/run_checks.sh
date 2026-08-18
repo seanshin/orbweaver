@@ -415,6 +415,35 @@ else
   fail_total=$((fail_total+1))
 fi
 
+hr "naming lifetimes — omniORB's client on the three re-examined deferrals"
+# `bind_context`/`rebind_context`/`destroy` were deferred; two of the reasons
+# turned out to describe the servant rather than constrain it. Driven by the
+# peer's client, because ours and our server were written together. --nocapture
+# because the verdict line is the fixture signal: the test prints SKIPPED and
+# passes when omniORBpy is absent, and a silent green there would be an
+# unmeasured check reported as a pass.
+np_out=$(cargo test -q -p orbweaver-giop --test naming_lifecycle_from_a_peer -- --nocapture 2>&1)
+case "$np_out" in
+  *"naming-peer: measured"*)
+    echo "  ok   omniORB drove bind_context/rebind_context/destroy against OUR server" ;;
+  *"naming-peer: SKIPPED"*)
+    echo "  SKIPPED  omniORBpy absent — the three deferrals are unmeasured, not passing"
+    skipped=$((skipped+1)) ;;
+  *)
+    echo "  FAIL the peer's view of bind_context/destroy"
+    printf '%s\n' "$np_out" | grep -E "^ *(left|right):" | head -2 | sed 's/^/       /'
+    fail_total=$((fail_total+1)) ;;
+esac
+# Structural, and cheap: the naming servant must still contain no outbound
+# call. That is what a federated bind_context would spend, so it fails here
+# rather than in a deadlock six months later.
+if cargo test -q -p orbweaver-giop --test naming_no_outbound_call >/dev/null 2>&1; then
+  echo "  ok   naming still dials nothing: no lock across an outbound call, structurally"
+else
+  echo "  FAIL the naming servant now names something that dials a peer"
+  fail_total=$((fail_total+1))
+fi
+
 hr "F5 lifecycle/property — omniORB's client against OUR tenant service"
 # SERVICES-COVERAGE §9's one open direction for golden 23: 16-of-16 had only
 # ever been asserted by the client written alongside the server.

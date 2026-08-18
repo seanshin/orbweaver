@@ -362,6 +362,46 @@ explained by nothing. That is the number this document exists to produce.
 선언 107개 중 12개가 서번트에게 거부당하지만 어디에도 설명이 없다. 이 문서가
 만들어내려던 숫자가 그것이다.
 
+### CosNaming, same day / 같은 날 CosNaming
+
+`bind_context`, `rebind_context` and `destroy` are served. Two of the three
+deferral reasons turned out to be **descriptions of the servant rather than
+obstacles**: contexts lived as long as the process *because* nothing removed a
+key, and `bind_context` of a context this dispatch already serves is a map
+insert, not a call over the wire. It was also the only way the already-served
+`new_context` produced anything reachable.
+
+Chaining — binding a **foreign** context — stays deferred, and its reason is
+rewritten rather than repeated. It is implementable now (`guarded` makes the
+lock question answerable), and that is a reason it is *possible*, not a reason
+to do it. Measured what it would buy: omniNames chains both `resolve` and
+`bind`, and against an undialable context turns a naming `resolve` into
+`TRANSIENT` after a TCP connect.
+
+The peer drove it: **20 labelled rows compared as a whole**, all matching, with
+every expected value measured against omniNames 4.3.4 first. Two deliberate
+divergences from omniNames, both peer-visible: it type-checks neither rebind,
+and it accepts any reference for `bind_context`. JacORB is **unmeasured, not
+passing** — no fixture on this machine.
+
+The structural property the naming module rests on is now checked rather than
+asserted: the servant contains no `Connection`, `Pool`, `Mux`, `invoke`,
+`TcpStream` or `connect(`, and all 16 operations run under
+`guarded::complaints_about` with nothing held. That is what a federated
+`bind_context` would spend.
+
+**One negative control changed a test.** The lock sweep *passed* with a
+violation planted in `Tree::destroy`, because `destroy` at a populated root
+stops at `NotEmpty` and never reaches the removal. Rows are dispatched where
+they succeed now, and each must return a value.
+
+`bind_context`·`rebind_context`·`destroy`가 서빙된다. 세 사유 중 둘은 **서번트에
+대한 서술이지 장애물이 아니었다** — 컨텍스트가 프로세스만큼 산 것은 *아무것도 키를
+지우지 않았기 때문*이다. 연쇄는 유예를 유지하되 사유를 다시 썼다: 이제 가능하다는
+것은 *가능하다*는 이유이지 *해야 한다*는 이유가 아니다. **음성 대조군 하나가
+테스트를 바꿨다** — 심어 둔 위반을 통과시켰는데, `destroy`가 `NotEmpty`에서 멈춰
+제거에 닿지 않았기 때문이다.
+
 ### Re-measured again, later on 2026-08-18 / 재재측정
 
 The pull half of CosEvent moved, and the sweep had to move with it.

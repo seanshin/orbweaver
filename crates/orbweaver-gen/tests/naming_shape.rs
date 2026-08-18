@@ -69,7 +69,7 @@ use orbweaver_giop::{
 };
 
 use emitted::f_gen_naming_subset::CosNaming::NamingContext::{
-    AlreadyBound, InvalidName, NotFound, NotFoundReason,
+    AlreadyBound, InvalidName, NotEmpty, NotFound, NotFoundReason,
 };
 use emitted::f_gen_naming_subset::CosNaming::NamingContextExt::InvalidAddress;
 use emitted::f_gen_naming_subset::CosNaming::{
@@ -145,6 +145,24 @@ struct Tree {
 }
 
 impl Tree {
+    /// The oid of a context reference this servant serves, or a refusal.
+    ///
+    /// Recognised by the oid **and** by this tree holding it. The oid alone
+    /// would adopt a foreign server's object, which is the one mistake here
+    /// that answers wrongly rather than raising.
+    fn local_oid(
+        &self,
+        at: &NamingContextExtTarget<'_>,
+        nc: &ObjRef,
+    ) -> Result<String, NamingContextExtFault> {
+        for oid in self.contexts.keys() {
+            if at.sibling(oid) == *nc {
+                return Ok(oid.clone());
+            }
+        }
+        Err(rt::raise::no_implement().did_not_run().into())
+    }
+
     /// A tree whose root context is the default object — the empty oid, which
     /// is the bare root key the server was bound with.
     fn new() -> Self {
@@ -387,26 +405,45 @@ impl NamingContextExtServant for Tree {
     // declares all three, and why `ir-subset.idl`'s not declaring the IFR's
     // deferrals is a `NOT_COMPARED` entry over there and is not one here.
 
+    /// A context this servant serves, bound under a name.
+    ///
+    /// The reference must be one of *ours*. `sibling` is the only thing that
+    /// mints them, so a reference whose oid this tree does not hold is a
+    /// foreign context, and adopting one would make `resolve` chain over the
+    /// wire — which the oracle refuses for the same reason and which this
+    /// servant, holding no connection at all, could not do if it wanted to.
     fn bind_context(
         &mut self,
-        _at: &NamingContextExtTarget<'_>,
-        _n: Name,
-        _nc: ObjRef,
+        at: &NamingContextExtTarget<'_>,
+        n: Name,
+        nc: ObjRef,
     ) -> Result<(), NamingContextExtFault> {
-        Err(rt::raise::no_implement().did_not_run().into())
+        let oid = self.local_oid(at, &nc)?;
+        self.bind_from(at.oid(), &n, Bound::Context(oid), false)
     }
 
     fn rebind_context(
         &mut self,
-        _at: &NamingContextExtTarget<'_>,
-        _n: Name,
-        _nc: ObjRef,
+        at: &NamingContextExtTarget<'_>,
+        n: Name,
+        nc: ObjRef,
     ) -> Result<(), NamingContextExtFault> {
-        Err(rt::raise::no_implement().did_not_run().into())
+        let oid = self.local_oid(at, &nc)?;
+        self.bind_from(at.oid(), &n, Bound::Context(oid), true)
     }
 
-    fn destroy(&mut self, _at: &NamingContextExtTarget<'_>) -> Result<(), NamingContextExtFault> {
-        Err(rt::raise::no_implement().did_not_run().into())
+    /// Discards this context, which must already be empty.
+    ///
+    /// Removing the oid is what retires the object: `knows` is answered from
+    /// this same map, so a later request against the reference is
+    /// `OBJECT_NOT_EXIST` rather than an operation on a context that is not
+    /// there. The two look-ups sharing one map is why they cannot disagree.
+    fn destroy(&mut self, at: &NamingContextExtTarget<'_>) -> Result<(), NamingContextExtFault> {
+        if !self.table(at.oid())?.is_empty() {
+            return Err(NamingContextExtFault::NotEmpty(NotEmpty {}));
+        }
+        self.contexts.remove(at.oid());
+        Ok(())
     }
 }
 
@@ -583,14 +620,21 @@ fn script() -> Vec<Step> {
     // the oracle refuses before it reads the body and a generated skeleton
     // reads it first, so a malformed body under one of these is the one
     // ordering difference between the two.
-    v.push(step("deferred bind_context", root.clone(), "bind_context", name_and_ref(&["c"], "C")));
+    // A context reference this servant did not mint. Both halves refuse it the
+    // same way — binding it would mean chaining `resolve` to another server,
+    // and neither of these holds a connection.
     v.push(step(
-        "deferred rebind_context",
+        "bind_context of a foreign reference",
+        root.clone(),
+        "bind_context",
+        name_and_ref(&["c"], "C"),
+    ));
+    v.push(step(
+        "rebind_context of a foreign reference",
         root.clone(),
         "rebind_context",
         name_and_ref(&["c"], "C"),
     ));
-    v.push(step("deferred destroy", root.clone(), "destroy", none()));
 
     // ── The empty tree ──
     v.push(step("list an empty context", root.clone(), "list", u32_arg(10)));
@@ -731,6 +775,34 @@ fn script() -> Vec<Step> {
         u32_arg(10),
     ));
 
+    // ── Lifetime, last, because it removes keys ──
+    //
+    // `destroy` used to sit near the top as a deferral both halves refused.
+    // When it stopped being refused, leaving it there destroyed the root
+    // **before every other step ran** — both servants identically, so the byte
+    // comparison stayed green while value-carrying replies fell from 25 to 5.
+    // Agreement by mutual destruction is exactly what
+    // `the_comparison_is_not_vacuous` exists to catch, and it caught it.
+    //
+    // oid 4 because the script mints 1, 2 and 3 above and this is the next one:
+    // guessing it wrong makes `destroy` answer `NotEmpty` for a context that is
+    // not the one named, which passes the byte comparison and measures nothing.
+    v.push(step("destroy a context that still holds bindings", root.clone(), "destroy", none()));
+    v.push(step(
+        "bind_new_context mints oid 4, to be destroyed",
+        root.clone(),
+        "bind_new_context",
+        name_args(&["doomed"]),
+    ));
+    v.push(step("destroy the empty child", ctx_key("4"), "destroy", none()));
+    v.push(step(
+        "resolve through the binding the destroyed child left",
+        root.clone(),
+        "resolve",
+        name_args(&["doomed"]),
+    ));
+    v.push(step("destroy a key that is gone", ctx_key("4"), "destroy", none()));
+
     v
 }
 
@@ -768,7 +840,7 @@ fn the_comparison_is_not_vacuous() {
     let steps = script();
     // Pinned, not bounded: a matrix that silently shrinks is a comparison that
     // silently weakens.
-    assert_eq!(steps.len(), 59, "the script changed length");
+    assert_eq!(steps.len(), 63, "the script changed length");
 
     let mut from_idl = generated();
     let (mut nonempty, mut empty, mut raised, mut user, mut unknown) = (0, 0, 0, 0, 0);
@@ -792,11 +864,19 @@ fn the_comparison_is_not_vacuous() {
     // Measured, then pinned. Each class is a different path through the
     // skeleton, and a script that stopped reaching one of them would still
     // pass the byte comparison — vacuously.
-    assert_eq!(nonempty, 25, "replies carrying a value");
-    assert_eq!(empty, 7, "void replies: the seven mutations that succeeded");
-    assert_eq!(user, 18, "user exceptions: NotFound, AlreadyBound, InvalidName, InvalidAddress");
-    assert_eq!(raised, 6, "system exceptions: three deferrals, one BAD_OPERATION, two MARSHAL");
-    assert_eq!(unknown, 3, "keys neither servant claims");
+    assert_eq!(nonempty, 27, "replies carrying a value");
+    assert_eq!(empty, 8, "void replies: the mutations that succeeded, destroy among them now");
+    assert_eq!(
+        user, 19,
+        "user exceptions: NotFound, AlreadyBound, InvalidName, InvalidAddress, NotEmpty"
+    );
+    // 6 -> 5: `destroy` stopped being a deferral. The other two remain, and
+    // they are the *foreign-reference* refusals rather than blanket ones.
+    assert_eq!(
+        raised, 5,
+        "system exceptions: two foreign-context refusals, one BAD_OPERATION, two MARSHAL"
+    );
+    assert_eq!(unknown, 4, "keys neither servant claims — one of them destroyed during the script");
     assert_eq!(nonempty + empty + user + raised + unknown, steps.len(), "every step is classed");
 
     // And the oracle must not be answering trivially either: after the script,
@@ -864,10 +944,16 @@ fn the_generated_replies_decode_as_the_oracles_own_readers() {
         }
         let iterator = Ior::read_from(&mut d).expect("the iterator slot is still an IOR");
         assert_eq!(d.remaining(), 0, "{endian:?}: trailing bytes after the listing");
-        // "a" was unbound by the script; "ctx" is a context.
-        assert_eq!(listed.len(), 1, "{endian:?}: {listed:?}");
+        // "a" was unbound by the script; "ctx" is a context; "doomed" is the
+        // **dangling binding** the destroyed child left behind. That it is
+        // still listed, and still listed as `ncontext`, is the property: a
+        // name and a lifetime are different things, and `destroy` ends the
+        // second without touching the first. Resolving it is what raises.
+        assert_eq!(listed.len(), 2, "{endian:?}: {listed:?}");
         assert_eq!(listed[0].0, vec![nc("ctx")]);
         assert_eq!(listed[0].1, 1, "ncontext is ordinal 1");
+        assert_eq!(listed[1].0, vec![nc("doomed")]);
+        assert_eq!(listed[1].1, 1, "a destroyed context's binding still says ncontext");
         assert!(
             iterator.type_id.is_empty() && iterator.profiles.is_empty(),
             "the iterator is nil (§9.3.6), not absent"
@@ -981,18 +1067,25 @@ fn a_context_nobody_minted_is_refused_by_both() {
 /// entry here is about identity, minting, key parsing or reference assembly.
 const NOT_COMPARED: [(&str, &str); 1] = [(
     "a malformed body under a deferred operation",
-    "`naming_server.rs` matches the operation name before it decodes any argument, so a \
-     `bind_context` whose body does not parse is NO_IMPLEMENT. A generated skeleton decodes the \
-     arguments the contract declares and only then calls the servant, so the same request is \
-     MARSHAL — the servant never runs and never gets to defer. Ordering a refusal ahead of \
-     decoding is a policy no contract can state; a servant that needs it overrides at the \
-     `Dispatch` level. With a well-formed body the two agree (three deferred operations in \
-     `script`), which is what makes this an ordering difference and not a missing answer.",
+    "**Retired 2026-08-18, and the retirement is the point.** This said that \
+     `naming_server.rs` matched the operation name before decoding any argument, so a \
+     `bind_context` with an unparsable body was NO_IMPLEMENT there and MARSHAL from a \
+     generated skeleton, which decodes what the contract declares and only then calls the \
+     servant. That difference existed *because* `bind_context` was deferred: a refusal keyed \
+     on the name never reaches the arguments. The deferral was re-examined and the operation \
+     is served now, so both halves decode first and both answer MARSHAL. The divergence was a \
+     property of the deferral, not of the two dispatch shapes, and it left with it.",
 )];
 
-/// The named divergence must still be one, and must be the only one.
+/// The named divergence is gone, and this asserts that rather than deleting it.
+///
+/// A `NOT_COMPARED` entry that stops diverging is worth one test more than
+/// silence: the entry stays, with its history, and this pins that the two
+/// halves now answer the same thing for the same reason. Deleting both would
+/// leave nobody able to tell that the ordering difference had ever existed or
+/// why it ended.
 #[test]
-fn the_named_divergence_still_diverges() {
+fn the_named_divergence_has_ended() {
     assert_eq!(NOT_COMPARED.len(), 1);
     let mut hand = hand_written();
     let mut from_idl = generated();
@@ -1006,10 +1099,10 @@ fn the_named_divergence_still_diverges() {
         ask(&mut from_idl, big, ROOT, "bind_context", &malformed),
     ) {
         (Answer::Raised { id: a, .. }, Answer::Raised { id: b, .. }) => {
-            assert_eq!(a, rt::NO_IMPLEMENT, "refused before the body is read");
-            assert_eq!(b, rt::MARSHAL, "the arguments are decoded before the servant is called");
+            assert_eq!(a, rt::MARSHAL, "the oracle decodes first now that it serves this");
+            assert_eq!(b, rt::MARSHAL, "and the skeleton always did");
         }
-        other => panic!("both must refuse, differently: {other:?}"),
+        other => panic!("both must refuse the same way: {other:?}"),
     }
 
     // With a well-formed body the two agree — the difference is the ordering

@@ -173,6 +173,39 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **CosNaming serves `bind_context`, `rebind_context` and `destroy`.** Two of
+  the three deferral reasons were **descriptions of the servant rather than
+  obstacles**: contexts lived as long as the process *because* nothing removed
+  a key, and binding a context this dispatch already serves is a map insert,
+  not a call over the wire — it was also the only way the already-served
+  `new_context` produced anything reachable. Binding a **foreign** context stays
+  deferred with a rewritten reason: it is implementable now, and that is a
+  reason it is possible, not a reason to do it.
+
+  A peer drove it — 20 labelled rows, every expected value measured against
+  omniNames 4.3.4 first, and two deliberate divergences from omniNames recorded
+  (it type-checks neither rebind, and accepts any reference for
+  `bind_context`). The property the module rests on is now **checked**: the
+  servant names no `Connection`, `Pool`, `Mux`, `invoke`, `TcpStream` or
+  `connect(`, and all 16 operations run with nothing held.
+
+  Its negative control changed a test: the lock sweep *passed* with a violation
+  planted in `destroy`, because `destroy` at a populated root stops at
+  `NotEmpty` and never reaches the removal.
+
+  Landing it meant the generated-skeleton comparison had to follow, and that
+  comparison caught the interesting part. `destroy` had sat near the top of the
+  script as a deferral both halves refused; once served, it **destroyed the
+  root before every other step ran** — both servants identically, so the byte
+  comparison stayed green while value-carrying replies fell from 25 to 5.
+  **Agreement by mutual destruction**, which is exactly what
+  `the_comparison_is_not_vacuous` exists to catch. The lifetime steps moved to
+  the end, and the `NOT_COMPARED` entry that recorded an ordering difference
+  was **retired rather than deleted**: the difference existed *because*
+  `bind_context` was deferred, and it left with the deferral.
+
+### Added / 추가
+
 - **CosEvent serves the pull model's consumer side** — `obtain_pull_supplier`,
   `connect_pull_consumer`, `pull`, `try_pull`, `disconnect_pull_supplier`. The
   deferral's reason was *"the same unbounded buffer this module spends its
