@@ -194,3 +194,117 @@ fn a_shared_file_keeps_its_identity_whichever_root_reaches_it() {
         assert_eq!(id, &first, "{root} gives a shared declaration a different identity");
     }
 }
+
+/// Every repository id the `inc-*` roots produce, as `omniidl` gave them.
+///
+/// Thirty-two ids over eight files whose only distinguishing feature is that
+/// the `#include` is **not at file scope**. That shape existed nowhere in this
+/// directory until 2026-08-18, and it is the shape where "reset the prefix"
+/// and "reset the id path" stop being the same instruction: seven of these
+/// thirty-two disagreed with both oracles when they were first measured, and
+/// all seven were the one cause — the boundary was a `#pragma prefix`, which
+/// *replaces* the id path, so the restore could name the includer's prefix but
+/// never the modules the `#include` sat inside.
+///
+/// Written out as exact strings rather than derived, for the reason the rest of
+/// this file gives: every wrong answer here is a well-formed id for a plausible
+/// module, nothing errors either way, and the only thing that ever disagrees is
+/// a peer. A table that computed the expectation would compute it with the same
+/// rule it is supposed to be checking.
+///
+/// The values are `omniidl -bpython -Wbinline` on the root, measured
+/// 2026-08-18. JacORB 3.9 agrees on all of them except the four leaf ids of
+/// `inc-scope-control.idl` and the three of `inc-two-scopes.idl`, where it
+/// resets nothing at the boundary; `cases.tsv` records that divergence and why
+/// we follow omniidl.
+#[test]
+fn an_include_inside_a_module_gets_the_ids_omniidl_gives_it() {
+    // (root, qualified name, id) — grouped by root, in declaration order.
+    let expected: &[(&str, &str, &str)] = &[
+        ("inc-leaf-plain.idl", "Parcel::TagNumber", "IDL:Parcel/TagNumber:1.0"),
+        ("inc-leaf-plain.idl", "Parcel::Waybill", "IDL:Parcel/Waybill:1.0"),
+        ("inc-leaf-plain.idl", "Parcel::Scanner", "IDL:Parcel/Scanner:1.0"),
+        ("inc-leaf-prefixed.idl", "Seal::BadgeCode", "IDL:leaf.example/Seal/BadgeCode:1.0"),
+        ("inc-leaf-prefixed.idl", "Seal::Stamper", "IDL:leaf.example/Seal/Stamper:1.0"),
+        // A file-scope prefix, the include inside `module Yard`. The leaf keeps
+        // the id it has alone; `Gate`, after the include, keeps `Yard`.
+        ("inc-scope-plain.idl", "Yard::BayNumber", "IDL:hub.example/Yard/BayNumber:1.0"),
+        ("inc-scope-plain.idl", "Yard::Parcel::TagNumber", "IDL:Parcel/TagNumber:1.0"),
+        ("inc-scope-plain.idl", "Yard::Parcel::Waybill", "IDL:Parcel/Waybill:1.0"),
+        ("inc-scope-plain.idl", "Yard::Parcel::Scanner", "IDL:Parcel/Scanner:1.0"),
+        ("inc-scope-plain.idl", "Yard::Gate", "IDL:hub.example/Yard/Gate:1.0"),
+        // Two prefixes at the splice point, and neither reaches the other.
+        ("inc-scope-prefixed.idl", "Wharf::BerthNumber", "IDL:hub.example/Wharf/BerthNumber:1.0"),
+        ("inc-scope-prefixed.idl", "Wharf::Seal::BadgeCode", "IDL:leaf.example/Seal/BadgeCode:1.0"),
+        ("inc-scope-prefixed.idl", "Wharf::Seal::Stamper", "IDL:leaf.example/Seal/Stamper:1.0"),
+        ("inc-scope-prefixed.idl", "Wharf::Crane", "IDL:hub.example/Wharf/Crane:1.0"),
+        // No prefix in the includer at all: the restore still has to put
+        // `Siding` back, which is what a `#pragma prefix ""` could not do.
+        ("inc-scope-bare.idl", "Siding::TrackNumber", "IDL:Siding/TrackNumber:1.0"),
+        ("inc-scope-bare.idl", "Siding::Seal::BadgeCode", "IDL:leaf.example/Seal/BadgeCode:1.0"),
+        ("inc-scope-bare.idl", "Siding::Seal::Stamper", "IDL:leaf.example/Seal/Stamper:1.0"),
+        ("inc-scope-bare.idl", "Siding::Shunt", "IDL:Siding/Shunt:1.0"),
+        // The control, and the one place the two oracles disagree: omniidl
+        // resets the id path at a file boundary whether or not a prefix is in
+        // play, JacORB resets nothing. We follow omniidl.
+        ("inc-scope-control.idl", "Ledger::EntryNumber", "IDL:Ledger/EntryNumber:1.0"),
+        ("inc-scope-control.idl", "Ledger::Parcel::TagNumber", "IDL:Parcel/TagNumber:1.0"),
+        ("inc-scope-control.idl", "Ledger::Parcel::Waybill", "IDL:Parcel/Waybill:1.0"),
+        ("inc-scope-control.idl", "Ledger::Parcel::Scanner", "IDL:Parcel/Scanner:1.0"),
+        ("inc-scope-control.idl", "Ledger::Journal", "IDL:Ledger/Journal:1.0"),
+        // Two prefix scopes, one guarded leaf: it lands in the first and the
+        // second does not contain it.
+        ("inc-two-scopes.idl", "Alpha::Parcel::TagNumber", "IDL:Parcel/TagNumber:1.0"),
+        ("inc-two-scopes.idl", "Alpha::Parcel::Waybill", "IDL:Parcel/Waybill:1.0"),
+        ("inc-two-scopes.idl", "Alpha::Parcel::Scanner", "IDL:Parcel/Scanner:1.0"),
+        ("inc-two-scopes.idl", "Alpha::Reader", "IDL:alpha.example/Reader:1.0"),
+        ("inc-two-scopes.idl", "Beta::Writer", "IDL:beta.example/Writer:1.0"),
+        // Depth two, where a restore-to-empty stops being indistinguishable
+        // from a restore-to-what-was-saved.
+        (
+            "inc-nested-scope.idl",
+            "Outer::Inner::Seal::BadgeCode",
+            "IDL:leaf.example/Seal/BadgeCode:1.0",
+        ),
+        (
+            "inc-nested-scope.idl",
+            "Outer::Inner::Seal::Stamper",
+            "IDL:leaf.example/Seal/Stamper:1.0",
+        ),
+        ("inc-nested-scope.idl", "Outer::Inner::Ticket", "IDL:hub.example/Outer/Inner/Ticket:1.0"),
+        ("inc-nested-scope.idl", "Outer::Docket", "IDL:hub.example/Outer/Docket:1.0"),
+    ];
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut root = "";
+    let mut spec = None;
+    for (r, name, want) in expected {
+        if *r != root {
+            root = r;
+            let unit = preprocess_file(&dir().join(root), &SearchPath::new()).expect("read");
+            spec = Some(check_unit(&unit).unwrap_or_else(|d| {
+                panic!(
+                    "{root} must be clean: {:?}",
+                    d.iter().map(|x| unit.render(x)).collect::<Vec<_>>()
+                )
+            }));
+        }
+        let s = spec.as_ref().expect("a root was loaded");
+        // `repository_ids` records only a *difference* from the plain
+        // derivation, so an id equal to the module path is absent by design.
+        let got = s
+            .repository_ids
+            .get(*name)
+            .cloned()
+            .unwrap_or_else(|| format!("IDL:{}:1.0", name.replace("::", "/")));
+        if got != *want {
+            failures.push(format!("{root}: {name} is {got}, omniidl says {want}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "the in-module include cases disagree with the oracle:\n  {}",
+        failures.join("\n  ")
+    );
+    assert_eq!(expected.len(), 32, "the measurement was 32 ids; adjust the count with the table");
+}

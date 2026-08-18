@@ -1,0 +1,26 @@
+// ---------------------------------------------------------------------------
+// The control: no prefix anywhere, in either file, and the `#include` still
+// inside a module.
+//
+// Nothing is injected, so the spliced unit is the concatenation and every id
+// is the plain module path.  Without this row a resolver that mangled the
+// scope path on every in-module include would still look right on the prefixed
+// cases if it mangled them consistently — the control is what separates "the
+// prefix rule is wrong" from "the splice is wrong".
+//
+// 대조군: 어느 파일에도 접두사가 없고 인클루드만 모듈 안에 있다.  주입이 없으므로
+// 결과는 단순 이어붙이기와 같아야 한다.  이 행이 없으면 "접두사 규칙이 틀렸다"와
+// "삽입 자체가 틀렸다"를 구분할 수 없다.
+// ---------------------------------------------------------------------------
+
+module Ledger {
+
+    typedef long EntryNumber;
+
+    #include "inc-leaf-plain.idl"
+
+    interface Journal {
+        Parcel::Waybill record(in EntryNumber entry);
+    };
+
+};

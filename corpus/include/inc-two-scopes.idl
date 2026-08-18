@@ -1,0 +1,41 @@
+// ---------------------------------------------------------------------------
+// The same leaf reached from two different prefix scopes in one unit.
+//
+// `module Alpha` and `module Beta` each set their own prefix in their own body
+// and each include `inc-leaf-plain.idl`.  The leaf is guarded, so it is spliced
+// once and the second `#include` is a no-op — for us by canonical path, for
+// omniidl by the guard, and the two answers must be the same one.  Which means
+// `Parcel` lands in whichever scope reached it FIRST and takes that scope's
+// identity, and the second scope simply does not contain it.  `Beta::Writer`
+// therefore names nothing from the leaf: it cannot, and a file that pretended
+// otherwise would be measuring a compile error rather than an identity.
+//
+// 한 유닛 안에서 서로 다른 접두사 스코프 두 곳이 같은 잎을 인클루드한다.  잎에는
+// 가드가 있으므로 한 번만 삽입되고 — 우리는 정준 경로로, omniidl은 가드로 —
+// 먼저 도달한 스코프가 가진다.  그래서 `Beta`에는 `Parcel`이 없고,
+// `Beta::Writer`는 잎의 어떤 이름도 부르지 않는다.
+// ---------------------------------------------------------------------------
+
+module Alpha {
+
+    #pragma prefix "alpha.example"
+
+    #include "inc-leaf-plain.idl"
+
+    interface Reader {
+        Parcel::TagNumber peek();
+    };
+
+};
+
+module Beta {
+
+    #pragma prefix "beta.example"
+
+    #include "inc-leaf-plain.idl"
+
+    interface Writer {
+        long tally();
+    };
+
+};

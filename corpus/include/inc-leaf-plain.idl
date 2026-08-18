@@ -1,0 +1,32 @@
+// ---------------------------------------------------------------------------
+// A leaf with a guard and NO `#pragma prefix` of its own.
+//
+// It exists to be included from *inside a module*, which is the shape no file
+// in this directory had: every existing case puts its `#include` at file
+// scope, where a prefix reset and a scope-path reset happen to mean the same
+// thing.  Inside a module they do not, and a repository id is the only place
+// the difference shows.
+//
+// 가드가 있고 접두사는 없는 잎 파일.  **모듈 안에서** 인클루드되기 위한 것이다 —
+// 기존 파일은 전부 파일 스코프에서만 인클루드했고, 거기서는 접두사 리셋과 스코프
+// 경로 리셋이 우연히 같은 뜻이 된다.  모듈 안에서는 다르다.
+// ---------------------------------------------------------------------------
+#ifndef _OW_INC_LEAF_PLAIN_IDL_
+#define _OW_INC_LEAF_PLAIN_IDL_
+
+module Parcel {
+
+    typedef long TagNumber;
+
+    struct Waybill {
+        TagNumber issued;
+        string    destination;
+    };
+
+    interface Scanner {
+        Waybill sweep(in TagNumber which);
+    };
+
+};
+
+#endif // _OW_INC_LEAF_PLAIN_IDL_

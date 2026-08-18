@@ -1,0 +1,35 @@
+// ---------------------------------------------------------------------------
+// A file-scope `#pragma prefix`, and an `#include` INSIDE a module.
+//
+// This is the gap `docs/COMPONENTS.md` names.  At file scope, "reset the
+// prefix" and "reset the scope path" are the same instruction, because the
+// scope path at file scope is empty either way.  Inside `module Yard` they are
+// different instructions, and only one of them agrees with the compiler on the
+// other end of the wire:
+//
+//     Parcel::TagNumber is either  IDL:Yard/Parcel/TagNumber:1.0     (scope kept)
+//                       or         IDL:Parcel/TagNumber:1.0          (scope reset)
+//
+// Both are well-formed ids for a plausible module, nothing errors either way,
+// and the only thing that ever disagrees is a peer.  `Gate` is declared after
+// the include so the *restore* is measured too, not only the entry.
+//
+// 파일 스코프 접두사 + **모듈 안** 인클루드.  파일 스코프에서는 "접두사 리셋"과
+// "스코프 경로 리셋"이 같은 말이지만 모듈 안에서는 다르며, 둘 다 well-formed
+// 저장소 ID다 — 틀렸다고 말해 주는 것은 상대 피어뿐이다.  인클루드 뒤에 선언된
+// `Gate`가 복원까지 측정한다.
+// ---------------------------------------------------------------------------
+
+#pragma prefix "hub.example"
+
+module Yard {
+
+    typedef long BayNumber;
+
+    #include "inc-leaf-plain.idl"
+
+    interface Gate {
+        Parcel::Waybill admit(in BayNumber bay);
+    };
+
+};

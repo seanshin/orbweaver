@@ -39,6 +39,15 @@
 //! * `#pragma version <name> M.m` replaces the `:1.0` of that item's id.
 //! * `#pragma ID <name> "…"` replaces the whole id and wins over both the
 //!   prefix and any `version`, whichever order they are written in.
+//! * `#pragma orbweaver include-enter` / `include-leave` — **not a
+//!   specification pragma**, and written by nobody: the pair
+//!   [`crate::include`] injects around a spliced file. It saves the whole
+//!   scope path and restarts at the empty one, then puts back exactly what it
+//!   saved. It exists because `#pragma prefix` cannot express the restore —
+//!   a prefix *replaces* the path, so it can name the includer's prefix but
+//!   never the modules the `#include` was written inside, which is wrong for
+//!   every `#include` that is not at file scope
+//!   (`corpus/include/inc-scope-*.idl`, measured against omniidl and JacORB).
 //!
 //! ## What is not implemented
 //!
@@ -123,6 +132,7 @@ pub fn parse(src: &str) -> Result<Spec> {
         i: 0,
         scope: Vec::new(),
         scope_ids: vec![String::new()],
+        include_ids: Vec::new(),
         ids: BTreeMap::new(),
         declared: HashMap::new(),
         declared_scope: HashMap::new(),
@@ -146,6 +156,15 @@ struct Parser {
     /// derived copy on entry and popping on exit is what stops a prefix
     /// escaping a closing brace.
     scope_ids: Vec<String>,
+    /// The id paths saved by `#pragma orbweaver include-enter`, innermost last.
+    ///
+    /// A translation-unit file boundary saves and restores the whole id path,
+    /// not just the prefix part of it. `#pragma prefix` cannot express the
+    /// restore — it *replaces* the path, so it can name the includer's prefix
+    /// but never the modules the `#include` was written inside — which is why
+    /// this is a stack of its own rather than another `Prefix` pragma.
+    /// Measured: `corpus/include/inc-scope-*.idl`.
+    include_ids: Vec<String>,
     /// Repository ids that differ from the plain derivation, by qualified name.
     ids: BTreeMap<String, String>,
     /// Every qualified name declared so far, keyed by its lowercase form —
@@ -290,6 +309,30 @@ impl Parser {
                     let qual = path.join("::");
                     self.versions.insert(qual.clone(), (major, minor));
                     self.set_id(&qual, &path);
+                }
+                // A file boundary saves the id path in force and restarts the
+                // included file at the empty one, then puts back exactly what
+                // it saved — enclosing modules included. Unconditional: it is
+                // not "reset the prefix if there is one", because an included
+                // file with no prefix anywhere still must not inherit the
+                // module its `#include` was written inside
+                // (`corpus/include/inc-scope-control.idl`, measured against
+                // omniidl).
+                Pragma::IncludeEnter => {
+                    self.include_ids.push(self.scope_ids.last().cloned().unwrap_or_default());
+                    if let Some(current) = self.scope_ids.last_mut() {
+                        current.clear();
+                    }
+                }
+                // An unmatched leave restores nothing rather than corrupting
+                // the path: the markers are injected in pairs, so seeing one
+                // alone means the text was hand-edited.
+                Pragma::IncludeLeave => {
+                    if let Some(saved) = self.include_ids.pop()
+                        && let Some(current) = self.scope_ids.last_mut()
+                    {
+                        *current = saved;
+                    }
                 }
                 Pragma::Other(_) => {}
             }
@@ -1127,6 +1170,64 @@ mod tests {
 
     /// The rule an implementation gets wrong by keeping one variable instead
     /// of a stack. Invisible in a one-module file.
+    /// The file-boundary marker saves and restores the whole id path, which is
+    /// the one thing `#pragma prefix` cannot be made to do.
+    ///
+    /// Written here as raw text because that is what `crate::include` injects,
+    /// and because the pair has to keep working when somebody reads the output
+    /// of `idl-check -E` back in. `Yard::I` is `IDL:aaa/Yard/I:1.0` — with the
+    /// module — while a `#pragma prefix "aaa"` in the same position would give
+    /// `IDL:aaa/I:1.0`. Both oracles say the former; see
+    /// `corpus/include/inc-scope-plain.idl`.
+    #[test]
+    fn an_include_boundary_saves_and_restores_the_whole_id_path() {
+        let out = ids("#pragma prefix \"aaa\"\n\
+             module Yard {\n\
+             #pragma orbweaver include-enter\n\
+             module N { interface J { void f(); }; };\n\
+             #pragma orbweaver include-leave\n\
+             interface I { void g(); };\n\
+             };");
+        assert_eq!(out.get("Yard::N::J").map(String::as_str), Some("IDL:N/J:1.0"));
+        assert_eq!(out.get("Yard::I").map(String::as_str), Some("IDL:aaa/Yard/I:1.0"));
+    }
+
+    /// Nested boundaries restore innermost-first, so a chain of includes two
+    /// deep does not put an outer file's path back one level early.
+    #[test]
+    fn include_boundaries_nest() {
+        let out = ids("module A {\n\
+             #pragma orbweaver include-enter\n\
+             module B {\n\
+             #pragma orbweaver include-enter\n\
+             interface Deep { void f(); };\n\
+             #pragma orbweaver include-leave\n\
+             interface Mid { void g(); };\n\
+             };\n\
+             #pragma orbweaver include-leave\n\
+             interface Top { void h(); };\n\
+             };");
+        // The innermost file starts empty; `B` came from the middle file, which
+        // itself started empty, so `Mid` keeps `B` and `Deep` keeps nothing.
+        assert_eq!(out.get("A::B::Deep").map(String::as_str), Some("IDL:Deep:1.0"));
+        assert_eq!(out.get("A::B::Mid").map(String::as_str), Some("IDL:B/Mid:1.0"));
+        // ...and the root gets its own path back, `A` included.
+        assert_eq!(out.get("A::Top"), None, "IDL:A/Top:1.0 is the plain derivation");
+    }
+
+    /// The `orbweaver` pragma namespace belongs to include resolution, and a
+    /// spelling it does not inject is an error rather than a silent no-op.
+    ///
+    /// Silence is the dangerous direction here for the same reason `#pragma id`
+    /// is not accepted as `#pragma ID`: a marker we ignore is a repository id
+    /// nobody warns about.
+    #[test]
+    fn an_unknown_orbweaver_pragma_is_an_error() {
+        let e = crate::parse("#pragma orbweaver include-enters\nmodule M { };")
+            .expect_err("an unknown marker must not be ignored");
+        assert!(e.message.contains("orbweaver"), "{}", e.message);
+    }
+
     #[test]
     fn a_prefix_does_not_escape_its_scope() {
         let out = ids("module a {\n#pragma prefix \"in.example\"\ninterface I { void f(); }; };\n\

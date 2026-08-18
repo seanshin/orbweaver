@@ -1,0 +1,27 @@
+// ---------------------------------------------------------------------------
+// The same shape, with a leaf that carries its own prefix.
+//
+// Two prefixes are in play at the splice point — `hub.example` from this file
+// and `leaf.example` from the included one — and neither may reach the other's
+// declarations.  `Seal::BadgeCode` must keep `leaf.example` even though it is
+// spliced into the body of `module Wharf`, and `Wharf::Crane`, declared after
+// the include, must still carry `hub.example` and its own module.
+//
+// 접두사가 둘 다 관여하는 경우.  잎의 `leaf.example`은 남의 모듈 안에 붙어도
+// 유지되어야 하고, 인클루드 뒤에 선언된 `Wharf::Crane`은 여전히 `hub.example`과
+// 자기 모듈을 유지해야 한다.
+// ---------------------------------------------------------------------------
+
+#pragma prefix "hub.example"
+
+module Wharf {
+
+    typedef long BerthNumber;
+
+    #include "inc-leaf-prefixed.idl"
+
+    interface Crane {
+        Seal::BadgeCode lift(in BerthNumber berth);
+    };
+
+};
