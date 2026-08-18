@@ -171,6 +171,27 @@ records what changed and, where it matters, what it changes on the wire.
   that would silently re-encode the repository ids and member names inside
   every `TypeCode`.
 
+### Decided / 결정
+
+- **D010 — what remains, and which of it cannot be measured here** (PROPOSED).
+  Written from the current gap columns rather than from memory, because the
+  session that produced it found four "gaps" already closed and four gates
+  green while measuring nothing — progress was wrong in both directions. It
+  splits the remainder into four classes: **A** buildable and measurable here,
+  **B** buildable but the oracle is absent (lands only as a SKIPPED harness
+  group naming its fixture, never as `ok`), **C** deferred with a trigger that
+  has not fired (building early is the defect), **D** a claim in a document
+  that cannot be tested. Six A items ordered by cost of defect, six B items
+  each naming what is missing, eleven C items each naming where its reason
+  lives, and the five D rows yesterday's plan batch left. Two process
+  proposals: a gap-column symbol check, and a rule that a new harness group
+  lands with its negative control in the commit message.
+
+  기억이 아니라 현재의 공백 열에서 썼다. 남은 것을 네 부류로 가른다 — 여기서
+  짓고 잴 수 있는 것, 지을 수 있으나 오라클이 없는 것(`ok`가 아니라 픽스처를
+  이름 붙인 SKIP으로만 착지), 방아쇠 달린 유예(일찍 짓는 것이 결함), 시험 불가한
+  문서 주장.
+
 ### Added / 추가
 
 - **CosNaming serves `bind_context`, `rebind_context` and `destroy`.** Two of
