@@ -12,6 +12,8 @@ HERE = pathlib.Path(__file__).parent
 omniORB.importIDL(str(HERE / "echo.idl"))
 import spike  # noqa: E402
 
+# Captured before ORB_init, which strips every -ORB option it recognises.
+ARGV = list(sys.argv)
 ior = pathlib.Path(sys.argv[1]).read_text().strip()
 orb = CORBA.ORB_init(sys.argv, CORBA.ORB_ID)
 echo = orb.string_to_object(ior)._narrow(spike.Echo)
@@ -30,6 +32,42 @@ check("ping()", echo.ping(), 42)
 check("add(1000000, 337)", echo.add(1000000, 337), 1000337)
 check("echo_string(...)", echo.echo_string("hello from omniORB"), "hello from omniORB")
 check("scale(1.5, 4.0)", echo.scale(1.5, 4.0), 6.0)
+
+# Wide text, and the reason this call is here rather than being obviously
+# missing. §7.10.2.4: a profile carrying no TAG_CODE_SETS declares *no wchar
+# support*, so a conformant client raises INV_OBJREF inside itself and sends
+# nothing at all — measured 2026-08-18 against omniORB 4.3.4, minor
+# 0x4F4D0001, with our server's log showing one earlier request and no error.
+# Every wstring operation we serve was unreachable and nothing here could see
+# it, because this file called every other operation and never this one.
+#
+# GIOP 1.0 has no wchar at all (§9.3.1.6 defines it from 1.1), and this harness
+# drives the peer at 1.0, 1.1 and 1.2 — so the call is made only where the wire
+# form exists. Asking at 1.0 measures the version, not the codeset.
+giop = "1.2"
+if "-ORBmaxGIOPVersion" in ARGV:
+    giop = ARGV[ARGV.index("-ORBmaxGIOPVersion") + 1]
+if giop in ("1.0", "1.1"):
+    # 1.0 defines no wchar at all (§9.3.1.6). 1.1 is skipped for a different
+    # and less comfortable reason: this peer is not an oracle for it. omniORB
+    # 4.3.4 on this host marshals a bare 1.1 `wchar` and then raises
+    # MARSHAL_MessageTooLong unmarshalling **its own output** — measured
+    # 2026-08-18 while auditing the wide-character path, which is why the
+    # GIOP 1.1 wchar unit order is recorded as UNMEASURED in `codeset.rs` and
+    # was left unchanged rather than moved on a reading. Asserting our form
+    # against a peer that disagrees with itself would measure the peer.
+    # A driver that can settle it settles it; until then this is a stated gap,
+    # not a silent one.
+    print(f"  ..   echo_wstring skipped at GIOP {giop}: "
+          "1.0 has no wchar; 1.1 has no usable oracle on this host")
+else:
+    try:
+        check("echo_wstring(ascii)", echo.echo_wstring("wide"), "wide")
+        check("echo_wstring(한글)", echo.echo_wstring("한글"), "한글")
+    except CORBA.INV_OBJREF as e:
+        print(f"  FAIL echo_wstring -> INV_OBJREF minor {e.minor:#x}: the peer refused to "
+              "send wide text because our reference declares no codesets")
+        fails += 1
 
 r = spike.Ragged(a=0xAA, b=-7, c=9, d=2.5, e=0xBB)
 back = echo.echo_ragged(r)
