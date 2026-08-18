@@ -83,14 +83,24 @@
 //!    [`Option<&Caller>`](crate::identity::Caller), and `Caller` holds a
 //!    principal, scopes and an expiry — the credential is *absent from the
 //!    type*, which is §4.8's hygiene rule made structural one layer down.
-//! 3. The chain runs **before the arguments are decoded** (see
-//!    [`crate::interceptor`]'s module docs), so no stage sees them, and the
-//!    record has no field for them even if one did.
+//! 3. A stage **can** see the arguments — [`CallContext::arguments`] carries
+//!    them unmapped for [`crate::interceptor::SEAT_SAFETY_CONTENT`] — and a
+//!    record still cannot, because [`SpanRecord`] has no field for a value and
+//!    [`Trace::record`] has no parameter that could carry one. A refusal
+//!    contributes only its *stage name* here; the free prose a stage writes
+//!    into [`crate::policy::Denied::Intercepted`] reaches this module not at
+//!    all, and the audit ledger only as the stage's name (see
+//!    `crate::guard::audit_reason`). The blindness was the old argument for
+//!    this line and it no longer holds; the shape of the record is the
+//!    argument, and it always was the stronger one.
 //!
 //! `a_secret_in_a_session_reaches_no_trace_line` runs a real session against a
 //! caller carrying secrets in its scopes, an object key and the call arguments,
 //! and asserts none of them appear — with the principal asserted *present* in
 //! the same test, so that a sink emitting nothing cannot pass it.
+//! `crate::interceptor`'s `an_argument_a_content_stage_saw_cannot_reach_the_ledger`
+//! is the harder case on the same property: a stage that has the value and is
+//! trying to write it down.
 
 use std::io;
 

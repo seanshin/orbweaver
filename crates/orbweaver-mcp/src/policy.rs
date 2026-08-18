@@ -157,6 +157,15 @@ pub enum Denied {
         /// nowhere else to put it.
         stage: String,
         /// What that stage says about it.
+        ///
+        /// **The one field of a refusal that this crate did not write, and the
+        /// only one that does not reach the audit ledger.** A stage at
+        /// [`crate::interceptor::SEAT_SAFETY_CONTENT`] holds the argument
+        /// values, so its sentence can hold one too;
+        /// `crate::guard::audit_reason` therefore renders an `Intercepted`
+        /// into the ledger by its `stage` alone. This text still reaches the
+        /// caller, the [`crate::dryrun`] report and every observer stage — the
+        /// readers who already have the arguments.
         reason: String,
     },
     /// A consumption budget is spent ([`crate::quota`], §4.5 #2).

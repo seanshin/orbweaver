@@ -92,11 +92,22 @@
 //! This does **less** than that clause allows, and the shortfall is structural
 //! rather than unfinished. It answers the *policy* question only: it does not
 //! marshal arguments and cannot show what bytes would go out, because the chain
-//! runs before the arguments are decoded — the same fact that leaves
-//! [`crate::interceptor::SEAT_SAFETY_CONTENT`] empty. A dry run that reported
-//! the encoded request would have to run after argument mapping, which is a
-//! change to *where* the chain runs. Until then: this says who could call what
-//! and why not, and says nothing whatever about the payload.
+//! runs before the arguments are decoded and a dry run is asked *before a call
+//! exists*, so there is no payload to marshal. A dry run that reported the
+//! encoded request would have to run after argument mapping, which is a change
+//! to *where* the chain runs. Until then: this says who could call what and why
+//! not, and says nothing whatever about the payload.
+//!
+//! The same fact bounds what a prediction is worth once a deployment fills
+//! [`crate::interceptor::SEAT_SAFETY_CONTENT`]. Every context synthesized here
+//! carries `arguments: None`, so a content stage is *reached* and has nothing
+//! to judge: a report can say the stage ran and had no objection, and that is
+//! not a promise about a payload nobody has sent yet. An operator reading
+//! `Would::Allow` for an operation behind a content filter is reading a policy
+//! verdict, not a safety one. Saying so is cheaper than a dry run that guesses.
+//!
+//! 예측은 **아직 보내지 않은 페이로드**에 대해 아무것도 약속하지 않는다.
+//! 내용 필터가 있는 운영에서 `Would::Allow`는 정책의 답이지 안전의 답이 아니다.
 
 use orbweaver_registry::Registry;
 
