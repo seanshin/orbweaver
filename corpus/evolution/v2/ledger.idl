@@ -1,0 +1,23 @@
+// ---------------------------------------------------------------------------
+// The root contract, and the file the release gate is pointed at.
+//
+// BYTE-IDENTICAL to `../v2/ledger.idl`.  Everything that changed between the
+// two revisions changed in `common.idl`, which is where a real estate keeps
+// the types more than one contract shares.  `Journal` inherits `Recorded` and
+// returns `Posting`; both are declared next door, and neither name exists in
+// this file's text.
+//
+// 이 파일은 v2와 바이트까지 동일하다.  변경은 전부 `common.idl`에 있다.
+// ---------------------------------------------------------------------------
+
+#include "common.idl"
+
+#pragma prefix "orbweaver.example"
+
+module Ledger {
+
+    interface Journal : Recorded {
+        Posting fetch(in Reference slip);
+    };
+
+};

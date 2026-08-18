@@ -1,6 +1,7 @@
 //! Prints the repository id of every definition in an IDL file.
 //!
-//! Usage: `repository-ids <file.idl>...`, one `<file>\t<qualified>\t<id>` row
+//! Usage: `repository-ids [-I <dir>]... <file.idl>...`, one
+//! `<file>\t<qualified>\t<id>` row
 //! per definition, sorted — the shape `corpus/pragma/expected.tsv` records, so
 //! a differential run against `omniidl` is a `diff` rather than an eyeball.
 //!
@@ -9,18 +10,32 @@
 //! from the module path; now the answer depends on where a pragma was written,
 //! and a question that can only be answered by running the compiler needs a
 //! way to run the compiler.
+//!
+//! `#include` is resolved first, for the same reason: a `#pragma prefix` in an
+//! included header is part of the id of everything after it, so a run that
+//! skipped the include would print ids the wire never carries. Every file in
+//! `corpus/pragma/` is self-contained, so `expected.tsv` is unaffected — which
+//! is exactly why the gap could sit there unmeasured.
 
-use orbweaver_registry::Registry;
+use orbweaver_idl::SearchPath;
+use orbweaver_registry::{Registry, Strictness, take_include_dirs};
 
 fn main() -> std::process::ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let search = match take_include_dirs(&mut args) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            return std::process::ExitCode::from(2);
+        }
+    };
     if args.is_empty() {
-        eprintln!("usage: repository-ids <file.idl>...");
+        eprintln!("usage: repository-ids [-I <dir>]... <file.idl>...");
         return std::process::ExitCode::from(2);
     }
     let mut failed = false;
     for path in &args {
-        if let Err(e) = dump(path) {
+        if let Err(e) = dump(path, &search) {
             eprintln!("{path}: {e}");
             failed = true;
         }
@@ -28,11 +43,12 @@ fn main() -> std::process::ExitCode {
     if failed { std::process::ExitCode::FAILURE } else { std::process::ExitCode::SUCCESS }
 }
 
-fn dump(path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let src = std::fs::read_to_string(path)?;
-    let spec = orbweaver_idl::parse(&src).map_err(|e| e.to_string())?;
-    let mut reg = Registry::new();
-    reg.load(&spec)?;
+fn dump(path: &str, search: &SearchPath) -> Result<(), Box<dyn std::error::Error>> {
+    let reg: Registry =
+        orbweaver_registry::registry_from_files(&[path], search, Strictness::Grammar)?;
+    for u in reg.unresolved() {
+        eprintln!("{path}: warning: {u}");
+    }
 
     let file = std::path::Path::new(path)
         .file_name()

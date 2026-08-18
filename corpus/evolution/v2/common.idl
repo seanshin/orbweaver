@@ -1,0 +1,29 @@
+// ---------------------------------------------------------------------------
+// Revision 2 of the shared header.  Two changes, both of which break a
+// deployed peer and neither of which is visible in `ledger.idl`:
+//
+//   1. `Posting::amount_minor` changes from `long` to `string` — the wire
+//      layout of every `Posting` a `Journal` returns changes with it.
+//   2. `Recorded::restamp` is removed — every `Journal` inherits `Recorded`,
+//      so an operation deployed clients invoke disappears from the interface.
+//
+// 두 변경 모두 배포된 피어를 깨뜨리며, 두 변경 모두 `ledger.idl`에는 보이지
+// 않는다.  포함된 헤더에만 있는 파괴적 변경이 §5.3 게이트가 잡아야 할 대상이다.
+// ---------------------------------------------------------------------------
+
+#pragma prefix "orbweaver.example"
+
+module Ledger {
+
+    typedef string Reference;
+
+    struct Posting {
+        Reference slip;
+        string    amount_minor;
+    };
+
+    interface Recorded {
+        readonly attribute Reference slip;
+    };
+
+};

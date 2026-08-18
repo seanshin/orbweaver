@@ -48,9 +48,12 @@ pub mod ifr;
 pub mod ingest;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::Path;
 
 use orbweaver_giop::typecode::{Member as TcMember, TypeCode, UnionCase as TcUnionCase};
 use orbweaver_idl::ast::*;
+use orbweaver_idl::include::{SearchPath, Unit, preprocess_file};
+use orbweaver_idl::sema::Diagnostic;
 
 /// A CORBA repository identifier, e.g. `IDL:spike/Echo:1.0`.
 pub type RepositoryId = String;
@@ -158,6 +161,69 @@ pub struct InterfaceEntry {
     pub attributes: BTreeMap<String, AttributeSig>,
     /// Whether only a forward declaration was seen.
     pub forward_only: bool,
+}
+
+/// A reference the registry could not resolve to a registered id, kept rather
+/// than dropped.
+///
+/// # Why a recorded marker and not an error
+///
+/// [`Registry::load`] is documented as accumulating: call it repeatedly and
+/// several files become one repository. It therefore cannot know, at the moment
+/// a name fails to resolve, whether the name is genuinely absent or merely not
+/// loaded yet — so refusing the load would make a documented usage impossible,
+/// and refusing it *sometimes* would be worse than either.
+///
+/// # Why not silence either
+///
+/// Silence is what made the estate defect invisible. The base name of nine of
+/// the estate's twelve interfaces lived in a file that `#include` had not
+/// resolved; the resolution failed; a `filter_map` dropped it; and the registry
+/// then said, truthfully as far as it knew, that those interfaces had no
+/// ancestry at all. Nothing downstream could tell "declares no base" from
+/// "declares a base I could not find", so the console drew 58 of 76 reachable
+/// operations and reported no problem.
+///
+/// So: the load still succeeds, and what it could not resolve is on the record.
+/// Deciding what to do about it belongs to the tool — a gate refuses
+/// ([`idl-diff`] exits 2 rather than issuing a verdict from a registry it knows
+/// is incomplete), a viewer says so beside what it drew.
+///
+/// *로드는 성공하되, 해석하지 못한 것은 기록된다. 침묵이 결함을 보이지 않게
+/// 만들었다. 어떻게 처리할지는 도구가 정한다.*
+///
+/// [`idl-diff`]: https://docs.rs/orbweaver-registry
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Unresolved {
+    /// The qualified name of the definition the reference was written in, e.g.
+    /// `Ledger::Journal` or `Ledger::Journal::fetch`.
+    pub at: String,
+    /// What kind of reference it was.
+    pub kind: UnresolvedKind,
+    /// The name as the IDL spelled it, e.g. `Recorded` or `::Freight::NotFound`.
+    pub name: String,
+}
+
+impl std::fmt::Display for Unresolved {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let what = match self.kind {
+            UnresolvedKind::Base => "base interface",
+            UnresolvedKind::Raises => "raised exception",
+        };
+        write!(f, "{}: {what} `{}` is not declared in this unit", self.at, self.name)
+    }
+}
+
+/// Which kind of reference an [`Unresolved`] records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum UnresolvedKind {
+    /// A name in an interface's inheritance list. The expensive one: it costs
+    /// every operation, attribute and `_is_a` answer the base would have
+    /// contributed.
+    Base,
+    /// A name in an operation's `raises` clause. It costs the caller the
+    /// ability to recognise the exception it is handed.
+    Raises,
 }
 
 /// An operation's shape, which is what a dynamic invoker needs to build a call.
@@ -282,6 +348,10 @@ pub struct Registry {
     /// that forgot to mark something would then under-report trust rather
     /// than over-report it.
     ingested: BTreeMap<RepositoryId, String>,
+    /// References a load could not resolve. See [`Unresolved`] for why they are
+    /// kept instead of dropped, and why keeping them is not the same as
+    /// failing the load.
+    unresolved: Vec<Unresolved>,
 }
 
 impl Registry {
@@ -304,7 +374,20 @@ impl Registry {
             overrides: spec.repository_ids.clone(),
         };
         builder.walk(&[], &spec.definitions);
+        self.unresolved.sort();
+        self.unresolved.dedup();
         Ok(())
+    }
+
+    /// Everything the loads so far referred to and could not find.
+    ///
+    /// Empty is the normal answer for a resolved translation unit. A non-empty
+    /// answer means this registry describes less than the IDL did, and any tool
+    /// about to make a decision from it — a release verdict, a drawn catalog, a
+    /// generated stub — should say so rather than present a partial graph as a
+    /// whole one. See [`Unresolved`].
+    pub fn unresolved(&self) -> &[Unresolved] {
+        &self.unresolved
     }
 
     /// Every registered repository id, in sorted order.
@@ -508,6 +591,136 @@ impl Registry {
     }
 }
 
+// ── reading a contract from a path ───────────────────────────────────────────
+
+/// How much of the front end a load runs before the registry sees the spec.
+///
+/// Both levels resolve `#include`. The difference is only whether semantic
+/// analysis runs, and it exists so that fixing include resolution did not also
+/// change what any tool accepts — a tool that used to take grammatical IDL
+/// still does, and one that gated on S4 still gates on S4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Strictness {
+    /// The grammar only — the strictness [`orbweaver_idl::parse`] gives.
+    Grammar,
+    /// The grammar and semantic analysis — the strictness
+    /// [`orbweaver_idl::check`] gives, and what S4 gates on.
+    Checked,
+}
+
+/// A contract read from a path, with its `#include`s resolved.
+///
+/// # Why this exists rather than `read_to_string` plus [`orbweaver_idl::parse`]
+///
+/// [`orbweaver_idl::parse`] takes a **string**, and a string has no directory,
+/// so a relative `#include` in it cannot resolve — the front end says so in its
+/// own documentation. Twelve binaries read a *path*, threw the path away, and
+/// handed the text to the string entry point anyway. Each of them therefore
+/// analysed a translation unit with pieces missing, and because a missing piece
+/// mostly shows up as a name that does not resolve, and an unresolved name was
+/// dropped rather than reported, the loss was silent: the console drew 58 of
+/// the estate's 76 reachable operations and said nothing about the other 18.
+///
+/// The fix is not a better diagnostic at each of the twelve sites. It is that
+/// a path is loaded through one function that resolves before it parses, and
+/// that function is this one.
+///
+/// *경로를 가진 도구는 전부 여기를 지난다. 문자열 진입점은 상대 `#include`를
+/// 해석할 수 없으며, 해석되지 않은 이름은 조용히 버려졌다.*
+#[derive(Debug, Clone)]
+pub struct Contract {
+    /// The resolved translation unit — the root file, everything it included,
+    /// and the map from a position in the spliced text back to the file and
+    /// line somebody actually wrote. Keep it beside the spec: it is the only
+    /// thing that can turn a span into a location a reader can open.
+    pub unit: Unit,
+    /// The parsed specification, over the whole unit.
+    pub spec: Spec,
+}
+
+impl Contract {
+    /// Resolves `path`'s includes and parses the result.
+    ///
+    /// An unresolvable `#include` is an error here and not a warning. Carrying
+    /// on without the included file turns one missing `-I` into a diagnostic
+    /// for every name that file declared — 90 of them across the thirteen-file
+    /// estate — and, worse, into no diagnostic at all wherever the consumer
+    /// drops unresolved names instead of reporting them.
+    pub fn load(
+        path: &Path,
+        search: &SearchPath,
+        strictness: Strictness,
+    ) -> Result<Self, RegistryError> {
+        let unit = preprocess_file(path, search)
+            .map_err(|e| RegistryError { message: format!("{}: {e}", path.display()) })?;
+        if !unit.is_ok() {
+            return Err(RegistryError { message: rendered(&unit, &unit.errors) });
+        }
+        let spec = orbweaver_idl::parse(&unit.text).map_err(|e| RegistryError {
+            message: unit.render(&Diagnostic { message: e.message, span: e.span, rule: e.rule }),
+        })?;
+        if strictness == Strictness::Checked {
+            let analysis = orbweaver_idl::analyse(&spec);
+            if !analysis.is_ok() {
+                return Err(RegistryError { message: rendered(&unit, &analysis.diagnostics) });
+            }
+        }
+        Ok(Contract { unit, spec })
+    }
+}
+
+/// Builds one registry from one or more contract files.
+///
+/// `Registry::load` accumulates, so several files become one repository — but
+/// each call resolves names against **that call's** spec alone, so an interface
+/// in one file cannot inherit a base declared in another by loading both. That
+/// is what `#include` is for, and why resolution belongs to [`Contract::load`]
+/// rather than to this loop.
+pub fn registry_from_files<P: AsRef<Path>>(
+    paths: &[P],
+    search: &SearchPath,
+    strictness: Strictness,
+) -> Result<Registry, RegistryError> {
+    let mut registry = Registry::new();
+    for path in paths {
+        let contract = Contract::load(path.as_ref(), search, strictness)?;
+        registry.load(&contract.spec)?;
+    }
+    Ok(registry)
+}
+
+/// Pulls `-I <dir>` and `-I<dir>` out of `args`, leaving everything else in
+/// order.
+///
+/// The C convention `omniidl -I` implements, and the one `sidl-validate`
+/// already documented. A tool that reads a path needs it for the same reason
+/// `omniidl` does: the quoted form finds a neighbour on its own, the angled
+/// form never does.
+pub fn take_include_dirs(args: &mut Vec<String>) -> Result<SearchPath, RegistryError> {
+    let mut search = SearchPath::new();
+    let mut rest = Vec::with_capacity(args.len());
+    let mut it = std::mem::take(args).into_iter();
+    while let Some(a) = it.next() {
+        if let Some(tail) = a.strip_prefix("-I") {
+            let dir = if tail.is_empty() {
+                it.next().ok_or(RegistryError { message: "-I needs a directory".to_owned() })?
+            } else {
+                tail.to_owned()
+            };
+            search.push(dir);
+        } else {
+            rest.push(a);
+        }
+    }
+    *args = rest;
+    Ok(search)
+}
+
+/// Every diagnostic rendered against the file it was written in, one per line.
+fn rendered(unit: &Unit, diagnostics: &[Diagnostic]) -> String {
+    diagnostics.iter().map(|d| unit.render(d)).collect::<Vec<_>>().join("\n")
+}
+
 /// Builds `IDL:a/b/C:1.0` from a qualified path.
 ///
 /// The derivation with no pragma in play. When IDL is the source, prefer
@@ -687,6 +900,12 @@ impl Builder<'_> {
         }
     }
 
+    /// Records a name that did not resolve, so the gap is queryable rather
+    /// than merely absent. See [`Unresolved`].
+    fn note_unresolved(&mut self, at: &str, kind: UnresolvedKind, name: &ScopedName) {
+        self.reg.unresolved.push(Unresolved { at: at.to_owned(), kind, name: name.text() });
+    }
+
     fn walk(&mut self, path: &[String], defs: &[Definition]) {
         for d in defs {
             let mut p = path.to_vec();
@@ -809,10 +1028,19 @@ impl Builder<'_> {
 
     fn interface_entry(&mut self, path: &[String], i: &Interface) -> InterfaceEntry {
         let scope = &path[..path.len() - 1];
+        // A base that does not resolve is recorded, not dropped. Dropping it is
+        // what turned "this interface inherits something I cannot find" into
+        // "this interface has no ancestry" — see [`Unresolved`].
         let bases = i
             .bases
             .iter()
-            .filter_map(|b| self.names.resolve(scope, b).map(|p| self.id_for(&p)))
+            .filter_map(|b| match self.names.resolve(scope, b) {
+                Some(p) => Some(self.id_for(&p)),
+                None => {
+                    self.note_unresolved(&qualified(path), UnresolvedKind::Base, b);
+                    None
+                }
+            })
             .collect();
         let Some(body) = &i.body else {
             return InterfaceEntry { bases, forward_only: true, ..InterfaceEntry::default() };
@@ -841,7 +1069,14 @@ impl Builder<'_> {
                         raises: op
                             .raises
                             .iter()
-                            .filter_map(|r| self.names.resolve(path, r).map(|p| self.id_for(&p)))
+                            .filter_map(|r| match self.names.resolve(path, r) {
+                                Some(p) => Some(self.id_for(&p)),
+                                None => {
+                                    let at = format!("{}::{}", qualified(path), op.name.text);
+                                    self.note_unresolved(&at, UnresolvedKind::Raises, r);
+                                    None
+                                }
+                            })
                             .collect(),
                         oneway: op.oneway,
                         annotations: to_map(&op.annotations),

@@ -11,7 +11,7 @@ use orbweaver_cdr::Encoder;
 use orbweaver_giop::server::{Dispatch, Request, Server, SystemException};
 use orbweaver_giop::{IiopProfile, Ior, Version};
 use orbweaver_object::{ObjectOps, get_reference, is_equivalent, put_reference};
-use orbweaver_registry::Registry;
+use orbweaver_registry::{Registry, Strictness};
 
 /// Matches `spikes/echo.idl`.
 const TYPE_ID: &str = "IDL:spike/Echo:1.0";
@@ -195,10 +195,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("READY");
 
     // `_is_a` is answered from IDL rather than over the network, so the
-    // fixture's own interface definition is loaded here.
-    let mut registry = Registry::new();
-    let idl = std::fs::read_to_string("spikes/echo.idl")?;
-    registry.load(&orbweaver_idl::parse(&idl).map_err(|e| e.to_string())?)?;
+    // fixture's own interface definition is loaded here — through the resolving
+    // loader, because `_is_a` is an inheritance answer and inheritance is
+    // precisely what an unresolved `#include` costs.
+    let registry: Registry = orbweaver_registry::registry_from_files(
+        &["spikes/echo.idl"],
+        &orbweaver_idl::SearchPath::new(),
+        Strictness::Grammar,
+    )?;
 
     // A second reference, on the same server, that `ping` is forwarded to.
     // Both keys reach the same servant, so a client that follows the forward

@@ -52,11 +52,11 @@ use std::time::Duration;
 use orbweaver_giop::server::{BAD_OPERATION, Server};
 use orbweaver_giop::typecode::TypeCode;
 use orbweaver_giop::{Connection, Error};
-use orbweaver_registry::Registry;
 use orbweaver_registry::ifr::{
     self, DefinitionKind, FullInterfaceDescription, INTERFACE_DEF_ID, NO_IMPLEMENT, NO_PERMISSION,
     RepositoryServer,
 };
+use orbweaver_registry::{Registry, Strictness};
 
 const T: Duration = Duration::from_secs(5);
 const ROOT: &[u8] = b"InterfaceRepository";
@@ -115,13 +115,20 @@ fn expect_system(result: Result<orbweaver_giop::Reply, Error>, want: &str, what:
 
 fn run(ior_path: &str, idl_paths: &[&str], hold: bool) -> Fallible {
     // `Registry::load` accumulates, so several files become one repository —
-    // which is what a repository is.
-    let mut registry = Registry::new();
+    // which is what a repository is. Each file's `#include`s are resolved
+    // first: a facade that served an interface with a base it could not find
+    // would answer `_is_a` and `describe_interface` short, which is the answer
+    // an IFR exists to give correctly.
+    let registry: Registry = orbweaver_registry::registry_from_files(
+        idl_paths,
+        &orbweaver_idl::SearchPath::new(),
+        Strictness::Grammar,
+    )?;
     for path in idl_paths {
-        let source = std::fs::read_to_string(path)?;
-        let spec = orbweaver_idl::parse(&source).map_err(|e| format!("{path}: {e}"))?;
-        registry.load(&spec)?;
         println!("loaded {path}");
+    }
+    for u in registry.unresolved() {
+        println!("  warning: {u}");
     }
     println!("repository holds {} interfaces", ifr::interface_ids(&registry).len());
 
