@@ -371,7 +371,11 @@ hr "peer input — an overflow the release fuzzer cannot see, and a body it cann
 # error message that was a lie about what happened, and the quieter behaviour is
 # the one that ships. One run with the checks on is the only gate in the tree
 # that can see the class at all.
-if RUSTFLAGS="-C overflow-checks=on" cargo run -q --release -p orbweaver-test \
+# CARGO_TARGET_DIR is separate on purpose: changing RUSTFLAGS invalidates the
+# shared target directory, so without this every later cargo step in the
+# harness rebuilds from scratch. The disk is cheaper than the rebuild.
+if RUSTFLAGS="-C overflow-checks=on" CARGO_TARGET_DIR=target/overflow-checked \
+     cargo run -q --release -p orbweaver-test \
      --bin wire-fuzz -- --cases 20000 >/tmp/orbweaver-oflow.log 2>&1; then
   echo "  ok   20k fuzz cases with overflow checks on: no arithmetic panic"
 else
