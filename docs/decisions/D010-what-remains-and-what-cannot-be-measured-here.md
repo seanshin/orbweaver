@@ -2,8 +2,21 @@
 
 **STATUS: PROPOSED** — drafted 2026-08-19 from `docs/COMPONENTS.md`'s gap
 columns, the "reported and not fixed" lines of every commit since v0.4.0, and
-`SERVICES-COVERAGE.md`. **Not adopted.** It sequences work; approval commits
-to the order and to the split in §2, not to any implementation.
+`SERVICES-COVERAGE.md`; **revised the same day after review checked each
+class-A claim against the code and found two wrong and one proposal
+unworkable as written.** Not adopted. It sequences work; approval commits to
+the order and to the split in §2, not to any implementation.
+
+> **What review changed.** A1 said `LOCATION_FORWARD_PERM` needed an
+> `orbweaver-giop` change; the encoder already emits status 4 and has tests for
+> it, so the whole gap is one return type in `orbweaver-gen` — a smaller batch
+> with a different oracle. A4 quoted the Python round-trip count from a
+> commit four batches old (73/104); it is 78/132 today. And §7.1's gap-symbol
+> check was **measured before being proposed as a gate**: 11 of the 17
+> symbols in today's gap columns "exist" in their crate, almost all
+> legitimately, so as drafted it would have been the fourth gate this week
+> that is green-or-red while measuring nothing. It is now a *report*, not a
+> gate, with the measurement that demoted it.
 
 **상태: 제안됨** — 2026-08-19 작성. `COMPONENTS.md`의 공백 열, v0.4.0 이후 모든
 커밋의 "보고만 하고 고치지 않음" 줄, `SERVICES-COVERAGE.md`에서 뽑았다. **채택
@@ -65,22 +78,28 @@ not passing`, 현재 3그룹). 아래 모든 B 행은 `ok`가 아니라 네 번�
 
 Ordered by what a defect would cost, not by size.
 
-### A1. `LOCATION_FORWARD_PERM` is unreachable — *stream B/E, `orbweaver-giop` + `gen`*
-- **State.** `Dispatch::forward` returns `Option<Ior>` and cannot say
-  *permanent*; `server.rs` always encodes status 3. A servant that has moved an
-  object for good cannot tell a client to stop asking the old address.
-- **Why it matters.** §7.4's I4 (promotion respects identity) is where a moved
-  object lives; without PERM every client re-forwards on every call.
-- **Batch.** A richer `forward` return (or `forward_perm`), the encoder taking
-  status 4, the generated skeleton exposing it. One `orbweaver-giop` change and
-  one `orbweaver-gen` change, **landed together** because the byte-comparison
-  oracle between a generated skeleton and a hand-written servant is what makes
-  it measurable — the same oracle that walked D009's list.
+### A1. `LOCATION_FORWARD_PERM` is unreachable from a skeleton — *stream B, `orbweaver-gen` only*
+- **State, corrected by review.** The first draft said this needed an
+  `orbweaver-giop` change. It does not: `server.rs` already maps
+  `ReplyStatus::LocationForwardPerm => 4` and has tests encoding it. What
+  cannot say *permanent* is `rt::Dispatch::forward(&mut self, &Request) ->
+  Option<Ior>` — the generated skeleton's hook, one crate, one signature.
+- **Why it matters.** §7.4's I4 is where a moved object lives; without PERM
+  every client re-forwards on every call, and a servant that has moved an
+  object for good has no way to say so.
+- **Batch.** `forward` returns a small enum — `Forward::Temporary(Ior)` /
+  `Forward::Permanent(Ior)` — or a second hook `forward_perm`; the generated
+  `Dispatch` maps it to the status the encoder already knows. `orbweaver-gen`
+  only. Smaller than the draft said, and **not** landed with a giop change,
+  because there is none.
 - **Oracle.** omniORB and JacORB clients following a PERM forward and **not
-  re-asking**: measured by counting requests at the old address after the
-  forward, which is a number, over both peers.
-- **Codify.** A harness group under the object-model section; the
-  `object_identity.rs` test gaining the PERM arm.
+  re-asking**: count requests at the old address after the forward, over both
+  peers. `crates/orbweaver-giop/tests/object_identity.rs` already drives the
+  temporary case over real GIOP with the client following transparently; the
+  PERM arm is that test plus the count.
+- **Codify.** The PERM arm in `object_identity.rs`; the byte comparison against
+  the hand-written naming servant does not change, because naming never
+  forwards — a review note, so nobody expects it to.
 
 ### A2. Trading's `moe::Capability` cannot answer `specialization` or `latency_p50` — *stream F*
 - **State.** The three-valued matcher already treats an unpopulated field as
@@ -111,10 +130,27 @@ Ordered by what a defect would cost, not by size.
   most needs to see is the one it does not.
 - **Batch.** Thread decoded arguments through `Invoker::invoke` for the static
   path (`orbweaver-gen` stubs → `orbweaver-mcp` chain), and give the dry run a
-  marshalling prediction from the same `TypeCode`s. **The gate must not move**:
-  refusal still precedes anything sent, and the leak test from this session
-  (`an_argument_a_content_stage_saw_cannot_reach_the_ledger`) must extend to
-  the static path before the seat sees anything there.
+  marshalling prediction from the same `TypeCode`s.
+- **This is the one item in this document that widens what a stage can see,
+  and it is ordered accordingly.** Three constraints, each with the failure it
+  prevents named:
+  1. **The leak test extends to the static path *before* the seat sees anything
+     there.** `an_argument_a_content_stage_saw_cannot_reach_the_ledger` was
+     written for the dynamic path after a PIN reached the audit ledger; the
+     static path must have the same test red-then-green in the *same* commit,
+     or the batch has re-opened the hole this session closed on the other path.
+  2. **The gate does not move.** Refusal still precedes anything sent. If
+     threading arguments through `Invoker::invoke` would make a stub encode
+     before the chain runs, the batch stops and reports — that is §4.7's bypass
+     in compiled form, and I1's transcript-leak test is what would catch it.
+  3. **The dry run's marshalling prediction must not decode a live payload.** A
+     prediction is synthesised from `TypeCode`s and the caller's declared
+     values; it must never be a real call with the wire disconnected, because
+     a real call reaches the content seat and the ledger.
+- **A note on why this is class A at all.** It sounds like it belongs beside
+  the identity work in class B, but every oracle it needs exists here: the
+  leak test, I1's transcript test, and a `Bounded<String, 8>` whose refusal
+  point both paths already share.
 - **Oracle.** The existing leak test over a *static* call; I1's transcript-leak
   test unchanged; a dry-run of an operation with a `string<8>` argument of nine
   characters predicting `MARSHAL` where today it predicts `allow`.
@@ -131,8 +167,11 @@ Ordered by what a defect would cost, not by size.
   round-trip oracle over `corpus/golden` gains the constructed-`any` cases the
   Rust side already passes.
 - **Oracle.** The existing `python_target.rs` sweep, which counts values crossed
-  to Python and back with 0 divergences: today 73/104 over golden; the number
-  goes up and stays at 0 divergences, or the batch has failed.
+  to Python and back with 0 divergences. **Today: 78 values / 132 calls over
+  golden, 35 / 46 over services** (measured 2026-08-19; the draft quoted
+  73/104 from a four-batch-old commit, which is the kind of number this
+  document exists to stop quoting). The count goes up and divergences stay at
+  0, or the batch has failed.
 - **Codify.** The skip list shrinks and the sweep pins the new count.
 
 ### A5. `SERVICES-COVERAGE.md` §4 and §2 are stale — *class D, but cheap and A-adjacent*
@@ -205,8 +244,13 @@ docker already follow. None may report `ok`.
   omniORBpy cannot unmarshal its own 1.1 `wchar` output, so it is not an oracle
   for 1.1 wide text; and `InterruptedMidReassembly`'s shape needs a peer to
   close between two writes of one reply, which neither fixture exposes.
-- **Missing.** A second peer for the first (JacORB may serve — its GIOP 1.1
-  wide-char path is untested here); a controllable peer for the second.
+- **Missing.** A second peer for the first: JacORB *may* serve, but **nothing
+  in the tree drives JacORB at GIOP 1.1 at all** — every JacORB group in the
+  harness runs at its default 1.2, and its `giop_minor_version` property has
+  never been set here. So the first step is not a wide-char test; it is a
+  JacORB-at-1.1 fixture, after which the wide-char question is one more call.
+  A controllable peer for the second — one that can be told to close between
+  two writes of a reply — which neither installed ORB is.
 
 ### B6. TAO — *streams B/E, and PLAN §8*
 - **State.** Named in §8 as a peer since v0.2; `tao_idl` absent; nothing
@@ -266,16 +310,28 @@ Not gaps in the product — gaps in the *process* the record shows, each with a
 codification proposal.
 
 ### 7.1 A stale gap column
-Four this session. `records_keep_up.py` now fails past ten commits without the
-records being *opened*, which is the crude half. The precise half — *is the
-gap column still true* — has no instrument, and one is possible for a subset:
-a gap sentence that names a symbol (`LOCATION_FORWARD_PERM`, `knows()`,
-`DynAny`) can be checked for whether that symbol now exists in the crate the
-row describes. **Proposed:** `spikes/gap_symbols.py`, same shape as
-`decision_status.py` — reads a gap column, extracts backticked identifiers,
-greps the crate, and reports "this gap names a thing that now exists". Not
-proof the gap closed; a prompt to re-read the row. Measured false-positive rate
-before wiring, as the decision-status gate was.
+Four this session (five, counting the idl row found while drafting this).
+`records_keep_up.py` now fails past ten commits without the records being
+*opened*, which is the crude half. The precise half — *is the gap column still
+true* — has no instrument.
+
+The draft proposed one: extract the backticked symbols from each gap column,
+grep the crate, and flag "this gap names a thing that now exists". **Measured
+before proposing it as a gate, as the decision-status gate was:** today's gap
+columns name 17 symbols, and **11 of them exist in their crate** — nearly all
+legitimately (`fixed`, `Dispatch::forward`, `Error::InterruptedMidReassembly`
+are named *because* they exist and the gap is about what they cannot yet do).
+A 65 % false-positive rate is not a gate; it is the fourth check this week that
+would be red-or-green while measuring nothing, and people learn to skip those.
+
+**Revised proposal:** `spikes/gap_symbols.py` exists as a **report the
+coordinator reads when writing a plan**, not a harness gate. It prints, per gap
+row, the symbols it names and whether each exists, so that the person
+re-reading the row has the fact in front of them. Batch 1 builds it as that.
+If a wording convention later lets a gap say "does not exist yet" in a
+machine-readable way — a `~~strikethrough~~` for closed items already does half
+of this — the report can become a gate for that subset, with its false-positive
+rate re-measured then.
 
 ### 7.2 A gate that is green and measures nothing
 Four this session, all found by a negative control. `CLAUDE.md`'s harness rules
@@ -303,10 +359,13 @@ they touch a batch; class B as fixtures appear; class C never, until triggered.
 | — | **B1–B6** | B | each a SKIPPED group naming its fixture; measured the day it appears |
 | — | **A6** Python servants | A | not until a consumer names it |
 
-Batches 2–5 have disjoint footprints (`giop`+`gen`, `mcp`+`gen`+`guard`,
-`trading`+`object`, `gen`) and can run as one parallel wave with serial
-landing, exactly as the service wave did. Batch 1 is the coordinator's, for the
-same reason yesterday's record work was.
+Batches 2–5 have footprints (`gen`, `mcp`+`gen`+`guard`, `trading`+`object`,
+`gen`) — and after review's correction to A1, **three of the four touch
+`orbweaver-gen`**. They cannot run as one wave the way the service wave did.
+Two waves: A1 + A2 first (disjoint: `gen` and `trading`+`object`), then A3 + A4
+after A1 lands (both touch `gen`, and A3's static-path change is what A4's
+generated stubs would carry). Batch 1 is the coordinator's, for the same
+reason yesterday's record work was.
 
 배치 2–5는 풋프린트가 갈리므로 서비스 웨이브처럼 병행 하나로 돌리고 직렬로
 착지시킨다. 배치 1은 어제의 기록 작업과 같은 이유로 코디네이터의 몫이다.
@@ -317,8 +376,13 @@ same reason yesterday's record work was.
 
 1. **The split in §2 becomes the rule for reporting.** A batch names its class
    in the landing message, and a class-B batch that reports `ok` is a defect.
-2. **§7's two proposals become work items** — `gap_symbols.py` in batch 1, the
-   negative-control rule in `CLAUDE.md`'s harness section.
+2. **§7's two proposals become work items** — `gap_symbols.py` in batch 1 **as
+   a report, not a gate** (its false-positive rate was measured at 65 % and
+   that number is what demoted it), and the negative-control rule in
+   `CLAUDE.md`'s harness section. **This document holds itself to that rule**:
+   every class-A batch above names its oracle, and A1's review correction is
+   itself the negative control on the draft — a claim about the code was
+   checked against the code and found wrong before anyone built on it.
 3. **Nothing in class C is authorised.** Approval of this document is not
    approval of any deferred chapter; each has its own trigger and, where one
    exists, its own decision.
