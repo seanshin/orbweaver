@@ -50,10 +50,14 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use orbweaver_idl::SearchPath;
 use orbweaver_registry::Registry;
 
 use crate::ingest::Brief;
-use crate::{Finding, Report, Severity, annotate, ingest, synthesize, validate, validate_against};
+use crate::{
+    Finding, RELEASED_UNREADABLE, Report, Severity, Source, annotate, ingest, synthesize, validate,
+    validate_source, validate_source_against,
+};
 
 /// One stage of the §5 pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -147,6 +151,52 @@ impl std::fmt::Display for StageId {
     }
 }
 
+/// One item on its way through a stage: its id, its text, and where the text
+/// came from when it came from anywhere.
+///
+/// The third field is the whole point. A stage used to be handed `(id, text)`,
+/// and text has no directory, so S4 — whose job is to judge a contract — could
+/// not resolve a quoted `#include` even when the caller had just read the file
+/// off disk. Pointed at the thirteen-file estate it refused all thirteen and
+/// exited 1, while `spikes/estate/run.sh` hid it by amalgamating the files into
+/// one unit before the pipeline ever saw them.
+///
+/// `origin: None` stays a first-class answer: [`crate::Source::anonymous`] is
+/// what a model writing IDL into a pipe deserves, and it still fails an
+/// unresolvable include, still saying why.
+///
+/// *항목은 자기 출처를 들고 다닌다. 출처가 없으면 없다고 말한다.*
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Item {
+    /// The item id: the file stem everything in the workspace is keyed by.
+    pub id: String,
+    /// The artifact this stage is given.
+    pub text: String,
+    /// The file `text` was read from. `None` when nothing on disk holds it —
+    /// a producer's output, or a caller's string literal.
+    pub origin: Option<PathBuf>,
+}
+
+impl Item {
+    /// An item whose text came from nowhere on disk.
+    pub fn new(id: impl Into<String>, text: impl Into<String>) -> Item {
+        Item { id: id.into(), text: text.into(), origin: None }
+    }
+
+    /// An item read from a file, which is what a quoted `#include` in it
+    /// resolves against.
+    pub fn from_file(id: impl Into<String>, text: impl Into<String>, origin: PathBuf) -> Item {
+        Item { id: id.into(), text: text.into(), origin: Some(origin) }
+    }
+}
+
+/// `(id, text)` stays the way to say "no origin", because that is what it is.
+impl From<(String, String)> for Item {
+    fn from((id, text): (String, String)) -> Item {
+        Item::new(id, text)
+    }
+}
+
 /// A producer and the deterministic gate that judges what it produced.
 ///
 /// Both halves belong to the stage. A producer with someone else's gate cannot
@@ -164,11 +214,13 @@ pub trait Stage {
     /// requirement states to the `ai_authz` S3 emits, and the token lives in
     /// S1's brief, which S3's input — an `.idl` file — cannot carry.
     ///
-    /// The item id rather than the artifact itself, because the artifact is on
+    /// The [`Item`] rather than the artifact itself, because the artifact is on
     /// disk in the workspace and a [`Stage`] that wants it knows where to look;
     /// widening the produce/gate signatures for one stage's second input would
     /// change every implementation of this trait for a case none of them have.
-    fn begin_item(&mut self, _id: &str) {}
+    /// The item carries [`Item::origin`], which is how S4 learns what a quoted
+    /// `#include` in this item resolves against.
+    fn begin_item(&mut self, _item: &Item) {}
 
     /// Turn one input artifact into one output artifact.
     ///
@@ -212,6 +264,15 @@ pub enum ItemStatus {
 pub struct ItemReport {
     /// The item's identifier, as given by the caller.
     pub id: String,
+    /// The file this item's artifact was read from, carried through from
+    /// [`Item::origin`] so a later step resolves `#include` the way the gate
+    /// just did. `None` when the item never came from a file.
+    ///
+    /// It describes where the item *lives*, not the bytes in
+    /// [`ItemReport::output`] — for a producing stage those are new. That is
+    /// enough for an include, which needs a directory; and it is exactly right
+    /// for S4 and S5, whose "output" is the file itself.
+    pub origin: Option<PathBuf>,
     /// Where it ended up.
     pub status: ItemStatus,
     /// How many rounds this item ran in this stage. 1 means it passed (or was
@@ -337,7 +398,7 @@ impl std::fmt::Display for BatchReport {
     }
 }
 
-/// Runs the §5.1 loop over a set through **one** stage: `(id, input)` pairs.
+/// Runs the §5.1 loop over a set through **one** stage.
 ///
 /// Round 1 produces **every** item before any gating — the produce loop
 /// completes before the gate loop starts, so there is no code path on which a
@@ -345,11 +406,16 @@ impl std::fmt::Display for BatchReport {
 /// once, failures are recorded by rule, and each failed item's next round
 /// carries its own `repair_prompt()`. Rounds repeat until a round ends clean or
 /// `max_rounds` is spent; either way the report says which.
-pub fn run_batch(
-    stage: &mut dyn Stage,
-    items: &[(String, String)],
-    max_rounds: usize,
-) -> BatchReport {
+///
+/// Items are anything that converts into an [`Item`]. A plain `(id, text)`
+/// pair still works and still means what it says — text with no origin — while
+/// a caller that read the artifact off disk hands in [`Item::from_file`] so a
+/// quoted `#include` has a directory to resolve against.
+pub fn run_batch<I>(stage: &mut dyn Stage, items: &[I], max_rounds: usize) -> BatchReport
+where
+    I: Clone + Into<Item>,
+{
+    let items: Vec<Item> = items.iter().cloned().map(Into::into).collect();
     struct State {
         status: ItemStatus,
         repair: Option<String>,
@@ -385,8 +451,8 @@ pub fn run_batch(
         for &i in &pending {
             let state = &mut states[i];
             state.rounds = round;
-            stage.begin_item(&items[i].0);
-            produced.push((i, stage.produce(&items[i].1, state.repair.as_deref())));
+            stage.begin_item(&items[i]);
+            produced.push((i, stage.produce(&items[i].text, state.repair.as_deref())));
         }
 
         // Gate phase: only now does anything get judged.
@@ -398,13 +464,13 @@ pub fn run_batch(
                     round_causes
                         .entry("producer-error".into())
                         .or_default()
-                        .push(items[i].0.clone());
+                        .push(items[i].id.clone());
                     states[i].status = ItemStatus::Error { message };
                     still_failing.push(i);
                 }
                 Ok(text) => {
-                    stage.begin_item(&items[i].0);
-                    let report = stage.gate(&items[i].1, &text);
+                    stage.begin_item(&items[i]);
+                    let report = stage.gate(&items[i].text, &text);
                     states[i].output = Some(text);
                     if report.is_ok() {
                         states[i].status = ItemStatus::Valid;
@@ -422,7 +488,7 @@ pub fn run_batch(
                             round_causes
                                 .entry(rule.to_owned())
                                 .or_default()
-                                .push(items[i].0.clone());
+                                .push(items[i].id.clone());
                         }
                         let prompt = report.repair_prompt();
                         states[i].repair = Some(prompt.clone());
@@ -445,8 +511,9 @@ pub fn run_batch(
         items: items
             .iter()
             .zip(states)
-            .map(|((id, _), s)| ItemReport {
-                id: id.clone(),
+            .map(|(item, s)| ItemReport {
+                id: item.id.clone(),
+                origin: item.origin.clone(),
                 status: s.status,
                 rounds: s.rounds,
                 output: s.output,
@@ -623,6 +690,8 @@ pub struct ValidateStage {
     registered: Option<Registered>,
     supersede: Option<String>,
     id: String,
+    origin: Option<PathBuf>,
+    search: SearchPath,
     baseline: Baseline,
     // `Stage::gate` takes `&self` — every other stage's gate is a pure function
     // of its inputs and widening the trait for this one would be the tail
@@ -653,6 +722,18 @@ impl ValidateStage {
         self
     }
 
+    /// Where the angled form `#include <x.idl>` looks, and the quoted form's
+    /// fallback after the including file's own directory — `-I`, in other
+    /// words.
+    ///
+    /// A directory of contracts that include each other by the quoted form
+    /// needs none of this: [`Item::origin`] already answers it. This is for the
+    /// estate that was written against a build system's `-I`.
+    pub fn searching(mut self, search: SearchPath) -> ValidateStage {
+        self.search = search;
+        self
+    }
+
     /// Every item this gate has judged, in order, with what it was compared
     /// against — including the items that had nothing to compare against, which
     /// is the number that keeps "clean" and "unchecked" apart.
@@ -671,11 +752,17 @@ impl Stage for ValidateStage {
         StageId::Validate
     }
 
-    /// Loads what is registered under this item, if anything is.
-    fn begin_item(&mut self, id: &str) {
-        self.id = id.to_owned();
+    /// Loads what is registered under this item, if anything is, and remembers
+    /// where the item was read from.
+    ///
+    /// The origin belongs to the *input*, and this stage's producer is the
+    /// identity — `produce` hands its input straight back — so the file the
+    /// origin names is the file the verdict is about.
+    fn begin_item(&mut self, item: &Item) {
+        self.id = item.id.clone();
+        self.origin = item.origin.clone();
         self.baseline = match &self.registered {
-            Some(registered) => registered.contract(id),
+            Some(registered) => registered.contract(&item.id),
             None => Baseline::None,
         };
     }
@@ -692,11 +779,16 @@ impl Stage for ValidateStage {
             blocking: Vec::new(),
             superseded: None,
         };
+        // The item as S4 actually received it: text, plus the file it was read
+        // from when there was one. `Source::anonymous` is not a fallback here —
+        // an item a model wrote has no directory, and saying so is the
+        // diagnostic.
+        let source = Source::maybe_from_file(output, self.origin.as_deref());
         let mut report = match &self.baseline {
-            Baseline::None => validate(output),
+            Baseline::None => validate_source(source, &self.search),
             Baseline::Unreadable { path, message } => {
                 outcome.against = Some(path.clone());
-                let mut report = validate(output);
+                let mut report = validate_source(source, &self.search);
                 report.findings.push(Finding {
                     rule: "evolution/registered-unreadable".into(),
                     severity: Severity::Error,
@@ -720,19 +812,32 @@ impl Stage for ValidateStage {
             }
             Baseline::Contract { path, idl } => {
                 outcome.against = Some(path.clone());
-                let report = validate_against(output, idl);
-                // `validate_against` refuses to diff a file that does not parse,
-                // so the comparison ran exactly when nothing *else* rejected it.
-                outcome.compared = !report
-                    .findings
-                    .iter()
-                    .any(|f| f.severity == Severity::Error && !f.rule.starts_with("evolution/"));
+                // The baseline is a path too, and a released contract read as a
+                // string loses every name its headers declared — which would
+                // report the whole shared header as newly added.
+                let report =
+                    validate_source_against(source, Source::from_file(idl, path), &self.search);
+                // The comparison ran exactly when nothing *else* rejected the
+                // file and the baseline itself held up. `RELEASED_UNREADABLE`
+                // is an `evolution/` rule that means the diff did **not** run,
+                // so it is counted with the refusals rather than with them.
+                outcome.compared = !report.findings.iter().any(|f| {
+                    f.severity == Severity::Error
+                        && (!f.rule.starts_with("evolution/") || f.rule == RELEASED_UNREADABLE)
+                });
                 report
             }
         };
 
         for finding in &mut report.findings {
             if finding.severity != Severity::Error || !finding.rule.starts_with("evolution/") {
+                continue;
+            }
+            // `--supersede` declares a change: "yes, this breaks, and here is
+            // why we are shipping it". There is nothing to declare about a
+            // comparison that never ran, so this one is never downgraded and
+            // never counted as a change the reason covered.
+            if finding.rule == RELEASED_UNREADABLE {
                 continue;
             }
             outcome.blocking.push(finding.message.clone());
@@ -864,14 +969,17 @@ impl Stage for CommandStage {
     /// A brief that is absent or unreadable binds nothing and is not an error:
     /// `--from s3` over hand-written IDL is a supported run, and refusing it
     /// would make a second input mandatory for a stage that has always had one.
-    fn begin_item(&mut self, id: &str) {
+    fn begin_item(&mut self, item: &Item) {
         self.brief = None;
         if self.stage != StageId::Annotate {
             return;
         }
         let Some(dir) = &self.briefs else { return };
-        let path =
-            dir.join(format!("{id}{}", StageId::Ingest.artifact_suffix().unwrap_or_default()));
+        let path = dir.join(format!(
+            "{}{}",
+            item.id,
+            StageId::Ingest.artifact_suffix().unwrap_or_default()
+        ));
         let Ok(text) = std::fs::read_to_string(&path) else { return };
         self.brief = Brief::parse(&text).ok();
     }
@@ -1021,15 +1129,29 @@ impl Workspace {
     /// stage's output, which is what makes resuming and running through the
     /// same path.
     pub fn load(&self, stage: StageId, id: &str) -> Result<String, PipelineError> {
-        let path = match stage {
+        self.load_item(stage, id).map(|item| item.text)
+    }
+
+    /// The file [`Workspace::load`] will read for `stage` and `id`.
+    ///
+    /// Exposed because the path is half the artifact: a contract's `#include`
+    /// resolves against the directory it was read from, so a caller that only
+    /// gets the text back cannot judge the same contract the file describes.
+    pub fn input_path(&self, stage: StageId, id: &str) -> Option<PathBuf> {
+        match stage {
             StageId::Validate | StageId::Register => self.gated_artifact(id),
             other => input_stage(other).and_then(|previous| self.artifact(previous, id)),
-        };
-        let Some(path) = path else {
+        }
+    }
+
+    /// [`Workspace::load`], keeping the origin — the shape a stage wants.
+    pub fn load_item(&self, stage: StageId, id: &str) -> Result<Item, PipelineError> {
+        let Some(path) = self.input_path(stage, id) else {
             return Err(PipelineError::MissingInput { stage, id: id.to_owned() });
         };
-        std::fs::read_to_string(&path)
-            .map_err(|e| PipelineError::Io { path, message: e.to_string() })
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| PipelineError::Io { path: path.clone(), message: e.to_string() })?;
+        Ok(Item::from_file(id, text, path))
     }
 
     /// The ids whose **input** artifact for `stage` is already on disk.
@@ -1283,11 +1405,14 @@ impl std::fmt::Display for PipelineReport {
 /// exactly what a rerun from a later stage does. An item a stage rejects does
 /// not continue — it is recorded in [`PipelineReport::dropped`] so a later
 /// stage's clean number cannot be mistaken for a clean batch.
-pub fn run_pipeline(
+pub fn run_pipeline<I>(
     pipeline: &mut Pipeline<'_>,
     workspace: &Workspace,
-    items: &[(String, String)],
-) -> Result<PipelineReport, PipelineError> {
+    items: &[I],
+) -> Result<PipelineReport, PipelineError>
+where
+    I: Clone + Into<Item>,
+{
     if pipeline.first.index() > pipeline.last.index() {
         return Err(PipelineError::BadRange { first: pipeline.first, last: pipeline.last });
     }
@@ -1312,7 +1437,7 @@ pub fn run_pipeline(
     }
 
     let mut report = PipelineReport { stages: Vec::new(), dropped: Vec::new(), skipped };
-    let mut current: Vec<(String, String)> = items.to_vec();
+    let mut current: Vec<Item> = items.iter().cloned().map(Into::into).collect();
 
     for (position, stage) in stages.iter().copied().enumerate() {
         if current.is_empty() {
@@ -1346,8 +1471,10 @@ pub fn run_pipeline(
         current = Vec::new();
         if let Some(next) = stages.get(position + 1) {
             for id in survivors {
-                let text = workspace.load(*next, &id)?;
-                current.push((id, text));
+                // `load_item`, not `load`: the next stage is handed the file it
+                // is about, not only its bytes, so an `#include` in it resolves
+                // against the directory it actually lives in.
+                current.push(workspace.load_item(*next, &id)?);
             }
         }
     }
@@ -1457,16 +1584,22 @@ pub fn register(report: &BatchReport, out_dir: &Path) -> Result<Registration, Re
         let Some(idl) = &item.output else {
             return Err(RegisterError::MissingIdl { id: item.id.clone() });
         };
-        let recheck = validate(idl);
+        // The same source S4 gated: the text from the report, and the file it
+        // came from. Re-checking the text against no origin would refuse every
+        // contract with a `#include` in it — S5 would reject exactly the
+        // estates S4 had just passed.
+        let source = Source::maybe_from_file(idl, item.origin.as_deref());
+        let recheck = validate_source(source, &SearchPath::new());
         if !recheck.is_ok() {
             return Err(RegisterError::Rejected {
                 id: item.id.clone(),
                 repair_prompt: recheck.repair_prompt(),
             });
         }
-        // `validate` just accepted it, so `check` succeeds; matched anyway so
-        // a future divergence between the two is a loud error, not a panic.
-        let spec = orbweaver_idl::check(idl).map_err(|diags| RegisterError::Rejected {
+        // `validate_source` just accepted it, so this succeeds; matched anyway
+        // so a future divergence between the two is a loud error, not a panic.
+        let unit = orbweaver_idl::preprocess(idl, item.origin.as_deref(), &SearchPath::new());
+        let spec = orbweaver_idl::check_unit(&unit).map_err(|diags| RegisterError::Rejected {
             id: item.id.clone(),
             repair_prompt: diags.iter().map(|d| d.message.clone()).collect::<Vec<_>>().join("\n"),
         })?;

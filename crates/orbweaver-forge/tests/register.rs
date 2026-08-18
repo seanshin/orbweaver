@@ -160,6 +160,9 @@ fn a_report_that_lies_about_validity_is_refused_at_the_gate() {
         stage: StageId::Validate,
         items: vec![ItemReport {
             id: "forged".into(),
+            // Forged by hand, as a report anyone can construct: no file
+            // holds it, and S5 must treat that as the answer it is.
+            origin: None,
             status: ItemStatus::Valid,
             rounds: 1,
             output: Some(CLASH.into()),
@@ -184,6 +187,9 @@ fn a_valid_marking_without_idl_is_refused() {
         stage: StageId::Validate,
         items: vec![ItemReport {
             id: "empty".into(),
+            // Forged by hand, as a report anyone can construct: no file
+            // holds it, and S5 must treat that as the answer it is.
+            origin: None,
             status: ItemStatus::Valid,
             rounds: 1,
             output: None,
@@ -206,12 +212,18 @@ fn only_valid_items_reach_the_catalog() {
         items: vec![
             ItemReport {
                 id: "good".into(),
+                // Forged by hand, as a report anyone can construct: no file
+                // holds it, and S5 must treat that as the answer it is.
+                origin: None,
                 status: ItemStatus::Valid,
                 rounds: 1,
                 output: Some(THERMOSTAT.into()),
             },
             ItemReport {
                 id: "bad".into(),
+                // Forged by hand, as a report anyone can construct: no file
+                // holds it, and S5 must treat that as the answer it is.
+                origin: None,
                 status: ItemStatus::Invalid { repair_prompt: "still broken".into() },
                 rounds: 3,
                 output: Some(CLASH.into()),
