@@ -1162,15 +1162,26 @@ pub fn read_message(stream: &mut impl Read, max_size: usize) -> Result<RawMessag
                 other => Error::UnexpectedMessage(other),
             });
         }
-        // The version must not change mid-message. This is not pedantry about
-        // a field: a 1.1 `Fragment` carries no request id, so the four bytes
-        // read below would be *body*. Matching them against the leading
-        // message's id would then be a coincidence, and mismatching them would
-        // report a desynchronised connection when the real fault is a peer
-        // switching layouts. Byte order is deliberately NOT constrained here —
-        // each message header carries its own flag, the id is decoded with the
-        // fragment's, and the payload is opaque bytes either way.
-        if next.version != version {
+        // Neither the version nor the byte order may change mid-message.
+        //
+        // The version is not pedantry about a field: a 1.1 `Fragment` carries
+        // no request id, so the four bytes read below would be *body*. Matching
+        // them against the leading message's id would then be a coincidence,
+        // and mismatching them would report a desynchronised connection when
+        // the real fault is a peer switching layouts.
+        //
+        // Byte order used to be allowed to change, on the grounds that "the
+        // payload is opaque bytes either way". It is not opaque: §9.4.9 makes a
+        // fragment a continuation of one CDR stream — alignment does not even
+        // restart at 1.2 — so its payload is decoded under the *leading*
+        // message's flag no matter what its own header said. A peer that flips
+        // the flag mid-message therefore gets every multi-octet field after the
+        // split silently reversed, with a reassembled header that still claims
+        // the original order. §9.4.9 forbids it in as many words — "the byte
+        // order and GIOP protocol version of a fragment shall be the same as
+        // that of the message it continues" — so it is refused rather than
+        // reassembled into a plausible wrong value.
+        if next.version != version || next.endian != endian {
             return Err(Error::UnexpectedMessage(MsgType::Fragment));
         }
         // FragmentHeader_1_2 is a single request_id, which must match.

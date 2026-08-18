@@ -121,6 +121,29 @@ impl std::error::Error for Error {}
 /// Result of a CDR operation.
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Converts a `long double` between the canonical big-endian octets the API
+/// deals in and the octets `endian` puts on the wire.
+///
+/// Its own inverse, so the same function serves both directions and neither
+/// can drift from the other. That matters more here than the two lines it
+/// saves: the previous code moved the octets through untouched in both
+/// directions, which is a convention our encoder and decoder agreed on with
+/// each other and with nobody else.
+const fn wire_long_double(v: [u8; 16], endian: Endian) -> [u8; 16] {
+    match endian {
+        Endian::Big => v,
+        Endian::Little => {
+            let mut out = [0u8; 16];
+            let mut i = 0;
+            while i < 16 {
+                out[i] = v[15 - i];
+                i += 1;
+            }
+            out
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Encoder
 // ─────────────────────────────────────────────────────────────────────────────
@@ -195,8 +218,16 @@ impl Encoder {
 
     /// Current offset relative to the alignment origin, including any
     /// virtual prefix from [`Encoder::continuing_at`].
+    ///
+    /// The origin is an *absolute* offset in the notional stream, which is why
+    /// the virtual prefix is added before it is subtracted rather than after.
+    /// Adding it afterwards made every encapsulation opened inside a
+    /// `continuing_at` buffer align from the enclosing message's offset instead
+    /// of from its own first byte — §9.3.1.1 says an encapsulation's octet
+    /// index restarts at zero "even if the encapsulation itself is nested in
+    /// another encapsulation".
     pub fn position(&self) -> usize {
-        self.buf.len() - self.origin + self.virtual_offset
+        (self.virtual_offset + self.buf.len()) - self.origin
     }
 
     /// The first error encountered, if any.
@@ -211,8 +242,13 @@ impl Encoder {
     }
 
     /// Treats the current end of the buffer as the new alignment origin.
+    ///
+    /// This is the only correct way to open an encapsulation: passing
+    /// [`Encoder::len`] to [`Encoder::set_origin`] is a buffer index, and the
+    /// origin is an absolute stream offset. The two coincide only when the
+    /// encoder was not built with [`Encoder::continuing_at`].
     pub fn reset_origin(&mut self) {
-        self.origin = self.buf.len();
+        self.origin = self.virtual_offset + self.buf.len();
     }
 
     /// The current alignment origin, for saving across a nested encapsulation.
@@ -220,13 +256,16 @@ impl Encoder {
         self.origin
     }
 
-    /// Restores a previously saved alignment origin.
+    /// Restores an origin previously obtained from [`Encoder::origin`].
     ///
     /// Encapsulations restart alignment at their own first byte, but a
     /// `TypeCode` indirection offset is measured in the *outermost* stream
     /// (CORBA 3.4 §9.3.5.1). Both are satisfiable only by writing everything
     /// into one buffer and moving the origin in and out of each encapsulation,
     /// rather than building encapsulations in buffers of their own.
+    ///
+    /// Takes an absolute offset in the notional stream — the same space
+    /// [`Encoder::origin`] reports — not an index into this buffer.
     pub fn set_origin(&mut self, origin: usize) {
         self.origin = origin;
     }
@@ -361,15 +400,22 @@ impl Encoder {
 
     /// Writes an IDL `long double`: 16 octets, 8-aligned.
     ///
-    /// Carried as raw octets because Rust has no stable 128-bit float. Passing
-    /// the bytes through is lossless and honest; converting via `f64` would
-    /// silently discard precision that the peer took care to send.
+    /// Carried as octets because Rust has no stable 128-bit float. Passing them
+    /// through is lossless and honest; converting via `f64` would silently
+    /// discard precision that the peer took care to send.
+    ///
+    /// The octets are **big-endian** — sign and exponent first, as CORBA 3.4
+    /// Part 2 Figure 9.2 draws them — and are reversed here when the stream is
+    /// little-endian. `long double` is a primitive with a size, so §9.3.1 makes
+    /// its octet order the stream's business exactly as it does for `double`;
+    /// the figure shows the little-endian column as the big-endian one read
+    /// bottom to top.
     pub fn put_long_double(&mut self, v: [u8; 16]) {
         if self.poison.is_some() {
             return;
         }
         self.align_to(8);
-        self.buf.extend_from_slice(&v);
+        self.buf.extend_from_slice(&wire_long_double(v, self.endian));
     }
 
     /// Writes an IDL `string`: a length that counts the terminating NUL,
@@ -620,12 +666,14 @@ impl<'a> Decoder<'a> {
         Ok(f64::from_bits(self.get_u64()?))
     }
 
-    /// Reads an IDL `long double` as 16 raw octets. See
-    /// [`Encoder::put_long_double`] for why they stay raw.
+    /// Reads an IDL `long double` as 16 big-endian octets. See
+    /// [`Encoder::put_long_double`] for why they stay octets and why
+    /// big-endian is the form the caller sees whatever the wire said.
     pub fn get_long_double(&mut self) -> Result<[u8; 16]> {
         self.align_to(8)?;
         let b = self.take(16)?;
-        Ok(b.try_into().expect("take(16) yields 16 bytes"))
+        let raw: [u8; 16] = b.try_into().expect("take(16) yields 16 bytes");
+        Ok(wire_long_double(raw, self.endian))
     }
 
     /// Reads an IDL `string` and returns its bytes without the terminating
@@ -796,22 +844,39 @@ mod tests {
         assert!(matches!(d.get_octet_seq(), Err(Error::BadLength(_))));
     }
 
-    /// 16 octets, 8-aligned, and byte-transparent. A `long double` that
-    /// round-tripped through `f64` would lose the precision the peer sent.
+    /// 16 octets, 8-aligned, and **byte-ordered**. A `long double` that
+    /// round-tripped through `f64` would lose the precision the peer sent, so
+    /// the octets stay octets — but they are a primitive's octets, and
+    /// CORBA 3.4 Part 2 Figure 9.2 draws the little-endian column of a
+    /// `long double` as the big-endian column read from octet 15 back to
+    /// octet 0: `s e1` sits at index 0 big-endian and at index 15
+    /// little-endian.
+    ///
+    /// This test used to assert byte *transparency* — that the wire bytes were
+    /// whatever the caller passed, in either order. That is a convention the
+    /// encoder and the decoder shared with each other and with no conformant
+    /// peer, and asserting it made the defect look like a requirement.
+    /// omniORB 4.3.4 cannot settle it on this host: `cdrMarshal(_tc_longdouble,
+    /// …)` raises `NO_IMPLEMENT_Unsupported`, because arm64 macOS has no
+    /// 128-bit `long double` to marshal from. The specification is the oracle
+    /// here, and the bytes below are built from the figure.
     #[test]
-    fn long_double_is_sixteen_transparent_octets() {
-        for endian in [Endian::Big, Endian::Little] {
-            let value: [u8; 16] = std::array::from_fn(|i| (i as u8) * 7 + 1);
+    fn long_double_octets_reverse_for_a_little_endian_stream() {
+        let value: [u8; 16] = std::array::from_fn(|i| (i as u8) * 7 + 1);
+        let reversed: [u8; 16] = std::array::from_fn(|i| value[15 - i]);
+        assert_ne!(value, reversed, "a palindromic fixture would assert nothing");
+
+        for (endian, on_the_wire) in [(Endian::Big, &value), (Endian::Little, &reversed)] {
             let mut e = Encoder::new(endian);
             e.put_octet(0xAA); // force padding before the 8-aligned value
             e.put_long_double(value);
             let raw = bytes(e);
             assert_eq!(raw.len(), 24, "1 byte + 7 pad + 16");
-            assert_eq!(&raw[8..24], &value);
+            assert_eq!(&raw[8..24], on_the_wire.as_slice(), "{endian:?} octet order");
 
             let mut d = Decoder::new(&raw, endian);
             assert_eq!(d.get_u8().unwrap(), 0xAA);
-            assert_eq!(d.get_long_double().unwrap(), value);
+            assert_eq!(d.get_long_double().unwrap(), value, "{endian:?} round trip");
         }
     }
 
