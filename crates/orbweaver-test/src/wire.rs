@@ -58,11 +58,46 @@
 //!
 //! **텍스트를 받는 파서에 무작위 바이트를 먹이면 `from_utf8`만 시험하게 된다.**
 //! 그래서 문자 단위로 변형하는 두 번째 파이프라인을 따로 둔다.
+//!
+//! # What this fuzz cannot observe, and why it says so out loud
+//!
+//! `wire-fuzz` is documented and run as `--release`, and **a release build has
+//! overflow checks off**. An `at + len` where `len` is a length a peer wrote
+//! therefore does not panic; it wraps, and the parser carries on with a number
+//! nobody sent. That is not a smaller version of the same bug — the two builds
+//! have genuinely different behaviour, and the quieter one is the one that
+//! ships:
+//!
+//! | build | `60 88 FF FF FF FF FF FF FF FF` |
+//! | --- | --- |
+//! | `-C overflow-checks=on` | panics — a peer stops the process |
+//! | `-C overflow-checks=off` | wraps, and returns the *wrong* error |
+//!
+//! That is the defect commit `36c8bc0` fixed, and the reason it could not have
+//! been found here: a release fuzzer reporting "0 panics" over an arithmetic
+//! overflow is not reporting a pass, it is reporting that it was not looking.
+//! So [`overflow_checks_on`] measures the build at run time rather than
+//! assuming it, [`panic_freedom`] carries the result on every [`Finding`]-free
+//! run, and the binary prints a warning naming the class it cannot see. **A
+//! fuzz that claims a class it is structurally unable to observe has made a
+//! claim it did not earn.**
+//!
+//! **릴리스 빌드는 정수 오버플로를 볼 수 없다.** 그래서 이 파일은 빌드를 실행
+//! 시점에 측정하고, 볼 수 없는 것을 보고서에 적는다.
+//!
+//! The class *is* observable where the tests run — `cargo test` builds with
+//! overflow checks on — which is why [`hostile_literals`] exists as a fixed
+//! corpus rather than as seeds: a random pool reaches a peer-chosen length
+//! sometimes, and a named literal reaches it every run, in both builds.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use orbweaver_cdr::{Decoder, Encoder, Endian};
 use orbweaver_forge::{Finding, Severity};
+use orbweaver_giop::csiv2::{
+    self, AsContext, CompoundSecMech, EstablishContext, GssUpToken, IdentityToken, SasContext,
+    SasContextBody, SecMechList,
+};
 use orbweaver_giop::nat::{RawIor, RawProfile};
 use orbweaver_giop::typecode::TypeCode;
 use orbweaver_giop::{IiopProfile, Ior, TAG_INTERNET_IOP, TaggedComponent, Version};
@@ -227,6 +262,7 @@ fn targets() -> Vec<Target> {
         },
     ];
     out.extend(later_surfaces());
+    out.extend(csiv2_surfaces());
     out
 }
 
@@ -311,6 +347,93 @@ fn later_surfaces() -> Vec<Target> {
             name: "ingest::validate_identifier",
             feed: Feed::Text(|s| {
                 let _ = validate_identifier("a fuzzed name", s, &Limits::default());
+            }),
+        },
+    ]
+}
+
+/// CSIv2, the surface this fuzz did not have until a defect was found without
+/// it.
+///
+/// Commit `36c8bc0` fixed an integer overflow in [`GssUpToken::decode`] reached
+/// from a DER length a peer wrote, and reported that **this file had no CSIv2
+/// target at all**: the list above covers `read_message`, `decode_request`,
+/// TypeCode, IOR, NAT, trace and ingest, and every one of them is a decoder
+/// somebody remembered to add. The security layer was not one of them, which is
+/// the wrong direction for an omission to run in.
+///
+/// The three entry points differ in how a peer reaches them, and the report
+/// says which rather than flattening them into "CSIv2":
+///
+/// - [`SecMechList::parse`] is reached **today, in production**, through
+///   `csiv2::advertised` on any `TaggedComponent` list — that is an IOR out of
+///   a naming service, a configuration file or a reply, so the bytes are the
+///   peer's whether or not we ever authenticate.
+/// - [`SasContextBody::parse`] and [`GssUpToken::decode`] read what arrives in
+///   the `SecurityAttributeService` context (`csiv2::SERVICE_ID_SAS`) on a
+///   call. We currently only *write* that context — `orbweaver-mcp`'s
+///   `identity::service_context` builds it and nothing in the workspace decodes
+///   an incoming one outside tests — so these two are fuzzed **ahead of** the
+///   server path that will call them. That is deliberate and it is stated here
+///   rather than implied: a parser fuzzed before it is wired up is cheap, and a
+///   parser wired up before it is fuzzed is how `36c8bc0` happened.
+///
+/// **보안 계층은 "잊고 안 넣은 대상"이 되어서는 안 된다.**
+fn csiv2_surfaces() -> Vec<Target> {
+    vec![
+        Target {
+            name: "csiv2::GssUpToken::decode",
+            feed: Feed::Bytes(|b| {
+                let _ = GssUpToken::decode(b);
+            }),
+        },
+        Target {
+            name: "csiv2::SasContextBody::parse",
+            feed: Feed::Bytes(|b| {
+                // A body that decodes is then re-encoded, because the bridge
+                // does both and an arm that survives reading can still be a
+                // length nobody can write back.
+                if let Ok(body) = SasContextBody::parse(b) {
+                    for endian in [Endian::Big, Endian::Little] {
+                        let _ = body.encode(endian);
+                    }
+                    // The nested token is the sharper half: a peer chooses the
+                    // service context, and the client authentication token
+                    // inside it is a second, independently framed parser —
+                    // which is exactly where the overflow `36c8bc0` fixed was.
+                    if let SasContextBody::Establish(e) = &body {
+                        let _ = GssUpToken::decode(&e.client_authentication_token);
+                    }
+                }
+            }),
+        },
+        Target {
+            name: "csiv2::SecMechList::parse",
+            feed: Feed::Bytes(|b| {
+                let _ = SecMechList::parse(b);
+            }),
+        },
+        Target {
+            name: "csiv2::advertised",
+            feed: Feed::Bytes(|b| {
+                // The production reach: the component list comes off an IOR, so
+                // the body handed to `SecMechList::parse` is a slice a peer
+                // chose the length of as well as the contents.
+                let components =
+                    vec![TaggedComponent { tag: csiv2::TAG_CSI_SEC_MECH_LIST, data: b.to_vec() }];
+                if let Some(Ok(list)) = csiv2::advertised(&components) {
+                    let _ = list.identity_assertion();
+                    for token in [
+                        IdentityToken::Absent,
+                        IdentityToken::Anonymous,
+                        IdentityToken::PrincipalName(b"alice".to_vec()),
+                    ] {
+                        let _ = list
+                            .mechanisms
+                            .iter()
+                            .any(|m| m.sas_context.as_ref().is_some_and(|s| s.accepts(&token)));
+                    }
+                }
             }),
         },
     ]
@@ -422,7 +545,198 @@ fn seeds() -> Vec<Vec<u8>> {
             }
         }
     }
+    out.extend(csiv2_seeds());
     out
+}
+
+/// Well-formed CSIv2 messages, without which the CSIv2 targets are decoration.
+///
+/// Measured before these existed, over 50 000 cases: **0 GSS initial context
+/// tokens and 0 SAS context bodies decoded**, and 10 security mechanism lists.
+/// `GssUpToken::decode` refuses anything that does not open with the DER tag
+/// `0x60`, so a uniform byte string reaches its second line one time in 256 and
+/// then still has to carry a well-formed length and the eight-byte GSSUP OID;
+/// the two encapsulation parsers need a byte-order flag, a plausible count and
+/// a chain of octet sequences that do not run off the end. A target reached
+/// zero times is not a target that passed — it is a target that was never run,
+/// reporting the same green as one that decoded a thousand messages.
+///
+/// **도달 0회는 통과가 아니라 미측정이다.** 그래서 씨앗을 넣는다.
+fn csiv2_seeds() -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    for endian in [Endian::Big, Endian::Little] {
+        let gssup = GssUpToken {
+            username: b"alice@example.com".to_vec(),
+            password: b"hunter2".to_vec(),
+            target_name: b"bank@example.com".to_vec(),
+        };
+        // The short form, and a username long enough to force the DER long form
+        // — the branch of `parse_der_length` that reads a peer-chosen byte count
+        // and the one `36c8bc0` overflowed in. A seed that only ever exercises
+        // the short form leaves that branch to the uniform source, which is the
+        // 1-in-256 draw above.
+        let long = GssUpToken {
+            username: vec![b'u'; 300],
+            password: b"hunter2".to_vec(),
+            target_name: b"bank@example.com".to_vec(),
+        };
+        let empty =
+            GssUpToken { username: Vec::new(), password: Vec::new(), target_name: Vec::new() };
+        let mut tokens = Vec::new();
+        for t in [&gssup, &long, &empty] {
+            if let Ok(bytes) = t.encode(endian) {
+                tokens.push(bytes.clone());
+                out.push(bytes);
+            }
+        }
+        let authenticated = tokens.first().cloned().unwrap_or_default();
+
+        for body in [
+            // Nothing asserted, nothing authenticated: the shape
+            // `identity::service_context` declines to send, and therefore the
+            // one a peer can still choose to send us.
+            SasContextBody::Establish(EstablishContext::default()),
+            // The shape the bridge actually writes, with a GSSUP token nested
+            // inside the octet sequence. Two framings, one message: the outer
+            // CDR encapsulation and the inner DER-tagged token, and the inner
+            // one is where the overflow was.
+            SasContextBody::Establish(EstablishContext {
+                client_context_id: 0x0102_0304_0506_0708,
+                authorization_token: vec![(1, b"scope=read".to_vec()), (17, vec![0xAB; 40])],
+                identity_token: IdentityToken::PrincipalName(b"alice@example.com".to_vec()),
+                client_authentication_token: authenticated.clone(),
+            }),
+            SasContextBody::Establish(EstablishContext {
+                client_context_id: 1,
+                authorization_token: Vec::new(),
+                identity_token: IdentityToken::X509CertChain(vec![0x30; 200]),
+                client_authentication_token: Vec::new(),
+            }),
+            SasContextBody::Complete {
+                client_context_id: 7,
+                stateful: true,
+                final_context_token: vec![0x60, 0x02, 0x01, 0x02],
+            },
+            SasContextBody::Error {
+                client_context_id: 7,
+                major_status: -1,
+                minor_status: i32::MIN,
+                error_token: vec![0xFF; 16],
+            },
+        ] {
+            if let Ok(bytes) = body.encode(endian) {
+                out.push(bytes);
+            }
+        }
+
+        for list in [rich_advertisement(), bare_advertisement()] {
+            if let Some(bytes) = encode_sec_mech_list(&list, endian) {
+                out.push(bytes);
+            }
+        }
+    }
+    out
+}
+
+/// A target that offers everything: a transport component, GSSUP client
+/// authentication, and identity assertion over two naming mechanisms.
+fn rich_advertisement() -> SecMechList {
+    SecMechList {
+        stateful: true,
+        mechanisms: vec![
+            CompoundSecMech {
+                target_requires: csiv2::options::ESTABLISH_TRUST_IN_CLIENT,
+                transport: Some(TaggedComponent { tag: 36, data: vec![0x01, 0x00, 0x20, 0x00] }),
+                as_context: Some(AsContext {
+                    target_supports: csiv2::options::ESTABLISH_TRUST_IN_CLIENT,
+                    target_requires: 0,
+                    mechanism: csiv2::GSSUP_OID.to_vec(),
+                    target_name: b"bank@example.com".to_vec(),
+                }),
+                sas_context: Some(SasContext {
+                    target_supports: csiv2::options::IDENTITY_ASSERTION,
+                    target_requires: 0,
+                    naming_mechanisms: vec![csiv2::GSSUP_OID.to_vec(), vec![0x06, 0x01, 0x2A]],
+                    supported_identity_types: 2 | 4 | 8,
+                }),
+            },
+            CompoundSecMech {
+                target_requires: 0,
+                transport: None,
+                as_context: None,
+                sas_context: None,
+            },
+        ],
+    }
+}
+
+/// A target that offers nothing, which is the common case §4.8 names and the
+/// one whose encoding is all zeroes — the shape a bit flip turns into a claim.
+fn bare_advertisement() -> SecMechList {
+    SecMechList {
+        stateful: false,
+        mechanisms: vec![CompoundSecMech {
+            target_requires: 0,
+            transport: None,
+            as_context: None,
+            sas_context: None,
+        }],
+    }
+}
+
+/// Writes a `CSIIOP::CompoundSecMechList` encapsulation.
+///
+/// `orbweaver-giop` parses this shape and does not write it — a target
+/// advertises, a bridge reads — so the encoder lives here, in the fuzz that
+/// needs seeds, rather than being added to the crate under test for the fuzz's
+/// convenience. It mirrors [`SecMechList::parse`] field for field and its
+/// agreement is asserted by a test rather than assumed; an encoder that drifts
+/// from the parser it feeds produces seeds that decode to nothing, which is the
+/// zero-reach failure in a costume.
+fn encode_sec_mech_list(list: &SecMechList, endian: Endian) -> Option<Vec<u8>> {
+    let mut e = Encoder::encapsulation(endian);
+    e.put_bool(list.stateful);
+    e.put_u32(u32::try_from(list.mechanisms.len()).ok()?);
+    for m in &list.mechanisms {
+        e.put_u16(m.target_requires);
+        match &m.transport {
+            Some(c) => {
+                e.put_u32(c.tag);
+                e.put_octet_seq(&c.data);
+            }
+            None => {
+                e.put_u32(csiv2::TAG_NULL_TAG);
+                e.put_octet_seq(&[]);
+            }
+        }
+        match &m.as_context {
+            Some(a) => {
+                e.put_u16(a.target_supports);
+                e.put_u16(a.target_requires);
+                e.put_octet_seq(&a.mechanism);
+                e.put_octet_seq(&a.target_name);
+            }
+            None => {
+                e.put_u16(0);
+                e.put_u16(0);
+                e.put_octet_seq(&[]);
+                e.put_octet_seq(&[]);
+            }
+        }
+        let sas = m.sas_context.as_ref();
+        e.put_u16(sas.map_or(0, |s| s.target_supports));
+        e.put_u16(sas.map_or(0, |s| s.target_requires));
+        // No privilege authorities. The parser reads and discards them, so the
+        // count still has to be written or every field after it shifts.
+        e.put_u32(0);
+        let naming: &[Vec<u8>] = sas.map_or(&[], |s| s.naming_mechanisms.as_slice());
+        e.put_u32(u32::try_from(naming.len()).ok()?);
+        for oid in naming {
+            e.put_octet_seq(oid);
+        }
+        e.put_u32(sas.map_or(0, |s| s.supported_identity_types));
+    }
+    e.finish().ok()
 }
 
 /// References worth mutating: an empty one, and one carrying both an IIOP
@@ -555,6 +869,195 @@ fn make_text(rng: &mut Rng, seeds: &[String]) -> (Source, String) {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The class a release build cannot see
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Whether **this** build panics on an arithmetic overflow.
+///
+/// Measured, not assumed. `cfg!(debug_assertions)` is the usual guess and it is
+/// only a default: `-C overflow-checks` can be set either way independently, so
+/// a report built on the `cfg!` would be stating the profile rather than the
+/// behaviour. This performs the addition and watches.
+///
+/// The answer decides what a green run means. With checks off, every
+/// `peer_chosen_length + offset` in every decoder wraps silently and this fuzz
+/// cannot distinguish "no overflow" from "overflow, unobserved" — so the number
+/// is printed beside the panic count rather than left for a reader to infer.
+///
+/// **오버플로 검사 여부는 가정하지 않고 실행 시점에 측정한다.**
+pub fn overflow_checks_on() -> bool {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let panicked = catch_unwind(|| {
+        // `black_box` on both operands: rustc denies an overflow it can see at
+        // compile time, and would fold this away in release otherwise.
+        let a = std::hint::black_box(usize::MAX);
+        let b = std::hint::black_box(1usize);
+        std::hint::black_box(a + b)
+    })
+    .is_err();
+    std::panic::set_hook(previous);
+    panicked
+}
+
+/// Inputs that reach a peer-chosen length, by name, every run.
+///
+/// The random pipeline reaches these shapes *sometimes*, which is the whole
+/// argument for [`Reach`]; a named literal reaches them **every run, in every
+/// build**, and that is what a class the release build cannot observe needs. If
+/// the same input is only reachable through a seed, then whether the check ran
+/// at all depends on `--cases`, and a class nobody can see does not get to also
+/// be a class nobody reliably reaches.
+///
+/// Each name is the replay handle: `run_literal(name, target)` re-runs one
+/// without the catch, the same way a seed does for the random pipeline.
+///
+/// Weighted toward **arithmetic on a length the peer wrote**, because that is
+/// the class `36c8bc0` found and the class this file could not see. The first
+/// entry is that commit's exact input.
+pub fn hostile_literals() -> Vec<(String, Vec<u8>)> {
+    let oid = csiv2::GSSUP_OID;
+    let mut out: Vec<(String, Vec<u8>)> = vec![
+        // `36c8bc0`'s input: a DER length of usize::MAX. `at + len` panicked
+        // with overflow checks on and wrapped to a bogus "truncated" without.
+        (
+            "gss/der-length-usize-max".to_owned(),
+            vec![0x60, 0x88, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+        ),
+        // One below, so the refusal is about the addition and not about the
+        // single value `usize::MAX` being special-cased somewhere.
+        (
+            "gss/der-length-usize-max-less-one".to_owned(),
+            vec![0x60, 0x88, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE],
+        ),
+        // Nine length bytes: refused by the `n > 8` check before any arithmetic.
+        (
+            "gss/der-length-nine-bytes".to_owned(),
+            vec![0x60, 0x89, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+        ),
+        // 4 GiB on a 64-bit target, and unrepresentable on a 32-bit one.
+        ("gss/der-length-four-gib".to_owned(), vec![0x60, 0x85, 0x01, 0x00, 0x00, 0x00, 0x00]),
+        // Indefinite length, which has no place in a GSS token.
+        ("gss/der-length-indefinite".to_owned(), vec![0x60, 0x80]),
+        ("gss/der-length-absent".to_owned(), vec![0x60]),
+        ("gss/der-length-long-form-truncated".to_owned(), vec![0x60, 0x84, 0x00, 0x00]),
+        ("gss/der-length-short-form-past-end".to_owned(), vec![0x60, 0x7F, 0x00]),
+        ("gss/tag-only".to_owned(), vec![0x60]),
+        ("gss/empty".to_owned(), Vec::new()),
+    ];
+    // A length that covers exactly the OID and nothing after it: the
+    // encapsulation that follows is empty, so the byte-order flag every
+    // encapsulation starts with is missing rather than wrong.
+    let mut exact = vec![0x60, oid.len() as u8];
+    exact.extend_from_slice(oid);
+    out.push(("gss/oid-then-empty-encapsulation".to_owned(), exact));
+    // A byte-order flag and nothing else, which is the shortest input that gets
+    // past `Decoder::encapsulation` into the body.
+    let mut flag_only = vec![0x60, (oid.len() + 1) as u8];
+    flag_only.extend_from_slice(oid);
+    flag_only.push(0x01);
+    out.push(("gss/oid-then-flag-only".to_owned(), flag_only));
+    // A length that stops inside the OID: `starts_with` must decide, not index.
+    let mut half = vec![0x60, 0x04];
+    half.extend_from_slice(&oid[..4]);
+    out.push(("gss/length-covers-half-the-oid".to_owned(), half));
+
+    for (endian, tag) in [(Endian::Big, "be"), (Endian::Little, "le")] {
+        // Counts and sequence lengths a peer chose, at u32::MAX. `validate_count`
+        // is the guard; these are what it is guarding, and a `Vec::with_capacity`
+        // reached before it would be an allocation a stranger sized.
+        let mut e = Encoder::encapsulation(endian);
+        e.put_u32(0); // MTEstablishContext
+        e.put_u64(0);
+        e.put_u32(u32::MAX); // authorization_token count
+        push_named(&mut out, "sas/authorization-count-u32-max", tag, e.finish().ok());
+
+        let mut e = Encoder::encapsulation(endian);
+        e.put_u32(0);
+        e.put_u64(0);
+        e.put_u32(0);
+        e.put_u32(2); // ITTPrincipalName
+        e.put_u32(u32::MAX); // its octet sequence length
+        push_named(&mut out, "sas/identity-token-length-u32-max", tag, e.finish().ok());
+
+        let mut e = Encoder::encapsulation(endian);
+        e.put_bool(true);
+        e.put_u32(u32::MAX); // mechanism count
+        push_named(&mut out, "secmech/mechanism-count-u32-max", tag, e.finish().ok());
+
+        let mut e = Encoder::encapsulation(endian);
+        e.put_bool(false);
+        e.put_u32(1);
+        e.put_u16(0);
+        e.put_u32(csiv2::TAG_NULL_TAG);
+        e.put_octet_seq(&[]);
+        e.put_u16(0);
+        e.put_u16(0);
+        e.put_octet_seq(&[]);
+        e.put_octet_seq(&[]);
+        e.put_u16(0);
+        e.put_u16(0);
+        e.put_u32(u32::MAX); // privilege authority count
+        push_named(&mut out, "secmech/privilege-count-u32-max", tag, e.finish().ok());
+
+        // The nested case, and the one an inbound call would actually carry: a
+        // well-formed SAS context body whose client authentication token is the
+        // hostile DER length above. Two framings, and the inner one is the one
+        // that overflowed.
+        if let Ok(bytes) = SasContextBody::Establish(EstablishContext {
+            client_context_id: 0,
+            authorization_token: Vec::new(),
+            identity_token: IdentityToken::Anonymous,
+            client_authentication_token: vec![
+                0x60, 0x88, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            ],
+        })
+        .encode(endian)
+        {
+            push_named(&mut out, "sas/nested-gss-length-usize-max", tag, Some(bytes));
+        }
+
+        // A truncated encapsulation: the flag says an order and nothing follows.
+        push_named(
+            &mut out,
+            "cdr/encapsulation-flag-only",
+            tag,
+            Some(vec![u8::from(endian == Endian::Little)]),
+        );
+    }
+    out
+}
+
+/// Names a per-byte-order literal: the two orders get two entries and two
+/// replay handles, because "it failed in little-endian" is only useful if the
+/// name says so.
+fn push_named(out: &mut Vec<(String, Vec<u8>)>, name: &str, order: &str, bytes: Option<Vec<u8>>) {
+    if let Some(bytes) = bytes {
+        // The order is part of the input, and the name has to say which, or a
+        // finding replays the wrong one half the time.
+        out.push((format!("{name}[{order}]"), bytes));
+    }
+}
+
+/// Replays one hostile literal against one target, without the catch.
+///
+/// The literal counterpart of [`run_case`]: a finding from the fixed corpus
+/// carries a name where a finding from the random pipeline carries a seed, and
+/// both have to replay or neither is a regression test.
+pub fn run_literal(name: &str, target: &str) {
+    let Some((_, bytes)) = hostile_literals().into_iter().find(|(n, _)| n == name) else {
+        return;
+    };
+    for t in targets() {
+        if t.name == target
+            && let Feed::Bytes(f) = t.feed
+        {
+            f(&bytes);
+        }
+    }
+}
+
 /// Runs `cases` inputs against every target and reports every panic.
 ///
 /// Silences the panic hook for the duration: a run that finds nothing should
@@ -568,6 +1071,12 @@ pub fn panic_freedom(cases: usize, root: u64) -> Vec<Finding> {
 
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
+
+    // The fixed corpus first, and unconditionally: it does not depend on
+    // `cases`, so `--cases 1` still runs every input that reaches a peer-chosen
+    // length. Whether this build can *see* an overflow among them is
+    // [`overflow_checks_on`]'s question, not this loop's.
+    out.extend(literal_findings(&targets));
 
     for i in 0..cases {
         let seed = case_seed(root, i as u64);
@@ -609,6 +1118,41 @@ pub fn panic_freedom(cases: usize, root: u64) -> Vec<Finding> {
     }
 
     std::panic::set_hook(previous);
+    out
+}
+
+/// Runs every [`hostile_literals`] entry against every byte target.
+///
+/// Split out of [`panic_freedom`] so it can be handed a target that *does*
+/// panic and be shown to report it. A reporting path nobody has ever seen fire
+/// is a reporting path that might not, and this whole module is an argument
+/// against trusting a green result whose machinery was never exercised.
+fn literal_findings(targets: &[Target]) -> Vec<Finding> {
+    let mut out = Vec::new();
+    for (name, bytes) in hostile_literals() {
+        for t in targets {
+            let Feed::Bytes(f) = t.feed else { continue };
+            if catch_unwind(AssertUnwindSafe(|| f(&bytes))).is_err() {
+                out.push(finding(
+                    "wire/panic",
+                    Severity::Error,
+                    format!(
+                        "{} panicked on the fixed hostile literal {name:?} ({} byte(s)); a peer \
+                         that can send these bytes can stop the process",
+                        t.name,
+                        bytes.len(),
+                    ),
+                    t.name.to_string(),
+                    Some(format!(
+                        "reproduce with orbweaver_test::wire::run_literal({name:?}, {:?}); the \
+                         input is {}",
+                        t.name,
+                        hex(&bytes),
+                    )),
+                ));
+            }
+        }
+    }
     out
 }
 
@@ -660,6 +1204,23 @@ pub struct Reach {
     pub repository_ids: usize,
     /// How many text inputs `ingest::validate_identifier` accepted.
     pub identifiers: usize,
+    /// How many byte inputs `csiv2::GssUpToken::decode` accepted. The one
+    /// number in this struct with a documented reason to be small: the parser
+    /// refuses anything that does not open with the DER tag `0x60`, so a
+    /// uniform byte string reaches it with probability 1/256 and then has to
+    /// carry a well-formed length and the GSSUP OID as well.
+    pub gss_tokens: usize,
+    /// How many byte inputs `csiv2::SasContextBody::parse` accepted.
+    pub sas_bodies: usize,
+    /// How many byte inputs `csiv2::SecMechList::parse` accepted.
+    pub sec_mech_lists: usize,
+    /// How many fixed hostile literals ran, times the byte targets they ran
+    /// against. Independent of `cases` on purpose — see [`hostile_literals`].
+    pub literal_runs: usize,
+    /// Whether this build could have observed an arithmetic overflow among
+    /// them. `false` is not a smaller pass; it is a class going unmeasured, and
+    /// it is in [`Reach`] so a report cannot omit it by accident.
+    pub overflow_observable: bool,
 }
 
 /// Measures [`Reach`] for the same inputs [`panic_freedom`] would run.
@@ -667,7 +1228,12 @@ pub fn reach(cases: usize, root: u64) -> Reach {
     let seeds = seeds();
     let text_seeds = text_seeds();
     let limits = Limits::default();
-    let mut r = Reach::default();
+    let mut r = Reach {
+        overflow_observable: overflow_checks_on(),
+        literal_runs: hostile_literals().len()
+            * targets().iter().filter(|t| matches!(t.feed, Feed::Bytes(_))).count(),
+        ..Reach::default()
+    };
     for i in 0..cases {
         let mut rng = Rng::new(case_seed(root, i as u64));
         let (source, input) = make_input(&mut rng, &seeds);
@@ -706,6 +1272,15 @@ pub fn reach(cases: usize, root: u64) -> Reach {
         }
         if validate_identifier("a fuzzed name", &text, &limits).is_ok() {
             r.identifiers += 1;
+        }
+        if GssUpToken::decode(&input).is_ok() {
+            r.gss_tokens += 1;
+        }
+        if SasContextBody::parse(&input).is_ok() {
+            r.sas_bodies += 1;
+        }
+        if SecMechList::parse(&input).is_ok() {
+            r.sec_mech_lists += 1;
         }
     }
     r
@@ -911,6 +1486,175 @@ mod tests {
             let bytes_then_text = make_input(&mut both, &byte_seeds);
             let _ = make_text(&mut both, &strings);
             assert_eq!(bytes_only, bytes_then_text);
+        }
+    }
+
+    /// The same demand made of the CSIv2 targets, and the reason this batch
+    /// exists at all.
+    ///
+    /// Measured before [`csiv2_seeds`] was written, over 50 000 cases:
+    /// **0 GSS initial context tokens, 0 SAS context bodies**, 10 security
+    /// mechanism lists. Three targets, two of them never once run. That is the
+    /// state a green exit code was already reporting as a pass.
+    #[test]
+    fn every_csiv2_surface_is_reached_and_not_merely_refused() {
+        let r = reach(2_000, crate::prop::DEFAULT_SEED);
+        for (what, count) in [
+            ("GSS initial context tokens decoded (csiv2::GssUpToken::decode)", r.gss_tokens),
+            ("SAS context bodies decoded (csiv2::SasContextBody::parse)", r.sas_bodies),
+            ("security mechanism lists decoded (csiv2::SecMechList::parse)", r.sec_mech_lists),
+        ] {
+            assert!(count > 0, "{what} never happened in 2000 cases; that target is untested");
+        }
+    }
+
+    /// Why the CSIv2 seeds exist, stated as a measurement rather than as an
+    /// opinion — the same argument the text pipeline makes above.
+    ///
+    /// `GssUpToken::decode` returns on its first line unless byte zero is
+    /// `0x60`, so the uniform source reaches its second line one time in 256 and
+    /// then still has to carry a well-formed DER length and the eight-byte
+    /// GSSUP OID. If the seed-derived sources ever stop dominating, the seeds
+    /// have stopped being what makes this target reachable.
+    #[test]
+    fn a_gssup_token_is_not_reachable_from_random_bytes() {
+        let seeds = seeds();
+        let (mut from_uniform, mut from_seeds) = (0usize, 0usize);
+        for i in 0..2_000u64 {
+            let mut rng = Rng::new(case_seed(crate::prop::DEFAULT_SEED, i));
+            let (source, input) = make_input(&mut rng, &seeds);
+            if GssUpToken::decode(&input).is_ok() {
+                match source {
+                    Source::Uniform => from_uniform += 1,
+                    _ => from_seeds += 1,
+                }
+            }
+        }
+        assert!(
+            from_seeds > from_uniform,
+            "{from_seeds} token(s) decoded from the seeded sources and {from_uniform} from \
+             uniform bytes; if that ever inverts, the seed corpus has stopped earning its keep"
+        );
+    }
+
+    /// The seed encoder must agree with the parser it feeds.
+    ///
+    /// `orbweaver-giop` parses `CSIIOP::CompoundSecMechList` and does not write
+    /// it, so [`encode_sec_mech_list`] is this module's own and nothing else
+    /// checks it. An encoder that drifts one field from the parser produces
+    /// seeds that decode to nothing — which shows up as reach quietly falling to
+    /// zero, the exact failure the reach numbers exist to prevent and the exact
+    /// one a green exit code would hide.
+    #[test]
+    fn the_advertisement_encoder_agrees_with_the_parser_it_feeds() {
+        for endian in [Endian::Big, Endian::Little] {
+            for list in [rich_advertisement(), bare_advertisement()] {
+                let bytes = encode_sec_mech_list(&list, endian).expect("encodes");
+                let read = SecMechList::parse(&bytes).expect("parses");
+                assert_eq!(read, list, "{endian:?}");
+            }
+        }
+        // And the rich one must actually carry what it claims, or "it round
+        // trips" would be true of two empty structures.
+        let rich = rich_advertisement();
+        assert!(rich.identity_assertion().is_some());
+        assert!(rich.mechanisms[0].as_context.as_ref().expect("gssup").is_gssup());
+    }
+
+    /// The fixed corpus, and the honesty rule applied to this file itself.
+    ///
+    /// The assertion that matters is the **first** one: `cargo test` builds with
+    /// overflow checks on, and if it did not, every literal below could pass by
+    /// wrapping rather than by refusing. An unmeasured check is a failure, never
+    /// a pass (`CLAUDE.md`), so the test says what it needed in order to mean
+    /// anything before it says what it found.
+    ///
+    /// **측정할 수 없는 빌드에서의 통과는 통과가 아니다.**
+    #[test]
+    fn the_hostile_literals_are_refused_and_this_build_could_tell() {
+        assert!(
+            overflow_checks_on(),
+            "this test binary was built with overflow checks OFF, so an arithmetic overflow on a \
+             peer-chosen length would wrap here instead of panicking and every literal below \
+             would pass without being measured"
+        );
+        // `cases = 0`: the random pipeline contributes nothing and only the
+        // fixed corpus runs, so a failure here names a literal and not a seed.
+        let findings = panic_freedom(0, crate::prop::DEFAULT_SEED);
+        assert!(
+            findings.is_empty(),
+            "{}",
+            findings.iter().map(|f| f.message.clone()).collect::<Vec<_>>().join("\n")
+        );
+    }
+
+    /// The literal corpus's *reporting* path, shown firing.
+    ///
+    /// `the_hostile_literals_are_refused_and_this_build_could_tell` asserts the
+    /// list is empty, which is exactly the assertion a broken reporter would
+    /// also satisfy. This hands the same machinery a target that panics on
+    /// every input and checks that a finding comes back naming the literal and
+    /// carrying a replay handle — because "0 findings" only means anything if
+    /// 1 finding was ever possible.
+    ///
+    /// **0건은 1건이 가능할 때만 의미가 있다.**
+    #[test]
+    fn a_literal_that_panics_is_reported_with_a_handle_that_replays() {
+        let exploding = vec![Target {
+            name: "fuzz::always_panics",
+            feed: Feed::Bytes(|_| panic!("deliberate")),
+        }];
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let findings = literal_findings(&exploding);
+        std::panic::set_hook(previous);
+
+        assert_eq!(findings.len(), hostile_literals().len(), "one finding per literal");
+        let first = &findings[0];
+        assert_eq!(first.source, "fuzz::always_panics");
+        let fix = first.fix.as_deref().expect("a finding without a replay handle is a story");
+        assert!(fix.contains("run_literal"), "{fix}");
+        assert!(fix.contains("gss/der-length-usize-max"), "{fix}");
+    }
+
+    /// The probe measures the build, not the profile — so it has to be right
+    /// about an operation other than the one it performs, and it has to give
+    /// the same answer twice.
+    #[test]
+    fn the_overflow_probe_measures_the_build_rather_than_the_profile() {
+        let on = overflow_checks_on();
+        assert_eq!(on, overflow_checks_on(), "the probe is not deterministic");
+
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        // A subtraction below zero, which is the same class through a different
+        // operator. If checks are on it panics; if they are off it wraps.
+        let underflowed = catch_unwind(|| {
+            let a = std::hint::black_box(0usize);
+            let b = std::hint::black_box(1usize);
+            std::hint::black_box(a - b)
+        })
+        .is_err();
+        std::panic::set_hook(previous);
+        assert_eq!(on, underflowed, "the probe disagrees with the build on a second operation");
+    }
+
+    /// A literal finding has to replay, the same way a seeded one does. That
+    /// needs the names to be unique, and it needs the lookup to find them.
+    #[test]
+    fn every_hostile_literal_replays_from_its_name() {
+        let literals = hostile_literals();
+        assert!(!literals.is_empty());
+        let mut names: Vec<&str> = literals.iter().map(|(n, _)| n.as_str()).collect();
+        names.sort_unstable();
+        let unique = names.len();
+        names.dedup();
+        assert_eq!(unique, names.len(), "two literals share a name, so one of them cannot replay");
+        for (name, bytes) in &literals {
+            let found = hostile_literals().into_iter().find(|(n, _)| n == name);
+            assert_eq!(found.map(|(_, b)| b).as_ref(), Some(bytes), "{name} does not look up");
+            // The replay path itself, over a target that takes these bytes.
+            run_literal(name, "csiv2::GssUpToken::decode");
         }
     }
 

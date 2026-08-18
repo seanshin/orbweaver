@@ -64,6 +64,36 @@ fn main() -> std::process::ExitCode {
         reach.repository_ids,
         reach.identifiers
     );
+    println!(
+        "  csiv2: {} GSS initial context token(s), {} SAS context body(ies), {} security \
+         mechanism list(s) decoded",
+        reach.gss_tokens, reach.sas_bodies, reach.sec_mech_lists
+    );
+    println!(
+        "  fixed: {} hostile literal(s) x byte target(s), run whatever --cases says",
+        reach.literal_runs
+    );
+    // What this build could not have seen, printed beside the panic count
+    // rather than left for a reader to infer from the profile. A release build
+    // has overflow checks off, so `peer_chosen_length + offset` wraps instead of
+    // panicking and this run cannot tell "no overflow" from "not looking".
+    if reach.overflow_observable {
+        println!(
+            "  scope: overflow checks are ON in this build, so an arithmetic overflow in a \
+             decoder would have been observed as a panic"
+        );
+    } else {
+        println!(
+            "  scope: overflow checks are OFF in this build. An arithmetic overflow on a \
+             peer-chosen length WRAPS here instead of panicking, so this run cannot observe that \
+             class at all — the class commit 36c8bc0's CSIv2 defect belonged to. The 0 above is \
+             a result about panics, not about overflows."
+        );
+        println!(
+            "  WARNING: re-run with RUSTFLAGS=\"-C overflow-checks=on\" to measure that class; \
+             `cargo test -p orbweaver-test` also builds with it on."
+        );
+    }
     // A zero on any of those is not a pass. The exit code cannot say so, so
     // this does: an unmeasured check is a failure, never a pass (CLAUDE.md).
     for (what, count) in [
@@ -72,6 +102,9 @@ fn main() -> std::process::ExitCode {
         ("trace spans", reach.trace_spans),
         ("repository ids", reach.repository_ids),
         ("identifiers", reach.identifiers),
+        ("GSS initial context tokens", reach.gss_tokens),
+        ("SAS context bodies", reach.sas_bodies),
+        ("security mechanism lists", reach.sec_mech_lists),
     ] {
         if count == 0 {
             println!(
