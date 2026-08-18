@@ -8,10 +8,11 @@
 //! # What is served, and what honestly is not
 //!
 //! `resolve`, `bind`, `rebind`, `unbind`, `bind_new_context`, `new_context`,
-//! `list`, and the `NamingContextExt` string surface (`resolve_str`,
-//! `to_name`, `to_string`, `to_url`) — plus `_is_a`/`_non_existent`, which
-//! every ORB probes with before trusting a narrow. Everything else answers
-//! `BAD_OPERATION` rather than being half-served:
+//! `bind_context`, `rebind_context`, `destroy`, `list`, and the
+//! `NamingContextExt` string surface (`resolve_str`, `to_name`, `to_string`,
+//! `to_url`) — plus `_is_a`/`_non_existent`, which every ORB probes with
+//! before trusting a narrow. Everything else answers `BAD_OPERATION` rather
+//! than being half-served:
 //!
 //! - **`BindingIterator` is stubbed.** `list` returns at most `how_many`
 //!   bindings and a **nil** iterator; anything beyond `how_many` is simply
@@ -19,13 +20,118 @@
 //!   have everything", so a truncated `list` under-reports — a caller that
 //!   wants the full set passes a large `how_many`. Real iterators need
 //!   servant lifecycle, which is POA work.
-//! - **`bind_context`/`rebind_context` are not served.** They would bind a
-//!   *foreign* context, and resolving through one means chaining the call
-//!   over the wire — not v1 work. [`NamingContext::bind_new_context`] covers
-//!   local nesting: every new context is a fresh object key behind this same
-//!   dispatch, and [`Dispatch::knows`] answers for all of them.
-//! - **`destroy` is not served**; contexts live as long as the process, and
-//!   an unbound context stays reachable by its key.
+//! - **`bind_context`/`rebind_context` bind a context *this server serves*,
+//!   and answer `NO_IMPLEMENT` for anything else** — see the next section
+//!   for what "anything else" costs.
+//!
+//! There is no longer any operation this servant refuses **by name**: the one
+//! deferral left is chosen by an *argument*, which is a fact about a call and
+//! not about an operation, so the name-keyed `is_deferred` predicate that
+//! used to live here is gone rather than left answering `false`.
+//!
+//! # The three deferrals, re-examined
+//!
+//! `bind_context`, `rebind_context` and `destroy` were deferred when this
+//! servant was written, each with a reason. Re-read against what the crate
+//! can do now, one reason had stopped being true, one was never about the
+//! whole operation, and one is still exactly right.
+//!
+//! Every claim below about CosNaming's *actual* semantics was measured
+//! against omniNames 4.3.4 with omniORB's own client, not read off the
+//! specification — the rows are quoted where they decide something.
+//!
+//! ## `destroy` — the reason had expired, so it is served
+//!
+//! The old reason was that "contexts live as long as the process, and an
+//! unbound context stays reachable by its key". That was a description of
+//! the servant, not an obstacle: it was true *because* nothing removed a
+//! key. Two things now make removal mean something on the wire.
+//! [`SharedDispatch::knows`] is answered from the context table rather than
+//! defaulted, so a removed key stops being an object this server answers for
+//! and [`crate::server::Served::UnknownObject`] turns every later request on
+//! it into `OBJECT_NOT_EXIST`; and `table` already answered
+//! `OBJECT_NOT_EXIST` for a key it does not hold, so the two look-ups agree
+//! without being made to.
+//!
+//! That is exactly what a peer sees from omniNames, measured rather than
+//! reasoned:
+//!
+//! | asked of omniNames 4.3.4 | answer |
+//! |---|---|
+//! | `destroy` an empty context | succeeds |
+//! | `destroy` a non-empty context | `NotEmpty` |
+//! | `destroy` the same context twice | `OBJECT_NOT_EXIST` |
+//! | resolve the *name* that named it | still succeeds — the binding survives |
+//! | any operation on the destroyed *reference* | `OBJECT_NOT_EXIST` |
+//! | resolve **through** the dangling binding | `OBJECT_NOT_EXIST` |
+//! | `list` the parent | still reports it, still `ncontext` |
+//! | `destroy` an **empty root** context | succeeds, and the service is gone |
+//!
+//! The last row is the uncomfortable one and it is served as measured. The
+//! root is not special to omniNames, and inventing a `NO_PERMISSION` for it
+//! here would be this servant answering a question CosNaming does not ask.
+//! We are strictly better placed than the oracle either way: omniNames
+//! records the destruction in its log directory and comes back dead, while
+//! this tree is in memory and a restart brings back a fresh root.
+//!
+//! `destroy` also gives the orphan a way out. `new_context` mints a context
+//! that is bound to no name; before `destroy` there was no operation that
+//! could ever reclaim one.
+//!
+//! ## `bind_context`/`rebind_context` — half the reason was never true
+//!
+//! The old reason was that they "would bind a *foreign* context, and
+//! resolving through one means chaining the call over the wire". The second
+//! half is right, and measurement makes it sharper than the sentence did:
+//! pointed at a context on a second naming service, omniNames really does
+//! chain — `resolve` and even `bind` are re-issued to the far ORB and its
+//! `NotFound` comes back with `rest_of_name` relative to *that* context —
+//! and pointed at an undialable one it turns a naming `resolve` into a
+//! `TRANSIENT` raised after a TCP connect attempt. A naming service that
+//! chains has a peer's availability inside its own reply.
+//!
+//! The first half was never true of the *operation*. The reference a client
+//! passes to `bind_context` is very often one this same server minted a
+//! moment earlier: `nc = new_context(); bind_context(name, nc)` is the
+//! ordinary CosNaming idiom for building a context before making it visible,
+//! and it is the only way the already-served `new_context` produces anything
+//! reachable. That call is a `BTreeMap` insert. Nothing is foreign, nothing
+//! is dialled, and refusing it was refusing the local case for the remote
+//! case's reason.
+//!
+//! So: **a reference this dispatch answers for is bound; anything else is
+//! `NO_IMPLEMENT`.** "Anything else" is one answer for a foreign context, a
+//! nil, and a plain object alike, because it is one reason — this servant
+//! would have to chain to honour any of them. The test is deliberately two
+//! halves, in `NamingServer::local_context_key` (private, so no link): an
+//! object key the tree holds *and* a profile addressed at the host and port
+//! this server publishes. The key alone would let a foreign server that used
+//! the same key shape be adopted as one of ours, which is somebody else's
+//! object served as though it were this servant's. omniNames type-checks
+//! neither — it stores whatever it is handed and reports it as `ncontext` —
+//! so this is stricter than the oracle, and stricter without dialling.
+//!
+//! One consequence to state, because it is a real deployment: behind the NAT
+//! rewriting of [`crate::nat`], our own reference comes back wearing an
+//! address that is not ours and is treated as foreign. The answer is then
+//! `NO_IMPLEMENT` rather than a wrong bind, which is the failure this test
+//! is shaped to make.
+//!
+//! ## What chaining would have cost, and why it was not spent
+//!
+//! Chaining is *implementable* now in a way it was not: [`crate::guarded`]
+//! makes "am I inside a lock section" a question with an answer, so a
+//! `resolve` that dials from inside the tree's lock fails its own test
+//! instead of deadlocking a deployment. That is a reason the work is
+//! possible, not a reason to do it. What it would spend is the property
+//! stated under *Sharing* below — there is no [`crate::Connection`] anywhere
+//! in this module, so "no lock across an outbound call" holds by
+//! construction and not by a tripwire that has to fire. Spending that buys
+//! cycle detection, a hop limit, a dial timeout inside a servant, and a
+//! naming reply whose latency belongs to a third party. It stays unspent
+//! until something needs a federated tree, and this module has no
+//! `Connection` in it after this batch either — which
+//! `naming_no_outbound_call.rs` now checks rather than asserts in prose.
 //!
 //! # `to_url` and the parser it has to agree with
 //!
@@ -73,15 +179,18 @@
 //! - **Nothing blocking inside it.** Naming *stores* references and never
 //!   dials one: there is no [`crate::Connection`] anywhere in this module, so
 //!   the "no lock across an outbound call" rule is satisfied structurally
-//!   rather than by care. If a future `bind_context` chains a resolve over the
-//!   wire, that call must happen outside the lock and the tripwire in
-//!   [`crate::guarded`] will say so.
+//!   rather than by care. `bind_context` did not change that — it decides
+//!   whether a reference is one of ours by looking at the tree and at two
+//!   constant fields, never by asking the reference. The property is checked
+//!   by `tests/naming_no_outbound_call.rs` now, because a structural claim
+//!   nobody measures is the next paragraph's problem waiting to happen.
 //!
-//! One consequence, stated because it is now reachable: `knows` and the
-//! dispatch are two separate looks at the tree, so a context could in
-//! principle be unbound between them. Contexts are never destroyed here, so
-//! today the window is empty — and `table()` answers `OBJECT_NOT_EXIST`
-//! rather than panicking either way.
+//! One consequence, and `destroy` has just made it reachable: `knows` and the
+//! dispatch are two separate looks at the tree, so a context can now be
+//! destroyed between them. Both looks answer the same thing — `knows`
+//! returning `false` becomes [`crate::server::Served::UnknownObject`] and
+//! `table()` answers `OBJECT_NOT_EXIST` — so the race decides *which* of two
+//! identical replies a caller gets, and there is nothing to order.
 //!
 //! [`NamingContext::bind_new_context`]: crate::naming::NamingContext::bind_new_context
 //! [`Server`]: crate::server::Server
@@ -114,6 +223,10 @@ pub const ALREADY_BOUND_ID: &str = "IDL:omg.org/CosNaming/NamingContext/AlreadyB
 /// Repository id of `CosNaming::NamingContext::InvalidName`.
 pub const INVALID_NAME_ID: &str = "IDL:omg.org/CosNaming/NamingContext/InvalidName:1.0";
 
+/// Repository id of `CosNaming::NamingContext::NotEmpty` — declared by
+/// `destroy` alone, and raised by nothing else.
+pub const NOT_EMPTY_ID: &str = "IDL:omg.org/CosNaming/NamingContext/NotEmpty:1.0";
+
 /// Repository id of `CosNaming::NamingContextExt::InvalidAddress` — declared
 /// by the `Ext` interface alone, and raised only by `to_url`.
 pub const INVALID_ADDRESS_ID: &str = "IDL:omg.org/CosNaming/NamingContextExt/InvalidAddress:1.0";
@@ -142,6 +255,9 @@ enum UserExc {
     AlreadyBound,
     /// `InvalidName`, no members.
     InvalidName,
+    /// `NotEmpty`, no members — `destroy` on a context that still holds
+    /// bindings, so no single call can orphan a subtree.
+    NotEmpty,
     /// `NamingContextExt::InvalidAddress`, no members.
     InvalidAddress,
 }
@@ -159,6 +275,7 @@ impl UserExc {
             }
             UserExc::AlreadyBound => out.put_str(ALREADY_BOUND_ID),
             UserExc::InvalidName => out.put_str(INVALID_NAME_ID),
+            UserExc::NotEmpty => out.put_str(NOT_EMPTY_ID),
             UserExc::InvalidAddress => out.put_str(INVALID_ADDRESS_ID),
         }
     }
@@ -198,6 +315,34 @@ enum Bound {
     Context(Vec<u8>),
 }
 
+/// What the four binding operations do with a name that is already taken.
+///
+/// The three cases are the difference between `bind`/`bind_context` and the
+/// two `rebind`s, and keeping them as one argument is what stops the two
+/// halves drifting: `rebind` replaces an object and `rebind_context` replaces
+/// a context, and each refuses the other's occupant with the
+/// `NotFoundReason` that names what was wrong.
+///
+/// **Measured divergence from omniNames 4.3.4, in both directions.** It
+/// type-checks neither `rebind`: asked to `rebind` an object over a context
+/// binding it silently made the name an `nobject`, and asked to
+/// `rebind_context` a context over an object binding it silently made the
+/// name an `ncontext`. §2.5.1's `not_object`/`not_context` reasons exist to
+/// be given here, and this servant gives them — a choice `rebind` already
+/// made before `rebind_context` existed, so the alternative was not "follow
+/// the oracle" but "disagree with our own other half".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Replace {
+    /// `bind` and `bind_context`: a taken name is `AlreadyBound`.
+    Never,
+    /// `rebind`: replaces an object binding; a context under the name is
+    /// `NotFound { why: not_object }`.
+    ObjectOnly,
+    /// `rebind_context`: replaces a context binding; an object under the name
+    /// is `NotFound { why: not_context }`.
+    ContextOnly,
+}
+
 /// Bindings of one context, keyed by `(id, kind)`. A `BTreeMap` so `list`
 /// order is deterministic.
 type Bindings = BTreeMap<(String, String), Bound>;
@@ -233,9 +378,30 @@ impl Tree {
         key
     }
 
-    /// The binding table of the context behind `key`. Contexts are never
-    /// destroyed, so a missing key means the request addressed an object
-    /// this server never minted.
+    /// Retires the context behind `key`, which must be empty.
+    ///
+    /// The *bindings that name it* are deliberately left alone: §2.5.1 makes
+    /// destroying a context and unbinding its name two operations, and
+    /// omniNames measurably leaves the dangling binding in place and
+    /// reporting `ncontext`. What changes is that the key stops being one
+    /// this dispatch answers for, so the reference a client is still holding
+    /// — and the one `resolve` will still hand out — answers
+    /// `OBJECT_NOT_EXIST` from that moment on.
+    ///
+    /// `minted` only ever rises, so a destroyed key is never re-issued and a
+    /// stale reference cannot come back pointing at a different context.
+    fn destroy(&mut self, key: &[u8]) -> Result<(), Raise> {
+        if !self.table(key)?.is_empty() {
+            return Err(UserExc::NotEmpty.into());
+        }
+        self.contexts.remove(key);
+        Ok(())
+    }
+
+    /// The binding table of the context behind `key`. A missing key means the
+    /// request addressed an object this server never minted, or one `destroy`
+    /// has since retired — the same answer for both, which is what lets
+    /// `knows` and this look-up race without ordering.
     fn table(&self, key: &[u8]) -> Result<&Bindings, Raise> {
         self.contexts.get(key).ok_or_else(|| Raise::System(SystemException::object_not_exist()))
     }
@@ -315,6 +481,43 @@ impl NamingServer {
         }
     }
 
+    /// The object key of a context **this server serves**, if `ior` names
+    /// one; `None` for everything else.
+    ///
+    /// This is the whole of what separates a `bind_context` this servant can
+    /// honour from one it answers `NO_IMPLEMENT` to, and it is two halves on
+    /// purpose:
+    ///
+    /// 1. a profile addressed at the host and port this server publishes, and
+    /// 2. an object key `tree` currently holds a context under.
+    ///
+    /// Neither alone is enough. The key alone would adopt a *foreign*
+    /// server's object because it happened to use the same key bytes —
+    /// binding somebody else's reference as though this dispatch answered for
+    /// it, which is the one mistake here that produces silent wrong answers
+    /// rather than an exception. The address alone would accept any key at
+    /// our own address, including one `destroy` has retired.
+    ///
+    /// Deliberately **not** done: asking the reference what it is. `_is_a`
+    /// over the wire would be an outbound call from a servant, which is the
+    /// property this module keeps (see the module docs on sharing), and it
+    /// would be a weaker answer anyway — a key in the tree is proof that this
+    /// dispatch answers for it, which is what the caller actually needs.
+    ///
+    /// Known and accepted: behind the address rewriting of [`crate::nat`] our
+    /// own reference comes back at an address that is not ours and is read as
+    /// foreign, so the answer is `NO_IMPLEMENT` rather than a wrong bind.
+    fn local_context_key(&self, tree: &Tree, ior: &Ior) -> Option<Vec<u8>> {
+        ior.profiles
+            .iter()
+            .find(|p| {
+                p.host == self.host
+                    && p.port == self.port
+                    && tree.contexts.contains_key(&p.object_key)
+            })
+            .map(|p| p.object_key.clone())
+    }
+
     /// The reference a resolved binding hands back. A context is named by its
     /// key, so its reference is minted here — outside the lock, from fields
     /// that cannot change.
@@ -363,11 +566,33 @@ impl NamingServer {
             "bind" | "rebind" => {
                 let name = read_name(&mut args).map_err(|_| marshal())?;
                 let obj = Ior::read_from(&mut args).map_err(|_| marshal())?;
-                let overwrite = req.operation == "rebind";
-                self.tree.write(|t| {
-                    t.bind_from(&req.object_key, &name, Bound::Object(obj), overwrite)
+                let replace =
+                    if req.operation == "rebind" { Replace::ObjectOnly } else { Replace::Never };
+                self.tree
+                    .write(|t| t.bind_from(&req.object_key, &name, Bound::Object(obj), replace))?;
+            }
+            // The context these bind must be one this dispatch answers for;
+            // see `local_context_key` for the test and the module docs for
+            // why a foreign one is still `NO_IMPLEMENT`. The membership look
+            // is inside the same write section as the bind, so the context
+            // cannot be destroyed between being recognised and being bound.
+            "bind_context" | "rebind_context" => {
+                let name = read_name(&mut args).map_err(|_| marshal())?;
+                let ctx = Ior::read_from(&mut args).map_err(|_| marshal())?;
+                let replace = if req.operation == "rebind_context" {
+                    Replace::ContextOnly
+                } else {
+                    Replace::Never
+                };
+                self.tree.write(|t| match self.local_context_key(t, &ctx) {
+                    Some(key) => t.bind_from(&req.object_key, &name, Bound::Context(key), replace),
+                    None => Err(SystemException::no_implement().into()),
                 })?;
             }
+            // §2.5.1: the context is retired, the name that named it is not.
+            // A context that still holds bindings is `NotEmpty`, so no single
+            // call can orphan a subtree.
+            "destroy" => self.tree.write(|t| t.destroy(&req.object_key))?,
             "unbind" => {
                 let name = read_name(&mut args).map_err(|_| marshal())?;
                 self.tree.write(|t| t.unbind_from(&req.object_key, &name))?;
@@ -439,25 +664,16 @@ impl NamingServer {
                 })?;
                 out.put_str(&url);
             }
-            // Declared by `CosNaming` and deliberately not served: the wire
-            // says so with `NO_IMPLEMENT`, which a client can tell from an
-            // oversight. `BAD_OPERATION` said "no such operation" and left the
-            // difference in this module's doc comment, where no caller reads.
-            op if is_deferred(op) => return Err(SystemException::no_implement().into()),
+            // Every operation `NamingContext` and `NamingContextExt` declare
+            // now has an arm above, so a name reaching here is one the
+            // contract does not declare at all — an oversight, not a
+            // decision, and `BAD_OPERATION` is what says so. The
+            // `NO_IMPLEMENT` this servant still raises is chosen by an
+            // argument, in `bind_context`, not by an operation name.
             _ => return Err(SystemException::bad_operation().into()),
         }
         Ok(())
     }
-}
-
-/// The `CosNaming` operations this server knows about and does not serve.
-///
-/// The reasons are in this module's header, one per operation, and they are
-/// the reasons this list exists rather than a `BAD_OPERATION` fallthrough:
-/// `bind_context`/`rebind_context` would bind a *foreign* context, and
-/// `destroy` would invalidate keys other references still name.
-pub fn is_deferred(op: &str) -> bool {
-    matches!(op, "bind_context" | "rebind_context" | "destroy")
 }
 
 impl Tree {
@@ -506,12 +722,14 @@ impl Tree {
         }
     }
 
+    /// The one implementation behind `bind`, `rebind`, `bind_context` and
+    /// `rebind_context`; `replace` is the only thing that differs.
     fn bind_from(
         &mut self,
         start: &[u8],
         name: &[NameComponent],
         to: Bound,
-        overwrite: bool,
+        replace: Replace,
     ) -> Result<(), Raise> {
         let (ctx, last) = self.walk(start, name)?;
         match self.table_mut(&ctx)?.entry(slot(&last)) {
@@ -520,13 +738,16 @@ impl Tree {
                 Ok(())
             }
             Entry::Occupied(mut o) => {
-                if !overwrite {
-                    return Err(UserExc::AlreadyBound.into());
-                }
-                if matches!(o.get(), Bound::Context(_)) {
-                    // rebind replaces objects only; replacing a context is
-                    // rebind_context's job, which is not served.
-                    return Err(UserExc::NotFound { why: WHY_NOT_OBJECT, rest: vec![last] }.into());
+                let why = match (replace, o.get()) {
+                    (Replace::Never, _) => return Err(UserExc::AlreadyBound.into()),
+                    // Each rebind refuses the other's occupant, naming which
+                    // kind it found rather than which it wanted.
+                    (Replace::ObjectOnly, Bound::Context(_)) => Some(WHY_NOT_OBJECT),
+                    (Replace::ContextOnly, Bound::Object(_)) => Some(WHY_NOT_CONTEXT),
+                    _ => None,
+                };
+                if let Some(why) = why {
+                    return Err(UserExc::NotFound { why, rest: vec![last] }.into());
                 }
                 o.insert(to);
                 Ok(())
@@ -537,7 +758,9 @@ impl Tree {
     fn unbind_from(&mut self, start: &[u8], name: &[NameComponent]) -> Result<(), Raise> {
         let (ctx, last) = self.walk(start, name)?;
         match self.table_mut(&ctx)?.remove(&slot(&last)) {
-            // An unbound context stays reachable by key; destroy is not served.
+            // Unbinding a context does not destroy it: an unbound context is
+            // still reachable by its key, and `destroy` is the operation that
+            // retires it. That is §2.5.1's split and omniNames' behaviour.
             Some(_) => Ok(()),
             None => Err(UserExc::NotFound { why: WHY_MISSING_NODE, rest: vec![last] }.into()),
         }
@@ -996,7 +1219,7 @@ mod tests {
     /// interface ids must answer true. An operation outside the served
     /// surface is `BAD_OPERATION`, never a silent empty reply.
     #[test]
-    fn is_a_answers_for_both_interfaces_and_a_deferred_op_says_so() {
+    fn is_a_answers_for_both_interfaces_and_an_undeclared_op_says_so() {
         let served = Served::start();
         let mut ctx = served.client();
         for (id, expected) in [
@@ -1007,16 +1230,22 @@ mod tests {
             let reply = ctx.connection().invoke("_is_a", move |e| e.put_str(id)).unwrap();
             assert_eq!(reply.body().unwrap().get_bool().unwrap(), expected, "{id}");
         }
-        // `destroy` is declared by `CosNaming` and deliberately not served,
-        // so it answers NO_IMPLEMENT. A name the contract does not declare at
-        // all still answers BAD_OPERATION, and the two staying different is
-        // the whole point: it is what lets a client tell a decision from a gap
-        // without reading this file.
-        match ctx.connection().invoke_nullary("destroy") {
+        // The deferral moved from an operation name to an argument, so this
+        // is where NO_IMPLEMENT is still measured: `bind_context` handed a
+        // context this dispatch does not answer for. A name the contract does
+        // not declare at all still answers BAD_OPERATION, and the two staying
+        // different is the whole point — it is what lets a client tell a
+        // decision from a gap without reading this file.
+        let foreign = dummy(b"somebody-elses-context");
+        let reply = ctx.connection().invoke("bind_context", |e| {
+            write_name(e, &[nc("elsewhere")]);
+            foreign.write_to(e).unwrap();
+        });
+        match reply {
             Err(Error::SystemException { id, .. }) => {
-                assert_eq!(id, crate::server::NO_IMPLEMENT, "a deferred operation");
+                assert_eq!(id, crate::server::NO_IMPLEMENT, "a foreign context");
             }
-            other => panic!("expected NO_IMPLEMENT for destroy, got {other:?}"),
+            other => panic!("expected NO_IMPLEMENT for a foreign bind_context, got {other:?}"),
         }
         match ctx.connection().invoke_nullary("no_such_operation") {
             Err(Error::SystemException { id, .. }) => {
@@ -1144,6 +1373,418 @@ mod tests {
             served.stats.peak_active()
         );
         served.shutdown(writer);
+    }
+
+    // ── the three re-examined deferrals ────────────────────────────────────
+
+    /// `new_context` over the wire, as the client half has no method for it.
+    fn new_context(ctx: &mut NamingContext) -> Ior {
+        let reply = ctx.connection().invoke_nullary("new_context").expect("new_context");
+        let mut b = reply.body().expect("body");
+        Ior::read_from(&mut b).expect("a context reference")
+    }
+
+    /// `bind_context`/`rebind_context` over the wire, likewise.
+    fn bind_ctx(
+        ctx: &mut NamingContext,
+        op: &'static str,
+        name: &[NameComponent],
+        target: &Ior,
+    ) -> Result<(), Error> {
+        let name = name.to_vec();
+        let target = target.clone();
+        ctx.connection()
+            .invoke(op, move |e| {
+                write_name(e, &name);
+                target.write_to(e).expect("an IOR encodes");
+            })
+            .map(|_| ())
+    }
+
+    fn destroy(ctx: &mut NamingContext) -> Result<(), Error> {
+        ctx.connection().invoke_nullary("destroy").map(|_| ())
+    }
+
+    fn system_exception_id(err: Error, ctx: &str) -> String {
+        match err {
+            Error::SystemException { id, .. } => id,
+            other => panic!("{ctx}: expected a system exception, got {other:?}"),
+        }
+    }
+
+    /// The idiom the old deferral refused: mint a context, populate it, then
+    /// make it visible under a name. `new_context` was already served and
+    /// until now produced nothing that could ever be bound.
+    #[test]
+    fn new_context_then_bind_context_is_the_local_idiom() {
+        let served = Served::start();
+        let mut ctx = served.client();
+
+        let minted = new_context(&mut ctx);
+        assert_eq!(minted.type_id, NAMING_CONTEXT_EXT_ID);
+        bind_ctx(&mut ctx, "bind_context", &[nc("sub")], &minted).expect("bind_context");
+
+        // It is a context of this tree, not an opaque reference: a path
+        // through it binds and resolves.
+        ctx.bind(&[nc("sub"), nc("leaf")], &dummy(b"Leaf")).unwrap();
+        assert_eq!(
+            ctx.resolve(&[nc("sub"), nc("leaf")]).unwrap().primary().unwrap().object_key,
+            b"Leaf"
+        );
+        assert_eq!(
+            ctx.resolve(&[nc("sub")]).unwrap().primary().unwrap().object_key,
+            minted.primary().unwrap().object_key,
+            "resolving the name gives back the very context that was bound"
+        );
+
+        // `list` reports it as ncontext, which is how a peer tells the two
+        // binding kinds apart.
+        let (all, _) = ctx.list(10).unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(all[0].is_context, "a bound context lists as ncontext");
+
+        // A taken name is AlreadyBound — measured against omniNames.
+        let again = new_context(&mut ctx);
+        match bind_ctx(&mut ctx, "bind_context", &[nc("sub")], &again) {
+            Err(Error::UserException { id, .. }) => assert_eq!(id, ALREADY_BOUND_ID),
+            other => panic!("expected AlreadyBound, got {other:?}"),
+        }
+        served.shutdown(ctx);
+    }
+
+    /// The two rebinds are mirror images, and each refuses the other's
+    /// occupant with the reason that names what it found. omniNames refuses
+    /// neither; the divergence is argued on [`Replace`].
+    #[test]
+    fn rebind_context_replaces_a_context_and_refuses_an_object() {
+        let served = Served::start();
+        let mut ctx = served.client();
+
+        let first = new_context(&mut ctx);
+        bind_ctx(&mut ctx, "bind_context", &[nc("c")], &first).unwrap();
+        ctx.bind(&[nc("c"), nc("inside")], &dummy(b"Old")).unwrap();
+
+        // Replacing a context binding is exactly what rebind_context is for,
+        // and the old context's contents leave with it.
+        let second = new_context(&mut ctx);
+        bind_ctx(&mut ctx, "rebind_context", &[nc("c")], &second).expect("rebind_context");
+        let err = ctx.resolve(&[nc("c"), nc("inside")]).unwrap_err();
+        expect_not_found(err, WHY_MISSING_NODE, &[nc("inside")], "after rebind_context");
+
+        // A free name is simply bound.
+        let third = new_context(&mut ctx);
+        bind_ctx(&mut ctx, "rebind_context", &[nc("fresh")], &third).expect("free name");
+
+        // An object under the name is not this operation's to replace.
+        ctx.bind(&[nc("anobject")], &dummy(b"O")).unwrap();
+        let fourth = new_context(&mut ctx);
+        let err = bind_ctx(&mut ctx, "rebind_context", &[nc("anobject")], &fourth).unwrap_err();
+        expect_not_found(err, WHY_NOT_CONTEXT, &[nc("anobject")], "rebind_context over object");
+        served.shutdown(ctx);
+    }
+
+    /// The half of the old deferral that is still in force, and the two-part
+    /// test that decides it. A key this tree holds is not enough — the
+    /// reference must also be addressed at us — because adopting a foreign
+    /// server's object as one of ours is the mistake here that answers
+    /// wrongly instead of raising.
+    #[test]
+    fn bind_context_refuses_every_reference_this_server_does_not_serve() {
+        let served = Served::start();
+        let mut ctx = served.client();
+
+        let ours = new_context(&mut ctx);
+        let addr = ours.primary().unwrap().clone();
+
+        // Our own key, somebody else's address.
+        let mut impostor = ours.clone();
+        impostor.profiles[0].host = "192.0.2.7".into();
+        // Our own address, a key we never minted.
+        let mut stranger = ours.clone();
+        stranger.profiles[0].object_key = b"NameService/_ctx9999".to_vec();
+        // The two shapes a client can hand over without meaning to.
+        let nil = nil_ref();
+        let plain = dummy(b"Echo");
+
+        for (what, r) in [
+            ("our key at a foreign address", &impostor),
+            ("our address with a key we never minted", &stranger),
+            ("a nil reference", &nil),
+            ("a plain object", &plain),
+        ] {
+            for op in ["bind_context", "rebind_context"] {
+                let err = bind_ctx(&mut ctx, op, &[nc("nope")], r).unwrap_err();
+                assert_eq!(
+                    system_exception_id(err, what),
+                    crate::server::NO_IMPLEMENT,
+                    "{op} with {what}"
+                );
+            }
+        }
+
+        // Nothing was bound by any of that, and the genuine article still is.
+        let (all, _) = ctx.list(10).unwrap();
+        assert!(all.is_empty(), "a refused bind_context must leave the context untouched");
+        bind_ctx(&mut ctx, "bind_context", &[nc("real")], &ours).expect("the genuine article");
+        assert_eq!(
+            ctx.resolve(&[nc("real")]).unwrap().primary().unwrap().object_key,
+            addr.object_key
+        );
+        served.shutdown(ctx);
+    }
+
+    /// What a peer sees after `destroy`, which is the whole reason the
+    /// operation is worth serving: the *binding* survives and the *object*
+    /// does not. Every row here was measured against omniNames first.
+    #[test]
+    fn destroy_retires_the_object_and_leaves_the_binding_dangling() {
+        let served = Served::start();
+        let mut ctx = served.client();
+        let dead = ctx.bind_new_context(&[nc("dead")]).unwrap();
+
+        {
+            // Destroy is addressed *to the context*, so it travels on that
+            // context's own reference.
+            let mut on_it = NamingContext::connect(&dead, T).unwrap();
+            destroy(&mut on_it).expect("an empty context is destroyable");
+            // A second destroy finds no such object.
+            let err = destroy(&mut on_it).unwrap_err();
+            assert_eq!(system_exception_id(err, "second destroy"), crate::server::OBJECT_NOT_EXIST);
+            // And so does anything else sent to it.
+            let err = on_it.resolve(&[nc("z")]).unwrap_err();
+            assert_eq!(
+                system_exception_id(err, "resolve on a destroyed context"),
+                crate::server::OBJECT_NOT_EXIST
+            );
+        }
+
+        // The parent still names it, and still calls it a context.
+        let (all, _) = ctx.list(10).unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(all[0].is_context, "the dangling binding still reports ncontext");
+        let still = ctx.resolve(&[nc("dead")]).expect("resolving the name still works");
+        assert_eq!(still.primary().unwrap().object_key, dead.primary().unwrap().object_key);
+
+        // Walking *through* it is where the client learns: OBJECT_NOT_EXIST,
+        // not NotFound — the name is fine, the object is gone.
+        let err = ctx.resolve(&[nc("dead"), nc("z")]).unwrap_err();
+        assert_eq!(
+            system_exception_id(err, "resolve through a destroyed binding"),
+            crate::server::OBJECT_NOT_EXIST
+        );
+        let err = ctx.bind(&[nc("dead"), nc("z")], &dummy(b"z")).unwrap_err();
+        assert_eq!(
+            system_exception_id(err, "bind through a destroyed binding"),
+            crate::server::OBJECT_NOT_EXIST
+        );
+
+        // Unbinding the dangling name is the client's other half, and it is
+        // an ordinary unbind.
+        ctx.unbind(&[nc("dead")]).unwrap();
+        let (all, _) = ctx.list(10).unwrap();
+        assert!(all.is_empty());
+        served.shutdown(ctx);
+    }
+
+    /// `NotEmpty` is what stops one call orphaning a subtree.
+    #[test]
+    fn destroy_refuses_a_context_that_still_holds_bindings() {
+        let served = Served::start();
+        let mut ctx = served.client();
+        let full = ctx.bind_new_context(&[nc("full")]).unwrap();
+        ctx.bind(&[nc("full"), nc("thing")], &dummy(b"T")).unwrap();
+
+        let mut on_it = NamingContext::connect(&full, T).unwrap();
+        match destroy(&mut on_it) {
+            Err(Error::UserException { id, reply }) => {
+                assert_eq!(id, NOT_EMPTY_ID);
+                let mut b = reply.body().unwrap();
+                assert_eq!(b.get_string().unwrap(), NOT_EMPTY_ID, "no members follow the id");
+                assert!(b.is_empty(), "NotEmpty carries nothing else");
+            }
+            other => panic!("expected NotEmpty, got {other:?}"),
+        }
+        // Emptied, it goes.
+        ctx.unbind(&[nc("full"), nc("thing")]).unwrap();
+        destroy(&mut on_it).expect("an emptied context is destroyable");
+        drop(on_it);
+        served.shutdown(ctx);
+    }
+
+    /// The root is not special, which is measured rather than chosen:
+    /// omniNames destroys an empty root and the naming service is then gone.
+    /// Ours behaves the same and, unlike omniNames', comes back on a restart
+    /// because the tree was never on disk.
+    #[test]
+    fn destroying_an_empty_root_is_not_special_cased() {
+        let served = Served::start();
+        let mut ctx = served.client();
+        ctx.bind(&[nc("occupant")], &dummy(b"o")).unwrap();
+        match destroy(&mut ctx) {
+            Err(Error::UserException { id, .. }) => {
+                assert_eq!(id, NOT_EMPTY_ID, "a populated root is NotEmpty, like any other")
+            }
+            other => panic!("expected NotEmpty for a populated root, got {other:?}"),
+        }
+        ctx.unbind(&[nc("occupant")]).unwrap();
+        destroy(&mut ctx).expect("an empty root goes the way omniNames' does");
+
+        // And the service is now unreachable, by its own root reference.
+        let err = ctx.resolve(&[nc("anything")]).unwrap_err();
+        assert_eq!(
+            system_exception_id(err, "after the root was destroyed"),
+            crate::server::OBJECT_NOT_EXIST
+        );
+        served.shutdown(ctx);
+    }
+
+    /// A context minted by `new_context` and never bound used to be
+    /// unreclaimable — the tree only grew. `destroy` is the way back.
+    #[test]
+    fn an_unbound_context_can_be_reclaimed() {
+        let served = Served::start();
+        let mut ctx = served.client();
+        let orphan = new_context(&mut ctx);
+        drop(ctx);
+
+        let mut on_it = NamingContext::connect(&orphan, T).unwrap();
+        destroy(&mut on_it).expect("an orphan is destroyable");
+        let err = on_it.resolve(&[nc("z")]).unwrap_err();
+        assert_eq!(
+            system_exception_id(err, "the reclaimed orphan"),
+            crate::server::OBJECT_NOT_EXIST
+        );
+        served.shutdown(on_it);
+    }
+
+    /// The property `bind_context` was measured not to spend: this servant
+    /// opens lock sections and never calls out from inside one.
+    ///
+    /// Dispatched **directly**, not through a server, because the tripwire
+    /// counts per thread — a violation committed on a connection thread is
+    /// invisible to the thread doing the asserting, so a test that drove this
+    /// over a socket would be measuring nothing. The completion flag is here
+    /// for the same reason: [`crate::guarded::complaints_about`] absorbs
+    /// panics, so an empty list has to be told apart from a closure that
+    /// stopped early.
+    #[test]
+    fn no_operation_of_this_servant_calls_out_from_inside_the_tree_lock() {
+        let ns = NamingServer::new("127.0.0.1", 1, b"NameService".to_vec());
+        let root = ns.root_ior();
+        let mut finished = false;
+
+        let complaints = crate::guarded::complaints_about(|| {
+            let mut child = nil_ref();
+            for (op, on_child, write) in operations(&root) {
+                let mut out = Encoder::new(Endian::Little);
+                let key = if on_child {
+                    child.primary().expect("new_context ran first").object_key.clone()
+                } else {
+                    b"NameService".to_vec()
+                };
+                let wire =
+                    crate::encode_request(Version::V1_2, Endian::Little, 1, &key, op, true, |e| {
+                        write(e, &child)
+                    })
+                    .unwrap();
+                let msg = crate::read_message(&mut &wire[..], DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+                let req = crate::server::decode_request(msg).unwrap();
+                // Both the key check and the operation, since `knows` takes
+                // the lock too.
+                assert!(SharedDispatch::knows(&ns, &req.object_key), "{op}");
+                let body = SharedDispatch::dispatch_body(&ns, &req, &mut out);
+                if op == "new_context" {
+                    let raw = out.finish().expect("the reply body encodes");
+                    child = Ior::read_from(&mut orbweaver_cdr::Decoder::new(&raw, Endian::Little))
+                        .expect("new_context returns a reference");
+                }
+                // Every operation must reach its *body*, or the sweep would
+                // measure the argument checks and call that coverage — the
+                // negative control caught exactly that: `destroy` addressed at
+                // the populated root stopped at `NotEmpty` and never removed a
+                // key, so a deliberate violation inside `Tree::destroy` went
+                // unnoticed. Each row is dispatched where it can succeed.
+                assert!(
+                    matches!(body, Ok(DispatchBody::Return)),
+                    "{op} did not reach its body: {body:?}"
+                );
+            }
+            finished = true;
+        });
+
+        // The complaint first, because in a debug build it is *why* the sweep
+        // stopped, and "measured nothing" would be the less useful of two
+        // true messages. Only `first()` is a both-profile observation: debug
+        // stops at the first violation and release carries on.
+        assert_eq!(
+            complaints.first(),
+            None,
+            "the naming servant violated the lock discipline: {complaints:?}"
+        );
+        assert!(finished, "the sweep did not run to the end, so it measured nothing");
+    }
+
+    /// Every operation this servant serves, in an order where each one
+    /// *succeeds* — so the sweep measures the operation bodies and not the
+    /// argument checks in front of them. The flag says whether the request is
+    /// addressed at the child `new_context` minted rather than at the root,
+    /// which is what lets `destroy` reach the line that removes a key.
+    ///
+    /// `new_context`'s reply also feeds the two operations that need a
+    /// context reference, so `bind_context`'s *accepting* path is swept and
+    /// not only its refusal.
+    #[allow(clippy::type_complexity)]
+    fn operations(root: &Ior) -> Vec<(&'static str, bool, Box<dyn Fn(&mut Encoder, &Ior)>)> {
+        let root = root.clone();
+        let a_context_ref = |e: &mut Encoder, child: &Ior| {
+            write_name(e, &[nc("c")]);
+            child.write_to(e).expect("an IOR encodes");
+        };
+        vec![
+            ("_is_a", false, Box::new(|e: &mut Encoder, _: &Ior| e.put_str(NAMING_CONTEXT_ID))),
+            ("_non_existent", false, Box::new(|_: &mut Encoder, _: &Ior| {})),
+            ("new_context", false, Box::new(|_: &mut Encoder, _: &Ior| {})),
+            (
+                "bind",
+                false,
+                Box::new(move |e: &mut Encoder, _: &Ior| {
+                    write_name(e, &[nc("a")]);
+                    root.write_to(e).expect("an IOR encodes");
+                }),
+            ),
+            ("resolve", false, Box::new(|e: &mut Encoder, _: &Ior| write_name(e, &[nc("a")]))),
+            ("resolve_str", false, Box::new(|e: &mut Encoder, _: &Ior| e.put_str("a"))),
+            ("to_name", false, Box::new(|e: &mut Encoder, _: &Ior| e.put_str("a"))),
+            ("to_string", false, Box::new(|e: &mut Encoder, _: &Ior| write_name(e, &[nc("a")]))),
+            (
+                "to_url",
+                false,
+                Box::new(|e: &mut Encoder, _: &Ior| {
+                    e.put_str("iiop:1.2@127.0.0.1:1");
+                    e.put_str("a");
+                }),
+            ),
+            ("list", false, Box::new(|e: &mut Encoder, _: &Ior| e.put_u32(10))),
+            (
+                "bind_new_context",
+                false,
+                Box::new(|e: &mut Encoder, _: &Ior| write_name(e, &[nc("n")])),
+            ),
+            ("bind_context", false, Box::new(a_context_ref)),
+            ("rebind_context", false, Box::new(a_context_ref)),
+            (
+                "rebind",
+                false,
+                Box::new(|e: &mut Encoder, child: &Ior| {
+                    write_name(e, &[nc("a")]);
+                    child.write_to(e).expect("an IOR encodes");
+                }),
+            ),
+            ("unbind", false, Box::new(|e: &mut Encoder, _: &Ior| write_name(e, &[nc("a")]))),
+            // On the child, which is empty: the root still holds bindings, so
+            // addressing `destroy` there would stop at `NotEmpty`.
+            ("destroy", true, Box::new(|_: &mut Encoder, _: &Ior| {})),
+        ]
     }
 
     /// The narrow `dispatch` entry point cannot carry a user exception, so it
