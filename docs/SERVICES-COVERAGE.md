@@ -362,6 +362,51 @@ explained by nothing. That is the number this document exists to produce.
 선언 107개 중 12개가 서번트에게 거부당하지만 어디에도 설명이 없다. 이 문서가
 만들어내려던 숫자가 그것이다.
 
+### Re-measured again, later on 2026-08-18 / 재재측정
+
+The pull half of CosEvent moved, and the sweep had to move with it.
+
+| Service | probes | served | `NO_PERMISSION` | `NO_IMPLEMENT` | `BAD_OPERATION` |
+|---|---:|---:|---:|---:|---:|
+| CosEvent | 28 | **24** | 0 | **4** | 0 |
+
+The consumer side of pull is served: `obtain_pull_supplier`,
+`connect_pull_consumer`, `pull`, `try_pull`, `disconnect_pull_supplier`. The
+deferral's reason was *"the same unbounded buffer this module spends its
+bounded queue avoiding, for no named consumer"*, and **only the second clause
+survived measurement** — a `ProxyPullSupplier` holds events in the same bounded
+deque, moved by the same knob, dropped oldest-first into the same counter.
+
+The supplier side stays deferred with a **rewritten** reason: there the channel
+is the puller, `PullSupplier::pull` is specified to block until the supplier
+has something, and the channel would hold a thread per connected supplier on
+somebody else's clock — for no named supplier, since nothing here is one.
+`destroy` also stays, and its reason sharpened: the outbound half is answered
+by `guarded`, but it remains an **unauthenticated remote operation that ends
+the channel for every other client**, and this servant does not know who is
+calling.
+
+**The sweep was measuring the wrong object.** It probed the pull operations
+against a *push* proxy, because no pull proxy could be obtained when that code
+was written. The moment they started being served, that reported the whole
+`ProxyPullSupplier` interface as **unserved** — a false absence produced by
+asking the wrong reference. It obtains the real proxy now. The
+`ProxyPullConsumer` probe still goes to a push proxy, and there that is the
+honest thing: `obtain_pull_consumer` is still refused, so the interface has no
+object, and an operation nothing can address is still an operation the channel
+does not have.
+
+**No peer verified any of this.** `brew info omnievents` still reports *"No
+available formula"*, and omniORBpy ships no `ProxyPullSupplier` stubs, so there
+is not even a half-peer. The oracle is CORBA 3.4 plus hand-built GIOP clients,
+with the limit that arrangement always has: it proves we do what we read, not
+what another ORB does.
+
+CosEvent의 pull 소비자 쪽이 서빙된다. 유예 사유 두 절 중 **하나만 측정을
+견뎠다.** 스윕은 **잘못된 객체를 재고 있었고**, 그래서 서빙되기 시작한 순간
+인터페이스 전체를 미서빙으로 보고했다 — 잘못된 참조에 물어 만든 거짓 부재다.
+**어떤 피어도 이것을 검증하지 않았다.**
+
 ### Re-measured 2026-08-18 / 재측정
 
 The table above is the 2026-08-14 measurement and stays as it was taken. The

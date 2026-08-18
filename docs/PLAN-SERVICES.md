@@ -335,5 +335,5 @@ omniEvents (absent — recorded above), sslTP (absent —
 | F7 Event channel | F6 | the channel is a named object; discovery wants Naming |
 | IFR facade (§7) | F6 | **landed** — same reason |
 | Trading wire (`ExpertRegistry` served) | F3 | the loader/state machine is its first caller |
-| F5 LifeCycle/Property | F2 ✅ + F4 | factories bind experts; policy rides the interceptor chain |
+| F5 LifeCycle/Property | F2 ✅ + F4 | **landed 2026-08-14** as `tenant_service.rs`, and this row never grew the marker the F6 and IFR rows have — measured 16/16 in `SERVICES-COVERAGE.md` §7. What was missing was the *direction*: 2026-08-18 an omniORB client calls all sixteen through its own stubs. Open hole: `bind_expert`/`set_policy` take references **no operation of the contract returns**, so a caller must build them from the key template |
 | CosEvent → telemetry feedback | F4 + F7 | the §6 feedback loop closes only when both exist |

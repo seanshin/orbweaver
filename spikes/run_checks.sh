@@ -415,6 +415,58 @@ else
   fail_total=$((fail_total+1))
 fi
 
+hr "F5 lifecycle/property — omniORB's client against OUR tenant service"
+# SERVICES-COVERAGE §9's one open direction for golden 23: 16-of-16 had only
+# ever been asserted by the client written alongside the server.
+f5_fail=0
+rm -f /tmp/orbweaver-f5-a.ior /tmp/orbweaver-f5-b.ior /tmp/orbweaver-f5-hold.log
+( cd "$ROOT" && exec cargo run -q --bin spike-tenants -- \
+    /tmp/orbweaver-f5-a.ior /tmp/orbweaver-f5-b.ior --hold \
+    >/tmp/orbweaver-f5-hold.log 2>&1 & )
+f5_up=0
+for _ in $(seq 1 120); do
+  grep -qs HOLDING /tmp/orbweaver-f5-hold.log && { f5_up=1; break; }
+  sleep 0.25
+done
+if [ "$f5_up" -eq 1 ]; then
+  f5_out=$(python3 spikes/f5_peer_client.py /tmp/orbweaver-f5-a.ior /tmp/orbweaver-f5-b.ior 2>&1)
+  case "$f5_out" in
+    *"f5-peer: PASS"*)
+      echo "  ok   omniORB called all 16 declared operations of golden 23 on our servant" ;;
+    *)
+      echo "  FAIL cross-ORB F5"
+      printf '%s\n' "$f5_out" | grep -E "FAIL|BLOCKED" | head -3 | sed 's/^/       /'
+      f5_fail=1 ;;
+  esac
+else
+  echo "  FAIL the holding tenant service never came up"; f5_fail=1
+fi
+fkill spike-tenants
+[ "$f5_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
+hr "cosevent pull model — no peer exists, so this is a repetition check"
+# omniEvents is absent and omniORBpy ships no ProxyPullSupplier stubs, so there
+# is nothing to check conformance against. What the harness adds over `cargo
+# test` is repetition: this is the first servant operation that blocks inside
+# `dispatch`, and the failure mode of its central test is a timeout rather than
+# a wrong value. One green run of a test like that is not evidence.
+pull_fail=0
+for pull_profile in "" "--release"; do
+  for _ in 1 2 3; do
+    pull_out=$(cargo test -q -p orbweaver-giop $pull_profile --test event_pull_model 2>&1)
+    if [ $? -ne 0 ] || ! printf '%s' "$pull_out" | grep -q "test result: ok\."; then
+      pull_fail=$((pull_fail+1))
+      printf '%s\n' "$pull_out" | tail -6 | sed 's/^/       /'
+    fi
+  done
+done
+if [ "$pull_fail" -eq 0 ]; then
+  echo "  ok   cosevent pull model green 6/6 across both profiles"
+else
+  echo "  FAIL cosevent pull model: $pull_fail of 6 runs were not green"
+  fail_total=$((fail_total+1))
+fi
+
 hr "codeset advertising — a conversion is offered only where one is needed"
 # D009 §8 row 4 conditions a non-empty char conversion list on a peer that
 # cannot reach UTF-8. This runs the condition rather than remembering it: a

@@ -713,14 +713,24 @@ def do_event(sweep, interfaces, ref):
                 [(CORBA_OBJECT_ID, "_is_a"), (CORBA_OBJECT_ID, "_non_existent")],
             )
 
-        # The pull half declares four interfaces whose objects cannot be
-        # obtained at all, because both `obtain_pull_*` are refused. Their
-        # operations are probed against the push proxies so the sweep says
-        # something measured about them rather than nothing: an operation
-        # nothing can address is still an operation the channel does not have.
-        if push_supplier:
-            pull = resolve(interfaces, "CosEventChannelAdmin::ProxyPullSupplier")
-            sweep_object(sweep, "CosEvent", "ProxyPushSupplier", conn, push_supplier, pull)
+        # The pull half. `obtain_pull_supplier` is served now, so the sweep
+        # asks for the real object rather than probing a push proxy that never
+        # claimed the interface — which reported the whole interface as
+        # *unserved* the moment it started being served, because the sweep was
+        # measuring the wrong object. `obtain_pull_consumer` is still refused,
+        # deliberately, so its interface has no object and the probe against a
+        # push proxy is what stays honest there: an operation nothing can
+        # address is still an operation the channel does not have.
+        pull_supplier = None
+        if consumer_admin:
+            a = conn.call(consumer_admin.key, "obtain_pull_supplier")
+            sweep.note(f"CosEvent obtain_pull_supplier() -> {a.short()}")
+            pull_supplier = read_objref(a.body) if a.status == NO_EXCEPTION else None
+        pull_sup_ops = resolve(interfaces, "CosEventChannelAdmin::ProxyPullSupplier")
+        if pull_supplier:
+            sweep_object(sweep, "CosEvent", "ProxyPullSupplier", conn, pull_supplier, pull_sup_ops)
+        elif push_supplier:
+            sweep_object(sweep, "CosEvent", "ProxyPushSupplier", conn, push_supplier, pull_sup_ops)
         if push_consumer:
             pull = resolve(interfaces, "CosEventChannelAdmin::ProxyPullConsumer")
             sweep_object(sweep, "CosEvent", "ProxyPushConsumer", conn, push_consumer, pull)
