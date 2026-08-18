@@ -1,8 +1,29 @@
 //! `gen-corpus` — generate a standalone crate of stubs from a set of IDL files.
 //!
 //! ```text
-//! gen-corpus --out <dir> --workspace <path-to-orbweaver> <file.idl>...
+//! gen-corpus --out <dir> --workspace <path-to-orbweaver> [-I <dir>]... <file.idl>...
 //! ```
+//!
+//! `-I` is `sidl-validate`'s flag and means the same thing: another directory
+//! to resolve `#include` against. The quoted form searches the including file's
+//! own directory first, so an estate stored as one tree needs no `-I` at all.
+//!
+//! # Each file is a translation unit, not a string
+//!
+//! A stub is the caller's half of a contract, so it has to be generated from
+//! everything the contract says — including the part a header says. Read as a
+//! string, an interface whose base is declared next door arrives with no
+//! ancestry, and the client stub is emitted **without the inherited
+//! operations**: a method the peer would have answered simply does not exist in
+//! the generated crate, and nothing anywhere says one is missing. The identity
+//! half is worse, because it is silent in the other direction — a
+//! `#pragma prefix` in a shared header is part of every repository id after it,
+//! and a stub built without it sends `_is_a` and `GIOP::Request` type ids no
+//! deployed object answers to.
+//!
+//! *스텁은 계약의 절반이므로 번역 단위 전체에서 생성되어야 한다. 문자열로 읽으면
+//! 상속된 연산이 조용히 빠지고, 헤더의 `#pragma prefix`가 빠진 저장소 ID는 어떤
+//! 객체도 응답하지 않는 ID다.*
 //!
 //! The output is a crate **outside** the workspace, because that is what a
 //! consumer of generated code is: the harness compiling it proves the stubs
@@ -21,14 +42,22 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use orbweaver_registry::Registry;
+use orbweaver_registry::{Contract, Registry, Strictness, take_include_dirs};
 
 fn main() -> std::process::ExitCode {
     let mut out_dir: Option<String> = None;
     let mut workspace: Option<String> = None;
     let mut files: Vec<String> = Vec::new();
 
-    let mut args = std::env::args().skip(1);
+    let mut argv: Vec<String> = std::env::args().skip(1).collect();
+    let search = match take_include_dirs(&mut argv) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            return std::process::ExitCode::from(2);
+        }
+    };
+    let mut args = argv.into_iter();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--out" => out_dir = args.next(),
@@ -37,7 +66,9 @@ fn main() -> std::process::ExitCode {
         }
     }
     let (Some(out_dir), Some(workspace), false) = (out_dir, workspace, files.is_empty()) else {
-        eprintln!("usage: gen-corpus --out <dir> --workspace <orbweaver root> <file.idl>...");
+        eprintln!(
+            "usage: gen-corpus --out <dir> --workspace <orbweaver root> [-I <dir>]... <file.idl>..."
+        );
         return std::process::ExitCode::from(2);
     };
 
@@ -59,32 +90,44 @@ fn main() -> std::process::ExitCode {
             .unwrap_or_default();
         let module = format!("f_{stem}");
 
-        let src = match std::fs::read_to_string(path) {
-            Ok(s) => s,
+        // A path this process cannot open at all is "could not run" and keeps
+        // exit 2, because `Contract::load` folds an unreadable root and a
+        // rejected contract into one error and a mistyped filename must not
+        // read as a defective contract.
+        if let Err(e) = std::fs::File::open(path) {
+            eprintln!("{path}: {e}");
+            return std::process::ExitCode::from(2);
+        }
+        // The gate first, over the whole translation unit: generating from IDL
+        // that S4 rejects would produce stubs describing calls nobody can make,
+        // and generating from a file read as a string would produce stubs
+        // missing every operation an included header declares.
+        let contract = match Contract::load(Path::new(path), &search, Strictness::Checked) {
+            Ok(c) => c,
             Err(e) => {
-                eprintln!("{path}: {e}");
-                return std::process::ExitCode::from(2);
-            }
-        };
-        // The gate first: generating from IDL that S4 rejects would produce
-        // stubs describing calls nobody can make.
-        let spec = match orbweaver_idl::check(&src) {
-            Ok(s) => s,
-            Err(diags) => {
                 eprintln!("{path}: rejected by the front end:");
-                for d in diags.iter().take(3) {
-                    eprintln!("  {d}");
+                for line in e.message.lines().take(3) {
+                    eprintln!("  {line}");
                 }
                 failed += 1;
                 continue;
             }
         };
         let mut registry = Registry::new();
-        if let Err(e) = registry.load(&spec) {
+        if let Err(e) = registry.load(&contract.spec) {
             eprintln!("{path}: {e}");
             failed += 1;
             continue;
         }
+        // Deliberately **not** gated on `Registry::unresolved()`, which
+        // `idl-diff` refuses on. It reports names the registry could not
+        // resolve, and its resolver does not search an inherited interface's
+        // scope: `corpus/services/gen-naming-subset.idl` raises `NotFound`
+        // from `NamingContextExt : NamingContext`, which is legal IDL both
+        // oracles accept and four `Unresolved` markers here. Gating on it
+        // would refuse a contract this generator emits correctly today. The
+        // include class is already covered — `Contract::load` refuses an
+        // `#include` that resolves to nothing, with the file name.
         let generated = orbweaver_gen::emit(&registry, &module);
         emitted += generated.emitted;
         skipped.extend(generated.skipped.iter().map(|(id, why)| (id.clone(), why.clone())));
@@ -158,7 +201,8 @@ use orbweaver_dynamic::Value;
 use orbweaver_gen::rt::{AnyVal, Cdr, ObjRef, WString};
 use orbweaver_giop::typecode::TypeCode;
 use orbweaver_giop::{Connection, Ior};
-use orbweaver_registry::Registry;
+use orbweaver_idl::include::SearchPath;
+use orbweaver_registry::{Contract, Registry, Strictness};
 
 use f_echo::spike::{EchoClient, Ragged};
 
@@ -208,10 +252,15 @@ fn run(ior_path: &str, idl_path: &str) -> Result<u32, String> {
     // The dynamic path is the reference implementation: it is the one verified
     // against two independent ORBs. A static stub is correct exactly when its
     // bytes equal the dynamic bytes for the same value.
-    let src = std::fs::read_to_string(idl_path).map_err(|e| format!("{idl_path}: {e}"))?;
-    let spec = orbweaver_idl::parse(&src).map_err(|e| e.to_string())?;
+    // The same translation unit `gen-corpus` generated the stubs from. If this
+    // read the file as a string while the generator resolved its includes, the
+    // two sides of the byte comparison would be built from different contracts
+    // and the oracle would be comparing the wrong two things.
+    let path = std::path::Path::new(idl_path);
+    let contract = Contract::load(path, &SearchPath::new(), Strictness::Grammar)
+        .map_err(|e| e.message)?;
     let mut registry = Registry::new();
-    registry.load(&spec).map_err(|e| e.to_string())?;
+    registry.load(&contract.spec).map_err(|e| e.to_string())?;
     let ragged_tc = registry.typecode("IDL:spike/Ragged:1.0").ok_or("Ragged missing")?;
 
     println!("── static bytes versus dynamic bytes ──");

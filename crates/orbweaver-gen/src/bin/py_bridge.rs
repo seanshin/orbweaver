@@ -1,8 +1,16 @@
 //! `orbweaver-py-bridge` — where a generated Python client meets the wire.
 //!
 //! ```text
-//! orbweaver-py-bridge --idl <file.idl> --ior <IOR:… | path/to/file.ior>
+//! orbweaver-py-bridge --idl <file.idl> --ior <IOR:… | path/to/file.ior> [-I <dir>]...
 //! ```
+//!
+//! The IDL is read as a translation unit, `#include`s resolved, `-I` as
+//! `sidl-validate` spells it. This one is not cosmetic: the registry built here
+//! is what turns a JSON document into CDR and a reply back into JSON. An
+//! operation declared in an included base would be answered `no such operation`
+//! by the bridge while the peer implements it, and a `raises` naming an
+//! exception from a header would leave the bridge unable to name what it was
+//! handed. *브리지의 레지스트리가 곧 호출 가능한 표면이다.*
 //!
 //! One JSON document per line in each direction, on stdin and stdout. The
 //! documents are **AnyJSON v1** (`docs/PLAN.md` §4.5) — the mapping this
@@ -48,12 +56,24 @@ use orbweaver_dynamic::invoke::{self, InvokeError};
 use orbweaver_dynamic::json::Json;
 use orbweaver_giop::typecode::TypeCode;
 use orbweaver_giop::{Connection, Error as GiopError, Ior};
-use orbweaver_registry::{Entry, OperationSig, ParamDirection, ParamSig, Registry};
+use orbweaver_idl::include::SearchPath;
+use orbweaver_registry::{
+    Contract, Entry, OperationSig, ParamDirection, ParamSig, Registry, Strictness,
+    take_include_dirs,
+};
 
 fn main() -> std::process::ExitCode {
     let mut idl: Option<String> = None;
     let mut ior: Option<String> = None;
-    let mut args = std::env::args().skip(1);
+    let mut argv: Vec<String> = std::env::args().skip(1).collect();
+    let search = match take_include_dirs(&mut argv) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            return std::process::ExitCode::from(2);
+        }
+    };
+    let mut args = argv.into_iter();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--idl" => idl = args.next(),
@@ -65,10 +85,10 @@ fn main() -> std::process::ExitCode {
         }
     }
     let (Some(idl), Some(ior)) = (idl, ior) else {
-        eprintln!("usage: orbweaver-py-bridge --idl <file.idl> --ior <IOR:… | file>");
+        eprintln!("usage: orbweaver-py-bridge --idl <file.idl> --ior <IOR:… | file> [-I <dir>]...");
         return std::process::ExitCode::from(2);
     };
-    match run(&idl, &ior) {
+    match run(&idl, &ior, &search) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("orbweaver-py-bridge: {e}");
@@ -77,12 +97,16 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-fn run(idl_path: &str, ior_arg: &str) -> Result<(), String> {
-    let src = std::fs::read_to_string(idl_path).map_err(|e| format!("{idl_path}: {e}"))?;
-    let spec = orbweaver_idl::check(&src)
-        .map_err(|diags| diags.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"))?;
+fn run(idl_path: &str, ior_arg: &str, search: &SearchPath) -> Result<(), String> {
+    let contract = Contract::load(std::path::Path::new(idl_path), search, Strictness::Checked)
+        .map_err(|e| e.message)?;
     let mut registry = Registry::new();
-    registry.load(&spec).map_err(|e| e.to_string())?;
+    registry.load(&contract.spec).map_err(|e| e.to_string())?;
+    // Not gated on `Registry::unresolved()`: it also records names whose only
+    // problem is that the registry's resolver does not search an inherited
+    // interface's scope, so refusing on it would refuse the naming contract
+    // this project serves. `Contract::load` already refuses the case that
+    // matters here — an `#include` that resolved to nothing.
     let registry = with_attribute_accessors(&registry);
 
     let text = match std::fs::read_to_string(ior_arg) {

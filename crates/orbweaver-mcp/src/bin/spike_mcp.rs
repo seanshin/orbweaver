@@ -13,27 +13,42 @@
 //! even when every call succeeded — especially then, because that is the shape
 //! it would ship in.
 //!
-//! Usage: `spike-mcp <ior-file> <idl-file> <interface-id>`
+//! Usage: `spike-mcp [-I <dir>]... <ior-file> <idl-file> <interface-id>`
+//!
+//! The IDL file is read as a translation unit, `#include`s resolved. The
+//! catalog an agent searches and the operations an exposure can name are both
+//! read out of the registry built here, so a contract read as a string would
+//! make this spike's default-deny assertions hold over a surface smaller than
+//! the one the peer implements — the weakest possible way to pass a test about
+//! what an agent may reach.
 
 use std::time::Duration;
 
 use orbweaver_dynamic::json::Json;
 use orbweaver_giop::{Connection, Ior};
+use orbweaver_idl::SearchPath;
 use orbweaver_mcp::Bridge;
 use orbweaver_mcp::handles::CapabilityTable;
 use orbweaver_mcp::policy::{Approval, Exposure};
-use orbweaver_registry::Registry;
+use orbweaver_registry::{Contract, Registry, Strictness, take_include_dirs};
 
 const OK: &str = "ok  ";
 const NO: &str = "FAIL";
 
 fn main() -> std::process::ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let search = match take_include_dirs(&mut args) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            return std::process::ExitCode::from(2);
+        }
+    };
     let [ior_path, idl_path, interface_id] = args.as_slice() else {
-        eprintln!("usage: spike-mcp <ior-file> <idl-file> <interface-id>");
+        eprintln!("usage: spike-mcp [-I <dir>]... <ior-file> <idl-file> <interface-id>");
         return std::process::ExitCode::from(2);
     };
-    match run(ior_path, idl_path, interface_id) {
+    match run(ior_path, idl_path, interface_id, &search) {
         Ok(0) => {
             println!("\nMCP bridge: PASS — an agent session with no address in it");
             std::process::ExitCode::SUCCESS
@@ -70,11 +85,16 @@ impl Transcript {
     }
 }
 
-fn run(ior_path: &str, idl_path: &str, interface_id: &str) -> Result<u32, String> {
-    let src = std::fs::read_to_string(idl_path).map_err(|e| format!("{idl_path}: {e}"))?;
-    let spec = orbweaver_idl::parse(&src).map_err(|e| format!("{idl_path}: {e}"))?;
+fn run(
+    ior_path: &str,
+    idl_path: &str,
+    interface_id: &str,
+    search: &SearchPath,
+) -> Result<u32, String> {
+    let contract = Contract::load(std::path::Path::new(idl_path), search, Strictness::Grammar)
+        .map_err(|e| e.message)?;
     let mut registry = Registry::new();
-    registry.load(&spec).map_err(|e| e.to_string())?;
+    registry.load(&contract.spec).map_err(|e| e.to_string())?;
 
     let text = std::fs::read_to_string(ior_path).map_err(|e| format!("{ior_path}: {e}"))?;
     let ior = Ior::parse(text.trim()).map_err(|e| e.to_string())?;
@@ -242,6 +262,12 @@ fn run(ior_path: &str, idl_path: &str, interface_id: &str) -> Result<u32, String
     // A destructive operation is refused even when it is exposed. Checked
     // against a contract that declares one, because the fixture honestly has
     // none — the gate is a local decision and needs no peer.
+    //
+    // `parse` on purpose, and it stays: this is a string literal, not a path.
+    // There is no file, no directory for a quoted `#include` to be relative to,
+    // and nothing to resolve. The string entry point is the right one exactly
+    // where the input really is a string. *경로가 아니라 문자열이므로 문자열
+    // 진입점이 맞다.*
     let destructive_src =
         "module vault { interface Store { //@ ai_effect: destructive\n void erase(); }; };";
     let dspec = orbweaver_idl::parse(destructive_src).map_err(|e| e.to_string())?;
