@@ -292,9 +292,14 @@ else
   fail_total=$((fail_total+1))
 fi
 # A zero reach is a green that measured nothing.
+# Match the zero-reach wording, not any WARNING: the same binaries also warn
+# that a release build cannot observe arithmetic overflow, which is true and is
+# not a zero reach. The first version of this check read that note as a missing
+# target and turned a correct run red.
 case "$af_out" in
-  *WARNING:*) echo "  FAIL a fuzz target was never reached"; fail_total=$((fail_total+1)) ;;
-  *)          echo "  ok   every agent-boundary target was reached" ;;
+  *"were reached; the target"*)
+    echo "  FAIL a fuzz target was never reached"; fail_total=$((fail_total+1)) ;;
+  *)  echo "  ok   every agent-boundary target was reached" ;;
 esac
 
 hr "§5.3 — a breaking change inside an included header reaches the gate"
@@ -946,12 +951,18 @@ if printf '%s' "$wf_out" | grep -q "wire-fuzz: PASS"; then
   echo "  ok   $(printf '%s' "$wf_out" | head -1 | sed 's/^wire-fuzz: //')"
   printf '%s' "$wf_out" | sed -n '2,3p' | sed 's/^  /  ok   /'
   # A target that reached nothing is green and worthless, and only a reader of
-  # this line can turn the binary's own warning into a failure.
-  if printf '%s' "$wf_out" | grep -q "WARNING:"; then
-    printf '%s' "$wf_out" | grep "WARNING:" | sed 's/^ */       /'
+  # this line can turn the binary's own warning into a failure. Matched on the
+  # zero-reach wording rather than on "WARNING:", because the same binary also
+  # warns — correctly — that a release build cannot observe arithmetic
+  # overflow. The first version of this check read that note as a missing
+  # target and turned a correct run red.
+  if printf '%s' "$wf_out" | grep -q "were reached; the target"; then
+    printf '%s' "$wf_out" | grep "were reached; the target" | sed 's/^ */       /'
     echo "  FAIL a fuzz target reached nothing; its green result measures nothing"
     fail_total=$((fail_total+1))
   fi
+  # The overflow note is not a failure; it is the scope of the green above it.
+  printf '%s' "$wf_out" | grep "overflow-checks" | sed 's/^ */  note /'
 else
   printf '%s' "$wf_out" | grep "FAIL" | head -3 | sed 's/^/       /'
   echo "  FAIL a decoder panicked on bytes a peer can send"
