@@ -37,3 +37,10 @@ path = "src/bin/contract_check.rs"
 [[bin]]
 name = "wire-fuzz"
 path = "src/bin/wire_fuzz.rs"
+
+# The same question at the other untrusted boundary. A separate binary rather
+# than a flag on `wire-fuzz`, because the two report different reach over
+# different targets and a combined green would hide which half was measured.
+[[bin]]
+name = "agent-fuzz"
+path = "src/bin/agent_fuzz.rs"

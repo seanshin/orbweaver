@@ -61,10 +61,24 @@
 //! directions of our own code agree with each other about the wrong thing is
 //! precisely what it cannot catch, and the fixtures exist for that.
 //!
+//! # [`wire`] and [`agent`] — the same question at two boundaries
+//!
+//! Both ask what a parser does when a stranger picked the input, and they are
+//! separate modules because they are separate claims about separate strangers.
+//! [`wire`] covers the decoders a **peer** reaches before any policy runs;
+//! [`agent`] covers the parsers an **agent** reaches through `tools/call`,
+//! which since AnyJSON v1.1 (D008) include one that reads a whole `TypeCode`
+//! out of the agent's own document. §9.0's R11/R12 put the two in the same
+//! threat model, so neither list is a subset of the other and neither run can
+//! stand in for the other's green.
+//!
+//! **피어와 에이전트는 같은 등급의 비신뢰 입력이지만 도달하는 파서가 다르다.**
+//!
 //! [`Value`]: orbweaver_dynamic::Value
 
 #![deny(missing_docs)]
 
+pub mod agent;
 pub mod contract;
 pub mod prop;
 pub mod wire;

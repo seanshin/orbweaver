@@ -85,7 +85,11 @@ pub enum Source {
 }
 
 impl Source {
-    fn label(self) -> &'static str {
+    /// The word a report uses for this source. Public because
+    /// [`crate::agent`] runs the same three sources over a different boundary
+    /// and reports them in the same words — two vocabularies for one idea is
+    /// how two reports stop being comparable.
+    pub fn label(self) -> &'static str {
         match self {
             Source::Uniform => "uniform",
             Source::Mutated => "mutated",
