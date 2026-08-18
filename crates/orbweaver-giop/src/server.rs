@@ -2846,29 +2846,39 @@ mod tests {
     }
 
     /// The tripwire is not decoration: the outbound client path really does
-    /// refuse to block while a lock section is open.
+    /// catch a dial made while a lock section is open.
     ///
-    /// Written against a *live* server, so the only reason the connect does
-    /// not happen is the discipline — a connect that would have failed anyway
+    /// Written against a *live* server, so the only thing the dial can be
+    /// caught by is the discipline — a connect that would have failed anyway
     /// proves nothing. `guarded`'s own tests prove the counter; this one
     /// proves it is wired into [`crate::Connection`].
+    ///
+    /// Asked through [`crate::guarded::catches_a_violation`], because a debug
+    /// build refuses the dial by panicking and a release build lets it through
+    /// and complains. Catching the panic asserted only the first of those, in
+    /// the profile that does not ship.
     #[test]
-    fn the_outbound_path_refuses_to_dial_from_inside_a_lock_section() {
+    fn the_outbound_path_catches_a_dial_from_inside_a_lock_section() {
         let inner = serving_shared(Arc::new(Pong), DEFAULT_MAX_CONNECTIONS);
         let held = Guarded::new("a servant that should have copied out", ior_at(inner.addr, b"k"));
 
-        // Outside the section the same dial succeeds, which is what makes the
-        // refusal below attributable to the lock and to nothing else.
+        // Outside the section the same dial is silent, which is what makes the
+        // complaint below attributable to the lock and to nothing else.
         let ior = held.read(|i| i.clone());
-        let mut ok = crate::Connection::connect(&ior, DEADLINE).unwrap();
-        assert_eq!(ok.invoke_nullary("ping").unwrap().body().unwrap().get_i32().unwrap(), 42);
-        drop(ok);
+        let clean = crate::guarded::catches_a_violation(|| {
+            let mut ok = crate::Connection::connect(&ior, DEADLINE).unwrap();
+            assert_eq!(ok.invoke_nullary("ping").unwrap().body().unwrap().get_i32().unwrap(), 42);
+        });
+        assert!(!clean, "a dial outside any section must not be reported");
 
-        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            held.read(|i| crate::Connection::connect(i, DEADLINE).map(|_| ()))
-        }));
-        assert!(refused.is_err(), "dialling from inside a lock section must be refused");
-        assert_eq!(crate::guarded::section_held(), None, "the unwound section must have closed");
+        let said = crate::guarded::complaints_about(|| {
+            let _ = held.read(|i| crate::Connection::connect(i, DEADLINE).map(|_| ()));
+        });
+        assert!(
+            said.first().is_some_and(|c| c.contains("connecting to a peer")),
+            "the dial itself must be what is caught, got {said:?}"
+        );
+        assert_eq!(crate::guarded::section_held(), None, "the section must have closed behind it");
         inner.shutdown();
     }
 
