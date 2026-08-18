@@ -1,0 +1,133 @@
+// gen-target-lints — operation names and arities that are legal IDL and mean
+// something else in the target language.
+//
+// The sibling of `28-target-keywords.idl`, and the same lesson one level up.
+// That file covers words the *compiler* reserves; this one covers names the
+// target's **conventions and standard traits** already claim, plus an arity its
+// style lints have an opinion about. Neither is the contract's problem: the
+// generator reproduces the operation name and the parameter list by mandate,
+// because reproducing them is the only thing generated code exists to do.
+//
+// The file is prefixed `gen-` rather than numbered because it was added by a
+// parallel agent working only inside `crates/orbweaver-gen/`, where the prefix
+// is what keeps two agents' corpus additions from colliding.
+//
+// Measured 2026-08-18, on the generated Rust, before the fix:
+//
+//   `_default()`                 E0034 — `ProbeObjects::new()` emitted
+//                                `Self::default()`, which is ambiguous once the
+//                                servant trait also has a `default`. **The
+//                                generated crate did not compile.**
+//   to_/from_/into_/as_/is_      clippy::wrong_self_convention
+//   next, eq, add, sub, neg…     clippy::should_implement_trait
+//   len                          clippy::len_without_is_empty (IDL cannot
+//                                declare the `is_empty` it asks for)
+//   more than six parameters     clippy::too_many_arguments
+//
+// Ten warnings and one hard error, from a contract every part of which is
+// ordinary. `CosNaming::NamingContextExt` alone trips the first lint three
+// times with `to_string`, `to_name` and `to_url`, so this is not a synthetic
+// worry: a consumer building generated code with warnings-as-errors could not
+// compile the real OMG naming contract.
+//
+// The fix is in the templates — a preamble allow list, and one fully-qualified
+// call — and it is executed rather than asserted: this file is blessed into
+// `crates/orbweaver-gen/tests/emitted/`, so `cargo clippy -p orbweaver-gen
+// --all-targets` lints the generated code itself. A rule about generated code
+// that no compiler ever runs over generated code is a comment.
+//
+// Adding a target means adding its conventions to this file's coverage, the
+// same way adding a target means adding its keyword list to 28's.
+
+module gclint {
+
+  //@ ai_desc: Two numbers, so the probe operations have something to carry
+  struct Pair {
+    //@ ai_desc: The first number
+    long a;
+    //@ ai_desc: The second number
+    long b;
+  };
+
+  //@ ai_desc: One operation per naming convention the target language claims
+  interface Probe {
+
+    // ── clippy::wrong_self_convention: five prefixes with a rule attached ──
+
+    //@ ai_desc: A textual rendering of this probe
+    //@ ai_effect: read_only
+    string to_text();
+
+    //@ ai_desc: The pair a textual rendering denotes
+    //@ ai_effect: read_only
+    Pair from_text(in string t);
+
+    //@ ai_desc: Whether the probe will answer right now
+    //@ ai_effect: read_only
+    boolean is_ready();
+
+    //@ ai_desc: This probe's state viewed as a pair
+    //@ ai_effect: read_only
+    Pair as_pair();
+
+    //@ ai_desc: This probe's state consumed into a pair
+    //@ ai_effect: idempotent
+    Pair into_pair();
+
+    // ── clippy::should_implement_trait: names the standard library owns ──
+
+    //@ ai_desc: The next pair in sequence
+    //@ ai_effect: idempotent
+    Pair next();
+
+    //@ ai_desc: Whether the given pair equals this probe's state
+    //@ ai_effect: read_only
+    boolean eq(in Pair other);
+
+    //@ ai_desc: This probe's first number increased by an amount
+    //@ ai_effect: read_only
+    long add(in long v);
+
+    //@ ai_desc: This probe's first number reduced by an amount
+    //@ ai_effect: read_only
+    long sub(in long v);
+
+    //@ ai_desc: This probe's first number with its sign flipped
+    //@ ai_effect: read_only
+    long neg();
+
+    //@ ai_desc: The number held at a position
+    //@ ai_effect: read_only
+    long index(in long v);
+
+    // ── E0034: an escaped IDL keyword that names a trait method ──
+    //
+    // `default` is reserved in IDL (a union arm), and the specification's own
+    // escape is the leading underscore, which the mapping then drops. So a
+    // generated servant trait can carry a `default` method, and any generated
+    // `Self::default()` becomes ambiguous. This is the operation that did not
+    // compile.
+
+    //@ ai_desc: The pair this probe starts from
+    //@ ai_effect: read_only
+    Pair _default();
+
+    //@ ai_desc: A copy of this probe's state
+    //@ ai_effect: read_only
+    Pair clone();
+
+    // ── clippy::len_without_is_empty: an is_empty IDL cannot declare ──
+
+    //@ ai_desc: How many numbers this probe holds
+    //@ ai_effect: read_only
+    long len();
+
+    // ── clippy::too_many_arguments: nine, and every one of them declared ──
+
+    //@ ai_desc: Takes more parameters than the target's style lint allows for
+    //@ ai_effect: destructive
+    //@ ai_authz: gclint.probe.wide
+    void wide(in long a1, in long a2, in long a3, in long a4, in long a5,
+              in long a6, in long a7, in long a8, in long a9);
+  };
+};

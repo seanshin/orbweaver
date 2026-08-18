@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 #![allow(non_camel_case_types, non_snake_case, non_upper_case_globals, dead_code)]
+#![allow(clippy::wrong_self_convention, clippy::should_implement_trait, clippy::len_without_is_empty, clippy::too_many_arguments)]
 
 /// IDL module `fault25`.
 pub mod fault25 {
@@ -418,7 +419,7 @@ pub mod fault25 {
     }
     impl<S: VaultObject> VaultObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { Self::default() }
+        pub fn new() -> Self { <Self as std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
         pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {

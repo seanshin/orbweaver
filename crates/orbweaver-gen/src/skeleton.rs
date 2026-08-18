@@ -649,7 +649,15 @@ fn emit_object_map(
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "impl<S: {obj}> {map}<S> {{");
     let _ = writeln!(s, "    /// An empty map, which knows no object at all.");
-    let _ = writeln!(s, "    pub fn new() -> Self {{ Self::default() }}");
+    // Fully qualified, and it has to be: `_default()` is a legal IDL operation
+    // name — `default` is reserved, and the specification's own escape is the
+    // leading underscore, which the mapping then drops — so `{obj}` may itself
+    // carry a `default` method. `Self::default()` is then ambiguous and the
+    // generated crate does not compile (E0034). Measured on a probe interface;
+    // same class as the reserved-word rule, which is why the fix is in the
+    // template and not in the contract.
+    let _ =
+        writeln!(s, "    pub fn new() -> Self {{ <Self as std::default::Default>::default() }}");
     let _ = writeln!(s, "    /// Adds or replaces the object under `oid`, answering what it");
     let _ = writeln!(s, "    /// displaced. The empty oid is the default object.");
     let _ = writeln!(

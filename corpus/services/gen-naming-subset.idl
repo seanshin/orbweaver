@@ -1,0 +1,201 @@
+// The CosNaming subset `crates/orbweaver-giop/src/naming_server.rs` serves,
+// written as a contract so a *generated* skeleton can be held against it.
+//
+// Why this file exists at all: `docs/COMPONENTS.md` recorded that
+// `naming_server`'s multi-context shape was "not yet generatable". The object
+// keys, `knows()` and the forward seam that claim was about landed in
+// `gen: give generated skeletons object keys, minting and a forward seam`, and
+// the IFR facade was the shape measured against them. Naming is the *other*
+// shape, and the one the gap statement named: the IFR facade derives its
+// objects from a registry and never mints one, while a naming server mints a
+// context per `bind_new_context` and must answer for every key it has ever
+// handed out. `crates/orbweaver-gen/tests/naming_shape.rs` drives both servants
+// with the same GIOP requests, in both byte orders, and compares reply bytes.
+//
+// Like `ir-subset.idl` this lives under `corpus/services/` and not under
+// `corpus/golden/`: it carries `#pragma prefix "omg.org"`, and
+// `pragma_corpus.rs` keeps the golden corpus free of identity pragmas. The
+// pragma is what makes the ids the real ones —
+// `IDL:omg.org/CosNaming/NamingContext:1.0` — rather than a look-alike, and
+// the ids are load-bearing twice over: `_is_a` answers with them, and a
+// `NotFound` body carries `IDL:omg.org/CosNaming/NamingContext/NotFound:1.0`
+// as its first field. A look-alike id would compare equal to nothing.
+//
+// **The exceptions and the reason enum are nested inside the interface on
+// purpose.** OMG declares them there and the repository id follows the scope,
+// so hoisting `NotFound` to module level would silently rename it to
+// `IDL:omg.org/CosNaming/NotFound:1.0` — a change no compiler catches and the
+// byte comparison does.
+//
+// What the OMG contract has and this does not, each because the servant it
+// describes does not serve it:
+//
+//   * `CannotProceed`. Declared by OMG with a `NamingContext` member; this
+//     servant never raises it, and an exception that is never raised adds a
+//     fault variant that can never be measured.
+//   * `NotEmpty` on `destroy`. `destroy` is declared — so the servant can
+//     answer `NO_IMPLEMENT` for it, which is only expressible for an operation
+//     the contract declares — but it is never served, so its raise clause has
+//     no reachable body.
+//   * `BindingIterator`'s `next_one`/`next_n`. `list` always answers with a
+//     nil iterator (see that servant's header), so the interface exists here
+//     only to give the `out` parameter a type.
+//
+// `contract-check` reports seven `inherited-destructive-splits-the-quota`
+// advisories over this file and they are **inherent to the OMG shape**, not to
+// this transcription: `NamingContextExt` derives from `NamingContext` and
+// redeclares none of its mutating operations, so every one of them is reachable
+// under two repository ids. Redeclaring them to silence the advice would
+// falsify the contract. The three operations that hand out a reference —
+// `resolve`, `resolve_str`, `list` — do carry an `ai_authz`, because a
+// reference is a bearer address (§4.7, R14) and the advisory for that one is
+// about this file rather than about OMG.
+//
+// Naming note, and it is the dominant generation failure: the identifier
+// clash rule is case-insensitive, so a `Name name` member or a
+// `NamingContext namingcontext` parameter would be rejected. The parameter
+// names below are OMG's (`n`, `obj`, `sn`, `addr`) and they were kept for
+// exactly that reason as much as for fidelity.
+
+#pragma prefix "omg.org"
+
+module CosNaming {
+
+  //@ ai_desc: One element of a naming path
+  struct NameComponent {
+    //@ ai_desc: The identifier part
+    string id;
+    //@ ai_desc: The kind part, frequently empty
+    string kind;
+  };
+
+  //@ ai_desc: A path through the naming graph, resolved component by component
+  typedef sequence<NameComponent> Name;
+
+  //@ ai_desc: Whether a binding names a plain object or a further context
+  enum BindingType { nobject, ncontext };
+
+  //@ ai_desc: One entry of a context listing
+  struct Binding {
+    //@ ai_desc: The single component this entry is bound under
+    Name binding_name;
+    //@ ai_desc: Object or context
+    BindingType binding_type;
+  };
+
+  //@ ai_desc: A page of bindings, as list answers with
+  typedef sequence<Binding> BindingList;
+
+  //@ ai_desc: Serves the remainder of a listing; this server always answers nil
+  interface BindingIterator {
+    //@ ai_desc: Releases the iterator
+    //@ ai_effect: destructive
+    //@ ai_authz: cosnaming.iterator.destroy
+    void destroy();
+  };
+
+  //@ ai_desc: One node of the naming tree, addressed by its own object key
+  interface NamingContext {
+
+    //@ ai_desc: Which of the three ways resolution stopped
+    enum NotFoundReason { missing_node, not_context, not_object };
+
+    //@ ai_desc: Resolution stopped before the whole path was consumed
+    exception NotFound {
+      //@ ai_desc: Why it stopped
+      NotFoundReason why;
+      //@ ai_desc: The remainder of the path, from the component that failed
+      Name rest_of_name;
+    };
+
+    //@ ai_desc: Something is already bound under that name in this context
+    exception AlreadyBound {};
+
+    //@ ai_desc: The name is empty or does not parse
+    exception InvalidName {};
+
+    //@ ai_desc: Binds a name to an object in this context
+    //@ ai_effect: destructive
+    //@ ai_authz: cosnaming.context.bind
+    void bind(in Name n, in Object obj) raises (NotFound, AlreadyBound, InvalidName);
+
+    //@ ai_desc: Binds a name to an object, replacing any object already there
+    //@ ai_effect: destructive
+    //@ ai_authz: cosnaming.context.bind
+    void rebind(in Name n, in Object obj) raises (NotFound, InvalidName);
+
+    //@ ai_desc: Binds a name to a context served elsewhere
+    //@ ai_effect: destructive
+    //@ ai_authz: cosnaming.context.bind
+    void bind_context(in Name n, in NamingContext nc)
+      raises (NotFound, AlreadyBound, InvalidName);
+
+    //@ ai_desc: Binds a name to a context, replacing any context already there
+    //@ ai_effect: destructive
+    //@ ai_authz: cosnaming.context.bind
+    void rebind_context(in Name n, in NamingContext nc) raises (NotFound, InvalidName);
+
+    //@ ai_desc: The object or context a path names
+    //@ ai_effect: read_only
+    //@ ai_authz: cosnaming.context.resolve
+    Object resolve(in Name n) raises (NotFound, InvalidName);
+
+    //@ ai_desc: Removes a binding; what it named is untouched
+    //@ ai_effect: destructive
+    //@ ai_authz: cosnaming.context.bind
+    void unbind(in Name n) raises (NotFound, InvalidName);
+
+    //@ ai_desc: A fresh context, bound to nothing
+    //@ ai_effect: destructive
+    //@ ai_authz: cosnaming.context.bind
+    NamingContext new_context();
+
+    //@ ai_desc: A fresh context, bound under the given name
+    //@ ai_effect: destructive
+    //@ ai_authz: cosnaming.context.bind
+    NamingContext bind_new_context(in Name n) raises (NotFound, AlreadyBound, InvalidName);
+
+    //@ ai_desc: Discards this context
+    //@ ai_effect: destructive
+    //@ ai_authz: cosnaming.context.destroy
+    void destroy();
+
+    //@ ai_desc: Up to how_many of this context's own bindings
+    //@ ai_effect: read_only
+    //@ ai_authz: cosnaming.context.resolve
+    void list(in unsigned long how_many, out BindingList bl, out BindingIterator bi);
+  };
+
+  //@ ai_desc: A naming context that also speaks the stringified name surface
+  interface NamingContextExt : NamingContext {
+
+    //@ ai_desc: A whole path in one string, components separated by /
+    typedef string StringName;
+
+    //@ ai_desc: A corbaloc-style address a URL is built around
+    typedef string Address;
+
+    //@ ai_desc: A corbaname URL
+    typedef string URLString;
+
+    //@ ai_desc: The address does not parse as one a URL may be built from
+    exception InvalidAddress {};
+
+    //@ ai_desc: The stringified form of a path
+    //@ ai_effect: read_only
+    StringName to_string(in Name n) raises (InvalidName);
+
+    //@ ai_desc: The path a stringified form denotes
+    //@ ai_effect: read_only
+    Name to_name(in StringName sn) raises (InvalidName);
+
+    //@ ai_desc: A corbaname URL naming sn at addr; a pure string operation
+    //@ ai_effect: read_only
+    URLString to_url(in Address addr, in StringName sn) raises (InvalidAddress, InvalidName);
+
+    //@ ai_desc: Resolves a stringified path in one call
+    //@ ai_effect: read_only
+    //@ ai_authz: cosnaming.context.resolve
+    Object resolve_str(in StringName sn) raises (NotFound, InvalidName);
+  };
+};
