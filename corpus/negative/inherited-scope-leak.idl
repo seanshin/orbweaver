@@ -1,0 +1,22 @@
+// The negative control for inherited-scope resolution: a *sibling* is not a
+// base, so its scope contributes nothing.
+//
+// CORBA §3.15.2 searches enclosing scopes and inherited ones. `Stranger`
+// encloses nothing of `Holder`'s and inherits nothing, so `Ticket` and `Denied`
+// are undeclared here and must stay undeclared. Without this file, a resolver
+// that "fixed" inheritance by searching every interface in the unit would pass
+// every positive case in `corpus/golden/inherited-scope.idl` and be wrong.
+//
+// *상속 범위 탐색이 형제 인터페이스까지 새면 안 된다. 이것이 그 음성 대조군이다.*
+//
+// Unnumbered on purpose: added by a repair rather than by the numbered sweep,
+// and a number would have collided with parallel work.
+module nsl {
+  interface Holder {
+    typedef string Ticket;
+    exception Denied {};
+  };
+  interface Stranger {
+    Ticket ask() raises (Denied);
+  };
+};
