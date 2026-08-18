@@ -22,6 +22,20 @@
 # `omniidl` 열은 기대값이 아니라 2026-08-14에 실제로 측정한 결과다. 두 행은
 # 의도적으로 오라클과 갈리며, 갈리는 방향과 이유를 각각 적어 두었다.
 #
+# The `inc-*` rows were added on 2026-08-18 and measured then, against BOTH
+# oracles: omniidl 4.3.4 (`omniidl -bpython -Wbinline`) and JacORB 3.9's IDL
+# compiler (`org.jacorb.idl.parser`, the repository ids its generated Java
+# embeds). There is no third column for JacORB because it only ever says one
+# thing this directory does not already have a home for, and it says it in two
+# rows: at an in-module file boundary omniidl resets the id path and JacORB
+# does not. Those two rows name it and say which oracle we follow. Everywhere
+# else the two oracles agree with each other and with us.
+#
+# `inc-*` 행은 2026-08-18에 추가되었고 오라클 **둘 다**에 대해 측정되었다.
+# JacORB 전용 열을 두지 않은 이유는 두 오라클이 갈리는 지점이 단 하나이고
+# (모듈 안 파일 경계에서 omniidl은 ID 경로를 리셋하고 JacORB는 하지 않는다)
+# 그 지점을 해당 행에서 이름과 이유로 밝혔기 때문이다.
+#
 # Files that are only ever included (`cycle-b.idl` is also a root; the rest of
 # the leaves are reachable from a root) are not listed as roots of their own
 # unless they are also valid alone.
@@ -44,3 +58,11 @@ orphan.idl	none	reject	include-not-found	reject	A #include that resolves to noth
 conditional.idl	none	reject	unsupported-directive	accept	DELIBERATE DIVERGENCE, we are stricter. omniidl runs a real preprocessor and compiles this; we refuse. Skipping #ifdef compiles every arm at once, which is a silent misparse and the worst of the three answers available. The diagnostic names what to run first (`cpp -P`, `omniidl -E`). A clear refusal is a legitimate answer; a silent misparse is not.
 angled.idl	none	reject	include-not-found	reject	`#include <common.idl>` must NOT find the sibling file. Both compilers refuse it with no include path.
 angled.idl	self	accept	-	accept	The same file with the directory on the search path. The asymmetry between "" and <> is the C convention CORBA IDL inherits; getting it wrong makes an estate resolve differently depending on where the validator was invoked from.
+inc-leaf-plain.idl	none	accept	-	accept	A guarded leaf with no prefix, standing alone: IDL:Parcel/TagNumber:1.0. It exists to be included from INSIDE a module, which no file here did — at file scope, resetting the prefix and resetting the scope path are the same instruction, so the difference between them could not show.
+inc-leaf-prefixed.idl	none	accept	-	accept	The same, with a file-scope prefix of its own: IDL:leaf.example/Seal/BadgeCode:1.0. Paired with the plain leaf so that a leak of the includer's prefix and a loss of the leaf's own are both visible.
+inc-scope-plain.idl	none	accept	-	accept	THE case docs/COMPONENTS.md named: a file-scope prefix, and the #include inside module Yard. omniidl resets the whole id path at the file boundary, so the leaf keeps IDL:Parcel/TagNumber:1.0, and restores the includer's path after it, so Gate is IDL:hub.example/Yard/Gate:1.0. We used to give Gate IDL:hub.example/Gate:1.0 — the restore was a `#pragma prefix`, which REPLACES the path and therefore dropped Yard. Both oracles said so; we were wrong, not different. All 5 ids now agree with omniidl.
+inc-scope-prefixed.idl	none	accept	-	accept	Two prefixes at the splice point. leaf.example survives being spliced into module Wharf and hub.example/Wharf/Crane survives the leaf. Same restore defect, same fix; 4 of 4 ids agree with omniidl.
+inc-scope-bare.idl	none	accept	-	accept	An includer with no prefix anywhere. Nothing was injected on entry under the old rule and the exit restored to the empty path, giving IDL:Shunt:1.0 with Siding gone; both oracles say IDL:Siding/Shunt:1.0. The case that proves the boundary markers have to be unconditional.
+inc-scope-control.idl	none	accept	-	accept	The control: no prefix in either file, #include still inside a module. THE ORACLES DISAGREE HERE. omniidl gives the leaf IDL:Parcel/TagNumber:1.0 — it resets the id path at a file boundary whether or not a prefix is in play — and JacORB 3.9 gives IDL:Ledger/Parcel/TagNumber:1.0, resetting nothing. We follow omniidl: under JacORB's reading a leaf's identity depends on which root reached it, which is exactly what the test `a_shared_file_keeps_its_identity_whichever_root_reaches_it` exists to forbid, and a repository id that changes with the includer is an IOR no peer agrees with.
+inc-two-scopes.idl	none	accept	-	accept	The same guarded leaf reached from two in-module prefix scopes. It is spliced once — for us by canonical path, for omniidl by the guard — so it lands in whichever scope reached it first and the second does not contain it. 5 of 5 ids agree with omniidl. JacORB agrees on the exit ids and diverges on the leaf's, the same entry-side disagreement as the control row.
+inc-nested-scope.idl	none	accept	-	accept	The include two modules deep, so the restore is measured at a depth greater than one: Ticket is IDL:hub.example/Outer/Inner/Ticket:1.0. A restore that resets to the empty path is indistinguishable from a correct one at depth zero, which is why every previous case missed it.

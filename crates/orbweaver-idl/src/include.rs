@@ -64,11 +64,45 @@
 //!
 //! and the mirror case, where `b.idl` sets `"bbb"`, leaves the includer's
 //! declarations on `"aaa"` — the included file's prefix does not escape either.
-//! So the rule is a save/restore across the boundary, and the splice
-//! implements it by injecting `#pragma prefix ""` before an included body and
-//! restoring the includer's prefix after it. Injection only happens when it
-//! would change something, so a unit whose files carry no prefix is spliced
-//! byte-for-byte.
+//! So the rule is a save/restore across the boundary.
+//!
+//! # The boundary is a marker, not a `#pragma prefix`
+//!
+//! It was a `#pragma prefix` pair — `""` on the way in, the includer's own
+//! string on the way out, injected only when a prefix was in force. That is
+//! correct for an `#include` written at **file scope** and wrong for one
+//! written inside a module, which is the shape `corpus/include/inc-scope-*.idl`
+//! now covers and no file covered before. Two things go wrong at once, and
+//! both are the same cause — `#pragma prefix` *replaces* the id path
+//! (`corpus/pragma/p02`), so it cannot express either half of a save/restore
+//! once the path has anything in it but the prefix:
+//!
+//! ```text
+//!   #pragma prefix "hub.example"        measured 2026-08-18, in-module #include
+//!   module Yard {                       omniidl   JacORB 3.9   us (before)
+//!     #include "leaf.idl"    Parcel::Tag  IDL:Parcel/…  IDL:hub.example/Yard/Parcel/…  IDL:Parcel/…
+//!     interface Gate {…};    Yard::Gate   IDL:hub.example/Yard/Gate:1.0 (both oracles)  IDL:hub.example/Gate:1.0
+//!   };
+//! ```
+//!
+//! The restore dropped `Yard`, because `#pragma prefix "hub.example"` written
+//! inside `module Yard` *means* "the id path is now `hub.example`". And the
+//! entry was skipped whenever no prefix was in force, which left an unprefixed
+//! included file inheriting the includer's module — omniidl resets there too.
+//!
+//! So the pair is now `#pragma orbweaver include-enter` / `include-leave`,
+//! injected **unconditionally**, and the parser treats them as a save/restore
+//! of the whole id path. A unit whose files carry no prefix is no longer
+//! spliced byte-for-byte, and that is the point: the boundary is a boundary
+//! whether or not anybody wrote a pragma near it.
+//!
+//! `#pragma prefix`로는 파일 경계를 표현할 수 없다 — 접두사는 ID 경로를
+//! **대체**하므로, 모듈 안에서 인클루드하면 복원이 감싸던 모듈을 잃는다.
+//! 이제 경계는 전용 표식이며 조건 없이 삽입된다.
+//!
+//! Both oracles agree on the **exit**; they disagree on the **entry** (JacORB
+//! never resets, so a leaf's ids depend on who included it). We follow
+//! omniidl, and `corpus/include/cases.tsv` records why.
 //!
 //! # Positions
 //!
@@ -155,7 +189,7 @@ pub struct Location<'a> {
     /// (including file, line of the `#include`).
     pub chain: Vec<(&'a Path, u32)>,
     /// Whether the position is inside text the resolver injected — a
-    /// `#pragma prefix` reset — rather than text somebody wrote. A diagnostic
+    /// file-boundary marker — rather than text somebody wrote. A diagnostic
     /// landing here is a bug in this module, and saying so beats pointing at a
     /// line the reader cannot find.
     pub synthetic: bool,
@@ -235,7 +269,7 @@ impl Unit {
         let mut s =
             format!("{}:{}:{}: {} [{}]", at.file.display(), at.line, at.column, d.message, d.rule);
         if at.synthetic {
-            s.push_str("\n    note: in a `#pragma prefix` reset inserted by include resolution");
+            s.push_str("\n    note: in a file-boundary marker inserted by include resolution");
         }
         for (file, line) in at.chain.iter().rev() {
             s.push_str(&format!("\n    included from {}:{}", file.display(), line));
@@ -603,16 +637,9 @@ impl Ctx<'_> {
     }
 
     /// Splices one file's text, recursing through its includes.
-    ///
-    /// Returns whether anything in the subtree changed the `#pragma prefix` in
-    /// force, which is what tells the caller whether it has to restore its own.
-    fn emit(&mut self, file: usize, text: &str, dir: Option<&Path>) -> bool {
+    fn emit(&mut self, file: usize, text: &str, dir: Option<&Path>) {
         let (_, refused) = classify(text);
         let mut in_block = false;
-        // The prefix this file has set for itself so far, as written. `None` is
-        // the empty prefix, which is also where every file starts.
-        let mut prefix: Option<String> = None;
-        let mut changed_prefix = false;
 
         for (n, line) in text.split_inclusive('\n').enumerate() {
             let lineno = n as u32 + 1;
@@ -626,19 +653,11 @@ impl Ctx<'_> {
                 continue;
             };
             let (word, rest) = split_directive(body);
-            if word == "pragma" {
-                // Track what this file has put in force, so an include can be
-                // followed by a restore of it.
-                if let Some(arg) = rest.strip_prefix("prefix")
-                    && let Some(q) = arg.trim().strip_prefix('"')
-                    && let Some(end) = q.find('"')
-                {
-                    prefix = if q[..end].is_empty() { None } else { Some(q[..end].to_owned()) };
-                    changed_prefix = true;
-                }
-                self.push_line(line, file, lineno, false);
-                continue;
-            }
+            // Every other directive — `#pragma` included — is passed straight
+            // through. The identity pragmas belong to the lexer, and this
+            // module no longer tracks the prefix in force at all: the file
+            // boundary is a marker the parser acts on, not a prefix this
+            // module recomputes.
             if word != "include" {
                 self.push_line(line, file, lineno, false);
                 continue;
@@ -663,25 +682,11 @@ impl Ctx<'_> {
                 );
                 continue;
             };
-            if self.emit_include(
-                &name,
-                angled,
-                dir,
-                file,
-                lineno,
-                column,
-                out_line,
-                stripped,
-                prefix.as_deref(),
-            ) {
-                changed_prefix = true;
-            }
+            self.emit_include(&name, angled, dir, file, lineno, column, out_line, stripped);
         }
-        changed_prefix
     }
 
-    /// Handles one `#include`. Returns whether the included subtree touched the
-    /// prefix, so the includer knows to restore its own.
+    /// Handles one `#include`.
     #[allow(clippy::too_many_arguments)]
     fn emit_include(
         &mut self,
@@ -693,8 +698,7 @@ impl Ctx<'_> {
         column: u32,
         out_line: u32,
         directive: &str,
-        prefix_in_force: Option<&str>,
-    ) -> bool {
+    ) {
         let path = match self.resolve(name, angled, dir) {
             Ok(p) => p,
             Err(where_it_looked) => {
@@ -706,7 +710,7 @@ impl Ctx<'_> {
                     "include-not-found",
                     true,
                 );
-                return false;
+                return;
             }
         };
         let canon = canonical(&path);
@@ -735,7 +739,7 @@ impl Ctx<'_> {
                 "include-cycle",
                 false,
             );
-            return false;
+            return;
         }
 
         // Already spliced. Silent when the file carries a guard, because that is
@@ -760,7 +764,7 @@ impl Ctx<'_> {
                     false,
                 );
             }
-            return false;
+            return;
         }
 
         let text = match std::fs::read_to_string(&path) {
@@ -777,7 +781,7 @@ impl Ctx<'_> {
                     "include-unreadable",
                     true,
                 );
-                return false;
+                return;
             }
         };
 
@@ -793,31 +797,19 @@ impl Ctx<'_> {
             self.guarded.insert(c.clone());
         }
 
-        // Enter the included file with the empty prefix, which is the state it
-        // would have begun in had it been compiled on its own. Measured against
-        // omniidl; see the module docs.
-        let reset = prefix_in_force.is_some();
-        if reset {
-            self.push_synthetic("#pragma prefix \"\"\n", from, at);
-        }
+        // Enter the included file at the empty id path, which is the state it
+        // would have begun in had it been compiled on its own, and leave it
+        // with the includer's path — prefix *and* enclosing modules — put back.
+        // Both markers are unconditional, and both are markers rather than
+        // `#pragma prefix` lines; the module docs say why neither shortcut
+        // survives an `#include` written inside a module.
+        self.push_synthetic("#pragma orbweaver include-enter\n", from, at);
         self.stack.push((from, at));
         let sub_dir = path.parent().map(Path::to_path_buf);
-        let touched = self.emit(idx, &text, sub_dir.as_deref());
+        self.emit(idx, &text, sub_dir.as_deref());
         self.stack.pop();
         self.run = None;
-
-        // ...and leave it with the includer's prefix back in force, but only if
-        // something actually moved it — either the reset above or a pragma
-        // inside the subtree. Injecting unconditionally would put a file-scope
-        // pragma wherever the `#include` happened to sit, and a `#pragma
-        // prefix` inside a module does not mean what one at file scope means
-        // (corpus/pragma/p02, corpus/divergences.tsv).
-        if touched || reset {
-            let restore = prefix_in_force.unwrap_or("");
-            self.push_synthetic(&format!("#pragma prefix \"{restore}\"\n"), from, at);
-            return true;
-        }
-        false
+        self.push_synthetic("#pragma orbweaver include-leave\n", from, at);
     }
 
     fn finish(self, root: PathBuf) -> Unit {
@@ -1003,6 +995,60 @@ mod tests {
         let spec = crate::parse(&u.text).expect("parses");
         assert_eq!(spec.repository_ids.get("P::K").map(String::as_str), Some("IDL:bbb/P/K:1.0"));
         assert_eq!(spec.repository_ids.get("Q::L"), None, "Q::L must keep the empty prefix");
+    }
+
+    /// The boundary saves and restores the **whole id path**, not the prefix
+    /// part of it.
+    ///
+    /// The `#include` is inside `module Yard`, which is the shape that separates
+    /// the two readings. A restore written as `#pragma prefix "aaa"` gives
+    /// `Yard::I` the id `IDL:aaa/I:1.0`, because a prefix *replaces* the path;
+    /// both omniidl 4.3.4 and JacORB 3.9 say `IDL:aaa/Yard/I:1.0`.
+    #[test]
+    fn an_in_module_include_restores_the_enclosing_module_too() {
+        let d = tmp("inmodule");
+        write(&d, "leaf.idl", "module N { interface J { void ping(); }; };\n");
+        let a = write(
+            &d,
+            "a.idl",
+            "#pragma prefix \"aaa\"\nmodule Yard {\n#include \"leaf.idl\"\n\
+             interface I { void ping(); };\n};\n",
+        );
+        let u = preprocess_file(&a, &SearchPath::new()).expect("read");
+        assert!(u.is_ok(), "{:?}", u.errors);
+        let spec = crate::parse(&u.text).expect("parses");
+        assert_eq!(
+            spec.repository_ids.get("Yard::I").map(String::as_str),
+            Some("IDL:aaa/Yard/I:1.0"),
+            "the restore must put back the modules the #include sat inside"
+        );
+        // And the leaf starts from the empty path, as it would compiled alone —
+        // `Yard` is absent from the id even though the declaration is nested
+        // inside it, which is what makes the id differ from the plain
+        // derivation and therefore get recorded at all.
+        assert_eq!(spec.repository_ids.get("Yard::N::J").map(String::as_str), Some("IDL:N/J:1.0"));
+    }
+
+    /// The boundary is unconditional: no prefix anywhere and the included
+    /// file still starts at the empty id path.
+    ///
+    /// This is where the two oracles part company. omniidl resets at a file
+    /// boundary whether or not a prefix is in play; JacORB 3.9 resets nothing,
+    /// which makes a leaf's identity depend on which root reached it. We follow
+    /// omniidl — see `corpus/include/inc-scope-control.idl`.
+    #[test]
+    fn the_boundary_applies_even_when_no_prefix_is_in_play() {
+        let d = tmp("noprefix");
+        write(&d, "leaf.idl", "module N { interface J { void ping(); }; };\n");
+        let a = write(&d, "a.idl", "module Led {\n#include \"leaf.idl\"\n};\n");
+        let u = preprocess_file(&a, &SearchPath::new()).expect("read");
+        assert!(u.is_ok(), "{:?}", u.errors);
+        let spec = crate::parse(&u.text).expect("parses");
+        assert_eq!(
+            spec.repository_ids.get("Led::N::J").map(String::as_str),
+            Some("IDL:N/J:1.0"),
+            "an included file must not inherit the module its #include was written in"
+        );
     }
 
     /// Conditional compilation is refused, not skipped: skipping it compiles

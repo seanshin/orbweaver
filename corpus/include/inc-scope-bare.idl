@@ -1,0 +1,26 @@
+// ---------------------------------------------------------------------------
+// An includer with NO prefix anywhere, including a prefixed leaf from inside a
+// module.
+//
+// This is the path where the resolver injects nothing on entry — there is no
+// prefix in force to reset — and therefore has to decide on its own whether the
+// exit needs a restore.  The leaf moved the prefix, so something must undo it;
+// what that something is written as decides whether `Siding::Shunt` keeps its
+// enclosing module.
+//
+// 접두사가 전혀 없는 파일이 접두사 있는 잎을 모듈 안에서 인클루드한다.  진입 시
+// 주입할 것이 없으므로 복원 여부를 스스로 판단해야 하는 경로이며, 그 판단이
+// `Siding::Shunt`가 자기 모듈을 유지하는지를 결정한다.
+// ---------------------------------------------------------------------------
+
+module Siding {
+
+    typedef long TrackNumber;
+
+    #include "inc-leaf-prefixed.idl"
+
+    interface Shunt {
+        Seal::BadgeCode couple(in TrackNumber track);
+    };
+
+};

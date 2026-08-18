@@ -92,6 +92,23 @@ pub enum Pragma {
         /// still what the author means to put on the wire.
         id: String,
     },
+    /// The first line of an included file's text, inserted by include
+    /// resolution and written by nobody.
+    ///
+    /// It marks a **translation-unit file boundary**, which is not the same
+    /// instruction as `Prefix(None)` even though the two coincide at file
+    /// scope. Crossing into an included file saves the whole id path in force
+    /// — prefix *and* enclosing scopes — and starts the file at the empty one,
+    /// which is the state it would have had if compiled alone.
+    ///
+    /// 인클루드 파일의 시작을 나타내는, 리졸버가 삽입한 표식. 파일 스코프에서는
+    /// `Prefix(None)`과 결과가 같지만 모듈 안에서는 다르다.
+    IncludeEnter,
+    /// The matching end of one, which restores what [`Pragma::IncludeEnter`]
+    /// saved. There is no `#pragma prefix` spelling for this: a prefix
+    /// *replaces* the id path, so it can name the includer's prefix but never
+    /// the enclosing modules the includer was inside.
+    IncludeLeave,
     /// A `#pragma` we recognise as a pragma and nothing more.
     Other(String),
 }
@@ -320,6 +337,23 @@ fn quoted(s: &str) -> Option<(String, &str)> {
 /// unrecognised spelling becomes [`Pragma::Other`] and has no effect.
 fn parse_pragma(rest: &str, span: Span) -> Result<Option<Pragma>, LexError> {
     let bad = |message: String| LexError { message, span };
+    // Not a specification pragma: the file-boundary marker `crate::include`
+    // injects. It is namespaced so that it cannot collide with anything a
+    // deployed compiler defines, and it is matched here rather than falling
+    // through to `Other` because the boundary is what decides a repository id.
+    if let Some(arg) = strip_word(rest, "orbweaver") {
+        match arg.trim() {
+            "include-enter" => return Ok(Some(Pragma::IncludeEnter)),
+            "include-leave" => return Ok(Some(Pragma::IncludeLeave)),
+            other => {
+                return Err(bad(format!(
+                    "`#pragma orbweaver {other}` is not a marker this front end inserts. The \
+                     `orbweaver` pragma namespace belongs to include resolution; write your \
+                     own pragma under a different name."
+                )));
+            }
+        }
+    }
     if let Some(arg) = strip_word(rest, "prefix") {
         let (text, tail) = quoted(arg).ok_or_else(|| {
             bad("#pragma prefix needs a quoted string, e.g. `#pragma prefix \"acme.com\"`".into())

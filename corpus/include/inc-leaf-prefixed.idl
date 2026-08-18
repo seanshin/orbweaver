@@ -1,0 +1,29 @@
+// ---------------------------------------------------------------------------
+// The other leaf: a guard AND a file-scope `#pragma prefix` of its own.
+//
+// The pair matters.  With no prefix here, the only prefix in play is the
+// includer's, so a leak shows up as an id that has one.  With a prefix here,
+// the leaf's own identity is the thing that must survive being spliced into
+// somebody else's module — an id that loses `leaf.example` is a call no peer
+// will answer.
+//
+// 자기 접두사를 가진 잎 파일.  접두사 없는 잎과 짝을 이룬다 — 한쪽은 접두사가
+// 새어 들어오는지를, 다른 쪽은 잎 자신의 정체성이 남의 모듈 안에서도 살아남는지를
+// 측정한다.
+// ---------------------------------------------------------------------------
+#ifndef _OW_INC_LEAF_PREFIXED_IDL_
+#define _OW_INC_LEAF_PREFIXED_IDL_
+
+#pragma prefix "leaf.example"
+
+module Seal {
+
+    typedef long BadgeCode;
+
+    interface Stamper {
+        BadgeCode emboss(in string wording);
+    };
+
+};
+
+#endif // _OW_INC_LEAF_PREFIXED_IDL_

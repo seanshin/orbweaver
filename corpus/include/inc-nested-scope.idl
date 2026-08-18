@@ -1,0 +1,28 @@
+// ---------------------------------------------------------------------------
+// The include two modules deep, so the restore is measured at a depth greater
+// than one.
+//
+// A restore that resets to the empty scope path instead of to the includer's
+// own is indistinguishable from a correct one at depth zero and wrong at every
+// depth after it.  `Ticket` is declared after the include and inside `Inner`;
+// `Docket` after `Inner` has closed.  Three different answers are possible for
+// them and only one matches the peer.
+//
+// 인클루드를 모듈 두 겹 안에 둔다.  깊이 0에서는 잘못된 복원과 올바른 복원이
+// 구분되지 않는다.  `Ticket`은 인클루드 뒤 `Inner` 안에서, `Docket`은 `Inner`가
+// 닫힌 뒤에 선언된다.
+// ---------------------------------------------------------------------------
+
+#pragma prefix "hub.example"
+
+module Outer {
+
+    module Inner {
+
+        #include "inc-leaf-prefixed.idl"
+
+        typedef long Ticket;
+    };
+
+    typedef long Docket;
+};
