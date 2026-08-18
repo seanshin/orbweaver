@@ -223,9 +223,25 @@ fn run(ior_text: &str) -> Result<u32, Error> {
         //    converted back, so passing means the two sides agree about what
         //    the bytes mean rather than that neither converted them.
         let korean = "함정 전투체계";
-        let cs = conn.char_converter();
-        println!("  ---  negotiated char codeset: {}", cs.id());
+        // `convert_chars`, not `char_converter`: this is the caller undertaking
+        // to encode every `string` through the negotiated codeset, which is the
+        // only thing that lets the connection put a non-UTF-8 `CodeSets`
+        // declaration on the wire. Reading the converter would not have done
+        // it, and reading it was all this had ever done.
         asserted += 1;
+        let Some(cs) = (match conn.convert_chars() {
+            Ok(c) => {
+                println!("  ---  negotiated char codeset: {}", c.id());
+                Some(c)
+            }
+            Err(e) => {
+                println!("  {NO} no usable char codeset: {e}");
+                fails += 1;
+                None
+            }
+        }) else {
+            continue;
+        };
         match cs.encode(korean) {
             Ok(sent) => match conn
                 .invoke("echo_string", |e| e.put_string_bytes(&sent))

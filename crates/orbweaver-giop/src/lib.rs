@@ -369,6 +369,27 @@ pub enum Error {
     /// reports them through the socket I/O that carried the handshake.
     #[cfg(feature = "ssliop")]
     Tls(rustls::Error),
+    /// §7.10.2.6: the peer published a `TAG_CODE_SETS` component and nothing
+    /// in it was acceptable to both sides. `CODESET_INCOMPATIBLE`.
+    ///
+    /// Distinct from sending nothing and hoping. A profile that publishes no
+    /// component at all is not this error — §7.10.2.5 gives that case a
+    /// specified default — but a profile that publishes one we cannot agree
+    /// with has told us, in advance, that our `string` octets will be read as
+    /// something they are not.
+    CodesetIncompatible(codeset::NegotiationError),
+    /// A `char` transmission codeset was agreed, and nothing on this
+    /// connection will convert to it.
+    ///
+    /// This crate's writers emit UTF-8 (`Encoder::put_str`, and every generated
+    /// stub through it). When negotiation lands somewhere else the octets and
+    /// the `CodeSets` context stop describing the same thing, so the request is
+    /// refused before it reaches the wire. A caller that *does* convert says so
+    /// with [`Connection::convert_chars`] and is not refused.
+    CodesetNotApplied {
+        /// What §7.10.2.6 agreed on and nobody encoded to.
+        negotiated: codeset::CodeSetId,
+    },
 }
 
 impl Error {
@@ -452,6 +473,15 @@ impl fmt::Display for Error {
             }
             #[cfg(feature = "ssliop")]
             Error::Tls(e) => write!(f, "tls: {e}"),
+            Error::CodesetIncompatible(e) => {
+                write!(f, "CODESET_INCOMPATIBLE: {e}")
+            }
+            Error::CodesetNotApplied { negotiated } => write!(
+                f,
+                "negotiated char codeset {negotiated}, which nothing on this connection \
+                 encodes to; call Connection::convert_chars and write the converted \
+                 octets, or talk to a peer that accepts UTF-8"
+            ),
         }
     }
 }
@@ -1523,9 +1553,12 @@ pub struct Connection {
     /// Set once framing can no longer be trusted. A desynchronized stream must
     /// be discarded: the next read would take payload bytes as a GIOP header.
     poisoned: bool,
-    /// Negotiated `char` converter, or `None` when the peer published no
-    /// codeset component. §7.10.2.5 then specifies ISO-8859-1 and no context.
-    char_converter: Option<codeset::Converter>,
+    /// What §7.10.2 produced for `char` data on this connection.
+    char_codeset: CharCodeset,
+    /// Set by [`Connection::convert_chars`]: a caller has taken the converter
+    /// and undertakes to encode every `string` argument through it. Without
+    /// this, an agreement on anything but UTF-8 refuses to send.
+    caller_converts_chars: bool,
     /// Whether the `CodeSets` context still needs to go out.
     codeset_context_pending: bool,
     /// Body size above which outbound messages are fragmented.
@@ -1689,8 +1722,8 @@ impl Connection {
     /// negotiation — from the profile. Shared by the plain and TLS paths so
     /// the two cannot drift apart in anything but the transport itself.
     fn from_stream(p: &IiopProfile, endpoint: (String, u16), stream: Stream) -> Self {
-        let char_converter = negotiated_char_converter(p);
-        let codeset_context_pending = char_converter.is_some();
+        let char_codeset = negotiated_char_codeset(p);
+        let codeset_context_pending = char_codeset.agreed().is_some();
 
         Self {
             stream,
@@ -1701,7 +1734,8 @@ impl Connection {
             next_id: 1,
             max_message_size: DEFAULT_MAX_MESSAGE_SIZE,
             poisoned: false,
-            char_converter,
+            char_codeset,
+            caller_converts_chars: false,
             codeset_context_pending,
             fragment_threshold: DEFAULT_FRAGMENT_THRESHOLD,
             max_reply_fragments: 1,
@@ -1715,11 +1749,42 @@ impl Connection {
     /// Falls back to ISO-8859-1, which is what §7.10.2.5 specifies when no
     /// context is negotiated. It is `Copy`, so take it before calling
     /// [`Connection::invoke`] and use it inside the closure.
+    ///
+    /// **Reading this does not make it apply.** It is the negotiated value, for
+    /// reporting; a caller that intends to encode through it calls
+    /// [`Connection::convert_chars`] instead, which is what tells the
+    /// connection that its declaration will be honoured.
     pub fn char_converter(&self) -> codeset::Converter {
-        self.char_converter.unwrap_or_else(|| {
+        self.char_codeset.agreed().unwrap_or_else(|| {
             codeset::Converter::new(codeset::CodeSetId::ISO_8859_1)
                 .expect("ISO-8859-1 is always supported")
         })
+    }
+
+    /// Takes responsibility for converting `char` data, and returns the
+    /// converter to do it with.
+    ///
+    /// Every `string` argument written after this **must** be encoded through
+    /// the returned [`codeset::Converter`] and written with
+    /// `Encoder::put_string_bytes`; `put_str` writes UTF-8 and would put the
+    /// connection back in the state this call is here to leave. That obligation
+    /// cannot be checked from here — a closure writing octets is opaque — so
+    /// this is an undertaking, and the alternative to undertaking it is not
+    /// calling this.
+    ///
+    /// Without it, a connection that agreed on anything but UTF-8 refuses to
+    /// send at all ([`Error::CodesetNotApplied`]). That refusal is the fix: the
+    /// behaviour it replaced was to announce ISO-8859-1 in the `CodeSets`
+    /// context and then put UTF-8 octets under it, which no peer can detect and
+    /// every peer decodes wrongly.
+    ///
+    /// Fails with [`Error::CodesetIncompatible`] when §7.10.2.6 found nothing
+    /// both sides accept: there is no converter to hand out, and pretending
+    /// otherwise would hide the one fact the caller needs.
+    pub fn convert_chars(&mut self) -> Result<codeset::Converter> {
+        let c = self.char_codeset.usable()?;
+        self.caller_converts_chars = true;
+        Ok(c)
     }
 
     /// The GIOP version negotiated for this connection.
@@ -1930,8 +1995,29 @@ impl Connection {
                     #[cfg(not(feature = "ssliop"))]
                     let next = Self::connect(&ior, Duration::from_secs(10))?;
                     let endian = self.endian;
+                    let converting = self.caller_converts_chars;
+                    // §7.10.2.5 negotiates per *connection*, and a forward is a
+                    // different connection. A caller that took a converter is
+                    // still encoding through the one it holds, so the new
+                    // target agreeing on something else is a mismatch the
+                    // caller cannot see: it wrote its octets before the
+                    // redirect existed.
+                    let before = self.char_codeset.agreed().map(|c| c.id());
                     *self = next;
                     self.endian = endian;
+                    if converting {
+                        let after = self.char_codeset.agreed().map(|c| c.id());
+                        if after != before {
+                            return Err(Error::CodesetNotApplied {
+                                // §7.10.2.5: absent an agreement the
+                                // transmission codeset *is* ISO-8859-1, so this
+                                // names what the new connection would transmit
+                                // under rather than inventing a placeholder.
+                                negotiated: after.unwrap_or(codeset::CodeSetId::ISO_8859_1),
+                            });
+                        }
+                        self.caller_converts_chars = true;
+                    }
                 }
             }
         }
@@ -1945,12 +2031,18 @@ impl Connection {
         if self.poisoned {
             return Err(Error::Desynchronized);
         }
+        // Before anything is allocated or written: the `CodeSets` context and
+        // the octets that follow it must describe the same bytes. Checked here
+        // rather than at connect time so the failure names the call that would
+        // have carried the mismatch, and so a connection is never left in a
+        // state where the check has been skipped once.
+        self.char_codeset.may_send(self.caller_converts_chars)?;
         let id = self.next_request_id();
         // §7.10.2.5 negotiates per connection, so the context goes on the
         // first request only. Sending it again on a later request would risk
         // MARSHAL minor 9 for conflicting contexts on one connection.
         let contexts = if self.codeset_context_pending {
-            match self.char_converter {
+            match self.char_codeset.agreed() {
                 Some(c) => vec![ServiceContext {
                     id: codeset::SERVICE_ID_CODE_SETS,
                     data: codeset::CodeSetContext {
@@ -2082,28 +2174,99 @@ enum Outcome {
     Forwarded(Ior),
 }
 
-/// The `char` converter a connection to this profile would negotiate, or
-/// `None` when the profile publishes no `TAG_CODE_SETS`.
+/// What §7.10.2 produced for `char` data against one profile.
+///
+/// Three outcomes, not two, and the third is the one that used to be missing.
+/// A profile that publishes no component and a profile whose component we
+/// cannot agree with were both collapsed into "nothing negotiated", which then
+/// took §7.10.2.5's *absent context* path — so a peer that had said, in its own
+/// IOR, that it reads Latin-1 and nothing else received UTF-8 octets under a
+/// specified default of ISO-8859-1 and no way to know.
+#[derive(Debug, Clone)]
+pub(crate) enum CharCodeset {
+    /// The profile publishes no `TAG_CODE_SETS`. §7.10.2.5 then makes the
+    /// transmission codeset ISO-8859-1 and no context is sent.
+    Unspecified,
+    /// A codeset both sides accept, per §7.10.2.6.
+    Agreed(codeset::Converter),
+    /// The profile publishes a component and nothing in it was mutually
+    /// acceptable, or it named a codeset this build cannot convert.
+    Incompatible(codeset::NegotiationError),
+}
+
+impl CharCodeset {
+    /// The agreed converter, if negotiation reached one.
+    pub(crate) fn agreed(&self) -> Option<codeset::Converter> {
+        match self {
+            CharCodeset::Agreed(c) => Some(*c),
+            _ => None,
+        }
+    }
+
+    /// The converter a caller may encode through, or why there is none.
+    pub(crate) fn usable(&self) -> Result<codeset::Converter> {
+        match self {
+            CharCodeset::Agreed(c) => Ok(*c),
+            CharCodeset::Incompatible(e) => Err(Error::CodesetIncompatible(e.clone())),
+            // Nothing was negotiated, so §7.10.2.5's default stands and there
+            // is nothing to convert *to* beyond it.
+            CharCodeset::Unspecified => codeset::Converter::new(codeset::CodeSetId::ISO_8859_1)
+                .map_err(Error::CodesetIncompatible),
+        }
+    }
+
+    /// Whether a request may go out with `caller_converts` as it stands.
+    ///
+    /// The whole point of the type: a declaration and the octets under it are
+    /// checked against each other once, in one place, rather than being assumed
+    /// to match by two files that never met.
+    pub(crate) fn may_send(&self, caller_converts: bool) -> Result<()> {
+        match self {
+            // No agreement was made, so nothing was declared. §7.10.2.5's
+            // default applies and is left as it was; see the module docs on
+            // `codeset` for what that default costs above ASCII.
+            CharCodeset::Unspecified => Ok(()),
+            CharCodeset::Incompatible(e) => Err(Error::CodesetIncompatible(e.clone())),
+            // The one codeset this crate's own writers emit.
+            CharCodeset::Agreed(c) if c.id() == codeset::CodeSetId::UTF_8 => Ok(()),
+            CharCodeset::Agreed(_) if caller_converts => Ok(()),
+            CharCodeset::Agreed(c) => Err(Error::CodesetNotApplied { negotiated: c.id() }),
+        }
+    }
+}
+
+/// The `char` codeset a connection to this profile would negotiate.
 ///
 /// §7.10.2.5 makes this a **per-connection** decision, taken once from the
 /// profile and then implied by every string on the wire. That is why it is a
 /// function of the profile alone and why [`pool`] puts its answer in the pool
 /// key: two references to one endpoint that negotiate different codesets
 /// cannot share a connection, because the second one's strings would be
-/// encoded under the first one's agreement. Absent a component the specified
-/// default is ISO-8859-1 with no context sent, which is what `None` means.
-fn negotiated_char_converter(p: &IiopProfile) -> Option<codeset::Converter> {
-    let mut char_converter = None;
+/// encoded under the first one's agreement.
+fn negotiated_char_codeset(p: &IiopProfile) -> CharCodeset {
+    let mut out = CharCodeset::Unspecified;
     for c in &p.components {
-        if c.tag == codeset::TAG_CODE_SETS
-            && let Ok(info) = codeset::CodeSetComponentInfo::parse(&c.data)
-            && let Ok(id) = codeset::negotiate(&codeset::client_char_component(), &info.for_char)
-            && let Ok(conv) = codeset::Converter::new(id)
-        {
-            char_converter = Some(conv);
+        if c.tag != codeset::TAG_CODE_SETS {
+            continue;
         }
+        // §9.7.2: a component we cannot read is ignored rather than fatal —
+        // which for *this* component means falling back to §7.10.2.5's default,
+        // the same position an absent component leaves us in.
+        let Ok(info) = codeset::CodeSetComponentInfo::parse(&c.data) else { continue };
+        out = match codeset::negotiate(&codeset::client_char_component(), &info.for_char)
+            .and_then(codeset::Converter::new)
+        {
+            Ok(conv) => CharCodeset::Agreed(conv),
+            Err(e) => CharCodeset::Incompatible(e),
+        };
     }
-    char_converter
+    out
+}
+
+/// The `char` converter a connection to this profile would negotiate, or
+/// `None` when nothing was agreed. [`pool::Key`] keys on it.
+fn negotiated_char_converter(p: &IiopProfile) -> Option<codeset::Converter> {
+    negotiated_char_codeset(p).agreed()
 }
 
 /// [`dial`], plus the socket options every connection gets: both timeouts,

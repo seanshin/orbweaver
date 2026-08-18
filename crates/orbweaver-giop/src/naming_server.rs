@@ -98,7 +98,7 @@ use crate::naming::{
     stringify_name, to_url, write_name,
 };
 use crate::server::{Dispatch, DispatchBody, Request, SharedDispatch, SystemException};
-use crate::{IiopProfile, Ior, Version};
+use crate::{IiopProfile, Ior, Version, codeset};
 
 /// Repository id of the plain (pre-Ext) naming context interface. `_is_a`
 /// answers `true` for it and for [`NAMING_CONTEXT_EXT_ID`], so a client may
@@ -307,7 +307,10 @@ impl NamingServer {
                 host: self.host.clone(),
                 port: self.port,
                 object_key: key.to_vec(),
-                components: Vec::new(),
+                // §7.10.2.4: a profile with no `TAG_CODE_SETS` declares no
+                // `wchar` support, and a conformant client then refuses to
+                // marshal a `wstring` to it. See `codeset::server_component`.
+                components: vec![codeset::server_component()],
             }],
         }
     }

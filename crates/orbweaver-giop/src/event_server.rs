@@ -112,7 +112,7 @@ use orbweaver_cdr::{Encoder, Endian};
 use crate::guarded::{Guarded, Section};
 use crate::server::{Dispatch, DispatchBody, Request, SharedDispatch, SystemException};
 use crate::typecode::{self, Any, TypeCode};
-use crate::{Connection, IiopProfile, Ior, Result, Version};
+use crate::{Connection, IiopProfile, Ior, Result, Version, codeset};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Repository ids
@@ -904,7 +904,10 @@ impl EventChannelServer {
                 host: self.host.clone(),
                 port: self.port,
                 object_key: key.to_vec(),
-                components: Vec::new(),
+                // §7.10.2.4: a profile with no `TAG_CODE_SETS` declares no
+                // `wchar` support, and a conformant client then refuses to
+                // marshal a `wstring` to it. See `codeset::server_component`.
+                components: vec![codeset::server_component()],
             }],
         }
     }
@@ -1283,7 +1286,10 @@ impl PushConsumerServant {
                 host: host.to_owned(),
                 port,
                 object_key: self.key.clone(),
-                components: Vec::new(),
+                // §7.10.2.4: a profile with no `TAG_CODE_SETS` declares no
+                // `wchar` support, and a conformant client then refuses to
+                // marshal a `wstring` to it. See `codeset::server_component`.
+                components: vec![codeset::server_component()],
             }],
         }
     }

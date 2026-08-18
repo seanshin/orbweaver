@@ -98,6 +98,19 @@ impl CodeSetComponent {
     pub fn supports(&self, id: CodeSetId) -> bool {
         self.native == Some(id) || self.conversions.contains(&id)
     }
+
+    /// Writes this side's declaration into an open encapsulation.
+    ///
+    /// A native of `None` is written as codeset 0, which is how
+    /// [`read_component`] reads "unspecified" back — the two halves of that
+    /// convention live next to each other on purpose.
+    fn write(&self, e: &mut Encoder) {
+        e.put_u32(self.native.map_or(0, |c| c.0));
+        e.put_u32(self.conversions.len() as u32);
+        for c in &self.conversions {
+            e.put_u32(c.0);
+        }
+    }
 }
 
 /// The contents of a `TAG_CODE_SETS` component: what a server declares.
@@ -117,6 +130,79 @@ impl CodeSetComponentInfo {
             for_char: read_component(&mut d)?,
             for_wchar: read_component(&mut d)?,
         })
+    }
+
+    /// Encodes the component body as the encapsulation an IOR carries.
+    pub fn encode(&self, endian: Endian) -> Result<Vec<u8>> {
+        let mut e = Encoder::encapsulation(endian);
+        self.for_char.write(&mut e);
+        self.for_wchar.write(&mut e);
+        e.finish().map_err(Error::Cdr)
+    }
+}
+
+/// What this implementation declares in the `TAG_CODE_SETS` component of every
+/// reference it publishes.
+///
+/// **Both conversion lists are empty, and that is the honest answer rather than
+/// an omission.** §7.6.6.5 defines `conversion_code_sets` as the sets this side
+/// is *willing to convert to and from*; nothing in this workspace converts a
+/// `string` argument on the way out or on the way in — `Encoder::put_str` writes
+/// UTF-8 and `Decoder::get_string` reads UTF-8, and a servant sees the result of
+/// those. Declaring a conversion we do not perform is the same defect as
+/// negotiating one and ignoring it, one layer further out: it invites a peer to
+/// send Latin-1 that our servants would then read as malformed UTF-8.
+///
+/// Measured against both peers before choosing the narrow declaration, because
+/// "honest" is worth nothing if it is also unusable:
+///
+/// - omniORB 4.3.4 publishes `char` native ISO-8859-1 with UTF-8 in its
+///   conversion list, so §7.10.2.6 case 3 agrees on **UTF-8** and omniORB
+///   converts on its side.
+/// - JacORB 3.9 publishes `char` native UTF-8, so case 1 agrees on **UTF-8**
+///   with nobody converting.
+///
+/// Both reach UTF-8 without us claiming a conversion. A peer that can reach
+/// neither genuinely cannot exchange `char` data with us, and §7.10.2.6's
+/// `CODESET_INCOMPATIBLE` is the right answer rather than mojibake.
+///
+/// `wchar` is UTF-16 native with no conversions for the same reason: the wide
+/// path is UTF-16 end to end (§9.3.1.6, and the byte sequences recorded in
+/// `tests/wide_chars_from_a_peer.rs`), and both peers publish UTF-16 native.
+pub fn server_component_info() -> CodeSetComponentInfo {
+    CodeSetComponentInfo {
+        for_char: CodeSetComponent { native: Some(CodeSetId::UTF_8), conversions: Vec::new() },
+        for_wchar: CodeSetComponent { native: Some(CodeSetId::UTF_16), conversions: Vec::new() },
+    }
+}
+
+/// The `TAG_CODE_SETS` component every published reference carries.
+///
+/// # Why a reference without one is not merely incomplete
+///
+/// §7.10.2.4 makes an absent codeset component a *statement*: the client is to
+/// assume the server's native `char` set is ISO 8859-1 and that **there is no
+/// `wchar` support at all**. A conformant client then refuses to marshal a
+/// `wchar` or `wstring` argument rather than sending one — measured, not
+/// inferred: omniORB 4.3.4 raises `INV_OBJREF` minor `0x4F4D0001`
+/// (`OMGVMCID | 1`) from inside the client on `echo_wstring`, having sent
+/// nothing, while `echo_string` on the same reference over the same connection
+/// succeeds. Our server log recorded one request and no error, which is exactly
+/// how a servant with a `wstring` in its interface can be unreachable and
+/// silent about it.
+///
+/// Little-endian by construction, matching [`crate::Ior::to_stringified`]: an
+/// encapsulation carries its own byte-order flag, so the choice is free, and
+/// making it the same one everywhere keeps published bytes reproducible.
+pub fn server_component() -> crate::TaggedComponent {
+    crate::TaggedComponent {
+        tag: TAG_CODE_SETS,
+        // Six `u32`s into a fresh encapsulation. `Encoder::finish` fails only
+        // for a poisoned encoder, and the only thing that poisons one is a
+        // string with an embedded NUL — there are no strings here.
+        data: server_component_info()
+            .encode(Endian::Little)
+            .expect("a fixed-shape codeset component has nothing that can fail to encode"),
     }
 }
 
@@ -242,6 +328,18 @@ impl std::fmt::Display for NegotiationError {
 /// Conversion order is preference order (§7.10.2.6 case 4 resolves by it), so
 /// EUC-KR sits ahead of the Latin sets: against a Korean peer that offers both,
 /// choosing EUC-KR carries the text and choosing ISO-8859-1 destroys it.
+///
+/// This list is wider than [`server_component_info`]'s because the two sides
+/// have different means. A client that agrees on a non-UTF-8 codeset can honour
+/// it — [`crate::Connection::convert_chars`] hands the caller the [`Converter`]
+/// and the caller encodes each `string` argument through it before writing the
+/// octets. There is no servant-side equivalent (a servant is handed a
+/// `Decoder`, not a string), so the published component claims nothing.
+///
+/// Offering a conversion is a promise, so a connection that agrees on one and
+/// finds nobody willing to keep it now refuses to send rather than putting UTF-8
+/// octets under a declaration that says otherwise. See
+/// [`crate::Error::CodesetNotApplied`].
 pub fn client_char_component() -> CodeSetComponent {
     let mut conversions = Vec::new();
     if cfg!(feature = "euc-kr") {
