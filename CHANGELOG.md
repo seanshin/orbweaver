@@ -87,7 +87,99 @@ records what changed and, where it matters, what it changes on the wire.
   `{"_raw": <base64>}`, tagged, because a malformed TypeCode is its producer's
   problem and a renderer that refuses to render it hides the evidence.
 
+### ⚠ Wire behaviour changed / 와이어 동작 변경
+
+- **Six wire defects our own round trip could not see.** A sweep of
+  `orbweaver-cdr` and `orbweaver-giop` for the class the union-label batch
+  named — a field both our ends agree about and a peer does not — examined 24
+  candidates and found 6 defects in 3 causes, with 17 correct and their reasons
+  written down.
+
+  `long double` moved its 16 octets with no byte-order reversal, where Figure
+  9.2 draws the same reversal `float` and `double` get. A UTF-16 `wchar` or
+  `wstring` took its byte order from the **message** when the value states its
+  own — three sites, and the read half is one our round trip could never reach,
+  because our writer always emits a BOM and so does omniORB's, so only the
+  peer's *reader* could settle it: twelve bodies read back, six answers, none
+  depending on the stream's flag. We returned U+7700 for an unmarked `00 77` in
+  a little-endian stream where the peer returns U+0077. And an alignment origin
+  leaked the enclosing buffer's offset, so a `TypeCode` encapsulation inside a
+  GIOP 1.0/1.1 body aligned from the message's offset rather than its own flag
+  — unreachable at 1.2, which rounds the body start to a multiple of 8, and
+  unconditional below it.
+
+  Two preconditions became checks rather than prose: relaying an `any` into a
+  different byte order is refused, and a `Fragment` that flips the byte-order
+  flag is refused per §9.4.9.
+
+  Where no peer could answer, the specification is the oracle and the code says
+  so. GIOP 1.1 `wchar` unit order is **left unchanged and recorded as
+  unmeasured**: omniORBpy marshals one and then fails to unmarshal its own
+  output on this host, so nothing here can settle it.
+
+  우리 왕복이 볼 수 없던 결함 6건 — 양쪽이 서로만 합의하는 관례가 숨긴 것들.
+  피어가 오라클일 수 없는 자리는 **미측정으로 남겼다.**
+
+- **A reference that declares no codeset refuses wide text, and ours declared
+  none.** §7.10.2.4: a profile with no `TAG_CODE_SETS` declares no wchar
+  support. Measured: omniORB's client raised `INV_OBJREF` minor `0x4F4D0001`
+  **inside itself** and sent nothing, while our server logged one earlier
+  request and no error. **Every `wstring` operation we serve was unreachable by
+  a conformant peer, and the refusal happening in the caller is why nothing
+  here could see it.** Eleven publish sites now carry the component; `한글`
+  round-trips at GIOP 1.2.
+
+  A third defect fell out of the counting: `negotiated_char_converter`
+  swallowed every negotiation failure into `None`, so "we cannot agree with
+  this peer" was indistinguishable from "this peer said nothing" — the one peer
+  that warned us was the one we told nothing.
+
+  `spikes/reverse_client.py` had exercised every other operation on the echo
+  contract and never `echo_wstring`. It does now, and found on its first run
+  that GIOP 1.1 raises `MARSHAL`; that is **stated as unmeasured**, because the
+  peer cannot unmarshal its own 1.1 wide output and so is not an oracle for it.
+
+- **The transmission codeset reaches the marshaller** (D009, approved). A CDR
+  stream carries an optional `TextCodec`; `None` is UTF-8 and is byte-for-byte
+  what shipped before. A connection puts its negotiated `char` agreement on the
+  encoder that carries a call's arguments, and a servant reads and answers in
+  the codeset the **client declared** — derived from the request, not the
+  connection, because two clients on one multiplexed connection can differ.
+
+  The codec goes on the body and never the header: `operation` and the object
+  key are identifiers the contract chose, and re-encoding them would change the
+  name a servant dispatches on. An encapsulation does not inherit it either —
+  that would silently re-encode the repository ids and member names inside
+  every `TypeCode`.
+
 ### 🔒 Security / 보안
+
+- **Twelve bytes bought sixty-four megabytes, and an overflow the release
+  fuzzer could not see.** Two hazards reachable from peer bytes, both
+  reproduced before being fixed.
+
+  `csiv2` added a peer-supplied DER length to a cursor unchecked. Fed
+  `60 88 FF FF FF FF FF FF FF FF` it panicked in debug and, in release,
+  **wrapped and returned "GSS token is truncated"** — an error message that was
+  a lie about what happened. `wire-fuzz` runs `--release`, where overflow
+  checks are off, so it was **structurally blind to the class**: its "0 panics"
+  was silent about it, not clearing it. The harness now carries the one run in
+  this tree that can see an arithmetic overflow at all.
+
+  And a GIOP 1.2 header declaring `message_size = 67,108,863` followed by
+  silence committed and zeroed 67,108,875 bytes before a body byte arrived. The
+  body is now read in 64 KiB chunks: the same header peaks at 65,548.
+
+- **An array length from an agent's document bought 206 GB.** A 198-byte
+  document declaring `array<octet, 4294967295>` as a union discriminator made
+  `decode_at` reserve before reading — then refuse the stream as truncated a
+  moment later, which is why nothing looked wrong. The `Sequence` arm fourteen
+  lines above has carried the guard since Phase 0 with a comment naming the
+  rule; the `Array` arm did not need it while every TypeCode it decoded against
+  had been compiled here. AnyJSON v1.1 made that length a field in a document
+  an agent sends.
+
+
 
 - **An argument value a content stage saw could reach the audit ledger.** The
   `SEAT_SAFETY_CONTENT` interceptor seat reads argument *values* — that is what
@@ -180,6 +272,69 @@ records what changed and, where it matters, what it changes on the wire.
   implementation is behind.
 
 ### Added / 추가
+
+- **`idl-diff` resolves what it is asked to diff.** The §5.3 release gate was
+  given two revisions whose root file is byte-identical and whose two breaking
+  changes both live in the header they share, and it printed *"no change"* and
+  exited **0**. One call — `orbweaver_idl::parse`, the string entry point —
+  across **19 sites**, of which 12 used `parse` (silent) and 6 used `check`
+  (loud about the include and equally unable to resolve it). All are now
+  decided per site, with the ones that correctly stay on a raw parse carrying
+  their reason. An unresolvable include is **exit 2**, never a verdict: a diff
+  of two partial graphs says nothing about the contracts.
+
+  `orbweaver-mcp-server` turns out not to have served an estate at all — it
+  refused to start, and `spikes/estate/run.sh`'s amalgamation step was a
+  load-bearing workaround that read as a convenience.
+
+  Measured cost of the old silence: stripping `#include` from the thirteen-file
+  estate drops **27 references without a word** — 8 base interfaces and 19
+  raised exceptions.
+
+- **DynAny**, over `Value`/`TypeCode`: navigation whose cursor is a path
+  re-resolved at every operation, so nothing exists below the focus and
+  past-the-end is representable but never readable. 76 of 78 golden types are
+  taken apart and reassembled into identical CDR, both byte orders, all eight
+  alignment phases; the two it cannot are `fixed`, deferred by §4.4, and the
+  test asserts that list is exactly those two.
+
+  Its first oracle was worthless and only mutation showed it: the source value
+  was generated with DynAny too, so breaking `next()` to skip every second
+  component **still passed**. A producer and a consumer sharing a defect agree
+  about the result.
+
+- **`agent-fuzz`**, for the parsers a `tools/call` reaches. AnyJSON v1.1 put a
+  recursive parser on the agent boundary and nobody had fuzzed it, including
+  whoever wrote it. Seven targets, zero panics over 50k/50k/200k at three
+  seeds; the one finding was the array reservation above.
+
+- **CSIv2 fuzz targets, and the reach that made them worth having.** Two of the
+  three were reached **zero times in 50,000 cases** before seeding — the
+  green-and-worthless case, stated. Twenty seeds took them to 659 / 1930 /
+  2811, and the dilution that cost the GIOP half is reported rather than
+  hidden. Twenty-five hostile literals run on every invocation whatever
+  `--cases` says, because a class the shipping build cannot see should not also
+  depend on a random draw.
+
+- **`call-bench`**, the LAN echo benchmark §8 has cited since v0.2 and did not
+  have. One loopback connection shared by both clients, calls interleaved with
+  the order swapped, every sample checked against the expected answer. The
+  dynamic path costs **+2.0 µs p50 on a 64-string payload (1.06×)** — about
+  31 ns per string, and per *string* rather than per byte.
+
+- **A generated skeleton is compared to the hand-written servant it must
+  match**, byte for byte: 59 scripted steps × 2 byte orders over CosNaming,
+  every structured reply decoded back by `orbweaver-giop`'s own readers,
+  because two servants can agree on wrong bytes. It is what forced D009's L2
+  early — the naming server began publishing `TAG_CODE_SETS` and the generated
+  reference did not.
+
+- **`#include` inside a module**, which no corpus file had. Eight new roots
+  produced 32 repository ids, **7 of which diverged from omniidl — and JacORB
+  agreed with omniidl against us on all seven.** The resolver had implemented a
+  file boundary as an injected `#pragma prefix`, and prefix *replaces* the id
+  path, so it could express neither half of a save/restore once the path held a
+  module.
 
 - **A decision's status is checked, not just written.**
   `spikes/decision_status.py` reads the authoritative status out of each

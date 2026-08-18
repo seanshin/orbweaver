@@ -439,6 +439,22 @@ else
   fail_total=$((fail_total+1))
 fi
 
+hr "the records keep up with the code"
+# A gate for decision *statuses* went in on 2026-08-18. It checks one field and
+# does not check whether the documents that describe the code were opened at
+# all — and thirty-nine commits later, six of them wire-behaviour changes,
+# three COMPONENTS rows had become false: two gap columns naming work that had
+# landed, and a row calling a measurement unmeasured. This is the crude half of
+# a rule whose precise half no script can hold: it reads no words, it counts
+# distance.
+if rk_out=$(python3 spikes/records_keep_up.py 2>&1); then
+  printf '%s\n' "$rk_out"
+else
+  printf '%s\n' "$rk_out"
+  echo "  FAIL a record that describes this code has not been opened in a while"
+  fail_total=$((fail_total+1))
+fi
+
 hr "decision status — one source of truth, restated nowhere stale"
 # A decision's status lives in docs/decisions/D00N-*.md. Five other documents
 # restate it, and restatements drift: the first run of this gate found seven,

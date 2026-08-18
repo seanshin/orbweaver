@@ -177,6 +177,13 @@ decisions being approved and work landing.
   COMPONENTS' remaining-work column. It did, and all three items it named had
   landed while it still named them — the cost was a planning pass spent on
   finished work, which no test can go red on. *계획서는 상태를 다시 적지 않는다.*
+- **A record lands with its batch, not after it.** `COMPONENTS.md` states what
+  is measured now and `CHANGELOG.md` states what changed; a script cannot check
+  either for truth, so `spikes/records_keep_up.py` checks the only thing it
+  can — whether they were opened at all — and fails past ten commits. Measured
+  2026-08-18: they had gone **thirty-nine commits**, six of them wire-behaviour
+  changes, while three `COMPONENTS.md` rows became false. *배치는 기록과 함께
+  착지한다.*
 - **A bilingual fact is one fact in two languages: edit both or neither.**
   D003's approval overwrote the head of its own PROPOSED block and left the
   tail, so the file said APPROVED in English and 제안 in Korean four lines
