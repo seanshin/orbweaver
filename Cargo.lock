@@ -227,6 +227,7 @@ dependencies = [
  "orbweaver-console",
  "orbweaver-dynamic",
  "orbweaver-forge",
+ "orbweaver-gen",
  "orbweaver-giop",
  "orbweaver-idl",
  "orbweaver-mcp",

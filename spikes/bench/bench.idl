@@ -1,0 +1,40 @@
+// The contract §8's performance row is measured over.
+//
+// Three operation shapes, chosen so the two client paths can be compared on
+// something other than an integer:
+//
+//   * `add`       — scalar. Eight bytes in, four out. As close to pure call
+//                   overhead as GIOP gets, so it isolates the fixed cost of a
+//                   round trip from anything the arguments cost.
+//   * `echo_text` — one string in, one string out. One length, one bounds
+//                   check, one allocation per direction.
+//   * `echo_many` — a sequence of strings. `docs/decisions/D009` §9 asks what a
+//                   per-string indirection costs; a benchmark whose widest
+//                   payload is a scalar cannot answer it, and one string is a
+//                   sample of size one. The element count is chosen by the
+//                   benchmark, not by the contract, so one servant serves every
+//                   payload size.
+//
+// Every operation is an echo. That is deliberate: the servant's own work has to
+// be identical for both client paths, or the difference between them is not the
+// client path. A clone is the least a servant can do and still return something
+// the client has to decode.
+module obbench {
+  //@ ai_desc: A list of short strings, the per-string indirection case
+  typedef sequence<string> TextSeq;
+
+  //@ ai_desc: An echo service that exists to be timed, not to compute
+  interface Meter {
+    //@ ai_desc: Adds two signed 32-bit integers; the scalar shape
+    //@ ai_effect: read_only
+    long add(in long a, in long b);
+
+    //@ ai_desc: Returns the string it was given, unchanged
+    //@ ai_effect: read_only
+    string echo_text(in string msg);
+
+    //@ ai_desc: Returns the list of strings it was given, unchanged
+    //@ ai_effect: read_only
+    TextSeq echo_many(in TextSeq items);
+  };
+};

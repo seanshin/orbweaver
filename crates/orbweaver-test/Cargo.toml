@@ -26,6 +26,12 @@ orbweaver-forge = { path = "../orbweaver-forge" }
 # nothing in the workspace depends on this crate.
 orbweaver-console = { path = "../orbweaver-console" }
 orbweaver-mcp = { path = "../orbweaver-mcp" }
+# The static half of §8's performance row. `call-bench` compares the generated
+# stub against the dynamic path, so it needs the generator's runtime — and the
+# generator itself, to prove the checked-in stub it measures is not a fossil.
+# Cycle-free: orbweaver-gen depends on cdr/giop/dynamic/registry/idl and on
+# nothing here.
+orbweaver-gen = { path = "../orbweaver-gen" }
 
 [lints]
 workspace = true
@@ -44,3 +50,11 @@ path = "src/bin/wire_fuzz.rs"
 [[bin]]
 name = "agent-fuzz"
 path = "src/bin/agent_fuzz.rs"
+
+# `docs/PLAN.md` §8's performance row, which has been cited since v0.2 with
+# nothing behind it. Separate from the fuzz binaries because it answers a
+# different kind of question: those ask whether a path survives, this asks what
+# it costs, and a combined exit code would let one hide the other.
+[[bin]]
+name = "call-bench"
+path = "src/bin/call_bench.rs"
