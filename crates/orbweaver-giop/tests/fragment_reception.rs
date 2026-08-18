@@ -194,6 +194,37 @@ fn a_fragment_for_another_request_is_refused() {
     assert!(matches!(read(&stream), Err(Error::Desynchronized)));
 }
 
+/// §9.4.9: "the byte order and GIOP protocol version of a fragment shall be
+/// the same as that of the message it continues."
+///
+/// A fragment is a continuation of one CDR stream — at 1.2 alignment does not
+/// even restart — so its payload is decoded under the *leading* message's flag
+/// whatever its own header claims. Concatenating a fragment written the other
+/// way round therefore yields a body of silently reversed `long`s and
+/// `double`s under a reassembled header that still names the original order:
+/// no error, no truncation, a plausible wrong value. The reader used to allow
+/// it, on the ground that "the payload is opaque bytes either way", and the
+/// payload is not opaque.
+#[test]
+fn a_fragment_that_changes_byte_order_is_refused() {
+    for (head_endian, frag_endian) in [(Endian::Big, Endian::Little), (Endian::Little, Endian::Big)]
+    {
+        let mut stream = with_more(request(5, &[], head_endian));
+        stream.extend(fragment(5, b"12345678", false, frag_endian));
+        assert!(
+            read(&stream).is_err(),
+            "a {frag_endian:?} fragment must not continue a {head_endian:?} message"
+        );
+    }
+
+    // The same stream in one order is the control: it must still reassemble.
+    for endian in [Endian::Big, Endian::Little] {
+        let mut stream = with_more(request(5, &[], endian));
+        stream.extend(fragment(5, b"12345678", false, endian));
+        assert_eq!(read(&stream).expect("reassembles").bytes[HEADER_LEN + 4..], *b"12345678");
+    }
+}
+
 /// A non-fragment arriving mid-reassembly is the same class: GIOP 1.2 does not
 /// allow another message to interrupt a fragmented one on the same connection.
 #[test]

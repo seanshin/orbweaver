@@ -421,7 +421,11 @@ fn encapsulation_begin(e: &mut Encoder) -> (usize, usize) {
     let len_at = e.len();
     e.put_bytes(&[0, 0, 0, 0]);
     let saved = e.origin();
-    e.set_origin(e.len()); // alignment restarts at the flag
+    // Alignment restarts at the flag. `reset_origin`, not `set_origin(e.len())`
+    // — the origin is an absolute stream offset and `len` is a buffer index,
+    // and a body encoder built with `Encoder::continuing_at` is exactly the
+    // case where those two differ.
+    e.reset_origin();
     e.put_u8(e.endian().as_flag());
     (len_at, saved)
 }
@@ -730,7 +734,20 @@ where
 /// alignment requires re-marshalling the value, which means walking its
 /// `TypeCode`. In GIOP 1.2 a request body and a reply body are both 8-aligned,
 /// so echoing one straight back is sound; assuming that in general is not.
+///
+/// The **byte order** half of the same precondition is enforced rather than
+/// documented. Alignment was written down here and honoured by the one caller;
+/// byte order was not written down at all, and value bytes relayed into a
+/// stream of the opposite order are every multi-octet field reversed, with no
+/// error anywhere and no way for a round trip to notice — the caller would be
+/// reading its own convention back. A precondition a compiler can check is
+/// worth more than a paragraph, so this refuses instead.
 pub fn encode_any_at_same_alignment(e: &mut Encoder, any: &Any) -> Result<()> {
+    if e.endian() != any.endian {
+        return Err(Error::Cdr(orbweaver_cdr::Error::Malformed(
+            "an any's value bytes cannot be relayed into a stream of the other byte order",
+        )));
+    }
     encode(e, &any.tc)?;
     e.put_bytes(&any.value);
     Ok(())
@@ -1009,6 +1026,27 @@ mod tests {
             }),
         };
         assert_eq!(chain.resolve_alias(), &TypeCode::Long);
+    }
+
+    /// Captured value bytes are readable in one byte order only, so relaying
+    /// them into a stream of the other one is every multi-octet field silently
+    /// reversed. The relay in `event_server` switches the outbound connection
+    /// to the event's order before calling this; the refusal is here so that
+    /// staying in step is not something a future caller has to remember.
+    #[test]
+    fn an_any_refuses_to_be_relayed_into_the_other_byte_order() {
+        let mut v = Encoder::new(Endian::Little);
+        v.put_i32(42);
+        let any = Any { tc: TypeCode::Long, value: v.finish().unwrap(), endian: Endian::Little };
+
+        let mut wrong = Encoder::new(Endian::Big);
+        assert!(
+            encode_any_at_same_alignment(&mut wrong, &any).is_err(),
+            "a little-endian any must not be written into a big-endian stream"
+        );
+
+        let mut right = Encoder::new(Endian::Little);
+        encode_any_at_same_alignment(&mut right, &any).expect("same order is fine");
     }
 
     #[test]
