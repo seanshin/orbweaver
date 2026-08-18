@@ -656,7 +656,10 @@ impl ExpertService {
                 host: self.host.clone(),
                 port: self.port,
                 object_key: key.to_vec(),
-                components: Vec::new(),
+                // D009 L2; see the note in `orbweaver-object/src/lib.rs`. The
+                // one at 192.0.2.7 below stays empty: it is a test's stand-in
+                // reference and never reaches a peer.
+                components: vec![orbweaver_giop::codeset::server_component()],
             }],
         }
     }

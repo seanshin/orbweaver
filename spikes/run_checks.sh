@@ -227,6 +227,36 @@ else
   fail_total=$((fail_total+1))
 fi
 
+hr "generated code is linted, not merely compiled"
+# `cargo build` accepted what `clippy -D warnings` does not, so a consumer
+# building with warnings-as-errors could not compile the real OMG naming
+# contract — `to_string`/`to_name`/`to_url` trip wrong_self_convention. Worse,
+# an operation named `_default()` (legal IDL; `default` is reserved and the
+# spec's escape is the leading underscore, which the mapping drops) emitted
+# `Self::default()` and produced E0034: the generated crate did not compile at
+# all. Neither was visible to a build-only check, which is why this step exists.
+gl_out=$(cargo test -q -p orbweaver-gen --test emitted_current 2>&1)
+if printf '%s' "$gl_out" | grep -q "test result: ok"; then
+  echo "  ok   the blessed emitted corpus still matches, lints included"
+else
+  echo "  FAIL generated code no longer matches its blessed form"
+  printf '%s\n' "$gl_out" | grep -A3 panicked | head -5 | sed 's/^/       /'
+  fail_total=$((fail_total+1))
+fi
+
+hr "a generated skeleton answers as the hand-written servant does"
+# 59 scripted steps x 2 byte orders over CosNaming, and every structured reply
+# decoded back by orbweaver-giop's own readers — two servants can agree on the
+# wrong bytes. This is what forced D009's L2 early: the naming server began
+# publishing TAG_CODE_SETS and the generated reference did not, and a byte
+# comparison is the only check that could see it.
+if cargo test -q -p orbweaver-gen --test naming_shape --test ifr_shape >/dev/null 2>&1; then
+  echo "  ok   naming and IFR skeletons match their hand-written servants, both orders"
+else
+  echo "  FAIL a generated skeleton and its hand-written servant have diverged"
+  fail_total=$((fail_total+1))
+fi
+
 hr "agent-fuzz — the parsers a tools/call reaches"
 # An agent is untrusted in this project's threat model exactly as a peer is
 # (R11/R12), and AnyJSON v1.1 put a recursive parser on that boundary —

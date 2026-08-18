@@ -343,7 +343,16 @@ impl ObjectHome {
                 host: self.host.clone(),
                 port: self.port,
                 object_key: key,
-                components: Vec::new(),
+                // §7.10.2.4: a profile with no TAG_CODE_SETS declares *no
+                // wchar support*, and a conformant client then refuses inside
+                // itself without sending anything — measured against omniORB
+                // 4.3.4 (`cffd748`), which is why nothing here ever went red.
+                // This is one of the seven sites D009 lists as L2, landing
+                // early because the naming-shape oracle demanded it: a
+                // generated skeleton's reference has to be byte-identical to
+                // the hand-written servant's, and that servant started
+                // publishing codesets.
+                components: vec![orbweaver_giop::codeset::server_component()],
             }],
         }
     }

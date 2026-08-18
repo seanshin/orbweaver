@@ -240,7 +240,13 @@ impl Poa {
                 host,
                 port,
                 object_key: self.object_key(id),
-                components: Vec::new(),
+                // §7.10.2.4: no TAG_CODE_SETS is a declaration of no wchar
+                // support, and a conformant client then refuses inside itself
+                // without sending anything (measured, omniORB 4.3.4). D009's
+                // L2, landed with the rest of its cause rather than one site
+                // at a time: the conversion lists stay empty, so this
+                // advertises UTF-8 — which we have — and nothing we do not.
+                components: vec![orbweaver_giop::codeset::server_component()],
             }],
         })
     }
@@ -417,7 +423,13 @@ mod tests {
                 host: host.into(),
                 port,
                 object_key: key.to_vec(),
-                components: Vec::new(),
+                // §7.10.2.4: no TAG_CODE_SETS is a declaration of no wchar
+                // support, and a conformant client then refuses inside itself
+                // without sending anything (measured, omniORB 4.3.4). D009's
+                // L2, landed with the rest of its cause rather than one site
+                // at a time: the conversion lists stay empty, so this
+                // advertises UTF-8 — which we have — and nothing we do not.
+                components: vec![orbweaver_giop::codeset::server_component()],
             }],
         }
     }
