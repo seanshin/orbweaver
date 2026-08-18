@@ -87,6 +87,48 @@ records what changed and, where it matters, what it changes on the wire.
   `{"_raw": <base64>}`, tagged, because a malformed TypeCode is its producer's
   problem and a renderer that refuses to render it hides the evidence.
 
+### ⚠ Behaviour changed / 동작 변경
+
+- **A servant that deliberately does not implement a declared operation now
+  answers `NO_IMPLEMENT`, not `BAD_OPERATION`.** The three answers are three
+  different facts on the wire, with no document needed to tell them apart:
+  `NO_PERMISSION` — the operation exists and the answer is no, as policy;
+  `NO_IMPLEMENT` — declared, not implemented, on purpose; `BAD_OPERATION` —
+  this interface does not declare that name at all.
+
+  The IFR facade worked this out first and it stayed in one servant. Everywhere
+  else a decision and an oversight gave the same answer, so the difference
+  lived only in a document the client cannot read. Moved: CosNaming's
+  `bind_context`, `rebind_context` and `destroy`; the event channel's whole
+  pull model and its `destroy`; and `moe::Router::dispatch`.
+
+  **`moe::Router::dispatch` is the one that mattered.** D006 approved excluding
+  it on 2026-08-14, and the servant went on saying "no such operation" — a
+  decision recorded in prose and contradicted on the wire, in exactly the class
+  `PLAN-SERVICES.md` §8.1 exists to name. The new gate found it on its first
+  green run.
+
+  **Upgrading:** a client that treats `BAD_OPERATION` as "not implemented"
+  should read `NO_IMPLEMENT` too; a client that treats it as "wrong object"
+  now gets a more accurate answer.
+
+  의도적 미구현은 이제 `NO_IMPLEMENT`로 답한다. 세 답이 와이어에서 세 사실이 되며,
+  구분에 문서가 필요하지 않다. IFR만 갖고 있던 규칙을 다섯 서비스 전부에 적용했다.
+  **`moe::Router::dispatch`가 핵심이다**: D006이 제외를 승인한 뒤에도 서번트는
+  "그런 연산 없음"이라 답하고 있었다 — 산문의 결정을 와이어가 부정한 것.
+
+- **The service sweep decides instead of counting, and fails on an absence.**
+  A `BAD_OPERATION` from an object that *claims* the interface — measured by
+  whether that object answers any other operation of it — is a servant
+  half-serving something it says it is, and there is no longer a document to
+  look it up in. An interface no object claims is reported as its own fact.
+  `NO_IMPLEMENT` is also no longer counted as *dispatched*, which had
+  overstated the IFR facade's served count by **14 operations**, in the
+  direction that flatters.
+
+  스윕이 세는 대신 판정하고, 부재에서 실패한다. `NO_IMPLEMENT`를 서빙으로 계수하던
+  탓에 IFR의 서빙 수치가 **14만큼** 부풀려져 있었다 — 유리한 쪽으로.
+
 ### Known limits / 알려진 한계
 
 - **`_rt.py` reads only a named type in an `any`'s `_t`.** The Rust half reads

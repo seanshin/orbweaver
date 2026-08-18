@@ -1136,16 +1136,23 @@ fi
 # ── Service coverage: every declared operation, over the wire ───────────────
 hr "service coverage — what the five servants actually serve"
 # Each COMPONENTS row says ✅ and each servant implements a subset, deliberately.
-# The wire cannot distinguish a considered BAD_OPERATION from a forgotten one,
-# so this counts the facts and docs/SERVICES-COVERAGE.md carries the reasons; a
-# servant that stops dispatching an operation, or starts dispatching one the
-# plan says is refused, moves a count here and nowhere else.
+# The wire used to be unable to distinguish a considered BAD_OPERATION from a
+# forgotten one, so this group only counted facts and the reasons lived in
+# docs/SERVICES-COVERAGE.md. Since 2026-08-18 a decision answers NO_IMPLEMENT
+# and BAD_OPERATION means only "this interface does not declare that name", so
+# the sweep decides instead of counting: a BAD_OPERATION from an object that
+# *claims* the interface is a servant half-serving something it says it is, and
+# it fails here. An interface no object claims is reported as its own fact.
+# The first version of that check asked `_is_a` with a repository id built from
+# the scoped name, which is wrong for every COS interface (#pragma prefix), and
+# it passed a deliberately broken servant. It now reads the claim out of the
+# rows already measured.
 cov=$(./spikes/service_sweep.sh 2>&1)
 if printf '%s' "$cov" | grep -q "service-sweep: PASS"; then
   printf '%s' "$cov" | grep '^TOTAL' | sed 's/^/  ok   /'
 else
   echo "  FAIL service coverage sweep"
-  printf '%s' "$cov" | grep -E 'FAIL|UNMEASURED|BLOCKED' | head -5 | sed 's/^/       /'
+  printf '%s' "$cov" | grep -E 'FAIL|ABSENT|UNMEASURED|BLOCKED' | head -8 | sed 's/^/       /'
   fail_total=$((fail_total+1))
 fi
 

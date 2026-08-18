@@ -275,6 +275,46 @@ decided", it says so rather than inventing a rationale after the fact.
 `NO_IMPLEMENT`로 답한다 — 이제 와이어 자체가 유예와 누락을 구분한다. §7 참조.
 나머지 항목(`to_url`, `moe::Router`)은 이 배치의 범위 밖이며 그대로 남는다.
 
+### 8.1.1 The rule the IFR found, applied everywhere / 그 규칙을 전면 적용
+
+**2026-08-18.** §7's answer was right and was only in one servant. Every other
+deliberate non-implementation still said `BAD_OPERATION` — *no such operation*
+— which is what an oversight says, so the decision lived in a document the
+client cannot read. It is now the wire's job in all five services:
+
+| answer | means |
+|---|---|
+| `NO_PERMISSION` | the operation exists and the answer is no, as policy |
+| `NO_IMPLEMENT` | the operation is declared and this servant does not implement it, on purpose |
+| `BAD_OPERATION` | this interface does not declare that name at all |
+
+Moved to `NO_IMPLEMENT`: CosNaming's `bind_context`, `rebind_context`,
+`destroy`; the event channel's whole pull model and its `destroy`; and
+`moe::Router::dispatch`, whose exclusion **D006 approved on 2026-08-14 while
+the servant went on saying "no such operation"** — a decision recorded in
+prose and contradicted on the wire, which is the exact failure §8.1 exists to
+name, committed by the section that names it.
+
+`moe::Expert` (as `corpus/golden/22` declares it) is **claimed by no object in
+the control plane, deliberately.** The registry *stores* expert references and
+the experts themselves are served elsewhere — `corpus/golden/23`'s
+`EnterpriseExpert` and the shared `::moe::Expert` both answer — so an `Expert`
+servant beside the registry would be a second, weaker implementation of
+something already served. `SERVICES-COVERAGE.md` observed that this was
+"defensible by design … but that sentence is nowhere written". This is the
+sentence. It is an unserved *interface*, which the sweep now reports as its own
+fact rather than as five missing operations.
+
+**전면 적용.** §7이 찾은 답은 옳았고 서번트 하나에만 있었다. 나머지의 의도적
+미구현은 여전히 `BAD_OPERATION`(*그런 연산 없음*) — 누락이 내는 답 — 이었으므로,
+결정은 클라이언트가 읽을 수 없는 문서에만 있었다. 이제 다섯 서비스 전부에서
+와이어가 그 일을 한다. 특히 `moe::Router::dispatch`는 **D006이 2026-08-14에
+제외를 승인했는데 서번트는 계속 "그런 연산 없음"이라고 답하고 있었다** — 산문에
+기록된 결정을 와이어가 부정한 것으로, §8.1이 이름 붙이려던 실패를 §8.1 자신이
+저지른 셈이다. `moe::Expert`는 컨트롤 플레인의 어떤 객체도 **의도적으로**
+자처하지 않으며(레지스트리는 참조를 저장할 뿐, 익스퍼트는 다른 곳에서 서빙된다),
+그 문장이 어디에도 없다던 지적에 대한 답이 이 문단이다.
+
 ## 9. Fixture & dependency policy / 픽스처·의존성 정책
 
 No service in this plan adds a Cargo dependency — pure spec implementation.

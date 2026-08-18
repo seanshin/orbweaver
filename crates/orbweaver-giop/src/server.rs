@@ -116,8 +116,14 @@ use crate::{
     Version, fragment_message, read_message,
 };
 
-/// Repository ID of the exception raised for an operation we do not implement.
+/// Repository ID for an operation name no interface of this object declares.
+///
+/// Not the same as "we do not implement it" — that is [`NO_IMPLEMENT`], and
+/// keeping the two apart is what lets a client tell a decision from a gap
+/// without reading a document.
 pub const BAD_OPERATION: &str = "IDL:omg.org/CORBA/BAD_OPERATION:1.0";
+/// Repository id of `CORBA::NO_IMPLEMENT`.
+pub const NO_IMPLEMENT: &str = "IDL:omg.org/CORBA/NO_IMPLEMENT:1.0";
 /// Repository ID for a malformed or undecodable request body.
 pub const MARSHAL: &str = "IDL:omg.org/CORBA/MARSHAL:1.0";
 /// Repository ID for an object key we do not recognise.
@@ -168,6 +174,20 @@ impl SystemException {
     /// A `BAD_OPERATION` for an operation name we do not serve.
     pub fn bad_operation() -> Self {
         Self { id: BAD_OPERATION.into(), minor: 0, completed: Completion::No }
+    }
+
+    /// A `NO_IMPLEMENT` for an operation this servant knows about and has
+    /// decided not to implement.
+    ///
+    /// The difference from [`Self::bad_operation`] is the whole point and it
+    /// is visible on the wire: `BAD_OPERATION` says *no such operation*, which
+    /// is what an oversight and a decision both used to say, so the only thing
+    /// separating them was a sentence in a document the client cannot read.
+    /// `NO_IMPLEMENT` says *the operation exists in the contract and this
+    /// servant does not implement it*, on purpose. `orbweaver-registry`'s IFR
+    /// facade found this first; `SERVICES-COVERAGE.md` is what made it a rule.
+    pub fn no_implement() -> Self {
+        Self { id: NO_IMPLEMENT.into(), minor: 0, completed: Completion::No }
     }
 
     /// A `MARSHAL` for a body we could not decode.

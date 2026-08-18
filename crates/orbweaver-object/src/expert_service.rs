@@ -1135,8 +1135,19 @@ impl ExpertService {
             // by nothing, so serving `dispatch` would commit this project to
             // it by accident. `select` returns references only and needs no
             // such commitment, which is why exactly one of the two is here.
+            //
+            // It answers `NO_IMPLEMENT`, not `BAD_OPERATION`. D006 recorded the
+            // exclusion in a document and the wire went on saying "no such
+            // operation" — the answer an oversight gives — so the decision was
+            // invisible to every client and indistinguishable from a servant
+            // that had simply forgotten. A name `moe::Router` does not declare
+            // at all still answers `BAD_OPERATION`.
             if req.operation != "select" {
-                return Err(SystemException::bad_operation());
+                return Err(if req.operation == "dispatch" {
+                    SystemException::no_implement()
+                } else {
+                    SystemException::bad_operation()
+                });
             }
             let gate = GateSignal::read_from(&mut args).map_err(|_| SystemException::marshal())?;
             let qos = Constraints::read_from(&mut args).map_err(|_| SystemException::marshal())?;
@@ -2170,7 +2181,12 @@ mod tests {
         // docs — and a neighbouring interface's operation, refused because
         // these are three objects rather than one with a union of operations.
         let err = router.invoke("dispatch", |e| e.put_octet_seq(&[])).unwrap_err();
-        assert_eq!(exception_id(err), orbweaver_giop::server::BAD_OPERATION, "Router::dispatch");
+        assert_eq!(
+            exception_id(err),
+            orbweaver_giop::server::NO_IMPLEMENT,
+            "Router::dispatch is declared and deliberately not served (D006), which is a \
+             different fact from a name this interface does not declare"
+        );
         let err = router.invoke("status", |e| e.put_str("expert-a")).unwrap_err();
         assert_eq!(exception_id(err), orbweaver_giop::server::BAD_OPERATION, "loader op on router");
         served.shutdown(router);

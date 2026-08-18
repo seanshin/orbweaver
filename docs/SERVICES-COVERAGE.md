@@ -362,6 +362,51 @@ explained by nothing. That is the number this document exists to produce.
 선언 107개 중 12개가 서번트에게 거부당하지만 어디에도 설명이 없다. 이 문서가
 만들어내려던 숫자가 그것이다.
 
+### Re-measured 2026-08-18 / 재측정
+
+The table above is the 2026-08-14 measurement and stays as it was taken. The
+same sweep, re-run:
+
+| Service | probes | served | `NO_PERMISSION` | `NO_IMPLEMENT` | `BAD_OPERATION` |
+|---|---:|---:|---:|---:|---:|
+| CosNaming | 16 | 13 | 0 | 3 | **0** |
+| CosEvent | 28 | 19 | 0 | 9 | **0** |
+| Interface Repository | 66 | 14 | 38 | 14 | **0** |
+| MoE enterprise | 28 | 28 | 0 | 0 | **0** |
+| MoE control plane | 19 | 12 | 0 | 1 | **6** |
+
+**Absences: zero.** Not because the operations were implemented — most were
+not — but because the wire now says which fact it means, per
+[`PLAN-SERVICES.md`](PLAN-SERVICES.md) §8.1.1: `NO_IMPLEMENT` for a declared
+operation this servant does not implement on purpose, `BAD_OPERATION` only for
+a name the interface does not declare. The sweep decides this instead of a
+reader cross-referencing a document, and **fails** on a `BAD_OPERATION` from an
+object that claims the interface.
+
+Three things that changes in the numbers above:
+
+1. **The IFR's served count was overstated by 14.** `NO_IMPLEMENT` was being
+   counted as *dispatched*, so a facade that answers 14 operations read as 28.
+   The count was wrong in the direction that flatters, which is the direction
+   worth checking.
+2. **The six remaining `BAD_OPERATION`s are correct** and are not absences:
+   they are `moe::Expert` operations probed against a registry and a loader
+   that never claimed to be Experts. That is reported now as its own fact — an
+   interface claimed by no object — with the reason written in §8.1.1 rather
+   than left as five missing operations.
+3. **`moe::Router::dispatch` was a real absence and had been one since D006.**
+   The decision to exclude it was approved 2026-08-14 and recorded in prose
+   while the servant went on answering "no such operation". The gate found it
+   on its first green run; nothing else could have.
+
+위 표는 2026-08-14 측정이며 그대로 둔다. 재실행 결과 **부재 0건** — 연산이
+구현되어서가 아니라 와이어가 어느 사실인지 말하게 되었기 때문이다. 셋이 달라졌다:
+① IFR의 서빙 수치는 **14만큼 부풀려져 있었다**(`NO_IMPLEMENT`를 서빙으로 계수),
+② 남은 `BAD_OPERATION` 6건은 옳은 답이며 부재가 아니다(자처한 적 없는 인터페이스),
+③ **`moe::Router::dispatch`는 진짜 부재였고 D006 이후 줄곧 그랬다** — 제외 결정은
+산문에 있었고 서번트는 계속 "그런 연산 없음"이라 답했다. 게이트가 첫 초록 실행에서
+찾았고, 다른 무엇도 찾을 수 없었다.
+
 ### Where the measurement disagrees with the documents / 문서와의 불일치
 
 1. **`COMPONENTS.md` line 39 says the CosNaming server landed a "full context

@@ -447,9 +447,20 @@ fn run(out: &[&str; 3], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
             "select(required='math') with no specialization on file is NO_IMPLEMENT, not empty",
         );
         // The other half of the interface, refused with the PLAN-MOE §4.6
-        // reason written in the servant.
+        // reason written in the servant — and since 2026-08-18 the wire says
+        // which kind of refusal it is. D006 approved the exclusion on
+        // 2026-08-14 while this answered `BAD_OPERATION`, "no such operation",
+        // so a client could not tell the decision from a servant that had
+        // forgotten. A name the interface does not declare still gets
+        // `BAD_OPERATION`, which is what makes the pair worth checking.
         let got = exception_id(rtr.invoke("dispatch", |e| e.put_octet_seq(&[])));
-        r.eq(got.as_str(), BAD_OPERATION, "Router::dispatch is refused: it carries an Activation");
+        r.eq(
+            got.as_str(),
+            NO_IMPLEMENT,
+            "Router::dispatch is declared and deliberately not served",
+        );
+        let got = exception_id(rtr.invoke("no_such_operation", |e| e.put_octet_seq(&[])));
+        r.eq(got.as_str(), BAD_OPERATION, "a name moe::Router does not declare");
     });
 
     // ── the policy application, pinned ──────────────────────────────────────

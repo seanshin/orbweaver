@@ -577,7 +577,17 @@ class Sweep:
             kind = "unmeasured"
             self.unmeasured.append(f"{service}/{obj}/{op}: {answer.note}")
         elif answer.status == SYSTEM_EXCEPTION and answer.exc_id.endswith("BAD_OPERATION:1.0"):
+            # "No such operation." An oversight and a decision both used to say
+            # this, so the only thing separating them was a sentence in a
+            # document the client cannot read. Twelve of 107 operations were in
+            # that state on 2026-08-14, which is why this row now means one
+            # thing: **nobody decided**.
             kind = "not-dispatched"
+        elif answer.status == SYSTEM_EXCEPTION and answer.exc_id.endswith("NO_IMPLEMENT:1.0"):
+            # "The operation exists in the contract and this servant does not
+            # implement it, on purpose." Counted separately because counting it
+            # as dispatched overstated the IFR facade by ten operations.
+            kind = "deferred"
         elif answer.status == SYSTEM_EXCEPTION and answer.exc_id.endswith("NO_PERMISSION:1.0"):
             kind = "refused"
         else:
@@ -1037,10 +1047,11 @@ def main(argv):
     for service in services:
         rows = [r for r in sweep.rows if r["service"] == service]
         counts = {k: sum(1 for r in rows if r["kind"] == k) for k in
-                  ("dispatched", "refused", "not-dispatched", "unmeasured")}
+                  ("dispatched", "refused", "deferred", "not-dispatched", "unmeasured")}
         print(
             f"TOTAL\t{service}\tprobes {len(rows)}\tdispatched {counts['dispatched']}"
-            f"\tNO_PERMISSION {counts['refused']}\tBAD_OPERATION {counts['not-dispatched']}"
+            f"\tNO_PERMISSION {counts['refused']}\tNO_IMPLEMENT {counts['deferred']}"
+            f"\tBAD_OPERATION {counts['not-dispatched']}"
             f"\tunmeasured {counts['unmeasured']}"
         )
 
@@ -1049,6 +1060,50 @@ def main(argv):
         for u in sweep.unmeasured:
             print(f"UNMEASURED\t{u}")
         print(f"\nservice-sweep: FAIL — {len(sweep.unmeasured)} unmeasured check(s)")
+        return 1
+
+    # An absence is a `BAD_OPERATION` from an object that **claims** the
+    # interface: the servant is half-serving something it says it is. The same
+    # answer from an object that never claimed the interface is correct and is
+    # a different fact — an interface no object serves — reported below and not
+    # counted here.
+    # An object **claims** an interface when it answers at least one of its
+    # operations with something other than "no such operation". Read out of the
+    # rows already measured rather than asked for over the wire: `_is_a` would
+    # mean constructing a repository id from a scoped name, and that guess is
+    # wrong for every COS interface — `IDL:CosNaming/…` where the contract's
+    # `#pragma prefix` makes it `IDL:omg.org/CosNaming/…`. The first version of
+    # this check did guess, and it passed a deliberately broken servant.
+    claimed = {
+        (r["service"], r["object"], r["interface"])
+        for r in sweep.rows
+        if r["kind"] != "not-dispatched"
+    }
+    absent = [
+        r for r in sweep.rows
+        if r["kind"] == "not-dispatched"
+        and (r["service"], r["object"], r["interface"]) in claimed
+    ]
+    unserved = sorted({
+        (r["service"], r["interface"])
+        for r in sweep.rows
+        if r["kind"] == "not-dispatched"
+        and (r["service"], r["object"], r["interface"]) not in claimed
+    })
+    if unserved:
+        print("\n#UNSERVED-INTERFACES")
+        for service, iface in unserved:
+            print(f"UNSERVED\t{service}\t{iface}\tdeclared, claimed by no object probed")
+    if absent:
+        print("\n#ABSENT")
+        for r in absent:
+            print(f"ABSENT\t{r['service']}\t{r['object']}\t{r['interface']}::{r['operation']}")
+        print(
+            f"\nservice-sweep: FAIL — {len(absent)} operation(s) answered BAD_OPERATION by an "
+            "object that claims the interface. That is the answer an oversight and a decision "
+            "both used to give; a decision now says NO_IMPLEMENT, so this list is the one "
+            "nobody has decided."
+        )
         return 1
     print("\nservice-sweep: PASS — every declared operation was answered")
     return 0

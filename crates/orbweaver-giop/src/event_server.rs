@@ -1069,12 +1069,38 @@ impl EventChannelServer {
                 }
             }
 
-            // Everything else — the whole pull model, `destroy`, the typed
-            // channel surface — is refused loudly rather than half-served.
+            // The pull model and `destroy` are declared by `CosEventComm` and
+            // `CosEventChannelAdmin` and deliberately not served, so the wire
+            // says `NO_IMPLEMENT`: a client can tell that from an oversight,
+            // and `BAD_OPERATION` — "no such operation" — could not, which left
+            // the difference in this module's header where no caller reads it.
+            (_, op) if is_deferred(op) => return Err(SystemException::no_implement().into()),
+            // Anything else is a name no interface of this object declares.
             _ => return Err(SystemException::bad_operation().into()),
         }
         Ok(())
     }
+}
+
+/// The event-service operations this server knows about and does not serve.
+///
+/// The reasons are in this module's header: pull inverts the flow control and
+/// would need the unbounded buffer the bounded queue exists to avoid, and
+/// `destroy` means calling back out to every attached consumer from inside a
+/// servant, where a failure has nowhere to go.
+pub fn is_deferred(op: &str) -> bool {
+    matches!(
+        op,
+        "obtain_pull_supplier"
+            | "obtain_pull_consumer"
+            | "connect_pull_consumer"
+            | "connect_pull_supplier"
+            | "disconnect_pull_supplier"
+            | "disconnect_pull_consumer"
+            | "pull"
+            | "try_pull"
+            | "destroy"
+    )
 }
 
 /// Reads a `push`'s single `any` argument, verbatim.
@@ -1292,6 +1318,7 @@ impl SharedDispatch for PushConsumerServant {
                 self.sink.state.write(|s| s.events.push(event.any));
             }
             "disconnect_push_consumer" => self.sink.state.write(|s| s.disconnected = true),
+            op if is_deferred(op) => return Err(SystemException::no_implement()),
             _ => return Err(SystemException::bad_operation()),
         }
         Ok(())
@@ -1728,7 +1755,7 @@ mod tests {
 
     /// The pull model and `destroy` are refused loudly, not half-served.
     #[test]
-    fn the_pull_model_and_destroy_are_bad_operation() {
+    fn the_pull_model_and_destroy_answer_no_implement() {
         let served = Served::start();
         let mut conn = served.channel_conn();
         let consumers = client::for_consumers(&mut conn).unwrap();
@@ -1737,9 +1764,9 @@ mod tests {
         for op in ["destroy", "obtain_pull_supplier", "pull", "try_pull"] {
             match conn.invoke_nullary(op) {
                 Err(Error::SystemException { id, .. }) => {
-                    assert_eq!(id, crate::server::BAD_OPERATION, "{op}");
+                    assert_eq!(id, crate::server::NO_IMPLEMENT, "{op}");
                 }
-                other => panic!("expected BAD_OPERATION for {op}, got {other:?}"),
+                other => panic!("expected NO_IMPLEMENT for {op}, got {other:?}"),
             }
         }
         drop(conn);
@@ -1752,10 +1779,15 @@ mod tests {
             for op in ops {
                 match c.invoke_nullary(op) {
                     Err(Error::SystemException { id, .. }) => {
-                        assert_eq!(id, crate::server::BAD_OPERATION, "{op}");
+                        let want = if super::is_deferred(op) {
+                            crate::server::NO_IMPLEMENT
+                        } else {
+                            crate::server::BAD_OPERATION
+                        };
+                        assert_eq!(id, want, "{op}");
                     }
                     other => {
-                        panic!("expected BAD_OPERATION for {op} on {}, got {other:?}", ior.type_id)
+                        panic!("expected a refusal for {op} on {}, got {other:?}", ior.type_id)
                     }
                 }
             }

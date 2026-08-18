@@ -436,10 +436,25 @@ impl NamingServer {
                 })?;
                 out.put_str(&url);
             }
+            // Declared by `CosNaming` and deliberately not served: the wire
+            // says so with `NO_IMPLEMENT`, which a client can tell from an
+            // oversight. `BAD_OPERATION` said "no such operation" and left the
+            // difference in this module's doc comment, where no caller reads.
+            op if is_deferred(op) => return Err(SystemException::no_implement().into()),
             _ => return Err(SystemException::bad_operation().into()),
         }
         Ok(())
     }
+}
+
+/// The `CosNaming` operations this server knows about and does not serve.
+///
+/// The reasons are in this module's header, one per operation, and they are
+/// the reasons this list exists rather than a `BAD_OPERATION` fallthrough:
+/// `bind_context`/`rebind_context` would bind a *foreign* context, and
+/// `destroy` would invalidate keys other references still name.
+pub fn is_deferred(op: &str) -> bool {
+    matches!(op, "bind_context" | "rebind_context" | "destroy")
 }
 
 impl Tree {
@@ -978,7 +993,7 @@ mod tests {
     /// interface ids must answer true. An operation outside the served
     /// surface is `BAD_OPERATION`, never a silent empty reply.
     #[test]
-    fn is_a_answers_for_both_interfaces_and_unserved_ops_are_bad_operation() {
+    fn is_a_answers_for_both_interfaces_and_a_deferred_op_says_so() {
         let served = Served::start();
         let mut ctx = served.client();
         for (id, expected) in [
@@ -989,11 +1004,22 @@ mod tests {
             let reply = ctx.connection().invoke("_is_a", move |e| e.put_str(id)).unwrap();
             assert_eq!(reply.body().unwrap().get_bool().unwrap(), expected, "{id}");
         }
+        // `destroy` is declared by `CosNaming` and deliberately not served,
+        // so it answers NO_IMPLEMENT. A name the contract does not declare at
+        // all still answers BAD_OPERATION, and the two staying different is
+        // the whole point: it is what lets a client tell a decision from a gap
+        // without reading this file.
         match ctx.connection().invoke_nullary("destroy") {
             Err(Error::SystemException { id, .. }) => {
-                assert_eq!(id, crate::server::BAD_OPERATION);
+                assert_eq!(id, crate::server::NO_IMPLEMENT, "a deferred operation");
             }
-            other => panic!("expected BAD_OPERATION for destroy, got {other:?}"),
+            other => panic!("expected NO_IMPLEMENT for destroy, got {other:?}"),
+        }
+        match ctx.connection().invoke_nullary("no_such_operation") {
+            Err(Error::SystemException { id, .. }) => {
+                assert_eq!(id, crate::server::BAD_OPERATION, "an undeclared name");
+            }
+            other => panic!("expected BAD_OPERATION for an undeclared name, got {other:?}"),
         }
         served.shutdown(ctx);
     }
