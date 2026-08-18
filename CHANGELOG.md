@@ -350,6 +350,29 @@ records what changed and, where it matters, what it changes on the wire.
   estate drops **27 references without a word** — 8 base interfaces and 19
   raised exceptions.
 
+- **The estate goes in as the thirteen files it is stored as.** `run.sh`
+  amalgamated them first, and that step turned out to be **load-bearing rather
+  than a convenience**: without it `orbweaver-mcp-server` did not serve less, it
+  refused to start. A direct stage now runs beside the amalgamated one and the
+  two are measured to agree — 12 interfaces, 76 operations, identical interface
+  by interface (and, as it happens, identical as whole documents, recorded but
+  not asserted, because the two inputs genuinely differ).
+
+  `amalgamate.py`'s docstring had rotted in place: it said the front end
+  *skips* `#include` and cited a line of `lex.rs` that today reads *"it used to
+  be in that list, and being in it was a defect… It is resolved before the
+  lexer runs now."* The script stays, for a reason that is still true — some
+  consumers take a translation unit rather than a path — and stage 7b measures
+  the equivalence instead of assuming it.
+
+  Two more things were found to rest on the amalgamation without saying so:
+  `forge-pipeline`'s S4 supplies its item as **text**, which has no directory
+  for a quoted `#include` to resolve against, so pointed at the thirteen files
+  it exits 1 — the same class as the nineteen call sites, reported and not
+  fixed here; and `gen-corpus`'s output compiles against a hand-written servant
+  written for the single amalgamated module, which is a genuine dependency and
+  now stated.
+
 - **DynAny**, over `Value`/`TypeCode`: navigation whose cursor is a path
   re-resolved at every operation, so nothing exists below the focus and
   past-the-end is representable but never readable. 76 of 78 golden types are
