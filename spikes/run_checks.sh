@@ -227,6 +227,26 @@ else
   fail_total=$((fail_total+1))
 fi
 
+hr "performance — the dynamic path against the static stub"
+# §8 has cited a LAN echo benchmark since v0.2 and there was none. This runs
+# for the *shape* of the answer, never for a threshold: the exit code depends
+# on whether both paths were measured and agreed on every answer, never on a
+# duration. A latency gate fails on the day the machine is busy and teaches
+# everyone to re-run it, which is how a gate stops being read.
+#
+# §11's target is deliberately not enforced here: "≤ 5 ms added and ≤ 3×
+# static" names no shape, no payload and no machine, and at ~21µs its two
+# clauses disagree by three orders of magnitude. A target nobody can test
+# against is not made testable by a script picking a clause.
+if cb_out=$(cargo run -q --release -p orbweaver-test --bin call-bench -- --samples 200 2>&1); then
+  printf '%s\n' "$cb_out" | grep -E "^  (add|echo_)" | sed 's/^ */  ..   /'
+  echo "  ok   both paths measured on four shapes and agreed on every answer"
+else
+  echo "  FAIL a series was not measured, or the two paths disagreed"
+  printf '%s\n' "$cb_out" | tail -5 | sed 's/^/       /'
+  fail_total=$((fail_total+1))
+fi
+
 hr "generated code is linted, not merely compiled"
 # `cargo build` accepted what `clippy -D warnings` does not, so a consumer
 # building with warnings-as-errors could not compile the real OMG naming

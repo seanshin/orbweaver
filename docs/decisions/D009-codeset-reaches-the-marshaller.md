@@ -246,8 +246,29 @@ Do not adopt B, C or D for the reasons in §5.
 
 ## 9. What would falsify this, and what cannot be measured yet / 반증과 미측정
 
-**A `dyn` call per string is claimed to be free. That claim cannot currently be
-tested.** §8's table names a *LAN echo benchmark, dynamic path vs static stub,
+> **Discharged 2026-08-18, batch 1.** The benchmark was built (`call-bench`)
+> and the number taken, twice, independently: the dynamic path costs **+2.0 µs
+> p50 on a sixty-four-string payload** whose round trip is 33 µs — a ratio of
+> **1.06×**, and about **31 ns per string**. It is per *string*, not per byte:
+> one 4 KiB string costs the same 0.5 µs as a 16-byte one. A codeset
+> indirection paid once per string is lost inside the call. **The falsifier did
+> not fire; A stands on a measurement rather than on "a refcount is cheap".**
+>
+> A second finding came with it, and it is the same class this project keeps
+> hitting: **§11's target cannot be compared to anything.** *"≤ 5 ms added and
+> ≤ 3× static"* names no operation shape, no payload, no sample count and no
+> machine, and at 21 µs its two clauses disagree by three orders of magnitude —
+> "≤ 5 ms added" allows 240× the entire call while "≤ 3× static" allows 42 µs.
+> Which clause binds is a different test. The benchmark prints that instead of
+> picking one. Restating §11 as a shape-qualified ratio is its own change.
+>
+> §9 배치 1에서 **갚았다**: 문자열당 약 31ns, 64개 문자열 페이로드에서 1.06배.
+> **반증 시험은 발화하지 않았고, A안은 "refcount는 싸다"가 아니라 측정 위에
+> 선다.** 함께 나온 두 번째 발견: **§11의 목표는 무엇과도 비교할 수 없다** —
+> 모양도 페이로드도 표본 수도 기계도 없고, 두 절이 세 자릿수만큼 어긋난다.
+
+**A `dyn` call per string was claimed to be free. That claim could not be
+tested when this was written.** §8's table names a *LAN echo benchmark, dynamic path vs static stub,
 within §11 targets* — **it does not exist.** `COMPONENTS.md` says telemetry has
 "counts and no latency (no clock)", and the only `bench` binary in the tree is
 `search_bench`, which measures retrieval quality.
