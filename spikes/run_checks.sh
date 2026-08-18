@@ -227,6 +227,43 @@ else
   fail_total=$((fail_total+1))
 fi
 
+hr "wide characters — the value's own order, not the message's"
+# A UTF-16 wchar or wstring states its byte order in its own octets and ignores
+# the stream's. Our writer always emits a mark, so our round trip could never
+# produce the unmarked body the reader was wrong about — the read half is the
+# one that matters, and only the peer's *reader* can settle it, because its
+# writer always marks too. Twelve readings, six answers, no dependence on the
+# stream flag.
+wcc_out=$(python3 spikes/wide_char_capture.py 2>&1); wcc_rc=$?
+printf '%s\n' "$wcc_out" | tail -3
+if [ "$wcc_rc" -eq 2 ]; then
+  skipped=$((skipped+1))
+elif [ "$wcc_rc" -ne 0 ]; then
+  echo "  FAIL the recorded wide-character bytes no longer match the live peer"
+  fail_total=$((fail_total+1))
+else
+  echo "  ok   17 recorded wide-character readings still match the live peer"
+fi
+if cargo test -q -p orbweaver-giop --test wide_chars_from_a_peer >/dev/null 2>&1; then
+  echo "  ok   the peer's wchar and wstring bytes read, and a wchar re-encodes to them"
+else
+  echo "  FAIL wide characters from a peer do not read as the peer reads them"
+  fail_total=$((fail_total+1))
+fi
+
+hr "encapsulation offsets — the same bytes wherever the body lands"
+# position() added the continuing_at prefix after subtracting the origin, so a
+# TypeCode encapsulation in a GIOP 1.0/1.1 body aligned from the message's
+# offset rather than from its own flag. Unreachable at 1.2, which rounds the
+# body start to a multiple of 8; unconditional at 1.0/1.1. It did not round-trip
+# against itself either — nothing had ever asked.
+if cargo test -q -p orbweaver-giop --test spliced_encapsulations >/dev/null 2>&1; then
+  echo "  ok   a TypeCode is the peer's bytes at every offset a body can hand it"
+else
+  echo "  FAIL an encapsulation's contents change with where the body lands"
+  fail_total=$((fail_total+1))
+fi
+
 hr "decision status — one source of truth, restated nowhere stale"
 # A decision's status lives in docs/decisions/D00N-*.md. Five other documents
 # restate it, and restatements drift: the first run of this gate found seven,
