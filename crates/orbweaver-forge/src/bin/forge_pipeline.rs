@@ -2,13 +2,33 @@
 //!
 //! ```text
 //! forge-pipeline --out <dir>
-//!                [--requirements <dir>]
+//!                [--requirements <dir>] [-I <dir>]
 //!                [--ingest <cmd>] [--synthesize <cmd>] [--annotate <cmd>]
 //!                [--from s1] [--to s4] [--only s3]
 //!                [--registered <dir>] [--supersede <reason>]
 //!                [--max-rounds N] [--register]
 //!                [--print-prompt s1|s2|s3]
 //! ```
+//!
+//! # `#include`, and why an item carries its path
+//!
+//! Every stage reads its input **from the workspace**, and S4 is handed that
+//! file's path along with its text. A quoted `#include "01-common.idl"`
+//! therefore resolves against the directory the contract lives in, which is
+//! what lets `--only s4` be pointed straight at a legacy estate — thirteen
+//! files that include each other, no `-I` required.
+//!
+//! It did not, and the failure was silent in the worst way: the estate's own
+//! harness amalgamated the thirteen files into one unit before this process
+//! saw them, so the gate that could not resolve an include was never asked to.
+//! Pointed at the directory it refused all thirteen as unannotated drafts and
+//! exited 1.
+//!
+//! An item whose text has no file behind it keeps saying so — *"this source was
+//! supplied as text, not read from a file"* — because a model may genuinely
+//! write IDL that was never a file, and resolving that against the process's
+//! working directory would make one contract mean two things. `-I` adds
+//! directories for the angled form `#include <x.idl>`.
 //!
 //! # Regenerating over a registered contract (D005 option B)
 //!
@@ -72,13 +92,14 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use orbweaver_forge::pipeline::{
-    CommandStage, EXPOSURE_TODO_FILE, ItemStatus, Pipeline, Registered, StageId, ValidateStage,
-    Workspace, record_supersede, register, run_pipeline,
+    CommandStage, EXPOSURE_TODO_FILE, Item, ItemStatus, Pipeline, Registered, StageId,
+    ValidateStage, Workspace, record_supersede, register, run_pipeline,
 };
+use orbweaver_idl::SearchPath;
 
 fn usage() -> String {
     format!(
-        "usage: forge-pipeline --out <dir> [--requirements <dir>]\n\
+        "usage: forge-pipeline --out <dir> [--requirements <dir>] [-I <dir>]\n\
          \x20   [--ingest <cmd>] [--synthesize <cmd>] [--annotate <cmd>]\n\
          \x20   [--from {stages}] [--to {stages}] [--only {stages}]\n\
          \x20   [--registered <dir>] [--supersede <reason>]\n\
@@ -88,7 +109,8 @@ fn usage() -> String {
          FORGE_STAGE and FORGE_PROMPT in the environment; stdout is the artifact.\n\
          --registered points S4 at the contracts a regeneration is compared with;\n\
          an id with nothing registered under it is a first generation and is not\n\
-         refused for having no baseline.",
+         refused for having no baseline. A quoted #include resolves against the\n\
+         directory the contract was read from; -I adds directories for <angled>.",
         stages = "s1|s2|s3|s4"
     )
 }
@@ -106,6 +128,7 @@ struct Args {
     to: Option<StageId>,
     max_rounds: Option<usize>,
     do_register: bool,
+    search: SearchPath,
 }
 
 fn main() -> ExitCode {
@@ -149,6 +172,13 @@ fn run() -> Result<ExitCode, String> {
                 a.max_rounds = Some(v.parse().map_err(|_| format!("--max-rounds: {v:?}"))?);
             }
             "--register" => a.do_register = true,
+            // The angled form only. The quoted form already resolves against
+            // the file the item was read from, which is why an estate whose
+            // headers sit beside it needs no -I at all.
+            flag if flag.starts_with("-I") => {
+                let dir = if flag.len() > 2 { flag[2..].to_owned() } else { value("-I")? };
+                a.search.push(dir);
+            }
             "--print-prompt" => {
                 let v = value("--print-prompt")?;
                 let s = stage("--print-prompt", v)?;
@@ -220,6 +250,7 @@ fn run() -> Result<ExitCode, String> {
     if let Some(reason) = &a.supersede {
         gate = gate.superseding(reason.clone());
     }
+    gate = gate.searching(a.search.clone());
 
     let mut pipeline = Pipeline {
         ingest: ingest.as_mut().map(|s| s as &mut dyn orbweaver_forge::pipeline::Stage),
@@ -340,12 +371,8 @@ fn run() -> Result<ExitCode, String> {
 /// S1 and a brief-less S2 read the requirements directory; every later stage
 /// reads the workspace, which is what makes "re-run from here" need nothing but
 /// `--out`.
-fn collect_items(
-    first: StageId,
-    args: &Args,
-    workspace: &Workspace,
-) -> Result<Vec<(String, String)>, String> {
-    let from_requirements = || -> Result<Vec<(String, String)>, String> {
+fn collect_items(first: StageId, args: &Args, workspace: &Workspace) -> Result<Vec<Item>, String> {
+    let from_requirements = || -> Result<Vec<Item>, String> {
         let dir = args.requirements.as_ref().ok_or_else(|| {
             format!("{} reads natural-language requirements: pass --requirements", first.title())
         })?;
@@ -365,19 +392,19 @@ fn collect_items(
                 let id = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
                 let text = std::fs::read_to_string(&path)
                     .map_err(|e| format!("{}: {e}", path.display()))?;
-                Ok((id, text))
+                Ok(Item::from_file(id, text, path))
             })
             .collect()
     };
 
-    let from_workspace = |stage: StageId| -> Result<Vec<(String, String)>, String> {
+    // `load_item`, not `load`: the item keeps the path it was read from, so the
+    // gate at the end of the range judges the contract the file describes
+    // rather than a smaller one with its includes missing.
+    let from_workspace = |stage: StageId| -> Result<Vec<Item>, String> {
         workspace
             .ids_ready_for(stage)
             .into_iter()
-            .map(|id| {
-                let text = workspace.load(stage, &id).map_err(|e| e.to_string())?;
-                Ok((id, text))
-            })
+            .map(|id| workspace.load_item(stage, &id).map_err(|e| e.to_string()))
             .collect()
     };
 

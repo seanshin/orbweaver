@@ -18,6 +18,22 @@
 //! failures sharing one root cause, and one message that names the cause turned
 //! 65% into 100% in a single round. The message is the mechanism.
 //!
+//! # What S4 takes: text, and where the text came from
+//!
+//! A contract is not only its bytes. A quoted `#include "x.idl"` resolves
+//! against the directory the including file lives in, so a gate handed nothing
+//! but a `&str` is judging a *smaller* contract than the one on disk — or, when
+//! the include is loud rather than silent, refusing a contract that is fine.
+//!
+//! So the unit S4 takes is a [`Source`]: the text, plus the file it was read
+//! from **when there was one**. Both halves are load-bearing. [`Source::from_file`]
+//! is what lets `forge-pipeline --only s4` be pointed at a directory of legacy
+//! contracts that include each other; [`Source::anonymous`] is what a model
+//! writing IDL into a pipe honestly is, and it keeps failing an unresolvable
+//! include with the reason — *"this source was supplied as text, not read from
+//! a file"*. Guessing a directory for it would make one contract mean different
+//! things depending on where the validator ran.
+//!
 //! # What it does not do
 //!
 //! It does not call an external compiler. The differential oracles
@@ -56,9 +72,10 @@ pub mod pipeline;
 pub mod synthesize;
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use orbweaver_dynamic::json::Json;
-use orbweaver_idl::Diagnostic;
+use orbweaver_idl::{Diagnostic, SearchPath};
 use orbweaver_registry::Registry;
 use orbweaver_registry::diff::{Verdict, diff};
 
@@ -197,9 +214,127 @@ impl Report {
     }
 }
 
+/// IDL text together with the file it was read from, when it was read from one.
+///
+/// A quoted `#include "x.idl"` resolves against **the including file's own
+/// directory** first; that is the C convention CORBA inherits and what
+/// `omniidl -I` implements. Text carries no directory, so an entry point that
+/// takes only a `&str` cannot resolve the quoted form at all — and that is the
+/// shape of the defect this type exists to close. `forge-pipeline` supplied
+/// S4's item as text while holding the path it had just read it from, so the
+/// thirteen-file estate was refused thirteen times for an include the caller
+/// could have resolved.
+///
+/// **`origin: None` is an answer, not a gap.** A model that writes IDL into a
+/// pipe genuinely has no directory, and the diagnostic says exactly that —
+/// *"this source was supplied as text, not read from a file"* — instead of
+/// resolving against the process's working directory, which would make one
+/// contract mean different things depending on where the validator was invoked.
+/// So [`Source::anonymous`] is not a degraded [`Source::from_file`]; it is the
+/// truthful description of a different input, and it still fails.
+///
+/// *텍스트에는 디렉터리가 없다. 출처를 함께 넘기거나, 없다고 정직하게 말한다 —
+/// 추측해서 해석하지 않는다.*
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Source<'a> {
+    text: &'a str,
+    origin: Option<&'a Path>,
+}
+
+impl<'a> Source<'a> {
+    /// IDL that came from nowhere on disk: a model wrote it, or a caller built
+    /// it. Only an absolute `#include` or the search path can resolve.
+    pub fn anonymous(text: &'a str) -> Source<'a> {
+        Source { text, origin: None }
+    }
+
+    /// IDL and the file it was read from.
+    pub fn from_file(text: &'a str, origin: &'a Path) -> Source<'a> {
+        Source { text, origin: Some(origin) }
+    }
+
+    /// IDL and the file it was read from, where the caller may or may not have
+    /// one — the shape a pipeline stage is in, since an item may be either.
+    pub fn maybe_from_file(text: &'a str, origin: Option<&'a Path>) -> Source<'a> {
+        Source { text, origin }
+    }
+
+    /// The IDL itself.
+    pub fn text(&self) -> &'a str {
+        self.text
+    }
+
+    /// The file it was read from, if there was one.
+    pub fn origin(&self) -> Option<&'a Path> {
+        self.origin
+    }
+}
+
 /// Runs every in-process check over one file.
+///
+/// The string entry point: no origin and no search path, so a `#include` here
+/// resolves only if it is absolute, and one that does not is **reported** with
+/// the reason rather than skipped. Callers that know the path want
+/// [`validate_source`]; this one stays because text with no origin is a real
+/// input and deserves a real answer.
 pub fn validate(src: &str) -> Report {
-    validate_checked(src, orbweaver_idl::check(src))
+    validate_source(Source::anonymous(src), &SearchPath::new())
+}
+
+/// S4 over a source that carries where it came from.
+///
+/// Resolves `#include` first — the quoted form against the origin's own
+/// directory, the angled form against `search` — and then runs every check over
+/// the resolved unit. Positions come back mapped to the file the line was
+/// written in, because a line number in the splice is a line number nobody can
+/// open.
+///
+/// With [`Source::anonymous`] this is byte-for-byte the old [`validate`]: same
+/// unit, same diagnostics, same refusal for an unresolvable include.
+pub fn validate_source(src: Source<'_>, search: &SearchPath) -> Report {
+    let unit = orbweaver_idl::preprocess(src.text, src.origin, search);
+    let mut report = validate_unit(&unit);
+    locate_findings(&mut report, &unit);
+    report
+}
+
+/// Maps every finding's position back to the file its line was written in.
+///
+/// A resolved unit is several files spliced together, so an unmapped line
+/// number points into a document that exists nowhere. §3.3 hands these
+/// diagnostics straight back to a generator, and a confident wrong position is
+/// worse than none — so a finding written in an *included* file also says which
+/// file, with the include chain that reached it.
+///
+/// A no-include unit is byte-identical to its input and this is the identity.
+fn locate_findings(report: &mut Report, unit: &orbweaver_idl::include::Unit) {
+    let Some(root) = unit.files.first() else { return };
+    for finding in &mut report.findings {
+        // Line 0 means "about the file as a whole"; there is no position to map.
+        if finding.line == 0 {
+            continue;
+        }
+        let at = unit.locate(orbweaver_idl::lex::Span {
+            start: 0,
+            end: 0,
+            line: finding.line,
+            column: finding.column,
+        });
+        if at.file != root.as_path() {
+            let mut chain = String::new();
+            for (file, line) in at.chain.iter().rev() {
+                chain.push_str(&format!(", included from {}:{}", file.display(), line));
+            }
+            finding.message = format!(
+                "{} (written in {}:{}{chain})",
+                finding.message,
+                at.file.display(),
+                at.line
+            );
+        }
+        finding.line = at.line;
+        finding.column = at.column;
+    }
 }
 
 /// S4 over an already-resolved translation unit.
@@ -259,17 +394,83 @@ fn validate_checked(
 /// here rather than at release time is the difference between a regenerate and
 /// an outage.
 pub fn validate_against(src: &str, released: &str) -> Report {
-    let mut report = validate(src);
+    validate_source_against(Source::anonymous(src), Source::anonymous(released), &SearchPath::new())
+}
+
+/// Says, in the report, that the §5.3 comparison did not run.
+///
+/// The failure modes below all used to `return report` — the proposal's own
+/// clean verdict, handed back with no mention that the diff never happened.
+/// Every caller then read it as "compared, and nothing breaks".
+fn never_compared(mut report: Report, why: String) -> Report {
+    report.findings.push(Finding {
+        rule: RELEASED_UNREADABLE.into(),
+        severity: Severity::Error,
+        message: format!(
+            "the §5.3 comparison against the released contract never ran: {why}. An unmeasured \
+             check is a failure, never a pass"
+        ),
+        line: 0,
+        column: 0,
+        source: String::new(),
+        fix: Some(
+            "fix the released contract, or point the comparison at the revision that was \
+             actually released"
+                .into(),
+        ),
+    });
+    report.findings.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.line.cmp(&b.line)));
+    report
+}
+
+/// The rule a §5.3 comparison reports when the *baseline* is what stopped it.
+///
+/// A released contract that will not resolve, parse or load is not a clean
+/// diff; it is no diff. The old code returned the proposal's report unchanged
+/// and every caller read that as "compared, and nothing broke" — an unmeasured
+/// check reported as a pass, which is the one thing the harness rules forbid.
+pub const RELEASED_UNREADABLE: &str = "evolution/released-unreadable";
+
+/// [`validate_against`] where both sides carry where they came from.
+///
+/// Both sides, deliberately. A released contract is a path too, and a baseline
+/// read as a string loses every name its headers declared — so comparing a
+/// resolved proposal against an unresolved baseline reports the whole shared
+/// header as *newly added*. Resolving one side only would have been a worse
+/// gate than resolving neither.
+pub fn validate_source_against(
+    proposed: Source<'_>,
+    released: Source<'_>,
+    search: &SearchPath,
+) -> Report {
+    let unit = orbweaver_idl::preprocess(proposed.text, proposed.origin, search);
+    let mut report = validate_unit(&unit);
+    locate_findings(&mut report, &unit);
     if !report.is_ok() {
         return report;
     }
-    let (Ok(new_spec), Ok(old_spec)) = (orbweaver_idl::check(src), orbweaver_idl::check(released))
-    else {
-        return report;
+    let released_unit = orbweaver_idl::preprocess(released.text, released.origin, search);
+    let old_spec = match orbweaver_idl::check_unit(&released_unit) {
+        Ok(spec) => spec,
+        Err(diags) => {
+            let why = diags
+                .first()
+                .map(|d| released_unit.render(d))
+                .unwrap_or_else(|| "it did not check out".to_owned());
+            return never_compared(report, why);
+        }
+    };
+    // `report.is_ok()` above means the proposal already checked out; matched
+    // rather than unwrapped so a future divergence is a finding, not a panic.
+    let Ok(new_spec) = orbweaver_idl::check_unit(&unit) else {
+        return never_compared(report, "the proposal stopped checking out".to_owned());
     };
     let (mut old, mut new) = (Registry::new(), Registry::new());
-    if old.load(&old_spec).is_err() || new.load(&new_spec).is_err() {
-        return report;
+    if let Err(e) = old.load(&old_spec) {
+        return never_compared(report, e.message);
+    }
+    if let Err(e) = new.load(&new_spec) {
+        return never_compared(report, e.message);
     }
     for change in diff(&old, &new) {
         let severity = match change.verdict {
