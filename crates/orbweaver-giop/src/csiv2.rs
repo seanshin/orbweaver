@@ -232,7 +232,16 @@ impl GssUpToken {
         at += 1;
         let (len, used) = parse_der_length(&bytes[at..])?;
         at += used;
-        let body = bytes.get(at..at + len).ok_or(Error::BadIor("GSS token is truncated"))?;
+        // `at + len` is arithmetic on a length the *peer* chose. `60 88 FF FF
+        // FF FF FF FF FF FF` declares `usize::MAX`, and the sum panicked in a
+        // debug build while wrapping to a bogus "truncated" in release — two
+        // behaviours, the quieter one being the one that ships, and the reason
+        // a release-mode fuzzer could not see this at all. The length is
+        // refused as a length, before it is added to anything.
+        let end = at
+            .checked_add(len)
+            .ok_or(Error::BadIor("GSS token declares a length no buffer can hold"))?;
+        let body = bytes.get(at..end).ok_or(Error::BadIor("GSS token is truncated"))?;
         if !body.starts_with(GSSUP_OID) {
             return Err(Error::BadIor("GSS token does not carry the GSSUP mechanism"));
         }
@@ -535,10 +544,17 @@ fn parse_der_length(bytes: &[u8]) -> Result<(usize, usize)> {
     if n == 0 || n > 8 || bytes.len() < 1 + n {
         return Err(Error::BadIor("GSS token has a malformed length"));
     }
-    let mut len = 0usize;
+    // Accumulated in `u64` and converted, not accumulated in `usize`: `n` may
+    // be 8, so on a 32-bit target `len << 8` would shift the peer's leading
+    // bytes out and turn an absurd length into a plausible small one. A length
+    // that does not fit the address space is refused, never truncated into one
+    // that does.
+    let mut len = 0u64;
     for b in &bytes[1..1 + n] {
-        len = (len << 8) | *b as usize;
+        len = (len << 8) | *b as u64;
     }
+    let len = usize::try_from(len)
+        .map_err(|_| Error::BadIor("GSS token declares a length no buffer can hold"))?;
     Ok((len, 1 + n))
 }
 
@@ -661,6 +677,44 @@ mod tests {
             let _ = GssUpToken::decode(&full[..i]);
         }
         assert!(GssUpToken::decode(&full[..full.len() - 1]).is_err());
+    }
+
+    /// A DER length the peer chose, added to a cursor. `60 88 FF FF FF FF FF
+    /// FF FF FF` declares `usize::MAX`: measured, it panicked with "attempt to
+    /// add with overflow" in a debug build and wrapped to a misleading
+    /// `GSS token is truncated` in release. The release half is why a
+    /// `--release` fuzzer could never report it, so this test asserts the
+    /// *same* refusal in both profiles — it runs in both, and every long form
+    /// is covered rather than the one byte string that was reported.
+    ///
+    /// Reachable from any `EstablishContext.client_authentication_token`.
+    #[test]
+    fn a_gss_length_that_cannot_be_added_to_the_cursor_is_refused_not_panicked() {
+        for n in 1..=8usize {
+            let mut token = vec![0x60, 0x80 | n as u8];
+            token.resize(2 + n, 0xFF);
+            match GssUpToken::decode(&token) {
+                Err(Error::BadIor(_)) => {}
+                other => panic!("{token:02X?} gave {other:?}"),
+            }
+        }
+    }
+
+    /// The negative control for the refusal above: a body long enough to force
+    /// the DER long form is still decoded, so the fix refuses lengths that
+    /// cannot fit rather than lengths that merely need two bytes.
+    #[test]
+    fn an_honest_long_form_length_still_decodes() {
+        let t = GssUpToken {
+            username: vec![b'u'; 300],
+            password: b"hunter2".to_vec(),
+            target_name: b"bank".to_vec(),
+        };
+        for endian in [Endian::Big, Endian::Little] {
+            let bytes = t.encode(endian).expect("encodes");
+            assert!(bytes[1] & 0x80 != 0, "expected the DER long form, got {:02X}", bytes[1]);
+            assert_eq!(GssUpToken::decode(&bytes).expect("decodes"), t, "{endian:?}");
+        }
     }
 
     /// §4.8's credential hygiene, made structural. A redaction that depends on
