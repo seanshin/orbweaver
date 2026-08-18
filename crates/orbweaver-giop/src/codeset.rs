@@ -169,6 +169,33 @@ impl CodeSetComponentInfo {
 /// `wchar` is UTF-16 native with no conversions for the same reason: the wide
 /// path is UTF-16 end to end (§9.3.1.6, and the byte sequences recorded in
 /// `tests/wide_chars_from_a_peer.rs`), and both peers publish UTF-16 native.
+///
+/// # Batch 4 of D009 §8 asked to grow this list, and could not
+///
+/// Since batch 3 a servant *does* honour a declared conversion, so the reason
+/// this list was empty — "nothing converts" — stopped being true. What kept it
+/// empty is the condition the decision attaches: a non-empty list lands only
+/// against **a peer advertising ISO-8859-1 without UTF-8 in its conversion
+/// list**. `spikes/codeset_peer_probe.py` went looking for one and reports
+/// **BLOCKED**: ten configurations were measured, five of omniORB 4.3.4 and
+/// five of JacORB 3.9, and every one of them reaches UTF-8. Neither ORB has any
+/// option that names its *conversion* list — omniORB offers
+/// `nativeCharCodeSet`/`defaultCharCodeSet`, JacORB `jacorb.native_char_codeset`
+/// and `jacorb.native_wchar_codeset` — so the list follows the build, and this
+/// machine cannot produce the peer.
+///
+/// `spikes/codeset_advertise_probe.py` then measured what growing it would have
+/// cost, by publishing the proposed component to unmodified peers: omniORB kept
+/// sending UTF-8, while **JacORB with native `char` ISO-8859-1 moved down to
+/// ISO-8859-1** and then truncated Korean text to one octet per character
+/// without raising anything. The two implementations resolve §7.10.2.6's open
+/// case in opposite directions, and an empty list is what keeps that ambiguity
+/// out of reach. Both measurements are pinned in
+/// `tests/codesets_on_the_wire.rs`.
+///
+/// *배치 4는 목록을 늘리려 했고, 늘릴 수 없었다.* UTF-8에 닿지 못하는 피어를
+/// 열 가지 구성에서 찾지 못했고, 늘렸을 때의 대가는 측정되었다 — JacORB는 더
+/// 좁은 코드셋으로 내려가 한글을 조용히 잘라 보냈다.
 pub fn server_component_info() -> CodeSetComponentInfo {
     CodeSetComponentInfo {
         for_char: CodeSetComponent { native: Some(CodeSetId::UTF_8), conversions: Vec::new() },
