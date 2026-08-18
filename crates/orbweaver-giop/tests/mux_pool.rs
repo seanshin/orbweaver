@@ -15,7 +15,7 @@
 //! `fragment_reception.rs` takes for the fragments no peer will send us.
 
 use orbweaver_cdr::Endian;
-use orbweaver_giop::guarded::Guarded;
+use orbweaver_giop::guarded::{Guarded, complaints_about};
 use orbweaver_giop::mux::{Mux, Sent};
 use orbweaver_giop::pool::{Limits, Pool};
 use orbweaver_giop::server::{
@@ -654,67 +654,99 @@ fn an_idle_connection_is_evicted_rather_than_reused() {
 ///
 /// This is why `Pool::acquire` is written as look, then dial, then file —
 /// three steps and two lock sections, with the blocking one in between.
+///
+/// Asked through `catches_a_violation` rather than by catching a panic: the
+/// discipline panics in a debug build and complains in a release one, and the
+/// property under test is the one both of those are reactions to. These three
+/// tests asserted the panic and so asserted nothing in `--release`.
 #[test]
-fn dialing_from_inside_a_lock_section_is_refused() {
+fn dialing_from_inside_a_lock_section_is_caught() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("addr");
     let ior = ior_at(addr, b"key", 2);
 
     let state = Guarded::new("a servant that should not dial", ());
-    let tripped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let said = complaints_about(|| {
         state.read(|_| {
             let _ = Connection::connect(&ior, T);
         });
-    }));
-    assert!(tripped.is_err(), "a dial from inside a lock section must be caught");
+    });
+    assert!(
+        said.first().is_some_and(|c| c.contains("connecting to a peer")),
+        "the dial itself must be what is caught, got {said:?}"
+    );
     assert_eq!(orbweaver_giop::guarded::section_held(), None, "the section must have closed");
 }
 
-/// And the same tripwire covers the pool's own entry points, because the pool
-/// keeps its state in a `Guarded` like everybody else.
+/// And the pool's own entry points are covered too, because the pool keeps its
+/// state in a `Guarded` like everybody else.
+///
+/// The rule that catches it is the **nesting** one, not the dial tripwire:
+/// `acquire` looks in its own guarded state before it dials, so the first
+/// complaint is about two sections at once and the dial never happens. That
+/// is worth naming rather than glossing — asserted loosely, this test stayed
+/// green with `assert_nothing_held` deleted, which is a test passing for its
+/// neighbour's reason.
 #[test]
-fn acquiring_from_inside_a_lock_section_is_refused() {
+fn acquiring_from_inside_a_lock_section_is_caught() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("addr");
     let ior = ior_at(addr, b"key", 2);
     let pool = Pool::new();
 
     let state = Guarded::new("a servant holding its own state", ());
-    let tripped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let said = complaints_about(|| {
         state.read(|_| {
             let _ = pool.acquire(&ior);
         });
-    }));
-    assert!(tripped.is_err(), "the pool must not be reachable from inside a servant's lock");
+    });
+    assert!(
+        said.first().is_some_and(|c| {
+            c.contains("the connection pool") && c.contains("a servant holding its own state")
+        }),
+        "the pool must not be reachable from inside a servant's lock, got {said:?}"
+    );
     assert_eq!(orbweaver_giop::guarded::section_held(), None);
 }
 
 /// A multiplexed invocation is a blocking call like any other, so the outbound
 /// tripwire has to cover it too — otherwise the one path built for
 /// concurrency would be the one path that could deadlock a servant.
+///
+/// The peer answers **however many requests arrive**, because that is not the
+/// same number in both profiles: a debug build panics before the request
+/// reaches the wire and a release build sends it, complains, and carries on.
+/// A script that insisted on exactly one request would be asserting the
+/// profile rather than the property.
 #[test]
-fn a_multiplexed_call_from_inside_a_lock_section_is_refused() {
+fn a_multiplexed_call_from_inside_a_lock_section_is_caught() {
     let (addr, done) = scripted(|l| {
         let (mut s, _) = l.accept().expect("accept");
-        let (id, _, v, e) = take_request(&mut s);
-        reply_long(&mut s, v, e, id, 1);
+        while let Ok(msg) = read_message(&mut s, DEFAULT_MAX_MESSAGE_SIZE) {
+            let req = decode_request(msg).expect("a request decodes");
+            reply_long(&mut s, req.version, req.endian, req.request_id, 1);
+        }
     });
     let ior = ior_at(addr, b"key", 2);
     let mux = Mux::connect(&ior, T).expect("connect");
 
     let state = Guarded::new("a servant mid-operation", ());
-    let tripped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let said = complaints_about(|| {
         state.read(|_| {
             let _ = mux.call_on(b"key", "op", |_| {}, T);
         });
-    }));
-    assert!(tripped.is_err(), "an invocation from inside a lock section must be caught");
+    });
+    assert!(
+        said.first().is_some_and(|c| c.contains("a multiplexed invocation")),
+        "the invocation itself must be what is caught, got {said:?}"
+    );
 
-    // The connection is untouched by the refusal, and the peer's one scripted
-    // reply is still there to be collected.
+    // The connection is untouched by the complaint: the next call, made
+    // properly from outside any section, is answered.
     match mux.call_on(b"key", "op", |_| {}, T) {
         Ok(Sent::Reply(r)) => assert_eq!(body_i32(&r), 1),
         other => panic!("the connection must still work, got {other:?}"),
     }
+    drop(mux); // the script ends when the client hangs up, not on a count
     done.recv_timeout(T).expect("the peer finished its script");
 }

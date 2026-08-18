@@ -53,6 +53,39 @@
 //! both, so the release path really does detect it rather than merely not
 //! panicking.
 //!
+//! # Asserting it in both profiles
+//!
+//! The split is a hazard for the *tests*, and it was one. They asserted the
+//! panic — `catch_unwind(...).is_err()` — so in a release build they asserted
+//! something a release build does not do: six of them failed, and
+//! `cargo test --release` could not be run clean. A profile nobody can run
+//! clean is a profile nobody runs, and that is where a release-only defect
+//! lives — `36c8bc0` is an arithmetic overflow that wrapped in release and
+//! panicked in debug, found by a fuzzer because no test pass would have.
+//!
+//! So the *outcome* is counted as well as reported. [`violations`] rises on
+//! every complaint in both profiles — before the debug build panics, so the
+//! two record the same thing and differ only in what they do next — and
+//! [`complaints_about`] asks the question one way for both. The panic becomes
+//! the debug build's *reaction* to a violation rather than the only evidence
+//! that one happened.
+//!
+//! Recording the complaint and not just counting it is what lets a test say
+//! *which* rule fired, and that turned out to matter: deleting
+//! [`assert_nothing_held`]'s body left two of these tests green, because
+//! `Pool::acquire` and `Mux::call_on` open sections of their own and the
+//! nesting rule caught them instead. A test that cannot tell its own subject
+//! apart from a neighbour passes for the wrong reason.
+//!
+//! The count is **per thread**, like the section count and for the same
+//! reason: a violation belongs to the thread that committed it. A
+//! process-wide counter would let one test's violation satisfy another test's
+//! assertion while the two run in parallel, which is "an unmeasured check
+//! reported as a pass" wearing a third hat.
+//!
+//! *디버그는 패닉, 릴리스는 경고 — 그 차이를 테스트가 떠안지 않도록 위반
+//! 자체를 스레드별로 센다. 같은 속성을 두 프로파일에서 검증한다.*
+//!
 //! # What this is not
 //!
 //! It is not a lock. It is a *shape* for one, and it does not fit everything:
@@ -64,7 +97,7 @@
 //! may just not hold two at the same instant, which is the rule, not an
 //! accident of this API.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::sync::RwLock;
 
 thread_local! {
@@ -72,6 +105,16 @@ thread_local! {
     /// is called. Zero for every thread that is not inside one — which is
     /// every thread, almost always, because that is the discipline.
     static OPEN: Cell<Option<&'static str>> = const { Cell::new(None) };
+
+    /// Lock-discipline violations this thread has committed, counted in every
+    /// profile. The panic is one build's reaction to a violation; this is the
+    /// violation.
+    static VIOLATIONS: Cell<u64> = const { Cell::new(0) };
+
+    /// The complaints themselves, recorded only while [`complaints_about`] is
+    /// running on this thread. `None` the rest of the time, so a live ORB
+    /// that keeps violating does not accumulate a diagnostic it never reads.
+    static RECORDING: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
 }
 
 /// An open critical section, counted for the current thread.
@@ -116,6 +159,15 @@ impl Drop for Section {
 /// Panics in a debug build, complains in a release one. See the module docs
 /// for why the two differ.
 fn violation(message: &str) {
+    // Counted *before* the panic, deliberately: a debug build must record the
+    // violation it is about to die of, or the two profiles would not be
+    // answering the same question and a test could only ask one of them.
+    VIOLATIONS.with(|v| v.set(v.get().saturating_add(1)));
+    RECORDING.with(|r| {
+        if let Some(log) = r.borrow_mut().as_mut() {
+            log.push(message.to_string());
+        }
+    });
     if cfg!(debug_assertions) {
         panic!("orbweaver: lock discipline violated: {message}");
     }
@@ -144,6 +196,43 @@ pub fn assert_nothing_held(what: &str) {
 /// failure wearing a different hat.
 pub fn section_held() -> Option<&'static str> {
     OPEN.with(|o| o.get())
+}
+
+/// How many lock-discipline violations the calling thread has committed.
+///
+/// Monotonic for the life of the thread, and maintained identically in both
+/// build profiles — they differ in what they *do* about a violation, never in
+/// whether they saw one.
+pub fn violations() -> u64 {
+    VIOLATIONS.with(|v| v.get())
+}
+
+/// Runs `f` and returns what the lock discipline complained about, in the
+/// order it complained — the same answer in a debug build and a release one.
+///
+/// This is how a test asserts the discipline. Catching the panic instead
+/// asserts nothing in a release build, where there is no panic to catch; see
+/// the module docs for what that cost.
+///
+/// A panic raised by `f` is absorbed, because in a debug build the violation
+/// *is* one. A panic with no violation behind it therefore yields an empty
+/// list rather than passing: `catch_unwind(...).is_err()` could not tell the
+/// tripwire firing apart from an `unwrap` failing on the way to it.
+///
+/// **A debug build stops at the first complaint** and a release build carries
+/// on, so only `first()` is a both-profile observation. Assert on it, not on
+/// the length — a call that violates twice reports twice in release and once
+/// in debug, and a test that pinned the count would be pinning the profile.
+pub fn complaints_about(f: impl FnOnce()) -> Vec<String> {
+    let outer = RECORDING.with(|r| r.replace(Some(Vec::new())));
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    RECORDING.with(|r| r.replace(outer)).unwrap_or_default()
+}
+
+/// Whether the lock discipline caught `f` violating it, for the tests that do
+/// not care which rule was broken. [`complaints_about`] is the one that does.
+pub fn catches_a_violation(f: impl FnOnce()) -> bool {
+    !complaints_about(f).is_empty()
 }
 
 /// State shared by every thread serving a servant, reachable only inside a
@@ -234,28 +323,50 @@ mod tests {
 
     /// The tripwire's whole job, exercised directly: the outbound path's
     /// assertion must fire from inside a section and stay silent outside one.
+    ///
+    /// Both halves go through [`catches_a_violation`], so both are asserted in
+    /// a release build too — the negative control especially. "Did not panic"
+    /// is not an observation a release build makes, so a control written that
+    /// way was vacuous in exactly the profile that ships.
     #[test]
     fn the_outbound_tripwire_fires_from_inside_a_section() {
-        assert_nothing_held("a call outside any section"); // must not panic
+        assert!(
+            !catches_a_violation(|| assert_nothing_held("a call outside any section")),
+            "a call outside any section must not be reported as one"
+        );
         let g = Guarded::new("tripwire", ());
-        let tripped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let before = violations();
+        let said = complaints_about(|| {
             g.read(|_| assert_nothing_held("an outbound call from inside a section"));
-        }));
-        assert!(tripped.is_err(), "holding a lock across an outbound call must be caught");
-        assert_eq!(section_held(), None, "the unwound section must still have closed");
+        });
+        assert!(
+            said.first()
+                .is_some_and(|c| c.contains("an outbound call from inside a section")
+                    && c.contains("tripwire")),
+            "the complaint must name both the call and the section it was made from, got {said:?}"
+        );
+        assert_eq!(violations(), before + 1, "one crossing, one complaint");
+        assert_eq!(section_held(), None, "the section must have closed either way");
     }
 
     /// Re-entering — the same lock twice, or two locks at once — is the same
     /// violation, because it is the same rule.
+    ///
+    /// "Caught" and not "refused": a release build does not refuse it, it
+    /// takes the second lock and says so. What holds in both profiles is that
+    /// the discipline *sees* it, and that is what the name should claim.
     #[test]
-    fn a_second_section_on_one_thread_is_refused() {
+    fn a_second_section_on_one_thread_is_caught() {
         let a = Guarded::new("outer", ());
         let b = Guarded::new("inner", ());
-        let nested = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let said = complaints_about(|| {
             a.read(|_| b.read(|_| ()));
-        }));
-        assert!(nested.is_err(), "two locks held at once must be caught");
-        assert_eq!(section_held(), None, "both sections must have closed on the unwind");
+        });
+        assert!(
+            said.first().is_some_and(|c| c.contains("inner") && c.contains("outer")),
+            "the complaint must name both sections, got {said:?}"
+        );
+        assert_eq!(section_held(), None, "both sections must have closed behind it");
     }
 
     /// A panic inside a section must not leave the thread permanently marked
