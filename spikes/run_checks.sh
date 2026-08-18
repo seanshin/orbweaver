@@ -402,6 +402,19 @@ else
   fail_total=$((fail_total+1))
 fi
 
+hr "wide text follows the connection, not a constant"
+# `Cdr::put(&self, e: &mut Encoder)` has no connection to ask, so a stub's
+# `wstring` answered with GIOP 1.2's form always — wrong on a 1.1 connection,
+# and invisible to every test here, because our own round trip used the same
+# constant at both ends. A convention both ends apply cannot be refuted by a
+# round trip; that is the union-label lesson, in the static path.
+if cargo test -q -p orbweaver-gen --test wide_follows_the_connection >/dev/null 2>&1; then
+  echo "  ok   a stub's wstring takes 1.1's form on 1.1, and the encapsulation rule when unattached"
+else
+  echo "  FAIL a wstring is written from a constant rather than from the connection"
+  fail_total=$((fail_total+1))
+fi
+
 hr "wide characters — the value's own order, not the message's"
 # A UTF-16 wchar or wstring states its byte order in its own octets and ignores
 # the stream's. Our writer always emits a mark, so our round trip could never

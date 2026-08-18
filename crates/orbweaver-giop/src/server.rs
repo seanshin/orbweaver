@@ -259,14 +259,21 @@ impl Request {
     /// servant answers the caller in front of it: two clients on one
     /// multiplexed connection can have declared different things.
     pub fn narrow_codec(&self) -> Option<std::sync::Arc<dyn orbweaver_cdr::TextCodec>> {
-        let cs = self.code_sets()?;
-        let id = cs.char_data;
-        if id == crate::codeset::CodeSetId::UTF_8 {
+        // The narrow half comes from what the client declared; the wide half
+        // from the version it used, which is what `Cdr for WString` could not
+        // ask for and therefore assumed was always 1.2.
+        let narrow = self
+            .code_sets()
+            .map(|cs| cs.char_data)
+            .filter(|id| *id != crate::codeset::CodeSetId::UTF_8)
+            .and_then(|id| crate::codeset::Converter::new(id).ok());
+        let wide =
+            crate::codeset::WideCodec::new(self.version, crate::codeset::CodeSetId::UTF_16).ok();
+        if narrow.is_none() && wide.is_none() {
             return None;
         }
-        crate::codeset::Converter::new(id)
-            .ok()
-            .map(|c| std::sync::Arc::new(c) as std::sync::Arc<dyn orbweaver_cdr::TextCodec>)
+        Some(std::sync::Arc::new(crate::codeset::Codecs::new(narrow, wide))
+            as std::sync::Arc<dyn orbweaver_cdr::TextCodec>)
     }
 
     /// Every `IOP::ServiceContext` the peer attached, in the order it sent

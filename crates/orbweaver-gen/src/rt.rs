@@ -798,10 +798,16 @@ impl<T: Cdr, const N: usize> Cdr for [T; N] {
 
 /// The one codec generated code uses for wide characters.
 ///
-/// GIOP 1.2 with UTF-16 — the same choice as the dynamic path's default, so the
-/// two paths produce identical bytes. Threading the connection's negotiated
-/// codec through every generated signature is stream-B batch-2 work; until
-/// then this is one constant in one place, not a rule copied into stubs.
+/// GIOP 1.2 with UTF-16 — **the encapsulation rule, not a default** (§9.3.1.6:
+/// a `wchar` inside an encapsulation is the 1.2 form whatever the message
+/// says), and the fallback for a stream that carries no codec.
+///
+/// It used to be the *only* answer, and that was the defect D009 batch 3
+/// fixed: a stub marshalling a `wstring` on a GIOP 1.1 connection wrote 1.2's
+/// form, because `Cdr::put(&self, e: &mut Encoder)` has no connection to ask.
+/// The stream carries the agreement now; this is what is left when nothing
+/// attached one, which is every encapsulation and every test that builds an
+/// encoder by hand.
 fn wide() -> WideCodec {
     WideCodec::new(Version::V1_2, CodeSetId::UTF_16).expect("1.2 + UTF-16 is always valid")
 }
@@ -811,10 +817,19 @@ fn wide() -> WideCodec {
 pub struct WString(pub String);
 
 impl Cdr for WString {
+    /// Asks the stream first. A connection puts its agreement on the body it
+    /// writes, so a 1.1 call gets 1.1's form — which this could not do while
+    /// the answer was a constant.
     fn put(&self, e: &mut Encoder) -> Result<(), GiopError> {
+        if e.has_codec() {
+            return e.put_wstr(&self.0).map_err(|_| GiopError::Decode("untranslatable wstring"));
+        }
         wide().put_wstring(e, &self.0).map_err(|_| GiopError::Decode("untranslatable wstring"))
     }
     fn get(d: &mut Decoder<'_>) -> Result<Self, GiopError> {
+        if d.has_codec() {
+            return d.get_wstr().map(WString).map_err(|_| GiopError::Decode("malformed wstring"));
+        }
         wide().get_wstring(d).map(WString).map_err(|_| GiopError::Decode("malformed wstring"))
     }
 }
@@ -825,9 +840,17 @@ pub struct WChar(pub char);
 
 impl Cdr for WChar {
     fn put(&self, e: &mut Encoder) -> Result<(), GiopError> {
+        if e.has_codec() {
+            return e
+                .put_wchar_text(self.0)
+                .map_err(|_| GiopError::Decode("wchar outside the BMP"));
+        }
         wide().put_wchar(e, self.0).map_err(|_| GiopError::Decode("wchar outside the BMP"))
     }
     fn get(d: &mut Decoder<'_>) -> Result<Self, GiopError> {
+        if d.has_codec() {
+            return d.get_wchar_text().map(WChar).map_err(|_| GiopError::Decode("malformed wchar"));
+        }
         wide().get_wchar(d).map(WChar).map_err(|_| GiopError::Decode("malformed wchar"))
     }
 }

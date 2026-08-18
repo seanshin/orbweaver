@@ -1355,8 +1355,13 @@ impl WideCodec {
 ///
 /// 협상 결과를 스트림이 지니므로, 모든 호출자가 기억하지 않아도 지켜진다.
 /// 프레이밍은 여전히 스트림의 몫이다.
-impl orbweaver_cdr::TextCodec for Converter {
-    fn encode_narrow(&self, s: &str) -> orbweaver_cdr::Result<Vec<u8>> {
+impl Converter {
+    /// The octets for `s`, as `orbweaver-cdr` wants them.
+    ///
+    /// Inherent rather than a `TextCodec` impl: this type knows narrow text
+    /// only, and the trait covers both halves. [`Codecs`] is the one
+    /// implementor, so there is one place a stream's text decisions are made.
+    pub fn encode_narrow(&self, s: &str) -> orbweaver_cdr::Result<Vec<u8>> {
         (*self).encode(s).map_err(|e| match e {
             // Not a substitution: mojibake in a database outlives the call
             // that made it, and this is the one place that decision is taken.
@@ -1371,9 +1376,95 @@ impl orbweaver_cdr::TextCodec for Converter {
         })
     }
 
-    fn decode_narrow(&self, bytes: &[u8]) -> orbweaver_cdr::Result<String> {
+    /// The text `bytes` carry in this codeset.
+    pub fn decode_narrow(&self, bytes: &[u8]) -> orbweaver_cdr::Result<String> {
         (*self).decode(bytes).map_err(|_| {
             orbweaver_cdr::Error::Malformed("octets are not valid in the negotiated codeset")
         })
+    }
+}
+
+/// Both halves of a connection's text agreement, held together and failing
+/// apart.
+///
+/// TCS-C and TCS-W are separate fields of `CodeSetComponentInfo` and negotiate
+/// independently: a peer may agree on `char` and not on `wchar`. A single
+/// `Option` over both would take working narrow conversion away for a wide
+/// disagreement, which is why this holds two — D009 §7.2 asked the question
+/// and this is the answer.
+///
+/// 두 협상은 독립적이므로 함께 지되 따로 실패한다. 하나의 `Option`으로 묶으면
+/// wide 불일치가 멀쩡한 narrow 변환까지 빼앗는다.
+#[derive(Debug, Clone, Copy)]
+pub struct Codecs {
+    narrow: Option<Converter>,
+    wide: Option<WideCodec>,
+}
+
+impl Codecs {
+    /// The agreement for a connection at `version`.
+    pub fn new(narrow: Option<Converter>, wide: Option<WideCodec>) -> Self {
+        Codecs { narrow, wide }
+    }
+
+    /// The 1.2 UTF-16 form an **encapsulation** always uses, whatever the
+    /// message's version says (§9.3.1.6), with no narrow conversion.
+    ///
+    /// This is a rule, not a default: it is the one place a fixed answer is
+    /// correct, and naming it that way is what keeps it from being copied to
+    /// somewhere a connection's version actually matters.
+    pub fn encapsulated() -> Self {
+        Codecs { narrow: None, wide: WideCodec::new(Version::V1_2, CodeSetId::UTF_16).ok() }
+    }
+}
+
+impl orbweaver_cdr::TextCodec for Codecs {
+    fn encode_narrow(&self, s: &str) -> orbweaver_cdr::Result<Vec<u8>> {
+        match self.narrow {
+            Some(c) => c.encode_narrow(s),
+            None => Ok(s.as_bytes().to_vec()),
+        }
+    }
+
+    fn decode_narrow(&self, bytes: &[u8]) -> orbweaver_cdr::Result<String> {
+        match self.narrow {
+            Some(c) => c.decode_narrow(bytes),
+            None => std::str::from_utf8(bytes)
+                .map(str::to_owned)
+                .map_err(|_| orbweaver_cdr::Error::BadUtf8),
+        }
+    }
+
+    fn put_wide(&self, e: &mut orbweaver_cdr::Encoder, s: &str) -> orbweaver_cdr::Result<()> {
+        let w = self.wide.ok_or(orbweaver_cdr::Error::Malformed(
+            "this connection agreed on no wchar codeset; a wstring cannot cross it",
+        ))?;
+        w.put_wstring(e, s).map_err(|_| {
+            orbweaver_cdr::Error::Malformed("text the agreed wchar codeset cannot carry")
+        })
+    }
+
+    fn get_wide(&self, d: &mut orbweaver_cdr::Decoder<'_>) -> orbweaver_cdr::Result<String> {
+        let w = self.wide.ok_or(orbweaver_cdr::Error::Malformed(
+            "this connection agreed on no wchar codeset; a wstring cannot cross it",
+        ))?;
+        w.get_wstring(d).map_err(|_| {
+            orbweaver_cdr::Error::Malformed("malformed wstring for the agreed codeset")
+        })
+    }
+
+    fn put_wide_char(&self, e: &mut orbweaver_cdr::Encoder, c: char) -> orbweaver_cdr::Result<()> {
+        let w = self
+            .wide
+            .ok_or(orbweaver_cdr::Error::Malformed("this connection agreed on no wchar codeset"))?;
+        w.put_wchar(e, c)
+            .map_err(|_| orbweaver_cdr::Error::Malformed("wchar outside the agreed codeset"))
+    }
+
+    fn get_wide_char(&self, d: &mut orbweaver_cdr::Decoder<'_>) -> orbweaver_cdr::Result<char> {
+        let w = self
+            .wide
+            .ok_or(orbweaver_cdr::Error::Malformed("this connection agreed on no wchar codeset"))?;
+        w.get_wchar(d).map_err(|_| orbweaver_cdr::Error::Malformed("malformed wchar"))
     }
 }

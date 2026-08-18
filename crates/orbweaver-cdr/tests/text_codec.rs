@@ -28,6 +28,21 @@ impl TextCodec for SwapCase {
         String::from_utf8(bytes.iter().map(|b| b ^ 0x20).collect())
             .map_err(|_| Error::Malformed("swapcase produced non-UTF-8"))
     }
+
+    // The wide half is another codeset's business; these test the narrow one,
+    // and a codec that refuses what it does not implement is the honest shape.
+    fn put_wide(&self, _: &mut Encoder, _: &str) -> Result<(), Error> {
+        Err(Error::Malformed("this test codec carries narrow text only"))
+    }
+    fn get_wide(&self, _: &mut Decoder<'_>) -> Result<String, Error> {
+        Err(Error::Malformed("this test codec carries narrow text only"))
+    }
+    fn put_wide_char(&self, _: &mut Encoder, _: char) -> Result<(), Error> {
+        Err(Error::Malformed("this test codec carries narrow text only"))
+    }
+    fn get_wide_char(&self, _: &mut Decoder<'_>) -> Result<char, Error> {
+        Err(Error::Malformed("this test codec carries narrow text only"))
+    }
 }
 
 fn swap() -> Option<Arc<dyn TextCodec>> {
@@ -77,6 +92,21 @@ fn the_framing_rules_are_still_the_streams() {
         }
         fn decode_narrow(&self, b: &[u8]) -> Result<String, Error> {
             Ok(String::from_utf8_lossy(b).into_owned())
+        }
+
+        // The wide half is another codeset's business; these test the narrow one,
+        // and a codec that refuses what it does not implement is the honest shape.
+        fn put_wide(&self, _: &mut Encoder, _: &str) -> Result<(), Error> {
+            Err(Error::Malformed("this test codec carries narrow text only"))
+        }
+        fn get_wide(&self, _: &mut Decoder<'_>) -> Result<String, Error> {
+            Err(Error::Malformed("this test codec carries narrow text only"))
+        }
+        fn put_wide_char(&self, _: &mut Encoder, _: char) -> Result<(), Error> {
+            Err(Error::Malformed("this test codec carries narrow text only"))
+        }
+        fn get_wide_char(&self, _: &mut Decoder<'_>) -> Result<char, Error> {
+            Err(Error::Malformed("this test codec carries narrow text only"))
         }
     }
     let mut e = Encoder::new(Endian::Big).with_codec(Some(Arc::new(Nul)));

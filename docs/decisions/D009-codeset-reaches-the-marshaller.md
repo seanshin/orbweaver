@@ -223,6 +223,27 @@ are two mechanisms for one fact — precisely the drift D007 warns about, and
 §8's oracle compares these two paths. Batch 3 must retire `default_codec()`
 and `wide()` **together**, or state why one survives.
 
+> **Corrected 2026-08-18, at the start of batch 3: one survives, and this
+> paragraph had them backwards.** Counting the call sites rather than assuming
+> them: every *wire* use of `default_codec()` is inside an `any`'s
+> encapsulation, and §9.3.1.6 makes the 1.2 form the rule there **regardless of
+> the message's version** — so it is not a hardcoding, it is the specification.
+> Its doc comment gives two justifications, "what both fixtures negotiate in
+> practice" and "what an encapsulated `any` uses regardless of the connection's
+> version", and only the second is a reason. The first is a guess sitting next
+> to a rule and borrowing its authority.
+>
+> `wide()` in `orbweaver-gen`'s `rt.rs` is the actual defect: it serves
+> `Cdr for WString`/`WChar` on the **top-level message body**, where the form
+> does depend on the connection's version, and a trait method that takes only
+> `&mut Encoder` cannot ask. That is what batch 3 fixes.
+>
+> **하나는 살아남고, 이 문단은 둘을 거꾸로 짚고 있었다.** `default_codec()`의
+> 와이어 사용처는 전부 `any`의 캡슐화 안이고 거기서 1.2는 §9.3.1.6의 **규칙**이다.
+> 주석이 근거를 둘 대지만 하나만 근거이고, 나머지는 규칙 옆에 앉아 권위를 빌린
+> 추측이다. 실제 결함은 `wide()` — 최상위 본문에서 쓰이며 거기서는 형식이 연결의
+> 버전에 달렸는데, `&mut Encoder`만 받는 트레이트 메서드는 물어볼 수가 없다.
+
 ---
 
 ## 8. Recommendation / 권고

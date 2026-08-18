@@ -647,9 +647,10 @@ fn a_reply_uses_the_agreement_its_request_arrived_under() {
             // this whole decision is about, and the first draft of this test
             // did exactly that: the servant read `cafÃ©`, one octet per
             // character, which is what a real peer would have seen.
-            Some(std::sync::Arc::new(
-                codeset::Converter::new(CodeSetId::ISO_8859_1).expect("iso-8859-1"),
-            )),
+            Some(std::sync::Arc::new(codeset::Codecs::new(
+                Some(codeset::Converter::new(CodeSetId::ISO_8859_1).expect("iso-8859-1")),
+                None,
+            ))),
             |e| e.put_str("caf\u{e9}"),
         )
         .expect("request");

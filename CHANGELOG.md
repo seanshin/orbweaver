@@ -139,6 +139,25 @@ records what changed and, where it matters, what it changes on the wire.
   that GIOP 1.1 raises `MARSHAL`; that is **stated as unmeasured**, because the
   peer cannot unmarshal its own 1.1 wide output and so is not an oracle for it.
 
+- **A stub's `wstring` takes its form from the connection.** `Cdr::put(&self,
+  e: &mut Encoder)` has no connection to ask, so `WString` answered with GIOP
+  1.2's form always — 1.2 counts octets and 1.1 counts characters, so on a 1.1
+  connection that is a different field. Nothing here could see it: **our own
+  round trip used the same constant at both ends**, which is the shape the
+  union-label batch named — a convention both ends apply cannot be refuted by a
+  round trip.
+
+  A stream with nothing attached still writes the 1.2 form, and that is not a
+  leftover: §9.3.1.6 fixes it for an encapsulation whatever the message says.
+  Both halves are asserted, and reverting the fix fails the first.
+
+  D009 §7.3 said to retire `wide()` and `default_codec()` together, and
+  **counting the call sites showed it had them backwards**: every wire use of
+  `default_codec()` is inside an `any`'s encapsulation, where the fixed answer
+  is the specification. Its doc gave two justifications and only one was a
+  reason — the other was a guess sitting next to a rule, borrowing its
+  authority. The decision is corrected in place.
+
 - **The transmission codeset reaches the marshaller** (D009, approved). A CDR
   stream carries an optional `TextCodec`; `None` is UTF-8 and is byte-for-byte
   what shipped before. A connection puts its negotiated `char` agreement on the

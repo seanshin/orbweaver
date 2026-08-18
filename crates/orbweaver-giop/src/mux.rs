@@ -618,14 +618,19 @@ struct Inner {
 /// two methods with one rule is where the two stop agreeing. `None` means the
 /// agreement *is* UTF-8, not that there was none — a failed negotiation is
 /// `CharCodeset::Incompatible` and refuses the call.
-pub(crate) fn narrow_codec(
+pub(crate) fn stream_codec(
     cs: &crate::CharCodeset,
+    version: crate::Version,
 ) -> Option<std::sync::Arc<dyn orbweaver_cdr::TextCodec>> {
-    let agreed = cs.agreed()?;
-    if agreed.id() == codeset::CodeSetId::UTF_8 {
+    let narrow = cs.agreed().filter(|c| c.id() != codeset::CodeSetId::UTF_8);
+    // The wide half is not negotiated separately here yet, so it is the form
+    // this connection's *version* requires — which is the thing `Cdr for
+    // WString` could not ask for and therefore assumed was always 1.2.
+    let wide = codeset::WideCodec::new(version, codeset::CodeSetId::UTF_16).ok();
+    if narrow.is_none() && wide.is_none() {
         return None;
     }
-    Some(std::sync::Arc::new(agreed))
+    Some(std::sync::Arc::new(codeset::Codecs::new(narrow, wide)))
 }
 
 impl Mux {
@@ -1048,7 +1053,7 @@ impl Inner {
             // stream rather than remembered by the caller. `None` when the
             // negotiation produced UTF-8 or produced nothing, which keeps
             // every existing call byte-identical.
-            narrow_codec(&self.char_codeset),
+            stream_codec(&self.char_codeset, self.version),
             write_args,
         ) {
             Ok(m) => m,

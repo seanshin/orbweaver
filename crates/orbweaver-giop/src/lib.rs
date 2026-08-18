@@ -1806,7 +1806,7 @@ impl Connection {
     /// Unlike [`Connection::char_converter`], **reading this does make it
     /// apply**: the value goes onto the request body's encoder.
     pub(crate) fn narrow_codec(&self) -> Option<std::sync::Arc<dyn orbweaver_cdr::TextCodec>> {
-        crate::mux::narrow_codec(&self.char_codeset)
+        crate::mux::stream_codec(&self.char_codeset, self.version)
     }
 
     /// Takes responsibility for converting `char` data, and returns the

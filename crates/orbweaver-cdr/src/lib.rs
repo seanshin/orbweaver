@@ -190,6 +190,23 @@ pub trait TextCodec: Send + Sync + fmt::Debug {
 
     /// The text `bytes` carry, or why they are not valid in this codeset.
     fn decode_narrow(&self, bytes: &[u8]) -> Result<String>;
+
+    /// Writes an IDL `wstring` — **the whole field**, framing included.
+    ///
+    /// The opposite of the narrow half, and the asymmetry is the design: a
+    /// `wstring`'s framing itself varies with the GIOP version and the BOM, so
+    /// this crate has nothing to keep. It has no version to consult and must
+    /// not learn one.
+    fn put_wide(&self, e: &mut Encoder, s: &str) -> Result<()>;
+
+    /// Reads an IDL `wstring`, framing included.
+    fn get_wide(&self, d: &mut Decoder<'_>) -> Result<String>;
+
+    /// Writes an IDL `wchar`.
+    fn put_wide_char(&self, e: &mut Encoder, c: char) -> Result<()>;
+
+    /// Reads an IDL `wchar`.
+    fn get_wide_char(&self, d: &mut Decoder<'_>) -> Result<char>;
 }
 
 /// Writes CDR-encoded values into a growable buffer.
@@ -260,6 +277,42 @@ impl Encoder {
         let mut e = Self::new(endian);
         e.put_u8(endian.as_flag());
         e
+    }
+
+    /// Writes a `wstring` through the stream's codec.
+    ///
+    /// Unlike [`Encoder::put_str`] there is no default: a `wstring`'s wire
+    /// form depends on the GIOP version, this crate does not know it, and
+    /// inventing one is how a 1.1 connection gets 1.2's form. A stream with no
+    /// codec refuses rather than guessing.
+    pub fn put_wstr(&mut self, v: &str) -> Result<()> {
+        match self.codec.clone() {
+            Some(c) => c.put_wide(self, v),
+            None => Err(Error::Malformed(
+                "this stream carries no wide codec, and a wstring's form depends on the \
+                 GIOP version — attach one rather than assuming 1.2",
+            )),
+        }
+    }
+
+    /// Writes a `wchar`. See [`Encoder::put_wstr`] for why there is no default.
+    pub fn put_wchar_text(&mut self, c: char) -> Result<()> {
+        match self.codec.clone() {
+            Some(codec) => codec.put_wide_char(self, c),
+            None => Err(Error::Malformed(
+                "this stream carries no wide codec, and a wchar's form depends on the \
+                 GIOP version",
+            )),
+        }
+    }
+
+    /// Whether a codec is attached.
+    ///
+    /// For a caller that has a correct fallback of its own — an encapsulation,
+    /// whose wide form is fixed by §9.3.1.6 — and must not turn "nothing
+    /// attached" into a refusal.
+    pub fn has_codec(&self) -> bool {
+        self.codec.is_some()
     }
 
     /// Attaches the transmission codeset for narrow text (D009).
@@ -581,6 +634,38 @@ impl<'a> Decoder<'a> {
         }
         let endian = Endian::try_from_flag(buf[0])?;
         Ok(Self { codec: None, buf, pos: 1, endian, origin: 0 })
+    }
+
+    /// Whether a codec is attached.
+    ///
+    /// For a caller that has a correct fallback of its own — an encapsulation,
+    /// whose wide form is fixed by §9.3.1.6 — and must not turn "nothing
+    /// attached" into a refusal.
+    pub fn has_codec(&self) -> bool {
+        self.codec.is_some()
+    }
+
+    /// Reads a `wstring` through the stream's codec. See
+    /// [`Encoder::put_wstr`] for why there is no default.
+    pub fn get_wstr(&mut self) -> Result<String> {
+        match self.codec.clone() {
+            Some(c) => c.get_wide(self),
+            None => Err(Error::Malformed(
+                "this stream carries no wide codec, and a wstring's form depends on the \
+                 GIOP version — attach one rather than assuming 1.2",
+            )),
+        }
+    }
+
+    /// Reads a `wchar` through the stream's codec.
+    pub fn get_wchar_text(&mut self) -> Result<char> {
+        match self.codec.clone() {
+            Some(codec) => codec.get_wide_char(self),
+            None => Err(Error::Malformed(
+                "this stream carries no wide codec, and a wchar's form depends on the \
+                 GIOP version",
+            )),
+        }
     }
 
     /// Attaches the transmission codeset for narrow text. See
