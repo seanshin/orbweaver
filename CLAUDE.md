@@ -156,6 +156,32 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   start, increment the failure counter. A harness that reports green on an
   unmeasured assumption is worse than no harness.
 
+### Where a fact lives / 사실이 사는 곳
+
+Every fact has one home. A document that **restates** another document's fact
+drifts from it on the next change, silently, because nothing compiles a
+sentence. Measured 2026-08-18: ten stale decision-status claims and four stale
+remaining-work lists across five documents, produced by nothing worse than
+decisions being approved and work landing.
+
+*사실마다 집은 하나다. 다른 문서의 사실을 **다시 적은** 문장은 다음 변경에서
+조용히 어긋난다 — 문장을 컴파일하는 것은 없기 때문이다.*
+
+- **A decision's status lives in `docs/decisions/D00N-*.md` and nowhere else.**
+  Every other mention is checked against it by `spikes/decision_status.py` in
+  the harness. Dated records — `docs/pipeline-runs/`, `PHASE*.md`, released
+  CHANGELOG sections — state what was true at a date and are out of scope by
+  construction: editing them to match today would falsify them, not repair them.
+- **`PLAN` records what was planned and what landed against it; `COMPONENTS`
+  records current status and what is still missing.** PLAN does not restate
+  COMPONENTS' remaining-work column. It did, and all three items it named had
+  landed while it still named them — the cost was a planning pass spent on
+  finished work, which no test can go red on. *계획서는 상태를 다시 적지 않는다.*
+- **A bilingual fact is one fact in two languages: edit both or neither.**
+  D003's approval overwrote the head of its own PROPOSED block and left the
+  tail, so the file said APPROVED in English and 제안 in Korean four lines
+  apart — and every document that had copied it copied the English half.
+
 ### Honesty rules / 정직성 규칙
 
 - Report what was measured, not what was intended. If something is unmeasured,
@@ -189,6 +215,7 @@ cargo run -q -p orbweaver-test --bin contract-check -- corpus/golden/*.idl
 cargo run -q --bin idl-diff -- <released>.idl <proposed>.idl   # §5.3, exit 1 on breaking
 omniidl -b dump <file>.idl      # the conformance oracle for one file
 ./spikes/differential.sh        # two front ends over the corpus, divergences recorded
+python3 spikes/decision_status.py  # every restated decision status vs its decision
 ```
 
 **Measurement tools** — each prints what it could *not* measure:

@@ -258,11 +258,14 @@ absence has a reason, which is what §8.1 of `PLAN-SERVICES` asks of every
 affinity`를 담은 `GateSignal`을 **받으므로** 평면 질문에서 자유롭지 않다. 참조만인
 것은 **반환**뿐이다. 산문 속의 규칙은 규칙이 아니라는 예시이기도 하다.
 
-> **Open as a decision, and it corrects this section.** Whether the plane rule
-> can be stated as a predicate over a contract at all, and which of five
+> **Settled as a decision, and it corrects this section.** Whether the plane
+> rule can be stated as a predicate over a contract at all, and which of five
 > mechanisms should carry it, is
 > [`decisions/D006-plane-rule-tensor.md`](decisions/D006-plane-rule-tensor.md)
-> (**PROPOSED**). Two of its findings amend what is written above: the split
+> (**APPROVED** 2026-08-14): option E, `Expert::process` and `Router::dispatch`
+> excluded rather than bounded, `Router::select` left open, and option A — a
+> new versioned interface carrying a `TensorHandle` — named as the return path
+> rather than a rejection. Two of its findings amend what is written above: the split
 > here is not two operations against one — `select` takes `GateSignal`, which
 > holds a `Tensor affinity`, so **all three operations touch a `Tensor`** and
 > only the return side of `select` is references-only; and a bound is *not*
@@ -270,7 +273,9 @@ affinity`를 담은 `GateSignal`을 **받으므로** 평면 질문에서 자유�
 > (`gen/src/lib.rs:164`) while `orbweaver-dynamic` enforces it. The bound change
 > was re-measured as BREAKING, and so is removing the two operations.
 > 규칙을 계약에 대한 술어로 쓸 수 있는가와 다섯 기제 중 무엇을 택할 것인가는
-> D006(**제안됨**)으로 열려 있다. 위 서술 두 곳을 정정한다: `select`도
+> D006(**승인됨**, 2026-08-14)으로 정리되었다: E안 — `Expert::process`와
+> `Router::dispatch`를 상한 대신 제외, `Router::select`는 열어 둠, A안(`TensorHandle`을
+> 나르는 새 버전 인터페이스)은 기각이 아니라 복귀 경로. 위 서술 두 곳을 정정한다: `select`도
 > `GateSignal.affinity`로 `Tensor`에 닿으므로 **세 연산 모두** 해당하며, 상한은
 > 마샬러가 공짜로 강제하지 않는다(정적 생성 경로가 상한을 버린다).
 

@@ -206,6 +206,21 @@ else
   fail_total=$((fail_total+1))
 fi
 
+hr "decision status — one source of truth, restated nowhere stale"
+# A decision's status lives in docs/decisions/D00N-*.md. Five other documents
+# restate it, and restatements drift: the first run of this gate found seven,
+# including a planning row that sent a whole planning pass down a branch that
+# had already landed, and D003 itself saying APPROVED in English and 제안 in
+# Korean four lines apart. Text, no fixtures, so it runs with the licence
+# checks rather than behind a peer.
+if status_out=$(python3 spikes/decision_status.py 2>&1); then
+  printf '  ok   %s\n' "$(printf '%s' "$status_out" | tail -1 | sed 's/^ *//')"
+else
+  printf '%s\n' "$status_out" | sed 's/^/  /'
+  echo "  FAIL a document states a decision status the decision does not have"
+  fail_total=$((fail_total+1))
+fi
+
 hr "ssliop feature — the D002 dependency promise"
 ssl_fail=0
 # A default build must carry no cryptography dependency at all.

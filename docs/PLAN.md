@@ -340,7 +340,7 @@ Curated per-operation tools remain available as an opt-in for small, stable, hig
 
 **S4 is the safety belt of the whole system.** An LLM writes plausible IDL that may be semantically wrong; an IDL compiler rejects syntactically wrong IDL every time without exception. That asymmetry — probabilistic synthesis, deterministic verification — is what makes the trust model work. Everything upstream of S4 is allowed to be uncertain because S4 is not.
 
-**What S4 does not gate: repeatability.** Running S1–S3 twice over one unchanged requirement, with unchanged prompts, produced two different contracts and both passed every gate — different names, a different parameter type, and an authorization scope that drifted from the one the requirement states literally ([`pipeline-runs/2026-08-14-end-to-end.md`](pipeline-runs/2026-08-14-end-to-end.md), Cause A). What S2 is allowed to choose, and what a regeneration owes an already-registered contract, is a policy question open as [`decisions/D005-contract-stability.md`](decisions/D005-contract-stability.md) (**PROPOSED**).
+**What S4 does not gate: repeatability.** Running S1–S3 twice over one unchanged requirement, with unchanged prompts, produced two different contracts and both passed every gate — different names, a different parameter type, and an authorization scope that drifted from the one the requirement states literally ([`pipeline-runs/2026-08-14-end-to-end.md`](pipeline-runs/2026-08-14-end-to-end.md), Cause A). What S2 is allowed to choose, and what a regeneration owes an already-registered contract, was settled by [`decisions/D005-contract-stability.md`](decisions/D005-contract-stability.md) (**APPROVED**): option C first — the scope-shaped literal token a requirement states must survive into the `//@ ai_authz` S3 emits, checked by string equality with no model — then option B, `validate_against`, which diffs a regeneration against what is already registered.
 
 ### 4.7 The object model
 
@@ -586,7 +586,7 @@ Two rules carry over unchanged from the operating model:
 | Phase 3.5 — capability handles (2 wk) | Complete, landed **with** the bridge as required: session-scoped, expiring, entropy-backed; transcript-searched leak test | `PHASE3.md` |
 | Phase 5 — identity (8 wk) | **Half landed.** CSIv2 wire (SAS, GSSUP, mech lists) unit-tested both byte orders; delegation default-deny with recorded reasons; credential hygiene structural; `@ai_authz` scopes enforced. Measured: neither fixture advertises CSIv2 at all | `PHASE5.md` |
 
-| Phase 4 — static generation, promotion (was not started at v0.6) | **Substantially landed.** Rust client stubs with the §8 static-equals-dynamic oracle against both peers; **server skeletons** driven by omniORB's own python client (narrow, attributes, `out` parameters, a oneway then a twoway on one connection, user exceptions by class); the promotion gate I4 live-verified. Remaining: a servant cannot raise a system exception, no server-side static-equals-dynamic oracle, no Python target | `COMPONENTS.md`, harness stream-B group |
+| Phase 4 — static generation, promotion (was not started at v0.6) | **Substantially landed.** Rust client stubs with the §8 static-equals-dynamic oracle against both peers; **server skeletons** driven by omniORB's own python client (narrow, attributes, `out` parameters, a oneway then a twoway on one connection, user exceptions by class); the promotion gate I4 live-verified. What remains is not restated here — the `orbweaver-gen` row of `COMPONENTS.md` carries it and is refreshed after every wave. This table's business is what was planned against what landed, and the three items this cell used to list had all landed while it still named them | `COMPONENTS.md`, harness stream-B group |
 
 Not started from the original plan: Phase 6 (productionization) and the
 model-in-the-loop stages S1–S3.
@@ -597,7 +597,7 @@ as status, so the status is here and the measurements are in
 **B** stubs + skeletons; **C** SSLIOP behind an off-by-default feature, peer
 proof measured BLOCKED (brew's omniORBpy ships no `sslTP` binding);
 **D** search v2 and D003-A's vector union (the synonym class remains
-UNMEASURED — no key here), D004 drafted PROPOSED; **E** concurrent connections
+UNMEASURED — no key here), D004 approved with tier 1 built; **E** concurrent connections
 with a cap and a `CloseConnection` refusal; **F** the residency machine, the
 trading wire surface, the interceptor chain, the event channel and tenancy;
 plus the CosNaming server, the read-only IFR facade, and a contract/property
@@ -609,9 +609,12 @@ crate whose fuzz found that recursive types could not be marshalled at all.
 > in [`PLAN-MOE.md`](PLAN-MOE.md), reviewed and adopted 2026-08-14. The rule
 > that defines that stream — *the data plane stays out of CORBA permanently* —
 > is enforced by no gate in this project and cannot be fully stated as a
-> predicate over a contract; what to do about that is open as
+> predicate over a contract — a finding approval did not change. What to do
+> about it was settled by
 > [`decisions/D006-plane-rule-tensor.md`](decisions/D006-plane-rule-tensor.md)
-> (**PROPOSED**).
+> (**APPROVED**): option E, `Expert::process` and `Router::dispatch` are
+> excluded rather than bounded, because no check can tell an activation from
+> any other `Tensor`. `Router::select` is deliberately left open there.
 > The core CORBA services (Naming, Event, Trading, LifeCycle, IFR facade) are
 > planned as a suite in [`PLAN-SERVICES.md`](PLAN-SERVICES.md) (2026-08-14).
 > What that suite deliberately excludes (Notification, OTS, Time, PSS,
@@ -694,10 +697,13 @@ produces), and **oracle** (what verifies the whole batch deterministically).
   cross-crate batch this list said not to smuggle into a giop-only one —
   `SharedDispatch` is `&self`/`Sync`, all five servants ported with a sharing
   decision argued per servant, and the lock discipline enforced by
-  `orbweaver_giop::guarded` rather than documented). Remaining: ~~fragment
-  *reception*~~, ~~request multiplexing~~, ~~connection pooling~~ (no peer fragments, so the specification is the oracle:
-  hand-built §9.4.9 streams found two reception bugs), request multiplexing,
-  connection pooling, `#pragma prefix`.
+  `orbweaver_giop::guarded` rather than documented), ~~fragment *reception*~~
+  (no peer fragments, so the specification is the oracle: hand-built §9.4.9
+  streams found two reception bugs), ~~request multiplexing~~, ~~connection
+  pooling~~, ~~`#pragma prefix`~~. **Nothing on this list is outstanding.** It
+  carried a second, un-struck copy of its own last three items through three
+  passes — each pass struck the first copy and left the second — which is one
+  of the reasons §7.2 stopped restating status at all.
 
   One measurement from that batch is worth carrying forward, because it is the
   kind of mistake the next concurrency change will make too: the server-side

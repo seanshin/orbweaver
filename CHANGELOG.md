@@ -10,7 +10,55 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
-_Nothing yet._
+### Added / 추가
+
+- **A decision's status is checked, not just written.**
+  `spikes/decision_status.py` reads the authoritative status out of each
+  `docs/decisions/D00N-*.md` and holds every other mention to it, in the
+  harness. Dated records — `pipeline-runs/`, `PHASE*.md`, released sections of
+  this file — are out of scope by construction: they state what was true on a
+  date, and editing them to match today would falsify them rather than repair
+  them. The gate also refuses a citation to a decision that does not exist.
+
+  결정의 상태는 `docs/decisions/`에 한 번만 산다. 나머지 언급은 하네스가 그것과
+  대조한다. 날짜가 붙은 기록(실행 기록·PHASE·릴리즈된 절)은 그 시점의 사실이므로
+  범위 밖이다 — 오늘 기준으로 고치는 것은 수리가 아니라 위조다.
+
+### Fixed / 수정
+
+- **Ten stale status claims, and the four remaining-work lists no gate can
+  see.** Four decisions the user approved on 2026-08-14 — D003, D004, D005,
+  D006 — were still being called open in five documents. `PLAN.md` §7.2 still
+  listed three Phase 4 items as remaining — a servant that cannot raise a system exception,
+  a missing server-side static-equals-dynamic oracle, and no Python target —
+  when all three had landed, and stream E carried an un-struck second copy of
+  its own last three items through three passes. Nothing here was a code
+  defect and nothing could go red: the measured cost was **a planning pass
+  spent proposing work that was already finished.** §7.2 no longer restates a
+  remaining-work list at all; it links the `COMPONENTS.md` row that owns one.
+
+  다섯 문서가 이미 승인된 결정 넷을 PROPOSED로 불렀고, §7.2는 이미 착지한 세
+  항목을 남은 일로 열거하고 있었다. 코드 결함은 하나도 없고 빨개질 수 있는
+  것도 없었다 — 실측된 비용은 **이미 끝난 일을 다음 작업으로 제안한 계획 한
+  번**이다.
+
+- **`D003` said APPROVED in English and 제안 in Korean, four lines apart.** The
+  approval edit overwrote the head of its own PROPOSED block and left the tail,
+  in the file that is the source of truth — and every document that copied it
+  copied the English half. The gate now requires a decision's status markers to
+  agree with each other before it checks anyone against them.
+
+- **The gate's own two blind spots, found by running it.** It read documents
+  line by line, so a claim whose reference and status word fell either side of
+  a markdown wrap was invisible — `PLAN-MOE.md` passed while saying the wrong
+  thing, and only its Korean twin was caught, because that one happened not to
+  wrap. It also attached every status word to every decision named in the same
+  sentence, which reported two correct sentences as drift. Passages are now
+  built per paragraph, and a status word binds to the decision most recently
+  named before it. First run 6 findings, after both repairs 10, false positives
+  0. It then caught the first draft of this very entry, which quoted the old
+  status without naming the new one — the entry was reworded rather than the
+  gate loosened.
 
 ---
 
