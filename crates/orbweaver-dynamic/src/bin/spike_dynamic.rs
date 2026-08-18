@@ -10,7 +10,16 @@
 //! did not write — a dynamic invoker that only agrees with our own decoder has
 //! not been tested at all.
 //!
-//! Usage: `spike-dynamic <ior-file> <idl-file> <interface-id>`
+//! Usage: `spike-dynamic [-I <dir>]... <ior-file> <idl-file> <interface-id>`
+//!
+//! The IDL file is read as a translation unit, `#include`s resolved. That is
+//! not housekeeping here: the claim this spike makes is that the registry built
+//! from a contract is enough to call a peer we did not write, and a registry
+//! missing an inherited operation would make the claim about a smaller contract
+//! than the one named on the command line — the call it could not build would
+//! read as a limit of dynamic invocation rather than as a file this process
+//! declined to finish reading. *계약만으로 호출한다는 주장은 계약 전체를 읽었을
+//! 때만 성립한다.*
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -19,19 +28,27 @@ use orbweaver_dynamic::Value;
 use orbweaver_dynamic::invoke::{InvokeError, invoke};
 use orbweaver_giop::typecode::TypeCode;
 use orbweaver_giop::{Connection, Ior};
-use orbweaver_registry::Registry;
+use orbweaver_idl::SearchPath;
+use orbweaver_registry::{Contract, Registry, Strictness, take_include_dirs};
 
 const OK: &str = "ok  ";
 const NO: &str = "FAIL";
 
 fn main() -> std::process::ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let search = match take_include_dirs(&mut args) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            return std::process::ExitCode::from(2);
+        }
+    };
     let [ior_path, idl_path, interface_id] = args.as_slice() else {
-        eprintln!("usage: spike-dynamic <ior-file> <idl-file> <interface-id>");
+        eprintln!("usage: spike-dynamic [-I <dir>]... <ior-file> <idl-file> <interface-id>");
         return std::process::ExitCode::from(2);
     };
 
-    match run(ior_path, idl_path, interface_id) {
+    match run(ior_path, idl_path, interface_id, &search) {
         Ok(0) => {
             println!("\ndynamic invocation: PASS — calls built from IDL text alone");
             std::process::ExitCode::SUCCESS
@@ -52,11 +69,16 @@ fn args_of(pairs: &[(&str, Value)]) -> BTreeMap<String, Value> {
     pairs.iter().map(|(k, v)| ((*k).to_owned(), v.clone())).collect()
 }
 
-fn run(ior_path: &str, idl_path: &str, interface_id: &str) -> Result<u32, String> {
-    let src = std::fs::read_to_string(idl_path).map_err(|e| format!("{idl_path}: {e}"))?;
-    let spec = orbweaver_idl::parse(&src).map_err(|e| format!("{idl_path}: {e}"))?;
+fn run(
+    ior_path: &str,
+    idl_path: &str,
+    interface_id: &str,
+    search: &SearchPath,
+) -> Result<u32, String> {
+    let contract = Contract::load(std::path::Path::new(idl_path), search, Strictness::Grammar)
+        .map_err(|e| e.message)?;
     let mut registry = Registry::new();
-    registry.load(&spec).map_err(|e| e.to_string())?;
+    registry.load(&contract.spec).map_err(|e| e.to_string())?;
 
     let text = std::fs::read_to_string(ior_path).map_err(|e| format!("{ior_path}: {e}"))?;
     let ior = Ior::parse(text.trim()).map_err(|e| e.to_string())?;

@@ -17,7 +17,16 @@
 //! the student.
 //!
 //! Usage: `search-bench [--vectors <cache>] [--threshold <t>] [--offline-stand-in <out>]
-//!         <queries.tsv> <idl-file>...`
+//!         [-I <dir>]... <queries.tsv> <idl-file>...`
+//!
+//! The IDL files are read as translation units, `#include`s resolved, `-I` as
+//! `sidl-validate` spells it. A benchmark is a claim about a catalog, and the
+//! catalog is what the haystack is built from: [`interface_text`] walks
+//! `resolved_operations`, which follows ancestry, so a file read as a string
+//! contributes an interface with its inherited operations missing. The rate
+//! would still be printed, and it would be a rate about a catalog nobody has.
+//! The frozen sets are unaffected — `corpus/golden/` and `spikes/echo.idl` are
+//! self-contained, which is precisely why the defect could sit here unmeasured.
 //!
 //! # The vector options (D003 part A)
 //!
@@ -42,10 +51,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::process::ExitCode;
 
 use orbweaver_dynamic::json::Json;
+use orbweaver_idl::SearchPath;
 use orbweaver_mcp::embed::{VectorIndex, Vectors, query_key};
 use orbweaver_mcp::policy::Exposure;
 use orbweaver_mcp::{Bridge, exposable_interfaces};
-use orbweaver_registry::Registry;
+use orbweaver_registry::{Registry, Strictness, registry_from_files, take_include_dirs};
 
 /// Larger than any query's expected set, and asserted against the `truncated` flag per
 /// query — a catalog that outgrows the limit must fail the bench loudly, not convert hits
@@ -241,7 +251,16 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
 }
 
 fn main() -> ExitCode {
-    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let mut argv: Vec<String> = std::env::args().skip(1).collect();
+    // `-I` is taken before anything else parses, so `parse_args` keeps seeing
+    // exactly the option set it is unit-tested against.
+    let search = match take_include_dirs(&mut argv) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("search-bench: {e}");
+            return ExitCode::from(2);
+        }
+    };
     let args = match parse_args(&argv) {
         Ok(args) => args,
         Err(e) => {
@@ -249,7 +268,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match run(&args) {
+    match run(&args, &search) {
         Ok(pass) => {
             if pass {
                 ExitCode::SUCCESS
@@ -361,18 +380,24 @@ fn stand_in_cache(registry: &Registry, cases: &[Case]) -> Result<Vectors, String
     Vectors::from_entries(entries)
 }
 
-fn run(args: &Args) -> Result<bool, String> {
+fn run(args: &Args, search: &SearchPath) -> Result<bool, String> {
     let tsv_path = args.tsv_path.as_str();
     let idl_paths = args.idl_paths.as_slice();
     let text = std::fs::read_to_string(tsv_path).map_err(|e| format!("{tsv_path}: {e}"))?;
     let cases = parse_tsv(&text).map_err(|e| format!("{tsv_path}: {e}"))?;
 
-    let mut registry = Registry::new();
-    for path in idl_paths {
-        let src = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-        let spec = orbweaver_idl::parse(&src).map_err(|e| format!("{path}: {e}"))?;
-        registry.load(&spec).map_err(|e| format!("{path}: {e}"))?;
-    }
+    // Grammar, not S4: this is a measurement over whatever catalog it is
+    // pointed at, and refusing a legacy contract that has not been fixed yet
+    // would answer "how well does search do on this estate" with "fix it
+    // first". Resolution is not part of that trade — an include that does not
+    // resolve is a file this run failed to read, not a contract it disagrees
+    // with, and `registry_from_files` says so with the missing name.
+    let registry =
+        registry_from_files(idl_paths, search, Strictness::Grammar).map_err(|e| e.message)?;
+    // No `Registry::unresolved()` line here on purpose: it also lists names
+    // whose only problem is that the registry's resolver does not search an
+    // inherited interface's scope, and a benchmark that printed a warning
+    // about legal IDL would train its readers to ignore the warning.
 
     // Everything exposable is exposed: the benchmark measures search quality over the
     // whole catalog, and an allowlist here would measure the allowlist instead.

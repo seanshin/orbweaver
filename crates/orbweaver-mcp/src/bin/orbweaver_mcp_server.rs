@@ -1,7 +1,7 @@
 //! `orbweaver-mcp-server` — the CORBA estate as three MCP tools over stdio.
 //!
 //! ```text
-//! orbweaver-mcp-server --idl <file.idl>... --ior <file> \
+//! orbweaver-mcp-server --idl <file.idl>... --ior <file> [-I <dir>]... \
 //!                      [--expose <IDL:module/Iface:1.0[.operation]>]... \
 //!                      [--assume-effect <ai_effect value>] \
 //!                      [--as <principal>] [--scope <scope>]... \
@@ -15,6 +15,35 @@
 //! Exposure is **default-deny**: with no `--expose`, the server starts, answers
 //! the handshake, and finds nothing. That is the correct behaviour and not a
 //! misconfiguration — an operator naming what an agent may reach is the point.
+//!
+//! # `--idl` takes a path, so it takes a translation unit
+//!
+//! Each `--idl` file is read with its `#include`s resolved — the including
+//! file's own directory first, then any `-I <dir>`, which is `sidl-validate`'s
+//! flag meaning `sidl-validate`'s thing. Several `--idl` files that include the
+//! same header are safe: the header's declarations are identical whichever root
+//! reached them, and a later load of the same id replaces the earlier one.
+//!
+//! This process is where reading a file as a string cost the most. **It could
+//! not serve an estate at all**: point it at thirteen legacy contracts that
+//! include each other and every base declared next door was dropped without a
+//! word, so the catalog an agent searched, the operations `--expose` could name,
+//! and the surface `--dry-run` reported were all smaller than the contracts an
+//! operator had handed it — and the report said nothing was missing. Measured
+//! on `spikes/estate/`: stripping the `#include` lines drops **27 references**,
+//! 8 base interfaces and 19 raised exceptions. `spikes/estate/run.sh` worked
+//! around it by amalgamating the estate into one file before this process saw
+//! it; that workaround is now a second way of doing it rather than the only one.
+//!
+//! An exposure decision taken over a partial catalog is the shape of failure
+//! this whole boundary exists to prevent, so a reference that will not resolve
+//! **refuses the start** and names what is missing. A gate that serves what it
+//! could read and stays quiet about what it could not is worse than one that
+//! will not start.
+//!
+//! *`--idl`은 경로를 받으므로 번역 단위를 받는다. 문자열로 읽던 시절 이 프로세스는
+//! 레거시 에스테이트를 아예 서비스할 수 없었다 — 상속 기반이 조용히 사라진 채로
+//! 더 작은 표면을 서비스했고, 무엇이 빠졌는지 아무 말도 하지 않았다.*
 //!
 //! # `--assume-effect`: what a contract's silence means, declared once
 //!
@@ -170,7 +199,7 @@ use orbweaver_mcp::quota::{Quota, Renewal, Scope};
 use orbweaver_mcp::session::Session;
 use orbweaver_mcp::telemetry::{CallPath, JsonLines, Timestamp, Trace};
 use orbweaver_mcp::token::ScopeMap;
-use orbweaver_registry::Registry;
+use orbweaver_registry::{Strictness, registry_from_files, take_include_dirs};
 
 /// D004's trace for this run: `-` is stderr, anything else is a file.
 ///
@@ -274,7 +303,15 @@ fn main() -> std::process::ExitCode {
     let mut audit_capacity: Option<usize> = None;
     let mut assume_effect: Option<String> = None;
 
-    let mut args = std::env::args().skip(1);
+    let mut argv: Vec<String> = std::env::args().skip(1).collect();
+    let search = match take_include_dirs(&mut argv) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            return std::process::ExitCode::from(2);
+        }
+    };
+    let mut args = argv.into_iter();
     while let Some(a) = args.next() {
         let mut next = |what: &str| match args.next() {
             Some(v) => Ok(v),
@@ -340,7 +377,7 @@ fn main() -> std::process::ExitCode {
             "-h" | "--help" => {
                 eprintln!(
                     "usage: orbweaver-mcp-server --idl <file.idl>... --ior <file> \
-                     [--expose <id[.operation]>]... [--assume-effect <value>] \
+                     [-I <dir>]... [--expose <id[.operation]>]... [--assume-effect <value>] \
                      [--as <principal>] [--scope <scope>]... \
                      [--map-scope <token>=<contract>]... [--token-scope <scope>]... \
                      [--dry-run[=<id>]] [--trace <path>|-] [--trace-ts <rfc3339>] \
@@ -371,38 +408,35 @@ fn main() -> std::process::ExitCode {
     // only preview an exposure once the thing it protects was already running.
     if idls.is_empty() || (ior_path.is_none() && !dry_run) {
         eprintln!(
-            "usage: orbweaver-mcp-server --idl <file.idl>... --ior <file>   (--ior is not \
-             needed with --dry-run)"
+            "usage: orbweaver-mcp-server --idl <file.idl>... --ior <file> [-I <dir>]...   \
+             (--ior is not needed with --dry-run; -I resolves #include, as sidl-validate \
+             spells it)"
         );
         return std::process::ExitCode::from(2);
     }
 
-    let mut registry = Registry::new();
-    for path in &idls {
-        let src = match std::fs::read_to_string(path) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("{path}: {e}");
-                return std::process::ExitCode::from(2);
+    // The gate, not the parser, over the whole translation unit: a catalog
+    // built from IDL that S4 rejects would describe operations nobody can
+    // call, and a catalog built from a file read as a string describes fewer
+    // operations than the contract does — silently, which is worse.
+    let registry = match registry_from_files(&idls, &search, Strictness::Checked) {
+        Ok(r) => r,
+        Err(e) => {
+            for line in e.message.lines().take(5) {
+                eprintln!("{line}");
             }
-        };
-        // The gate, not the parser: a catalog built from IDL that S4 rejects
-        // would describe operations nobody can call.
-        match orbweaver_idl::check(&src) {
-            Ok(spec) => {
-                if let Err(e) = registry.load(&spec) {
-                    eprintln!("{path}: {e}");
-                    return std::process::ExitCode::from(2);
-                }
-            }
-            Err(diags) => {
-                for d in diags.iter().take(5) {
-                    eprintln!("{path}:{d}");
-                }
-                return std::process::ExitCode::from(2);
-            }
+            return std::process::ExitCode::from(2);
         }
-    }
+    };
+    // Deliberately **not** also gated on `Registry::unresolved()`, which
+    // `idl-diff` refuses on: that list holds every name the registry's own
+    // resolver missed, and the resolver does not search an inherited
+    // interface's scope. `corpus/services/gen-naming-subset.idl` raises
+    // `NotFound` from `NamingContextExt : NamingContext` — legal IDL that both
+    // oracles accept, and four `Unresolved` markers here. A server that
+    // refused to start on the naming contract it serves would be a gate
+    // nobody could run. What made an estate unservable was the include, and
+    // `registry_from_files` refuses that above, naming the file.
 
     let mut exposure = Exposure::nothing();
     for spec in &expose {
