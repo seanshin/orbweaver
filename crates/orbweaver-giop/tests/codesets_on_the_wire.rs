@@ -225,6 +225,7 @@ fn a_requests_codeset_context_survives_decoding() {
                 "echo_wstring",
                 true,
                 &[ctx, other],
+                None,
                 |e| e.put_i32(1),
             )
             .expect("encodes");
@@ -258,6 +259,7 @@ fn an_absent_codeset_context_is_reported_as_absent() {
         "ping",
         true,
         &[],
+        None,
         |_| {},
     )
     .expect("encodes");
@@ -367,9 +369,14 @@ fn a_caller_that_converts_may_send_under_its_own_declaration() {
         let req = decode_request(raw).expect("decodes");
         let cs = req.code_sets();
         let arg = req.body().expect("body").get_string_bytes().expect("a string").to_vec();
-        let out = encode_reply(version, endian, req.request_id, ReplyStatus::NoException, |e| {
-            e.put_string_bytes(&arg)
-        })
+        let out = encode_reply(
+            version,
+            endian,
+            req.request_id,
+            ReplyStatus::NoException,
+            req.narrow_codec(),
+            |e| e.put_string_bytes(&arg),
+        )
         .expect("reply encodes");
         s.write_all(&out).expect("write");
         s.flush().expect("flush");
@@ -437,9 +444,14 @@ fn a_profile_without_a_component_still_calls() {
         let (version, endian) = (raw.version, raw.endian);
         let req = decode_request(raw).expect("decodes");
         let n = req.service_contexts().len();
-        let out = encode_reply(version, endian, req.request_id, ReplyStatus::NoException, |e| {
-            e.put_i32(42)
-        })
+        let out = encode_reply(
+            version,
+            endian,
+            req.request_id,
+            ReplyStatus::NoException,
+            req.narrow_codec(),
+            |e| e.put_i32(42),
+        )
         .expect("encodes");
         s.write_all(&out).expect("write");
         s.flush().expect("flush");
@@ -492,9 +504,14 @@ fn the_utf8_case_declares_utf8_and_writes_utf8() {
         let req = decode_request(raw).expect("decodes");
         let declared = req.code_sets();
         let arg = req.body().expect("body").get_string_bytes().expect("a string").to_vec();
-        let out = encode_reply(version, endian, req.request_id, ReplyStatus::NoException, |e| {
-            e.put_i32(0)
-        })
+        let out = encode_reply(
+            version,
+            endian,
+            req.request_id,
+            ReplyStatus::NoException,
+            req.narrow_codec(),
+            |e| e.put_i32(0),
+        )
         .expect("encodes");
         let _ = s.write_all(&out);
         let _ = s.flush();
@@ -531,11 +548,15 @@ fn the_context_goes_out_once() {
             let (version, endian) = (raw.version, raw.endian);
             let req = decode_request(raw).expect("decodes");
             carried.push(req.code_sets().is_some());
-            let out =
-                encode_reply(version, endian, req.request_id, ReplyStatus::NoException, |e| {
-                    e.put_i32(0)
-                })
-                .expect("encodes");
+            let out = encode_reply(
+                version,
+                endian,
+                req.request_id,
+                ReplyStatus::NoException,
+                req.narrow_codec(),
+                |e| e.put_i32(0),
+            )
+            .expect("encodes");
             s.write_all(&out).expect("write");
             s.flush().expect("flush");
         }
@@ -592,4 +613,71 @@ fn a_context_is_not_a_component() {
     assert_eq!(raw.len(), 12, "flag, pad, and two ids");
     let comp = codeset::server_component_info().encode(Endian::Little).expect("encodes");
     assert_eq!(comp.len(), 20, "flag, pad, and two (native, count) pairs");
+}
+
+// ── D009 §7.1: one agreement for a call and its answer ──────────────────────
+
+/// A servant reads its arguments in the codeset the **client declared**, and
+/// answers in the same one.
+///
+/// This is the question the decision's first draft did not ask. A reply
+/// encoded under a different agreement from the request it answers is the
+/// defect D009 exists for, wearing the other face — and it would be invisible
+/// to every test that only checks the request direction.
+#[test]
+fn a_reply_uses_the_agreement_its_request_arrived_under() {
+    // A client that declares ISO-8859-1 for narrow text.
+    let ctx = CodeSetContext { char_data: CodeSetId::ISO_8859_1, wchar_data: CodeSetId::UTF_16 };
+    let contexts = vec![ServiceContext {
+        id: codeset::SERVICE_ID_CODE_SETS,
+        data: ctx.encode(Endian::Big).expect("encode the context"),
+    }];
+
+    for endian in [Endian::Big, Endian::Little] {
+        let msg = encode_request_with_contexts(
+            Version::V1_2,
+            endian,
+            1,
+            b"key",
+            "echo",
+            true,
+            &contexts,
+            // The client writes what it declared. Passing `None` here — a
+            // declaration of ISO-8859-1 and a body in UTF-8 — is the defect
+            // this whole decision is about, and the first draft of this test
+            // did exactly that: the servant read `cafÃ©`, one octet per
+            // character, which is what a real peer would have seen.
+            Some(std::sync::Arc::new(
+                codeset::Converter::new(CodeSetId::ISO_8859_1).expect("iso-8859-1"),
+            )),
+            |e| e.put_str("caf\u{e9}"),
+        )
+        .expect("request");
+
+        let raw = read_message(&mut msg.as_slice(), DEFAULT_MAX_MESSAGE_SIZE).expect("frame");
+        let req = decode_request(raw).expect("decode");
+
+        // The servant reads through the request's own declaration.
+        let text = req.body().expect("body").get_string().expect("argument");
+        assert_eq!(text, "caf\u{e9}", "{endian:?}: the argument decoded under the declaration");
+
+        // And answers under the same one, which is the half §7.1 is about.
+        let reply = encode_reply(
+            req.version,
+            req.endian,
+            req.request_id,
+            ReplyStatus::NoException,
+            req.narrow_codec(),
+            |e| e.put_str("caf\u{e9}"),
+        )
+        .expect("reply");
+
+        // é is one octet in ISO-8859-1 and two in UTF-8. Finding one proves
+        // the codec reached the reply's body rather than only the request's.
+        let body = &reply[reply.len() - 8..];
+        assert!(
+            body.contains(&0xE9) && !body.windows(2).any(|w| w == [0xC3, 0xA9]),
+            "{endian:?}: the reply is not in the agreed codeset: {body:02x?}"
+        );
+    }
 }

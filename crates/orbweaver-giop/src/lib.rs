@@ -793,6 +793,7 @@ where
         operation,
         expect_reply,
         &[],
+        None,
         write_body,
     )
 }
@@ -891,11 +892,15 @@ pub fn decode_locate_reply(msg: RawMessage) -> Result<(u32, LocateResult)> {
     Ok((request_id, result))
 }
 
-/// As [`encode_request`], but attaching service contexts.
+/// As [`encode_request`], but attaching service contexts and the transmission
+/// codeset the connection agreed on.
 ///
-/// Codeset negotiation needs this: §7.10.2.5 carries the agreed transmission
-/// codesets in a `CodeSets` context, and without one the specified default is
-/// ISO-8859-1 regardless of what bytes we actually send.
+/// Codeset negotiation needs both halves: §7.10.2.5 carries the agreed
+/// transmission codesets in a `CodeSets` context, and without one the
+/// specified default is ISO-8859-1 regardless of what bytes we actually send —
+/// but declaring an agreement and then writing UTF-8 anyway is the *same*
+/// defect wearing the other face, and that is what shipped until D009. `codec`
+/// is `None` for UTF-8, which is every call this project made before then.
 #[allow(clippy::too_many_arguments)]
 pub fn encode_request_with_contexts<F>(
     version: Version,
@@ -905,6 +910,7 @@ pub fn encode_request_with_contexts<F>(
     operation: &str,
     expect_reply: bool,
     contexts: &[ServiceContext],
+    codec: Option<std::sync::Arc<dyn orbweaver_cdr::TextCodec>>,
     write_body: F,
 ) -> Result<Vec<u8>>
 where
@@ -913,6 +919,10 @@ where
     if version.major != 1 || version.minor > 2 {
         return Err(Error::UnsupportedVersion(version));
     }
+    // The codec rides the *body*, and the header is not text: `operation` and
+    // the object key are identifiers the contract chose, not the peer's prose,
+    // and re-encoding them would change the name a servant dispatches on.
+    // Attached after the header is written, for exactly that reason.
     let mut e = Encoder::new(endian);
 
     // ── message header (12 bytes, alignment origin) ──
@@ -957,7 +967,12 @@ where
     // sat where it will actually land — CDR counts from the start of the
     // message, not from the start of whatever buffer we built it in.
     let body_start = if version.aligns_body() { e.len().div_ceil(8) * 8 } else { e.len() };
-    let mut body = Encoder::continuing_at(endian, body_start);
+    // The codec goes on the **body** and never on the header. `operation` and
+    // the object key are written above with `put_str`, and they are
+    // identifiers the contract chose — re-encoding them would change the name
+    // a servant dispatches on. That the body is already a separate encoder is
+    // what makes this one line instead of an argument threaded everywhere.
+    let mut body = Encoder::continuing_at(endian, body_start).with_codec(codec);
     write_body(&mut body);
     let body_bytes = body.finish().map_err(Error::Cdr)?;
     if !body_bytes.is_empty() {
@@ -995,6 +1010,13 @@ pub struct Reply {
     raw: Vec<u8>,
     /// Offset in `raw` where the reply body begins.
     body_at: usize,
+    /// The narrow-text codeset this reply's body is in (D009 §7.1).
+    ///
+    /// A reply is encoded under the agreement its *request* was sent under, so
+    /// this is the connection's, attached when the reply is read rather than
+    /// re-derived here — a reply that decoded under a different agreement from
+    /// the one it answered is the defect D009 is about, wearing the other face.
+    codec: Option<std::sync::Arc<dyn orbweaver_cdr::TextCodec>>,
 }
 
 impl Reply {
@@ -1004,9 +1026,21 @@ impl Reply {
     /// which left the decoder at offset 0 and returned the GIOP magic as
     /// payload — wrong values, no error, nothing in the logs.
     pub fn body(&self) -> Result<Decoder<'_>> {
-        let mut d = Decoder::new(&self.raw, self.endian);
+        let mut d = Decoder::new(&self.raw, self.endian).with_codec(self.codec.clone());
         d.seek_to(self.body_at)?;
         Ok(d)
+    }
+
+    /// Attaches the narrow-text codeset the connection agreed on.
+    ///
+    /// Crate-private: a reply's codeset is not the reader's choice, it is the
+    /// one its request was sent under, and letting a caller set it would make
+    /// that a matter of opinion.
+    pub(crate) fn set_codec(
+        &mut self,
+        codec: Option<std::sync::Arc<dyn orbweaver_cdr::TextCodec>>,
+    ) {
+        self.codec = codec;
     }
 
     /// The undecoded message, for diagnostics.
@@ -1379,7 +1413,7 @@ pub fn decode_reply(msg: RawMessage) -> Result<Reply> {
         d.offset()
     };
 
-    Ok(Reply { request_id, status, endian, version, raw, body_at })
+    Ok(Reply { request_id, status, endian, version, raw, body_at, codec: None })
 }
 
 fn skip_service_contexts(d: &mut Decoder<'_>) -> Result<()> {
@@ -1761,6 +1795,20 @@ impl Connection {
         })
     }
 
+    /// The narrow-text codec for this connection's streams, or `None` for
+    /// UTF-8.
+    ///
+    /// `None` is not "we failed to negotiate" — that is
+    /// [`CharCodeset::Incompatible`], which refuses the call. This is "the
+    /// agreement is UTF-8, so the stream's default is already right", and it
+    /// is what keeps every call that existed before D009 byte-identical.
+    ///
+    /// Unlike [`Connection::char_converter`], **reading this does make it
+    /// apply**: the value goes onto the request body's encoder.
+    pub(crate) fn narrow_codec(&self) -> Option<std::sync::Arc<dyn orbweaver_cdr::TextCodec>> {
+        crate::mux::narrow_codec(&self.char_codeset)
+    }
+
     /// Takes responsibility for converting `char` data, and returns the
     /// converter to do it with.
     ///
@@ -2065,6 +2113,11 @@ impl Connection {
             operation,
             true,
             &contexts,
+            // The agreement this connection reached, carried by the
+            // stream rather than remembered by the caller. `None` when the
+            // negotiation produced UTF-8 or produced nothing, which keeps
+            // every existing call byte-identical.
+            self.narrow_codec(),
             write_args,
         )?;
         self.codeset_context_pending = false;
@@ -2110,7 +2163,12 @@ impl Connection {
         self.max_reply_fragments = self.max_reply_fragments.max(raw.fragments);
         match raw.msg_type {
             MsgType::Reply => {
-                let reply = decode_reply(raw).inspect_err(|_| self.poisoned = true)?;
+                let mut reply = decode_reply(raw).inspect_err(|_| self.poisoned = true)?;
+                // §7.1: one agreement for a call and its answer. The reply is
+                // encoded under what this connection negotiated, so it is read
+                // under the same thing rather than under whatever a later
+                // renegotiation might say.
+                reply.set_codec(self.narrow_codec());
                 if reply.request_id != id {
                     self.poisoned = true;
                     return Err(Error::Desynchronized);

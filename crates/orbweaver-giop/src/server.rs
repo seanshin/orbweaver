@@ -237,11 +237,36 @@ pub struct Request {
 }
 
 impl Request {
-    /// A decoder positioned at the first argument.
+    /// A decoder positioned at the first argument, reading text in the
+    /// codeset the **client declared** (D009 §7.1).
+    ///
+    /// `None` — no `CodeSets` context — is ISO-8859-1 by §7.10.2.5 and not
+    /// UTF-8, but this project's streams default to UTF-8 and every peer here
+    /// reaches it, so a missing context is left as the stream's default rather
+    /// than silently reinterpreting every existing caller's bytes. That gap is
+    /// named in `codeset.rs`'s module docs; closing it changes behaviour
+    /// against every component-less peer in existence, on a question no peer
+    /// here can settle.
     pub fn body(&self) -> Result<Decoder<'_>> {
-        let mut d = Decoder::new(&self.raw, self.endian);
+        let mut d = Decoder::new(&self.raw, self.endian).with_codec(self.narrow_codec());
         d.seek_to(self.body_at)?;
         Ok(d)
+    }
+
+    /// The narrow-text codec this request's own `CodeSets` context asks for.
+    ///
+    /// Derived from the request rather than from the connection, because a
+    /// servant answers the caller in front of it: two clients on one
+    /// multiplexed connection can have declared different things.
+    pub fn narrow_codec(&self) -> Option<std::sync::Arc<dyn orbweaver_cdr::TextCodec>> {
+        let cs = self.code_sets()?;
+        let id = cs.char_data;
+        if id == crate::codeset::CodeSetId::UTF_8 {
+            return None;
+        }
+        crate::codeset::Converter::new(id)
+            .ok()
+            .map(|c| std::sync::Arc::new(c) as std::sync::Arc<dyn orbweaver_cdr::TextCodec>)
     }
 
     /// Every `IOP::ServiceContext` the peer attached, in the order it sent
@@ -373,6 +398,7 @@ pub fn encode_reply<F>(
     endian: Endian,
     request_id: u32,
     status: ReplyStatus,
+    codec: Option<std::sync::Arc<dyn orbweaver_cdr::TextCodec>>,
     write_body: F,
 ) -> Result<Vec<u8>>
 where
@@ -408,7 +434,9 @@ where
     // See encode_request: the body must align from where it will land in the
     // message, not from the start of its own buffer.
     let body_start = if version.aligns_body() { e.len().div_ceil(8) * 8 } else { e.len() };
-    let mut body = Encoder::continuing_at(endian, body_start);
+    // §7.1: the answer goes back in the codeset the question was asked in.
+    // On the body only — the reply header carries no text.
+    let mut body = Encoder::continuing_at(endian, body_start).with_codec(codec);
     write_body(&mut body);
     let body_bytes = body.finish().map_err(Error::Cdr)?;
     if !body_bytes.is_empty() {
@@ -435,12 +463,13 @@ pub fn encode_location_forward(
     to: &crate::Ior,
 ) -> Result<Vec<u8>> {
     let mut err = None;
-    let bytes = encode_reply(version, endian, request_id, ReplyStatus::LocationForward, |b| {
-        // The IOR is marshalled inline here, not as an encapsulation (§9.3.6).
-        if let Err(e) = to.write_to(b) {
-            err = Some(e);
-        }
-    })?;
+    let bytes =
+        encode_reply(version, endian, request_id, ReplyStatus::LocationForward, None, |b| {
+            // The IOR is marshalled inline here, not as an encapsulation (§9.3.6).
+            if let Err(e) = to.write_to(b) {
+                err = Some(e);
+            }
+        })?;
     match err {
         Some(e) => Err(e),
         None => Ok(bytes),
@@ -454,7 +483,7 @@ pub fn encode_system_exception(
     request_id: u32,
     ex: &SystemException,
 ) -> Result<Vec<u8>> {
-    encode_reply(version, endian, request_id, ReplyStatus::SystemException, |b| {
+    encode_reply(version, endian, request_id, ReplyStatus::SystemException, None, |b| {
         b.put_str(&ex.id);
         b.put_u32(ex.minor);
         b.put_u32(ex.completed as u32);
@@ -1446,9 +1475,14 @@ impl Server {
                     DispatchBody::UserException => ReplyStatus::UserException,
                 };
                 let body = out.finish().map_err(Error::Cdr)?;
-                Ok(Some(encode_reply(req.version, req.endian, req.request_id, status, |e| {
-                    e.put_bytes(&body)
-                })?))
+                Ok(Some(encode_reply(
+                    req.version,
+                    req.endian,
+                    req.request_id,
+                    status,
+                    req.narrow_codec(),
+                    |e| e.put_bytes(&body),
+                )?))
             }
             Err(ex) => self.reply_exception(req, &ex),
         }
@@ -1556,7 +1590,7 @@ mod tests {
     fn reply_round_trips_in_every_version() {
         for version in [Version::V1_0, Version::V1_1, Version::V1_2] {
             for endian in [Endian::Big, Endian::Little] {
-                let wire = encode_reply(version, endian, 88, ReplyStatus::NoException, |e| {
+                let wire = encode_reply(version, endian, 88, ReplyStatus::NoException, None, |e| {
                     e.put_f64(1.25)
                 })
                 .unwrap();
@@ -1597,14 +1631,28 @@ mod tests {
     fn post_1_2_status_is_refused_on_older_versions() {
         for version in [Version::V1_0, Version::V1_1] {
             assert!(
-                encode_reply(version, Endian::Big, 1, ReplyStatus::LocationForwardPerm, |_| {})
-                    .is_err(),
+                encode_reply(
+                    version,
+                    Endian::Big,
+                    1,
+                    ReplyStatus::LocationForwardPerm,
+                    None,
+                    |_| {}
+                )
+                .is_err(),
                 "{version} has no LOCATION_FORWARD_PERM"
             );
         }
         assert!(
-            encode_reply(Version::V1_2, Endian::Big, 1, ReplyStatus::LocationForwardPerm, |_| {})
-                .is_ok()
+            encode_reply(
+                Version::V1_2,
+                Endian::Big,
+                1,
+                ReplyStatus::LocationForwardPerm,
+                None,
+                |_| {}
+            )
+            .is_ok()
         );
     }
 

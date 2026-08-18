@@ -611,6 +611,23 @@ struct Inner {
     last_used: AtomicU64,
 }
 
+/// The narrow-text codec for a negotiated `char` codeset, or `None` for UTF-8.
+///
+/// A free function rather than a method on two types: `Connection` and this
+/// multiplexer hold the same `CharCodeset` and must answer the same way, and
+/// two methods with one rule is where the two stop agreeing. `None` means the
+/// agreement *is* UTF-8, not that there was none — a failed negotiation is
+/// `CharCodeset::Incompatible` and refuses the call.
+pub(crate) fn narrow_codec(
+    cs: &crate::CharCodeset,
+) -> Option<std::sync::Arc<dyn orbweaver_cdr::TextCodec>> {
+    let agreed = cs.agreed()?;
+    if agreed.id() == codeset::CodeSetId::UTF_8 {
+        return None;
+    }
+    Some(std::sync::Arc::new(agreed))
+}
+
 impl Mux {
     /// Takes over an established connection.
     ///
@@ -1027,6 +1044,11 @@ impl Inner {
             operation,
             expect_reply,
             &contexts,
+            // The agreement this connection reached, carried by the
+            // stream rather than remembered by the caller. `None` when the
+            // negotiation produced UTF-8 or produced nothing, which keeps
+            // every existing call byte-identical.
+            narrow_codec(&self.char_codeset),
             write_args,
         ) {
             Ok(m) => m,

@@ -49,8 +49,9 @@ fn ior_at(addr: std::net::SocketAddr, key: &[u8], minor: u8) -> Ior {
 
 /// Reads one request and answers `id` with a `long` of `value`.
 fn reply_long(s: &mut TcpStream, version: Version, endian: Endian, id: u32, value: i32) {
-    let msg = encode_reply(version, endian, id, ReplyStatus::NoException, |e| e.put_i32(value))
-        .expect("reply encodes");
+    let msg =
+        encode_reply(version, endian, id, ReplyStatus::NoException, None, |e| e.put_i32(value))
+            .expect("reply encodes");
     s.write_all(&msg).expect("reply goes out");
     s.flush().expect("flush");
 }
@@ -219,15 +220,16 @@ fn a_message_interleaved_into_a_fragmented_reply_faults_instead_of_misattributin
         let (second, _, _, _) = take_request(&mut s);
         // A reply big enough to fragment, then somebody else's reply shoved
         // between the pieces.
-        let big = encode_reply(v, e, first, ReplyStatus::NoException, |enc| {
+        let big = encode_reply(v, e, first, ReplyStatus::NoException, None, |enc| {
             enc.put_octet_seq(&vec![0u8; 4096]);
         })
         .expect("reply encodes");
         let pieces = fragment_message(big, 512).expect("fragments");
         assert!(pieces.len() > 2, "the test needs a genuinely fragmented reply");
         s.write_all(&pieces[0]).expect("leading piece");
-        let interloper = encode_reply(v, e, second, ReplyStatus::NoException, |enc| enc.put_i32(5))
-            .expect("reply encodes");
+        let interloper =
+            encode_reply(v, e, second, ReplyStatus::NoException, None, |enc| enc.put_i32(5))
+                .expect("reply encodes");
         s.write_all(&interloper).expect("the interleaved message");
         for p in &pieces[1..] {
             let _ = s.write_all(p);
@@ -258,7 +260,7 @@ fn a_message_interleaved_into_a_fragmented_reply_faults_instead_of_misattributin
 /// leading piece, which is the state §9.4.9 calls a message in progress and the
 /// state every test below interrupts.
 fn start_a_fragmented_reply(s: &mut TcpStream, version: Version, endian: Endian, id: u32) {
-    let big = encode_reply(version, endian, id, ReplyStatus::NoException, |e| {
+    let big = encode_reply(version, endian, id, ReplyStatus::NoException, None, |e| {
         e.put_octet_seq(&vec![0u8; 4096]);
     })
     .expect("reply encodes");

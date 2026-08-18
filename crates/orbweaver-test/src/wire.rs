@@ -369,7 +369,7 @@ fn seeds() -> Vec<Vec<u8>> {
                 orbweaver_giop::ReplyStatus::LocationForward,
             ] {
                 if let Ok(msg) =
-                    orbweaver_giop::server::encode_reply(version, endian, 7, status, |e| {
+                    orbweaver_giop::server::encode_reply(version, endian, 7, status, None, |e| {
                         e.put_str("IDL:fuzz/Boom:1.0");
                         e.put_u32(1);
                         e.put_u32(0);
