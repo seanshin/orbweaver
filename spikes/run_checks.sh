@@ -227,6 +227,37 @@ else
   fail_total=$((fail_total+1))
 fi
 
+hr "peer input — an overflow the release fuzzer cannot see, and a body it cannot buy"
+# Two hazards reachable from a peer, both measured before being fixed.
+#
+# `wire-fuzz` runs --release, where overflow-checks are OFF, so the arithmetic
+# class is structurally invisible to it: `60 88 FF FF FF FF FF FF FF FF` panicked
+# in debug and *wrapped* in release, returning "GSS token is truncated" — an
+# error message that was a lie about what happened, and the quieter behaviour is
+# the one that ships. One run with the checks on is the only gate in the tree
+# that can see the class at all.
+if RUSTFLAGS="-C overflow-checks=on" cargo run -q --release -p orbweaver-test \
+     --bin wire-fuzz -- --cases 20000 >/tmp/orbweaver-oflow.log 2>&1; then
+  echo "  ok   20k fuzz cases with overflow checks on: no arithmetic panic"
+else
+  echo "  FAIL an arithmetic overflow is reachable from peer bytes"
+  tail -5 /tmp/orbweaver-oflow.log | sed 's/^/       /'
+  fail_total=$((fail_total+1))
+fi
+# And the allocation half: twelve bytes declared 64 MiB and got it, before one
+# body byte arrived. `panic_freedom` cannot observe an allocation by
+# construction, so the property is asserted as "never asks for more than one
+# chunk the peer has not delivered".
+if cargo test -q -p orbweaver-giop --release --lib -- \
+     a_declared_body_is_committed_only_as_it_arrives \
+     a_body_larger_than_one_chunk_still_reads_back_byte_for_byte \
+     chunk_boundaries_are_exact >/dev/null 2>&1; then
+  echo "  ok   an inbound body is committed as it arrives, not as it is declared"
+else
+  echo "  FAIL a peer's declared message_size is committed before the bytes arrive"
+  fail_total=$((fail_total+1))
+fi
+
 hr "wide characters — the value's own order, not the message's"
 # A UTF-16 wchar or wstring states its byte order in its own octets and ignores
 # the stream's. Our writer always emits a mark, so our round trip could never
