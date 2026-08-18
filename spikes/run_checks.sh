@@ -415,6 +415,23 @@ else
   fail_total=$((fail_total+1))
 fi
 
+hr "codeset advertising — a conversion is offered only where one is needed"
+# D009 §8 row 4 conditions a non-empty char conversion list on a peer that
+# cannot reach UTF-8. This runs the condition rather than remembering it: a
+# non-zero exit means such a peer now exists, the empty list is costing it, and
+# the row is unblocked. ~3 s, no long-lived fixture, no port.
+cpa_out=$(python3 spikes/codeset_peer_probe.py 2>&1); cpa_rc=$?
+if [ "$cpa_rc" -eq 1 ]; then
+  printf '%s\n' "$cpa_out" | tail -3 | sed 's/^/       /'
+  echo "  FAIL a peer advertises ISO-8859-1 without UTF-8 — D009 §8 row 4 is unblocked"
+  fail_total=$((fail_total+1))
+elif [ "$cpa_rc" -eq 2 ]; then
+  printf '%s\n' "$cpa_out" | tail -2 | sed 's/^/       /'
+  skipped=$((skipped+1))
+else
+  echo "  ok   every peer configuration still reaches UTF-8; the empty conversion list holds"
+fi
+
 hr "wide characters — the value's own order, not the message's"
 # A UTF-16 wchar or wstring states its byte order in its own octets and ignores
 # the stream's. Our writer always emits a mark, so our round trip could never
@@ -490,6 +507,26 @@ for nctl in corpus/negative/inherited-scope-leak.idl corpus/negative/n04-unknown
     fail_total=$((fail_total+1))
   fi
 done
+
+hr "the release profile, run rather than only built"
+# Six tests asserted a panic the release build does not produce — the lock
+# tripwire counts in both profiles and panics only in debug, deliberately, so a
+# live ORB is not killed by its own diagnostic. The tests were asserting the
+# debug *reaction* instead of the property, so `cargo test --release` could not
+# be run clean, so nobody ran it, so the release-only defect class had no test
+# pass that would find it. That is how an overflow that wrapped in release and
+# panicked in debug survived every green run until a fuzzer met it.
+#
+# Measured on this machine, warm: 22 s to build the workspace's release test
+# binaries, 49 s to run them. `wire-fuzz` already builds release, so most of
+# the first number is paid either way.
+if cargo test --workspace --release --no-fail-fast >/tmp/orbweaver-release.log 2>&1; then
+  echo "  ok   $(grep -cE '^test result: ok' /tmp/orbweaver-release.log) release suite(s) green"
+else
+  echo "  FAIL the release profile is not clean; a profile nobody can run is a profile nobody runs"
+  grep -E "^test .*FAILED|panicked at" /tmp/orbweaver-release.log | head -4 | sed 's/^/       /'
+  fail_total=$((fail_total+1))
+fi
 
 hr "the records keep up with the code"
 # A gate for decision *statuses* went in on 2026-08-18. It checks one field and

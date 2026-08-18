@@ -171,6 +171,33 @@ records what changed and, where it matters, what it changes on the wire.
   that would silently re-encode the repository ids and member names inside
   every `TypeCode`.
 
+### Known limits / 알려진 한계
+
+- **The `char` conversion list stays empty, and that is now measured rather
+  than cautious** (D009 §8 row 4, **BLOCKED**). The row conditioned a non-empty
+  list on a peer that cannot reach UTF-8. Eleven configurations of the two
+  installed ORBs were probed and ten measured: **every one reaches UTF-8**.
+  Neither ORB exposes an option that *names* its conversion list — omniORB has
+  `nativeCharCodeSet`/`defaultCharCodeSet` and accepts only ISO-8859-1 and
+  UTF-8 as a native set; JacORB's list follows its build. The one setting that
+  removes UTF-8, `jacorb.codeset=off`, removes the component entirely, and an
+  absence is not an advertisement.
+
+  What growing the list *would* cost was measured too, and it is not nothing.
+  Offered ISO-8859-1 from a listener we wrote, against clients we did not:
+  omniORB keeps sending UTF-8, and **JacORB configured native ISO-8859-1 moves
+  down to it** — `café` as `63 61 66 e9` instead of `63 61 66 c3 a9`, and
+  `함정 전투체계` as **each character truncated to its low octet, raising
+  nothing**. §7.10.2.6 leaves that case open and the two ORBs resolve it in
+  opposite directions; the empty list is what keeps the ambiguity unreachable.
+  A guard test fails if anyone grows the list, and names the probe to run
+  first.
+
+  광고하지 않는 편이 옳다는 것이 **조심이 아니라 측정**이 되었다. 설치된 두 ORB의
+  열한 구성 중 열을 측정했고 전부 UTF-8에 닿는다. 그리고 목록을 키웠을 때의 비용도
+  쟀다: JacORB는 제안하는 즉시 **내려가고**, 한글을 **각 문자의 하위 옥텟으로 잘라
+  보내면서 아무 예외도 올리지 않는다.**
+
 ### 🔒 Security / 보안
 
 - **Twelve bytes bought sixty-four megabytes, and an overflow the release
