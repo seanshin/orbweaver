@@ -13,7 +13,16 @@
 #
 # The estate is `spikes/estate/idl/`. It is **not** in `corpus/`, on purpose:
 # the corpus is a gate's fixture set and this is a consumer. Nothing here is
-# allowed to become a gate's input.
+# allowed to become a gate's input — including stage 7b, which belongs to this
+# run and not to `run_checks.sh`.
+#
+# Two paths, deliberately. Most stages ask about the amalgamation — thirteen
+# files spliced into one translation unit — because some consumers still take a
+# single unit. Stage 7b asks the same question of the thirteen files as they
+# are stored, and asserts the two answers match. They had never been compared;
+# `83eba89` found that the splice was not a convenience but the only reason one
+# of those consumers ran at all, and a workaround nobody has measured against
+# the real path is a claim, not a workaround.
 #
 # Exit status: 0 when every stage was measured and every assertion held, 1 when
 # an assertion failed, 2 when the run could not happen at all. A stage that
@@ -140,7 +149,11 @@ else
     row s2-oracle accepted UNMEASURED
 fi
 
-# ── Stage 3: the amalgamation, which is the only multi-file path we have ─────
+# ── Stage 3: the amalgamation, one of the two multi-file paths ───────────────
+# It used to be the only one, and the comment here said so for six phases. It
+# is now the single-translation-unit path, kept because `forge-pipeline`'s S4
+# still supplies its item as text and so still needs one; stage 7b measures the
+# other path beside it rather than taking the equivalence on faith.
 bold "stage 3 — one translation unit, in dependency order"
 python3 "$ESTATE/amalgamate.py" "$IDLDIR" >"$WORK/ESTATE.idl" 2>"$WORK/amal.err"
 if [ ! -s "$WORK/ESTATE.idl" ]; then
@@ -353,8 +366,10 @@ PY
     say "$SUM"
     ALLOWED=$(printf '%s' "$SUM" | grep -oE 'allow=[0-9]+' | cut -d= -f2)
     TOTALOPS=$(printf '%s' "$SUM" | grep -oE 'operations=[0-9]+' | cut -d= -f2)
+    TOTALIFACES=$(printf '%s' "$SUM" | grep -oE 'interfaces=[0-9]+' | cut -d= -f2)
     BYTES=$(wc -c <"$WORK/dry-all.json" | tr -d ' ')
     AUDIT=$(grep -c '^DRYRUN-' "$WORK/dry-all.err")
+    row s7-dryrun interfaces "$TOTALIFACES"
     row s7-dryrun operations "$TOTALOPS"
     row s7-dryrun allowed "$ALLOWED"
     row s7-dryrun bytes "$BYTES"
@@ -386,6 +401,109 @@ PY
     fi
 else
     fail "--dry-run produced no report"
+fi
+
+# ── Stage 7b: the same question, over the thirteen files as they are stored ──
+# Every stage above this one has been asking about a document that does not
+# exist in the estate. The amalgamation was described throughout as a
+# convenience — a tidier input, the same contract — and `83eba89` measured that
+# it was nothing of the kind for this process: `orbweaver-mcp-server` read its
+# `--idl` list with the string entry point, `check` is loud about an
+# `#include` it cannot resolve, and so pointing it at the thirteen files exited
+# 2 on the second one and started **nothing at all**. The amalgamation was not
+# making the report tidier; it was the only reason there was a report.
+#
+# A workaround only becomes a convenience once the path it stood in for is
+# measured beside it. That is this stage. The estate goes in the way it is
+# stored — thirteen `--idl` arguments, no splice, no `-I`, since the quoted
+# include form searches the including file's own directory — and the two
+# reports are compared on their structure.
+#
+# The comparison is deliberately NOT byte identity of the document. The two
+# inputs genuinely differ: one is a generated single unit with banners and
+# prefix resets, the other is thirteen files with a dependency graph between
+# them. What must not differ is the surface an operator exposes and an agent
+# reaches — which interfaces, and which operations under each. So the assertion
+# is the interface set and its per-interface operation breakdown. Whole-report
+# identity is recorded as a row because it is worth knowing, and is not
+# asserted, because tightening it would make an irrelevant change look like a
+# regression here.
+#
+# If the two disagree, that is the finding this stage exists to produce and the
+# run fails. It is not to be reconciled by widening the comparison.
+bold "stage 7b — the same dry run, thirteen --idl arguments, no amalgamation"
+DIRECT_IDL=()
+for f in "${FILES[@]}"; do
+    DIRECT_IDL+=(--idl "$f")
+done
+row s7-direct idl-args "$N"
+"$MCP" "${DIRECT_IDL[@]}" "${EXPOSE_ALL[@]}" --as ops-agent \
+       --dry-run >"$WORK/dry-direct.json" 2>"$WORK/dry-direct.err"
+DIRECT_RC=$?
+row s7-direct rc "$DIRECT_RC"
+if [ ! -s "$WORK/dry-all.json" ]; then
+    fail "no amalgamated report to compare against; the direct path is unmeasured"
+    row s7-direct agrees UNMEASURED
+elif [ ! -s "$WORK/dry-direct.json" ]; then
+    fail "the direct path produced no report (exit $DIRECT_RC) — this is the 83eba89 failure returning"
+    head -3 "$WORK/dry-direct.err" | sed 's/^/  | /' | quiet
+    row s7-direct agrees no
+else
+    # Producer captured to a variable, then matched. Never piped into `grep -q`,
+    # which exits on its first match and SIGPIPEs the thing that produced it.
+    CMP=$(python3 - "$WORK/dry-all.json" "$WORK/dry-direct.json" <<'PY'
+import json, sys
+
+
+def shape(path):
+    """id -> its operation names. The surface, with the wrapping thrown away."""
+    report = json.load(open(path))
+    return {i["id"]: sorted(o["operation"] for o in i["operations"])
+            for i in report["interfaces"]}
+
+
+def ops(d):
+    return sum(len(v) for v in d.values())
+
+
+a, b = shape(sys.argv[1]), shape(sys.argv[2])
+print(f"amalgamated  interfaces={len(a)} operations={ops(a)}")
+print(f"direct       interfaces={len(b)} operations={ops(b)}")
+
+differ = []
+for key in sorted(set(a) | set(b)):
+    if a.get(key) != b.get(key):
+        left = sorted(set(a.get(key, [])) - set(b.get(key, [])))
+        right = sorted(set(b.get(key, [])) - set(a.get(key, [])))
+        differ.append(f"  {key}: amalgamated-only={left} direct-only={right}")
+
+print("verdict=" + ("agree" if not differ else "differ"))
+for line in differ:
+    print(line)
+same = json.load(open(sys.argv[1])) == json.load(open(sys.argv[2]))
+print("identical-report=" + ("yes" if same else "no"))
+PY
+)
+    printf '%s\n' "$CMP" | sed 's/^/  | /' | quiet
+    D_IFACES=$(printf '%s\n' "$CMP" | grep '^direct ' | grep -oE 'interfaces=[0-9]+' | cut -d= -f2)
+    D_OPS=$(printf '%s\n' "$CMP" | grep '^direct ' | grep -oE 'operations=[0-9]+' | cut -d= -f2)
+    VERDICT=$(printf '%s\n' "$CMP" | grep -oE '^verdict=[a-z]+' | cut -d= -f2)
+    IDENTICAL=$(printf '%s\n' "$CMP" | grep -oE '^identical-report=[a-z]+' | cut -d= -f2)
+    row s7-direct interfaces "${D_IFACES:-0}"
+    row s7-direct operations "${D_OPS:-0}"
+    row s7-direct report-identical "${IDENTICAL:-unknown}"
+    if [ "$DIRECT_RC" -ne 0 ]; then
+        fail "the direct path wrote a report and still exited $DIRECT_RC"
+    fi
+    if [ "$VERDICT" = "agree" ]; then
+        pass "both paths: ${D_IFACES} interfaces, ${D_OPS} operations, identical interface by interface"
+        note "the amalgamation is a convenience now — measured, for the first time, rather than described"
+        row s7-direct agrees yes
+    else
+        fail "the two paths report different surfaces — the finding, not something to loosen"
+        note "one of them is answering about a contract the operator did not hand it"
+        row s7-direct agrees no
+    fi
 fi
 
 # ── Stage 8: one object of the estate, served over real TCP ──────────────────
