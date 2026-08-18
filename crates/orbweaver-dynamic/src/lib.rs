@@ -767,7 +767,18 @@ fn decode_at(d: &mut Decoder<'_>, tc: &TypeCode, p: &Path<'_>, wide: WideCodec) 
             Value::List(out)
         }
         TypeCode::Array { element, length } => {
-            let mut out = Vec::with_capacity(*length as usize);
+            // The same guard the `Sequence` arm above carries, for the same
+            // reason and against a length that used to be beyond a peer's
+            // reach. An array's length comes from its TypeCode, and until
+            // AnyJSON v1.1 (D008) every TypeCode we decoded against had been
+            // compiled here — so the number was ours. It is now a field in a
+            // document an agent sends: `agent-fuzz` reached this from a
+            // **198-byte** document declaring `array<octet, 4294967295>` as a
+            // union discriminator, reserving 206 GB before reading a byte.
+            // Lazily backed on macOS/arm64, which is why nothing fell over;
+            // uncatchably fatal under a memory limit or on a 32-bit target.
+            let n = cdr(p, d.validate_count(*length, min_width(element)))?;
+            let mut out = Vec::with_capacity(n);
             for i in 0..*length as usize {
                 out.push(decode_at(d, element, &p.index(i), wide)?);
             }

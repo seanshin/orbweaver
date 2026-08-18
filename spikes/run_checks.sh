@@ -227,6 +227,32 @@ else
   fail_total=$((fail_total+1))
 fi
 
+hr "DynAny — every corpus type taken apart and put back together"
+# §8's discipline applied to the mutation API: a value walked component by
+# component and reassembled must produce identical CDR, both byte orders and
+# every alignment phase. The sampler that builds the source value does not use
+# DynAny — the first version of this oracle did, and it passed with `next()`
+# deliberately broken, because a producer and a consumer sharing a defect agree
+# about the result. Captured, never piped into grep -q.
+if dynany_out=$(RUSTFLAGS="-D warnings" cargo test -p orbweaver-dynamic \
+     --test dynany_corpus -- --nocapture --test-threads=1 2>&1); then
+  printf '%s\n' "$dynany_out" | grep -E "type\(s\) walked" | sed 's/^ *//;s/^/  ok   /'
+  printf '%s\n' "$dynany_out" | grep -E "uncovered:" | sed 's/^ *uncovered:/  note uncovered:/'
+else
+  echo "  FAIL a corpus type does not survive a DynAny walk"
+  printf '%s\n' "$dynany_out" | grep -E "differs on the wire|the walk failed|is invalid" \
+    | head -3 | sed 's/^/       /'
+  fail_total=$((fail_total+1))
+fi
+# An array's length is a number in an agent's document since D008, and the
+# reservation was made before the length was checked: 198 bytes reserved 206 GB.
+if cargo test -q -p orbweaver-dynamic --test bounded_array >/dev/null 2>&1; then
+  echo "  ok   a declared array length is checked against the buffer before it is reserved"
+else
+  echo "  FAIL an array length from a document can still buy memory"
+  fail_total=$((fail_total+1))
+fi
+
 hr "peer input — an overflow the release fuzzer cannot see, and a body it cannot buy"
 # Two hazards reachable from a peer, both measured before being fixed.
 #
