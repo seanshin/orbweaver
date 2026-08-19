@@ -12,6 +12,42 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **S4 names what the v1 wire cannot carry.** `wire/deferred-type` (replacing
+  `wire/valuetype`, which named a declaration and stopped): every declaration
+  that is or carries a `valuetype`, an abstract interface or a `fixed` —
+  through members, typedefs, elements, signatures, `raises` and inheritance —
+  reported at its name span with the reach as prose (`the return of operation
+  "sum" is "gc21::Amount", which is fixed<9,2>`) and a fix per family. **A
+  warning by default, a refusal in `forge-pipeline`'s S4 and under
+  `sidl-validate --wire v1`**: golden 20/21 exist to pin that these constructs
+  *parse*, so a refusing default would fail the S4 group on IDL both oracles
+  accept; a contract a model just wrote for this ORB is a different caller.
+  `orbweaver-gen`'s §4.4 skips are held to the same set over golden
+  (`tests/deferred_wire_agreement.rs`: 11 of 11 for `fixed`, both targets).
+  `contract-check` prints "N deferred-wire declaration(s) (§4.4) of which M
+  unmeasured by the property" (golden 19 / 7), both pinned in the harness.
+  New `corpus/golden/deferred-reach.idl`. **Found and not fixed, pinned as the
+  divergence it is:** both emitters emit a `valuetype` or abstract interface
+  as an **object reference** rather than skipping it — the registry records it
+  as `TypeCode::ObjRef`, so a peer expecting a value gets a reference; the
+  Python emitter writes an empty name into a skipped interface's `tk_objref`
+  TypeCode; and the parser accepts a bare `fixed<d,s>` as a parameter or
+  return type where omniidl rejects it.
+
+  **S4가 v1 와이어가 나를 수 없는 것을 이름으로 말한다.** `wire/deferred-type`:
+  `valuetype`·abstract interface·`fixed`이거나 이를 멤버·typedef·요소·시그니처·
+  `raises`·상속으로 품는 모든 선언을, 도달 경로를 문장으로, 계열별 수정과 함께
+  보고한다. **기본은 경고, 파이프라인의 S4와 `--wire v1`은 거부** — golden 20/21은
+  이 구문이 *파싱된다*는 것을 고정하려 존재하므로 기본값이 거부면 두 오라클이
+  받아들이는 IDL에서 S4 그룹이 깨진다. 생성기의 §4.4 skip 집합과 golden 전체에서
+  일치함을 테스트로 고정(`fixed` 11/11, 두 타깃). `contract-check` 요약에 §4.4
+  개수(19/7), 하네스에 핀. **보고만:** 두 이미터 모두 `valuetype`/abstract
+  interface를 **객체 참조로** 내보낸다 — 값을 기다리는 피어에게 참조가 간다;
+  Python은 건너뛴 인터페이스의 `tk_objref`에 빈 이름을 쓴다; 파서는 omniidl이
+  거부하는 맨 `fixed` 파라미터를 받는다.
+
+### Added / 추가
+
 - **The catalogue says, per peer, who enforces a caller identity.**
   `orbweaver-console catalog … --ior <file>` carries each reference's CSIv2
   capability record beside its interface — `enforces_identity`,

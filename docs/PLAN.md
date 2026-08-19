@@ -657,8 +657,11 @@ produces), and **oracle** (what verifies the whole batch deterministically).
 
 - **What:** `orbweaver-gen` stubs/skeletons from the registry (Rust first,
   then Python); promotion engine (dynamic → static with regression gating);
-  contract tests generated from annotations; `valuetype`/`fixed` wire decision
-  gate.
+  contract tests generated from annotations; ~~`valuetype`/`fixed` wire decision
+  gate~~ (landed 2026-08-19 as `wire/deferred-type` at S4 — warning by default,
+  refusal in the pipeline and under `--wire v1` — held to the generator's skip
+  list by a test; the *wire support* decision itself stays a Phase 4 gate,
+  §4.4).
 - **Depends on:** registry and dynamic path (landed). Nothing else.
 - **Batch unit:** one backend target across the **whole golden corpus** at
   once — generate every stub, compile every stub, run every one against the

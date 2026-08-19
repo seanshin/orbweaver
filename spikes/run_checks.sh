@@ -1314,6 +1314,23 @@ echo "  ok   $s4_cov of $s4_tot rejections carry an actionable fix (a missing se
 [ "$s4_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
 # ── Contract and property gate ───────────────────────────────────────────────
+# --wire v1 (PLAN §4.4, 18c1ef1): the same golden files that pass the default
+# form are refused by the strict one — exactly those that reach a deferred
+# construct through members, signatures, raises or inheritance. The rule is a
+# warning by default because golden 20/21 exist to pin that these constructs
+# *parse*; the pipeline's S4 gates for v1, because a contract a model just
+# wrote for this ORB is a different caller. Negative control (in that commit):
+# WireGate::V1's severity forced to Warning -> this prints "refused: ''".
+s4_wire_out=$(cargo run -q --bin sidl-validate -- --wire v1 corpus/golden/*.idl 2>/dev/null)
+s4_wire_files=$(printf '%s\n' "$s4_wire_out" | grep 'error: .*\[wire/deferred-type\]' \
+  | cut -d: -f1 | sort -u | xargs -n1 basename | tr '\n' ' ')
+if [ "$s4_wire_files" = "20-deferred-valuetype.idl 21-deferred-fixed.idl deferred-reach.idl " ]; then
+  echo "  ok   --wire v1 refuses exactly the three golden files that reach a §4.4 construct"
+else
+  echo "  FAIL --wire v1 refused: '$s4_wire_files' (expected 20, 21, deferred-reach)"
+  fail_total=$((fail_total+1))
+fi
+
 hr "contract-check — seeded round-trip property plus annotation contract advice"
 # Two gates with deliberately different force. A byte-instability in the
 # marshalling core is a defect and fails the run; an annotation finding is
@@ -1372,6 +1389,18 @@ if [ -z "${1:-}" ] || [ "$1" -lt 5248 ] || [ "$1" -ne "$2" ]; then
   fail_total=$((fail_total+1))
 else
   echo "  ok   $1 of $2 CDR round trips also crossed AnyJSON, byte-equal, both orders"
+fi
+# §4.4's count over golden (18c1ef1): the declarations the v1 wire cannot
+# carry, and how many of them the property sweep cannot even sample. Pinned
+# rather than gated to zero — golden 20/21/deferred-reach exist to carry them.
+# Negative control in that commit: deleting deferred-reach.idl prints '7 2'.
+cc_wire=$(printf '%s\n' "$cc_out" | sed -n 's/.* \([0-9][0-9]*\) deferred-wire declaration(s) (§4.4) of which \([0-9][0-9]*\) unmeasured.*/\1 \2/p')
+set -- $cc_wire
+if [ "${1:-}" = 19 ] && [ "${2:-}" = 7 ]; then
+  echo "  ok   19 deferred-wire declaration(s) over golden (§4.4), 7 unmeasured by the property"
+else
+  echo "  FAIL deferred-wire count over golden: '${cc_wire:-absent}' (pinned 19 of which 7)"
+  fail_total=$((fail_total+1))
 fi
 # Panic freedom. Rust rules out the memory-corruption half of "wire parsing is
 # the classic memory-safety hazard" at compile time and rules out nothing about
