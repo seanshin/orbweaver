@@ -533,7 +533,7 @@ CDR encodes by position, not by tag. Anyone whose intuition was trained on proto
 
 Consequence: interface evolution happens through **versioned interfaces** (a `Transfer_2` in a versioned module, plus `@ai_since` metadata), never by editing deployed types in place. The differ blocks any registration that edits a released type unless the change is in the compatible set or carries an explicit approval.
 
-**Status — implemented and measured (Phase 2 Batch 5).** `orbweaver-registry::diff` implements the table and `idl-diff` is the gate, exiting non-zero on `BREAKING` and `conditionally breaking` unless given `--approve <reason>`, which prints the reason beside the findings.
+**Status — implemented and measured (Phase 2 Batch 5).** `orbweaver-registry::diff` implements the table and `idl-diff` is the gate, exiting non-zero on `BREAKING` and `conditionally breaking` unless given `--approve <reason>` — which since 2026-08-19 **writes an approval record** (`<proposed>.approvals.tsv`: the finding, the reason, a required `--approver`, both units' SHA-256, a timestamp) that a later run reads back and an edited byte invalidates; before that it only printed the reason beside the findings.
 
 The table's central claim was verified on the wire rather than asserted: against an omniORB servant built from the previous contract, a client encoding a struct whose two members had been swapped received **the other member's value, with no exception raised**. A caller cannot detect this, which is why the check has to happen before release. The *server-first* row was verified in both states — `BAD_OPERATION` from an un-updated server, correct answers after the additive release, with the un-recompiled old client unaffected throughout. See `docs/PHASE2.md`.
 
@@ -699,9 +699,10 @@ produces), and **oracle** (what verifies the whole batch deterministically).
   absent by design and the synonym class is a counted `SKIPPED`);
   ~~OpenTelemetry via interceptors~~ (D004 tier 1 landed; tiers 2–3
   pre-cleared with triggers, none fired); ~~`orbweaver-console`~~ (three pages);
-  governance workflow around `idl-diff --approve` — today a flag and a printed
-  line, no store and no approver; the shape to copy is `forge-pipeline
-  --supersede`, which persists.
+  ~~governance workflow around `idl-diff --approve`~~ (landed 2026-08-19 as an
+  approval store — record, replay, invalidation on an edited byte, a required
+  approver name; what remains is identity: the approver is a name, not a
+  credential).
 - **Depends on:** MCP bridge (landed). Embeddings need a model at run time;
   everything else is self-contained.
 - **Batch unit:** one operability surface at a time, across every existing

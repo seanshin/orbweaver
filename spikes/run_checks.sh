@@ -1767,6 +1767,29 @@ else
   fail_total=$((fail_total+1))
 fi
 
+hr "§5.3 — an approval is a record that replays"
+# idl-diff --approve (93c7ea9) writes <proposed>.approvals.tsv (or --approvals):
+# one row per blocking finding, bound to both units' SHA-256, with a required
+# --approver; a later run reads it and passes covered findings as
+# "[approved by …]"; an edited contract invalidates the row; a nameless row
+# refuses the store whole (exit 2). approval_replay.rs holds the whole
+# sequence, byte-identical apart from the timestamp (SOURCE_DATE_EPOCH pins
+# it). Negative control (93c7ea9): the approver column blanked -> exit 2
+# "a decision with no approver is not on record". No corpus file may carry an
+# approvals store — a committed approval would be a decision nobody made.
+ap_out=$(cargo test -q -p orbweaver-registry --test approval_replay 2>&1)
+if printf '%s' "$ap_out" | grep -q "^test result: ok"; then
+  echo "  ok   an approval replays byte-identically, invalidates on an edited byte, and refuses a nameless row"
+else
+  echo "  FAIL the approval store's replay property"; printf '%s\n' "$ap_out" | grep -A3 panicked | head -6 | sed 's/^/       /'
+  fail_total=$((fail_total+1))
+fi
+if ls corpus/evolution/*/*.approvals.tsv corpus/golden/*.approvals.tsv >/dev/null 2>&1; then
+  echo "  FAIL a corpus contract carries a committed approvals store"; fail_total=$((fail_total+1))
+else
+  echo "  ok   no corpus contract carries a committed approval"
+fi
+
 hr "§5.3 — moe v1.1 is additive, and the in-place edit is still refused"
 # corpus/evolution/moe/v1.0 is the frozen release; golden 22 the served revision;
 # v1.1-in-place the negative control (both members added to the released

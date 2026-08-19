@@ -12,6 +12,31 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **`idl-diff --approve` is now a record, not a printed line.** Each blocking
+  finding accepted under `--approve <reason>` is appended to
+  `<proposed>.approvals.tsv` (or `--approvals <file>`) with the two units'
+  SHA-256 fingerprints, the finding key, reason, **required `--approver`** (or
+  `ORBWEAVER_APPROVER`; absent → exit 2: a decision with no name on it is not
+  a decision on record) and an ISO timestamp. A later run reads the store:
+  covered findings report `[approved by <who>: <reason>]` and pass; an edited
+  contract — including a shared header — invalidates the row and the gate
+  refuses again, saying so; a store with a nameless row is refused whole.
+  Replays are byte-identical apart from `approved_at` (`SOURCE_DATE_EPOCH`
+  pins that too). The console `diff` page renders who/why/when per finding
+  from the same store and still decides nothing. SHA-256 is first-party (FIPS
+  180-4, published vectors in tests); no dependency added. Harness: the replay
+  property, and no corpus contract may carry a committed store.
+
+  **`idl-diff --approve`는 이제 출력이 아니라 기록이다.** 파괴적 판정마다
+  `<proposed>.approvals.tsv`에 두 번역 단위의 SHA-256, 판정 키, 이유, **필수
+  `--approver`**(없으면 exit 2), ISO 시각을 한 행으로 남긴다. 재실행은 저장소를
+  읽어 `[approved by …]`로 통과시키고, 계약(공유 헤더 포함)이 한 바이트라도
+  바뀌면 행이 무효가 되어 다시 거부하며, 이름 없는 행이 있으면 저장소 전체를
+  거부한다. 재실행 기록은 시각 열을 빼면 바이트까지 같다. 콘솔 `diff` 페이지는
+  같은 저장소에서 누가·왜·언제를 그리고 결정하지 않는다.
+
+### Added / 추가
+
 - **SIDL v1 has a version constant.** `SIDL_VERSION = "1"` beside both
   vocabulary copies (forge S3, test S7), pinned equal across crates for the
   first time — until now no test compared the two crates' vocabularies to each
