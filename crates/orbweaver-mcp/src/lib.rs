@@ -527,6 +527,9 @@ impl<'a> Bridge<'a> {
         // The guard shares this session's table rather than holding a copy of
         // it: a handle its dry run is asked about is one this session issued,
         // and it resolves — or has been revoked — as of the moment of asking.
+        // It shares this session's counters the same way (PLAN-MOE IF2): a
+        // static call is in `Bridge::stats()` the moment it completes, under
+        // the static column, with no merge step for a deployment to forget.
         Ok(guard::Guarded::assemble(
             conn,
             self.registry,
@@ -535,18 +538,19 @@ impl<'a> Bridge<'a> {
             id,
             approval,
             self.shared_handles(),
-        ))
+        )
+        .counting_into(&self.chain.stats()))
     }
 
-    /// Folds a static guard's counters into this session's.
+    /// Folds a history kept elsewhere into this session's counters.
     ///
-    /// The explicit half of PLAN-MOE **IF2**: one store when a deployment asks
-    /// for one, and two while the question is what to promote next — see
-    /// [`crate::promote::CallStats::merge`] for why the default is not to fold.
-    /// Call it before the guard is dropped; afterwards its counts are gone.
-    /// Returns `false` when this session's chain has no telemetry stage, so a
-    /// history handed to a bridge that counts nothing is reported rather than
-    /// dropped.
+    /// A guard this session issued already records into this session's store
+    /// (see [`Bridge::connect_static`]), and passing its `stats()` here is a
+    /// no-op by construction. This is for a history that is genuinely
+    /// somewhere else — a guard from another session, a store read back from
+    /// disk. Returns `false` when this session's chain has no telemetry stage,
+    /// so a history handed to a bridge that counts nothing is reported rather
+    /// than dropped.
     pub fn absorb_static(&mut self, stats: &promote::CallStats) -> bool {
         match self.chain.stats_mut() {
             Some(mine) => {
@@ -663,9 +667,30 @@ impl<'a> Bridge<'a> {
     }
 
     /// The call statistics the promotion policy reads, kept by the chain's
-    /// telemetry stage (PLAN-MOE **IF2**: one store, not two).
-    pub fn stats(&self) -> &promote::CallStats {
+    /// telemetry stage (PLAN-MOE **IF2**: one store, not two) — a handle to
+    /// the store, so it reads calls made after it was taken.
+    ///
+    /// Both paths are in it: this session's dynamic calls under
+    /// [`telemetry::CallPath::Dynamic`], and every call through a
+    /// [`guard::Guarded`] this session issued under
+    /// [`telemetry::CallPath::Static`]. [`promote::CallStats::calls`] adds
+    /// the two; the promotion policy reads the dynamic column alone.
+    pub fn stats(&self) -> promote::CallStats {
         self.chain.stats()
+    }
+
+    /// What the target behind `handle` can enforce, read off the IOR this
+    /// session holds for it — PLAN §4.8's per-peer record.
+    ///
+    /// The IOR does not leave the table: the record is booleans, counts and
+    /// tokens ([`identity::PeerCapability::to_json`]), so an agent may be told
+    /// that its target cannot enforce a caller identity without being told
+    /// where the target is. `None` for a handle this session did not issue,
+    /// or one that has expired — the same answer [`Bridge::check`] gives.
+    pub fn peer_capability(&self, handle: &str) -> Option<identity::PeerCapability> {
+        let table = self.handles.borrow();
+        let ior = orbweaver_dynamic::anyjson::References::resolve(&*table, handle)?;
+        Some(identity::PeerCapability::of_ior(&ior))
     }
 }
 
@@ -2154,5 +2179,86 @@ mod tests {
         let _ = g.invoke("deposit", |_| {});
 
         assert_eq!(b.audit()[0], g.audit()[0], "one formatter, one format, string equality");
+    }
+
+    /// PLAN-MOE IF2, the half that used to be a merge step: a static call
+    /// through a guard `connect_static` issued is in `Bridge::stats()` the
+    /// moment it completes — under the static column, so the promotion
+    /// policy, which reads the dynamic column, does not recommend a path
+    /// that already has a stub.
+    #[test]
+    fn a_static_call_through_connect_static_lands_in_the_bridges_own_stats() {
+        use promote::PromotionPolicy;
+        use telemetry::CallPath;
+
+        const ACCOUNT: &str = "IDL:bank/Account:1.0";
+        let r = registry(AUDIT_IDL);
+        let (listener, ior) = dummy_target();
+        // Accept and hang up, so the guard's one call fails fast at the
+        // transport instead of waiting out the read timeout. A failure is
+        // still a call: it is counted, and counted as failed.
+        let peer = std::thread::spawn(move || {
+            let (socket, _) = listener.accept().expect("the guard dials");
+            drop(socket);
+        });
+        let mut b = Bridge::new(&r, Exposure::nothing().allow_interface(ACCOUNT), "s-if2")
+            .on_behalf_of(Caller::new("alice"));
+        let h = b.handles().issue_checked(&ior).expect("issued");
+        let before = b.stats();
+        assert_eq!(before.calls(ACCOUNT, "balance"), 0);
+
+        let mut g = b
+            .connect_static(h.as_str(), Approval::default(), Duration::from_secs(5))
+            .expect("dials the listener");
+        assert!(g.stats().shares_store_with(&b.stats()), "one store, not two");
+        let _ = g.invoke("balance", |_| {});
+        peer.join().expect("the peer thread");
+
+        // The handle taken *before* the call sees it: it is a handle to the
+        // store, not a snapshot.
+        assert_eq!(before.calls(ACCOUNT, "balance"), 1);
+        assert_eq!(b.stats().calls_on(CallPath::Static, ACCOUNT, "balance"), 1);
+        assert_eq!(b.stats().failures_on(CallPath::Static, ACCOUNT, "balance"), 1);
+        assert_eq!(b.stats().calls_on(CallPath::Dynamic, ACCOUNT, "balance"), 0);
+        assert_eq!(b.stats().calls(ACCOUNT, "balance"), 1, "the traffic question adds both");
+
+        // The policy reads the dynamic column: a static call is evidence the
+        // path already has a stub, and must not make it a candidate.
+        let policy = PromotionPolicy { min_calls: 1, max_failure_rate: 1.0 };
+        assert!(policy.recommend(&b.stats()).is_empty(), "a static call is not a candidate");
+        // A dynamic call on the same operation is one.
+        b.stats().handle(CallPath::Dynamic).record(ACCOUNT, "balance", true);
+        let candidates = policy.recommend(&b.stats());
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].calls, 1, "the dynamic count alone");
+        assert_eq!(b.stats().calls(ACCOUNT, "balance"), 2);
+
+        // And the old explicit fold is a no-op on the same store rather than a
+        // doubling — the merge step nobody has to remember any more.
+        assert!(b.absorb_static(&g.stats()));
+        assert_eq!(b.stats().calls(ACCOUNT, "balance"), 2);
+    }
+
+    /// The per-peer record, read off the IOR the session holds for a handle
+    /// and never carrying the IOR: PLAN §4.8's "the catalogue has to say so",
+    /// answerable for a target nobody has dialed.
+    #[test]
+    fn a_handle_yields_its_targets_capability_record_and_nothing_dialable() {
+        use identity::EnforcementPoint;
+
+        let r = registry(AUDIT_IDL);
+        let (_listener, ior) = dummy_target();
+        let mut b = Bridge::new(&r, Exposure::nothing(), "s-peer");
+        let h = b.handles().issue_checked(&ior).expect("issued");
+
+        let record = b.peer_capability(h.as_str()).expect("a live handle has a record");
+        assert_eq!(record.enforcement_point(), EnforcementPoint::BridgeOnly);
+        assert!(!record.enforces_identity() && !record.transport_secured());
+        let text = record.to_json().to_string();
+        assert!(!text.contains("127.0.0.1") && !text.contains("acct-1"), "{text}");
+
+        assert!(b.peer_capability("cap_forged").is_none(), "a handle nobody issued");
+        assert!(b.handles().revoke(h.as_str()));
+        assert!(b.peer_capability(h.as_str()).is_none(), "a revoked handle");
     }
 }

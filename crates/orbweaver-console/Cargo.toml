@@ -14,8 +14,17 @@ rust-version.workspace = true
 [dependencies]
 orbweaver-registry = { path = "../orbweaver-registry" }
 orbweaver-mcp = { path = "../orbweaver-mcp" }
+# For `Ior::parse` alone — a peer reference an operator hands the catalog page
+# so it can carry that peer's CSIv2 capability record. Default features off:
+# no TLS, no cryptography, nothing external.
+orbweaver-giop = { path = "../orbweaver-giop", default-features = false }
 orbweaver-dynamic = { path = "../orbweaver-dynamic" }
 orbweaver-idl = { path = "../orbweaver-idl" }
+
+[dev-dependencies]
+# The tests fabricate an IOR that advertises a CSIv2 mechanism list — the
+# negative control for the per-peer record — and need the encoder to do it.
+orbweaver-cdr = { path = "../orbweaver-cdr" }
 
 [lints]
 workspace = true

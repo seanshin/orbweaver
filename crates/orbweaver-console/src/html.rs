@@ -188,6 +188,8 @@ text-transform:uppercase;border:1px solid transparent;white-space:nowrap}\
 .b-dry{background:transparent;color:var(--dim);border:1px dashed var(--dim)}\
 .b-unknown{background:var(--warn-bg);color:var(--warn);border-color:var(--warn)}\
 .absent{color:var(--dim);font-style:italic}\
+.peers{margin:.25rem 0 .5rem}\
+.peer{padding:.35rem 0;border-top:1px dashed var(--rule)}\
 .desc{color:var(--dim);margin:.15rem 0 .5rem}\
 .row-refuse{background:var(--stop-bg)}\
 .row-dry{background:transparent;color:var(--dim)}\

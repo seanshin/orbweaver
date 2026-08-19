@@ -470,7 +470,8 @@ fn run(ior_path: &str, idl_path: &str) -> Result<u32, String> {
     use std::collections::BTreeMap;
 
     use orbweaver_dynamic::invoke::Outcome;
-    use orbweaver_mcp::promote::{self, CallStats, PromotionPolicy, PromotionRegression};
+    use orbweaver_mcp::promote::{self, PromotionPolicy, PromotionRegression};
+    use orbweaver_mcp::telemetry::CallPath;
 
     let mut check = |what: &str, pass: bool| {
         if pass {
@@ -489,15 +490,10 @@ fn run(ior_path: &str, idl_path: &str) -> Result<u32, String> {
         .allow_operation("IDL:spike/Echo:1.0", "ping")
         .allow_operation("IDL:spike/Echo:1.0", "add");
 
-    // Bridge::stats() fills only through Bridge::invoke — the JSON tool path.
-    // Every I4 call bypasses it (invoke::invoke on a raw connection, and
-    // Guarded stubs from connect_static), so the traffic is recorded into a
-    // local CallStats; wiring the static path into the bridge's own stats
-    // belongs to lib.rs's owner, not to this oracle.
-    let mut stats = CallStats::new();
-
     // The dynamic path: the reference implementation, add(40, 2) through the
     // same invoke() the bridge's JSON path uses, over a fresh plain connection.
+    // Not counted anywhere: this call is the reference *outcome*, made outside
+    // any bridge; the counts below are the bridges' own.
     let mut dconn =
         Connection::connect(&ior, Duration::from_secs(5)).map_err(|e| e.to_string())?;
     let mut dargs = BTreeMap::new();
@@ -510,7 +506,6 @@ fn run(ior_path: &str, idl_path: &str) -> Result<u32, String> {
         "add",
         &dargs,
     );
-    stats.record("IDL:spike/Echo:1.0", "add", dynamic_outcome.is_ok());
     let dynamic_outcome = dynamic_outcome.map_err(|e| e.to_string())?;
 
     // The dynamic session this promotion would replace, on behalf of alice.
@@ -541,9 +536,7 @@ fn run(ior_path: &str, idl_path: &str) -> Result<u32, String> {
         .connect_static(ah.as_str(), Approval::default(), Duration::from_secs(5))
         .map_err(|e| e.to_string())?;
     let mut aclient = EchoClient::new(ag);
-    let kept = aclient.add(40, 2);
-    stats.record("IDL:spike/Echo:1.0", "add", kept.is_ok());
-    let kept = kept.map_err(|e| e.to_string())?;
+    let kept = aclient.add(40, 2).map_err(|e| e.to_string())?;
     // The stub answers a bare i32; the gate compares Outcomes, so lift it
     // into the dynamic shape: returns Value::Long, no out or inout outputs.
     let static_outcome = Outcome { returns: Value::Long(kept), outputs: BTreeMap::new() };
@@ -570,9 +563,7 @@ fn run(ior_path: &str, idl_path: &str) -> Result<u32, String> {
         .connect_static(nh.as_str(), Approval::default(), Duration::from_secs(5))
         .map_err(|e| e.to_string())?;
     let mut nclient = EchoClient::new(ng);
-    let lost = nclient.add(40, 2);
-    stats.record("IDL:spike/Echo:1.0", "add", lost.is_ok());
-    let lost = lost.map_err(|e| e.to_string())?;
+    let lost = nclient.add(40, 2).map_err(|e| e.to_string())?;
     let lost_outcome = Outcome { returns: Value::Long(lost), outputs: BTreeMap::new() };
     let lost_audit =
         nclient.conn.audit().last().cloned().ok_or("the guard wrote no audit line")?;
@@ -590,15 +581,32 @@ fn run(ior_path: &str, idl_path: &str) -> Result<u32, String> {
                     if static_caller == "<nobody>"),
     );
 
-    // And the recommendation plumbing sees the same real traffic: three add
-    // calls were recorded around the wire calls above.
-    let policy = PromotionPolicy { min_calls: 3, max_failure_rate: 0.0 };
+    // And the counters are the bridges' own, both paths (PLAN-MOE IF2): the
+    // dynamic bridge counted its JSON-path call under the dynamic column, and
+    // each static bridge counted the call its generated stub made through the
+    // guard under the static column — no local store, no merge step.
     check(
-        "I4: after 3 recorded live calls the policy recommends (IDL:spike/Echo:1.0, add)",
+        "I4: the dynamic call is in its Bridge::stats() (dynamic column)",
+        dynamic_bridge.stats().calls_on(CallPath::Dynamic, "IDL:spike/Echo:1.0", "add") == 1
+            && dynamic_bridge.stats().calls_on(CallPath::Static, "IDL:spike/Echo:1.0", "add") == 0,
+    );
+    check(
+        "I4: the static calls are in their issuing Bridge::stats() (static column) — one store",
+        alice.stats().calls_on(CallPath::Static, "IDL:spike/Echo:1.0", "add") == 1
+            && alice.stats().calls_on(CallPath::Dynamic, "IDL:spike/Echo:1.0", "add") == 0
+            && nobody.stats().calls_on(CallPath::Static, "IDL:spike/Echo:1.0", "add") == 1,
+    );
+    // The recommendation reads the dynamic column: the dynamic history names
+    // add, and a history of nothing but stub calls names nothing — a path
+    // that already has a stub is not recommended for one.
+    let policy = PromotionPolicy { min_calls: 1, max_failure_rate: 0.0 };
+    check(
+        "I4: the policy recommends (IDL:spike/Echo:1.0, add) from the dynamic history and not from the static one",
         policy
-            .recommend(&stats)
+            .recommend(&dynamic_bridge.stats())
             .iter()
-            .any(|c| c.id == "IDL:spike/Echo:1.0" && c.operation == "add"),
+            .any(|c| c.id == "IDL:spike/Echo:1.0" && c.operation == "add")
+            && policy.recommend(&alice.stats()).is_empty(),
     );
 
     Ok(fails)

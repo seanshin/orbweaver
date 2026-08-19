@@ -118,6 +118,30 @@ fn an_ingested_interface_name_containing_markup_renders_as_text() {
     assert!(page.contains("not exposed"), "exposure is still visible");
 }
 
+/// A peer's IOR names its own type, and a peer's IOR is a peer's bytes: the
+/// type id on the page beside a capability record is untrusted text like any
+/// ingested id, and so is the label an operator typed for it.
+#[test]
+fn a_peer_reference_with_a_hostile_type_id_renders_as_text() {
+    let registry = Registry::new();
+    let mut view = catalog_of(&registry, Exposure::nothing());
+    let ior = orbweaver_giop::Ior {
+        type_id: HOSTILE_ID.to_owned(),
+        profiles: vec![orbweaver_giop::IiopProfile {
+            version: orbweaver_giop::Version::V1_2,
+            host: "127.0.0.1".into(),
+            port: 1,
+            object_key: b"k".to_vec(),
+            components: Vec::new(),
+        }],
+    };
+    view.attach_peer(PAYLOAD, &ior);
+    assert_eq!(view.unmatched_peers.len(), 1, "an empty catalog matches nothing");
+    let page = catalog::render_html(&view);
+    assert_inert(&page, "catalog with a hostile peer type id and label");
+    assert!(page.contains("bridge is the only enforcement point"), "the record is still visible");
+}
+
 /// `ai_desc` is prose somebody else wrote. On an ingested entry it is a
 /// repository description that came off a foreign wire.
 #[test]
