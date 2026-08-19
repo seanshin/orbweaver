@@ -330,15 +330,17 @@ Curated per-operation tools remain available as an opt-in for small, stable, hig
 
 ## 5. Pipeline
 
-| Stage | Input | Processing | Output | Automation target |
-|---|---|---|---|---|
-| **S1** Ingest | Requirements, legacy source, IFR dumps | Extract domain entities and operations | Intermediate representation | 95% |
-| **S2** Synthesize | IR plus retrieved similar IDL | Generate IDL 4.2 draft as AST | `.idl` | 90% |
-| **S3** Annotate | `.idl` | Infer `@ai_*` annotations; queue uncertain ones for review | SIDL | 80% |
-| **S4** Validate | SIDL | Differential compile, lint, naming rules, compatibility check | Report, or self-repair loop | 100% |
-| **S5** Register | Validated SIDL | Commit, load into registry, embed | Catalog entry | 100% |
-| **S6** Bind | Catalog | Dynamic invocation, or static generation and build | Working binding | 85% |
-| **S7** Verify | Binding | Contract tests, interceptors, tracing | Pass verdict plus telemetry | 90% |
+| Stage | Input | Processing | Output |
+|---|---|---|---|
+| **S1** Ingest | Requirements, legacy source, IFR dumps | Extract domain entities and operations | Intermediate representation |
+| **S2** Synthesize | IR plus retrieved similar IDL | Generate IDL 4.2 draft as AST | `.idl` |
+| **S3** Annotate | `.idl` | Infer `@ai_*` annotations; queue uncertain ones for review | SIDL |
+| **S4** Validate | SIDL | Differential compile, lint, naming rules, compatibility check | Report, or self-repair loop |
+| **S5** Register | Validated SIDL | Commit, load into registry, embed | Catalog entry |
+| **S6** Bind | Catalog | Dynamic invocation, or static generation and build | Working binding |
+| **S7** Verify | Binding | Contract tests, interceptors, tracing | Pass verdict plus telemetry |
+
+**The *Automation target* column this table carried until 2026-08-19 — 95 / 90 / 80 / 100 / 100 / 85 / 90 — is now aspiration A9 in §11.** Seven percentages, and no run in the tree computes any of them, because "automation" of a stage was never given a denominator: automated *what* — items, operations, human touches? What *is* measured per stage is a different quantity — `forge-pipeline`'s `first-pass:` line, one per stage it runs, which is the §11 first-pass row and covers S1–S4 only. S4 and S5 are deterministic programs, so a percentage there is a category error rather than a target; S6 and S7 have no run that reports anything per stage. A table of seven untestable numbers is worse than no column, so the column moved to where untestable numbers are kept, with the trigger that would make it testable.
 
 **S4 is the safety belt of the whole system.** An LLM writes plausible IDL that may be semantically wrong; an IDL compiler rejects syntactically wrong IDL every time without exception. That asymmetry — probabilistic synthesis, deterministic verification — is what makes the trust model work. Everything upstream of S4 is allowed to be uncertain because S4 is not.
 
@@ -752,7 +754,7 @@ Running streams in parallel does not relax §5.1 — it sharpens two rules:
 | Layer | Method | Pass criterion |
 |---|---|---|
 | Wire protocol | Round-trip against **omniORB and JacORB**, both directions — the interop matrix is those two peers × {our client → peer server, peer client → our server}, and `run_checks.sh` has one group per cell | All four cells measured and green; an absent fixture is reported `SKIPPED` and counted unmeasured, never passing |
-| CDR encoding | Differential against reference ORBs on the golden corpus | Byte-identical |
+| CDR encoding | Against **omniORB and JacORB**, three ways: values round-tripped through each peer and compared **decoded**; bytes a peer wrote, recorded in `crates/orbweaver-giop/tests/union_labels_from_a_peer.rs` and re-captured from the live fixture by `spikes/union_label_capture.py`, **re-encoded** by our encoder; and a `TypeCode` derived from IDL compared with the one each peer returns (`registry-check`, harness group *type registry*) | Decoded values equal; re-encoded bytes equal on every byte the specification defines — **padding excluded by a mask, never compared**; derived `TypeCode` structurally equal to the peer's. Never "byte-identical" over a raw buffer: see the CDR paragraph below |
 | IDL syntax | Differential compile against tao_idl and omniidl | Zero unexplained disagreements |
 | IDL semantics | `sidl-validate` naming and semantic rules over the corpus; S3's own annotation gate over everything the pipeline emits | Zero S4 errors; zero `s3/missing-ai_desc`/`-ai_effect`/`-ai_authz` on pipeline output — annotation completeness is gated at 100% *there*, and **no run computes an annotation-coverage percentage over an arbitrary contract set** |
 | Backward compatibility | Semantic diff, breaking-change detection | Zero unapproved breaking changes |
@@ -772,6 +774,8 @@ Running streams in parallel does not relax §5.1 — it sharpens two rules:
 - **IDL semantics** asked for **annotation coverage ≥ 90%**, and nothing has ever computed it. `contract-check`'s annotation output is advice that exits 0 by construction — a byte instability is a defect in code we wrote, an annotation smell is an opinion about prose somebody else wrote, and the two must not share an exit code — and no run in this tree prints a coverage percentage at all. What *does* gate is narrower and stricter: S3's own check raises `s3/missing-ai_desc`, `s3/missing-ai_effect` and `s3/missing-ai_authz` at Error severity, so every operation the pipeline emits carries all three or the stage fails; and at the MCP boundary an operation with no stated `ai_effect` is refused rather than allowed. **The 90% was not lowered to a number today's code happens to reach.** The arithmetic is trivial and the denominator is not — coverage of *which* contracts, counted over operations or over parameters too — and inventing one to make the row green is precisely the failure this revision is about. Aspiration **A3**.
 - **End to end** promised **"pilot integration with a real legacy system, ≥80% reduction versus manual"**. There is no pilot, no cooperative owner and no logged manual baseline — §1.1's "days–weeks" is an estimate table with no source and no procedure for taking the number — so the percentage has no denominator and no run could fail it. `spikes/estate/run.sh` is the nearest thing in the tree and measures a different quantity: thirteen contracts with the texture of a fifteen-year-old estate, through nine stages, every stage asserted. It reads no clock at any point. The row now claims that and only that; the pilot is aspiration **A5**.
 - **AI quality** asked for a **100-case** benchmark. `corpus/requirements/inputs` holds 20 and `inputs-v2` holds 26, counted 2026-08-18, and v1 is frozen on purpose — it is the denominator of every assumption-B number this project has published, so it is not being grown to satisfy a sentence. The pass criterion is the testable half and survives with two corrections. "First-pass rate" is singular, and the benchmark stopped producing one number on 2026-08-13 when the stages were split: a run yields one rate per stage, and quoting a single figure hides which stage moved. And at n = 20 one case is five percentage points, so an unqualified "a drop" fires on a single item. 100 cases is aspiration **A7**.
+
+**On the CDR row.** Until 2026-08-19 it read *"Differential against reference ORBs on the golden corpus — Byte-identical"*, and that contradicted the wire rule this project's own instructions carry: CDR padding content is undefined by the specification, omniORB does not zero it, so a byte-for-byte comparison against a reference ORB produces false failures — which is not a hypothesis, it is what `spikes/union_label_capture.py` did for a week, green on the local omniORB and red for ten CI runs on the Linux one, on bytes the specification says nothing about; the script's own header records it. Nor was there ever a golden-corpus differential against a peer: the corpus round-trips against **our own** encoder (the *Dynamic invocation* and *AnyJSON* rows, where byte-identity is ours to demand because both sides are ours), and the peer comparisons run over `spikes/echo.idl` types and the recorded captures. The row now names the three comparisons that exist and the one thing each asserts. Byte-identity survives in one place only, and deliberately: our re-encoding of a peer's recorded bytes, over the bytes the specification defines, because that is the check our own round trip could never perform — encode and decode agreed with each other in any byte order while a `long long` discriminated union could not be decoded at all.
 
 **On the performance row.** It has said *LAN* since v0.2 and what exists is loopback. `call-bench` (`crates/orbweaver-test/src/bin/call_bench.rs`) runs both clients in one process, over one loopback connection, against our own servant — so the row now says loopback. A LAN hop, a NIC or a foreign peer adds its cost to **both** columns, so the *ratio* §11 targets survives the move and the absolute microseconds do not; a LAN run, a foreign ORB and anything concurrent stay unmeasured. `run_checks.sh` runs the benchmark at `--samples 200` and fails only when a series cannot be measured or the two paths disagree on an answer — both defects on any machine at any speed. The ratio target is not gated there: see §11.
 
@@ -848,10 +852,10 @@ Because the OMG specifications are open, this is achievable rather than aspirati
 |---|---|---|---|
 | Time to define a new interface | 3–10 days — §1.1 estimate, never measured | < 1 hour | **none** — aspiration **A1** |
 | Time to bind a new service (dynamic path) | 2–4 weeks — §1.1 estimate, never measured | < 10 minutes | **none** — aspiration **A2** |
-| IDL first-pass compile rate | — | ≥ 85% | `forge-pipeline` over `corpus/requirements/inputs`; **one rate per stage**, recorded under `docs/pipeline-runs/` |
-| Compile rate within three self-repair rounds | — | ≥ 98% | the same run's round counts, at `--max-rounds 3` |
+| IDL first-pass compile rate | — | ≥ 85% | `forge-pipeline` over `corpus/requirements/inputs`, which prints **one block per stage** — `S1 ingest`, `S2 synthesize`, `S3 annotate`, `S4 validate` — each with the line `first-pass: a/N valid (x%) — after round 1, before any repair`. *This* row is the `S2 synthesize` block, the stage whose gate is the compile; the `S1` and `S3` lines are recorded beside it under `docs/pipeline-runs/` and this row sets no target for them. `S4 validate` prints the same line but rewrites nothing and runs `1 allowed` round, so its figure is a gate verdict, not a first-pass rate |
+| Compile rate within three self-repair rounds | — | ≥ 98% | the same block's `rounds: r used, 3 allowed` (`--max-rounds 3` is the default) and its `result:` line — `all N item(s) valid`, or `NOT all valid — k item(s) still failing after r round(s)`, from which the rate is (N − k)/N |
 | Semantic annotation coverage | 0% | ≥ 90% | **none** — no run computes a coverage percentage; what is gated instead is in §8. Aspiration **A3** |
-| Contract tests auto-generated | 0% | ≥ 80% | **none**, and *unaudited at this revision* — named here rather than restated, so the next batch finds it stated instead of implied |
+| Contract tests auto-generated | 0% | ≥ 80% | **none** — audited 2026-08-19: `orbweaver-gen` emits stubs, skeletons and a runtime, and no test; "contract tests generated from annotations" is still a scope line in stream B (§7.3). Restated when the generator counts what it emits. Aspiration **A8** |
 | Breaking changes caught pre-merge | Manual | 100% | `idl-diff` (§5.3), gated by `run_checks.sh` |
 | Interop matrix pass rate | — | 100% | the four cells §8 names, one `run_checks.sh` group per cell |
 | Dynamic-path overhead vs static stub — `call-bench` p50 ratio, loopback, n ≥ 2000 per path per shape after 300 warm-up pairs | 1.06–1.07× on the widest shape (`echo_many`, 64 × 24 B strings), twelve-core laptop under load ~3–4, 2026-08-18 | ≤ 1.5× on **every** shape; no absolute-latency clause | `call-bench --samples 2000 --max-ratio 1.5` at release review; not gated by `run_checks.sh` |
@@ -865,7 +869,7 @@ Because the OMG specifications are open, this is achievable rather than aspirati
 
 ### Aspirations — stated, and with no instrument
 
-A table where some rows are gates and others are wishes, with nothing telling them apart, is worse than either: the reader cannot tell which claims the project is standing behind. The last column above is what tells them apart, and the rows reading **none** are collected here — together with the two §8 rows that were the same thing in the verification table.
+A table where some rows are gates and others are wishes, with nothing telling them apart, is worse than either: the reader cannot tell which claims the project is standing behind. The last column above is what tells them apart, and the rows reading **none** are collected here — together with the two §8 rows that were the same thing in the verification table, and the column §5 carried until 2026-08-19.
 
 These are not deleted. They are why the project exists, and a plan that hides its intent in order to look rigorous has traded one dishonesty for another. What each gets instead is what [`PLAN-DEFERRED.md`](PLAN-DEFERRED.md) requires of a deferral: an **observable trigger**, not a feeling. "If we need it" is not a trigger.
 
@@ -878,16 +882,20 @@ These are not deleted. They are why the project exists, and a plan that hides it
 | **A5** | Pilot integration with a real legacy system, ≥80% reduction versus manual (was §8 *End to end*) | No pilot, no cooperative owner, no logged manual baseline. `spikes/estate/run.sh` measures path completion over contracts we wrote, not effort saved on contracts somebody maintains | A real estate with an owner who accepts both the measurement and the blast radius. A1 and A2 are this same trigger seen from the other end, and one pilot satisfies all three |
 | **A6** | TAO as a wire round-trip peer (was named in §8 *Wire protocol*) | `tao_idl` is a front-end oracle only, optional in `spikes/differential.sh` and absent here; no TAO **server** fixture exists anywhere in the tree | A peer that runs TAO — a pilot, or a CI image that can carry it without ever being published (§10, fixture hygiene) |
 | **A7** | A 100-case requirement benchmark (was §8 *AI quality*) | 20 frozen cases in `inputs/` and 26 in `inputs-v2/`, counted 2026-08-18. v1 stays frozen because it is the denominator of every published assumption-B figure | The benchmark being used to **gate** a release rather than report one. That needs an independent evaluator first: generator and evaluator are still the same model, so every rate here is indicative and §8's criterion is a comparison, not a threshold |
+| **A8** | Contract tests auto-generated ≥ 80% (§11 row) | Nothing generates a test: `orbweaver-gen` emits stubs, skeletons and a runtime. The numerator does not exist and the denominator — a test per operation? per annotation? — is undefined | The generator emitting its first test, at which point it counts what it emits and the ratio has both halves. That is stream B's "contract tests generated from annotations", not a metric batch |
+| **A9** | Per-stage automation targets — S1 95 / S2 90 / S3 80 / S4 100 / S5 100 / S6 85 / S7 90 (was §5's *Automation target* column) | "Automation" of a stage has no denominator: no run counts what a stage did without a human against what it did with one. The nearest measured quantity, `forge-pipeline`'s per-stage `first-pass:` line, measures validity, not automation, and stops at S4 | As A4, per stage — the first run in which every human touch is already a record, so the automated fraction of a stage is a count and not an estimate. A4 is this same number over the whole pipeline |
 
-**A7 first, if any of them.** It is the only one of the seven that needs no outside party — no pilot owner, no fixture the licensing boundary complicates — so it is the only one this project can move on its own. A5 and A6 both wait on somebody else, and A1, A2 and A4 wait on A5.
+**A7 first, if any of them.** Of the nine, only it and A8 need no outside party — no pilot owner, no fixture the licensing boundary complicates — and A8 is a build (stream B) rather than a measurement, so A7 is the only one this project can move on its own *as a measurement*. A5 and A6 both wait on somebody else, A1, A2 and A4 wait on A5, and A9 waits on A4.
 
 ---
 
 ## 12. Immediate actions
 
+The v0.1 list, kept as it was written: it is a record of what the plan asked for on day one, and what landed against it lives in §7.2, not here. One item is annotated because it names a peer the tree does not have.
+
 1. **Start Phase 0.** Assumption A (GIOP interop) is the single highest-risk item and now gates the entire in-house strategy. Test it in week 1.
 2. **Build golden IDL corpus v0** — 20–30 representative patterns.
-3. **Stand up the interop CI harness** — TAO, omniORB and JacORB containers, wired before Phase 1 code exists.
+3. **Stand up the interop CI harness** — TAO, omniORB and JacORB containers, wired before Phase 1 code exists. *Historical, kept as written.* What stood up is §8's matrix — **omniORB and JacORB**, both directions, one `run_checks.sh` group per cell — and TAO never became a wire peer: `tao_idl` is an optional front-end oracle and no TAO server fixture exists in the tree. This item is not rewritten to say "two peers" because it would then read as if two had been asked for; the missing third is aspiration **A6** in §11, which carries the trigger; [`decisions/D010-what-remains-and-what-cannot-be-measured-here.md`](decisions/D010-what-remains-and-what-cannot-be-measured-here.md) B6 is the same absence seen from the fixture side. Neither is restated here.
 4. **Select a pilot system** — real IDL assets, a cooperative owner, low blast radius.
 5. **Staff the team** — one engineer with ORB and wire-protocol experience (essential), two backend engineers, one AI engineer.
 6. **Freeze AI benchmark v1** — with a hold-out subset, before any prompt tuning begins.
