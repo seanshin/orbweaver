@@ -1109,6 +1109,29 @@ else
   [ "$jfail" -eq 0 ] || fail_total=$((fail_total+1))
 fi
 
+hr "GIOP 1.1 against JacORB — version from the wire, then one wide string each way (D010 B5)"
+# spikes/jacorb_giop11.sh: a recording tap republishes the IOR at 1.1 and
+# parses every GIOP header it relays; our server's log is the second witness.
+# JacORB's giop_minor_version sets the version of the IORs it *creates*; its
+# client follows the profile it dials — so the lever is the profile, not the
+# property, and the group asserts the version from bytes. Wide text at 1.1 was
+# a measured FAIL on landing day: we wrote a byte-order mark JacORB neither
+# writes nor strips at 1.1, its user got U+FEFF + text, and its echo of our
+# mark came back as data that our reader then stripped — spike-interop's own
+# "wstring round-tripped under GIOP 1.1" was green while the peer's user saw
+# the wrong value. Fixed the same day (codeset.rs); step 4 of the script
+# counts the units on the wire so that masking cannot recur. Negative
+# controls: `--expect-minor 2` goes red on the version line; the pre-fix tap
+# log fails step 4 in 4 of 4 exchanges.
+g11=$(./spikes/jacorb_giop11.sh 2>&1); g11_rc=$?
+printf '%s\n' "$g11" | grep -E "^  (ok|FAIL|info|SKIPPED)" | cut -c1-150
+if [ "$g11_rc" -eq 2 ]; then
+  skipped=$((skipped+1))
+elif [ "$g11_rc" -ne 0 ]; then
+  echo "  FAIL GIOP 1.1 against JacORB — see /tmp/orbweaver-giop11"
+  fail_total=$((fail_total+1))
+fi
+
 # ── S4, the validation gate ──────────────────────────────────────────────────
 hr "S4 validation gate — diagnostics a generator can act on"
 # §5: everything upstream of S4 is allowed to be uncertain because S4 is not.

@@ -49,6 +49,34 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### ⚠ Wire behaviour changed / 와이어 동작 변경
 
+- **`wstring` at GIOP 1.0/1.1 is written without a byte-order mark and with
+  its units in the message's byte order** (was: BOM + stream order, as at
+  1.2). D010 B5's first step was a JacORB-at-1.1 fixture, and it found this the
+  same hour: measured against JacORB 3.9 (`spikes/jacorb_giop11.sh`, both
+  directions, both byte orders), a 1.1 peer read our mark as U+FEFF text, and
+  its echo of it was stripped by our reader, so the round trip was green while
+  the peer's user saw the wrong value; an unmarked value is read by that peer
+  in the message's order — the literal §9.3.1.6 "neither → big-endian" bullet
+  is contradicted by the only 1.1 wide-text peer here, and the code says so.
+  GIOP 1.2 unchanged (mark, big-endian default). The reader still removes a
+  leading mark at 1.1 ("shall remove", unscoped). Recorded with provenance in
+  `crates/orbweaver-giop/tests/wide_1_1_from_a_peer.rs`; the fixture asserts
+  the version from bytes (JacORB's `giop_minor_version` sets the IORs it
+  creates; its client follows the profile it dials) and counts wire units so
+  the masking cannot recur. Harness group added; a class-B row that turned out
+  measurable, and measured red first.
+
+  **GIOP 1.0/1.1의 `wstring`은 바이트순서표식(BOM) 없이, 유닛을 메시지의
+  바이트순서로 기록한다**(이전: 1.2와 같이 BOM + 스트림 순서). D010 B5의 첫
+  단계인 JacORB-1.1 픽스처가 같은 시간에 이것을 찾았다: JacORB 3.9로
+  측정(`spikes/jacorb_giop11.sh`, 양방향·양 바이트순서), 1.1 피어는 우리
+  표식을 U+FEFF 문자로 읽었고 그 에코를 우리 리더가 표식으로 벗겨내어 왕복은
+  녹색이면서 피어 사용자에게는 잘못된 값이 갔다; 표식 없는 값은 그 피어가
+  메시지 순서로 읽는다. GIOP 1.2는 변경 없음. 리더는 1.1에서도 선행 표식을
+  제거한다. `tests/wide_1_1_from_a_peer.rs`에 출처와 함께 기록; 하네스 그룹
+  추가 — 잴 수 없다던 B류 행이 재어졌고, 먼저 빨갛게 재어졌다.
+
+
 - **A union `TypeCode`'s case labels are aligned and byte-order-normalised.**
   A label is the discriminator marshalled in its own type. It was read with
   `get_bytes` and written with `put_bytes` — neither of which knows the
