@@ -1104,6 +1104,29 @@ def main(argv):
         print("\n#UNSERVED-INTERFACES")
         for service, iface in unserved:
             print(f"UNSERVED\t{service}\t{iface}\tdeclared, claimed by no object probed")
+    # An interface the IDL declares and this sweep probed against *no* object
+    # is a third fact, and until 2026-08-19 it was silent: `BindingIterator`
+    # (no iterator object exists to address), the pull-side client interfaces
+    # (`PullSupplier`, `PullConsumer` — implemented by a client, not this
+    # channel), and most of `ir.idl`. Silence read as coverage. Listed so the
+    # generated document can say "unmeasured" where it used to say nothing.
+    probed = {(r["service"], r["interface"]) for r in sweep.rows}
+    scope = [
+        ("CosNaming", omg, ("CosNaming::",)),
+        ("CosEvent", omg, ("CosEventComm::", "CosEventChannelAdmin::")),
+        ("IFR", omg, ("CORBA::",)),
+        ("MoE enterprise", enterprise, ("",)),
+        ("MoE control plane", control, ("",)),
+    ]
+    unprobed = []
+    for service, decl, prefixes in scope:
+        for iface in decl:
+            if any(iface.startswith(p) for p in prefixes) and (service, iface) not in probed:
+                unprobed.append((service, iface, len(decl[iface]["ops"])))
+    if unprobed:
+        print("\n#UNPROBED-INTERFACES")
+        for service, iface, n in unprobed:
+            print(f"UNPROBED\t{service}\t{iface}\t{n} declared operation(s), probed against no object")
     if absent:
         print("\n#ABSENT")
         for r in absent:

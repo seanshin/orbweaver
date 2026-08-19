@@ -425,6 +425,33 @@ records what changed and, where it matters, what it changes on the wire.
   something else — the same rule the Rust side follows, applied to whichever
   implementation is behind.
 
+### Added / 추가
+
+- **`docs/SERVICES-COVERAGE.md` §8 is generated from the sweep and diffed by
+  the harness** (D010 A5, batch 1). `spikes/coverage_tables.py` renders
+  `service_sweep.sh --raw` into per-service tables, totals, the interfaces no
+  object claimed, and — new — the interfaces the IDL declares that the sweep
+  **probed against no object** (`BindingIterator`, 21 of `ir.idl`'s), which
+  used to be silent and read as coverage. `--check` fails the harness with the
+  diff when the wire and the file disagree; the fix is to regenerate, never to
+  edit the block. §3–§7 are re-framed as the dated first reading kept for the
+  reasons quoted there, and their headings lose the counts they carried by
+  hand: every one was stale, and D010 A5's own sentence about "§2's naming row
+  says 13 of 16" named a number that occurs in no document — the class it was
+  describing, in the description. Negative control: one served count edited in
+  the block → `FAIL … no longer says what the wire says` with the one-line
+  diff; regenerated → ok.
+- **`spikes/gap_symbols.py`** — D010 §7.1's report, deliberately not a gate:
+  per `COMPONENTS.md` gap row, the symbols it names and whether each exists in
+  its crate. Measured today: 12 of 12 exist, all legitimately — which is the
+  number that demoted it from a gate, printed at the bottom of every run.
+
+  **`SERVICES-COVERAGE.md` §8을 스윕이 생성하고 하네스가 diff한다.** 선언되었으나
+  어떤 객체에도 프로브하지 않은 인터페이스가 처음으로 드러난다(전에는 침묵이
+  커버리지로 읽혔다). §3–§7의 손으로 적은 수치는 모두 낡아 있었고 제목에서
+  뺐다. `gap_symbols.py`는 게이트가 아닌 리포트 — 오늘 12/12가 존재하며 그
+  숫자가 게이트에서 강등한 이유다.
+
 ### Fixed / 수정
 
 - **CI had been red for ten consecutive runs while the local harness was

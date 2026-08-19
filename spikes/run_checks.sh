@@ -1590,9 +1590,18 @@ hr "service coverage — what the five servants actually serve"
 # the scoped name, which is wrong for every COS interface (#pragma prefix), and
 # it passed a deliberately broken servant. It now reads the claim out of the
 # rows already measured.
-cov=$(./spikes/service_sweep.sh 2>&1)
+cov=$(./spikes/service_sweep.sh --raw 2>&1)
 if printf '%s' "$cov" | grep -q "service-sweep: PASS"; then
   printf '%s' "$cov" | grep '^TOTAL' | sed 's/^/  ok   /'
+  # docs/SERVICES-COVERAGE.md §8 is generated from these same rows, so the
+  # document is checked against the wire rather than transcribed from it —
+  # the counts it used to carry by hand went stale in four days (D010 A5).
+  # Negative control (2026-08-19): one served count edited in the block ->
+  # "FAIL docs/SERVICES-COVERAGE.md §8 no longer says what the wire says"
+  # with the one-line diff; regenerated -> ok.
+  ct_out=$(printf '%s\n' "$cov" | python3 spikes/coverage_tables.py --check 2>&1); ct_rc=$?
+  printf '%s\n' "$ct_out" | head -12
+  [ "$ct_rc" -eq 0 ] || fail_total=$((fail_total+1))
 else
   echo "  FAIL service coverage sweep"
   printf '%s' "$cov" | grep -E 'FAIL|ABSENT|UNMEASURED|BLOCKED' | head -8 | sed 's/^/       /'

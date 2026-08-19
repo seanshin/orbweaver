@@ -237,6 +237,8 @@ cargo run -q --bin repository-ids -- corpus/pragma/*.idl   # ids, to diff agains
 ./spikes/estate/run.sh --tsv    # thirteen legacy contracts, ingestion to agent call
 cargo run -q --bin gen-python -- --out <dir> <files>.idl   # the second target
 cargo run -q -p orbweaver-console --bin orbweaver-console -- catalog <file>.idl --text
+python3 spikes/gap_symbols.py   # before planning against a COMPONENTS gap row: what it
+                                # names and whether that exists — a report, not a gate
 ```
 
 Fixture setup: `brew install omniorb` (interop peer and oracle only);
