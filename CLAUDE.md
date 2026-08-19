@@ -155,6 +155,23 @@ Each of these produced a phantom failure during Phase 0. They will recur.
 - **An unmeasured check is a failure, never a pass.** If a fixture will not
   start, increment the failure counter. A harness that reports green on an
   unmeasured assumption is worse than no harness.
+- **A new harness group lands with its negative control in the commit
+  message** — the command that was run to make it red, and what it printed
+  (D010 §7.2). Five gates were green while measuring nothing in one week, and
+  every one was found by a negative control, none by review; the fifth was
+  written by the person who had just recorded the other four — a probe that
+  grepped its marker out of a traceback echoing the source line. Probes use
+  exit codes, not markers.
+- **A peer's bytes are recorded with provenance and re-taken live.** A
+  convention both ends apply cannot be refuted by a round trip, and a
+  convention one end applies on read can hide the other end's defect on
+  write; twelve wire changes in v0.5.0 were found this way and none by a test
+  we could have written from the specification alone. One test per capture
+  decodes it and re-encodes back to the peer's bytes; the harness re-takes
+  every capture from the live fixture (`spikes/*_capture.py`).
+- **A class-B claim lands as a counted `SKIPPED` group naming its fixture,
+  never as a `note` and never as `ok`** (D010 §2). The verdict line counts
+  SKIPPED; prose after an `ok` is not counted and reads as coverage.
 
 ### Where a fact lives / 사실이 사는 곳
 
@@ -203,7 +220,7 @@ decisions being approved and work landing.
 ## Commands
 
 ```bash
-cargo test --workspace          # ~1200 tests across twelve crates
+cargo test --workspace          # ~1440 tests across twelve crates
 ./spikes/run_checks.sh          # the harness; exit code is the verdict, one run at a time
 ```
 
@@ -235,6 +252,14 @@ cargo run -q --bin repository-ids -- corpus/pragma/*.idl   # ids, to diff agains
 ./spikes/end_to_end.sh          # requirement → contract → both halves → guarded call
 ./spikes/nat_rewrite.sh         # R7: an IOR dialable from where the client actually is
 ./spikes/estate/run.sh --tsv    # thirteen legacy contracts, ingestion to agent call
+./spikes/perm_fallback.sh --expect-temporary reask --expect-permanent stay
+                                # the two forward statuses, told apart by behaviour — omniORB and ours
+./spikes/jacorb_giop11.sh · ./spikes/jacorb_wchar11.sh · ./spikes/wide_rust.sh
+                                # GIOP 1.1/1.2 wide text against JacORB, version asserted from bytes
+python3 spikes/union_label_capture.py · python3 spikes/union_default_capture.py
+                                # re-take the peer's recorded TypeCode bytes from the live fixture
+./spikes/service_sweep.sh --raw | python3 spikes/coverage_tables.py --check
+                                # SERVICES-COVERAGE §8 says what the wire says
 cargo run -q --bin gen-python -- --out <dir> <files>.idl   # the second target
 cargo run -q -p orbweaver-console --bin orbweaver-console -- catalog <file>.idl --text
 python3 spikes/gap_symbols.py   # before planning against a COMPONENTS gap row: what it

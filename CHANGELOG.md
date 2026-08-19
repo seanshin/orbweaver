@@ -10,42 +10,67 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
-### ⚠ Mapping changed / 매핑 변경
+_Nothing yet._
 
-- **AnyJSON v1.1: a type describes itself structurally** (D008, approved
-  2026-08-18). `_t` keeps its v1 name for a type whose identity fits in one —
-  `"double"` is still `"double"` and every v1 document still reads and still
-  reproduces the same CDR — and becomes an object where v1 could say nothing,
-  or where the name lost something the wire keeps: `string<5>` and `string`
-  were one word to v1 and are two TypeCodes to a peer. The same representation
-  is now also a **value**, so `::CORBA::TypeCode` crosses.
+---
 
-  Measured before the change: `to_json` wrote `{"_t":"IDL:gc12/Tagged:1.0",…}`
-  and `from_json` **refused that same document**. Not a limitation — an
-  asymmetry, which puts the failure on the return leg in the caller rather than
-  at the boundary that produced it. And `tk_TypeCode` had no `Value` variant at
-  all, so §8's *static equals dynamic* oracle was not weaker for the operations
-  only the static path handled; it was **inapplicable**.
+## v0.5.0 — 2026-08-19
 
-  **`ir-subset` went from 18 generated + 10 skipped to 28 + 0.** The ten
-  included `InterfaceDef` itself — the skip propagated up through every
-  container until `describe_interface`, the operation the IFR facade exists
-  for, could not be generated. The MCP bridge speaks the same mapping, so an
-  **Interface Repository is now readable through the agent path**, asserted by
-  repository id over the real contract in both byte orders.
+The release **a peer's bytes** produced. Twelve wire-behaviour changes lead,
+and every one of them was invisible to our own round trip: union case labels
+stored in the arriving order, `long double`'s octets, UTF-16 read in the
+message's order rather than its own, an encapsulation's alignment origin, a
+`wstring` written from a 1.2 constant on every connection, a 1.1 `wstring`
+carrying a mark JacORB read as text, a union `default:` member with no label
+bytes at all, a member list that was ours rather than omniidl's, a 1.2 `wchar`
+that was itself a mark. Each was found by asking omniORB or JacORB for their
+octets, recording them with provenance, and re-taking the capture from the
+live fixture on every harness run — 30-odd captures in eight files now. *A
+convention both ends apply cannot be refuted by a round trip*, and its
+corollary from this release: **a convention one end applies on read can hide
+the other end's defect on write.**
 
-  **Upgrading:** nothing to do for a v1 producer or consumer; the change is
-  additive and the compatibility claim is tested, not asserted. A Python client
-  gains `_rt.TypeCode` — the document, unread: enough to receive one, hand it
-  back and inspect its `kind`, not enough to marshal a value *described* by
-  one, which would mean Python deciding CDR questions in a package that
-  deliberately contains no wire.
+Two decisions closed (D008 AnyJSON v1.1: a type describes itself structurally;
+D009: the negotiated codeset reaches the marshaller through an owned slot,
+measured at ~31 ns a string) and one was written from the gap columns and then
+corrected three times by the batches that built it (D010 — what remains, and
+which of it cannot be measured here). All of D010's class-A rows landed. Its
+class-B rows are counted `SKIPPED` groups that name their missing fixture, and
+the one that turned out measurable (GIOP 1.1 wide text against JacORB)
+measured **red before it measured green**.
 
-  AnyJSON v1.1: `_t`가 이름 하나에 담기는 타입은 v1 그대로, 그 밖에는 구조가
-  된다. **추가적**이므로 v1 문서는 전부 그대로 읽히며 그 주장은 시험된다.
-  변경 전 실측: 매핑이 자기가 쓴 문서를 자기가 거부했고, `tk_TypeCode`에는
-  `Value`가 없었다. **ir-subset 18+10 → 28+0**, 그 열에는 `InterfaceDef` 자신이
-  들어 있었다.
+Three security findings from the agent boundary (a 12-byte message that
+reserved 64 MB, a document array length that reserved 206 GB, an argument a
+content stage saw reaching the audit ledger), each with a negative control in
+its landing message — which is now the rule for every harness group. And the
+gates that were green while measuring nothing: four found by negative controls
+in the first session, one more written by the coordinator and caught on its
+own first run (a probe that grepped its marker out of a traceback echoing the
+source line). Documents a script writes replace documents a hand transcribes:
+`SERVICES-COVERAGE.md` §8 is generated from the sweep and diffed by the
+harness, and went red by itself the first afternoon.
+
+CI was red for eleven runs when this release's second day began, on three
+harness-only causes nobody had read; green on every push since — including
+the two things Linux caught that macOS cannot.
+
+이번 릴리즈는 **피어의 바이트**가 만들었다. 와이어 동작 변경 열둘이 앞장서며,
+하나도 우리 자신의 왕복으로는 보이지 않던 것이다 — 도착한 순서대로 저장된 union
+레이블, `long double`의 옥텟, 자기 순서가 아닌 메시지 순서로 읽힌 UTF-16,
+인캡슐레이션의 정렬 원점, 매 연결마다 1.2 상수로 쓰인 `wstring`, JacORB가
+텍스트로 읽은 1.1 `wstring`의 표식, 레이블 바이트가 아예 없던 union `default:`
+멤버, omniidl이 아닌 우리 것이던 멤버 목록, 표식 그 자체이던 1.2 `wchar`. 전부
+omniORB·JacORB에 옥텟을 물어 출처와 함께 기록하고 하네스가 돌 때마다 라이브
+픽스처에서 재채취해서 나왔다. **양쪽이 똑같이 적용하는 관례는 왕복으로 반증되지
+않고, 한쪽이 읽을 때 적용하는 관례는 다른 쪽이 쓸 때의 결함을 가린다.**
+
+결정 둘이 닫히고(D008, D009) 하나는 공백 열에서 쓰인 뒤 그것을 지은 배치들이 세
+번 정정했다(D010). D010의 A류는 전부 착지했고, B류는 빠진 픽스처를 이름 붙인
+`SKIPPED` 그룹이며, 잴 수 있게 된 하나(JacORB 상대 GIOP 1.1 와이드 텍스트)는
+**초록 전에 빨강으로** 재어졌다. 에이전트 경계의 보안 발견 셋, 각각 착지 메시지에
+음성 대조군 — 이제 모든 하네스 그룹의 규칙이다. 스크립트가 쓰는 문서가 손으로
+옮겨 적던 문서를 대체한다. 이 릴리즈의 둘째 날은 CI가 열한 런 빨간 채로 시작했고,
+그 뒤 모든 푸시에서 초록이다 — 리눅스만 잡을 수 있던 둘을 포함해서.
 
 ### ⚠ Wire behaviour changed / 와이어 동작 변경
 
@@ -239,8 +264,6 @@ records what changed and, where it matters, what it changes on the wire.
   `{"_raw": <base64>}`, tagged, because a malformed TypeCode is its producer's
   problem and a renderer that refuses to render it hides the evidence.
 
-### ⚠ Wire behaviour changed / 와이어 동작 변경
-
 - **Six wire defects our own round trip could not see.** A sweep of
   `orbweaver-cdr` and `orbweaver-giop` for the class the union-label batch
   named — a field both our ends agree about and a peer does not — examined 24
@@ -323,209 +346,42 @@ records what changed and, where it matters, what it changes on the wire.
   that would silently re-encode the repository ids and member names inside
   every `TypeCode`.
 
-### Decided / 결정
+### ⚠ Mapping changed / 매핑 변경
 
-- **D010 — what remains, and which of it cannot be measured here** (PROPOSED).
-  Written from the current gap columns rather than from memory, because the
-  session that produced it found four "gaps" already closed and four gates
-  green while measuring nothing — progress was wrong in both directions. It
-  splits the remainder into four classes: **A** buildable and measurable here,
-  **B** buildable but the oracle is absent (lands only as a SKIPPED harness
-  group naming its fixture, never as `ok`), **C** deferred with a trigger that
-  has not fired (building early is the defect), **D** a claim in a document
-  that cannot be tested. Six A items ordered by cost of defect, six B items
-  each naming what is missing, eleven C items each naming where its reason
-  lives, and the five D rows yesterday's plan batch left. Two process
-  proposals: a gap-column symbol check, and a rule that a new harness group
-  lands with its negative control in the commit message.
+- **AnyJSON v1.1: a type describes itself structurally** (D008, approved
+  2026-08-18). `_t` keeps its v1 name for a type whose identity fits in one —
+  `"double"` is still `"double"` and every v1 document still reads and still
+  reproduces the same CDR — and becomes an object where v1 could say nothing,
+  or where the name lost something the wire keeps: `string<5>` and `string`
+  were one word to v1 and are two TypeCodes to a peer. The same representation
+  is now also a **value**, so `::CORBA::TypeCode` crosses.
 
-  기억이 아니라 현재의 공백 열에서 썼다. 남은 것을 네 부류로 가른다 — 여기서
-  짓고 잴 수 있는 것, 지을 수 있으나 오라클이 없는 것(`ok`가 아니라 픽스처를
-  이름 붙인 SKIP으로만 착지), 방아쇠 달린 유예(일찍 짓는 것이 결함), 시험 불가한
-  문서 주장.
+  Measured before the change: `to_json` wrote `{"_t":"IDL:gc12/Tagged:1.0",…}`
+  and `from_json` **refused that same document**. Not a limitation — an
+  asymmetry, which puts the failure on the return leg in the caller rather than
+  at the boundary that produced it. And `tk_TypeCode` had no `Value` variant at
+  all, so §8's *static equals dynamic* oracle was not weaker for the operations
+  only the static path handled; it was **inapplicable**.
 
-### Added / 추가
+  **`ir-subset` went from 18 generated + 10 skipped to 28 + 0.** The ten
+  included `InterfaceDef` itself — the skip propagated up through every
+  container until `describe_interface`, the operation the IFR facade exists
+  for, could not be generated. The MCP bridge speaks the same mapping, so an
+  **Interface Repository is now readable through the agent path**, asserted by
+  repository id over the real contract in both byte orders.
 
-- **CosNaming serves `bind_context`, `rebind_context` and `destroy`.** Two of
-  the three deferral reasons were **descriptions of the servant rather than
-  obstacles**: contexts lived as long as the process *because* nothing removed
-  a key, and binding a context this dispatch already serves is a map insert,
-  not a call over the wire — it was also the only way the already-served
-  `new_context` produced anything reachable. Binding a **foreign** context stays
-  deferred with a rewritten reason: it is implementable now, and that is a
-  reason it is possible, not a reason to do it.
+  **Upgrading:** nothing to do for a v1 producer or consumer; the change is
+  additive and the compatibility claim is tested, not asserted. A Python client
+  gains `_rt.TypeCode` — the document, unread: enough to receive one, hand it
+  back and inspect its `kind`, not enough to marshal a value *described* by
+  one, which would mean Python deciding CDR questions in a package that
+  deliberately contains no wire.
 
-  A peer drove it — 20 labelled rows, every expected value measured against
-  omniNames 4.3.4 first, and two deliberate divergences from omniNames recorded
-  (it type-checks neither rebind, and accepts any reference for
-  `bind_context`). The property the module rests on is now **checked**: the
-  servant names no `Connection`, `Pool`, `Mux`, `invoke`, `TcpStream` or
-  `connect(`, and all 16 operations run with nothing held.
-
-  Its negative control changed a test: the lock sweep *passed* with a violation
-  planted in `destroy`, because `destroy` at a populated root stops at
-  `NotEmpty` and never reaches the removal.
-
-  Landing it meant the generated-skeleton comparison had to follow, and that
-  comparison caught the interesting part. `destroy` had sat near the top of the
-  script as a deferral both halves refused; once served, it **destroyed the
-  root before every other step ran** — both servants identically, so the byte
-  comparison stayed green while value-carrying replies fell from 25 to 5.
-  **Agreement by mutual destruction**, which is exactly what
-  `the_comparison_is_not_vacuous` exists to catch. The lifetime steps moved to
-  the end, and the `NOT_COMPARED` entry that recorded an ordering difference
-  was **retired rather than deleted**: the difference existed *because*
-  `bind_context` was deferred, and it left with the deferral.
-
-### Added / 추가
-
-- **CosEvent serves the pull model's consumer side** — `obtain_pull_supplier`,
-  `connect_pull_consumer`, `pull`, `try_pull`, `disconnect_pull_supplier`. The
-  deferral's reason was *"the same unbounded buffer this module spends its
-  bounded queue avoiding, for no named consumer"*, and **only the second clause
-  survived measurement**: a pull proxy holds events in the same bounded deque,
-  moved by the same knob, dropped oldest-first into the same counter. Nine
-  pushes into a limit of three give `queued=3, dropped=6` on both sides.
-
-  It **drops at the bound and blocks at the empty end**, deliberately and at
-  different ends. Blocking a supplier — CORBA's own answer to a full channel —
-  would let one slow puller wedge the channel for every other consumer.
-  Blocking a caller that asked to wait is what `pull` means; it is bounded,
-  woken by an arriving event, and expires as `TIMEOUT` with **`COMPLETED_NO`**,
-  the load-bearing half: nothing was consumed, so calling again is safe.
-
-  The **supplier** side stays deferred with a rewritten reason — there the
-  channel is the puller, `PullSupplier::pull` is specified to block, and the
-  channel would hold a thread per supplier on somebody else's clock, for no
-  named supplier. `destroy` stays too, its reason moved from outbound calls
-  (which `guarded` now answers) to authorization: it is an **unauthenticated
-  remote operation that ends the channel for every other client**.
-
-  CosEvent 19 → **24 served**, `NO_IMPLEMENT` 9 → 4. **No peer verified any of
-  it** — omniEvents is absent and omniORBpy ships no `ProxyPullSupplier` stubs.
-
-- **The sweep was measuring the wrong object.** It probed the pull operations
-  against a *push* proxy, because no pull proxy could be obtained when that
-  code was written — so the moment they were served it reported the whole
-  `ProxyPullSupplier` interface as **unserved**. A false absence produced by
-  asking the wrong reference, and one that appears exactly when the underlying
-  thing gets better.
-
-- **F5 was already served, so what was missing was the second direction.**
-  `PLAN-SERVICES` §10 listed LifeCycle/Property as never started;
-  `COMPONENTS.md` had it ✅ since 2026-08-14 and coverage measured 16/16 — the
-  fourth "gap" this session that turned out to be closed. What was genuinely
-  missing is one section down in that same document: *no cross-ORB direction*.
-  An omniORB client now calls **all sixteen** through its own stubs. A hole it
-  found: `bind_expert`/`set_policy` take references **no operation returns**.
-
-- **S4 reads an `#include` from the item's own directory.** The thirteen-file
-  estate scored **1/13 (8%)** first-pass, each contract refused for a file
-  sitting beside it, and nothing was red because `estate/run.sh` amalgamates
-  first. **13/13** now, with the exposure worksheet byte-identical to the
-  amalgamated one — the equivalence that script had been assuming.
-
-  The shape is a `Source`, not a path: a model writes IDL that was never a
-  file. Text with no origin still says so in the same words, pinned by a test.
-  Two sites shared the cause, including `DiffOutcome::compared` recording
-  **`true` when the baseline failed to parse** — an unmeasured check reported
-  as a pass, the third found this session.
-
-### Known limits / 알려진 한계
-
-- **The `char` conversion list stays empty, and that is now measured rather
-  than cautious** (D009 §8 row 4, **BLOCKED**). The row conditioned a non-empty
-  list on a peer that cannot reach UTF-8. Eleven configurations of the two
-  installed ORBs were probed and ten measured: **every one reaches UTF-8**.
-  Neither ORB exposes an option that *names* its conversion list — omniORB has
-  `nativeCharCodeSet`/`defaultCharCodeSet` and accepts only ISO-8859-1 and
-  UTF-8 as a native set; JacORB's list follows its build. The one setting that
-  removes UTF-8, `jacorb.codeset=off`, removes the component entirely, and an
-  absence is not an advertisement.
-
-  What growing the list *would* cost was measured too, and it is not nothing.
-  Offered ISO-8859-1 from a listener we wrote, against clients we did not:
-  omniORB keeps sending UTF-8, and **JacORB configured native ISO-8859-1 moves
-  down to it** — `café` as `63 61 66 e9` instead of `63 61 66 c3 a9`, and
-  `함정 전투체계` as **each character truncated to its low octet, raising
-  nothing**. §7.10.2.6 leaves that case open and the two ORBs resolve it in
-  opposite directions; the empty list is what keeps the ambiguity unreachable.
-  A guard test fails if anyone grows the list, and names the probe to run
-  first.
-
-  광고하지 않는 편이 옳다는 것이 **조심이 아니라 측정**이 되었다. 설치된 두 ORB의
-  열한 구성 중 열을 측정했고 전부 UTF-8에 닿는다. 그리고 목록을 키웠을 때의 비용도
-  쟀다: JacORB는 제안하는 즉시 **내려가고**, 한글을 **각 문자의 하위 옥텟으로 잘라
-  보내면서 아무 예외도 올리지 않는다.**
-
-### 🔒 Security / 보안
-
-- **Twelve bytes bought sixty-four megabytes, and an overflow the release
-  fuzzer could not see.** Two hazards reachable from peer bytes, both
-  reproduced before being fixed.
-
-  `csiv2` added a peer-supplied DER length to a cursor unchecked. Fed
-  `60 88 FF FF FF FF FF FF FF FF` it panicked in debug and, in release,
-  **wrapped and returned "GSS token is truncated"** — an error message that was
-  a lie about what happened. `wire-fuzz` runs `--release`, where overflow
-  checks are off, so it was **structurally blind to the class**: its "0 panics"
-  was silent about it, not clearing it. The harness now carries the one run in
-  this tree that can see an arithmetic overflow at all.
-
-  And a GIOP 1.2 header declaring `message_size = 67,108,863` followed by
-  silence committed and zeroed 67,108,875 bytes before a body byte arrived. The
-  body is now read in 64 KiB chunks: the same header peaks at 65,548.
-
-- **An array length from an agent's document bought 206 GB.** A 198-byte
-  document declaring `array<octet, 4294967295>` as a union discriminator made
-  `decode_at` reserve before reading — then refuse the stream as truncated a
-  moment later, which is why nothing looked wrong. The `Sequence` arm fourteen
-  lines above has carried the guard since Phase 0 with a comment naming the
-  rule; the `Array` arm did not need it while every TypeCode it decoded against
-  had been compiled here. AnyJSON v1.1 made that length a field in a document
-  an agent sends.
-
-
-
-- **An argument value a content stage saw could reach the audit ledger.** The
-  `SEAT_SAFETY_CONTENT` interceptor seat reads argument *values* — that is what
-  it is for — and it can also refuse. Its refusal is `Denied::Intercepted`,
-  whose `reason` is free prose written by whatever stage a deployment
-  installed, and `AuditInterceptor` rendered that prose verbatim. A content
-  filter's most natural sentence names the thing it objected to, so the payload
-  landed in the one artifact this crate writes to disk, retains, and greps.
-
-  Measured, not reasoned: a real session with a marker in an argument produced
-
-  ```
-  REFUSE caller=alice … why=the safety.content stage refused this call:
-         this looked like a credential: {"cents":"pin-s3cret-4242"}
-  ```
-
-  The channel was opened on 2026-08-14 by the batch that filled the seat, which
-  checked that a stage *could* see the arguments and did not check its own
-  second condition — that the audit must not thereby gain a way to log one.
-  `guard.rs`'s claim that an audit line "can carry no credential material:
-  nothing here holds one" was false from that day and left standing.
-
-  **The ledger now takes the stage's name and drops its prose.** Typed refusals
-  are unchanged — their fields are repository ids, operation and scope names,
-  quota arithmetic, none of which can hold a byte the agent sent. The full
-  sentence still reaches the caller, the dry-run report and every observer
-  stage: readers who already hold the arguments. The gate did not move; a
-  refusal still precedes anything being sent.
-
-  **A gate that has to see a secret must not thereby be a gate that publishes
-  one.** Two harness checks: the property, and the shape — an `audit_entry`
-  call site taking a `Denied`'s `Display` — that would reintroduce it.
-
-  내용 좌석은 인자 **값**을 읽는다(그러라고 있는 자리다). 그 좌석의 거부 사유는
-  배포자가 설치한 스테이지가 쓴 자유 산문이고, 원장은 그것을 그대로 실었다 —
-  디스크에 남고 사람이 grep 하는 유일한 산출물에. 실측: 인자에 넣은 PIN이 `why=`에
-  그대로 찍혔다. 좌석을 채운 2026-08-14 배치가 **자기 두 번째 조건을 검사하지
-  않았고**, `guard.rs`의 "자격증명은 담기지 않는다"는 주장은 그날부터 거짓이었다.
-  이제 원장은 스테이지 **이름**만 싣는다. **비밀을 봐야 하는 게이트가 비밀을
-  퍼뜨리는 게이트가 되어서는 안 된다.**
+  AnyJSON v1.1: `_t`가 이름 하나에 담기는 타입은 v1 그대로, 그 밖에는 구조가
+  된다. **추가적**이므로 v1 문서는 전부 그대로 읽히며 그 주장은 시험된다.
+  변경 전 실측: 매핑이 자기가 쓴 문서를 자기가 거부했고, `tk_TypeCode`에는
+  `Value`가 없었다. **ir-subset 18+10 → 28+0**, 그 열에는 `InterfaceDef` 자신이
+  들어 있었다.
 
 ### ⚠ Behaviour changed / 동작 변경
 
@@ -597,15 +453,180 @@ records what changed and, where it matters, what it changes on the wire.
   스윕이 세는 대신 판정하고, 부재에서 실패한다. `NO_IMPLEMENT`를 서빙으로 계수하던
   탓에 IFR의 서빙 수치가 **14만큼** 부풀려져 있었다 — 유리한 쪽으로.
 
-### Known limits / 알려진 한계
+### 🔒 Security / 보안
 
-- **`_rt.py` reads only a named type in an `any`'s `_t`.** The Rust half reads
-  and writes the structural form; the Python half refuses it by name, with the
-  decision cited, rather than accepting the document and marshalling `_v` as
-  something else — the same rule the Rust side follows, applied to whichever
-  implementation is behind.
+- **Twelve bytes bought sixty-four megabytes, and an overflow the release
+  fuzzer could not see.** Two hazards reachable from peer bytes, both
+  reproduced before being fixed.
+
+  `csiv2` added a peer-supplied DER length to a cursor unchecked. Fed
+  `60 88 FF FF FF FF FF FF FF FF` it panicked in debug and, in release,
+  **wrapped and returned "GSS token is truncated"** — an error message that was
+  a lie about what happened. `wire-fuzz` runs `--release`, where overflow
+  checks are off, so it was **structurally blind to the class**: its "0 panics"
+  was silent about it, not clearing it. The harness now carries the one run in
+  this tree that can see an arithmetic overflow at all.
+
+  And a GIOP 1.2 header declaring `message_size = 67,108,863` followed by
+  silence committed and zeroed 67,108,875 bytes before a body byte arrived. The
+  body is now read in 64 KiB chunks: the same header peaks at 65,548.
+
+- **An array length from an agent's document bought 206 GB.** A 198-byte
+  document declaring `array<octet, 4294967295>` as a union discriminator made
+  `decode_at` reserve before reading — then refuse the stream as truncated a
+  moment later, which is why nothing looked wrong. The `Sequence` arm fourteen
+  lines above has carried the guard since Phase 0 with a comment naming the
+  rule; the `Array` arm did not need it while every TypeCode it decoded against
+  had been compiled here. AnyJSON v1.1 made that length a field in a document
+  an agent sends.
+
+
+
+- **An argument value a content stage saw could reach the audit ledger.** The
+  `SEAT_SAFETY_CONTENT` interceptor seat reads argument *values* — that is what
+  it is for — and it can also refuse. Its refusal is `Denied::Intercepted`,
+  whose `reason` is free prose written by whatever stage a deployment
+  installed, and `AuditInterceptor` rendered that prose verbatim. A content
+  filter's most natural sentence names the thing it objected to, so the payload
+  landed in the one artifact this crate writes to disk, retains, and greps.
+
+  Measured, not reasoned: a real session with a marker in an argument produced
+
+  ```
+  REFUSE caller=alice … why=the safety.content stage refused this call:
+         this looked like a credential: {"cents":"pin-s3cret-4242"}
+  ```
+
+  The channel was opened on 2026-08-14 by the batch that filled the seat, which
+  checked that a stage *could* see the arguments and did not check its own
+  second condition — that the audit must not thereby gain a way to log one.
+  `guard.rs`'s claim that an audit line "can carry no credential material:
+  nothing here holds one" was false from that day and left standing.
+
+  **The ledger now takes the stage's name and drops its prose.** Typed refusals
+  are unchanged — their fields are repository ids, operation and scope names,
+  quota arithmetic, none of which can hold a byte the agent sent. The full
+  sentence still reaches the caller, the dry-run report and every observer
+  stage: readers who already hold the arguments. The gate did not move; a
+  refusal still precedes anything being sent.
+
+  **A gate that has to see a secret must not thereby be a gate that publishes
+  one.** Two harness checks: the property, and the shape — an `audit_entry`
+  call site taking a `Denied`'s `Display` — that would reintroduce it.
+
+  내용 좌석은 인자 **값**을 읽는다(그러라고 있는 자리다). 그 좌석의 거부 사유는
+  배포자가 설치한 스테이지가 쓴 자유 산문이고, 원장은 그것을 그대로 실었다 —
+  디스크에 남고 사람이 grep 하는 유일한 산출물에. 실측: 인자에 넣은 PIN이 `why=`에
+  그대로 찍혔다. 좌석을 채운 2026-08-14 배치가 **자기 두 번째 조건을 검사하지
+  않았고**, `guard.rs`의 "자격증명은 담기지 않는다"는 주장은 그날부터 거짓이었다.
+  이제 원장은 스테이지 **이름**만 싣는다. **비밀을 봐야 하는 게이트가 비밀을
+  퍼뜨리는 게이트가 되어서는 안 된다.**
+
+### Decided / 결정
+
+- **D010 — what remains, and which of it cannot be measured here** (PROPOSED).
+  Written from the current gap columns rather than from memory, because the
+  session that produced it found four "gaps" already closed and four gates
+  green while measuring nothing — progress was wrong in both directions. It
+  splits the remainder into four classes: **A** buildable and measurable here,
+  **B** buildable but the oracle is absent (lands only as a SKIPPED harness
+  group naming its fixture, never as `ok`), **C** deferred with a trigger that
+  has not fired (building early is the defect), **D** a claim in a document
+  that cannot be tested. Six A items ordered by cost of defect, six B items
+  each naming what is missing, eleven C items each naming where its reason
+  lives, and the five D rows yesterday's plan batch left. Two process
+  proposals: a gap-column symbol check, and a rule that a new harness group
+  lands with its negative control in the commit message.
+
+  기억이 아니라 현재의 공백 열에서 썼다. 남은 것을 네 부류로 가른다 — 여기서
+  짓고 잴 수 있는 것, 지을 수 있으나 오라클이 없는 것(`ok`가 아니라 픽스처를
+  이름 붙인 SKIP으로만 착지), 방아쇠 달린 유예(일찍 짓는 것이 결함), 시험 불가한
+  문서 주장.
 
 ### Added / 추가
+
+- **CosNaming serves `bind_context`, `rebind_context` and `destroy`.** Two of
+  the three deferral reasons were **descriptions of the servant rather than
+  obstacles**: contexts lived as long as the process *because* nothing removed
+  a key, and binding a context this dispatch already serves is a map insert,
+  not a call over the wire — it was also the only way the already-served
+  `new_context` produced anything reachable. Binding a **foreign** context stays
+  deferred with a rewritten reason: it is implementable now, and that is a
+  reason it is possible, not a reason to do it.
+
+  A peer drove it — 20 labelled rows, every expected value measured against
+  omniNames 4.3.4 first, and two deliberate divergences from omniNames recorded
+  (it type-checks neither rebind, and accepts any reference for
+  `bind_context`). The property the module rests on is now **checked**: the
+  servant names no `Connection`, `Pool`, `Mux`, `invoke`, `TcpStream` or
+  `connect(`, and all 16 operations run with nothing held.
+
+  Its negative control changed a test: the lock sweep *passed* with a violation
+  planted in `destroy`, because `destroy` at a populated root stops at
+  `NotEmpty` and never reaches the removal.
+
+  Landing it meant the generated-skeleton comparison had to follow, and that
+  comparison caught the interesting part. `destroy` had sat near the top of the
+  script as a deferral both halves refused; once served, it **destroyed the
+  root before every other step ran** — both servants identically, so the byte
+  comparison stayed green while value-carrying replies fell from 25 to 5.
+  **Agreement by mutual destruction**, which is exactly what
+  `the_comparison_is_not_vacuous` exists to catch. The lifetime steps moved to
+  the end, and the `NOT_COMPARED` entry that recorded an ordering difference
+  was **retired rather than deleted**: the difference existed *because*
+  `bind_context` was deferred, and it left with the deferral.
+
+- **CosEvent serves the pull model's consumer side** — `obtain_pull_supplier`,
+  `connect_pull_consumer`, `pull`, `try_pull`, `disconnect_pull_supplier`. The
+  deferral's reason was *"the same unbounded buffer this module spends its
+  bounded queue avoiding, for no named consumer"*, and **only the second clause
+  survived measurement**: a pull proxy holds events in the same bounded deque,
+  moved by the same knob, dropped oldest-first into the same counter. Nine
+  pushes into a limit of three give `queued=3, dropped=6` on both sides.
+
+  It **drops at the bound and blocks at the empty end**, deliberately and at
+  different ends. Blocking a supplier — CORBA's own answer to a full channel —
+  would let one slow puller wedge the channel for every other consumer.
+  Blocking a caller that asked to wait is what `pull` means; it is bounded,
+  woken by an arriving event, and expires as `TIMEOUT` with **`COMPLETED_NO`**,
+  the load-bearing half: nothing was consumed, so calling again is safe.
+
+  The **supplier** side stays deferred with a rewritten reason — there the
+  channel is the puller, `PullSupplier::pull` is specified to block, and the
+  channel would hold a thread per supplier on somebody else's clock, for no
+  named supplier. `destroy` stays too, its reason moved from outbound calls
+  (which `guarded` now answers) to authorization: it is an **unauthenticated
+  remote operation that ends the channel for every other client**.
+
+  CosEvent 19 → **24 served**, `NO_IMPLEMENT` 9 → 4. **No peer verified any of
+  it** — omniEvents is absent and omniORBpy ships no `ProxyPullSupplier` stubs.
+
+- **The sweep was measuring the wrong object.** It probed the pull operations
+  against a *push* proxy, because no pull proxy could be obtained when that
+  code was written — so the moment they were served it reported the whole
+  `ProxyPullSupplier` interface as **unserved**. A false absence produced by
+  asking the wrong reference, and one that appears exactly when the underlying
+  thing gets better.
+
+- **F5 was already served, so what was missing was the second direction.**
+  `PLAN-SERVICES` §10 listed LifeCycle/Property as never started;
+  `COMPONENTS.md` had it ✅ since 2026-08-14 and coverage measured 16/16 — the
+  fourth "gap" this session that turned out to be closed. What was genuinely
+  missing is one section down in that same document: *no cross-ORB direction*.
+  An omniORB client now calls **all sixteen** through its own stubs. A hole it
+  found: `bind_expert`/`set_policy` take references **no operation returns**.
+
+- **S4 reads an `#include` from the item's own directory.** The thirteen-file
+  estate scored **1/13 (8%)** first-pass, each contract refused for a file
+  sitting beside it, and nothing was red because `estate/run.sh` amalgamates
+  first. **13/13** now, with the exposure worksheet byte-identical to the
+  amalgamated one — the equivalence that script had been assuming.
+
+  The shape is a `Source`, not a path: a model writes IDL that was never a
+  file. Text with no origin still says so in the same words, pinned by a test.
+  Two sites shared the cause, including `DiffOutcome::compared` recording
+  **`true` when the baseline failed to parse** — an unmeasured check reported
+  as a pass, the third found this session.
 
 - **The property sweep takes every value across AnyJSON and back.**
   `orbweaver-test`'s `one_case` now does `to_json` → text → `from_json` and
@@ -829,6 +850,104 @@ records what changed and, where it matters, what it changes on the wire.
   뺐다. `gap_symbols.py`는 게이트가 아닌 리포트 — 오늘 12/12가 존재하며 그
   숫자가 게이트에서 강등한 이유다.
 
+- **`idl-diff` resolves what it is asked to diff.** The §5.3 release gate was
+  given two revisions whose root file is byte-identical and whose two breaking
+  changes both live in the header they share, and it printed *"no change"* and
+  exited **0**. One call — `orbweaver_idl::parse`, the string entry point —
+  across **19 sites**, of which 12 used `parse` (silent) and 6 used `check`
+  (loud about the include and equally unable to resolve it). All are now
+  decided per site, with the ones that correctly stay on a raw parse carrying
+  their reason. An unresolvable include is **exit 2**, never a verdict: a diff
+  of two partial graphs says nothing about the contracts.
+
+  `orbweaver-mcp-server` turns out not to have served an estate at all — it
+  refused to start, and `spikes/estate/run.sh`'s amalgamation step was a
+  load-bearing workaround that read as a convenience.
+
+  Measured cost of the old silence: stripping `#include` from the thirteen-file
+  estate drops **27 references without a word** — 8 base interfaces and 19
+  raised exceptions.
+
+- **The estate goes in as the thirteen files it is stored as.** `run.sh`
+  amalgamated them first, and that step turned out to be **load-bearing rather
+  than a convenience**: without it `orbweaver-mcp-server` did not serve less, it
+  refused to start. A direct stage now runs beside the amalgamated one and the
+  two are measured to agree — 12 interfaces, 76 operations, identical interface
+  by interface (and, as it happens, identical as whole documents, recorded but
+  not asserted, because the two inputs genuinely differ).
+
+  `amalgamate.py`'s docstring had rotted in place: it said the front end
+  *skips* `#include` and cited a line of `lex.rs` that today reads *"it used to
+  be in that list, and being in it was a defect… It is resolved before the
+  lexer runs now."* The script stays, for a reason that is still true — some
+  consumers take a translation unit rather than a path — and stage 7b measures
+  the equivalence instead of assuming it.
+
+  Two more things were found to rest on the amalgamation without saying so:
+  `forge-pipeline`'s S4 supplies its item as **text**, which has no directory
+  for a quoted `#include` to resolve against, so pointed at the thirteen files
+  it exits 1 — the same class as the nineteen call sites, reported and not
+  fixed here; and `gen-corpus`'s output compiles against a hand-written servant
+  written for the single amalgamated module, which is a genuine dependency and
+  now stated.
+
+- **DynAny**, over `Value`/`TypeCode`: navigation whose cursor is a path
+  re-resolved at every operation, so nothing exists below the focus and
+  past-the-end is representable but never readable. 76 of 78 golden types are
+  taken apart and reassembled into identical CDR, both byte orders, all eight
+  alignment phases; the two it cannot are `fixed`, deferred by §4.4, and the
+  test asserts that list is exactly those two.
+
+  Its first oracle was worthless and only mutation showed it: the source value
+  was generated with DynAny too, so breaking `next()` to skip every second
+  component **still passed**. A producer and a consumer sharing a defect agree
+  about the result.
+
+- **`agent-fuzz`**, for the parsers a `tools/call` reaches. AnyJSON v1.1 put a
+  recursive parser on the agent boundary and nobody had fuzzed it, including
+  whoever wrote it. Seven targets, zero panics over 50k/50k/200k at three
+  seeds; the one finding was the array reservation above.
+
+- **CSIv2 fuzz targets, and the reach that made them worth having.** Two of the
+  three were reached **zero times in 50,000 cases** before seeding — the
+  green-and-worthless case, stated. Twenty seeds took them to 659 / 1930 /
+  2811, and the dilution that cost the GIOP half is reported rather than
+  hidden. Twenty-five hostile literals run on every invocation whatever
+  `--cases` says, because a class the shipping build cannot see should not also
+  depend on a random draw.
+
+- **`call-bench`**, the LAN echo benchmark §8 has cited since v0.2 and did not
+  have. One loopback connection shared by both clients, calls interleaved with
+  the order swapped, every sample checked against the expected answer. The
+  dynamic path costs **+2.0 µs p50 on a 64-string payload (1.06×)** — about
+  31 ns per string, and per *string* rather than per byte.
+
+- **A generated skeleton is compared to the hand-written servant it must
+  match**, byte for byte: 59 scripted steps × 2 byte orders over CosNaming,
+  every structured reply decoded back by `orbweaver-giop`'s own readers,
+  because two servants can agree on wrong bytes. It is what forced D009's L2
+  early — the naming server began publishing `TAG_CODE_SETS` and the generated
+  reference did not.
+
+- **`#include` inside a module**, which no corpus file had. Eight new roots
+  produced 32 repository ids, **7 of which diverged from omniidl — and JacORB
+  agreed with omniidl against us on all seven.** The resolver had implemented a
+  file boundary as an injected `#pragma prefix`, and prefix *replaces* the id
+  path, so it could express neither half of a save/restore once the path held a
+  module.
+
+- **A decision's status is checked, not just written.**
+  `spikes/decision_status.py` reads the authoritative status out of each
+  `docs/decisions/D00N-*.md` and holds every other mention to it, in the
+  harness. Dated records — `pipeline-runs/`, `PHASE*.md`, released sections of
+  this file — are out of scope by construction: they state what was true on a
+  date, and editing them to match today would falsify them rather than repair
+  them. The gate also refuses a citation to a decision that does not exist.
+
+  결정의 상태는 `docs/decisions/`에 한 번만 산다. 나머지 언급은 하네스가 그것과
+  대조한다. 날짜가 붙은 기록(실행 기록·PHASE·릴리즈된 절)은 그 시점의 사실이므로
+  범위 밖이다 — 오늘 기준으로 고치는 것은 수리가 아니라 위조다.
+
 ### Fixed / 수정
 
 - **The §5.3 differ compares a union's members by role, not by position.**
@@ -986,8 +1105,6 @@ records what changed and, where it matters, what it changes on the wire.
   액션 3은 역사적 기록으로 주석. `README.md`가 같은 표를 계측기 없이 다시
   적고 있음 — 같은 클래스의 여섯째 행, 이 배치 밖.
 
-### Fixed / 수정
-
 - **CI had been red for ten consecutive runs while the local harness was
   green, on three causes, none of them in the code.** Found by reading the
   runs before planning the next batch rather than after landing it.
@@ -1060,108 +1177,6 @@ records what changed and, where it matters, what it changes on the wire.
   대신 *마커가 무엇을 뜻하는가*를 물어서 나왔다. 음성 대조군이 설계의 핵심이다:
   **형제** 인터페이스의 스코프는 여전히 새면 안 된다.
 
-### Added / 추가
-
-- **`idl-diff` resolves what it is asked to diff.** The §5.3 release gate was
-  given two revisions whose root file is byte-identical and whose two breaking
-  changes both live in the header they share, and it printed *"no change"* and
-  exited **0**. One call — `orbweaver_idl::parse`, the string entry point —
-  across **19 sites**, of which 12 used `parse` (silent) and 6 used `check`
-  (loud about the include and equally unable to resolve it). All are now
-  decided per site, with the ones that correctly stay on a raw parse carrying
-  their reason. An unresolvable include is **exit 2**, never a verdict: a diff
-  of two partial graphs says nothing about the contracts.
-
-  `orbweaver-mcp-server` turns out not to have served an estate at all — it
-  refused to start, and `spikes/estate/run.sh`'s amalgamation step was a
-  load-bearing workaround that read as a convenience.
-
-  Measured cost of the old silence: stripping `#include` from the thirteen-file
-  estate drops **27 references without a word** — 8 base interfaces and 19
-  raised exceptions.
-
-- **The estate goes in as the thirteen files it is stored as.** `run.sh`
-  amalgamated them first, and that step turned out to be **load-bearing rather
-  than a convenience**: without it `orbweaver-mcp-server` did not serve less, it
-  refused to start. A direct stage now runs beside the amalgamated one and the
-  two are measured to agree — 12 interfaces, 76 operations, identical interface
-  by interface (and, as it happens, identical as whole documents, recorded but
-  not asserted, because the two inputs genuinely differ).
-
-  `amalgamate.py`'s docstring had rotted in place: it said the front end
-  *skips* `#include` and cited a line of `lex.rs` that today reads *"it used to
-  be in that list, and being in it was a defect… It is resolved before the
-  lexer runs now."* The script stays, for a reason that is still true — some
-  consumers take a translation unit rather than a path — and stage 7b measures
-  the equivalence instead of assuming it.
-
-  Two more things were found to rest on the amalgamation without saying so:
-  `forge-pipeline`'s S4 supplies its item as **text**, which has no directory
-  for a quoted `#include` to resolve against, so pointed at the thirteen files
-  it exits 1 — the same class as the nineteen call sites, reported and not
-  fixed here; and `gen-corpus`'s output compiles against a hand-written servant
-  written for the single amalgamated module, which is a genuine dependency and
-  now stated.
-
-- **DynAny**, over `Value`/`TypeCode`: navigation whose cursor is a path
-  re-resolved at every operation, so nothing exists below the focus and
-  past-the-end is representable but never readable. 76 of 78 golden types are
-  taken apart and reassembled into identical CDR, both byte orders, all eight
-  alignment phases; the two it cannot are `fixed`, deferred by §4.4, and the
-  test asserts that list is exactly those two.
-
-  Its first oracle was worthless and only mutation showed it: the source value
-  was generated with DynAny too, so breaking `next()` to skip every second
-  component **still passed**. A producer and a consumer sharing a defect agree
-  about the result.
-
-- **`agent-fuzz`**, for the parsers a `tools/call` reaches. AnyJSON v1.1 put a
-  recursive parser on the agent boundary and nobody had fuzzed it, including
-  whoever wrote it. Seven targets, zero panics over 50k/50k/200k at three
-  seeds; the one finding was the array reservation above.
-
-- **CSIv2 fuzz targets, and the reach that made them worth having.** Two of the
-  three were reached **zero times in 50,000 cases** before seeding — the
-  green-and-worthless case, stated. Twenty seeds took them to 659 / 1930 /
-  2811, and the dilution that cost the GIOP half is reported rather than
-  hidden. Twenty-five hostile literals run on every invocation whatever
-  `--cases` says, because a class the shipping build cannot see should not also
-  depend on a random draw.
-
-- **`call-bench`**, the LAN echo benchmark §8 has cited since v0.2 and did not
-  have. One loopback connection shared by both clients, calls interleaved with
-  the order swapped, every sample checked against the expected answer. The
-  dynamic path costs **+2.0 µs p50 on a 64-string payload (1.06×)** — about
-  31 ns per string, and per *string* rather than per byte.
-
-- **A generated skeleton is compared to the hand-written servant it must
-  match**, byte for byte: 59 scripted steps × 2 byte orders over CosNaming,
-  every structured reply decoded back by `orbweaver-giop`'s own readers,
-  because two servants can agree on wrong bytes. It is what forced D009's L2
-  early — the naming server began publishing `TAG_CODE_SETS` and the generated
-  reference did not.
-
-- **`#include` inside a module**, which no corpus file had. Eight new roots
-  produced 32 repository ids, **7 of which diverged from omniidl — and JacORB
-  agreed with omniidl against us on all seven.** The resolver had implemented a
-  file boundary as an injected `#pragma prefix`, and prefix *replaces* the id
-  path, so it could express neither half of a save/restore once the path held a
-  module.
-
-- **A decision's status is checked, not just written.**
-  `spikes/decision_status.py` reads the authoritative status out of each
-  `docs/decisions/D00N-*.md` and holds every other mention to it, in the
-  harness. Dated records — `pipeline-runs/`, `PHASE*.md`, released sections of
-  this file — are out of scope by construction: they state what was true on a
-  date, and editing them to match today would falsify them rather than repair
-  them. The gate also refuses a citation to a decision that does not exist.
-
-  결정의 상태는 `docs/decisions/`에 한 번만 산다. 나머지 언급은 하네스가 그것과
-  대조한다. 날짜가 붙은 기록(실행 기록·PHASE·릴리즈된 절)은 그 시점의 사실이므로
-  범위 밖이다 — 오늘 기준으로 고치는 것은 수리가 아니라 위조다.
-
-### Fixed / 수정
-
 - **Ten stale status claims, and the four remaining-work lists no gate can
   see.** Four decisions the user approved on 2026-08-14 — D003, D004, D005,
   D006 — were still being called open in five documents. `PLAN.md` §7.2 still
@@ -1197,6 +1212,39 @@ records what changed and, where it matters, what it changes on the wire.
   gate loosened.
 
 ---
+
+### Known limits / 알려진 한계
+
+- **The `char` conversion list stays empty, and that is now measured rather
+  than cautious** (D009 §8 row 4, **BLOCKED**). The row conditioned a non-empty
+  list on a peer that cannot reach UTF-8. Eleven configurations of the two
+  installed ORBs were probed and ten measured: **every one reaches UTF-8**.
+  Neither ORB exposes an option that *names* its conversion list — omniORB has
+  `nativeCharCodeSet`/`defaultCharCodeSet` and accepts only ISO-8859-1 and
+  UTF-8 as a native set; JacORB's list follows its build. The one setting that
+  removes UTF-8, `jacorb.codeset=off`, removes the component entirely, and an
+  absence is not an advertisement.
+
+  What growing the list *would* cost was measured too, and it is not nothing.
+  Offered ISO-8859-1 from a listener we wrote, against clients we did not:
+  omniORB keeps sending UTF-8, and **JacORB configured native ISO-8859-1 moves
+  down to it** — `café` as `63 61 66 e9` instead of `63 61 66 c3 a9`, and
+  `함정 전투체계` as **each character truncated to its low octet, raising
+  nothing**. §7.10.2.6 leaves that case open and the two ORBs resolve it in
+  opposite directions; the empty list is what keeps the ambiguity unreachable.
+  A guard test fails if anyone grows the list, and names the probe to run
+  first.
+
+  광고하지 않는 편이 옳다는 것이 **조심이 아니라 측정**이 되었다. 설치된 두 ORB의
+  열한 구성 중 열을 측정했고 전부 UTF-8에 닿는다. 그리고 목록을 키웠을 때의 비용도
+  쟀다: JacORB는 제안하는 즉시 **내려가고**, 한글을 **각 문자의 하위 옥텟으로 잘라
+  보내면서 아무 예외도 올리지 않는다.**
+
+- **`_rt.py` reads only a named type in an `any`'s `_t`.** The Rust half reads
+  and writes the structural form; the Python half refuses it by name, with the
+  decision cited, rather than accepting the document and marshalling `_v` as
+  something else — the same rule the Rust side follows, applied to whichever
+  implementation is behind.
 
 ## v0.4.0 — 2026-08-14
 

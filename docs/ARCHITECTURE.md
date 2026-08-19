@@ -275,6 +275,15 @@ catches a class the one below cannot:
    is the layer that finds specification misreadings, and it has: a transposed
    completion status survived every local test because both sides compared
    against the same enum, and only an ORB we did not write could disagree.
+   Since v0.5.0 this layer has a discipline rather than a habit: **the peer's
+   bytes are recorded with provenance, one test per capture decodes them and
+   re-encodes back to them, and the harness re-takes every capture from the
+   live fixture** (`spikes/*_capture.py`, `tests/*_from_a_peer.rs`). Twelve
+   wire changes came from it in one release, and none from a test written
+   from the specification alone — a convention both ends apply cannot be
+   refuted by a round trip, and a convention one end applies on *read* can
+   hide the other end's defect on *write* (the 1.1 `wstring` mark our reader
+   stripped after JacORB echoed it as data).
 5. **Differential compilers** — omniidl and JacORB's IDL compiler over the
    whole corpus, with divergences recorded rather than reconciled.
 6. **A consumer-shaped input** — `spikes/estate/`: thirteen legacy contracts
@@ -292,12 +301,23 @@ The harness (`spikes/run_checks.sh`) is the merge gate, and its exit code is
 the verdict. Two rules give the number meaning: **an unmeasured check is a
 failure, never a pass** — absent fixtures are counted as skips and named — and
 **a batch reports its first-pass rate and its round count separately**, because
-they measure different things.
+they measure different things. Two more since v0.5.0: **a new group lands with
+its negative control in its commit message** (five gates were green while
+measuring nothing in one week, all found by negative controls, none by review),
+and **a claim whose fixture is absent is a counted `SKIPPED` group that names
+the fixture** — the verdict line counts skips; a `note` after an `ok` is not
+counted and reads as coverage. And where a document restates a measurement, a
+script writes it: `SERVICES-COVERAGE.md` §8 is generated from the sweep and
+diffed here.
 
 **약한 주장부터 여섯 계층.** 각 계층은 아래 계층이 잡을 수 없는 부류를 잡는다.
 4계층(외부 피어)만이 규격 오독을 잡는다 — 우리 양쪽 끝이 같은 오독을 공유하면
 3계층까지는 전부 통과한다. 6계층은 **모양**의 공백을 잡는다: 파일 두 개가 있어야
-드러나는 결함은 한 파일짜리 사례를 아무리 많이 쌓아도 잡히지 않는다.
+드러나는 결함은 한 파일짜리 사례를 아무리 많이 쌓아도 잡히지 않는다. v0.5.0부터
+4계층은 습관이 아니라 규율이다: **피어의 바이트를 출처와 함께 기록하고, 캡처마다
+테스트 하나가 디코드해 그 바이트로 재인코딩하며, 하네스가 라이브 픽스처에서 매번
+재채취한다.** 새 하네스 그룹은 음성 대조군을 커밋 메시지에 싣고, 픽스처가 없는
+주장은 픽스처를 이름 붙인 `SKIPPED` 그룹으로 센다.
 
 ---
 
