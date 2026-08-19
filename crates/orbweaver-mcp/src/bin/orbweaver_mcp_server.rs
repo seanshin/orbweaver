@@ -7,6 +7,7 @@
 //!                      [--as <principal>] [--scope <scope>]... \
 //!                      [--map-scope <token-scope>=<contract-scope>]... [--token-scope <s>]... \
 //!                      [--dry-run[=<IDL:module/Iface:1.0[.operation]>]] [--dry-run-args <json>] \
+//!                      [--dry-run-handle <name>=<IOR:...|file>]... \
 //!                      [--trace <path>|-] [--trace-ts <rfc3339>] \
 //!                      [--quota <calls>] [--quota-scope <everything|caller|interface|operation>] \
 //!                      [--audit-capacity <lines>]
@@ -102,15 +103,51 @@
 //! `would` to `marshal` and names `raises` (`MARSHAL`). A `string<8>` given
 //! nine characters predicts `allow` without values and `marshal` with them: the
 //! value-less question is a policy verdict and says so by saying nothing about
-//! a payload. Handles in the arguments resolve against this run's own table,
-//! which holds nothing — a `--dry-run` issues no handle — so a declared
-//! reference predicts `would_not_marshal` here, and the sentence names the
-//! handle. Still no target: nothing is dialed with values any more than
+//! a payload. Still no target: nothing is dialed with values any more than
 //! without them (`orbweaver_mcp::dryrun`, "Nothing reaches the wire").
+//!
+//! An object reference in the arguments is `{"_ref": <handle>}` — D008's one
+//! notation, the same the agent sends — and a handle resolves against **this
+//! run's own capability table**. A `--dry-run` issues none on its own, so a
+//! declared reference used to predict `would_not_marshal` from the command
+//! line however valid the target; the one instrument an operator has could not
+//! ask about `heartbeat(in Expert e, …)` at all. `--dry-run-handle
+//! <name>=<IOR:…|file>` (repeatable) is how the run comes to hold one:
+//!
+//! ```text
+//! --dry-run=IDL:moe/ExpertRegistry:1.0.heartbeat \
+//! --dry-run-handle expert=/var/run/expert.ior \
+//! --dry-run-args '{"e":{"_ref":"expert"},"updated_cap":{…}}'
+//! ```
+//!
+//! The IOR is **parsed and never dialed** — read from the file (or given
+//! inline as `IOR:…`), issued into the session's table through the same
+//! `issue_checked` the serving path issues its root handle through, so the
+//! handle carries the same repository id, the same expiry and the same 128
+//! bits from `/dev/urandom` a live `resolve` would have issued. The token
+//! does not exist before this process runs, so `--dry-run-args` names the
+//! reference by the **name** the flag gave it: every `{"_ref": "<name>"}` in
+//! the arguments is rewritten to the token before the library sees the
+//! document, and the library sees exactly what an agent would have sent. A
+//! `_ref` that names no `--dry-run-handle` is left as written and resolves to
+//! nothing — `would_not_marshal`, `at e: no reference is held under handle
+//! "expert"` — which is the negative control and the same sentence a forged
+//! handle earns from a live call. The document carries `handles:
+//! {"<name>": "<token>"}` so a reader can see what was held; the token is
+//! session-scoped and the session ends with the process, so the line is
+//! worthless to anybody who reads it later, exactly like `root handle:` on
+//! stderr. Nothing about the target — host, port, object key — reaches
+//! stdout, stderr or the ledger; `dryrun_handle.rs` holds that against a
+//! listener nobody connects to.
 //!
 //! 값과 함께 물으면 예측은 페이로드가 계약의 `TypeCode`에 맞는지도 답한다 —
 //! 양쪽 바이트 순서로, 버려지는 버퍼에 인코딩해서. 값 없이 물은 예측은 정책의
 //! 답일 뿐이며, 페이로드에 대해 아무 말도 하지 않는 것으로 그렇다고 말한다.
+//! 인자 속 객체 참조는 `{"_ref": <핸들>}`이며 이 실행의 테이블에서 해석된다.
+//! `--dry-run-handle <이름>=<IOR|파일>`은 IOR을 **파싱만 하고 다이얼하지 않은
+//! 채** 라이브 경로와 같은 발급 경로로 테이블에 넣고, `--dry-run-args`의
+//! `{"_ref": "<이름>"}`을 발급된 토큰으로 바꾼다. 선언되지 않은 이름은 그대로
+//! 남아 `would_not_marshal`이 되며, 그것이 음성 대조군이다.
 //!
 //! # `--map-scope`: the vocabulary gap, made loud before a call
 //!
@@ -292,6 +329,69 @@ fn split_operation(spec: &str) -> (&str, Option<&str>) {
     }
 }
 
+/// `--dry-run-handle <name>=<IOR:…|file>`: a reference this dry run will
+/// hold, **parsed and not dialed**.
+///
+/// Split at the first `=`, like `--map-scope`: a name is an identifier the
+/// arguments will use and cannot contain one; a path can. The value is a
+/// stringified IOR when it reads as one and a file holding one otherwise, so
+/// the file an ORB writes its reference to is usable as it lies. Refused at
+/// parse time — a reference that will not parse is a usage error, not a
+/// prediction about a payload nobody described — and nothing here opens a
+/// socket: `Ior::parse` is a decoder over hex.
+fn dry_run_handle(spec: &str) -> Result<(String, Ior), String> {
+    let Some((name, value)) = spec.split_once('=') else {
+        return Err(format!("--dry-run-handle {spec:?}: expected <name>=<IOR:...|file>"));
+    };
+    if name.is_empty() || value.is_empty() {
+        return Err(format!(
+            "--dry-run-handle {spec:?}: expected <name>=<IOR:...|file>, both non-empty"
+        ));
+    }
+    let text = if value.get(..4).is_some_and(|p| p.eq_ignore_ascii_case("IOR:")) {
+        value.to_owned()
+    } else {
+        std::fs::read_to_string(value)
+            .map_err(|e| format!("--dry-run-handle {name}: {value}: {e}"))?
+    };
+    let ior = Ior::parse(text.trim()).map_err(|e| format!("--dry-run-handle {name}: {e}"))?;
+    Ok((name.to_owned(), ior))
+}
+
+/// Rewrites every `{"_ref": "<name>"}` in `args` whose name is a
+/// `--dry-run-handle` to the token that handle was issued as, and returns the
+/// names it found.
+///
+/// The library is handed the document an agent would have sent — D008's one
+/// notation, a token in the `_ref` seat — and knows nothing of names. A
+/// `_ref` that names no declared handle is left as written: it resolves to
+/// nothing, and the prediction says so in the mapper's own sentence, which is
+/// what a forged handle earns from a live call. Only the `_ref` **string**
+/// is rewritten, so a struct member that happens to be named like a handle
+/// is untouched.
+fn name_references(
+    args: &mut Json,
+    tokens: &std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeSet<String> {
+    let mut used = std::collections::BTreeSet::new();
+    let mut stack = vec![args];
+    while let Some(node) = stack.pop() {
+        match node {
+            Json::Object(fields) => {
+                if let Some(Json::String(name)) = fields.get_mut("_ref")
+                    && let Some(token) = tokens.get(name.as_str())
+                {
+                    used.insert(std::mem::replace(name, token.clone()));
+                }
+                stack.extend(fields.values_mut());
+            }
+            Json::Array(items) => stack.extend(items.iter_mut()),
+            _ => {}
+        }
+    }
+    used
+}
+
 /// Emits every audit line written since `from` to stderr, and returns the new
 /// watermark.
 ///
@@ -348,6 +448,7 @@ fn main() -> std::process::ExitCode {
     let mut dry_run = false;
     let mut dry_run_only: Option<String> = None;
     let mut dry_run_args: Option<Json> = None;
+    let mut dry_run_handles: Vec<(String, Ior)> = Vec::new();
     let mut trace_to: Option<String> = None;
     let mut trace_ts: Option<String> = None;
     let mut quota_limit: Option<u64> = None;
@@ -419,6 +520,18 @@ fn main() -> std::process::ExitCode {
                 )),
                 Err(e) => Err(format!("--dry-run-args: {e}")),
             }),
+            // A reference this run holds without dialing it. Parsed here, so
+            // a malformed IOR is refused before the registry is read; issued
+            // below, once there is a session to issue it into.
+            "--dry-run-handle" => {
+                next("--dry-run-handle").and_then(|v| dry_run_handle(&v)).and_then(|(name, ior)| {
+                    if dry_run_handles.iter().any(|(n, _)| *n == name) {
+                        return Err(format!("--dry-run-handle {name}: declared twice"));
+                    }
+                    dry_run_handles.push((name, ior));
+                    Ok(())
+                })
+            }
             "--trace" => next("--trace").map(|v| trace_to = Some(v)),
             "--trace-ts" => next("--trace-ts").map(|v| trace_ts = Some(v)),
             "--quota" => next("--quota").and_then(|v| match v.parse::<u64>() {
@@ -447,6 +560,7 @@ fn main() -> std::process::ExitCode {
                      [--as <principal>] [--scope <scope>]... \
                      [--map-scope <token>=<contract>]... [--token-scope <scope>]... \
                      [--dry-run[=<id[.operation]>]] [--dry-run-args <json>] \
+                     [--dry-run-handle <name>=<IOR:...|file>]... \
                      [--trace <path>|-] [--trace-ts <rfc3339>] \
                      [--quota <calls>] [--quota-scope <everything|caller|interface|operation>] \
                      [--audit-capacity <lines>]"
@@ -494,6 +608,17 @@ fn main() -> std::process::ExitCode {
         eprintln!(
             "--dry-run-args needs one operation to apply the values to: \
              --dry-run=<IDL:module/Iface:1.0>.<operation>"
+        );
+        return std::process::ExitCode::from(2);
+    }
+    // A held reference is named by the values or by nothing. Refused for the
+    // same reason as values without an operation: a run that held a reference
+    // nothing could name would print a document that looks like the one that
+    // asked about it.
+    if !dry_run_handles.is_empty() && dry_run_args.is_none() {
+        eprintln!(
+            "--dry-run-handle needs --dry-run-args to name the reference: \
+             --dry-run-args '{{\"<param>\":{{\"_ref\":\"<name>\"}}}}'"
         );
         return std::process::ExitCode::from(2);
     }
@@ -594,8 +719,10 @@ fn main() -> std::process::ExitCode {
     };
 
     if dry_run {
-        // No IOR is read, no socket is opened, and no handle is issued: the
-        // report is a question about the policy and the policy is in memory.
+        // No socket is opened and no target is read: the report is a question
+        // about the policy and the policy is in memory. The only references
+        // it holds are the ones `--dry-run-handle` declared, parsed and issued
+        // below — never dialed.
         // The approval is the one a session starts with — an operator asking
         // "what needs a human?" wants the answer for a session that has not
         // been handed one.
@@ -641,6 +768,36 @@ fn main() -> std::process::ExitCode {
                 }
             }
         }
+        // The references this run holds, issued into the session's own table
+        // through the path the serving branch issues its root handle through
+        // — same repository id, same expiry, same entropy — so the library
+        // resolves them the way a live call would. Then the values name them:
+        // `{"_ref": "<name>"}` becomes `{"_ref": "<token>"}` before the
+        // library sees the document, and a name nothing declared is left to
+        // resolve to nothing. The mapping goes on stderr where the root handle
+        // goes, and into the document under `handles`.
+        let mut tokens = std::collections::BTreeMap::new();
+        for (name, ior) in &dry_run_handles {
+            match bridge.handles().issue_checked(ior) {
+                Ok(h) => {
+                    eprintln!("dry-run handle {name}: {h} ({}; parsed, not dialed)", ior.type_id);
+                    tokens.insert(name.clone(), h.as_str().to_owned());
+                }
+                Err(e) => {
+                    eprintln!("--dry-run-handle {name}: {e}");
+                    return std::process::ExitCode::from(2);
+                }
+            }
+        }
+        if let Some(args) = &mut dry_run_args {
+            let used = name_references(args, &tokens);
+            for name in tokens.keys().filter(|n| !used.contains(*n)) {
+                eprintln!(
+                    "--dry-run-handle {name} is named by nothing in --dry-run-args: the \
+                     prediction does not depend on it"
+                );
+            }
+        }
         // One operation prints that operation's own document; with values,
         // the same document with the payload's verdict in it. The other two
         // grains are surveys, as they were. (`--dry-run-args` without an
@@ -660,6 +817,16 @@ fn main() -> std::process::ExitCode {
         // saw.
         if let (Some(audit), Json::Object(fields)) = (&scope_audit, &mut report) {
             fields.insert("scope_map".to_owned(), audit.to_json());
+        }
+        // What was held, by name: absent when nothing was declared, so the
+        // document a deployment without the flag reads is the one it read.
+        if let (false, Json::Object(fields)) = (tokens.is_empty(), &mut report) {
+            fields.insert(
+                "handles".to_owned(),
+                Json::Object(
+                    tokens.iter().map(|(n, t)| (n.clone(), Json::String(t.clone()))).collect(),
+                ),
+            );
         }
         println!("{report}");
         // The questions are on the record too, and stderr is where a
@@ -795,4 +962,50 @@ fn main() -> std::process::ExitCode {
     // not at all.
     emit_audit(session.bridge(), audited);
     std::process::ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Only the `_ref` seat is rewritten, and only when it names a declared
+    /// handle: a member that happens to share a name, an array of references,
+    /// and a name nobody declared are all left as written. The library then
+    /// sees D008's notation with a token in it — or a name it will refuse.
+    #[test]
+    fn name_references_rewrites_the_ref_seat_and_nothing_else() {
+        let tokens: std::collections::BTreeMap<String, String> =
+            [("acct", "cap_0a"), ("spare", "cap_0b")]
+                .into_iter()
+                .map(|(n, t)| (n.to_owned(), t.to_owned()))
+                .collect();
+        let mut args = Json::parse(
+            r#"{"acct":{"_ref":"acct"},"more":[{"_ref":"acct"},{"_ref":"nobody"}],
+                "note":"acct","nested":{"inner":{"_ref":"acct","acct":"acct"}}}"#,
+        )
+        .expect("json");
+        let used = name_references(&mut args, &tokens);
+        assert_eq!(used.into_iter().collect::<Vec<_>>(), ["acct"], "spare was named by nothing");
+        assert_eq!(
+            args.to_string(),
+            Json::parse(
+                r#"{"acct":{"_ref":"cap_0a"},"more":[{"_ref":"cap_0a"},{"_ref":"nobody"}],
+                    "note":"acct","nested":{"inner":{"_ref":"cap_0a","acct":"acct"}}}"#
+            )
+            .expect("json")
+            .to_string()
+        );
+    }
+
+    /// `<name>=<IOR:…|file>`, both halves non-empty, and a reference that
+    /// will not parse is refused with the flag and the name in the sentence.
+    #[test]
+    fn a_dry_run_handle_is_name_equals_reference() {
+        for bad in ["expert", "=IOR:00", "expert=", ""] {
+            assert!(dry_run_handle(bad).is_err(), "{bad:?}");
+        }
+        assert!(
+            dry_run_handle("expert=IOR:zz").unwrap_err().starts_with("--dry-run-handle expert")
+        );
+    }
 }
