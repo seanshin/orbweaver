@@ -21,7 +21,7 @@
 
 use std::collections::BTreeSet;
 
-use orbweaver_giop::typecode::TypeCode;
+use orbweaver_giop::typecode::{TypeCode, UnionCase};
 
 use crate::{Entry, OperationSig, Registry, RepositoryId};
 
@@ -403,44 +403,10 @@ fn diff_type(id: &RepositoryId, a: &TypeCode, b: &TypeCode, out: &mut Vec<Change
                 });
             }
         }
-        (TypeCode::Union { cases: ca, .. }, TypeCode::Union { cases: cb, .. }) => {
-            let removed: Vec<_> =
-                ca.iter().filter(|x| !cb.iter().any(|y| y.label == x.label)).collect();
-            let added: Vec<_> =
-                cb.iter().filter(|y| !ca.iter().any(|x| x.label == y.label)).collect();
-            if !removed.is_empty() {
-                out.push(Change {
-                    id: id.clone(),
-                    what: format!(
-                        "union case(s) removed: {:?}",
-                        removed.iter().map(|c| &c.name).collect::<Vec<_>>()
-                    ),
-                    why: "a sender may still select the removed discriminator",
-                    verdict: Verdict::Breaking,
-                });
-            }
-            if !added.is_empty() {
-                out.push(Change {
-                    id: id.clone(),
-                    what: format!(
-                        "union case(s) added: {:?}",
-                        added.iter().map(|c| &c.name).collect::<Vec<_>>()
-                    ),
-                    why: "an old receiver has no branch for the new discriminator",
-                    verdict: Verdict::ConditionallyBreaking,
-                });
-            }
-            for (x, y) in ca.iter().zip(cb) {
-                if x.label == y.label && !same_identity(&x.tc, &y.tc) {
-                    out.push(Change {
-                        id: id.clone(),
-                        what: format!("union case {:?} changed type", x.name),
-                        why: "the receiver reads the old branch's bytes",
-                        verdict: Verdict::Breaking,
-                    });
-                }
-            }
-        }
+        (
+            TypeCode::Union { discriminator: da, default_index: dia, cases: ca, .. },
+            TypeCode::Union { discriminator: db, default_index: dib, cases: cb, .. },
+        ) => diff_union(id, (da, *dia, ca), (db, *dib, cb), out),
         // A bound is not an encoding. `sequence<octet>` and `sequence<octet, 64>`
         // put the same bytes on the wire — a length and the elements — so the
         // catch-all's sentence about a receiver having no way to notice is
@@ -474,6 +440,159 @@ fn diff_type(id: &RepositoryId, a: &TypeCode, b: &TypeCode, out: &mut Vec<Change
             why: "the encoded form differs, and CDR gives a receiver no way to notice",
             verdict: Verdict::Breaking,
         }),
+    }
+}
+
+/// A union compared by the roles its members play on the wire, not by their
+/// positions in the `TypeCode`'s member list.
+///
+/// A union value is a discriminator followed by the one member that
+/// discriminator selects — a labelled case by its label, the default member
+/// by *not* matching any label. The member list's order and length are not
+/// part of that encoding: `case 2: default: string rest;` was two members in
+/// this registry until f8daa21 (the default folded onto its label,
+/// `default_index` on it) and is three today (omniidl's list, the default a
+/// member of its own), and every discriminator selects the same branch from
+/// either. Compared by position those two lists differ, and compared by label
+/// the default's empty label reads as a discriminator value nobody has, so
+/// the folded shape against the expanded one was "case added — conditionally
+/// breaking" one way and "case removed — BREAKING" the other, and a default
+/// whose type changed while a case was inserted ahead of it was missed
+/// outright (measured 2026-08-19; the tests below hold both). An IFR-ingested
+/// peer `TypeCode` is always the expanded shape and a frozen or hand-built one
+/// need not be, which is where a gate reasoning by position would be wrong
+/// about what it claims.
+///
+/// So: every case with a non-empty label is keyed by that label — one present
+/// in one list and not the other is a branch removed or added; the default is
+/// the case `default_index` names, compared with the other side's default
+/// wherever that one sits, by that role alone. A default's label, when it has
+/// one, is a real label of the folded shape and counts in the first set (on
+/// the wire the slot's value is ignored, §9.3.5.1.4, and the decoder drops
+/// it, so an ingested default never has one). A case with an empty label that
+/// is not the default cannot come from the registry or the wire decoder and
+/// is in neither set.
+///
+/// The verdicts for a default that appears or disappears follow from what a
+/// peer without one does with a discriminator no label claims. It does not
+/// fail: omniORB's generated stub reads the discriminator, sets its default
+/// flag and reads no member (`omniidl -bcxx`, measured 2026-08-19), and its
+/// `_default()` writes such a discriminator with no member after it — legal by
+/// CORBA 3.4 Part 2 §9.3.2.6, "followed by the representation of any selected
+/// member". So a peer with the default and a peer without it disagree on
+/// whether a member follows that discriminator, and whichever is receiving
+/// reads the following bytes as the wrong thing and raises nothing: §5.3's
+/// silent class. Adding a default is that mechanism for every unlabelled
+/// discriminator at once, which is what adding a case is for one — the same
+/// verdict, conditionally breaking; removing one is a removed branch a
+/// deployed sender may still select — BREAKING, like a removed case.
+fn diff_union(
+    id: &RepositoryId,
+    (da, dia, ca): (&TypeCode, i32, &[UnionCase]),
+    (db, dib, cb): (&TypeCode, i32, &[UnionCase]),
+    out: &mut Vec<Change>,
+) {
+    if !same_identity(da, db) {
+        out.push(Change {
+            id: id.clone(),
+            what: "discriminator changed type".into(),
+            why: "the discriminator is the first thing in every value of the union and is \
+                  read at the old type's width, so the branch after it is misread too",
+            verdict: Verdict::Breaking,
+        });
+        // The labels are encoded in the discriminator's width; comparing
+        // them across two widths would report every case removed and added.
+        return;
+    }
+
+    fn labelled(cases: &[UnionCase]) -> impl Iterator<Item = &UnionCase> {
+        cases.iter().filter(|c| !c.label.is_empty())
+    }
+    fn default_of(cases: &[UnionCase], index: i32) -> Option<&UnionCase> {
+        usize::try_from(index).ok().and_then(|i| cases.get(i))
+    }
+
+    let removed: Vec<_> =
+        labelled(ca).filter(|x| !labelled(cb).any(|y| y.label == x.label)).collect();
+    let added: Vec<_> =
+        labelled(cb).filter(|y| !labelled(ca).any(|x| x.label == y.label)).collect();
+    if !removed.is_empty() {
+        out.push(Change {
+            id: id.clone(),
+            what: format!(
+                "union case(s) removed: {:?}",
+                removed.iter().map(|c| &c.name).collect::<Vec<_>>()
+            ),
+            why: "a sender may still select the removed discriminator",
+            verdict: Verdict::Breaking,
+        });
+    }
+    if !added.is_empty() {
+        out.push(Change {
+            id: id.clone(),
+            what: format!(
+                "union case(s) added: {:?}",
+                added.iter().map(|c| &c.name).collect::<Vec<_>>()
+            ),
+            why: "an old receiver has no branch for the new discriminator",
+            verdict: Verdict::ConditionallyBreaking,
+        });
+    }
+    for x in labelled(ca) {
+        let Some(y) = labelled(cb).find(|y| y.label == x.label) else { continue };
+        member_difference(id, "union case", x, y, out);
+    }
+
+    match (default_of(ca, dia), default_of(cb, dib)) {
+        (None, None) => {}
+        (Some(x), Some(y)) => member_difference(id, "default member", x, y, out),
+        (Some(x), None) => out.push(Change {
+            id: id.clone(),
+            what: format!("default member {:?} removed", x.name),
+            why: "a sender may still select a discriminator no label claims, and a receiver \
+                  without the default reads no member where the sender wrote one — the \
+                  member's bytes are read as whatever follows the union, and nothing is raised",
+            verdict: Verdict::Breaking,
+        }),
+        (None, Some(y)) => out.push(Change {
+            id: id.clone(),
+            what: format!("default member {:?} added", y.name),
+            why: "an old receiver reads no member after a discriminator no label claims, so \
+                  the default's bytes are read as whatever follows the union and nothing is \
+                  raised; safe only once every receiver is updated, like an added case",
+            verdict: Verdict::ConditionallyBreaking,
+        }),
+    }
+}
+
+/// One union member against its counterpart on the other side — the same
+/// labelled case, or the two defaults — by type and then by name.
+fn member_difference(
+    id: &RepositoryId,
+    role: &str,
+    x: &UnionCase,
+    y: &UnionCase,
+    out: &mut Vec<Change>,
+) {
+    if !same_identity(&x.tc, &y.tc) {
+        out.push(Change {
+            id: id.clone(),
+            what: format!("{role} {:?} changed type", x.name),
+            why: "the receiver reads the old branch's bytes",
+            verdict: Verdict::Breaking,
+        });
+    } else if x.name != y.name {
+        out.push(Change {
+            id: id.clone(),
+            what: format!("{role} {:?} renamed to {:?}", x.name, y.name),
+            // Reported so a reviewer knows the differ looked, and compatible
+            // because nothing deployed can tell: a value is selected by its
+            // discriminator, `TypeCode::equivalent` ignores member names, and
+            // only regenerated stubs see the new one.
+            why: "a member's name does not travel — values are selected by discriminator and \
+                  TypeCode equivalence ignores member names — so only regenerated stubs see it",
+            verdict: Verdict::Compatible,
+        });
     }
 }
 
@@ -699,6 +818,166 @@ mod tests {
         assert_eq!(c[0].verdict, Verdict::Breaking);
         assert!(c[0].what.contains("removed"));
         assert!(c.iter().any(|x| x.verdict == Verdict::Compatible && x.what.contains("added")));
+    }
+
+    /// A union `TypeCode` built by hand, in whichever member-list convention
+    /// the test needs. `None` is the default member's empty label.
+    fn union_tc(default_index: i32, cases: &[(Option<i32>, &str, TypeCode)]) -> TypeCode {
+        TypeCode::Union {
+            id: "IDL:m/U:1.0".into(),
+            name: "U".into(),
+            discriminator: Box::new(TypeCode::Long),
+            default_index,
+            cases: cases
+                .iter()
+                .map(|(label, name, tc)| orbweaver_giop::typecode::UnionCase {
+                    label: label.map(|v| v.to_be_bytes().to_vec()).unwrap_or_default(),
+                    name: (*name).to_owned(),
+                    tc: tc.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    /// A registry holding one frozen `TypeCode` with no IDL behind it — the
+    /// shape an IFR-ingested peer type, or a `TypeCode` built by an older
+    /// registry, arrives in.
+    fn frozen(tc: TypeCode) -> Registry {
+        let mut r = Registry::new();
+        r.define_ingested("IDL:m/U:1.0".into(), Entry::Type(tc), "frozen").expect("registers");
+        r
+    }
+
+    /// `union U switch (long) { case 1: long one; case 2: default: string
+    /// rest; }` has two member lists: the one the registry built until
+    /// f8daa21 — the `default:` folded onto its label, `default_index` on it —
+    /// and omniidl's, one member per label with the default a member of its
+    /// own. Same value encoding for every discriminator (measured, 3a061d8),
+    /// so the §5.3 gate must call them the same union. It called them "case
+    /// added — conditionally breaking" one way and "case removed — BREAKING"
+    /// the other, because it compared the default's empty label as if it were
+    /// a discriminator value.
+    #[test]
+    fn a_folded_and_an_expanded_default_are_the_same_union() {
+        let folded = union_tc(
+            1,
+            &[(Some(1), "one", TypeCode::Long), (Some(2), "rest", TypeCode::String(0))],
+        );
+        let expanded = union_tc(
+            2,
+            &[
+                (Some(1), "one", TypeCode::Long),
+                (Some(2), "rest", TypeCode::String(0)),
+                (None, "rest", TypeCode::String(0)),
+            ],
+        );
+        let forward = diff(&frozen(folded.clone()), &frozen(expanded.clone()));
+        assert!(forward.is_empty(), "folded -> expanded: {forward:#?}");
+        let back = diff(&frozen(expanded), &frozen(folded.clone()));
+        assert!(back.is_empty(), "expanded -> folded: {back:#?}");
+        // And against the shape the registry derives from the IDL today.
+        let from_idl = reg(
+            "module m { union U switch (long) { case 1: long one; case 2: default: string rest; }; };",
+        );
+        let against_idl = diff(&frozen(folded), &from_idl);
+        assert!(against_idl.is_empty(), "frozen folded -> IDL: {against_idl:#?}");
+    }
+
+    /// Removing the default is a removed branch for every discriminator no
+    /// label claims: an old sender may still select one, and the new receiver
+    /// reads no member where the sender wrote one.
+    #[test]
+    fn removing_the_default_is_breaking_and_is_reported_as_the_default() {
+        let c = diff(
+            &reg("module m { union U switch (long) { case 1: long a; default: string b; }; };"),
+            &reg("module m { union U switch (long) { case 1: long a; }; };"),
+        );
+        assert_eq!(c.len(), 1, "{c:#?}");
+        assert_eq!(c[0].verdict, Verdict::Breaking);
+        assert!(c[0].what.contains("default member \"b\" removed"), "{}", c[0].what);
+    }
+
+    /// Adding one is the same mechanism as adding a case, for every
+    /// discriminator no label claims at once: an old receiver reads no member
+    /// after such a discriminator (omniORB's generated stub sets its default
+    /// flag and reads nothing — measured 2026-08-19, `omniidl -bcxx`), so the
+    /// new default's bytes are consumed as whatever follows the union, and
+    /// nothing is raised. The verdict is the one "case added" carries and the
+    /// message says which role changed.
+    #[test]
+    fn adding_a_default_is_conditionally_breaking_like_an_added_case() {
+        let c = diff(
+            &reg("module m { union U switch (long) { case 1: long a; }; };"),
+            &reg("module m { union U switch (long) { case 1: long a; default: string b; }; };"),
+        );
+        assert_eq!(c.len(), 1, "{c:#?}");
+        assert_eq!(c[0].verdict, Verdict::ConditionallyBreaking);
+        assert!(c[0].what.contains("default member \"b\" added"), "{}", c[0].what);
+        assert!(c[0].why.contains("no member"), "the reason must name the mechanism: {}", c[0].why);
+    }
+
+    /// The default member's type is compared by role, wherever the member sits.
+    /// Positional comparison missed this once anything before it shifted:
+    /// here a case is inserted ahead of it and its type changes at the same
+    /// time.
+    #[test]
+    fn retyping_the_default_is_breaking_wherever_it_sits() {
+        let c = diff(
+            &reg("module m { union U switch (long) { case 1: long a; default: string b; }; };"),
+            &reg(
+                "module m { union U switch (long) { case 1: long a; case 2: long c; default: long b; }; };",
+            ),
+        );
+        assert!(
+            c.iter().any(|x| x.verdict == Verdict::Breaking
+                && x.what.contains("default member \"b\" changed type")),
+            "{c:#?}"
+        );
+        assert!(
+            c.iter()
+                .any(|x| x.verdict == Verdict::ConditionallyBreaking && x.what.contains("added")),
+            "{c:#?}"
+        );
+        // And the same edit with the default moved to the front, where the
+        // registry's expanded list puts it first.
+        let c = diff(
+            &reg("module m { union U switch (long) { case 1: long a; default: string b; }; };"),
+            &reg("module m { union U switch (long) { default: long b; case 1: long a; }; };"),
+        );
+        assert_eq!(c.len(), 1, "{c:#?}");
+        assert_eq!(c[0].verdict, Verdict::Breaking);
+        assert!(c[0].what.contains("default member \"b\" changed type"), "{}", c[0].what);
+    }
+
+    /// A member's name does not travel: values are selected by discriminator
+    /// and `TypeCode::equivalent` ignores member names, so a deployed peer is
+    /// unaffected and only regenerated stubs see it. Reported, so a reviewer
+    /// knows the differ looked, and compatible.
+    #[test]
+    fn renaming_a_union_member_is_compatible_because_names_do_not_travel() {
+        let c = diff(
+            &reg("module m { union U switch (long) { case 1: long a; default: string b; }; };"),
+            &reg("module m { union U switch (long) { case 1: long x; default: string y; }; };"),
+        );
+        assert_eq!(c.len(), 2, "{c:#?}");
+        assert!(c.iter().all(|x| x.verdict == Verdict::Compatible), "{c:#?}");
+        assert!(c.iter().any(|x| x.what.contains("case \"a\" renamed to \"x\"")), "{c:#?}");
+        assert!(
+            c.iter().any(|x| x.what.contains("default member \"b\" renamed to \"y\"")),
+            "{c:#?}"
+        );
+    }
+
+    /// The discriminator is the first thing in every value of the union.
+    #[test]
+    fn changing_the_discriminator_is_breaking_and_says_so() {
+        let c = diff(
+            &reg("module m { union U switch (long) { case 1: long a; default: string b; }; };"),
+            &reg("module m { union U switch (short) { case 1: long a; default: string b; }; };"),
+        );
+        assert_eq!(c.len(), 1, "{c:#?}");
+        assert_eq!(c[0].verdict, Verdict::Breaking);
+        assert!(c[0].what.contains("discriminator"), "{}", c[0].what);
     }
 
     #[test]
