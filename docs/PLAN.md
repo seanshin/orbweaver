@@ -640,9 +640,9 @@ produces), and **oracle** (what verifies the whole batch deterministically).
 - **What:** ~~`orbweaver-forge` stages S1 ingest, S2 synthesize, S3 annotate~~
   (landed, each a producer plus its own gate, measured 2026-08-13);
   ~~the self-repair loop driven by S4's `--repair-prompt`~~ (landed, in-process
-  rounds, cause-grouped prompts); SIDL vocabulary v1 finalized as one constant
-  mirrored in two crates with a pinning test — **its version marker is the
-  open item** (`SIDL_VERSION`, so a v2 key is distinguishable to a consumer);
+  rounds, cause-grouped prompts); ~~SIDL vocabulary v1 finalized~~ (one constant mirrored in two crates,
+  and since 2026-08-19 **versioned**: `SIDL_VERSION`, `//@ sidl_version`,
+  unknown-version findings at S3 and S7);
   and a live run per release (§8 *AI quality*), which needs a model at run
   time and is a counted `SKIPPED` in the harness until then.
 - **Depends on:** S4 (landed), the corpus (landed), a model API key at run time.
@@ -838,7 +838,7 @@ Putting an AI bridge in front of legacy CORBA widens the attack surface in ways 
 | **R15** | **CSIv2 interop is poor across vendors** — a known weakness, not a surprise | High | High | Working subset per named peer, explicit fallbacks, and "CSIv2 support" reported per peer rather than as a feature flag |
 | **R16** | **Credential store is a high-value target** | High | Medium | Never logged or persisted in recoverable form, shortest useful lifetime, excluded from diagnostics by construction; audit records which principal was asserted, never the material |
 | **R17** | **Token lifetime disagrees with connection lifetime** — CORBA connections are long-lived, tokens expire | Medium | High | Two halves. **Landed:** a call on an expired context fails rather than silently proceeding (`Expiry` is the first seat of the chain; `Unstamped::Refuse` when the host stamps no clock). **Not built:** mid-connection re-establishment — needs an issuer to re-exchange against (D010 B2) |
-| **R18** | **A peer's defect becomes our specification** — a wire choice made from what two peers accept rather than from the standard (2026-08-19: the union `default:` label is zeros at the discriminator's width because JacORB reads one octet that must be 0 and omniORB ignores the value; §9.3.5.1.4 says the value has no significance) | High — both defects are live | Medium — visible on every defaulted union in an `any` | The recording harness re-checks against those two peers only, so it stays green if JacORB fixes its reader and says nothing about a third ORB. Mitigation: pin the *conformant* half the peers cannot test — our reader accepts and ignores any non-zero default label (test); name a third value oracle in A6's trigger |
+| **R18** | **A peer's defect becomes our specification** — a wire choice made from what two peers accept rather than from the standard (2026-08-19: the union `default:` label is zeros at the discriminator's width because JacORB reads one octet that must be 0 and omniORB ignores the value; §9.3.5.1.4 says the value has no significance) | High — both defects are live | Medium — visible on every defaulted union in an `any` | The recording harness re-checks against those two peers only, so it stays green if JacORB fixes its reader and says nothing about a third ORB. Mitigation, landed 2026-08-19: our reader ignores the slot whatever it holds — 42 hand-built labels × 2 orders at TypeCode and value level; a third value oracle stays in A6's trigger. Found on the way: our own zero label collides with a real `case 0:`/`case FALSE:`/first-enumerator case, legal and ignored by us and omniORB, accepted by JacORB (first octet 0) — no value avoids every collision under JacORB's one-octet check in both orders |
 
 ---
 

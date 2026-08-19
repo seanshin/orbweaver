@@ -245,9 +245,16 @@ if [ "$udc_rc" -eq 2 ]; then
 elif [ "$udc_rc" -ne 0 ]; then
   echo "  FAIL the recorded default-label bytes no longer match the live peer"; fail_total=$((fail_total+1))
 fi
+# R18 (40a4729): whatever a third peer writes in the default label slot — 42
+# hand-built labels (MAX/MIN/all-ones/colliding/invalid, six discriminator
+# kinds, both orders) decode == the zero-label shape and 304 values round-trip
+# under them. Negative controls in that commit: reject a colliding label ->
+# 3 red; keep the label -> 5 red; "must be zero" -> every recording red.
 if cargo test -q -p orbweaver-giop --test union_default_label_from_a_peer >/dev/null 2>&1 \
-   && cargo test -q -p orbweaver-registry --test union_default_round_trip >/dev/null 2>&1; then
-  echo "  ok   a union with a default: label slot at the discriminator's width, ignored on read, both orders"
+   && cargo test -q -p orbweaver-registry --test union_default_round_trip >/dev/null 2>&1 \
+   && cargo test -q -p orbweaver-dynamic --test union_value_after_a_nonzero_default_label >/dev/null 2>&1; then
+  echo "  ok   a union with a default: label slot at the discriminator's width, ignored on read whatever a peer"
+  echo "       wrote in it — 42 hand-built labels incl. colliding ones, both orders, TypeCode and value level"
 else
   echo "  FAIL a defaulted union TypeCode does not survive the wire"; fail_total=$((fail_total+1))
 fi
@@ -1332,6 +1339,26 @@ if printf '%s\n' "$cc_out" | grep -q "prop/unmeasured"; then
   fail_total=$((fail_total+1))
 else
   echo "  ok   every property case produced a value (no prop/unmeasured)"
+fi
+# SIDL has a version (40a4729): `SIDL_VERSION = "1"` beside both vocabulary
+# copies, pinned equal across crates; a contract may declare
+# `//@ sidl_version: N` and an unknown one is a Warning at S3 and S7. Golden
+# must be v1 (marker or none); the positive probe runs the checker over a
+# scratch copy declaring 2 and requires the finding — unmeasured is not passing.
+if printf '%s\n' "$cc_out" | grep -q "unknown-sidl-version"; then
+  echo "  FAIL a golden contract declares a SIDL version this checker does not read"
+  fail_total=$((fail_total+1))
+else
+  sv_tmp=$(mktemp -d "${TMPDIR:-/tmp}/orbweaver-sidlv.XXXXXX")
+  sed 's|^//@ sidl_version: 1|//@ sidl_version: 2|' corpus/golden/19-realistic-service.idl > "$sv_tmp/v2.idl"
+  sv_out=$(cargo run -q -p orbweaver-test --bin contract-check -- "$sv_tmp/v2.idl" 2>&1)
+  rm -rf "$sv_tmp"
+  if printf '%s\n' "$sv_out" | grep -q "unknown-sidl-version"; then
+    echo "  ok   every golden contract is SIDL v1 (marker or none; golden 19 declares it), and a v2 marker is refused to be understood"
+  else
+    echo "  FAIL the SIDL version check did not fire on a v2 marker (unmeasured is not passing)"
+    fail_total=$((fail_total+1))
+  fi
 fi
 # The JSON leg (9fa89ee) is a count, not a finding: a leg that stops running
 # prints the same findings, so its floor is pinned — 5248 = 82 mapped golden

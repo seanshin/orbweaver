@@ -10,6 +10,30 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+### Added / 추가
+
+- **SIDL v1 has a version constant.** `SIDL_VERSION = "1"` beside both
+  vocabulary copies (forge S3, test S7), pinned equal across crates for the
+  first time — until now no test compared the two crates' vocabularies to each
+  other; contracts may declare `//@ sidl_version: N` (read from the syntax
+  tree, since a file-top comment lands on a `module` the registry keeps
+  nothing for); unknown or later → `s3/unknown-sidl-version` /
+  `contract/unknown-sidl-version` (Warning); none → v1. golden 19 declares
+  it; the harness runs the checker over a scratch v2 copy and requires the
+  finding. **R18: a conformant non-zero default label is read as nothing** —
+  42 hand-built union TypeCodes (six discriminator kinds, MAX/MIN/all-ones/
+  colliding/invalid, both orders) decode `==` the zero-label shape and 304
+  values round-trip under them; three negative controls in the commit. Found
+  on the way: our own zero label collides with a real zero-valued case (legal;
+  ignored by us and omniORB, accepted by JacORB).
+
+  **SIDL v1에 버전 상수가 생겼다.** 두 어휘 사본 옆에 `SIDL_VERSION = "1"`,
+  크레이트 간 동일성을 처음으로 테스트로 고정; 계약은 `//@ sidl_version: N`을
+  선언할 수 있고 모르는 버전은 S3·S7에서 Warning; 선언 없음 → v1. golden 19가
+  선언. **R18: 적합한 피어가 쓴 0이 아닌 default 라벨은 없는 것으로 읽는다** —
+  손으로 만든 union TypeCode 42개(판별자 6종, 양쪽 바이트 순서)가 0-라벨 형태와
+  `==`; 값 왕복 304회.
+
 ### Fixed / 수정
 
 - **The plan reviewed against the code, row by row — nineteen rows
