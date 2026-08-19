@@ -556,6 +556,23 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **README — the sixth class-D row the PLAN batch named.** The S1–S7 stage
+  table lost its *Target* column (95/90/80/100/100/85/90 — now only PLAN §11
+  A9); *Targets / 목표 지표* no longer copies PLAN §11 without its instrument
+  column and points there instead; the Phase 0 bullet B stops carrying the
+  spike threshold (≥ 60 / ≥ 95 %, home `PHASE0.md`) beside a plan that carries
+  the standing target (≥ 85 / ≥ 98 %, home PLAN §11) — two facts, each now
+  with one home. `docs/plan-page.html` (hand-maintained, dated v0.3) gets a
+  kept-as-written card and its TAO/omniORB/JacORB line annotated historical,
+  mirroring PLAN §12. Headings 18 → 18.
+
+  **README — 계획서 배치가 지목한 클래스 D 여섯째 행.** S1–S7 단계 표의 *목표*
+  열 삭제(계획서 §11 A9만 보유); *목표 지표* 절은 계측기 열 없이 §11을 베끼던
+  표를 지우고 그곳을 가리킴; Phase 0 가정 B 줄은 스파이크 기준값(≥ 60 /
+  ≥ 95 %, 집은 `PHASE0.md`)과 상시 목표(≥ 85 / ≥ 98 %, 집은 계획서 §11)를
+  각각의 집으로 돌려보내고 어느 수치도 담지 않음. `docs/plan-page.html`
+  (수작업, v0.3 날짜)에는 기록 카드와 TAO 줄 역사 주석. 헤딩 18 → 18.
+
 - **PLAN §5, §8, §11, §12 — the five class-D rows D010 §6 named.** The §5
   *Automation target* column (seven percentages, no instrument) moved to §11
   as aspiration A9; *contract tests auto-generated* audited (nothing generates
