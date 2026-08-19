@@ -30,5 +30,10 @@ path = "src/bin/spike_experts.rs"
 name = "spike-tenants"
 path = "src/bin/spike_tenants.rs"
 
+# spikes/wide.idl from our own stack, both seats (spikes/wide_rust.sh).
+[[bin]]
+name = "spike-wide"
+path = "src/bin/spike_wide.rs"
+
 [lints]
 workspace = true

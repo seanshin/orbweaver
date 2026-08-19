@@ -455,3 +455,94 @@ fn a_1_1_wchar_refuses_what_is_not_a_character_and_keeps_feff_as_data() {
     let mut d = Decoder::new(JACORB_WCHAR_FEFF, Endian::Big);
     assert_eq!(codec().get_wchar(&mut d).expect("decode"), '\u{FEFF}', "data, not a mark, at 1.1");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The same contract with OUR stack in each seat, and one 1.2 finding
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// `spikes/wide_rust.sh` (2026-08-19) put `spike-wide` — `Server` + a
+// hand-written `Dispatch`, `Connection` + `WideCodec`, in
+// `crates/orbweaver-object/src/bin/spike_wide.rs` — on the wire for
+// `spikes/wide.idl` in place of the hand-built Python peer above, recorded by
+// `spikes/jacorb_giop11_tap.py`. Measured, and checked live against the
+// constants of the previous section on every run of that script:
+//
+// * JacORB's `echo_wchar(U+D55C)` request as our **real server** received it
+//   is `JACORB_REQUEST_HAN` octet for octet, and our real server's reply is
+//   `OUR_REPLY_HAN_BE` octet for octet; JacORB's user got U+D55C.
+// * Our **own client's** big-endian 1.1 request for U+D55C is
+//   `JACORB_REQUEST_HAN` octet for octet as well (same key, same layout, same
+//   id 2), and our real server's replies to our own client are
+//   `OUR_REPLY_HAN_BE` and `OUR_REPLY_HAN_LE`, so the little-endian form
+//   JacORB's user read as U+D55C is what the real server writes when the
+//   request is little-endian — the case JacORB's own client cannot elicit,
+//   since our server answers in the request's order and JacORB requests
+//   big-endian only.
+// * JacORB's reply to our real client's U+D55C request, in either order, is
+//   `JACORB_REPLY_HAN` apart from the request id (4 was the hand-built
+//   client's numbering, 2 is `Connection`'s).
+// * JacORB's lone surrogate `d8 3d` reaching our real reader is refused —
+//   MARSHAL to JacORB's user. The hand-built peer passed it through as
+//   octets; the Rust reader does what
+//   [`a_1_1_wchar_refuses_what_is_not_a_character_and_keeps_feff_as_data`]
+//   says it does, now on the wire.
+//
+// And one finding at 1.2, from the self-consistency arm and then against
+// JacORB in both directions with the same binary:
+//
+// 6. **U+FEFF as a 1.2 `wchar` crosses neither stack.** Both writers — ours
+//    and JacORB 3.9's — write it as `02 fe ff`: an octet count of two and the
+//    unit, no mark before it. Both readers then take a leading `fe ff` for
+//    the mark §9.3.1.6 says an ORB "shall remove … before passing the value
+//    to the user", and are left with nothing: JacORB hands its user U+0000
+//    and echoes `02 00 00`; our reader refuses the empty remainder with
+//    MARSHAL. Under the paragraph as written a writer that means the
+//    character has to put a mark in front of it (`04 fe ff fe ff`), which
+//    neither does. `codeset.rs` was outside the batch that found this; the
+//    test below pins the *measured* octets so that whoever changes
+//    `put_wchar` at 1.2 has to revise this record in the same commit — and
+//    should measure the marked form against JacORB before adopting it, since
+//    what its reader does with `04 fe ff fe ff` has not been asked.
+
+/// JacORB's `echo_wchar(U+FEFF)` at GIOP 1.2, big-endian, from
+/// `spikes/wide_rust.sh`'s tap: the request body, and — to our identical
+/// request — the reply body its server wrote. Ours to the same request is a
+/// MARSHAL reply.
+const JACORB_WCHAR_FEFF_1_2: &[u8] = &[0x02, 0xfe, 0xff];
+const JACORB_ECHO_OF_FEFF_1_2: &[u8] = &[0x02, 0x00, 0x00];
+
+/// The 1.2 defect, pinned as measured (fact 6): we write JacORB's `02 fe ff`
+/// for U+FEFF, and our reader — like JacORB's — does not read U+FEFF back
+/// from it. JacORB's echo `02 00 00` is U+0000 to our reader, which is what
+/// its user got. Revise this test with the writer, not around it.
+#[test]
+fn at_1_2_a_wchar_that_is_itself_a_mark_is_written_bare_by_both_writers_and_read_by_neither() {
+    let w12 = WideCodec::new(Version::V1_2, CodeSetId::UTF_16).expect("1.2 + UTF-16");
+    for endian in [Endian::Big, Endian::Little] {
+        let mut e = Encoder::new(endian);
+        w12.put_wchar(&mut e, '\u{FEFF}').expect("FEFF is a character");
+        assert_eq!(
+            e.finish().expect("finish"),
+            JACORB_WCHAR_FEFF_1_2,
+            "{endian:?}: the same three octets JacORB writes for U+FEFF at 1.2"
+        );
+        let mut d = Decoder::new(JACORB_WCHAR_FEFF_1_2, endian);
+        assert!(
+            w12.get_wchar(&mut d).is_err(),
+            "{endian:?}: fe ff after the count is taken for a mark and nothing is left — MARSHAL on the wire"
+        );
+        let mut d = Decoder::new(JACORB_ECHO_OF_FEFF_1_2, endian);
+        assert_eq!(
+            w12.get_wchar(&mut d).expect("two octets"),
+            '\u{0000}',
+            "{endian:?}: what JacORB's user got, and echoed"
+        );
+    }
+    // The 1.1 arm keeps FEFF as data (fact 4), which is why the same unit
+    // round-trips at 1.1 in every seat of spikes/wide_rust.sh and not at 1.2.
+    let mut e = Encoder::new(Endian::Big);
+    codec().put_wchar(&mut e, '\u{FEFF}').expect("FEFF");
+    let bytes = e.finish().expect("finish");
+    let mut d = Decoder::new(&bytes, Endian::Big);
+    assert_eq!(codec().get_wchar(&mut d).expect("data at 1.1"), '\u{FEFF}');
+}
