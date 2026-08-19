@@ -455,6 +455,33 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **The content seat sees a static call's payload** (D010 A3, 2026-08-19).
+  `Guarded` reads a stub's own bytes back through the contract and hands the
+  chain the same AnyJSON document the dynamic path hands it — no stub, trait
+  or emitted file changed, so stubs already compiled are covered; the
+  three-crate `Invoker::invoke` change D010 named was not needed. A payload the
+  guard cannot read is refused `MARSHAL`/`BAD_OPERATION` after the gate and
+  before the wire, never forwarded. The leak test now has a static arm,
+  red-then-green in the same commit. **A dry run can take values**:
+  `Bridge::dry_run_with` / `Guarded::dry_run_with` hand them to the content
+  seat and predict marshalling from the contract's `TypeCode`s, both byte
+  orders, into a dropped buffer (`Would::Marshal`, `payload`, `raises`); a
+  `string<8>` given nine characters predicts `marshal` where it predicted
+  `allow`. Nothing dials. Pinned rather than fixed: a stub's over-bound
+  argument is refused by the stub's probe before the guard hears of it
+  (nothing sent, nothing audited).
+
+  **정적 호출의 페이로드가 내용 좌석에 도달한다** (D010 A3). 가드가 스텁이 쓴
+  바이트를 계약에 따라 되읽어 동적 경로와 같은 AnyJSON 문서를 체인에 건넨다 —
+  스텁·트레이트·생성 파일은 바뀌지 않았으므로 이미 컴파일된 스텁도 적용되며,
+  D010이 이름 붙인 세 크레이트 변경은 필요 없었다. 읽을 수 없는 페이로드는
+  게이트 뒤·와이어 앞에서 `MARSHAL`/`BAD_OPERATION`으로 거절되고 전달되지
+  않는다. 누출 시험에 정적 경로 팔이 같은 커밋에서 red→green으로 추가되었다.
+  **드라이런이 값을 받는다**: 내용 좌석에 값을 건네고 같은 `TypeCode`로 양쪽
+  바이트 순서 마샬링을 예측한다(`Would::Marshal`); `string<8>`에 아홉 글자는
+  `allow`였던 자리에서 `marshal`을 예측한다. 아무것도 다이얼하지 않는다.
+  고치지 않고 못 박은 것: 스텁의 상한 초과 인자는 가드가 듣기 전에 스텁의
+  프로브가 거절한다.
 - **The pool says which forward it followed.** `mux::Sent::Forward` carries
   `Forward`, not a bare `Ior`; `Pool::invoke_tracking` returns the reply and
   the last hop followed; `Reference::forwarded()` is the pooled

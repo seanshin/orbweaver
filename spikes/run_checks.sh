@@ -1629,13 +1629,23 @@ hr "audit ledger — a gate that sees a secret must not publish one"
 # retains and greps. Rendering that prose put the payload there: measured, with
 # a PIN in an argument reaching `why=` verbatim. Two checks, because the second
 # is the one that catches the next call site.
+# Since 2026-08-19 (D010 A3) the static path has the same arm — the guard
+# reads a stub's own bytes back through the contract — and a dry run with
+# values predicts marshalling from the contract's TypeCodes into a dropped
+# buffer. Negative control: `arguments: view.as_ref().ok()` reverted to
+# `arguments: None` in guard.rs -> the static arm panics "it saw: <none>" and
+# the count drops to 5.
 lk=$(cargo test -q -p orbweaver-mcp --lib -- \
      an_argument_a_content_stage_saw_cannot_reach_the_ledger \
+     an_argument_a_content_stage_saw_on_the_static_path_cannot_reach_the_ledger \
      the_ledger_keeps_a_typed_reason_whole_and_a_stages_prose_not_at_all \
-     a_dry_run_offers_a_content_stage_no_arguments_to_judge 2>&1)
+     a_dry_run_offers_a_content_stage_no_arguments_to_judge \
+     a_string_of_eight_given_nine_characters_predicts_marshal_where_it_predicted_allow \
+     a_static_dry_run_with_values_predicts_marshalling_and_touches_no_wire 2>&1)
 n_lk=$(printf '%s' "$lk" | grep -o '^test result: ok. [0-9]*' | grep -o '[0-9]*$')
-if [ "${n_lk:-0}" = "3" ]; then
-  echo "  ok   a content stage reads the payload; the ledger and the trace do not"
+if [ "${n_lk:-0}" = "6" ]; then
+  echo "  ok   a content stage reads the payload — dynamic and static — the ledger and the trace do not"
+  echo "  ok   a dry run with values predicts MARSHAL from the TypeCodes and touches no wire"
 else
   # A renamed or deleted test is unmeasured, which is a failure, never a pass.
   echo "  FAIL the content-seat leak property is failing or no longer measured"
@@ -2366,6 +2376,18 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
     else
       echo "  FAIL a declared bound is enforced by one path and not the other"
       printf '%s\n' "$bo" | grep -A3 "panicked" | head -6 | sed 's/^/       /'
+      gen_fail=1
+    fi
+    # D010 A3: the checked-in f_27_bounds stub through Bridge::connect_static
+    # with a content stage — the payload seen as AnyJSON, the ledger clean, and
+    # an over-bound argument refused by the stub's probe before the guard hears
+    # of it (pinned, not moved).
+    gs=$(cargo test -q -p orbweaver-gen --test guarded_stub 2>&1)
+    if printf '%s' "$gs" | grep -q "^test result: ok"; then
+      echo "  ok   a real generated stub through the guard: the content seat sees its payload, the ledger does not"
+    else
+      echo "  FAIL guarded_stub — the static path's content seat or ledger property"
+      printf '%s\n' "$gs" | grep -A3 "panicked" | head -6 | sed 's/^/       /'
       gen_fail=1
     fi
     # §8's rule in the direction nothing checked: a skeleton's reply bytes

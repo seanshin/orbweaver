@@ -130,6 +130,16 @@ Ordered by what a defect would cost, not by size.
   from "unanswerable" to measured.
 
 ### A3. The dry-run's *mapping* half, and a static call's `arguments: None` — *stream A×D, three crates*
+> **Landed 2026-08-19 (f47ddcd), smaller than named here.** The three-crate
+> `Invoker::invoke` change was not needed: `Guarded` runs the stub's closure
+> once into a local encoder and decodes the bytes back through the contract,
+> so the chain sees the same document the dynamic path hands it — no stub,
+> trait or emitted file changed. All three constraints held as written: the
+> static leak arm went red ("it saw: <none>") then green in one commit; the
+> stub encodes into buffers that are never sent (twice — probe and view) and
+> zero times to the wire before the gate; the prediction maps declared JSON
+> through the dynamic path's own mapper into a dropped buffer with no invoker
+> reachable. `string<8>` given nine characters: `allow` → `marshal`.
 - **State.** The chain runs before arguments are decoded, so a dry run predicts
   policy and not marshalling, and the static path hands the content seat
   `arguments: None`. Named as "a three-crate `Invoker::invoke` change" and left.
@@ -362,7 +372,7 @@ they touch a batch; class B as fixtures appear; class C never, until triggered.
 |---|---|---|---|
 | 1 | **A5** coverage document emitted by the sweep + §7.1's `gap_symbols.py` | D→A | diff in the harness; false-positive rate measured first |
 | 2 | **A1** `LOCATION_FORWARD_PERM` | A | reply status byte off the wire, both byte orders; omniORB following it (landed 680aa41 — the count is not an oracle) |
-| 3 | **A3** static-path arguments and dry-run mapping | A | leak test over a static call; a `string<8>` dry-run predicting `MARSHAL` |
+| 3 | **A3** static-path arguments and dry-run mapping | A | leak test over a static call; a `string<8>` dry-run predicting `MARSHAL` (landed f47ddcd, without the three-crate change) |
 | 4 | **A2** versioned `Capability` | A | `idl-diff` both directions; router refusing an unmeasured expert |
 | 5 | **A4** structural `_t` in `_rt.py` | A | golden crossings up, divergences 0 |
 | 6 | **§6**'s five rows | D | none — restate/mark/remove with argument |
