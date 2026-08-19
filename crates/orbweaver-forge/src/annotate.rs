@@ -77,7 +77,9 @@ use std::collections::BTreeMap;
 
 use orbweaver_idl::ast::{
     Definition, Interface, InterfaceMember, Operation, Param, ScopedName, Spec, TypeSpec,
+    ValueMember,
 };
+use orbweaver_idl::lex::Annotation;
 use orbweaver_registry::{Entry, Registry};
 
 use crate::ingest::Brief;
@@ -242,6 +244,116 @@ pub const VOCABULARY: [&str; 8] = [
     "ai_precond",
     "ai_authz",
 ];
+
+/// The SIDL version [`VOCABULARY`] is the vocabulary of.
+///
+/// Until 2026-08-19 "v1" was a doc comment: nothing a consumer could read,
+/// nothing a contract could declare, so a v2 key added tomorrow would be
+/// indistinguishable from a v1 typo to every reader in the tree. This is the
+/// number a contract is compared against when it declares one with
+/// [`SIDL_VERSION_KEY`], and it moves when the vocabulary does — never
+/// separately. Mirrored in `orbweaver-test`'s `contract::SIDL_VERSION` beside
+/// that crate's copy of the vocabulary, for the reason [`VOCABULARY`] gives;
+/// the two copies are pinned equal by `orbweaver-test`'s
+/// `the_mirror_matches_the_s7_authority`, the one test that can see both.
+pub const SIDL_VERSION: &str = "1";
+
+/// The structured comment a contract declares its SIDL version with:
+/// `//@ sidl_version: 1`.
+///
+/// Optional. A contract that declares none is read as v1, because every
+/// contract written before the key existed is v1 and a finding on all of them
+/// would report the calendar rather than the file. Not an `ai_*` key: it says
+/// nothing about an operation, and putting it in the vocabulary would make it
+/// a thing an agent reads. To omniidl and every other compiler it is a comment.
+pub const SIDL_VERSION_KEY: &str = "sidl_version";
+
+/// The `sidl_version` a file declares, wherever the comment sits.
+///
+/// The lexer hands a structured comment to the declaration that follows it,
+/// so a marker written at the top of a file lands on the first `module` — a
+/// place the registry keeps no annotations for — and a marker under a
+/// `#pragma prefix` lands one declaration later. Reading it from the syntax
+/// tree rather than the registry is what lets it be written where a person
+/// would write it. Every carrier is walked in source order and the first
+/// marker wins; a file that declares two disagreeing ones is reported on the
+/// first, which is the one a reader meets first too.
+pub fn declared_sidl_version(spec: &Spec) -> Option<&Annotation> {
+    fn in_list(list: &[Annotation]) -> Option<&Annotation> {
+        list.iter().find(|a| a.key == SIDL_VERSION_KEY)
+    }
+    fn in_members(members: &[InterfaceMember]) -> Option<&Annotation> {
+        members.iter().find_map(|m| match m {
+            InterfaceMember::Operation(op) => in_list(&op.annotations)
+                .or_else(|| op.params.iter().find_map(|p| in_list(&p.annotations))),
+            InterfaceMember::Attribute(a) => in_list(&a.annotations),
+            InterfaceMember::Nested(d) => in_defs(std::slice::from_ref(d)),
+        })
+    }
+    fn in_defs(defs: &[Definition]) -> Option<&Annotation> {
+        defs.iter().find_map(|d| match d {
+            Definition::Module(m) => in_list(&m.annotations).or_else(|| in_defs(&m.definitions)),
+            Definition::Interface(i) => {
+                in_list(&i.annotations).or_else(|| i.body.as_deref().and_then(in_members))
+            }
+            Definition::Struct(s) | Definition::Exception(s) => in_list(&s.annotations)
+                .or_else(|| s.members.iter().flatten().find_map(|m| in_list(&m.annotations))),
+            Definition::Union(u) => in_list(&u.annotations)
+                .or_else(|| u.cases.iter().find_map(|c| in_list(&c.member.annotations))),
+            Definition::Enum(e) => in_list(&e.annotations),
+            Definition::Typedef(t) => in_list(&t.annotations),
+            Definition::Const(c) => in_list(&c.annotations),
+            Definition::ValueType(v) => in_list(&v.annotations).or_else(|| {
+                v.members.iter().flatten().find_map(|m| match m {
+                    ValueMember::State { member, .. } => in_list(&member.annotations),
+                    ValueMember::Other(other) => in_members(std::slice::from_ref(other)),
+                })
+            }),
+            Definition::Native(_) => None,
+        })
+    }
+    in_defs(&spec.definitions)
+}
+
+/// Whether a declared `sidl_version` is one this reader knows.
+///
+/// [`Severity::Warning`], and outside [`RULES`] on purpose. S3 does not write
+/// the marker — a marker comes in with the file, from a person or an earlier
+/// tool — so it is not something the prompt can demand, and the roster test
+/// would have nothing of the stage's own to show firing. What a foreign version
+/// means is what `s3/unknown-annotation` means one key at a time: the file
+/// states something this checker does not read, so a pass from it is a pass
+/// over the part it understood. Warning is where every "read by nobody"
+/// finding sits, here and in `contract-check`; an Error would refuse a file
+/// for being newer than the tool, which is the tool's problem to report and
+/// not the contract's to fail on.
+pub fn sidl_version_findings(spec: &Spec) -> Vec<Finding> {
+    let Some(marker) = declared_sidl_version(spec) else { return Vec::new() };
+    let declared = marker.value.trim();
+    if declared == SIDL_VERSION {
+        return Vec::new();
+    }
+    let relation = match (declared.parse::<u32>(), SIDL_VERSION.parse::<u32>()) {
+        (Ok(theirs), Ok(ours)) if theirs > ours => "later than",
+        (Ok(_), Ok(_)) => "not",
+        _ => "not a version number, so not",
+    };
+    vec![finding(
+        "s3/unknown-sidl-version",
+        Severity::Warning,
+        format!(
+            "the file declares sidl_version {declared:?}, which is {relation} the SIDL \
+             v{SIDL_VERSION} this gate reads; any key that version adds is checked by nothing \
+             here, so a pass from this gate covers the part of the contract it understood"
+        ),
+        &marker.span,
+        format!("{}: {}", marker.key, marker.value),
+        &format!(
+            "write `//@ {SIDL_VERSION_KEY}: {SIDL_VERSION}` if the file is a v{SIDL_VERSION} \
+             contract, or upgrade the checker before trusting its verdict on this file"
+        ),
+    )]
+}
 
 /// `ai_effect` values the MCP policy gate treats as needing no approval.
 ///
@@ -549,7 +661,7 @@ pub fn stated_scope_findings(scopes: &BTreeMap<String, String>, idl: &str) -> Ve
 pub fn check(idl: &str) -> Report {
     let Ok(spec) = orbweaver_idl::check(idl) else { return Report::default() };
     let index = TypeIndex::of(&spec);
-    let mut findings = Vec::new();
+    let mut findings = sidl_version_findings(&spec);
     let mut interfaces: Vec<&Interface> = Vec::new();
     collect_interfaces(&spec.definitions, &mut interfaces);
 
@@ -821,9 +933,9 @@ fn unknown_keys(
                 "s3/unknown-annotation",
                 Severity::Error,
                 format!(
-                    "{what} carries {k:?}, which is not in the SIDL v1 vocabulary; the registry \
-                     keeps it and no consumer reads it, so the annotation is present in the \
-                     source and absent from every decision"
+                    "{what} carries {k:?}, which is not in the SIDL v{SIDL_VERSION} vocabulary; the \
+                     registry keeps it and no consumer reads it, so the annotation is present in \
+                     the source and absent from every decision"
                 ),
                 at,
                 what.to_owned(),
@@ -1606,5 +1718,58 @@ mod tests {
         assert_eq!(UNGATED_EFFECTS, ["read_only", "readonly", "idempotent", "safe"]);
         assert_eq!(GATED_EFFECTS, ["destructive"]);
         assert!(UNGATED_EFFECTS.iter().all(|u| !GATED_EFFECTS.contains(u)));
+        // The version is a number a contract can be compared against, and it
+        // is the version the vocabulary above is documented as. The
+        // cross-crate half — that `orbweaver-test`'s copy says the same —
+        // lives in that crate, the one that can see both.
+        assert_eq!(SIDL_VERSION, "1", "the vocabulary above is SIDL v1's; move both together");
+        assert!(SIDL_VERSION.parse::<u32>().is_ok(), "a version a file can declare as a number");
+        assert!(!SIDL_VERSION_KEY.starts_with("ai_"), "the marker is not vocabulary");
+        assert!(!VOCABULARY.contains(&SIDL_VERSION_KEY));
+    }
+
+    /// A contract that says which SIDL it was written to, and says this one,
+    /// is silent; one that says none is silent too, because every contract
+    /// written before the marker existed is v1.
+    #[test]
+    fn a_declared_or_undeclared_v1_is_silent() {
+        let declared = format!("//@ sidl_version: 1\n{ANNOTATED}");
+        assert!(gate(&declared).is_ok(), "{:?}", gate(&declared).findings);
+        let spec = orbweaver_idl::check(&declared).expect("checks");
+        assert_eq!(declared_sidl_version(&spec).map(|a| a.value.as_str()), Some("1"));
+        assert!(declared_sidl_version(&orbweaver_idl::check(ANNOTATED).expect("checks")).is_none());
+        // Written where a person might also write it: under the pragma, and
+        // inside the module rather than above it.
+        let under_pragma = format!("#pragma prefix \"x\"\n//@ sidl_version: 1\n{ANNOTATED}");
+        assert!(gate(&under_pragma).is_ok(), "{:?}", gate(&under_pragma).findings);
+        let inside = ANNOTATED.replacen("module bank {", "module bank {\n//@ sidl_version: 1", 1);
+        assert!(gate(&inside).is_ok(), "{:?}", gate(&inside).findings);
+    }
+
+    /// A version this reader does not know is a Warning that says which way
+    /// it is unknown, and does not fail the gate: newer than the tool is the
+    /// tool's problem to report, not the contract's to fail on.
+    #[test]
+    fn a_later_sidl_version_is_a_warning_naming_what_is_unchecked() {
+        let v2 = format!("//@ sidl_version: 2\n{ANNOTATED}");
+        let r = gate(&v2);
+        assert!(r.is_ok(), "a warning is not a failure: {:?}", r.findings);
+        let f: Vec<&Finding> =
+            r.findings.iter().filter(|f| f.rule == "s3/unknown-sidl-version").collect();
+        assert_eq!(f.len(), 1, "{:?}", r.findings);
+        assert_eq!(f[0].severity, Severity::Warning);
+        assert!(f[0].message.contains("later than"), "{}", f[0].message);
+        assert_eq!(f[0].line, 1, "the finding points at the marker");
+        assert_eq!(f[0].source, "sidl_version: 2");
+
+        let words = format!("//@ sidl_version: two\n{ANNOTATED}");
+        let f = check(&words).findings;
+        assert!(
+            f.iter().any(|f| f.rule == "s3/unknown-sidl-version"
+                && f.message.contains("not a version number")),
+            "{f:?}"
+        );
+        // And it stays quiet on the rest of a well-annotated file: one finding.
+        assert_eq!(f.len(), 1, "{f:?}");
     }
 }

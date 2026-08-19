@@ -1,4 +1,10 @@
 // 19 — a service shaped like real legacy code, not a type-system exercise.
+// The one golden file that says which SIDL it is written to. The marker is a
+// comment to omniidl and every other compiler; contract-check reads it
+// (contract/unknown-sidl-version, absent here) and S3's gate reads it. It sits
+// above the module, whose annotations the registry does not keep — which is
+// the point: it is read from the syntax tree, not the registry.
+//@ sidl_version: 1
 module tms {
   enum TrackClass { UNKNOWN, SURFACE, AIR, SUBSURFACE };
   struct Position { double lat; double lon; double alt; };

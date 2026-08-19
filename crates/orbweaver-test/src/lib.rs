@@ -140,6 +140,27 @@ pub fn check_measured(
     (Report { findings }, measured)
 }
 
+/// [`check_measured`] plus the one finding that lives on the file rather than
+/// in the registry: the SIDL version a contract declares
+/// ([`contract::sidl_version_findings`]).
+///
+/// A separate entry point because a registry has no file to read a marker
+/// from — the lexer hands `//@ sidl_version: N` to the first declaration, and
+/// when that is a `module` the registry keeps nothing. `contract-check` has
+/// the checked source in hand and calls this; a caller with only a registry
+/// keeps [`check_measured`], and gets no version verdict, which is honest.
+pub fn check_source_measured(
+    spec: &orbweaver_idl::ast::Spec,
+    registry: &orbweaver_registry::Registry,
+    cases: usize,
+    seed: u64,
+) -> (Report, prop::Measured) {
+    let (mut report, measured) = check_measured(registry, cases, seed);
+    report.findings.extend(contract::sidl_version_findings(spec));
+    report.findings.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.rule.cmp(&b.rule)));
+    (report, measured)
+}
+
 /// Whether a report contains a genuine defect, as opposed to advice.
 ///
 /// The exit-code rule in one place: a byte instability is a defect and an
