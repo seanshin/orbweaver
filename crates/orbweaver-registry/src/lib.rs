@@ -1296,6 +1296,16 @@ impl Builder<'_> {
                         let tc = self.type_of(path, &c.member.ty);
                         let member_name =
                             c.member.names.first().map(|n| n.text.clone()).unwrap_or_default();
+                        // A bare `default:` is the case selected by *not*
+                        // matching, so it has no label: an empty one, and
+                        // `default_index` names it. That is the in-memory
+                        // convention every consumer reads (the generators, the
+                        // dynamic invoker, the property sampler); the wire has
+                        // its own — a slot of the discriminator's width, value
+                        // ignored (CORBA 3.4 §9.3.5.1.4) — and the TypeCode
+                        // codec in `orbweaver_giop` translates between the two.
+                        // Until 2026-08-19 it did not, and wrote the empty label
+                        // as no bytes at all.
                         let labels: Vec<Vec<u8>> = if c.labels.is_empty() {
                             vec![Vec::new()]
                         } else {

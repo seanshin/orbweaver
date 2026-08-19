@@ -138,9 +138,15 @@ class _Walk:
             self.typecode()
 
 
-def pad_mask(buf):
-    """Offsets in `buf` (a TypeCode starting at its kind) that are padding."""
-    w = _Walk(buf, 0, True)
+def pad_mask(buf, little=True):
+    """Offsets in `buf` (a TypeCode starting at its kind) that are padding.
+
+    `little` is the byte order of the *stream* the kind and encapsulation
+    length sit in; the encapsulation carries its own flag. omniORB writes the
+    body little-endian on this host whichever order the stream is, so a
+    big-endian capture is the one case where the two differ.
+    """
+    w = _Walk(buf, 0, little)
     w.typecode()
     if w.pos != len(buf):
         raise ValueError("walked %d of %d bytes" % (w.pos, len(buf)))

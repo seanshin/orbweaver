@@ -377,9 +377,48 @@ fn encode_inner(
                     e.put_i32(*default_index);
                     e.put_u32(cases.len() as u32);
                     let label_len = discriminator_width(discriminator);
-                    for c in cases {
+                    for (i, c) in cases.iter().enumerate() {
                         e.align_to(label_len.min(8));
-                        e.put_bytes(&canonical_label(&c.label, e.endian()));
+                        let is_default = *default_index >= 0 && i == *default_index as usize;
+                        if is_default {
+                            // The default member's label: the discriminator's
+                            // width of zeros, whatever the case carries. On the
+                            // wire every member has a label of that width
+                            // (Table 9.2), the default's included — §9.3.5.1.4
+                            // calls its value insignificant, not optional — and
+                            // the registry gives a bare `default:` an empty one,
+                            // which used to be written as it stood: zero bytes.
+                            // Our own decoder then read the member name's length
+                            // as the label and failed a field later; omniORB
+                            // refused the TypeCode with MARSHAL_PassEndOfMessage;
+                            // JacORB with "buffer too small".
+                            //
+                            // Zeros, and not the case's own label when it has one
+                            // (`case 2: default:` is one case labelled 2 here),
+                            // and not omniORB's choice of a value no other case
+                            // uses: JacORB 3.9 reads this slot as one octet and
+                            // rejects the TypeCode unless that octet is 0
+                            // (BAD_PARAM "Label type does not match discriminator
+                            // type"), so omniORB's `0x80000000` for a `long`
+                            // passes it little-endian and fails it big-endian,
+                            // and a label of 2 fails it little-endian. omniORB
+                            // ignores the value entirely — measured with a
+                            // default labelled 1 next to `case 1:`, and 1 still
+                            // selected `case 1:`. Zeros of the width satisfy
+                            // both peers in both byte orders, and the label the
+                            // registry keeps on a labelled default is not lost
+                            // to anyone: `default_index` names that member, and
+                            // every discriminator no other case claims selects
+                            // it. Measured 2026-08-19, `spikes/
+                            // union_default_capture.py` and the JacORB fixture.
+                            e.put_bytes(&vec![0; label_len]);
+                        } else if c.label.is_empty() {
+                            return Err(Error::Cdr(orbweaver_cdr::Error::Malformed(
+                                "a union case that is not the default has no label",
+                            )));
+                        } else {
+                            e.put_bytes(&canonical_label(&c.label, e.endian()));
+                        }
                         e.put_str(&c.name);
                         encode_inner(e, &c.tc, seen, depth + 1)?;
                     }
@@ -596,6 +635,21 @@ fn decode_complex(
                     });
                 }
                 open.remove(&start);
+                // The default member's label is read at its width and then
+                // dropped: §9.3.5.1.4 says its value "may be any valid value of
+                // the discriminant type, and has no semantic significance
+                // (i.e., it should be ignored ...)". Kept, it would be a label
+                // like any other to everything that selects a branch by
+                // comparing labels, and a peer is free to write one that
+                // duplicates a real case's — omniORB writes an unused value,
+                // the specification does not require it to. Dropped, the
+                // default is the branch with no label, which is what the
+                // registry builds and what every consumer already reads.
+                if default_index >= 0
+                    && let Some(c) = cases.get_mut(default_index as usize)
+                {
+                    c.label.clear();
+                }
                 TypeCode::Union { id, name, discriminator, default_index, cases }
             }
             TcKind::Enum => {
