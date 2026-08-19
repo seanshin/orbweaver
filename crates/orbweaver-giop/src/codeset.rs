@@ -904,13 +904,21 @@ mod tests {
             "octets including the BOM, no terminator"
         );
 
-        let mut e = Encoder::new(Endian::Big);
-        wide(Version::V1_1).put_wstring(&mut e, "ab").unwrap();
-        assert_eq!(
-            e.finish().unwrap(),
-            vec![0, 0, 0, 4, 0xFE, 0xFF, 0, b'a', 0, b'b', 0, 0],
-            "elements including the BOM and the terminator"
-        );
+        // 1.1 carries no mark and its units follow the message — both
+        // measured against JacORB 3.9 (see `unmarked_order` and
+        // tests/wide_1_1_from_a_peer.rs), neither what a 1.2 value does.
+        for (endian, expected) in [
+            (Endian::Big, [0, 0, 0, 3, 0, b'a', 0, b'b', 0, 0]),
+            (Endian::Little, [3, 0, 0, 0, b'a', 0, b'b', 0, 0, 0]),
+        ] {
+            let mut e = Encoder::new(endian);
+            wide(Version::V1_1).put_wstring(&mut e, "ab").unwrap();
+            assert_eq!(
+                e.finish().unwrap(),
+                expected.to_vec(),
+                "{endian:?}: elements including the terminator, no mark, units in the stream's order"
+            );
+        }
     }
 
     /// A peer that wrote the opposite byte order marks it, and the reader must
@@ -1118,28 +1126,51 @@ const BOM: u16 = 0xFEFF;
 ///
 /// The spec also requires the mark itself be removed before the value reaches
 /// the caller, which is why this returns the body rather than only the order.
-fn wide_order(raw: &[u8], tcs: CodeSetId, stream: Endian) -> (Endian, &[u8]) {
+///
+/// That measurement is a GIOP 1.2 one, and the third bullet is not what the
+/// only 1.1 wide-text peer on this host does — see [`unmarked_order`] for the
+/// 1.1 rule and its provenance.
+fn wide_order(raw: &[u8], version: Version, tcs: CodeSetId, stream: Endian) -> (Endian, &[u8]) {
     match raw.get(..2) {
         Some([0xFE, 0xFF]) => (Endian::Big, &raw[2..]),
         Some([0xFF, 0xFE]) => (Endian::Little, &raw[2..]),
-        _ => (unmarked_order(tcs, stream), raw),
+        _ => (unmarked_order(version, tcs, stream), raw),
     }
 }
 
 /// The order a wide value is in when it carries no mark of its own.
 ///
-/// Big-endian for UTF-16, which is §9.3.1.6's third bullet. The message's own
-/// order for UCS-2, which is the carve-out two paragraphs later: "for GIOP 1.1,
-/// 1.2, and 1.3, UCS-2 and UCS-4 should be encoded using the endianess of the
-/// GIOP message, for backward compatibility" — and the BOM paragraph above it
-/// opens with "if UTF-16 is selected as the TCS-W", so it does not reach here.
+/// **GIOP 1.2:** big-endian for UTF-16, which is §9.3.1.6's third bullet, and
+/// measured against omniORB 4.3.4 in `tests/wide_chars_from_a_peer.rs`. The
+/// message's own order for UCS-2, which is the carve-out two paragraphs later:
+/// "for GIOP 1.1, 1.2, and 1.3, UCS-2 and UCS-4 should be encoded using the
+/// endianess of the GIOP message, for backward compatibility" — and the BOM
+/// paragraph above it opens with "if UTF-16 is selected as the TCS-W", so it
+/// does not reach here.
+///
+/// **GIOP 1.1:** the message's own order for UTF-16 as well. The BOM paragraph
+/// names no GIOP version, but its bullets are phrased "after the length
+/// indication" and a 1.1 `wchar` has none — the section is written around the
+/// 1.2 form — so whether its third bullet binds a 1.1 `wstring` is genuinely
+/// ambiguous, and the decision is to follow the one 1.1 wide-text peer this
+/// host can measure. JacORB 3.9 at GIOP 1.1 (`spikes/jacorb_giop11.sh`,
+/// 2026-08-19, wchar=UTF-16) reads an unmarked `wstring` **in the message's
+/// order**: given `00 77 00 69 …` in a little-endian message it echoed
+/// `77 00 69 00 …` — U+7700 U+6900 — and given the same octets in a big-endian
+/// message it echoed them unchanged. It writes only big-endian messages, so its
+/// writer's convention in a little-endian message is unmeasurable, and it does
+/// not read a mark at 1.1 at all (see [`WideCodec::put_wstring`]). omniORB
+/// declines 1.1 wide text outright (`BAD_PARAM` minor 23, spike-interop case
+/// 9), so there is no second witness. This also makes a 1.1 `wstring` agree
+/// with a 1.1 `wchar`, which has always been written and read in the
+/// message's order here.
 ///
 /// Both the reader and the writer go through this, which is the point. The
 /// writer used to hard-code big-endian for every codeset while the reader used
 /// the stream, and the two only ever agreed because a mark was always present
 /// to make them agree.
-fn unmarked_order(tcs: CodeSetId, stream: Endian) -> Endian {
-    if tcs == CodeSetId::UTF_16 { Endian::Big } else { stream }
+fn unmarked_order(version: Version, tcs: CodeSetId, stream: Endian) -> Endian {
+    if tcs == CodeSetId::UTF_16 && version.minor >= 2 { Endian::Big } else { stream }
 }
 
 /// Whether a wide value in `tcs` is written with a leading byte-order mark.
@@ -1205,9 +1236,10 @@ impl WideCodec {
         s.encode_utf16().collect()
     }
 
-    /// Writes a `wstring`, prefixed with a byte-order mark.
+    /// Writes a `wstring` — at GIOP 1.2 prefixed with a byte-order mark, at
+    /// GIOP 1.1 unmarked and in the message's order.
     ///
-    /// The BOM is not decoration. Both omniORB and JacORB misread a
+    /// The 1.2 BOM is not decoration. Both omniORB and JacORB misread a
     /// big-endian UTF-16 `wstring` sent without one — `w` (U+0077) came back
     /// as U+7700 — so peers do **not** infer wide-character order from the
     /// enclosing message's byte order, whatever a reading of §9.3.2.7 might
@@ -1217,17 +1249,46 @@ impl WideCodec {
     ///
     /// What that observation was actually seeing is now measured and named in
     /// [`wide_order`]: a BOM-less UTF-16 value is big-endian by definition, in
-    /// either kind of stream. The BOM stays because it is what omniORB writes
-    /// and what every reader in the field understands, not because the reader
-    /// here needs it any more.
+    /// either kind of stream. At 1.2 the BOM stays because it is what omniORB
+    /// writes and what every reader in the field understands, not because the
+    /// reader here needs it any more.
+    ///
+    /// **At 1.1 no mark is written.** §9.3.1.6 (CORBA 3.4 Part 2) makes the
+    /// mark the writer's option, not its duty — "if an ORB decides to use BOM
+    /// to indicate endianness, it shall add the BOM …" — and its third bullet
+    /// makes the unmarked form well-defined: "if the first two bytes (after
+    /// the length indication) are neither, it's big-endian". The paragraph is
+    /// not scoped to a GIOP version, so a mark at 1.1 is *permitted*; what is
+    /// measured is that the one 1.1 wide-text peer this host has does not
+    /// read it as one. JacORB 3.9 at GIOP 1.1 (`spikes/jacorb_giop11.sh`,
+    /// 2026-08-19, negotiated char=UTF-8 wchar=UTF-16) writes `count=13`
+    /// unmarked big-endian for a twelve-unit text and, given our marked
+    /// `count=14`, hands its user `U+FEFF` + text — and echoes the mark back
+    /// as the fourteenth unit, which our reader then stripped as a mark, so
+    /// the round trip was green while the peer's user saw the wrong value.
+    /// The same peer strips the mark at 1.2. omniORBpy cannot unmarshal its
+    /// own 1.1 `wchar` (D010 B5) and omniORB declines 1.1 wide text with
+    /// `BAD_PARAM` minor 23, so JacORB is the only witness, and the form it
+    /// reads correctly is the one the specification defines without the
+    /// option — unmarked, counted in wide characters plus the terminator
+    /// (§9.3.2.7). Recorded in `tests/wide_1_1_from_a_peer.rs`.
+    ///
+    /// The unmarked units follow [`unmarked_order`] — the same rule the 1.2
+    /// `wchar` writer already applies. At 1.2 that is big-endian whatever the
+    /// stream; at 1.1 it is the message's order, which is where the same peer
+    /// measurement parted from §9.3.1.6's third bullet: our first unmarked
+    /// attempt wrote big-endian units into a little-endian message and JacORB
+    /// echoed every unit swapped. A UCS-2 value never carried a mark and keeps
+    /// following the message in every version.
     pub fn put_wstring(
         self,
         e: &mut Encoder,
         s: &str,
     ) -> std::result::Result<(), NegotiationError> {
         let units = self.units(s);
-        // UCS-2 has no mark defined for it; see `marks_its_order`.
-        let mark = marks_its_order(self.tcs);
+        // UCS-2 has no mark defined for it; see `marks_its_order`. A 1.1
+        // value is unmarked whatever its codeset; see the doc comment.
+        let mark = marks_its_order(self.tcs) && self.version.minor >= 2;
         let total = units.len() + usize::from(mark);
         if self.version.minor >= 2 {
             // Octet count, no terminator. Zero length stays legal and carries
@@ -1242,10 +1303,21 @@ impl WideCodec {
             e.put_u32(total as u32 + 1);
         }
         if mark {
+            // A marked value is written in the stream's order and the mark,
+            // written the same way, says which order that was.
             e.put_u16(BOM);
-        }
-        for u in units {
-            e.put_u16(u);
+            for u in units {
+                e.put_u16(u);
+            }
+        } else {
+            // An unmarked value is in the only order the reader may assume.
+            let order = unmarked_order(self.version, self.tcs, e.endian());
+            for u in units {
+                e.put_bytes(&match order {
+                    Endian::Big => u.to_be_bytes(),
+                    Endian::Little => u.to_le_bytes(),
+                });
+            }
         }
         if self.version.minor < 2 {
             e.put_u16(0);
@@ -1256,10 +1328,27 @@ impl WideCodec {
     /// Reads a `wstring`.
     ///
     /// The units are ordered by [`wide_order`] — the value's own BOM, or
-    /// big-endian when it carries none — and **not** by the enclosing stream.
+    /// [`unmarked_order`] when it carries none: big-endian at 1.2, and **not**
+    /// the enclosing stream's order; the stream's order at 1.1.
     /// The elements are read as octets, which is also what Table 9.1's `wchar`
     /// alignment of 1 for GIOP 1.2 asks for; the count is a 4-aligned
     /// `unsigned long`, so a 1.1 element still lands 2-aligned as it must.
+    ///
+    /// **A leading mark is removed at 1.1 as well as at 1.2.** This is a
+    /// decision, not an accident of sharing [`wide_order`]: §9.3.1.6's "if a
+    /// BOM is present at the beginning of a wchar or wstring received in a
+    /// GIOP message, the ORB shall remove the BOM before passing the value to
+    /// the user" names no GIOP version, so a 1.1 peer that marks — as we did
+    /// until this was measured, and as the sentence permits — is read as it
+    /// meant to be, in the order it marked. What that accepts: a 1.1 peer
+    /// that does not mark and whose user's text genuinely begins with U+FEFF
+    /// (JacORB 3.9 is one) loses that first character here, exactly as it
+    /// would at any 1.2 reader. What it prevents: handing our user a U+FEFF
+    /// from a marking peer, and reading a little-endian-marked value
+    /// backwards — the former being the very defect this writer no longer
+    /// commits against JacORB. JacORB's echo of our unmarked 13-unit request
+    /// is 13 unmarked units and decodes to the original text either way; the
+    /// spec sentence is what breaks the tie.
     pub fn get_wstring(self, d: &mut Decoder<'_>) -> std::result::Result<String, NegotiationError> {
         let bad = || NegotiationError::Malformed { codeset: self.tcs };
         let len = d.get_u32().map_err(|_| bad())?;
@@ -1277,7 +1366,7 @@ impl WideCodec {
             (len as usize).checked_mul(2).ok_or_else(bad)?
         };
         let raw = d.get_bytes(octets).map_err(|_| bad())?;
-        let (order, body) = wide_order(raw, self.tcs, d.endian());
+        let (order, body) = wide_order(raw, self.version, self.tcs, d.endian());
         let mut units = wide_units(body, order);
         if self.version.minor < 2 {
             match units.pop() {
@@ -1318,7 +1407,7 @@ impl WideCodec {
         }
         if self.version.minor >= 2 {
             let unit = units[0];
-            let octets = match unmarked_order(self.tcs, e.endian()) {
+            let octets = match unmarked_order(self.version, self.tcs, e.endian()) {
                 Endian::Big => unit.to_be_bytes(),
                 Endian::Little => unit.to_le_bytes(),
             };
@@ -1351,7 +1440,7 @@ impl WideCodec {
         let unit = if self.version.minor >= 2 {
             let n = d.get_u8().map_err(|_| bad())?;
             let raw = d.get_bytes(n as usize).map_err(|_| bad())?;
-            let (order, body) = wide_order(raw, self.tcs, d.endian());
+            let (order, body) = wide_order(raw, self.version, self.tcs, d.endian());
             // An odd count is refused rather than truncated: `chunks_exact`
             // would drop the trailing octet and hand back a plausible
             // character, having consumed a byte nothing accounts for.
