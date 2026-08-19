@@ -1,0 +1,24 @@
+// The single wide character, as its own contract.
+//
+// spikes/echo.idl carries a wstring and no wchar, and every fixture in the
+// tree implements echo.idl — so until this file existed the GIOP 1.1 `wchar`
+// (two octets, no length indication, nowhere to put a mark) had never met a
+// peer in either direction. Adding the operation to echo.idl would have
+// touched every fixture; a second, two-operation contract touches only the
+// fixtures that exist to measure it: spikes/jacorb/WideServer.java,
+// spikes/jacorb/WideClient.java and spikes/jacorb_wchar11.py, driven by
+// spikes/jacorb_wchar11.sh.
+//
+// *echo.idl에는 wstring만 있고 wchar가 없어서, 1.1 wchar는 어느 방향으로도
+// 피어를 만난 적이 없었다. 이 계약은 그 한 문자를 재기 위해서만 존재한다.*
+module spike {
+  //@ ai_desc: Wide-character echo used to measure wchar and wstring codeset paths
+  interface Wide {
+    //@ ai_desc: Returns the wide character it was given, unchanged
+    //@ ai_effect: read_only
+    wchar   echo_wchar(in wchar c);
+    //@ ai_desc: Returns the wide string it was given, unchanged
+    //@ ai_effect: read_only
+    wstring echo_wstring(in wstring s);
+  };
+};

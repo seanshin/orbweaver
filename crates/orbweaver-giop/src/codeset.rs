@@ -1163,7 +1163,8 @@ fn wide_order(raw: &[u8], version: Version, tcs: CodeSetId, stream: Endian) -> (
 /// declines 1.1 wide text outright (`BAD_PARAM` minor 23, spike-interop case
 /// 9), so there is no second witness. This also makes a 1.1 `wstring` agree
 /// with a 1.1 `wchar`, which has always been written and read in the
-/// message's order here.
+/// message's order here — and which the same peer was measured to read the
+/// same way (`spikes/jacorb_wchar11.sh`, see [`WideCodec::get_wchar`]).
 ///
 /// Both the reader and the writer go through this, which is the point. The
 /// writer used to hard-code big-endian for every codeset while the reader used
@@ -1396,6 +1397,13 @@ impl WideCodec {
     /// only order it may be written in, and for UCS-2 that order is the
     /// message's. Hard-coding big-endian here while the reader used the stream
     /// is what made the two disagree for UCS-2 and agree for UTF-16 by luck.
+    ///
+    /// The 1.1 unit is two octets in the stream's order and nothing else —
+    /// no length, no mark — and that too is measured, against JacORB 3.9
+    /// (`spikes/jacorb_wchar11.sh`, 2026-08-19): our `d5 5c` in a big-endian
+    /// message and `5c d5` in a little-endian one both reached JacORB's user
+    /// as U+D55C, and the control — `d5 5c` in a little-endian message —
+    /// reached it as U+5CD5. See [`WideCodec::get_wchar`].
     pub fn put_wchar(self, e: &mut Encoder, c: char) -> std::result::Result<(), NegotiationError> {
         let mut buf = [0u16; 2];
         let units = c.encode_utf16(&mut buf);
@@ -1430,11 +1438,15 @@ impl WideCodec {
     ///
     /// GIOP 1.1 keeps the stream's order. It has no length indication, so it
     /// has nowhere to put a mark, and §9.3.1.6 phrases the byte-order bullets
-    /// in terms of "the first two bytes *after the length indication*". This
-    /// one is **unmeasured**: omniORBpy 4.3.4 marshals a bare `wchar` but
-    /// raises `MARSHAL_MessageTooLong` unmarshalling its own output, so no peer
-    /// on this host can be asked. It is left as it was rather than changed on a
-    /// reading.
+    /// in terms of "the first two bytes *after the length indication*".
+    /// **Measured** against JacORB 3.9 (`spikes/jacorb_wchar11.sh`,
+    /// 2026-08-19, wchar=UTF-16; omniORBpy 4.3.4 cannot unmarshal its own 1.1
+    /// `wchar`, so it is the one peer): JacORB writes `d5 5c` for U+D55C in
+    /// its big-endian messages and reads a 1.1 `wchar` in the *message's*
+    /// order — `5c d5` in a little-endian reply reached its user as U+D55C,
+    /// `d5 5c` in the same frame as U+5CD5, 4/4 units each way — which is
+    /// what this arm has always done. `fe ff` is U+FEFF as data on both
+    /// sides. Recorded in `tests/wide_1_1_from_a_peer.rs`.
     pub fn get_wchar(self, d: &mut Decoder<'_>) -> std::result::Result<char, NegotiationError> {
         let bad = || NegotiationError::Malformed { codeset: self.tcs };
         let unit = if self.version.minor >= 2 {

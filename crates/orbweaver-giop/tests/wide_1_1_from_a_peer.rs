@@ -1,5 +1,5 @@
-//! A GIOP 1.1 `wstring` as the one 1.1 wide-text peer on this host actually
-//! writes and reads it.
+//! A GIOP 1.1 `wstring` — and, from the second section on, a GIOP 1.1 `wchar`
+//! — as the one 1.1 wide-text peer on this host actually writes and reads them.
 //!
 //! Every byte sequence below came off the wire between JacORB 3.9 and our
 //! `spike-server` / `spike-interop` on 2026-08-19, recorded by
@@ -10,8 +10,8 @@
 //! 23, spike-interop case 9) and omniORBpy cannot unmarshal its own 1.1
 //! `wchar` (D010 B5), so JacORB is the only witness there is.
 //!
-//! The negotiated codesets were char=UTF-8, wchar=UTF-16, and the two facts
-//! the bytes establish are:
+//! The negotiated codesets were char=UTF-8, wchar=UTF-16, and the first two
+//! facts the bytes establish are:
 //!
 //! 1. **A 1.1 `wstring` carries no byte-order mark, and a mark is not read as
 //!    one.** JacORB writes `count=13` for a twelve-unit text — the units and
@@ -224,4 +224,234 @@ fn a_marked_1_1_wstring_from_a_peer_is_still_read_as_marked() {
     let marked_le = [0x00, 0x00, 0x00, 0x03, 0xff, 0xfe, 0x77, 0x00, 0x00, 0x00];
     let mut d = Decoder::new(&marked_le, Endian::Big);
     assert_eq!(codec().get_wstring(&mut d).expect("decode"), "w");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The single wide character, second half of D010 B5
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Everything below came off the wire between JacORB 3.9 and the hand-built
+// GIOP 1.1 peer in `spikes/jacorb_wchar11.py`, driven by
+// `spikes/jacorb_wchar11.sh`, on 2026-08-19, over `spikes/wide.idl`
+// (`IDL:spike/Wide:1.0`, `wchar echo_wchar(in wchar c)`), negotiated
+// char=UTF-8 wchar=UTF-16. `spikes/echo.idl` has no `wchar` operation, which
+// is why the 1.1 `wchar` — two octets, no length indication, nowhere to put a
+// mark — had met no peer before this. The same clause (b) as above: the
+// output of a program we ran, over types the OMG defines.
+//
+// The facts the bytes establish:
+//
+// 3. **A 1.1 `wchar` is its two octets in the MESSAGE's order, and nothing
+//    else.** JacORB writes `d5 5c` for U+D55C in its (always big-endian)
+//    messages. Given our reply `5c d5` in a *little-endian* message its user
+//    received U+D55C; given `d5 5c` in a little-endian message (the control)
+//    its user received U+5CD5, and every other unit swapped the same way,
+//    4/4. In the other direction our little-endian request `5c d5` came back
+//    as `d5 5c` (U+D55C) and the control's `d5 5c` in a little-endian request
+//    came back as `5c d5` (U+5CD5). `WideCodec::put_wchar` and `get_wchar`
+//    have always used the stream's order at 1.1; the measurement agrees.
+//
+// 4. **U+FEFF is data at 1.1.** A 1.1 `wchar` has no length, so §9.3.1.6's
+//    "first two bytes (after the length indication)" has nowhere to apply;
+//    JacORB writes `fe ff` for U+FEFF and echoes it, and its user gets U+FEFF
+//    back from our `fe ff`. Our reader hands it over as data too — the 1.1
+//    arm of `get_wchar` never looked for a mark.
+//
+// 5. **What a `wchar` cannot carry.** A character above the BMP is two UTF-16
+//    units; a Java `char` is one, so JacORB's client can only *ask* for a
+//    lone surrogate, and it writes one as `d8 3d` and echoes one back. Given
+//    four octets `d8 3d de 00` as one wchar, JacORB read the first two and
+//    ignored the rest (U+D83D back). Our reader refuses `d8 3d` — not a
+//    character — and our writer refuses U+1F600 rather than splitting it.
+//    Recorded as behaviour, not as a pass: neither side is wrong about a
+//    value the type cannot hold.
+
+use orbweaver_giop::server::{decode_request, encode_reply};
+use orbweaver_giop::{DEFAULT_MAX_MESSAGE_SIZE, ReplyStatus, decode_reply, read_message};
+
+/// The four units `spikes/jacorb_wchar11.sh` sends as `UNITS`, and what
+/// JacORB's client wrote for each (`a.srv.log`, "request body: wchar 1.1
+/// body=…"): 'w', whose swap U+7700 is a different valid character; '한';
+/// U+FEFF as data; and a lone high surrogate.
+const JACORB_WCHAR_W: &[u8] = &[0x00, 0x77];
+const JACORB_WCHAR_HAN: &[u8] = &[0xd5, 0x5c];
+const JACORB_WCHAR_FEFF: &[u8] = &[0xfe, 0xff];
+const JACORB_WCHAR_LONE_SURROGATE: &[u8] = &[0xd8, 0x3d];
+
+/// The whole `echo_wchar(U+D55C)` request JacORB's `WideClient` wrote — its
+/// second request on the connection, so no service context is in it. From
+/// `a.srv.log`:
+///
+/// ```text
+/// [1] C->S GIOP 1.1 Request BE id=2 op=echo_wchar
+///     request body: wchar 1.1 body=d55c read in the message's order (BE) -> U+D55C
+///     0000  47 49 4f 50 01 01 00 00 00 00 00 36 00 00 00 00  GIOP.......6....
+///     0010  00 00 00 02 01 00 00 00 00 00 00 0d 4f 72 62 77  ............Orbw
+///     0020  65 61 76 65 72 57 69 64 65 00 00 00 00 00 00 0b  eaverWide.......
+///     0030  65 63 68 6f 5f 77 63 68 61 72 00 00 00 00 00 00  echo_wchar......
+///     0040  d5 5c                                            .\
+/// ```
+///
+/// Header; no contexts; id 2; response expected and the three 1.1 reserved
+/// octets; the 13-octet key; the operation; an empty principal; and the two
+/// octets — 2-aligned, which after the principal's count they already are.
+const JACORB_REQUEST_HAN: &[u8] = &[
+    0x47, 0x49, 0x4f, 0x50, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x36, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0x4f, 0x72, 0x62, 0x77,
+    0x65, 0x61, 0x76, 0x65, 0x72, 0x57, 0x69, 0x64, 0x65, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0b,
+    0x65, 0x63, 0x68, 0x6f, 0x5f, 0x77, 0x63, 0x68, 0x61, 0x72, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0xd5, 0x5c,
+];
+
+/// The whole reply JacORB's `WideServer` wrote to our `echo_wchar(U+D55C)`
+/// request — the same 26 octets whether our request was big-endian (`d5 5c`)
+/// or little-endian (`5c d5`): JacORB replies big-endian, and it read both.
+/// From `d.be.log` and `d.le.log`:
+///
+/// ```text
+/// S->C GIOP 1.1 Reply BE id=4 status=0
+///     0000  47 49 4f 50 01 01 00 01 00 00 00 0e 00 00 00 00  GIOP............
+///     0010  00 00 00 04 00 00 00 00 d5 5c                    .........\
+/// ```
+const JACORB_REPLY_HAN: &[u8] = &[
+    0x47, 0x49, 0x4f, 0x50, 0x01, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0xd5, 0x5c,
+];
+
+/// What our side wrote back to JacORB's `echo_wchar(U+D55C)` — request id 2 —
+/// and JacORB's user reported receiving U+D55C from: a big-endian reply
+/// (`a.srv.log`) and a little-endian one with the unit in the message's
+/// order (`b.srv.log`).
+///
+/// ```text
+/// [1] S->C GIOP 1.1 Reply BE id=2 for=echo_wchar
+///     0000  47 49 4f 50 01 01 00 01 00 00 00 0e 00 00 00 00  GIOP............
+///     0010  00 00 00 02 00 00 00 00 d5 5c                    .........\
+/// [1] S->C GIOP 1.1 Reply LE id=2 for=echo_wchar
+///     0000  47 49 4f 50 01 01 01 01 0e 00 00 00 00 00 00 00  GIOP............
+///     0010  02 00 00 00 00 00 00 00 5c d5                    ........\.
+/// ```
+///
+/// The control — `d5 5c` in the little-endian frame — reached JacORB's user
+/// as U+5CD5 (`c.client.log`), so these two are the only forms it reads as
+/// U+D55C.
+const OUR_REPLY_HAN_BE: &[u8] = &[
+    0x47, 0x49, 0x4f, 0x50, 0x01, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0xd5, 0x5c,
+];
+const OUR_REPLY_HAN_LE: &[u8] = &[
+    0x47, 0x49, 0x4f, 0x50, 0x01, 0x01, 0x01, 0x01, 0x0e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5c, 0xd5,
+];
+
+/// The two octets follow the message: JacORB's big-endian octets decode here
+/// in a big-endian stream, we re-encode them byte for byte, and in a
+/// little-endian stream we write the swap — the octets JacORB read correctly
+/// in a little-endian message — and read the swap back.
+#[test]
+fn a_1_1_wchar_is_written_and_read_in_the_messages_order_as_the_peer_does() {
+    for (peer, c) in
+        [(JACORB_WCHAR_W, 'w'), (JACORB_WCHAR_HAN, '한'), (JACORB_WCHAR_FEFF, '\u{FEFF}')]
+    {
+        let mut d = Decoder::new(peer, Endian::Big);
+        assert_eq!(codec().get_wchar(&mut d).expect("decode"), c, "{c:?}: JacORB's octets");
+        assert!(d.is_empty(), "{c:?}: two octets and nothing else");
+
+        let mut e = Encoder::new(Endian::Big);
+        codec().put_wchar(&mut e, c).expect("encode");
+        assert_eq!(e.finish().expect("finish"), peer, "{c:?}: our big-endian octets are JacORB's");
+
+        let swapped = [peer[1], peer[0]];
+        let mut e = Encoder::new(Endian::Little);
+        codec().put_wchar(&mut e, c).expect("encode");
+        assert_eq!(
+            e.finish().expect("finish"),
+            swapped,
+            "{c:?}: little-endian message, unit swapped"
+        );
+        let mut d = Decoder::new(&swapped, Endian::Little);
+        assert_eq!(
+            codec().get_wchar(&mut d).expect("decode"),
+            c,
+            "{c:?}: read in the message's order"
+        );
+
+        // And the control JacORB's user saw swapped: JacORB's octets in a
+        // little-endian stream are the other character here as well.
+        let mut d = Decoder::new(peer, Endian::Little);
+        let other = codec().get_wchar(&mut d).expect("decode");
+        assert_ne!(other, c, "{c:?}: big-endian octets in a little-endian message are not {c:?}");
+    }
+}
+
+/// JacORB's whole request through our server's request decoder, and its whole
+/// reply through our client's reply decoder — the version, the byte order and
+/// the operation read from its bytes, and the character from the body.
+#[test]
+fn jacorbs_1_1_wchar_request_and_reply_decode_through_our_paths() {
+    let raw = read_message(&mut JACORB_REQUEST_HAN.to_vec().as_slice(), DEFAULT_MAX_MESSAGE_SIZE)
+        .expect("frames");
+    let req = decode_request(raw).expect("decodes");
+    assert_eq!(req.version, Version::V1_1);
+    assert_eq!(req.endian, Endian::Big);
+    assert_eq!(req.request_id, 2);
+    assert_eq!(req.operation, "echo_wchar");
+    assert_eq!(req.object_key, b"OrbweaverWide");
+    let mut body = req.body().expect("body");
+    let w =
+        WideCodec::new(req.version, CodeSetId::UTF_16).expect("codec from the request's version");
+    assert_eq!(w.get_wchar(&mut body).expect("wchar"), '한');
+    assert!(body.is_empty(), "nothing after the wchar");
+
+    let raw = read_message(&mut JACORB_REPLY_HAN.to_vec().as_slice(), DEFAULT_MAX_MESSAGE_SIZE)
+        .expect("frames");
+    let reply = decode_reply(raw).expect("decodes");
+    assert_eq!(reply.version, Version::V1_1);
+    assert_eq!(reply.endian, Endian::Big);
+    assert_eq!(reply.request_id, 4);
+    assert_eq!(reply.status, ReplyStatus::NoException);
+    let mut body = reply.body().expect("body");
+    assert_eq!(codec().get_wchar(&mut body).expect("wchar"), '한');
+    assert!(body.is_empty(), "nothing after the wchar");
+}
+
+/// Our server's reply for `echo_wchar(U+D55C)` at 1.1, in each byte order, is
+/// octet for octet the reply JacORB's user read as U+D55C — and not the
+/// control it read as U+5CD5.
+#[test]
+fn our_1_1_wchar_reply_is_the_one_jacorbs_user_read_in_both_orders() {
+    for (endian, want) in [(Endian::Big, OUR_REPLY_HAN_BE), (Endian::Little, OUR_REPLY_HAN_LE)] {
+        let msg = encode_reply(Version::V1_1, endian, 2, ReplyStatus::NoException, None, |e| {
+            codec().put_wchar(e, '한').expect("wchar");
+        })
+        .expect("encodes");
+        assert_eq!(msg, want, "{endian:?}");
+    }
+    let mut e = Encoder::new(Endian::Little);
+    codec().put_wchar(&mut e, '한').expect("wchar");
+    assert_ne!(e.finish().expect("finish"), JACORB_WCHAR_HAN, "we do not write JacORB's control");
+}
+
+/// What a `wchar` cannot carry, on both sides. JacORB passes a lone surrogate
+/// through as two octets and takes the first two of a four-octet "pair"; we
+/// refuse the lone unit as not a character and refuse to split U+1F600. U+FEFF
+/// is a character at 1.1, both ways.
+#[test]
+fn a_1_1_wchar_refuses_what_is_not_a_character_and_keeps_feff_as_data() {
+    let mut d = Decoder::new(JACORB_WCHAR_LONE_SURROGATE, Endian::Big);
+    assert!(codec().get_wchar(&mut d).is_err(), "a lone surrogate is not a char");
+
+    let pair_as_one_wchar = [0xd8, 0x3d, 0xde, 0x00];
+    let mut d = Decoder::new(&pair_as_one_wchar, Endian::Big);
+    assert!(codec().get_wchar(&mut d).is_err(), "the first two octets are a lone surrogate");
+    assert_eq!(d.remaining(), 2, "two octets consumed, as JacORB consumed them");
+
+    let mut e = Encoder::new(Endian::Big);
+    assert!(codec().put_wchar(&mut e, '\u{1F600}').is_err(), "two units are not one wchar");
+
+    let mut e = Encoder::new(Endian::Big);
+    codec().put_wchar(&mut e, '\u{FEFF}').expect("FEFF is a character");
+    assert_eq!(e.finish().expect("finish"), JACORB_WCHAR_FEFF);
+    let mut d = Decoder::new(JACORB_WCHAR_FEFF, Endian::Big);
+    assert_eq!(codec().get_wchar(&mut d).expect("decode"), '\u{FEFF}', "data, not a mark, at 1.1");
 }
