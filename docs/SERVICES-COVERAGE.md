@@ -489,13 +489,15 @@ _`CORBA::Object` pseudo-operations probed and counted apart: `_is_a`, `_non_exis
 
 _`CORBA::Object` pseudo-operations probed and counted apart: `_is_a`, `_non_existent`._
 
-### MoE control plane — 12 declared, 8 served / 선언 12, 서빙 8
+### MoE control plane — 14 declared, 10 served / 선언 14, 서빙 10
 
 | Interface | Operation | Answer, per object probed | Class |
 |---|---|---|---|
 | `moe::ExpertRegistry` | `register_expert` | ExpertRegistry → `MARSHAL` | served |
 | `moe::ExpertRegistry` | `deregister` | ExpertRegistry → `MARSHAL` | served |
 | `moe::ExpertRegistry` | `heartbeat` | ExpertRegistry → `MARSHAL` | served |
+| `moe::ExpertRegistry` | `register_measured` | ExpertRegistry → `MARSHAL` | served |
+| `moe::ExpertRegistry` | `heartbeat_measured` | ExpertRegistry → `MARSHAL` | served |
 | `moe::ExpertLoader` | `prefetch` | ExpertLoader → `MARSHAL` | served |
 | `moe::ExpertLoader` | `evict` | ExpertLoader → `MARSHAL` | served |
 | `moe::ExpertLoader` | `pin` | ExpertLoader → `MARSHAL` | served |
@@ -516,8 +518,8 @@ _`CORBA::Object` pseudo-operations probed and counted apart: `_is_a`, `_non_exis
 | CosEvent | 18 | 14 | 4 | 0 | 0 | 28 | 0 |
 | IFR | 44 | 9 | 10 | 25 | 0 | 66 | 0 |
 | MoE enterprise | 16 | 16 | 0 | 0 | 0 | 28 | 0 |
-| MoE control plane | 12 | 8 | 1 | 0 | 3 | 19 | 0 |
-| **total** | **104** | **61** | **15** | **25** | **3** | **157** | **0** |
+| MoE control plane | 14 | 10 | 1 | 0 | 3 | 21 | 0 |
+| **total** | **106** | **63** | **15** | **25** | **3** | **159** | **0** |
 
 _Declared_ counts each `interface::operation` once however many objects it was probed on; an operation is _served_ if any object dispatched it. `MARSHAL` on a 64-zero-byte probe proves dispatch, not correctness (§9). / _선언_은 객체 수와 무관하게 `인터페이스::연산`을 한 번씩 센다.
 

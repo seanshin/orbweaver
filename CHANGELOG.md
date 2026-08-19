@@ -427,6 +427,32 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **moe v1.1 — the Capability gap closed additively (D010 A2).**
+  `corpus/golden/22` gains `MeasuredCapability` (composes the released
+  `Capability` + `specialization` + `latency_p50_ms`) and
+  `ExpertRegistry::register_measured` / `heartbeat_measured`; `idl-diff` exit 0
+  against the frozen release `corpus/evolution/moe/v1.0`, exit 1 for the
+  in-place edit kept at `corpus/evolution/moe/v1.1-in-place` — both in the
+  harness. `orbweaver-trading`: `Selection::unranked` + `is_complete()` — an
+  offer with no value for the `ORDER BY` field is set aside and named, no
+  longer sorted last (which still picked an unmeasured expert when nothing was
+  measured). `orbweaver-object`: both operations served, both byte orders; a
+  v1.0 `heartbeat` keeps the two members it cannot mention (it used to erase
+  them, and an out-of-band `declare_specialization` with them — same root
+  cause: a message with no room for a fact cannot withdraw it). `spike-experts`
+  windows 4–5: refused → refused with the unmeasured one named → complete
+  answer by measurement. The generated coverage block moved 12→14 declared on
+  the control plane by itself, which is what it is for.
+
+  **moe v1.1 — Capability 간극을 추가만으로 닫음 (D010 A2).** golden 22에
+  `MeasuredCapability`와 `register_measured`/`heartbeat_measured` 추가; 동결
+  릴리스 `corpus/evolution/moe/v1.0` 대비 `idl-diff` exit 0, 제자리 수정
+  대조군 exit 1 — 둘 다 하네스에. trading: `Selection::unranked`·
+  `is_complete()` — 순위를 매길 수 없는 오퍼는 마지막이 아니라 따로 명명.
+  object: 두 오퍼레이션 양쪽 바이트 순서로 서비스, v1.0 heartbeat는 언급할 수
+  없는 두 멤버를 지우지 않음. spike-experts 4·5번 창: 거부 → 부분 측정 거부 →
+  측정에 의한 완전한 답.
+
 - **`_rt.py` reads and writes AnyJSON v1.1's structural `_t`** (D010 A4). An
   `any` carrying a struct, enum, union, exception or typedef crosses to Python
   and back; a type the package never declared is synthesised from the document

@@ -1508,11 +1508,45 @@ hr "expert service — registry, policy and residency through GIOP"
 ex=$(cargo run -q --bin spike-experts 2>&1)
 if printf '%s' "$ex" | grep -q "expert-service: PASS"; then
   echo "  ok   register/heartbeat/oneway prefetch/guarded evict/policy, one control loop"
+  # D010 A2 (2026-08-19): a router ordering by latency_p50 refuses to pick when
+  # every candidate is unmeasured, and names the unmeasured one when some are.
+  # Negative control: with "unknown sorts last" restored, the spike picked
+  # expert-math with no measurement at all (agent measurement, in 06ea90e).
+  if printf '%s' "$ex" | grep -q "only unmeasured candidates: the router refuses"; then
+    echo "  ok   ORDER BY latency_p50 over unmeasured experts is refused, not ranked"
+  else
+    echo "  FAIL the router picked, or did not say it refused, over unmeasured experts"
+    fail_total=$((fail_total+1))
+  fi
 else
   echo "  FAIL expert service"
   printf '%s' "$ex" | grep -i "FAIL" | head -3 | sed 's/^/       /'
   fail_total=$((fail_total+1))
 fi
+
+hr "§5.3 — moe v1.1 is additive, and the in-place edit is still refused"
+# corpus/evolution/moe/v1.0 is the frozen release; golden 22 the served revision;
+# v1.1-in-place the negative control (both members added to the released
+# struct). Captured then matched, never piped to grep -q. Negative control for
+# the group itself: point the first diff at v1.1-in-place and it goes FAIL.
+mv_fail=0
+mv_out=$(cargo run -q --bin idl-diff -- corpus/evolution/moe/v1.0/moe.idl \
+         corpus/golden/22-moe-control-plane.idl 2>&1); mv_rc=$?
+if [ "$mv_rc" -eq 0 ] && printf '%s' "$mv_out" | grep -q "MeasuredCapability"; then
+  echo "  ok   moe v1.0 -> golden 22 is additive (exit 0) and names MeasuredCapability"
+else
+  echo "  FAIL golden 22 is no longer an additive revision of moe v1.0 (exit $mv_rc)"
+  printf '%s\n' "$mv_out" | head -3 | sed 's/^/       /'; mv_fail=1
+fi
+mv_ctl=$(cargo run -q --bin idl-diff -- corpus/evolution/moe/v1.0/moe.idl \
+         corpus/evolution/moe/v1.1-in-place/moe.idl 2>&1); mv_ctl_rc=$?
+if [ "$mv_ctl_rc" -eq 1 ] && printf '%s' "$mv_ctl" | grep -q "latency_p50_ms" \
+   && printf '%s' "$mv_ctl" | grep -q "specialization"; then
+  echo "  ok   the in-place edit is still refused with both members named (exit 1)"
+else
+  echo "  FAIL the negative control passed the gate (exit $mv_ctl_rc)"; mv_fail=1
+fi
+[ "$mv_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
 # ── The guard's dry-run: a policy preview that costs nothing ────────────────
 hr "audit ledger — a gate that sees a secret must not publish one"
