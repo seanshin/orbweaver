@@ -505,6 +505,34 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### ⚠ Behaviour changed / 동작 변경
 
+- **`Connection` keeps the reference it was dialled from (`origin()`) and,
+  after a temporary `LOCATION_FORWARD`, restarts there when the forwarded-to
+  connection fails without the request having run** (CloseConnection, write
+  failure, or already poisoned) — reuse of the forwarding information first,
+  then the origin, once per call (§9.6 "shall restart the location process
+  using the original address"). A permanent forward replaces the origin and
+  never falls back (§9.6 "may replace", taken). Failures of unknown completion
+  are still errors; the next call restarts. `Reference` caches a temporary
+  forward (one round trip per call while it stands, was two), restarts at its
+  IOR the same way, and re-points on `LOCATION_FORWARD_PERM`;
+  `Reference::forwarded()` now reports the redirect in force, as
+  `Connection::forwarded()` does. Both clients now distinguish the two
+  statuses by behaviour; `spikes/perm_fallback.sh` asserts our eight cells
+  alongside omniORB's two, both byte orders. Decided 2026-08-19 on the
+  record's recommendation; omniORB restarts on COMPLETED_MAYBE too, ours does
+  not by design.
+
+  **`Connection`은 처음 연결한 레퍼런스(`origin()`)를 보관하고, 임시
+  `LOCATION_FORWARD` 이후 전달된 연결이 요청을 실행하지 않은 채
+  실패하면**(CloseConnection, 쓰기 실패, 이미 오염된 연결) 호출당 한 번 — 먼저
+  전달 정보 재사용, 그다음 원래 주소 — 에서 재시작한다(§9.6). 영구 포워드는
+  origin을 교체하며 되돌아가지 않는다. 완료 여부를 알 수 없는 실패는 여전히
+  오류이고 다음 호출이 재시작한다. `Reference`는 임시 포워드를 캐시하고(호출당
+  왕복 1회, 이전 2회), 같은 방식으로 재시작하며 `LOCATION_FORWARD_PERM`에서는
+  스스로를 재지정한다. 두 클라이언트 모두 두 상태를 동작으로 구별하며,
+  `perm_fallback.sh`가 우리 셀 8개를 omniORB 셀 2개와 함께 단정한다.
+
+
 - **A servant that deliberately does not implement a declared operation now
   answers `NO_IMPLEMENT`, not `BAD_OPERATION`.** The three answers are three
   different facts on the wire, with no document needed to tell them apart:

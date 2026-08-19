@@ -1020,10 +1020,15 @@ hr "LOCATION_FORWARD vs _PERM — fallback-on-failure: the forwarded-to server k
 # it may have replaced the reference. Measured 2026-08-19 (af73b2f): omniORB
 # 4.3.4 re-asks under temporary and stays on the dead address under
 # permanent — asserted. Server-side control in af73b2f: PERM downgraded to 3
-# -> omniORB re-asks -> red. Our Connection/Reference cells are printed as
-# measured (neither distinguishes the two; the test's doc says why). Negative
-# control for the group: `--only omni --expect-permanent reask` goes red.
-pfout=$(./spikes/perm_fallback.sh --expect-permanent stay 2>&1); pfrc=$?
+# -> omniORB re-asks -> red. Since 3ab23d5 our own clients do the same and are
+# asserted alongside: Connection keeps its origin and restarts there when a
+# temporary forward's target fails with the request provably unsent
+# (CloseConnection, write failure, poisoned at entry — never on unknown
+# completion), a permanent forward replaces the origin; Reference caches a
+# temporary forward, restarts the same way, re-points on permanent. Ten cells,
+# both byte orders. Negative controls (3ab23d5): `let temporary = false` ->
+# the temporary arm red; `--only omni --expect-permanent reask` -> red.
+pfout=$(./spikes/perm_fallback.sh --expect-temporary reask --expect-permanent stay 2>&1); pfrc=$?
 printf '%s\n' "$pfout" | grep -E '^  (ok|FAIL|SKIPPED|\.\.) ' | cut -c1-150
 case "$pfrc" in
   0) ;;
