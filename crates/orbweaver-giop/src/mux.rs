@@ -219,9 +219,9 @@ use orbweaver_cdr::{Encoder, Endian};
 
 use crate::guarded::{Section, assert_nothing_held};
 use crate::{
-    Connection, Error, Ior, MsgType, RawMessage, Reply, ReplyStatus, Result, ServiceContext,
-    Stream, Version, codeset, decode_reply, encode_cancel_request, encode_request_with_contexts,
-    fragment_message, read_message,
+    Connection, Error, Forward, Ior, MsgType, RawMessage, Reply, ReplyStatus, Result,
+    ServiceContext, Stream, Version, codeset, decode_reply, encode_cancel_request,
+    encode_request_with_contexts, fragment_message, read_message,
 };
 
 /// How long [`Mux::call`] waits for a reply when the caller does not say.
@@ -278,8 +278,13 @@ fn now_ms() -> u64 {
 pub enum Sent {
     /// The target answered.
     Reply(Box<Reply>),
-    /// The target moved; the body carried the reference to retry against.
-    Forward(Box<Ior>),
+    /// The target moved; the body carried the reference to retry against and
+    /// the status said whether for good. Both statuses are followed the same
+    /// way; what [`Forward::Permanent`] adds is the servant's leave to replace
+    /// the reference that was dialled, which nobody downstream can use unless
+    /// it is carried — and while this held a bare `Ior` it was not, so the
+    /// pool followed both and could say which of neither.
+    Forward(Box<Forward>),
 }
 
 /// A failed call, plus the one fact a retry needs.
@@ -1407,13 +1412,19 @@ fn interpret(reply: Reply) -> Answered {
             };
             Err(failed(Error::UserException { id, reply: Box::new(reply) }, false))
         }
+        // Status 4 exists only in a 1.2 layout — `ReplyStatus::from_u32` does
+        // not produce `LocationForwardPerm` for a 1.0/1.1 reply — so a peer
+        // that downgraded a permanent redirect to status 3 for an older client
+        // is heard here as temporary, which is all it said.
         ReplyStatus::LocationForward | ReplyStatus::LocationForwardPerm => {
             let mut b = match reply.body() {
                 Ok(b) => b,
                 Err(e) => return Err(failed(e, false)),
             };
+            let permanent = reply.status == ReplyStatus::LocationForwardPerm;
             match Ior::read_from(&mut b) {
-                Ok(ior) => Ok(Sent::Forward(Box::new(ior))),
+                Ok(ior) if permanent => Ok(Sent::Forward(Box::new(Forward::Permanent(ior)))),
+                Ok(ior) => Ok(Sent::Forward(Box::new(Forward::Temporary(ior)))),
                 Err(e) => Err(failed(e, false)),
             }
         }
@@ -1426,6 +1437,48 @@ fn interpret(reply: Reply) -> Answered {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A decoded forward keeps the status it arrived under: status 4 becomes
+    /// [`Forward::Permanent`], status 3 [`Forward::Temporary`], and the IOR is
+    /// the one in the body either way. Every version by both byte orders,
+    /// with the bytes coming from the server half's own emitter — which is
+    /// where the 1.0/1.1 rows get their downgrade from: below 1.2 there is no
+    /// status 4 to decode, so a permanent redirect is heard as temporary.
+    #[test]
+    fn a_forward_is_interpreted_with_the_status_it_arrived_under() {
+        let to = Ior {
+            type_id: "IDL:test/Moved:1.0".into(),
+            profiles: vec![crate::IiopProfile {
+                version: Version::V1_2,
+                host: "127.0.0.1".into(),
+                port: 1,
+                object_key: b"new".to_vec(),
+                components: Vec::new(),
+            }],
+        };
+        for version in [Version::V1_0, Version::V1_1, Version::V1_2] {
+            for endian in [Endian::Big, Endian::Little] {
+                for forward in [Forward::Temporary(to.clone()), Forward::Permanent(to.clone())] {
+                    let wire = crate::server::encode_location_forward(version, endian, 5, &forward)
+                        .unwrap();
+                    let reply = decode_reply(
+                        read_message(&mut &wire[..], crate::DEFAULT_MAX_MESSAGE_SIZE).unwrap(),
+                    )
+                    .unwrap();
+                    let heard = match interpret(reply) {
+                        Ok(Sent::Forward(f)) => *f,
+                        other => panic!("{version} {endian:?} {forward:?}: {other:?}"),
+                    };
+                    let expected = if forward.is_permanent() && version.is_1_2_layout() {
+                        Forward::Permanent(to.clone())
+                    } else {
+                        Forward::Temporary(to.clone())
+                    };
+                    assert_eq!(heard, expected, "{version} {endian:?} sent {forward:?}");
+                }
+            }
+        }
+    }
 
     /// A fault is told to every waiter the same way, and only
     /// `CloseConnection` says the request can be re-sent — §13.5.1 is the only

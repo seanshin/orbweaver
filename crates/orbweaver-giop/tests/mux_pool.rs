@@ -14,16 +14,17 @@
 //! results, and they are labelled as such on purpose — the same posture
 //! `fragment_reception.rs` takes for the fragments no peer will send us.
 
-use orbweaver_cdr::Endian;
+use orbweaver_cdr::{Encoder, Endian};
 use orbweaver_giop::guarded::{Guarded, complaints_about};
 use orbweaver_giop::mux::{Mux, Sent};
 use orbweaver_giop::pool::{Limits, Pool};
 use orbweaver_giop::server::{
-    decode_request, encode_close_connection, encode_message_error, encode_reply,
+    Dispatch, Request, Server, SystemException, decode_request, encode_close_connection,
+    encode_location_forward, encode_message_error, encode_reply,
 };
 use orbweaver_giop::{
-    Connection, DEFAULT_MAX_MESSAGE_SIZE, Error, IiopProfile, Ior, MsgType, ReplyStatus, Version,
-    fragment_message, read_message,
+    Connection, DEFAULT_MAX_MESSAGE_SIZE, Error, Forward, IiopProfile, Invoker, Ior, MsgType,
+    ReplyStatus, Version, fragment_message, read_message,
 };
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
@@ -642,6 +643,173 @@ fn an_idle_connection_is_evicted_rather_than_reused() {
     assert_eq!(stats.dialed, 2, "an expired connection must not be handed out");
     assert!(stats.idle_evicted >= 1, "and it must be dropped, not merely skipped");
     done.recv_timeout(T).expect("the peer finished its script");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Forwards: followed alike, reported apart
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The redirect a servant answers with, built for the version the request
+/// came in — the pool keys connections on the profile's version, so the hop
+/// stays on the connection under test.
+fn moved_to(addr: std::net::SocketAddr, version: Version, permanent: bool) -> Forward {
+    let ior = ior_at(addr, b"new", version.minor);
+    if permanent { Forward::Permanent(ior) } else { Forward::Temporary(ior) }
+}
+
+/// The three versions by the two statuses a servant can ask for. Status 4 is
+/// a 1.2 word: below it a permanent redirect travels as status 3 and the
+/// client can be told no more than "retry there".
+fn expected_permanent(version: Version, servant_says_permanent: bool) -> bool {
+    servant_says_permanent && version.minor >= 2
+}
+
+/// The pool follows `LOCATION_FORWARD` and `LOCATION_FORWARD_PERM` the same
+/// way and reports which one it followed — permanent only when the peer said
+/// so *and* spoke a version that has the word for it. Both reply byte orders,
+/// which is the axis a scripted peer can vary and a real one cannot: the
+/// pool dials native, and the peer here answers in whichever order the test
+/// picks, so the decoder — not the encoder — is what both orders exercise.
+///
+/// The bytes are `encode_location_forward`'s, the server half's own emitter,
+/// so a scripted peer here sends exactly what `Server` would; the version
+/// downgrade is that emitter's decision and is what the 1.0/1.1 rows measure
+/// from the receiving end.
+#[test]
+fn the_pool_follows_both_forward_statuses_and_reports_permanent_only_at_1_2() {
+    for servant_says_permanent in [false, true] {
+        for minor in [0u8, 1, 2] {
+            for reply_endian in [Endian::Big, Endian::Little] {
+                let version = Version { major: 1, minor };
+                let (addr, done) = scripted(move |l| {
+                    let (mut s, _) = l.accept().expect("accept");
+                    let me = s.local_addr().expect("local addr");
+                    // Two redirected calls — one through `Pool`, one through
+                    // `Reference` — each a forward and then the retry at the
+                    // forwarded key, on the same connection.
+                    for _ in 0..2 {
+                        let msg = read_message(&mut s, DEFAULT_MAX_MESSAGE_SIZE).expect("request");
+                        let req = decode_request(msg).expect("decodes");
+                        assert_eq!(req.object_key, b"old", "the call addresses the old key");
+                        let fwd = moved_to(me, req.version, servant_says_permanent);
+                        let out = encode_location_forward(
+                            req.version,
+                            reply_endian,
+                            req.request_id,
+                            &fwd,
+                        )
+                        .expect("forward encodes");
+                        s.write_all(&out).expect("forward goes out");
+                        let msg = read_message(&mut s, DEFAULT_MAX_MESSAGE_SIZE).expect("retry");
+                        let req = decode_request(msg).expect("decodes");
+                        assert_eq!(req.object_key, b"new", "the retry addresses the forwarded key");
+                        reply_long(&mut s, req.version, reply_endian, req.request_id, 42);
+                    }
+                    // A last call, answered where it was sent: the reference's
+                    // report must go back to "nothing followed".
+                    let msg = read_message(&mut s, DEFAULT_MAX_MESSAGE_SIZE).expect("last");
+                    let req = decode_request(msg).expect("decodes");
+                    reply_long(&mut s, req.version, reply_endian, req.request_id, 7);
+                });
+                let label = format!(
+                    "servant says permanent={servant_says_permanent} {version} reply {reply_endian:?}"
+                );
+                let want = expected_permanent(version, servant_says_permanent);
+
+                let pool = Pool::new();
+                let old = ior_at(addr, b"old", minor);
+                let (reply, followed) =
+                    pool.invoke_tracking(&old, "op", |_| {}, T).expect("the redirect is followed");
+                assert_eq!(body_i32(&reply), 42, "{label}");
+                let followed =
+                    followed.unwrap_or_else(|| panic!("{label}: a forward was followed"));
+                assert_eq!(
+                    followed.ior().primary().expect("profile").object_key,
+                    b"new",
+                    "{label}"
+                );
+                assert_eq!(followed.is_permanent(), want, "{label}");
+                assert_eq!(pool.stats().dialed, 1, "{label}: the hop stayed on one connection");
+
+                // The same fact through the `Invoker`-shaped handle, which is
+                // what a generated stub holds. `Reference::invoke` sends to
+                // the reference's own IOR, so this call is redirected too and
+                // reads the same way; the one after it is answered in place
+                // and must read as nothing followed.
+                let mut r = pool.reference(old.clone());
+                assert!(r.forwarded().is_none(), "{label}: nothing followed before any call");
+                assert_eq!(body_i32(&r.invoke("op", |_| {}).expect("answered")), 42, "{label}");
+                assert_eq!(r.forwarded().map(Forward::is_permanent), Some(want), "{label}");
+                assert_eq!(body_i32(&r.invoke("op", |_| {}).expect("answered")), 7, "{label}");
+                assert!(r.forwarded().is_none(), "{label}: the last call was not redirected");
+                done.recv_timeout(T).unwrap_or_else(|_| panic!("{label}: the peer finished"));
+            }
+        }
+    }
+}
+
+/// A servant that has moved `old` to `new` and answers `new` with 42 — the
+/// hand-written `Dispatch` shape, saying temporary or permanent through the
+/// hook `Server` asks.
+struct Mover {
+    at: std::net::SocketAddr,
+    permanent: bool,
+}
+
+impl Dispatch for Mover {
+    fn dispatch(&mut self, _: &Request, out: &mut Encoder) -> Result<(), SystemException> {
+        out.put_i32(42);
+        Ok(())
+    }
+    fn knows(&self, key: &[u8]) -> bool {
+        key == b"old" || key == b"new"
+    }
+    fn redirect(&mut self, request: &Request) -> Option<Forward> {
+        (request.object_key == b"old").then(|| moved_to(self.at, request.version, self.permanent))
+    }
+}
+
+/// The same matrix end to end through this crate's own `Server`, so the
+/// status the pool reports is the one `Forward::reply_status` actually put on
+/// the wire and not one a script chose. Native byte order only: the pool
+/// dials with the connection's default order and the server answers in the
+/// order it was asked in, so a real server cannot be made to answer this
+/// client in the other one — the scripted test above is where both orders
+/// are measured.
+#[test]
+fn a_real_server_is_heard_as_permanent_only_at_1_2() {
+    for servant_says_permanent in [false, true] {
+        let server = Server::bind("127.0.0.1:0", b"old".to_vec()).expect("bind");
+        let addr = server.local_addr().expect("addr");
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let raised = stop.clone();
+        let serving = std::thread::spawn(move || {
+            let mut mover = Mover { at: addr, permanent: servant_says_permanent };
+            server
+                .serve(&mut mover, || raised.load(std::sync::atomic::Ordering::SeqCst))
+                .expect("serves");
+        });
+
+        let pool = Pool::new();
+        for minor in [0u8, 1, 2] {
+            let version = Version { major: 1, minor };
+            let label = format!("servant says permanent={servant_says_permanent} {version}");
+            let old = ior_at(addr, b"old", minor);
+            let (reply, followed) =
+                pool.invoke_tracking(&old, "op", |_| {}, T).expect("the redirect is followed");
+            assert_eq!(body_i32(&reply), 42, "{label}");
+            let followed = followed.unwrap_or_else(|| panic!("{label}: a forward was followed"));
+            assert_eq!(followed.ior().primary().expect("profile").object_key, b"new", "{label}");
+            assert_eq!(
+                followed.is_permanent(),
+                expected_permanent(version, servant_says_permanent),
+                "{label}"
+            );
+        }
+        pool.clear();
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        serving.join().expect("the server thread ends");
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -161,7 +161,7 @@ use orbweaver_cdr::{Encoder, Endian};
 use crate::guarded::Guarded;
 use crate::mux::{Failed, Mux, Sent};
 use crate::{
-    Connection, Error, Invoker, Ior, MAX_FORWARD_HOPS, Reply, Result, Version, codeset,
+    Connection, Error, Forward, Invoker, Ior, MAX_FORWARD_HOPS, Reply, Result, Version, codeset,
     negotiated_char_converter,
 };
 
@@ -478,11 +478,13 @@ impl Pool {
 
     /// Invokes `operation` on `ior`, over a pooled connection.
     ///
-    /// Follows `LOCATION_FORWARD` up to [`MAX_FORWARD_HOPS`], acquiring a
-    /// connection for each new reference — a forward may point at a different
-    /// host, so it is a new pool lookup and not a redirect of this one. Hides
-    /// exactly one class of failure from the caller: a request the peer proved
-    /// it had not processed, which is re-sent once on a fresh connection.
+    /// Follows `LOCATION_FORWARD` and `LOCATION_FORWARD_PERM` alike, up to
+    /// [`MAX_FORWARD_HOPS`], acquiring a connection for each new reference — a
+    /// forward may point at a different host, so it is a new pool lookup and
+    /// not a redirect of this one. Which of the two was followed is
+    /// [`Pool::invoke_tracking`]'s to report. Hides exactly one class of
+    /// failure from the caller: a request the peer proved it had not
+    /// processed, which is re-sent once on a fresh connection.
     pub fn invoke<F>(&self, ior: &Ior, operation: &str, write_args: F) -> Result<Reply>
     where
         F: Fn(&mut Encoder),
@@ -501,14 +503,45 @@ impl Pool {
     where
         F: Fn(&mut Encoder),
     {
+        self.invoke_tracking(ior, operation, write_args, timeout).map(|(reply, _)| reply)
+    }
+
+    /// As [`Pool::invoke_with`], and says which redirect the call followed.
+    ///
+    /// The pool follows a `LOCATION_FORWARD` and a `LOCATION_FORWARD_PERM`
+    /// identically — both are §9.4.3.2's "retry there" — so from the `Reply`
+    /// alone a caller cannot tell that a redirect happened, let alone whether
+    /// the servant said *permanent*. This is how it can tell: the second half
+    /// is the last hop the call took, `None` when it was answered where it was
+    /// sent. A [`Forward::Permanent`] is the servant's leave to replace the
+    /// reference the caller holds; a [`Forward::Temporary`] is not, and a
+    /// caller that republishes a temporary target as the object's address is
+    /// publishing something the servant did not say. The pool itself replaces
+    /// nothing: it holds connections, not references, and the next call is
+    /// sent to whatever `ior` the caller passes.
+    ///
+    /// Only the last hop of a chain is reported, as [`Connection::forwarded`]
+    /// reports it: it is the one that answered.
+    pub fn invoke_tracking<F>(
+        &self,
+        ior: &Ior,
+        operation: &str,
+        write_args: F,
+        timeout: Duration,
+    ) -> Result<(Reply, Option<Forward>)>
+    where
+        F: Fn(&mut Encoder),
+    {
         let mut target = ior.clone();
+        let mut followed: Option<Forward> = None;
         let mut retried = false;
         for _ in 0..MAX_FORWARD_HOPS {
             let (mux, key) = self.acquire(&target)?;
             match mux.call_on(&key, operation, &write_args, timeout) {
-                Ok(Sent::Reply(reply)) => return Ok(*reply),
+                Ok(Sent::Reply(reply)) => return Ok((*reply, followed)),
                 Ok(Sent::Forward(next)) => {
-                    target = *next;
+                    target = next.ior().clone();
+                    followed = Some(*next);
                 }
                 Err(Failed { error, unsent }) => {
                     // The connection is out either way: a fault means it can
@@ -563,7 +596,7 @@ impl Pool {
 
     /// A reference bound to this pool, for code that wants an [`Invoker`].
     pub fn reference(&self, ior: Ior) -> Reference {
-        Reference { pool: self.clone(), ior, endian: Endian::native() }
+        Reference { pool: self.clone(), ior, endian: Endian::native(), forwarded: None }
     }
 }
 
@@ -653,6 +686,9 @@ pub struct Reference {
     pool: Pool,
     ior: Ior,
     endian: Endian,
+    /// The redirect the most recent two-way call followed, if any. See
+    /// [`Reference::forwarded`].
+    forwarded: Option<Forward>,
 }
 
 impl Reference {
@@ -667,6 +703,27 @@ impl Reference {
     pub fn set_endian(&mut self, endian: Endian) {
         self.endian = endian;
     }
+
+    /// The redirect the most recent invocation followed, and whether the
+    /// servant said it was for good.
+    ///
+    /// The pooled counterpart of [`Connection::forwarded`], with one
+    /// difference a caller should know: a `Connection` moves to the forwarded
+    /// endpoint and stays there, so its answer describes where it *is*; a
+    /// `Reference` sends every call to [`Reference::ior`] and lets the pool
+    /// follow, so this describes what the *last two-way call* did — `None`
+    /// when it was answered where it was sent, whether or not an earlier one
+    /// was redirected. A oneway carries no reply and cannot be forwarded, and
+    /// a call that fails has its error to report instead; both leave this as
+    /// it was.
+    ///
+    /// The reference is not replaced on a permanent forward. That is the
+    /// caller's decision to make with what this reports: a `Reference` is
+    /// `Clone`, and a clone that silently re-pointed itself would disagree
+    /// with its siblings about which object it names.
+    pub fn forwarded(&self) -> Option<&Forward> {
+        self.forwarded.as_ref()
+    }
 }
 
 impl Invoker for Reference {
@@ -675,7 +732,14 @@ impl Invoker for Reference {
     }
 
     fn invoke<F: Fn(&mut Encoder)>(&mut self, operation: &str, write_args: F) -> Result<Reply> {
-        self.pool.invoke(&self.ior, operation, write_args)
+        let (reply, forwarded) = self.pool.invoke_tracking(
+            &self.ior,
+            operation,
+            write_args,
+            crate::mux::DEFAULT_CALL_TIMEOUT,
+        )?;
+        self.forwarded = forwarded;
+        Ok(reply)
     }
 
     fn invoke_oneway<F: Fn(&mut Encoder)>(&mut self, operation: &str, write_args: F) -> Result<()> {
