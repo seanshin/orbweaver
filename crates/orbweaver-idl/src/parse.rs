@@ -705,11 +705,15 @@ impl Parser {
                 return self.err(format!("union {:?} is missing its closing '}}'", name.text));
             }
             let mut labels = Vec::new();
-            let mut is_default = false;
-            // One member may carry several labels, and `default` is one of them.
+            let mut default_at = None;
+            // One member may carry several labels, and `default` is one of
+            // them; where it sits among them is kept (see `UnionCase`).
             loop {
                 if self.eat_kw("default") {
-                    is_default = true;
+                    // A second `default:` on the same branch is sema's
+                    // diagnostic (`duplicate-union-default`); the first
+                    // position stands.
+                    default_at.get_or_insert(labels.len());
                     self.expect_punct(":")?;
                 } else if self.eat_kw("case") {
                     labels.push(self.const_expr()?);
@@ -718,7 +722,7 @@ impl Parser {
                     break;
                 }
             }
-            if labels.is_empty() && !is_default {
+            if labels.is_empty() && default_at.is_none() {
                 return self.err(format!(
                     "expected 'case' or 'default' inside union {:?}, found {}",
                     name.text,
@@ -726,7 +730,7 @@ impl Parser {
                 ));
             }
             let member = self.member()?;
-            cases.push(UnionCase { labels, is_default, member });
+            cases.push(UnionCase { labels, default_at, member });
         }
         self.expect_punct("}")?;
         Ok(UnionDef { name, discriminator, cases, annotations })

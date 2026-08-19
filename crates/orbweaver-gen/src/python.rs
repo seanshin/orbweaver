@@ -538,15 +538,23 @@ fn emit_type(id: &str, tc: &TypeCode) -> Result<String, String> {
             // so the name is the branch.
             //
             // A branch that is both labelled and `default:` (`case 2: default:
-            // string rest;`) is one case in the registry, at `default_index`,
-            // whose label is 2 — and it keeps that label here. Until
-            // `corpus/golden/29` the default branch was written with no labels
-            // regardless, so the TypeCode the runtime rebuilt for an `any` had a
-            // labelless default where the registry's had 2, and came back as
-            // different bytes. Only a bare `default:` has no label of its own;
-            // the registry gives that one an empty label, and `json_label` has
-            // no value to render for it.
-            let mut branches: Vec<(Vec<String>, &str, &TypeCode, bool)> = Vec::new();
+            // string rest;`) is one case per label in the registry, the default
+            // a case of its own with no label (as omniidl lists it: `(2,
+            // rest)`, then the default `rest`, `default_index` on the latter);
+            // here it is one branch that keeps its labels and is the default
+            // as well. Until `corpus/golden/29` the default branch was written
+            // with no labels regardless, so the TypeCode the runtime rebuilt
+            // for an `any` had a labelless default where the registry's had 2,
+            // and came back as different bytes. `json_label` has no value to
+            // render for the default's empty label.
+            //
+            // The default's SLOT — how many of the branch's labels precede it
+            // — is kept as well, because the runtime rebuilds the registry's
+            // member list from this class and the default's member sits where
+            // `default:` was written (first for `default: case 5: case 6:`,
+            // last for `case 2: default:`); a rebuilt list with the default
+            // elsewhere is a different `default_index` on the wire.
+            let mut branches: Vec<(Vec<String>, &str, &TypeCode, Option<usize>)> = Vec::new();
             for (i, c) in cases.iter().enumerate() {
                 let is_default = *default_index >= 0 && i == *default_index as usize;
                 let label = if c.label.is_empty() {
@@ -555,11 +563,14 @@ fn emit_type(id: &str, tc: &TypeCode) -> Result<String, String> {
                     Some(json_label(&c.label, discriminator)?)
                 };
                 if let Some(b) = branches.iter_mut().find(|b| b.1 == c.name) {
+                    if is_default {
+                        b.3.get_or_insert(b.0.len());
+                    }
                     b.0.extend(label);
-                    b.3 |= is_default;
                     continue;
                 }
-                branches.push((label.into_iter().collect(), &c.name, &c.tc, is_default));
+                let slot = is_default.then_some(0);
+                branches.push((label.into_iter().collect(), &c.name, &c.tc, slot));
             }
             let _ = writeln!(s, "class {}(_rt.Union):", py_ident(name));
             docstring(
@@ -586,8 +597,11 @@ fn emit_type(id: &str, tc: &TypeCode) -> Result<String, String> {
                 );
             }
             let _ = writeln!(s, "    )");
-            let default_at = branches.iter().position(|b| b.3).map_or(-1i64, |i| i as i64);
+            let default_at =
+                branches.iter().position(|b| b.3.is_some()).map_or(-1i64, |i| i as i64);
             let _ = writeln!(s, "    _idl_default = {default_at}");
+            let slot = branches.iter().find_map(|b| b.3).unwrap_or(0);
+            let _ = writeln!(s, "    _idl_default_slot = {slot}");
             for (_, member, _, _) in &branches {
                 let py = py_ident(member);
                 let _ = writeln!(s);

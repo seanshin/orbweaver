@@ -143,7 +143,7 @@ fn witness(tc: &TypeCode, open: &mut Vec<(String, TypeCode)>) -> Option<Value> {
             // it is usually the default branch, which is the one a generator
             // gets wrong.
             let (i, case) = cases.iter().enumerate().next_back()?;
-            let d = label_value(&case.label, discriminator, i as i32 == *default_index)?;
+            let d = label_value(&case.label, discriminator, i as i32 == *default_index, cases)?;
             let v = witness(&case.tc, open);
             open.pop();
             Value::Union { discriminator: Box::new(d), value: Some(Box::new(v?)) }
@@ -263,14 +263,20 @@ fn bounded_text(text: &str, bound: u32) -> String {
     if bound == 0 { text.to_owned() } else { text.chars().take(bound as usize).collect() }
 }
 
-fn label_value(label: &[u8], disc: &TypeCode, is_default: bool) -> Option<Value> {
+fn label_value(
+    label: &[u8],
+    disc: &TypeCode,
+    is_default: bool,
+    cases: &[orbweaver_giop::typecode::UnionCase],
+) -> Option<Value> {
     let mut wide: i64 = 0;
     for b in label {
         wide = (wide << 8) | i64::from(*b);
     }
-    // The default branch's stored label is not a case value; a discriminator
-    // that matches nothing else is what selects it, and every corpus union
-    // that has one reserves a value outside its labels.
+    // The default branch has no stored label — it is a case of its own with
+    // an empty one, where `default:` was written — so a discriminator that
+    // matches nothing else is what selects it, and every corpus union that
+    // has one reserves a value outside its labels.
     Some(match disc {
         TypeCode::Boolean => Value::Bool(!is_default && wide != 0),
         TypeCode::Long => Value::Long(if is_default { i32::MIN } else { wide as i32 }),
@@ -279,6 +285,19 @@ fn label_value(label: &[u8], disc: &TypeCode, is_default: bool) -> Option<Value>
         TypeCode::UShort => Value::UShort(if is_default { u16::MAX } else { wide as u16 }),
         TypeCode::Char => Value::Char(if is_default { 0xFE } else { wide as u8 }),
         TypeCode::Octet => Value::Octet(if is_default { 0xFE } else { wide as u8 }),
+        TypeCode::Enum { members, .. } if is_default => {
+            // The first enumerator no case names. `golden/29`'s `Tint` is
+            // `case RED: .. case GREEN: default: ..` — its default member,
+            // now the LAST case with no label, read as ordinal 0 was RED,
+            // which selects `warm` and not the branch under witness; the
+            // value could not be rendered and the sweep silently lost the
+            // union, its any and its call (170 -> 168 values, 137 -> 136
+            // calls) until this arm existed.
+            let taken = |i: usize| cases.iter().any(|c| c.label == (i as u32).to_be_bytes());
+            Value::Enum(
+                (0..members.len()).find(|i| !taken(*i)).and_then(|i| members.get(i))?.clone(),
+            )
+        }
         TypeCode::Enum { members, .. } => {
             Value::Enum(members.get(wide as usize).or_else(|| members.first())?.clone())
         }
@@ -985,17 +1004,19 @@ fn an_any_describing_a_type_the_package_never_declared_is_read_and_reproduced() 
             Member { name: "lambda".into(), tc: TypeCode::Boolean },
             // A branch that is both labelled and `default:` — `case 1: case 2:
             // default: boolean loud;` — is one case per label in the registry
-            // with `default_index` at the first of them. The synthesised class
-            // has to keep the labels on its default branch, or the TypeCode
-            // it writes back has a labelless default where this one has 1 and
-            // 2 (`corpus/golden/29` holds the generated classes to the same).
+            // with the default a labelless case of its own where `default:`
+            // was written, `default_index` on it (omniidl's member list). The
+            // synthesised class has to keep the labels on its default branch
+            // AND put the default member back in its slot, or the TypeCode it
+            // writes back has a different member list from this one
+            // (`corpus/golden/29` holds the generated classes to the same).
             Member {
                 name: "mode".into(),
                 tc: TypeCode::Union {
                     id: "IDL:elsewhere/Mode:1.0".into(),
                     name: "Mode".into(),
                     discriminator: Box::new(TypeCode::Short),
-                    default_index: 0,
+                    default_index: 2,
                     cases: vec![
                         UnionCase {
                             label: 1i16.to_be_bytes().to_vec(),
@@ -1007,6 +1028,7 @@ fn an_any_describing_a_type_the_package_never_declared_is_read_and_reproduced() 
                             name: "loud".into(),
                             tc: TypeCode::Boolean,
                         },
+                        UnionCase { label: Vec::new(), name: "loud".into(), tc: TypeCode::Boolean },
                         UnionCase {
                             label: 3i16.to_be_bytes().to_vec(),
                             name: "level".into(),
@@ -1100,6 +1122,7 @@ assert Val(3, "three")._d == 3, "the default branch"
 # The labelled default keeps its labels: 1 and 2 select it by label, anything
 # else by default, and setting the branch picks its first label.
 assert Mode._idl_cases[Mode._idl_default][0] == (1, 2), Mode._idl_cases
+assert Mode._idl_default_slot == 2, "the default member sits after both labels, where `default:` was written"
 assert Mode(1, True)._branch("loud") is True and Mode(9, False)._branch("loud") is False, "by label and by default"
 m = Mode(3, 0); m._set_branch("loud", True)
 assert m._d == 1 and m._v is True, repr(m)

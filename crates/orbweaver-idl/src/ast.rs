@@ -221,12 +221,31 @@ pub struct UnionDef {
 /// One union branch, which may carry several labels.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnionCase {
-    /// Case labels; empty means `default`.
+    /// Case labels, in source order. Empty for a bare `default:`.
     pub labels: Vec<ConstExpr>,
-    /// Whether this branch is the `default`.
-    pub is_default: bool,
+    /// Where `default:` was written among this branch's labels: the number of
+    /// `case` labels that precede it — `Some(0)` for a bare `default:` and for
+    /// `default: case 5: case 6:`, `Some(1)` for `case 2: default:`, `None`
+    /// for a branch that is not the default.
+    ///
+    /// The position is kept, not only the fact, because a `TypeCode` lists one
+    /// member per label **with the default as a member of its own** (CORBA 3.4
+    /// Part 2 Table 9.2: `default_index` names one member of the list), and
+    /// omniidl and JacORB put that member where `default:` was written. A
+    /// front end that remembered only *whether* a branch was the default could
+    /// not reproduce their member order; until 2026-08-19 the registry folded
+    /// `case 2: default: string rest;` into one member where the peers make
+    /// two, and `default_index` pointed at the labelled one.
+    pub default_at: Option<usize>,
     /// Branch member.
     pub member: Member,
+}
+
+impl UnionCase {
+    /// Whether this branch is the `default:` branch, wherever the keyword sat.
+    pub fn is_default(&self) -> bool {
+        self.default_at.is_some()
+    }
 }
 
 /// `enum X { A, B };`

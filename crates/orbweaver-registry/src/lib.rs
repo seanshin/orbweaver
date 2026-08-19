@@ -1289,57 +1289,53 @@ impl Builder<'_> {
             }
             DefRef::Union(u) => {
                 let disc = self.type_of(scope, &u.discriminator);
-                let cases = u
-                    .cases
-                    .iter()
-                    .flat_map(|c| {
-                        let tc = self.type_of(path, &c.member.ty);
-                        let member_name =
-                            c.member.names.first().map(|n| n.text.clone()).unwrap_or_default();
-                        // A bare `default:` is the case selected by *not*
-                        // matching, so it has no label: an empty one, and
-                        // `default_index` names it. That is the in-memory
-                        // convention every consumer reads (the generators, the
-                        // dynamic invoker, the property sampler); the wire has
-                        // its own — a slot of the discriminator's width, value
-                        // ignored (CORBA 3.4 §9.3.5.1.4) — and the TypeCode
-                        // codec in `orbweaver_giop` translates between the two.
-                        // Until 2026-08-19 it did not, and wrote the empty label
-                        // as no bytes at all.
-                        let labels: Vec<Vec<u8>> = if c.labels.is_empty() {
-                            vec![Vec::new()]
-                        } else {
-                            c.labels.iter().map(|l| label_bytes(l, &disc)).collect()
-                        };
-                        labels
-                            .into_iter()
-                            .map(|label| TcUnionCase {
-                                label,
-                                name: member_name.clone(),
-                                tc: tc.clone(),
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .collect();
-                // Indexed against the *expanded* case list. A branch with
-                // several labels becomes several cases, so any multi-label
-                // branch before the default shifts it — computing the position
-                // in the AST list pointed the default at the wrong case, and
-                // everything consuming this TypeCode (the dynamic invoker's
-                // branch selection, the peer we encode it for, the static
-                // generator) inherited the error. Found by the generator's
-                // union tests, which is stream B's oracle earning its keep.
-                let default_index = {
-                    let mut index = -1i32;
-                    let mut expanded = 0usize;
-                    for c in &u.cases {
-                        if c.is_default {
-                            index = expanded as i32;
-                        }
-                        expanded += c.labels.len().max(1);
+                // One case per label, the `default:` a case of its own — the
+                // member list omniidl and JacORB derive from the same IDL
+                // (CORBA 3.4 Part 2 Table 9.2: `default_index` names one member
+                // of the list), in source order: `case 2: default: string
+                // rest;` is `(2, rest)` then the default `rest`; `default:
+                // case 5: case 6: short misc;` is the default first. Until
+                // 2026-08-19 a labelled default was ONE case here, carrying its
+                // label with `default_index` pointing at it — semantically the
+                // same union, and both peers selected identically from it, but
+                // a different `member_count` and `default_index` on the wire,
+                // a `TypeCode` no peer's IDL-derived one equals, and IDL
+                // regenerated from our own decoded TypeCode lost the `case 2:`.
+                //
+                // The default case is the one selected by *not* matching, so
+                // it has no label: an empty one, and `default_index` names it.
+                // That is the in-memory convention every consumer reads (the
+                // generators fold by member name and read the flag off the
+                // index; the dynamic invoker matches labels first and falls
+                // back to the index; the property sampler searches for a value
+                // no label claims). The wire has its own — a slot of the
+                // discriminator's width, value ignored (§9.3.5.1.4) — and the
+                // TypeCode codec in `orbweaver_giop` translates between the
+                // two: zeros out, dropped on the way in.
+                let mut cases = Vec::new();
+                let mut default_index = -1i32;
+                for c in &u.cases {
+                    let tc = self.type_of(path, &c.member.ty);
+                    let member_name =
+                        c.member.names.first().map(|n| n.text.clone()).unwrap_or_default();
+                    let mut labels: Vec<Vec<u8>> =
+                        c.labels.iter().map(|l| label_bytes(l, &disc)).collect();
+                    if let Some(at) = c.default_at {
+                        // Indexed against the *expanded* list, which is what
+                        // goes on the wire and what every consumer selects
+                        // from: a multi-label branch before the default shifts
+                        // it, and computing the position over the AST list
+                        // once pointed it at the wrong case.
+                        let at = at.min(labels.len());
+                        default_index = (cases.len() + at) as i32;
+                        labels.insert(at, Vec::new());
                     }
-                    index
-                };
+                    cases.extend(labels.into_iter().map(|label| TcUnionCase {
+                        label,
+                        name: member_name.clone(),
+                        tc: tc.clone(),
+                    }));
+                }
                 TypeCode::Union {
                     id: id.clone(),
                     name,
