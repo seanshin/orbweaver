@@ -455,6 +455,28 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **The property sweep takes every value across AnyJSON and back.**
+  `orbweaver-test`'s `one_case` now does `to_json` → text → `from_json` and
+  re-encodes in the same byte order; the bytes must equal the CDR-only leg's
+  (both encoders and the mapping are ours, so byte equality is legitimate here
+  — and not redundant with value equality: `-0.0 == 0.0` yet encodes
+  differently). Six `json/*` error classes fail `contract-check`;
+  `json/unmapped` (advice) names the types the mapping documents as not
+  crossing (`fixed`, `Principal`, `void`), pinned over golden to gc21's
+  `Amount`/`Invoice`. The summary line and `--json` print how many CDR round
+  trips also crossed (golden 5248 of 5248; 12,928 over four corpora), and the
+  harness pins the floor. First pass: **0 findings**; two negative controls
+  red (2712 and 70). Closes 1b6b4c8's report that the sweep never called
+  `anyjson`.
+
+  **속성 스윕이 모든 값을 AnyJSON으로 건넜다 돌아온다.** `to_json` → 텍스트 →
+  `from_json` → 같은 바이트 순서로 재인코딩, 바이트가 CDR 전용 왕복과 같아야
+  한다(두 인코더와 매핑 모두 우리 것이므로 바이트 동일이 정당하고, `-0.0`은
+  값은 같아도 바이트가 다르므로 값 비교와 중복이 아니다). `json/*` 오류 6종은
+  실패, `json/unmapped`는 매핑이 건너지 못한다고 문서화한 타입(gc21의 `fixed`)만.
+  요약 줄이 건넌 수를 찍고 하네스가 바닥을 고정(golden 5248/5248, 네 코퍼스
+  12,928). 1차 통과 0건; 음성 대조 2건 적색(2712, 70).
+
 - **The content seat sees a static call's payload** (D010 A3, 2026-08-19).
   `Guarded` reads a stub's own bytes back through the contract and hands the
   chain the same AnyJSON document the dynamic path hands it — no stub, trait

@@ -1224,6 +1224,19 @@ if printf '%s\n' "$cc_out" | grep -q "prop/unmeasured"; then
 else
   echo "  ok   every property case produced a value (no prop/unmeasured)"
 fi
+# The JSON leg (9fa89ee) is a count, not a finding: a leg that stops running
+# prints the same findings, so its floor is pinned — 5248 = 82 mapped golden
+# types x 32 cases x 2 byte orders, and every CDR round trip must have crossed.
+# Negative controls in that commit: to_json dropping the last struct member ->
+# 2712 json/from-json-error; -0.0 flattened -> 70 json/roundtrip-bytes.
+cc_json=$(printf '%s\n' "$cc_out" | sed -n 's/.* \([0-9][0-9]*\) of \([0-9][0-9]*\) CDR round trip(s) also taken across AnyJSON.*/\1 \2/p')
+set -- $cc_json
+if [ -z "${1:-}" ] || [ "$1" -lt 5248 ] || [ "$1" -ne "$2" ]; then
+  echo "  FAIL AnyJSON leg: '${cc_json:-absent}' (need every CDR round trip crossed, >= 5248)"
+  fail_total=$((fail_total+1))
+else
+  echo "  ok   $1 of $2 CDR round trips also crossed AnyJSON, byte-equal, both orders"
+fi
 # Panic freedom. Rust rules out the memory-corruption half of "wire parsing is
 # the classic memory-safety hazard" at compile time and rules out nothing about
 # panics — a slice index or an unwrap reachable from a peer's bytes ends the
