@@ -1,0 +1,31 @@
+// ---------------------------------------------------------------------------
+// The negative control of the union-default §5.3 pair: two edits to the
+// released Payload in place — `case 2: long extra` inserted ahead of the
+// default, and the default's type changed from string to long.
+//
+// Against union-default/v1.0 the gate must exit 1 and name BOTH:
+//   [BREAKING]               default member "text" changed type
+//   [conditionally breaking] union case(s) added: ["extra"]
+// Until 2026-08-19 the differ compared members by position (`zip`), the
+// inserted case shifted the default, and only the added case was reported —
+// the release was refused, for half the reason.
+//
+// union-default/v1.0에 대한 음성 대조군: default 앞에 case를 끼워 넣고 default의
+// 타입을 바꿨다. 게이트는 exit 1이어야 하고 두 변경을 모두 이름으로 불러야
+// 한다. 위치로 비교하던 차분기는 끼워 넣은 case만 보고했다.
+// ---------------------------------------------------------------------------
+
+module evo {
+  union Payload switch (long) {
+    case 1: long code;
+    case 2: long extra;
+    default: long text;
+  };
+
+  //@ ai_desc: Accepts one payload, whichever branch it carries
+  interface Sink {
+    //@ ai_desc: Deliver one payload
+    //@ ai_effect: idempotent
+    void put(in Payload item);
+  };
+};

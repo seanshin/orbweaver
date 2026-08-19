@@ -1,0 +1,27 @@
+// ---------------------------------------------------------------------------
+// The SAME release as union-default/v1.0, with the `default:` written first.
+// omniidl, JacORB and this registry all list the members in source order, so
+// the two TypeCodes differ in member order and default_index — and encode
+// every value identically, because a value is the discriminator and the one
+// member it selects. The §5.3 gate must say "no change" (exit 0). It is the
+// positive control for comparing union members by role rather than by
+// position.
+//
+// union-default/v1.0과 같은 릴리스, `default:`만 앞에 썼다. 멤버 순서와
+// default_index는 다르지만 모든 값의 인코딩은 같다 — 게이트는 "변경 없음"
+// (exit 0)이어야 한다. 역할 기준 비교의 양성 대조군.
+// ---------------------------------------------------------------------------
+
+module evo {
+  union Payload switch (long) {
+    default: string text;
+    case 1: long code;
+  };
+
+  //@ ai_desc: Accepts one payload, whichever branch it carries
+  interface Sink {
+    //@ ai_desc: Deliver one payload
+    //@ ai_effect: idempotent
+    void put(in Payload item);
+  };
+};

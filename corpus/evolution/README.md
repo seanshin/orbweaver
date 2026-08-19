@@ -84,3 +84,38 @@ measurement, and why the version bump was paid, is PLAN-MOE §4.5.1.
 `moe/v1.0/moe.idl`은 **동결된** 릴리스, golden 22가 추가만 한 v1.1 (exit 0),
 `moe/v1.1-in-place`는 제자리 수정 음성 대조군 (exit 1). 둘 다 서비스되지 않고
 수정되지 않는다. 측정과 이유는 PLAN-MOE §4.5.1.
+
+---
+
+## `union-default/` — the §5.3 pair for a union's default member
+
+Driven by `crates/orbweaver-registry/tests/union_default_pair.rs`.
+
+`union-default/v1.0/payload.idl` is the **frozen** release: one union with a
+labelled case and a `default:` member. `v1.0-default-first/` is the same union
+with the default written first — a different member list and `default_index`,
+the same encoding of every value, so `idl-diff` must say "no change" (exit 0);
+`v1.1-retyped-default/` inserts a case ahead of the default **and** changes the
+default's type, and the gate must exit 1 naming both:
+
+| change | verdict | why |
+| --- | --- | --- |
+| `case 2: long extra` inserted | conditionally breaking | an old receiver has no branch for the new discriminator |
+| `default: string text` → `default: long text` | **BREAKING** | the receiver reads the old branch's bytes |
+
+Until 2026-08-19 the differ compared union members by position and treated the
+default's empty label as a discriminator value. Against this pair it reported
+only the inserted case — the release was refused, for half the reason — and a
+frozen `TypeCode` of the pre-f8daa21 shape (the default folded onto its label)
+against today's expanded one read as "case added" one way and "case removed"
+the other, with nothing changed on the wire. Members are now compared by role:
+labelled cases by label, the default by `default_index`. The frozen-TypeCode
+half is held by the unit tests in `crates/orbweaver-registry/src/diff.rs`; this
+directory holds the half a person can produce from IDL. Nothing under
+`union-default/` is served and nothing is edited.
+
+`union-default/v1.0`은 **동결된** 릴리스, `v1.0-default-first`는 default만 앞에
+쓴 같은 유니언 (exit 0), `v1.1-retyped-default`는 default 앞에 case를 끼워 넣고
+default의 타입을 바꾼 음성 대조군 (exit 1, 두 변경 모두 이름으로). 위치로
+비교하던 차분기는 끼워 넣은 case만 보고했다. 이제 라벨 있는 case는 라벨로,
+default는 `default_index`로 — 역할로 비교한다. 서비스되지 않고 수정되지 않는다.
