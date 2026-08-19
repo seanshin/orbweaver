@@ -371,16 +371,19 @@ landing message; the rule makes it a requirement rather than a habit.
 Class A first, ordered by cost-of-defect; class D's cheap rows folded in where
 they touch a batch; class B as fixtures appear; class C never, until triggered.
 
-| # | Batch | Class | Oracle |
-|---|---|---|---|
-| 1 | **A5** coverage document emitted by the sweep + §7.1's `gap_symbols.py` | D→A | diff in the harness; false-positive rate measured first |
-| 2 | **A1** `LOCATION_FORWARD_PERM` | A | reply status byte off the wire, both byte orders; omniORB following it (landed 680aa41 — the count is not an oracle) |
-| 3 | **A3** static-path arguments and dry-run mapping | A | leak test over a static call; a `string<8>` dry-run predicting `MARSHAL` (landed f47ddcd, without the three-crate change) |
-| 4 | **A2** versioned `Capability` | A | `idl-diff` both directions; router refusing an unmeasured expert |
-| 5 | **A4** structural `_t` in `_rt.py` | A | golden crossings up, divergences 0 |
-| 6 | **§6**'s five rows | D | none — restate/mark/remove with argument |
-| — | **B1–B6** | B | each a SKIPPED group naming its fixture; measured the day it appears |
-| — | **A6** Python servants | A | not until a consumer names it |
+| # | Batch | Class | Oracle | Landed (2026-08-19) |
+|---|---|---|---|---|
+| 1 | **A5** coverage document emitted by the sweep + §7.1's `gap_symbols.py` | D→A | diff in the harness; false-positive rate measured first | 8e01027 — and the sweep now names 22 declared-but-unprobed interfaces; the check went red by itself when A2 added two operations |
+| 2 | **A1** `LOCATION_FORWARD_PERM` | A | reply status byte off the wire, both byte orders; omniORB following it (the count is not an oracle) | 680aa41 (giop+gen — the review's "gen only" was wrong); pool half b77c9fb; the fallback-on-failure oracle af73b2f (omniORB re-asks after temporary, stays after permanent) |
+| 3 | **A3** static-path arguments and dry-run mapping | A | leak test over a static call; a `string<8>` dry-run predicting `MARSHAL` | f47ddcd, without the three-crate change; CLI values + session handles 4bb9742 |
+| 4 | **A2** versioned `Capability` | A | `idl-diff` both directions; router refusing an unmeasured expert | 06ea90e — additive `MeasuredCapability`, both gates in the harness |
+| 5 | **A4** structural `_t` in `_rt.py` | A | golden crossings up, divergences 0 | 50a4d12 — 78→158 (→170 with golden 29); it found the anyjson `Recursive` gap, closed 1b6b4c8, and three empty witnesses, all closed |
+| 6 | **§6**'s five rows | D | none — restate/mark/remove with argument | 65f43a9; README's sixth row 585ed68 |
+| — | **B1–B6** | B | each a SKIPPED group naming its fixture; measured the day it appears | B5 measured in full (74b0f15, 2a052cb, 382baa9 — a wire defect found and fixed on the first measurement); B2/B3 became counted SKIPPED groups 7cefabd; B1/B4/B6 were already |
+| — | **A6** Python servants | A | not until a consumer names it | not started — no consumer has named it |
+
+*(The Landed column was added on 2026-08-19 evening; the record of how the
+day went is `docs/pipeline-runs/2026-08-19-d010-wave.md`.)*
 
 Batches 2–5 have footprints (`gen`, `mcp`+`gen`+`guard`, `trading`+`object`,
 `gen`) — and after review's correction to A1, **three of the four touch
