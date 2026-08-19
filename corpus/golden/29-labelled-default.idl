@@ -1,0 +1,51 @@
+// 29 — a union branch that is both labelled and `default:`.
+//
+// `case 2: default: string rest;` is one branch with one member, selected by
+// the label 2 and by every discriminator no other label names. The registry
+// keeps it as one case whose label is 2 and whose index is `default_index`;
+// the Python emitter kept only the `default:` half, so the TypeCode the
+// runtime rebuilt for an `any` carrying one had a labelless default where the
+// registry's had 2 — measured as different bytes on the way back. Reported
+// with the constructed-any sweep (2026-08-19) as unmeasured by inspection:
+// no corpus union had the shape, so no gate had seen it.
+//
+// The shape appears three ways, one each: label then `default:` on the LAST
+// branch (the sweep witnesses the last case, so the value crosses too),
+// `default:` before its labels and before a plain branch, and over an enum
+// discriminator, whose labels cross as enumerator names. Member names avoid
+// their type names and enumerators ignoring case, which is this project's
+// dominant generation failure.
+module gc29 {
+  //@ ai_desc: The last branch is the default and also answers to 2
+  union Coded switch (long) {
+    case 1: long one;
+    case 2:
+    default: string rest;
+  };
+  //@ ai_desc: The default first, then its own labels, then a plain branch
+  union Spread switch (short) {
+    default:
+    case 5:
+    case 6: short misc;
+    case 7: long seven;
+  };
+  enum Hue { RED, GREEN, BLUE };
+  //@ ai_desc: The same shape over an enumerator label
+  union Tint switch (Hue) {
+    case RED: octet warm;
+    case GREEN:
+    default: string named;
+  };
+  //@ ai_desc: Each union in a parameter and a return, so a call carries it too
+  interface Mixer {
+    //@ ai_desc: Returns the union it was given, branch and label intact
+    //@ ai_effect: idempotent
+    Coded  code(in Coded v);
+    //@ ai_desc: Returns the union it was given, branch and label intact
+    //@ ai_effect: idempotent
+    Spread scatter(in Spread v);
+    //@ ai_desc: Returns the union it was given, branch and label intact
+    //@ ai_effect: idempotent
+    Tint   paint(in Tint v);
+  };
+};

@@ -945,20 +945,29 @@ fn emit_union(
     // The registry expands `case 2: case 3: T x;` into two cases sharing a
     // member name; fold them back into one branch with two labels, because the
     // Rust variant is the member, and the discriminator that selected it is a
-    // fact the variant must then carry.
+    // fact the variant must then carry. Member names are unique within a
+    // union, so the name is the branch.
+    //
+    // A branch that is both labelled and `default:` (`case 5: case 6: default:
+    // short misc;`) keeps its labels and is the default as well. The fold used
+    // to start a fresh branch for the default case, so that shape emitted the
+    // variant `misc` twice — once `{ d, v }` and once `(i16)` — and the
+    // generated crate did not compile (`corpus/golden/29`, 2026-08-19). Only a
+    // bare `default:` has no label of its own: the registry gives that case
+    // an empty label, and there is no literal to write for it.
     let mut branches: Vec<Branch<'_>> = Vec::new();
     for (i, c) in cases.iter().enumerate() {
         let is_default = default_index >= 0 && i == default_index as usize;
-        if let Some(b) =
-            branches.iter_mut().find(|b| b.member == c.name && !b.is_default && !is_default)
-        {
-            b.labels.push(label_literal(&c.label, disc_tc));
+        let label = (!c.label.is_empty()).then(|| label_literal(&c.label, disc_tc));
+        if let Some(b) = branches.iter_mut().find(|b| b.member == c.name) {
+            b.labels.extend(label);
+            b.is_default |= is_default;
             continue;
         }
         branches.push(Branch {
             member: &c.name,
             tc: &c.tc,
-            labels: if is_default { Vec::new() } else { vec![label_literal(&c.label, disc_tc)] },
+            labels: label.into_iter().collect(),
             is_default,
         });
     }
@@ -974,8 +983,13 @@ fn emit_union(
         if b.is_default {
             let _ = writeln!(
                 s,
-                "    /// IDL `default` branch `{}`; `d` is the discriminator",
-                b.member
+                "    /// IDL `default` branch `{}`{}; `d` is the discriminator",
+                b.member,
+                if b.labels.is_empty() {
+                    String::new()
+                } else {
+                    format!(", also selected by {}", b.labels.join(" or "))
+                }
             );
             let _ = writeln!(s, "    /// that selected it, which no label implies.");
         } else if b.labels.len() > 1 {
@@ -1236,6 +1250,27 @@ mod tests {
         assert!(b_branch.contains("d: i32,") && b_branch.contains("v: bool,"), "{b_branch}");
         assert!(g.source.contains("2i32 | 3i32 =>"), "{}", g.source);
         assert!(!g.source.contains("Unlisted_"), "a union with a default has no unlisted arm");
+    }
+
+    /// `default:` on a branch that also has labels is one branch. The fold
+    /// used to start a second `misc` for the default case, so the enum
+    /// declared the variant twice — once `{ d, v }`, once `(i16)` — and the
+    /// generated crate did not compile. `corpus/golden/29` holds the shape;
+    /// this pins the emitter to one variant, carrying `d`, with its labels
+    /// documented and no explicit `get` arm for them (the `_` arm selects the
+    /// same variant and records the discriminator, which is what the labels
+    /// would have done).
+    #[test]
+    fn a_labelled_default_branch_is_one_variant_that_keeps_its_labels() {
+        let g = generate(
+            "module m { union U switch (short) { default: case 5: case 6: short misc; \
+             case 7: long seven; }; };",
+        );
+        assert_eq!(g.source.matches("misc {").count(), 3, "declared once, put once, got once");
+        assert!(!g.source.contains("misc(i16)"), "{}", g.source);
+        assert!(g.source.contains("also selected by 5i16 or 6i16"), "{}", g.source);
+        assert!(g.source.contains("_ => Self::misc { d: disc, v: Cdr::get(d)? }"), "{}", g.source);
+        assert!(!g.source.contains("5i16 =>") && !g.source.contains("6i16 =>"), "{}", g.source);
     }
 
     #[test]

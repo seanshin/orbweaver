@@ -983,6 +983,38 @@ fn an_any_describing_a_type_the_package_never_declared_is_read_and_reproduced() 
                 },
             },
             Member { name: "lambda".into(), tc: TypeCode::Boolean },
+            // A branch that is both labelled and `default:` — `case 1: case 2:
+            // default: boolean loud;` — is one case per label in the registry
+            // with `default_index` at the first of them. The synthesised class
+            // has to keep the labels on its default branch, or the TypeCode
+            // it writes back has a labelless default where this one has 1 and
+            // 2 (`corpus/golden/29` holds the generated classes to the same).
+            Member {
+                name: "mode".into(),
+                tc: TypeCode::Union {
+                    id: "IDL:elsewhere/Mode:1.0".into(),
+                    name: "Mode".into(),
+                    discriminator: Box::new(TypeCode::Short),
+                    default_index: 0,
+                    cases: vec![
+                        UnionCase {
+                            label: 1i16.to_be_bytes().to_vec(),
+                            name: "loud".into(),
+                            tc: TypeCode::Boolean,
+                        },
+                        UnionCase {
+                            label: 2i16.to_be_bytes().to_vec(),
+                            name: "loud".into(),
+                            tc: TypeCode::Boolean,
+                        },
+                        UnionCase {
+                            label: 3i16.to_be_bytes().to_vec(),
+                            name: "level".into(),
+                            tc: TypeCode::Octet,
+                        },
+                    ],
+                },
+            },
         ],
     };
     // `kids` carries a Reading, so the value *under* the recursion marker
@@ -1005,6 +1037,13 @@ fn an_any_describing_a_type_the_package_never_declared_is_read_and_reproduced() 
         ),
         ("kids".into(), Value::List(vec![])),
         ("lambda".into(), Value::Bool(false)),
+        (
+            "mode".into(),
+            Value::Union {
+                discriminator: Box::new(Value::Short(3)),
+                value: Some(Box::new(Value::Octet(200))),
+            },
+        ),
     ]);
     let root = Value::Struct(vec![
         ("unit".into(), Value::Enum("F".into())),
@@ -1017,6 +1056,14 @@ fn an_any_describing_a_type_the_package_never_declared_is_read_and_reproduced() 
         ),
         ("kids".into(), Value::List(vec![leaf])),
         ("lambda".into(), Value::Bool(true)),
+        // 5 names no label: the labelled default branch, selected by default.
+        (
+            "mode".into(),
+            Value::Union {
+                discriminator: Box::new(Value::Short(5)),
+                value: Some(Box::new(Value::Bool(true))),
+            },
+        ),
     ]);
     let carried = Value::Any(Box::new(reading), Box::new(root));
     let mut handles = LocalReferences::new();
@@ -1036,6 +1083,8 @@ assert v.value._d == 9 and v.value._v == "nine", repr(v.value)
 assert v._lambda is True, "a keyword member is escaped as the generator escapes it"
 assert len(v.kids) == 1 and type(v.kids[0]).__name__ == "Reading", repr(v.kids)
 assert v.kids[0].value._d == 2 and v.kids[0].value._v == 22 and v.kids[0].kids == [], repr(v.kids[0])
+assert v.mode._d == 5 and v.mode._v is True and v.mode._branch("loud") is True, repr(v.mode)
+assert v.kids[0].mode._d == 3 and v.kids[0].mode._branch("level") == 200, repr(v.kids[0].mode)
 print("read:", repr(v))
 
 # The type it described is now a type this package can speak, recursion
@@ -1044,10 +1093,17 @@ print("read:", repr(v))
 Reading = _rt.TYPES["IDL:elsewhere/Reading:1.0"]
 Unit = _rt.TYPES["IDL:elsewhere/Unit:1.0"]
 Val = _rt.TYPES["IDL:elsewhere/Val:1.0"]
-nested = _rt.to_json("any", (desc, Reading(Unit.C, Val(1, 1), [Reading(Unit.F, Val(2, 2), [], False)], False)))
+Mode = _rt.TYPES["IDL:elsewhere/Mode:1.0"]
+nested = _rt.to_json("any", (desc, Reading(Unit.C, Val(1, 1), [Reading(Unit.F, Val(2, 2), [], False, Mode(3, 7))], False, Mode(2, False))))
 assert nested["_v"]["kids"][0]["value"] == {"_d": 2, "_v": 2}, nested
 assert Val(3, "three")._d == 3, "the default branch"
-again = Reading(Unit.C, v.value, [], False)
+# The labelled default keeps its labels: 1 and 2 select it by label, anything
+# else by default, and setting the branch picks its first label.
+assert Mode._idl_cases[Mode._idl_default][0] == (1, 2), Mode._idl_cases
+assert Mode(1, True)._branch("loud") is True and Mode(9, False)._branch("loud") is False, "by label and by default"
+m = Mode(3, 0); m._set_branch("loud", True)
+assert m._d == 1 and m._v is True, repr(m)
+again = Reading(Unit.C, v.value, [], False, Mode(1, True))
 assert _rt.TypeCode.of(("ref", "IDL:elsewhere/Reading:1.0")).form == doc["_t"], "of()"
 assert _rt.TypeCode(doc["_t"]).descriptor() == desc, "descriptor()"
 
