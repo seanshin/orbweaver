@@ -919,6 +919,31 @@ done
 fkill spike-server
 [ "$fwd_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
+# ── LOCATION_FORWARD_PERM: a generated skeleton saying "moved for good" ─────
+hr "LOCATION_FORWARD_PERM — status 4 from a generated skeleton, omniORB following it"
+# The status byte is the oracle: through every client measured, a temporary
+# and a permanent forward produce the same request count at the old reference
+# (1), so a count can never go red on its own. The in-test control is the
+# temporary servant beside the permanent one reading status 3; the run-red
+# control (Forward::reply_status forced to 3 -> "left: 3 right: 4") is in
+# 680aa41's message. D010 A1, 2026-08-19.
+permout=$(cargo test -q -p orbweaver-gen --test object_identity -- \
+            an_object_moved_for_good_answers_with_location_forward_perm \
+            omniorb_follows_a_permanent_forward_from_a_generated_skeleton --nocapture 2>&1)
+case "$permout" in
+  *"test result: ok. 2 passed"*)
+    echo "  ok   status 4 at 1.2, 3 below, 3 from the temporary servant — raw off the wire, both byte orders"
+    if printf '%s' "$permout" | grep -q "UNMEASURED: omniORB"; then
+      echo "  SKIPPED  omniORB half — fixture absent"; skipped=$((skipped+1))
+    else
+      echo "  ok   omniORB followed a LOCATION_FORWARD_PERM from a generated skeleton, five calls answered by the new object"
+      printf '%s' "$permout" | grep "requests at the OLD reference" | head -2 | sed 's/^/       /'
+    fi ;;
+  *) echo "  FAIL LOCATION_FORWARD_PERM"
+     printf '%s' "$permout" | grep -E "panicked|left:|right:" | head -4 | sed 's/^/       /'
+     fail_total=$((fail_total+1)) ;;
+esac
+
 # ── Registry: does IDL-derived type metadata match the wire? ────────────────
 hr "type registry — TypeCode derived from IDL vs the peer's"
 # Deriving a TypeCode and encoding it with our own encoder proves only that two

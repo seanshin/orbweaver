@@ -427,6 +427,31 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **`LOCATION_FORWARD_PERM` is reachable from a servant** (D010 A1).
+  `Forward { Temporary, Permanent }` and a defaulted `redirect` on
+  `Dispatch`/`SharedDispatch` (giop) and on every generated servant trait
+  (gen); `Served::Forward` carries it and the server puts status 4 on the wire
+  to a 1.2 peer, 3 to a 1.0/1.1 peer whose status enumeration has no 4.
+  `Connection::forwarded()` reports which a client followed. Measured: raw
+  status off the wire from a generated skeleton, both byte orders, all three
+  versions; omniORB 4.3.4 following our status 4. Request count at the old
+  reference is **1 under both statuses** for our client and for omniORB — the
+  count is not an oracle, the status byte is. `Servants` delegates `redirect`
+  explicitly; the trait default was silent through it. D010 A1's review
+  correction was itself wrong (`rt::Dispatch` is giop's trait); the batch was
+  giop + gen, and D010 §3 now says so.
+
+  **`LOCATION_FORWARD_PERM`을 서번트가 말할 수 있다** (D010 A1). `Forward {
+  Temporary, Permanent }`와 기본 구현이 있는 `redirect`가 giop의
+  `Dispatch`/`SharedDispatch`와 gen의 모든 생성 서번트 트레이트에 추가됐다.
+  서버는 1.2 피어에게 상태 4를, 상태 열거형에 4가 없는 1.0/1.1 피어에게는 3을
+  보낸다. `Connection::forwarded()`로 클라이언트가 무엇을 따랐는지 알 수 있다.
+  측정: 생성 스켈레톤에서 와이어로 읽은 원시 상태값(양쪽 바이트 순서, 세 버전),
+  omniORB 4.3.4가 우리의 상태 4를 따름. 옛 참조에 도달한 요청 수는 우리
+  클라이언트와 omniORB 모두 **두 상태에서 1로 같다** — 횟수는 오라클이 아니고
+  상태값이 오라클이다. D010 A1의 검토 정정 자체가 틀렸고(`rt::Dispatch`는
+  giop의 트레이트), 배치는 giop + gen이었다.
+
 - **moe v1.1 — the Capability gap closed additively (D010 A2).**
   `corpus/golden/22` gains `MeasuredCapability` (composes the released
   `Capability` + `specialization` + `latency_p50_ms`) and

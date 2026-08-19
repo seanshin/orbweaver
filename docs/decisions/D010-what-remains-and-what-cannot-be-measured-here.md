@@ -79,24 +79,34 @@ not passing`, 현재 3그룹). 아래 모든 B 행은 `ok`가 아니라 네 번�
 Ordered by what a defect would cost, not by size.
 
 ### A1. `LOCATION_FORWARD_PERM` is unreachable from a skeleton — *stream B, `orbweaver-gen` only*
-- **State, corrected by review.** The first draft said this needed an
-  `orbweaver-giop` change. It does not: `server.rs` already maps
-  `ReplyStatus::LocationForwardPerm => 4` and has tests encoding it. What
-  cannot say *permanent* is `rt::Dispatch::forward(&mut self, &Request) ->
-  Option<Ior>` — the generated skeleton's hook, one crate, one signature.
+- **State, corrected twice.** The first draft said this needed an
+  `orbweaver-giop` change; review said it did not, because `server.rs` already
+  encodes status 4. Both were half right (found by the batch, 2026-08-19): the
+  encoder could write it and no `Dispatch` could ask for it — `rt::Dispatch`
+  is `orbweaver_giop::server::Dispatch` re-exported, `Served::Forward` carried
+  a bare `Ior`, and `Server::handle_request` mapped every forward to status 3.
+  The generated skeleton's own doc comment said so; the review read
+  `rt::Dispatch` as a gen type. The batch was giop (a `Forward` type, a
+  defaulted `redirect`, the status mapping with the 1.0/1.1 downgrade,
+  `Connection::forwarded()`) then gen (the servant hook, the generated
+  dispatch, re-bless), in that order.
 - **Why it matters.** §7.4's I4 is where a moved object lives; without PERM
   every client re-forwards on every call, and a servant that has moved an
   object for good has no way to say so.
-- **Batch.** `forward` returns a small enum — `Forward::Temporary(Ior)` /
-  `Forward::Permanent(Ior)` — or a second hook `forward_perm`; the generated
-  `Dispatch` maps it to the status the encoder already knows. `orbweaver-gen`
-  only. Smaller than the draft said, and **not** landed with a giop change,
-  because there is none.
-- **Oracle.** omniORB and JacORB clients following a PERM forward and **not
-  re-asking**: count requests at the old address after the forward, over both
-  peers. `crates/orbweaver-giop/tests/object_identity.rs` already drives the
-  temporary case over real GIOP with the client following transparently; the
-  PERM arm is that test plus the count.
+- **Batch (as landed, 680aa41).** giop: `Forward { Temporary(Ior),
+  Permanent(Ior) }` and a defaulted `redirect` beside the existing `forward`,
+  so every servant that implements `forward` keeps compiling and keeps meaning
+  temporary; gen: the servant trait's `redirect`, the generated
+  `Dispatch::redirect`, the emitted corpus re-blessed.
+- **Oracle (measured, and not the one first proposed).** The raw reply
+  status off the wire — 4 at 1.2, 3 below — from a generated skeleton, both
+  byte orders, beside a temporary servant reading 3. The request count at the
+  old address, which the draft named, **cannot go red**: it is 1 under both
+  statuses for our client and for omniORB 4.3.4 (measured), because both move
+  to the forwarded endpoint and stay. What omniORB measurably does is follow
+  our status 4. The discriminating peer oracle is fallback-on-failure of the
+  forwarded-to address (temporary → re-asks the original, permanent → does
+  not), which needs a second server at a second address and is not built.
 - **Codify.** The PERM arm in `object_identity.rs`; the byte comparison against
   the hand-written naming servant does not change, because naming never
   forwards — a review note, so nobody expects it to.
@@ -351,7 +361,7 @@ they touch a batch; class B as fixtures appear; class C never, until triggered.
 | # | Batch | Class | Oracle |
 |---|---|---|---|
 | 1 | **A5** coverage document emitted by the sweep + §7.1's `gap_symbols.py` | D→A | diff in the harness; false-positive rate measured first |
-| 2 | **A1** `LOCATION_FORWARD_PERM` | A | request count at the old address, both peers |
+| 2 | **A1** `LOCATION_FORWARD_PERM` | A | reply status byte off the wire, both byte orders; omniORB following it (landed 680aa41 — the count is not an oracle) |
 | 3 | **A3** static-path arguments and dry-run mapping | A | leak test over a static call; a `string<8>` dry-run predicting `MARSHAL` |
 | 4 | **A2** versioned `Capability` | A | `idl-diff` both directions; router refusing an unmeasured expert |
 | 5 | **A4** structural `_t` in `_rt.py` | A | golden crossings up, divergences 0 |
