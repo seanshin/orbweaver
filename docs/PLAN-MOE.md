@@ -63,10 +63,10 @@ with the findings in their headers; stream F batch 1 promotes them to
 | POA ServantActivator 적재기 | `Poa` + `ServantLocator` (`Located::{Here,Forward,Unknown}`) + `residency::ExpertLoader` | ✅ — 상태 머신 F3 착지 |
 | Interface Repository | `orbweaver-registry` + SIDL annotations (`ai_desc`… ≈ capability contract) | ✅ |
 | MCP 얼굴 + 핸들↔IOR 바인딩 | `orbweaver-mcp` triad + `CapabilityTable` | ✅, 원문보다 강함 |
-| PolicyDomain (인가·레지던시·감사) | `Exposure` + `Delegation` + `Caller`/`ai_authz` + audit lines | ◐ — residency 제약만 없음 |
-| 테넌트 격리 | per-session capability tables + default-deny exposure | ◐ — Naming/Trading 도메인 스코프는 F5 |
-| route_freq 텔레메트리 | `promote::CallStats` — 승격 엔진이 곧 적재 정책의 사촌 | ◐ — 재사용 지점 |
-| 인터셉터 체인 | guard의 검사 순서 (정렬은 있으나 공식 체인 아님) | ◐ — F4 |
+| PolicyDomain (인가·레지던시·감사) | `Exposure` + `Delegation` + `Caller`/`ai_authz` + audit lines; 계약의 `PolicyDomain`은 `tenant_service.rs`가 16/16 서빙 | ◐ — `Delegation::decide`의 residency 항만 없음 |
+| 테넌트 격리 | per-session capability tables + default-deny exposure + F5 `tenant_service.rs`(2026-08-14) | ✅ — F5가 *인가* 모양을 택했다(한 그래프, 테넌트별 키); 도메인 모양은 PLAN-DEFERRED §7의 방아쇠로 남음 |
+| route_freq 텔레메트리 | `promote::CallStats` — 승격 엔진이 곧 적재 정책의 사촌 | ◐ — IF2 재사용은 착지(`Bridge::invoke` → `CallStats`, F4의 텔레메트리 인터셉터); MoE 오퍼 저장소의 `route_freq`는 여전히 자체 카운터이고 `CallStats`가 먹이지 않는다 |
+| 인터셉터 체인 | `interceptor::Chain::standard` — exposure → scopes → quota → approval → safety → telemetry → audit | ✅ — F4 착지 2026-08-14 |
 | Naming | CosNaming client + corbaname | ✅ |
 | 언어별 스텁 (원문 §10) | `orbweaver-gen` Rust 백엔드, 오라클 정적=동적 | ◐ — 타 언어는 스트림 B |
 
@@ -107,11 +107,11 @@ reports an unmeasurable number later.
   `Located::Here` activates an id permanently, so eviction has to be
   reconciled onto the POA (`ExpertLoader::reconcile`) or an evicted expert
   keeps being served out of the active map.
-- **F4 — the interceptor chain, formalized.** The guard's checks become an
+- **F4 — the interceptor chain, formalized.** ✅ *landed 2026-08-14 (`crates/orbweaver-mcp/src/interceptor.rs`, order pinned by `the_chain_and_check_call_answer_alike`).* The guard's checks become an
   ordered, extensible chain: authn → quota → safety → telemetry → audit (원문
   §4.5 순서), with telemetry feeding `CallStats`/`route_freq`. Oracle: order
   pinned by tests; every existing guard test must pass unchanged.
-- **F5 — enterprise composition.** `ComposedModel`/`ModelFactory` over the
+- **F5 — enterprise composition.** ✅ *landed 2026-08-14 as `tenant_service.rs`, 16/16 served (PLAN-SERVICES §10); the residency term in `Delegation::decide` is the open half.* `ComposedModel`/`ModelFactory` over the
   registry; tenancy = per-domain `Exposure` + capability tables; residency
   constraint joins `Delegation::decide`. Oracle: cross-tenant invisibility
   tests in the exact shape of the existing cross-session handle tests;
@@ -348,7 +348,10 @@ affinity`를 담은 `GateSignal`을 **받으므로** 평면 질문에서 자유�
 > holds a `Tensor affinity`, so **all three operations touch a `Tensor`** and
 > only the return side of `select` is references-only; and a bound is *not*
 > enforced by the marshaller for free, because `orbweaver-gen` drops it
-> (`gen/src/lib.rs:164`) while `orbweaver-dynamic` enforces it. The bound change
+> (`gen/src/lib.rs:164`) while `orbweaver-dynamic` enforces it *[true on 2026-08-14 when D006
+> was written; the same day's 526b355 made both paths enforce it — `rt::Bounded`,
+> `tests/bounds_oracle.rs` — and D006's argument does not depend on it: a bound
+> constrains size, not frequency]*. The bound change
 > was re-measured as BREAKING, and so is removing the two operations.
 > 규칙을 계약에 대한 술어로 쓸 수 있는가와 다섯 기제 중 무엇을 택할 것인가는
 > D006(**승인됨**, 2026-08-14)으로 정리되었다: E안 — `Expert::process`와

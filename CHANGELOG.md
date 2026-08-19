@@ -10,7 +10,45 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
-_Nothing yet._
+### Fixed / 수정
+
+- **The plan reviewed against the code, row by row — nineteen rows
+  understated, six overstated, all restated where they live**
+  (`docs/pipeline-runs/2026-08-19-plan-review.md`). PLAN §7.2 no longer says
+  S1–S3 are not started (measured 2026-08-13); §7.3 strikes what landed in
+  streams A/C/D and names the actual open items (a SIDL version marker, R17's
+  re-establishment half, the per-peer CSIv2 record, an `--approve` store);
+  §7.4 I4 is ✅ (the dynamic audit line is captured, not reconstructed); §8's
+  rows name the instrument that exists (`idl-check`, DII over `echo.idl` +
+  the corpus through DynAny/AnyJSON, seven `*_from_a_peer.rs` files, EUC-KR
+  unmeasured on the wire, no v0.5.0 model run, contract tests not generated,
+  the hold-out subset as A7's procedure); §9.1 R7/R8/R11/R13/R17 restated as
+  the halves they are, and **R18** added — a peer's defect becoming our
+  specification (the union `default:` label). PLAN-SERVICES: CosNaming's three
+  operations served (one fact had three homes and three answers), CosEvent ✅
+  with the consumer half of pull, the `Capability` gap closed, F3/F7 marked
+  landed, the F4+F7 telemetry-feedback row named as open with its precondition
+  met. PLAN-MOE: F4/F5 ✅, IF2 landed, the D006 quote dated (the bound has been
+  enforced by both paths since 526b355 — noted in D006 too). PLAN-DEFERRED
+  gains §10–§12 for the three 2026-08-18 deferrals with their triggers, and §7
+  cites F5's in-code trigger evaluation. `SERVICES-COVERAGE` §9's `--hold`
+  paragraph dated and the orphaned `spikes/svc-hold` removed; `COMPONENTS`'
+  CosEvent cell three answers behind, corrected; `expert_service.rs`'s header
+  said `BAD_OPERATION` where the wire says `NO_IMPLEMENT`. **Codified:**
+  `spikes/plan_numbers.py`, a report — every hand-typed count in the plan
+  documents beside today's computed figure (six found, six stale within five
+  days; the sentences now carry their date and point at the script). Harness:
+  one group per interop cell, three claims that were green while unrun now
+  counted `SKIPPED` (S1–S3 replay, the second-host NAT probe, the I3 line
+  naming both classes) — SKIPPED 5 → 7.
+
+  **계획서를 코드에 행 단위로 대조 — 19행 과소, 6행 과대, 각 사실이 사는
+  자리에서 재기술.** PLAN §7.2·§7.3·§7.4·§8·§9.1(R18 신설), PLAN-SERVICES,
+  PLAN-MOE, D006 인용의 날짜, PLAN-DEFERRED §10–§12 신설, SERVICES-COVERAGE
+  §9, COMPONENTS의 CosEvent 칸, `expert_service.rs` 헤더. **코드화:**
+  `spikes/plan_numbers.py` — 계획 문서의 손으로 적은 수치를 오늘 계산값 옆에
+  찍는 리포트(6건 발견, 6건 모두 닷새 안에 낡음). 하네스: 상호운용 셀당 그룹
+  하나, 돌지 않고 초록이던 주장 셋을 `SKIPPED`로 — 5 → 7.
 
 ---
 

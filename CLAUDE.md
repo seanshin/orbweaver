@@ -264,6 +264,8 @@ cargo run -q --bin gen-python -- --out <dir> <files>.idl   # the second target
 cargo run -q -p orbweaver-console --bin orbweaver-console -- catalog <file>.idl --text
 python3 spikes/gap_symbols.py   # before planning against a COMPONENTS gap row: what it
                                 # names and whether that exists — a report, not a gate
+python3 spikes/plan_numbers.py  # every hand-typed count in the plan documents beside
+                                # today's computed figure — a report, not a gate
 ```
 
 Fixture setup: `brew install omniorb` (interop peer and oracle only);

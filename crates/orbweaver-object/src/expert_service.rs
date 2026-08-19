@@ -25,8 +25,11 @@
 //!   reading that a `Tensor` holds a handle rather than a payload — a reading
 //!   that lives in a comment in corpus/golden/22, binds nothing, and is
 //!   enforced by nothing. Serving them would commit the project to it
-//!   silently. `dispatch` answers `BAD_OPERATION` **and this paragraph is its
-//!   reason**, which is what PLAN-SERVICES §8.1 asks of every refusal.
+//!   silently. `dispatch` answers `NO_IMPLEMENT` **and this paragraph is its
+//!   reason**, which is what PLAN-SERVICES §8.1 asks of every refusal. (This
+//!   sentence said `BAD_OPERATION` from 2026-08-18 to 2026-08-19 while the code
+//!   and the sweep said `NO_IMPLEMENT` — the §8.1.1 failure with the polarity
+//!   reversed; the wire is the home of the fact, this is its reason.)
 //! - **`moe::Expert`'s own operations** are not served here at all, and that
 //!   is not an omission either: this registry *stores* expert references and
 //!   hands them back, and the experts themselves are served elsewhere

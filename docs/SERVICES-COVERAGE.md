@@ -275,7 +275,7 @@ has the two backwards.
 ## 6. MoE control plane (`corpus/golden/22`) — the first reading / 첫 판독
 
 Objects addressed: `moe::ExpertRegistry` and `moe::ExpertLoader`, held open by
-`spikes/svc-hold` (see §9). Source: `corpus/golden/22-moe-control-plane.idl`.
+the harness-only holder `spikes/svc-hold` on 2026-08-14 (removed 2026-08-19 — both spikes have `--hold`; see §9). Source: `corpus/golden/22-moe-control-plane.idl`.
 
 | Operation | Interface | Verdict | Wire |
 |---|---|---|---|
@@ -723,14 +723,13 @@ Three things that changes in the numbers above:
 
 ## 9. What could not be measured, and why / 측정하지 못한 것과 그 이유
 
-- **`spike-experts` and `spike-tenants` have no `--hold`.** `spike-names`,
-  `spike-events` and `spike-ifr` do; the two MoE spikes open their serving
-  windows inside `std::thread::scope` and close them again, so an external
-  sweep has no way to address either servant. This sweep works around it with
-  `spikes/svc-hold`, a harness-only holder outside the workspace. **Adding
-  `--hold` to the two binaries is the right fix and it is a `crates/` change,
-  so it is reported here rather than made.**
-- **`MARSHAL` proves dispatch, not correctness.** Twelve of the fifty served
+- **`spike-experts` and `spike-tenants` had no `--hold`** on 2026-08-14, so this
+  sweep worked around it with a harness-only holder (`spikes/svc-hold`). Both
+  binaries have `--hold` now and `spikes/service_sweep.sh` uses it; the holder
+  crate was orphaned and referenced by no script, and was removed on 2026-08-19
+  (plan review).
+
+- **`MARSHAL` proves dispatch, not correctness.** On 2026-08-14, twelve of the fifty served
   operations are classified served on a `MARSHAL` alone — no real call with
   real arguments was made here: `bind`, `rebind` (CosNaming),
   `connect_push_consumer` (CosEvent), `deregister`, `prefetch` (golden 22),

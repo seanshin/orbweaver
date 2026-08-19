@@ -34,8 +34,9 @@
 operation each service's IDL declares against the running servant and reports,
 per operation, whether it is served, refused with a reason quoted from the
 servant, or refused with no reason written anywhere. The last category is the
-one this rule exists to keep empty; it currently holds **12 of 107** declared
-operations, and the sections below are where their reasons would go. Re-run it
+one this rule exists to keep empty; it held **12 of 107** declared operations
+on 2026-08-14 and **0 of 106** on 2026-08-19 — the current number is the
+generated block `SERVICES-COVERAGE.md` §8, never this sentence. Re-run it
 with `./spikes/service_sweep.sh`.
 
 규칙 2가 지켜지고 있는지는 주장이 아니라 **측정**된다 —
@@ -60,9 +61,15 @@ our `NotFound` user-exception bytes** — the first "their client, our server"
 claim in the project. Serving user exceptions at all required
 `Dispatch::dispatch_body`, which every existing servant inherits unchanged.
 
-Not doing (until a consumer appears): real `BindingIterator` lifecycles,
-`bind_context`/`destroy` (refused loudly), federation across naming domains
-(F5's tenancy work will name the requirement if it materializes).
+Not doing (until a consumer appears): real `BindingIterator` lifecycles
+(the interface is declared and probed against no object — §8 of the coverage
+document names it unmeasured), federation across naming domains (F5 evaluated
+PLAN-DEFERRED §7's trigger *in code* and found the other shape —
+`tenant_service.rs`, "one graph, per-tenant keys"). `bind_context`,
+`rebind_context` and `destroy` are **served** since 2026-08-18 (this sentence
+said "refused loudly" and §8.1.1 said "moved to `NO_IMPLEMENT`" while the wire
+served all three — one fact, three homes, three answers, found by the plan
+review of 2026-08-19; the wire is the home).
 
 ## 3. CosTrading / 트레이딩 — ✅ engine and project-contract wire both landed
 
@@ -70,8 +77,8 @@ Not doing (until a consumer appears): real `BindingIterator` lifecycles,
 |---|---|
 | Standard | `CosTrading` (Lookup, Register, Admin, Link, Proxy) |
 | Consumer | stream F loading/placement (PLAN-MOE §6), later the catalog |
-| Engine (F2, 2026-08-14) | `orbweaver-trading`: offers, constraint-query subset, loading policy, deterministic trace replay — 37 tests |
-| Wire (2026-08-15) | `orbweaver-object::expert_service`: `moe::ExpertRegistry` + `moe::ExpertLoader` from `corpus/golden/22`, on our POA-side `Server` — 17 tests plus `spike-experts` |
+| Engine (F2, 2026-08-14) | `orbweaver-trading`: offers, constraint-query subset, loading policy, deterministic trace replay — 37 tests on 2026-08-14 (`spikes/plan_numbers.py` prints today's) |
+| Wire (2026-08-15) | `orbweaver-object::expert_service`: `moe::ExpertRegistry` + `moe::ExpertLoader` from `corpus/golden/22`, on our POA-side `Server` — 17 tests on 2026-08-15 (`spikes/plan_numbers.py` prints today's) plus `spike-experts` |
 
 **The honest choice about the standard module:** OMG CosTrading is enormous
 (five interfaces, federated links, proxy offers, dynamic properties). Nothing
@@ -97,9 +104,9 @@ declares `raises`**, so every refusal is a system exception chosen to be
 actionable (`BAD_PARAM` unknown, `BAD_INV_ORDER` no such edge, `NO_PERMISSION`
 pinned, `TRANSIENT` the window may differ); inventing a user exception would
 emit bytes the generated client has no branch for. And **`moe::Capability`
-carries no `specialization` and no `latency_p50`**, so a constraint query on
-either cannot be satisfied by an offer that arrived over this contract — a
-contract gap for F1, not a default to guess at here.
+carried no `specialization` and no `latency_p50`** — closed 2026-08-19 the
+§5.3 way as `MeasuredCapability` + `register_measured`/`heartbeat_measured`
+(PLAN-MOE §4.5.1 is the home; `corpus/evolution/moe/` holds the frozen pair).
 
 Not measured, and not claimed: only our own client has called this. No foreign
 MoE peer exists, so unlike §2 there is no "their client, our server" direction
@@ -128,7 +135,7 @@ to report.
 측정되지 않았고 주장하지도 않는 것: 우리 클라이언트만 호출했다. 외부 MoE 피어가
 없으므로 §2와 달리 "그들의 클라이언트, 우리의 서버" 방향은 보고할 것이 없다.
 
-## 4. CosEvent / 이벤트 — ❌ → F7, oracle design settled by measurement
+## 4. CosEvent / 이벤트 — ✅ F7 landed (push both ways, the consumer half of pull), oracle design settled by measurement
 
 | | |
 |---|---|
@@ -144,8 +151,10 @@ channel first-party, and omniORB's python acts as the independent push
 consumer/supplier against it.** Scope v1: `EventChannel` +
 `ConsumerAdmin::obtain_push_supplier` + `SupplierAdmin::obtain_push_consumer`
 + `ProxyPushConsumer::push(any)` / `ProxyPushSupplier::connect_push_consumer`
-— the push model only; pull is refused loudly. Events are `any`, which
-AnyJSON already carries.
+— the push model, and since 2026-08-18 the **consumer half of pull**
+(`obtain_pull_supplier`, `pull`, `try_pull` served); the supplier half and
+`destroy` are `NO_IMPLEMENT` with reasons in `event_server.rs`'s header (and
+now PLAN-DEFERRED §10). Events are `any`, which AnyJSON already carries.
 
 Batch unit: the channel × both directions (our supplier → omniORB consumer,
 omniORB supplier → our consumer) × disconnect semantics (a dead consumer must
@@ -288,8 +297,11 @@ client cannot read. It is now the wire's job in all five services:
 | `NO_IMPLEMENT` | the operation is declared and this servant does not implement it, on purpose |
 | `BAD_OPERATION` | this interface does not declare that name at all |
 
-Moved to `NO_IMPLEMENT`: CosNaming's `bind_context`, `rebind_context`,
-`destroy`; the event channel's whole pull model and its `destroy`; and
+Moved to `NO_IMPLEMENT` on 2026-08-18: the event channel's supplier-side pull
+and its `destroy`; and — then re-examined the same day — CosNaming's
+`bind_context`, `rebind_context`, `destroy` and the consumer side of pull,
+which turned out to be *possible* rather than deferred and are **served**
+(§2, §4; the generated coverage block is the home); and
 `moe::Router::dispatch`, whose exclusion **D006 approved on 2026-08-14 while
 the servant went on saying "no such operation"** — a decision recorded in
 prose and contradicted on the wire, which is the exact failure §8.1 exists to
@@ -332,8 +344,8 @@ omniEvents (absent — recorded above), sslTP (absent —
 | Batch | After | Why that order |
 |---|---|---|
 | F6 Naming server | — | **landed 2026-08-14** |
-| F7 Event channel | F6 | the channel is a named object; discovery wants Naming |
+| F7 Event channel | F6 | **landed** (push both ways; consumer-side pull 2026-08-18) — the channel is a named object; discovery wants Naming |
 | IFR facade (§7) | F6 | **landed** — same reason |
-| Trading wire (`ExpertRegistry` served) | F3 | the loader/state machine is its first caller |
+| Trading wire (`ExpertRegistry` served) | F3 | **landed 2026-08-15** (§3) — the loader/state machine is its first caller |
 | F5 LifeCycle/Property | F2 ✅ + F4 | **landed 2026-08-14** as `tenant_service.rs`, and this row never grew the marker the F6 and IFR rows have — measured 16/16 in `SERVICES-COVERAGE.md` §7. What was missing was the *direction*: 2026-08-18 an omniORB client calls all sixteen through its own stubs. Open hole: `bind_expert`/`set_policy` take references **no operation of the contract returns**, so a caller must build them from the key template |
-| CosEvent → telemetry feedback | F4 + F7 | the §6 feedback loop closes only when both exist |
+| CosEvent → telemetry feedback | F4 + F7 | **both exist since 2026-08-18 and nothing publishes** a control-plane event into the channel — the precondition is met and the work is open (plan review 2026-08-19); needs a short design note first: what is published, what is not (the §5 trust boundary) |

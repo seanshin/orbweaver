@@ -241,7 +241,10 @@ the class of claim that is embarrassing to assert and cheap to check.
   - **Dynamic path: enforced, both directions.** `check_bound`
     (`dynamic/src/lib.rs:594`) is called on encode (`:539`) and on decode
     (`:718`), with `bounds_are_enforced_in_both_directions` (`:988`) pinning it.
-  - **Static generated path: the bound is dropped.** `rust_type`
+  - **Static generated path: the bound is dropped** *(as of this draft; the same
+    day's 526b355 made the static path enforce it — `rt::Bounded<T, N>`,
+    `crates/orbweaver-gen/tests/bounds_oracle.rs` — and the argument below does
+    not depend on it: a bound constrains size, not frequency).* `rust_type`
     (`gen/src/lib.rs:164`) maps `TypeCode::Sequence { element, .. }` to
     `Vec<{element}>` — the bound is discarded at the pattern — and
     `impl<T: Cdr> Cdr for Vec<T>` (`gen/src/rt.rs:526`) writes `self.len()` with
@@ -556,7 +559,7 @@ reading the named file: the three `idl-diff` / `contract-check` / `omniidl` runs
 quoted in §*What was measured*; `diff.rs`'s bound arm (`:426-452`), its two bound
 tests (`:504`, `:520`) and `same_identity` (`:253`); `dynamic/src/lib.rs`'s
 `check_bound` (`:594`) and its call sites (`:539`, `:718`) and test (`:988`);
-`gen/src/lib.rs:164` dropping the bound and `gen/src/rt.rs:526-546`'s unchecked
+`gen/src/lib.rs:164` dropping the bound (then; enforced since 526b355) and `gen/src/rt.rs:526-546`'s unchecked
 `Vec<T>` codec; `contract.rs`'s rule for adding a rule (`:12-16`), `VOCABULARY`
 (`:120`, eight keys), the interface-only iteration (`:205`) and `unknown_keys`
 (`:668`); `registry/src/lib.rs:647` and `:917-928` carrying typedef annotations

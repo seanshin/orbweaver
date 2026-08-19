@@ -291,9 +291,9 @@ reader can see them **without** reading them as unfinished:
 | Item | Trigger | Where the reason lives |
 |---|---|---|
 | CosNotification, OTS, Time, PSS, Concurrency, Collections, Federated Naming, Security beyond CSIv2 | each has an observable trigger in `PLAN-DEFERRED` §1–§8 | that document |
-| CosEvent **supplier**-side pull | a named `PullSupplier` in this workspace | `event_server.rs` header, rewritten 2026-08-18 |
-| CosEvent `destroy` | an authenticated caller model | same |
-| CosNaming chaining to a foreign context | a federation requirement (also PLAN-DEFERRED §7) | `naming_server.rs` header, rewritten 2026-08-18 |
+| CosEvent **supplier**-side pull | a named `PullSupplier` in this workspace | `PLAN-DEFERRED` §10 (2026-08-19; the servant header carries the same reason)
+| CosEvent `destroy` | an authenticated caller model | `PLAN-DEFERRED` §11 |
+| CosNaming chaining to a foreign context | a federation requirement (PLAN-DEFERRED §7, whose trigger F5 evaluated in code) | `PLAN-DEFERRED` §12; `naming_server.rs` header |
 | A non-empty `char` conversion list | a peer that cannot reach UTF-8 — **probed, none exists**, and offering it was measured to *lower* what JacORB sends | D009 §8 row 4, `codeset.rs` |
 | The remote `DynAny` interface | a caller that holds a component reference across calls | `dynany.rs` |
 | A durable catalog store | a pilot that needs durability (D003-B) | D003 |

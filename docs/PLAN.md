@@ -592,8 +592,13 @@ Two rules carry over unchanged from the operating model:
 
 | Phase 4 — static generation, promotion (was not started at v0.6) | **Substantially landed.** Rust client stubs with the §8 static-equals-dynamic oracle against both peers; **server skeletons** driven by omniORB's own python client (narrow, attributes, `out` parameters, a oneway then a twoway on one connection, user exceptions by class); the promotion gate I4 live-verified. What remains is not restated here — the `orbweaver-gen` row of `COMPONENTS.md` carries it and is refreshed after every wave. This table's business is what was planned against what landed, and the three items this cell used to list had all landed while it still named them | `COMPONENTS.md`, harness stream-B group |
 
-Not started from the original plan: Phase 6 (productionization) and the
-model-in-the-loop stages S1–S3.
+Not started from the original plan: Phase 6 (productionization). The
+model-in-the-loop stages S1–S3 were **landed and measured** against a real
+model on 2026-08-13 (S1 90 % / S2 95 % / S3 100 % first pass over the twenty,
+`docs/pipeline-runs/2026-08-13-split-pipeline.md`); this sentence said "not
+started" for six days after that, which the plan review of 2026-08-19 found —
+status lives in `COMPONENTS.md`, and this line now only says what was never
+begun.
 
 **Landed since v0.6, by stream** — the streams below are written as scope, not
 as status, so the status is here and the measurements are in
@@ -632,9 +637,14 @@ produces), and **oracle** (what verifies the whole batch deterministically).
 
 #### Stream A — AI pipeline: S1–S3 (was Phase 3's model-in-the-loop half)
 
-- **What:** `orbweaver-forge` stages S1 ingest, S2 synthesize, S3 annotate;
-  SIDL vocabulary v1 finalized; the self-repair loop driven by S4's
-  `--repair-prompt`.
+- **What:** ~~`orbweaver-forge` stages S1 ingest, S2 synthesize, S3 annotate~~
+  (landed, each a producer plus its own gate, measured 2026-08-13);
+  ~~the self-repair loop driven by S4's `--repair-prompt`~~ (landed, in-process
+  rounds, cause-grouped prompts); SIDL vocabulary v1 finalized as one constant
+  mirrored in two crates with a pinning test — **its version marker is the
+  open item** (`SIDL_VERSION`, so a v2 key is distinguishable to a consumer);
+  and a live run per release (§8 *AI quality*), which needs a model at run
+  time and is a counted `SKIPPED` in the harness until then.
 - **Depends on:** S4 (landed), the corpus (landed), a model API key at run time.
 - **Batch unit:** one requirements set → N IDL files, generated in one pass
   with **no oracle peeking mid-pass** (§5.1 rule 1).
@@ -666,8 +676,12 @@ produces), and **oracle** (what verifies the whole batch deterministically).
   ~~OAuth2/JWT → `Caller` token exchange~~ (landed as a seam — the verifier is
   a trait this project does not implement, because a verifier wrong in the
   accepting direction interoperates perfectly and no oracle we own sees it); mid-connection
-  re-establishment on token expiry (R17); catalogue marking for targets that
-  cannot enforce.
+  re-establishment on token expiry (R17 — the *safe-failure* half is landed:
+  `Expiry` is the first seat of the chain and a call on an expired context is
+  refused as `CredentialExpired`; the *re-establishment* half is not built and
+  needs an issuer, D010 B2); catalogue marking for targets that cannot enforce
+  (the decision exists as `Assertion::RecordedOnly`; the per-peer record in
+  the catalogue is the open item, measurable here with the two peers).
 - **Depends on:** csiv2 module and `Caller` seam (landed). TLS needs a
   certificate fixture, which is a batch-one deliverable, not a dependency.
 - **Batch unit:** one mechanism at a time across **every fixture peer** — e.g.
@@ -680,9 +694,14 @@ produces), and **oracle** (what verifies the whole batch deterministically).
 
 #### Stream D — Catalog depth and operability (was Phase 6, minus TLS)
 
-- **What:** embedding index and semantic search behind `search_interfaces`
-  (upgrading today's honest lexical match); OpenTelemetry via interceptors;
-  `orbweaver-console`; governance workflow around `idl-diff --approve`.
+- **What:** ~~embedding index and semantic search behind `search_interfaces`~~
+  (landed: index, cache format, lexical∪vector union — D003-A; the model is
+  absent by design and the synonym class is a counted `SKIPPED`);
+  ~~OpenTelemetry via interceptors~~ (D004 tier 1 landed; tiers 2–3
+  pre-cleared with triggers, none fired); ~~`orbweaver-console`~~ (three pages);
+  governance workflow around `idl-diff --approve` — today a flag and a printed
+  line, no store and no approver; the shape to copy is `forge-pipeline
+  --supersede`, which persists.
 - **Depends on:** MCP bridge (landed). Embeddings need a model at run time;
   everything else is self-contained.
 - **Batch unit:** one operability surface at a time, across every existing
@@ -734,8 +753,8 @@ independent by construction.
 |---|---|---|
 | **I1. Generated stubs are guarded** ✅ | B × C | Static stubs go through the same `Exposure`/`Delegation`/audit path as dynamic calls. A stub that bypasses the guard recreates the §4.7 bypass in compiled form. Checked by the transcript-leak test running against a static client. **Verified**: stubs are generic over `Invoker`; `Guarded` applies exposure, `ai_authz` scopes and `destructive` approval per operation, refuses as `NO_PERMISSION` before anything is sent, and its audit log is leak-checked live against omniORB. |
 | **I2. Pipeline output is exposed safely** ✅ | A × D | S5 registration feeds the catalog with **exposure off by default**; a generated interface becoming agent-visible requires the same explicit allowlist as a hand-written one. **Verified**: `pipeline::register` re-checks every item at the gate (a forged `Valid` is refused), grants nothing — the exposable list is a menu in `exposure.todo.tsv`, every row `exposed=no` — and the proof runs a real `Bridge` over the registered batch: invisible under `Exposure::nothing()`, one `allow_interface` exposes exactly one interface, the neighbour stays dark. Durable store (§6) remains future work; `register` is its seam. |
-| **I3. Search does not launder annotations** ● | A × D | The embedding index treats `ai_desc` as data (R11); injection cases from the negative corpus are part of the frozen query benchmark. **Partly verified**: the injection class holds 5/5 in both the frozen v1 set and the widened v2 set, lexically and with a vector index attached, and the discipline earned its keep — D003-A's first run leaked a JSON-shaped injection query past the 0.60 gate at 0.617 because `interface_text` was embedding repository-id boilerplate as content, which is now a pinned bench test. **Not verified**: the same class against a real embedding model, because no API key exists here; the harness reports that arm SKIPPED rather than passing. |
-| **I4. Promotion respects identity** ● | B × C | A promoted static path carries the same `Caller` assertion behaviour as the dynamic path it replaced. **Gate landed and live-verified**: `verify_promotion` fed both paths' real outcomes against a stock ORB in the gen-corpus oracle — the static audit line captured from a real `Guarded`, a caller-less rebuild of the same call refused as `IdentityDropped` with results identical, and `PromotionPolicy` recommending the observed traffic. The dynamic path's audit line is still *reconstructed* from `Bridge::caller` session state in the guard's format, because the dynamic bridge path emits no audit lines yet; capture replaces reconstruction when it does. |
+| **I3. Search does not launder annotations** ● | A × D | The embedding index treats `ai_desc` as data (R11); injection cases from the negative corpus are part of the frozen query benchmark. **Partly verified**: the injection class holds 5/5 in both the frozen v1 set and the widened v2 set, lexically and with a vector index attached, and the discipline earned its keep — D003-A's first run leaked a JSON-shaped injection query past the 0.60 gate at 0.617 because `interface_text` was embedding repository-id boilerplate as content, which is now a pinned bench test. **Not verified**: the same class against a real embedding model, because no API key exists here; the harness reports that arm SKIPPED rather than passing — the skip line names both classes it leaves unmeasured, the synonym rate and injection against a real model. |
+| **I4. Promotion respects identity** ✅ | B × C | A promoted static path carries the same `Caller` assertion behaviour as the dynamic path it replaced. **Gate landed and live-verified**: `verify_promotion` fed both paths' real outcomes against a stock ORB in the gen-corpus oracle — the static audit line captured from a real `Guarded`, a caller-less rebuild of the same call refused as `IdentityDropped` with results identical, and `PromotionPolicy` recommending the observed traffic. The dynamic path's audit line is **captured, not reconstructed**: `Bridge::audit()` writes it through the same audit stage as the guard's, and the oracle takes it from there (this row said "reconstructed … until the bridge emits audit lines" for days after it did — found by the plan review of 2026-08-19). Residue: `Bridge::stats()` filled only through `Bridge::invoke`, so the oracle's I4 calls recorded into a local `CallStats` — closed by the same review's batch. |
 
 ### 7.5 Batch discipline for parallel execution
 
@@ -753,20 +772,20 @@ Running streams in parallel does not relax §5.1 — it sharpens two rules:
 
 | Layer | Method | Pass criterion |
 |---|---|---|
-| Wire protocol | Round-trip against **omniORB and JacORB**, both directions — the interop matrix is those two peers × {our client → peer server, peer client → our server}, and `run_checks.sh` has one group per cell | All four cells measured and green; an absent fixture is reported `SKIPPED` and counted unmeasured, never passing |
-| CDR encoding | Against **omniORB and JacORB**, three ways: values round-tripped through each peer and compared **decoded**; bytes a peer wrote, recorded in `crates/orbweaver-giop/tests/union_labels_from_a_peer.rs` and re-captured from the live fixture by `spikes/union_label_capture.py`, **re-encoded** by our encoder; and a `TypeCode` derived from IDL compared with the one each peer returns (`registry-check`, harness group *type registry*) | Decoded values equal; re-encoded bytes equal on every byte the specification defines — **padding excluded by a mask, never compared**; derived `TypeCode` structurally equal to the peer's. Never "byte-identical" over a raw buffer: see the CDR paragraph below |
-| IDL syntax | Differential compile against tao_idl and omniidl | Zero unexplained disagreements |
-| IDL semantics | `sidl-validate` naming and semantic rules over the corpus; S3's own annotation gate over everything the pipeline emits | Zero S4 errors; zero `s3/missing-ai_desc`/`-ai_effect`/`-ai_authz` on pipeline output — annotation completeness is gated at 100% *there*, and **no run computes an annotation-coverage percentage over an arbitrary contract set** |
+| Wire protocol | Round-trip against **omniORB and JacORB**, both directions — the interop matrix is those two peers × {our client → peer server, peer client → our server}, and `run_checks.sh` has one group per cell (two for JacORB since 2026-08-19 — its two directions had shared one counter, so a green harness could not tell "both passed" from "one never reached") | All four cells measured and green; an absent fixture is reported `SKIPPED` and counted unmeasured, never passing |
+| CDR encoding | Against **omniORB and JacORB**, three ways: values round-tripped through each peer and compared **decoded**; bytes a peer wrote, recorded with provenance in `crates/orbweaver-giop/tests/*_from_a_peer.rs` and `crates/orbweaver-registry/tests/*_from_a_peer.rs` (seven files at v0.5.0) and re-captured from the live fixture on every run by `spikes/*_capture.py`, **re-encoded** by our encoder; and a `TypeCode` derived from IDL compared with the one each peer returns (`registry-check`, harness group *type registry*) | Decoded values equal; re-encoded bytes equal on every byte the specification defines — **padding excluded by a mask, never compared**; derived `TypeCode` structurally equal to the peer's. Never "byte-identical" over a raw buffer: see the CDR paragraph below |
+| IDL syntax | Differential compile against omniidl and JacORB's IDL compiler (both required in CI); `tao_idl` is an optional third column, absent here and in CI (aspiration A6) | Zero unexplained disagreements; an absent oracle's column is `SKIPPED`, never passing |
+| IDL semantics | the S4 rules (`idl-check` over the corpus in the harness; `sidl-validate` is the same rules with fix hints); S3's own annotation gate over everything the pipeline emits (unit-tested; run over pipeline output only when a live run happens — see *AI quality*) | Zero S4 errors; zero `s3/missing-ai_desc`/`-ai_effect`/`-ai_authz` on pipeline output — annotation completeness is gated at 100% *there*, and **no run computes an annotation-coverage percentage over an arbitrary contract set** |
 | Backward compatibility | Semantic diff, breaking-change detection | Zero unapproved breaking changes |
-| Dynamic invocation | DII round-trip over the golden corpus | 100% lossless |
-| Generated code | Compile, contract tests, static result equals dynamic result | Zero mismatches |
+| Dynamic invocation | DII against both peers over `spikes/echo.idl` (calls built from IDL text alone); the golden corpus goes through DynAny and the AnyJSON leg of the property sweep (5248 CDR round trips also crossed, floor pinned) | 100% lossless |
+| Generated code | Compile (linted, not merely compiled), static result equals dynamic result, a generated skeleton answering as the hand-written servant does; contract tests are **not** generated (aspiration A8) | Zero mismatches |
 | End to end | `spikes/estate/run.sh` — thirteen legacy-shaped contracts through nine stages, ingestion to agent call | Every stage measured and every assertion held; a stage that cannot be measured is a failure, never a skip. This measures **path completion, not effort saved** |
-| AI quality | `forge-pipeline` over `corpus/requirements/inputs` (20, frozen) and `corpus/requirements/inputs-v2` (26 — those 20 byte-for-byte plus 6), every release | Both sets run; per-stage first-pass rate and round count recorded under `docs/pipeline-runs/`, compared at release review against the previous release's record. One case is 5.0 points at n = 20, so a "drop" smaller than that is not a signal |
-| Codesets | Korean-text round-trips (EUC-KR / UTF-8 / UTF-16) against every fixture ORB | 100% lossless |
+| AI quality | `forge-pipeline` over `corpus/requirements/inputs` (20, frozen) and `corpus/requirements/inputs-v2` (26 — those 20 byte-for-byte plus 6), every release — **not done for v0.5.0**: no model key ran here, and the harness now counts the model arm `SKIPPED` rather than replaying the 2026-08-13 recording as `ok` | Both sets run; per-stage first-pass rate and round count recorded under `docs/pipeline-runs/`, compared at release review against the previous release's record. One case is 5.0 points at n = 20, so a "drop" smaller than that is not a signal |
+| Codesets | Korean-text round-trips in UTF-8 and UTF-16 against both fixture ORBs, both directions; EUC-KR verified against an independent codec (Python's), **unmeasured on the wire because no available peer negotiates it** (`spikes/codeset_peer_probe.py`: eleven configurations, every one reaches UTF-8) | 100% lossless where measured; the EUC-KR wire cell is `SKIPPED`-class |
 | AnyJSON | `any → JSON → any` across the golden corpus | Byte-identical CDR |
 | Performance | `call-bench`: dynamic path vs static stub, four operation shapes over one loopback connection shared by both clients, calls interleaved | Every series measured and both paths agreeing on every answer; p50 ratios reported, and judged against §11 at release review |
 
-**Benchmark discipline.** The AI benchmark is frozen and versioned; a hold-out subset is never touched during prompt development, and cases rotate between releases so the pipeline is not tuned to its own exam.
+**Benchmark discipline.** The AI benchmark is frozen and versioned (v1: 20, byte-for-byte pinned; v2: those plus 6). A hold-out subset and rotation between releases are **aspiration A7's** procedure, not this project's practice yet: no hold-out exists in the tree, `inputs-v2` added six and rotated nothing, and generator and evaluator are the same model — which is why A7's trigger is an independent evaluator.
 
 **On four rows this table carried as criteria and could not test.** Each named a number nothing computed. They are restated above against what the tree contains — counted on 2026-08-18, not recalled — and whatever is left over is kept as an **aspiration in §11**, with a trigger, rather than as a criterion here.
 
@@ -808,17 +827,18 @@ Putting an AI bridge in front of legacy CORBA widens the attack surface in ways 
 | **R4** | LLM hallucinates IDL | Medium | High | Compile gate blocks 100% of syntactic errors. Semantic errors caught by contract tests and human review queue |
 | **R5** | Specification defects dominate, per AutoMCP | Medium | High | S3's gate refuses any pipeline output missing `ai_desc`, `ai_effect` or `ai_authz`, and the MCP boundary refuses an operation whose effect is unstated. **A coverage *rate* is not computed and blocks no registration** — §11 A3. Gaps back-inferred from traffic observation |
 | **R6** | CORBA expertise is scarce | Medium | High | Secure at least one experienced ORB engineer or external advisor. Accumulate operational knowledge internally |
-| **R7** | **IOR addressing under NAT/containers** — an internal IP baked into an IOR is uncallable externally | Medium | High | Endpoint rewriting templated into every deployment. Hazard verified in Phase 0 assumption D; the rewriter is `orbweaver_giop::nat` plus `Server::ior_mapped`, measured by dialing in `spikes/nat_rewrite.sh` (docs/PHASE6.md). A real routing domain remains unmeasured — the container probe under `spikes/nat/` is written and unrun |
-| **R8** | Scope growth from building the ORB core | Medium | Medium | Phases 1–2 are strictly wire and compiler work with no AI scope creep. GIOP 1.2 over TCP only in v1 |
+| **R7** | **IOR addressing under NAT/containers** — an internal IP baked into an IOR is uncallable externally | Medium | High | Endpoint rewriting templated into every deployment. Hazard verified in Phase 0 assumption D; the rewriter is `orbweaver_giop::nat` plus `Server::ior_mapped`, measured by dialing in `spikes/nat_rewrite.sh` (docs/PHASE6.md). A real routing domain **was** measured — `spikes/nat/vm/run.sh` across a multipass VM, five consecutive passes (docs/PHASE6.md), a counted `SKIPPED` in the harness until `ORBWEAVER_NAT_VM=1` runs it. Still unmeasured: the container probe (no docker), and a foreign ORB reading a rewritten reference |
+| **R8** | Scope growth from building the ORB core | Medium | Medium | Phases 1–2 are strictly wire and compiler work with no AI scope creep. ("GIOP 1.2 over TCP only in v1" was the v0.1 mitigation; the streams in §7.3 overruled it — 1.0/1.1/1.2, SSLIOP behind a feature, six services — and the risk is now bounded by D010's split rather than by a version cap) |
 | **R9** | CORBA market contraction | Strategic | Medium | IDL 4.x is shared with DDS; land a DDS target early. Position as an OMG IDL automation platform, not a CORBA product |
 | **R10** | Dynamic path too slow | Low | Medium | Structurally solved by promotion. Hot paths always use static stubs |
-| **R11** | **Prompt injection through interface metadata** — hostile IFR/IDL text steers the agent (tool poisoning) | High | Medium | §9.0 controls: metadata untrusted by default, sanitized on render, quarantined until approved |
+| **R11** | **Prompt injection through interface metadata** — hostile IFR/IDL text steers the agent (tool poisoning) | High | Medium | §9.0 controls: metadata untrusted by default (`HostileIdentifier` on ingestion), escaped on render (`Markup::text`, boundary-fuzzed); **not quarantined** — by design it is carried intact and no decision is made from annotation text except `ai_effect` (PHASE3), because redacting it would be its own failure |
 | **R12** | **The bridge amplifies legacy exposure** — unauthenticated internal services become AI-reachable | High | Medium | Default-deny allowlist, per-interface exposure review, bridge-level authentication, network segmentation |
-| **R13** | **Confused deputy** — the target sees the bridge's identity on every call, so its authorization decisions and audit trail are about the wrong subject | Critical | **High** — this is the default behaviour, not a failure mode | Caller identity propagated via CSIv2 SAS (§4.8). Where a target cannot enforce, the catalogue records that the bridge is the only enforcement point rather than implying the target checks |
+| **R13** | **Confused deputy** — the target sees the bridge's identity on every call, so its authorization decisions and audit trail are about the wrong subject | Critical | **High** — this is the default behaviour, not a failure mode | Two halves. **Landed and measured:** where a target cannot enforce, the bridge is the only enforcement point and the audit line says so (`Assertion::RecordedOnly`) — both fixture peers advertise no CSIv2, measured every run. **Aspiration until D010 B2's fixture:** caller identity propagated via CSIv2 SAS (§4.8) — the wire is unit-tested in both byte orders, the verifier is deliberately empty, and the harness counts that leg `SKIPPED` |
 | **R14** | **A raw IOR escapes to an agent** — an IOR is a bearer address, so holding one bypasses the guard entirely | Critical | Medium | Capability handles at the MCP boundary (§4.7); raw IORs never serialised into agent-visible payloads; AnyJSON has no encoding that could carry one |
 | **R15** | **CSIv2 interop is poor across vendors** — a known weakness, not a surprise | High | High | Working subset per named peer, explicit fallbacks, and "CSIv2 support" reported per peer rather than as a feature flag |
 | **R16** | **Credential store is a high-value target** | High | Medium | Never logged or persisted in recoverable form, shortest useful lifetime, excluded from diagnostics by construction; audit records which principal was asserted, never the material |
-| **R17** | **Token lifetime disagrees with connection lifetime** — CORBA connections are long-lived, tokens expire | Medium | High | Mid-connection re-establishment; a call on an expired context fails rather than silently proceeding |
+| **R17** | **Token lifetime disagrees with connection lifetime** — CORBA connections are long-lived, tokens expire | Medium | High | Two halves. **Landed:** a call on an expired context fails rather than silently proceeding (`Expiry` is the first seat of the chain; `Unstamped::Refuse` when the host stamps no clock). **Not built:** mid-connection re-establishment — needs an issuer to re-exchange against (D010 B2) |
+| **R18** | **A peer's defect becomes our specification** — a wire choice made from what two peers accept rather than from the standard (2026-08-19: the union `default:` label is zeros at the discriminator's width because JacORB reads one octet that must be 0 and omniORB ignores the value; §9.3.5.1.4 says the value has no significance) | High — both defects are live | Medium — visible on every defaulted union in an `any` | The recording harness re-checks against those two peers only, so it stays green if JacORB fixes its reader and says nothing about a third ORB. Mitigation: pin the *conformant* half the peers cannot test — our reader accepts and ignores any non-zero default label (test); name a third value oracle in A6's trigger |
 
 ---
 

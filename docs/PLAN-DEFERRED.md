@@ -50,6 +50,9 @@ is the adoption, not this file.
 | §6 CosCollections | a foreign client expecting `CosCollection` by name; or a result set that genuinely cannot be bounded |
 | §7 Federated Naming / Trading Links | the first configuration with **more than one naming/trading domain behind one MCP face** |
 | §8 Security Service beyond CSIv2 | four separate triggers, one per part — see §8; the earliest is F5 tenancy wanting policy by **domain membership** rather than per call |
+| §10 CosEvent supplier-side pull | a named `PullSupplier` in this workspace — something that *is* one, whose clock the channel would then hold a thread on |
+| §11 CosEvent `destroy` | a caller model in the event servant — the operation is unauthenticated and ends the channel for every other client |
+| §12 CosNaming chaining to a foreign context | a federation requirement (§7's trigger, seen from the naming servant) — chaining is *possible* today, which is a reason it can be built, not a reason to |
 
 ---
 
@@ -442,7 +445,11 @@ failure means. Trading links are the explicit version — `CosTrading::Link`,
 so a `query` with no local match propagates to linked traders.
 
 **Why deferred.** PLAN-SERVICES §2 records federation as "not doing (until a
-consumer appears)" and §8 says tenancy (F5) may name the requirement. It has
+consumer appears)" and §8 says tenancy (F5) may name the requirement. **F5
+landed on 2026-08-14 and evaluated this trigger in code** — `tenant_service.rs`,
+"one graph, per-tenant keys … this is the other shape, so the trigger has not
+fired" — the one place the tree answered a question this file asks; it is
+cited here so the answer has a home a reader can find. It has
 not.
 
 **Trigger — and the precision is the point of this chapter.** F5 tenancy is
@@ -581,6 +588,83 @@ v1은 CORBASec이 아니라 기존 어휘의 최소 답: (1) 레지스트리 항
 체인은 공짜로 탐지를 풀고 서명은 키 관리를 대가로 귀속만 푼다.
 
 ---
+
+## 10. CosEvent — the supplier side of pull / 이벤트 — pull의 공급자 쪽
+
+**What it is.** `SupplierAdmin::obtain_pull_consumer` and the
+`ProxyPullConsumer` it would return: the channel *pulls* from a supplier —
+`PullSupplier::pull` is specified to block until the supplier has something.
+The consumer side of pull (`obtain_pull_supplier`, `pull`, `try_pull`) is
+**served** since 2026-08-18: it holds events in the same bounded deque the push
+path uses, moved by the same knob, dropped oldest-first into the same counter
+(`event_server.rs`, `spikes/service_sweep.sh`).
+
+**Why deferred, re-measured 2026-08-18.** The original reason was two claims —
+"the same unbounded buffer this module avoids, for no named consumer" — and
+only the second survived measurement: the consumer half needed no new buffer.
+What holds for the supplier half is different: there the *channel* is the
+puller and would hold a thread per connected supplier on somebody else's clock,
+with no bound it owns — for no named supplier, since nothing in this workspace
+is a `PullSupplier` (grep, 2026-08-19: only the servant's own proxy and the
+sweep's note that the interface is client-implemented). Answered
+`NO_IMPLEMENT` with this reason; measured in the generated coverage block.
+
+**Un-defer trigger.** A named `PullSupplier` in this workspace. **v1 sketch:**
+one thread per connected supplier with a per-supplier deadline the channel
+owns; a supplier that blocks past it is disconnected with the same
+`disconnected_for_failure` accounting the push path has.
+
+**무엇.** 채널이 공급자에서 *당기는* 쪽. 소비자 쪽 pull은 2026-08-18부터 서빙.
+**왜 유예.** 원래 사유는 두 주장이었고 하나만 측정을 견뎠다; 공급자 쪽은 채널이
+남의 시계에 스레드를 하나씩 붙잡는 일이며 이 작업공간에 `PullSupplier`인 것이
+없다. **방아쇠.** 이름 붙은 `PullSupplier` 하나.
+
+## 11. CosEvent — `destroy` / 이벤트 — `destroy`
+
+**What it is.** `EventChannel::destroy`: disconnect every proxy, invalidate
+every object key other references still name, stop the relay.
+
+**Why deferred, re-measured 2026-08-18.** The original reason — outbound
+`disconnect_*` calls from inside a servant whose failures have nowhere to go —
+is answered by `orbweaver_giop::guarded` since concurrent dispatch landed. What
+remains is sharper: it is an **unauthenticated remote operation that ends the
+channel for every other client**, and this servant has no notion of who is
+calling (no `Caller`, no service context reaches it — `event_server.rs`,
+2026-08-19). `ChannelHandle::stop` is the in-process path. Answered
+`NO_IMPLEMENT` with this reason.
+
+**Un-defer trigger.** A caller model in the event servant — the moment CSIv2
+identity or the bridge's `Caller` reaches a servant (stream C, D010 B2), this
+becomes an authorization decision like any other. **v1 sketch:** `destroy`
+allowed to the principal that created the channel, `NO_PERMISSION` to others,
+each disconnect through `guarded` with its failure counted.
+
+**무엇.** 채널을 끝내는 원격 연산. **왜 유예.** 원래 사유는 `guarded`가 답했고,
+남은 것은 더 날카롭다 — 누가 부르는지 모르는 서번트가 모두의 채널을 끝내는
+인증 없는 연산. **방아쇠.** 이벤트 서번트에 호출자 모델이 닿는 순간.
+
+## 12. CosNaming — chaining to a foreign context / 네이밍 — 외부 컨텍스트로의 연쇄
+
+**What it is.** `bind_context` with a context served by *another* ORB, and a
+`resolve` that follows it: the naming servant would make an outbound call.
+
+**Why deferred, re-measured 2026-08-18.** `bind_context`, `rebind_context` and
+`destroy` are **served** for contexts this server serves (the earlier
+"contexts live as long as the process" was true only because nothing removed a
+key; measured against omniNames). What is deferred is narrower: a foreign
+context. It is *possible* today — that is a reason the work can be done, not a
+reason to do it — and the servant deliberately holds no `Connection`, which is
+now a test (`naming_no_outbound_call.rs`) rather than a sentence.
+
+**Un-defer trigger.** §7's: more than one naming domain behind one MCP face —
+seen from the servant. **v1 sketch:** §7's loop protection and hop count,
+plus a per-context "foreign" mark in the catalogue so a `resolve` that will
+leave the process is visible before it does.
+
+**무엇.** 다른 ORB가 서빙하는 컨텍스트로의 연쇄. **왜 유예.** 자기 컨텍스트에
+대한 세 연산은 서빙된다; 외부 컨텍스트만 남았고, 가능하다는 것은 지을 수 있다는
+이유이지 지어야 할 이유가 아니다 — 서번트에 `Connection`이 없다는 것은 이제
+테스트다. **방아쇠.** §7의 것.
 
 ## 9. How a chapter graduates / 한 장이 졸업하는 법
 
