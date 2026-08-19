@@ -1240,16 +1240,17 @@ elif [ "$w11_rc" -ne 0 ]; then
   echo "  FAIL 1.1 wchar against JacORB — see /tmp/orbweaver-wchar11"
   fail_total=$((fail_total+1))
 fi
-# spikes/wide_rust.sh (ff2c742): wide.idl with OUR OWN stack in each seat —
-# spike-wide serves and dials IDL:spike/Wide:1.0 through Server/Connection;
-# 382baa9's matrix re-run with the real Rust server and client, plus
-# 1.0/1.1/1.2 self-consistency in both orders, and the live octets checked
-# against tests/wide_1_1_from_a_peer.rs on every run: the real server writes
-# exactly the recorded replies and our 1.1 request is octet-for-octet JacORB's.
-# Recorded, not gated: U+FEFF as a 1.2 wchar crosses neither stack (both
-# writers write 02 fe ff, both readers strip it as a mark) — pinned until
-# put_wchar at 1.2 changes, and measured before that against JacORB's reader.
-# Negative control: `--expect-han 5CD5` -> 8 FAIL lines, rc 1.
+# spikes/wide_rust.sh (ff2c742, f77a50c): wide.idl with OUR OWN stack in each
+# seat — spike-wide serves and dials IDL:spike/Wide:1.0 through
+# Server/Connection; 382baa9's matrix re-run with the real Rust server and
+# client at 1.1 AND 1.2, 1.0/1.1/1.2 self-consistency in both orders, JacORB's
+# 1.2 wchar reader driven with the recorded forms of tests/wide_1_2_from_a_peer.rs
+# (JACORB_READER_1_2, 13 forms both message orders), and the live octets checked
+# against wide_1_1_ and wide_1_2_from_a_peer.rs on every run. U+FEFF/U+FFFE as a
+# 1.2 wchar cross both ways: ours marked (04 fe ff fe ff), JacORB's bare
+# (02 fe ff) read as the unit — the day's fourth wire defect, measured against
+# the peer's reader before the writer changed. Negative control:
+# `--expect-han 5CD5` -> 12 FAIL lines, rc 1.
 wr=$(./spikes/wide_rust.sh 2>&1); wr_rc=$?
 printf '%s\n' "$wr" | grep -E "^  (ok|FAIL|info|SKIPPED)" | cut -c1-150
 if [ "$wr_rc" -eq 2 ]; then

@@ -49,6 +49,29 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### ⚠ Wire behaviour changed / 와이어 동작 변경
 
+- **A GIOP 1.2 `wchar` that is itself a mark is written behind a mark, and a
+  bare mark is read as the unit** (D010 B5, fourth part; `codeset.rs`,
+  `spikes/wide_rust.sh`, `tests/wide_1_2_from_a_peer.rs` new). ff2c742's open
+  finding — U+FEFF at 1.2 written `02 fe ff` by both writers and stripped as a
+  mark by both readers — was measured against JacORB 3.9's reader first: it
+  honours `04 fe ff fe ff` and `04 ff fe ff fe` as U+FEFF (13-row matrix, both
+  message orders). `put_wchar` at 1.2 now writes U+FEFF as `04 fe ff fe ff`
+  and U+FFFE as `04 fe ff ff fe`, every other unit unchanged; `get_wchar` at
+  1.2 reads `02 fe ff`/`02 ff fe` as U+FEFF/U+FFFE (a wchar is never empty, so
+  only a bare writer — JacORB's — produces them). Measured after: JacORB's user
+  gets both back from our real server, our client gets both from JacORB's bare
+  echoes, both orders. Reported: JacORB's own writer still writes them bare
+  and its own reader cannot read them back.
+
+  **표식 그 자체인 GIOP 1.2 `wchar`는 표식 뒤에 쓰고, 맨 표식은 유닛으로
+  읽는다** (D010 B5 네 번째). ff2c742의 미해결 발견을 JacORB 3.9 리더에 먼저
+  쟀다: `04 fe ff fe ff`와 `04 ff fe ff fe`를 U+FEFF로 읽는다(13행 행렬, 두
+  메시지 순서). `put_wchar` 1.2는 이제 U+FEFF를 `04 fe ff fe ff`, U+FFFE를
+  `04 fe ff ff fe`로 쓰고 다른 유닛은 그대로; `get_wchar` 1.2는 `02 fe ff`/
+  `02 ff fe`를 U+FEFF/U+FFFE로 읽는다. 수정 후 실측: JacORB 사용자는 우리 실제
+  서버로부터 둘 다 되받고, 우리 클라이언트는 JacORB의 맨 에코에서 둘 다 받는다.
+  보고: JacORB 자신의 라이터는 여전히 맨 형태로 쓰고 자신의 리더가 그것을 되읽지
+  못한다.
 - **A union branch that is both labelled and `default:` now produces one
   TypeCode member per label plus a labelless default member at the position
   `default:` was written, `default_index` on it** — structurally equal (`==`)
@@ -114,7 +137,8 @@ records what changed and, where it matters, what it changes on the wire.
   neither stack — both writers write `02 fe ff`, both readers strip it as a
   mark (JacORB → U+0000, ours → MARSHAL); pinned until `put_wchar` at 1.2
   changes, and the proposed `04 fe ff fe ff` must be measured against JacORB's
-  reader before it is adopted.
+  reader before it is adopted (measured and adopted the same day — see the
+  Wire behaviour entry above).
 
   **`wide.idl`을 우리 스택으로.** `spike-wide`가 `Server`/`Connection`으로
   `IDL:spike/Wide:1.0`을 서빙·호출; `spikes/wide_rust.sh`가 382baa9의 행렬을
