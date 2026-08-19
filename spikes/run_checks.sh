@@ -1676,6 +1676,27 @@ else
   echo "  FAIL gen-python refused the golden corpus"
   fail_total=$((fail_total+1))
 fi
+# The cross-implementation sweep must keep measuring what it measured:
+# 158 values / 132 calls over golden, 70 / 46 over services, 0 divergences
+# (2026-08-19, D010 A4 — constructed anys and forward-declared references
+# included). A drop is the oracle quietly measuring less, which is how a green
+# line stops meaning anything. Negative control: the pre-A4 `_rt.py` reads
+# "85 divergence(s)" here (the D008 refusal on every structural `_t`).
+py_sweep=$(cargo test -q -p orbweaver-gen --test python_target -- --nocapture 2>&1)
+gl=$(printf '%s\n' "$py_sweep" | sed -n 's/^.*corpus\/golden: .* \([0-9][0-9]*\) value(s) and \([0-9][0-9]*\) call(s) .* \([0-9][0-9]*\) divergence(s)$/\1 \2 \3/p' | head -1)
+sv=$(printf '%s\n' "$py_sweep" | sed -n 's/^.*corpus\/services: .* \([0-9][0-9]*\) value(s) and \([0-9][0-9]*\) call(s) .* \([0-9][0-9]*\) divergence(s)$/\1 \2 \3/p' | head -1)
+set -- $gl
+if [ "${1:-0}" -ge 158 ] && [ "${2:-0}" -ge 132 ] && [ "${3:-1}" -eq 0 ]; then
+  echo "  ok   $1 golden value(s) over $2 call(s) crossed to Python and back, constructed anys included, 0 divergences"
+else
+  echo "  FAIL python round-trip sweep over golden: ${gl:-did not print its measurement}"; fail_total=$((fail_total+1))
+fi
+set -- $sv
+if [ "${1:-0}" -ge 70 ] && [ "${2:-0}" -ge 46 ] && [ "${3:-1}" -eq 0 ]; then
+  echo "  ok   $1 service value(s) over $2 call(s), 0 divergences"
+else
+  echo "  FAIL python round-trip sweep over services: ${sv:-did not print its measurement}"; fail_total=$((fail_total+1))
+fi
 
 # ── corpus/include: the first multi-file cases the corpus has ever had ──────
 # Every other corpus file is self-contained, which is exactly why `#include`

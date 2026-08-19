@@ -427,6 +427,29 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **`_rt.py` reads and writes AnyJSON v1.1's structural `_t`** (D010 A4). An
+  `any` carrying a struct, enum, union, exception or typedef crosses to Python
+  and back; a type the package never declared is synthesised from the document
+  and registered, so no prior copy is needed at the reader — the property D008
+  chose the structural form for, now true of both implementations. Generated
+  modules carry each type's IDL name (`_idl_name`, `register_alias(id, desc,
+  name)`, `register_name`) because a rebuilt TypeCode names the type beside
+  its id. Round-trip sweep: golden 78/132 → **158/132**, services 35/46 →
+  **70/46**, 0 divergences; the new cases are red against the old runtime with
+  the D008 refusal (85 + 35 divergences), and the harness now pins the counts.
+  Found on the way: `anyjson` (Rust) does not resolve `TypeCode::Recursive`,
+  so a non-empty value under a recursion marker cannot cross the reference
+  mapping — reported, not fixed here.
+
+  **`_rt.py`가 AnyJSON v1.1의 구조적 `_t`를 읽고 쓴다** (D010 A4).
+  struct·enum·union·exception·typedef를 실은 `any`가 Python으로 건너갔다
+  돌아온다. 패키지가 선언한 적 없는 타입은 문서에서 합성해 등록하므로 읽는
+  쪽에 사본이 미리 있을 필요가 없다 — D008이 구조적 형식을 택한 이유가 이제
+  두 구현 모두에서 참이다. 왕복 스윕: golden 78/132 → **158/132**, services
+  35/46 → **70/46**, 불일치 0; 새 케이스는 이전 런타임에 대해 D008 거부로
+  빨간불(85 + 35). 도중 발견: Rust `anyjson`이 `TypeCode::Recursive`를 풀지
+  않아 재귀 마커 아래의 비어 있지 않은 값은 기준 매핑을 건너지 못한다 — 보고만
+  하고 여기서 고치지 않음.
 - **`docs/SERVICES-COVERAGE.md` §8 is generated from the sweep and diffed by
   the harness** (D010 A5, batch 1). `spikes/coverage_tables.py` renders
   `service_sweep.sh --raw` into per-service tables, totals, the interfaces no
