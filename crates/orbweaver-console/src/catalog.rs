@@ -34,12 +34,29 @@
 //! deployment may put its own stage anywhere, and a guess from a stage name
 //! would silently become wrong the day it does.
 //!
+//! # What a peer can enforce is on the page too
+//!
+//! PLAN §4.8: CSIv2 support is per-peer, and where a target cannot enforce a
+//! caller identity the bridge is the only enforcement point — *and the
+//! catalogue has to say so*. An operator who hands the page a peer's reference
+//! ([`Catalog::attach_peer`], the binary's `--ior`) gets that peer's record
+//! beside the interface its `type_id` names: whether the target enforces
+//! identity, whether its transport is secured, and where enforcement happens.
+//! The record is [`orbweaver_mcp::identity::PeerCapability`]'s, read off the
+//! IOR by the same code the bridge decides with; this module renders its
+//! sentences and forms no opinion of its own about a tagged component. A peer
+//! whose type is not in the catalog is still rendered — the record is a fact
+//! about the IOR, not about the catalog — under its own heading. An interface
+//! nobody handed a reference for says so: what its targets can enforce is
+//! *unmeasured here*, which is not the same as "bridge only".
+//!
 //! [`Chain`]: orbweaver_mcp::interceptor::Chain
 //! [`StageOutcome::NotReached`]: orbweaver_mcp::interceptor::StageOutcome
 
 use orbweaver_dynamic::json::Json;
+use orbweaver_giop::Ior;
 use orbweaver_mcp::dryrun::{self, Would};
-use orbweaver_mcp::identity::Caller;
+use orbweaver_mcp::identity::{Caller, PeerCapability};
 use orbweaver_mcp::interceptor::{CallContext, Chain, STAGE_SCOPES, StageOutcome};
 use orbweaver_mcp::policy::{Approval, Denied, Exposure};
 use orbweaver_registry::{Origin, Registry};
@@ -108,6 +125,53 @@ impl OperationRow {
     }
 }
 
+/// One peer's capability record, as the bridge read it off the peer's IOR.
+///
+/// The sentences are [`PeerCapability`]'s own; this crate carries them and
+/// draws them. `label` is what the operator called the reference — a file
+/// path, a handle — and `type_id` is what the IOR itself claims to be, which
+/// a peer chose and is therefore untrusted text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerRow {
+    /// The operator's name for the reference.
+    pub label: String,
+    /// The repository id the IOR names. Untrusted: the peer wrote it.
+    pub type_id: String,
+    /// Whether the target advertises a mechanism that accepts an asserted
+    /// identity — [`PeerCapability::enforces_identity`].
+    pub enforces_identity: bool,
+    /// Whether the target advertises `TAG_SSL_SEC_TRANS` —
+    /// [`PeerCapability::transport_secured`].
+    pub transport_secured: bool,
+    /// `target` or `bridge only` — [`PeerCapability::enforcement_point`].
+    pub enforcement_point: String,
+    /// The identity half, in the bridge's words.
+    pub identity: String,
+    /// The transport half, in the bridge's words.
+    pub transport: String,
+}
+
+impl PeerRow {
+    /// Reads a peer's record off its reference. The IOR itself is not kept.
+    pub fn of(label: impl Into<String>, ior: &Ior) -> Self {
+        let record = PeerCapability::of_ior(ior);
+        Self {
+            label: label.into(),
+            type_id: ior.type_id.clone(),
+            enforces_identity: record.enforces_identity(),
+            transport_secured: record.transport_secured(),
+            enforcement_point: record.enforcement_point().as_str().to_owned(),
+            identity: record.identity_sentence(),
+            transport: record.transport_sentence(),
+        }
+    }
+
+    /// Whether the bridge is this target's only enforcement point.
+    pub fn bridge_only(&self) -> bool {
+        !self.enforces_identity
+    }
+}
+
 /// One interface, with its provenance and its exposure.
 #[derive(Debug, Clone)]
 pub struct InterfaceRow {
@@ -127,6 +191,11 @@ pub struct InterfaceRow {
     pub ai_desc: Option<String>,
     /// Operations, sorted, inherited included.
     pub operations: Vec<OperationRow>,
+    /// The peers an operator handed the page whose IOR names this interface,
+    /// in the order they were attached. Empty means *no reference supplied* —
+    /// what this interface's targets can enforce is unmeasured on this page,
+    /// which the render says in words rather than by leaving a gap.
+    pub peers: Vec<PeerRow>,
 }
 
 impl InterfaceRow {
@@ -177,9 +246,44 @@ pub struct Catalog {
     /// allowlists nothing is a misconfiguration an operator wants to see before
     /// a deployment rather than after one.
     pub unknown_exposures: Vec<String>,
+    /// Peers whose IOR names a type the catalog does not have. Their records
+    /// are still on the page: what a target can enforce is a fact about the
+    /// IOR, and an operator who supplied the reference wants the answer
+    /// whether or not the contract for it has been loaded.
+    pub unmatched_peers: Vec<PeerRow>,
 }
 
 impl Catalog {
+    /// Attaches a peer's capability record to the interface its IOR names, or
+    /// to [`Catalog::unmatched_peers`] when the catalog has no such interface.
+    ///
+    /// The record is read once, here, through
+    /// [`orbweaver_mcp::identity::PeerCapability::of_ior`]; the IOR is not
+    /// kept and nothing dialable reaches a row.
+    pub fn attach_peer(&mut self, label: impl Into<String>, ior: &Ior) {
+        let row = PeerRow::of(label, ior);
+        match self.interfaces.iter_mut().find(|i| i.id == row.type_id) {
+            Some(iface) => iface.peers.push(row),
+            None => self.unmatched_peers.push(row),
+        }
+    }
+
+    /// Every peer record on the page, matched or not.
+    pub fn peers(&self) -> impl Iterator<Item = &PeerRow> {
+        self.interfaces.iter().flat_map(|i| &i.peers).chain(&self.unmatched_peers)
+    }
+
+    /// How many peers were handed to the page.
+    pub fn peer_count(&self) -> usize {
+        self.peers().count()
+    }
+
+    /// How many of them cannot enforce a caller identity — targets for which
+    /// the bridge is the only enforcement point.
+    pub fn bridge_only_count(&self) -> usize {
+        self.peers().filter(|p| p.bridge_only()).count()
+    }
+
     /// How many interfaces the exposure allowlists.
     pub fn exposed_count(&self) -> usize {
         self.interfaces.iter().filter(|i| i.exposed).count()
@@ -298,6 +402,7 @@ pub fn build(
             touches_ingested: registry.touches_ingested(id),
             ai_desc: registry.annotations(id).and_then(|a| a.get("ai_desc")).map(ToOwned::to_owned),
             operations,
+            peers: Vec::new(),
             id: id.clone(),
         });
     }
@@ -330,6 +435,7 @@ pub fn build(
             .map(|(w, n)| (w.name().to_owned(), n))
             .collect(),
         unknown_exposures: unknown_exposures.collect(),
+        unmatched_peers: Vec::new(),
         interfaces,
     }
 }
@@ -428,6 +534,20 @@ pub fn render_html(catalog: &Catalog) -> String {
     if catalog.interfaces.is_empty() {
         body.push(Markup::labelled("p", "absent", "the catalog is empty"));
     }
+
+    if !catalog.unmatched_peers.is_empty() {
+        body.push(Markup::labelled("h2", "", "Peers whose type is not in the catalog"));
+        let mut inner = Markup::labelled(
+            "p",
+            "note",
+            "These references were supplied and name a type no loaded contract declares. What \
+             each target can enforce is a fact about its IOR and is rendered anyway.",
+        );
+        for peer in &catalog.unmatched_peers {
+            inner.push(peer_block(peer, true));
+        }
+        body.push(Markup::element("div", "card", inner));
+    }
     body.push(provenance_footer());
     page("Catalog — orbweaver-console", body)
 }
@@ -440,6 +560,15 @@ fn header_card(catalog: &Catalog) -> Markup {
     stats.push(stat("warn", catalog.touching_ingested_count(), "touching ingested"));
     stats.push(stat("stop", catalog.destructive_count(), "operations need a human"));
     stats.push(stat("", catalog.gated_count(), "operations gated by a scope"));
+    stats.push(stat("", catalog.peer_count(), "peer references supplied"));
+    // The common case §4.8 predicts, and still worth a colour: every one of
+    // these is a target behind which no second check exists.
+    let bridge_only = catalog.bridge_only_count();
+    stats.push(stat(
+        if bridge_only > 0 { "warn" } else { "" },
+        bridge_only,
+        "targets where the bridge is the only enforcement point",
+    ));
 
     let scopes =
         if catalog.scopes.is_empty() { "no scopes".to_owned() } else { catalog.scopes.join(", ") };
@@ -539,6 +668,7 @@ fn interface_card(iface: &InterfaceRow) -> Markup {
         )),
     }
 
+    inner.push(peers_block(&iface.peers));
     inner.push(operations_table(&iface.operations));
 
     let class = match (iface.exposed, iface.touches_ingested) {
@@ -548,6 +678,52 @@ fn interface_card(iface: &InterfaceRow) -> Markup {
         (false, false) => "iface",
     };
     Markup::element("div", class, inner)
+}
+
+/// The peers attached to one interface, or the sentence that none were.
+fn peers_block(peers: &[PeerRow]) -> Markup {
+    if peers.is_empty() {
+        // Not "bridge only": that is a measurement of a reference, and none
+        // was supplied. Unmeasured is its own word here, as everywhere else on
+        // the page.
+        return Markup::labelled(
+            "p",
+            "absent",
+            "no peer reference supplied — what this interface's targets can enforce is \
+             unmeasured here",
+        );
+    }
+    let mut block = Markup::empty();
+    for peer in peers {
+        block.push(peer_block(peer, false));
+    }
+    Markup::element("div", "peers", block)
+}
+
+/// One peer's record: its label, and the bridge's two sentences about it.
+///
+/// `with_type` names the IOR's own type id, for a peer drawn away from the
+/// interface card that would otherwise name it.
+fn peer_block(peer: &PeerRow, with_type: bool) -> Markup {
+    let mut inner = Markup::labelled("span", "mono", &peer.label);
+    if with_type {
+        inner.push(Markup::text(" — "));
+        inner.push(Markup::labelled("span", "id", &peer.type_id));
+    }
+    let class = if peer.bridge_only() { "badge b-unknown" } else { "badge b-ok" };
+    inner.push(Markup::labelled(
+        "span",
+        class,
+        &format!("enforced by: {}", peer.enforcement_point),
+    ));
+    if peer.transport_secured {
+        inner.push(Markup::labelled("span", "badge b-scope", "tls advertised"));
+    } else {
+        inner.push(Markup::labelled("span", "badge b-dark", "cleartext"));
+    }
+    inner.push(Markup::labelled("div", "note", &format!("identity: {}", peer.identity)));
+    inner.push(Markup::labelled("div", "note", &format!("transport: {}", peer.transport)));
+    Markup::element("div", "peer", inner)
 }
 
 fn operations_table(operations: &[OperationRow]) -> Markup {
@@ -655,6 +831,11 @@ pub fn render_text(catalog: &Catalog) -> String {
     for id in &catalog.unknown_exposures {
         out.push_str(&format!("! allowlisted and not in the catalog: {id}\n"));
     }
+    out.push_str(&format!(
+        "{} peer reference(s) supplied, {} where the bridge is the only enforcement point\n",
+        catalog.peer_count(),
+        catalog.bridge_only_count()
+    ));
     for iface in &catalog.interfaces {
         let exposure = if iface.exposed { "EXPOSED" } else { "not exposed" };
         let origin = match iface.source() {
@@ -666,6 +847,14 @@ pub fn render_text(catalog: &Catalog) -> String {
         match &iface.ai_desc {
             Some(desc) => out.push_str(&format!("  desc: {desc}\n")),
             None => out.push_str("  desc: absent\n"),
+        }
+        if iface.peers.is_empty() {
+            out.push_str(
+                "  peer: none supplied — what its targets can enforce is unmeasured here\n",
+            );
+        }
+        for peer in &iface.peers {
+            out.push_str(&peer_text(peer, false));
         }
         if iface.operations.is_empty() {
             out.push_str("  (no operations)\n");
@@ -689,7 +878,29 @@ pub fn render_text(catalog: &Catalog) -> String {
             out.push('\n');
         }
     }
+    if !catalog.unmatched_peers.is_empty() {
+        out.push_str("\nPEERS WHOSE TYPE IS NOT IN THE CATALOG\n");
+        for peer in &catalog.unmatched_peers {
+            out.push_str(&peer_text(peer, true));
+        }
+    }
     out
+}
+
+/// One peer's record for a terminal: one line an operator can grep for
+/// `enforced-by=`, then the two sentences.
+fn peer_text(peer: &PeerRow, with_type: bool) -> String {
+    let mut line = format!("  peer: {} enforced-by={}", peer.label, peer.enforcement_point);
+    if with_type {
+        line.push_str(&format!(" type={}", peer.type_id));
+    }
+    line.push_str(&format!(
+        " transport={}\n      identity: {}\n      transport: {}\n",
+        if peer.transport_secured { "tls-advertised" } else { "cleartext" },
+        peer.identity,
+        peer.transport
+    ));
+    line
 }
 
 #[cfg(test)]
@@ -896,5 +1107,157 @@ mod tests {
         for invented in ["duration", "elapsed", "latency", "ms<", "µs"] {
             assert!(!html.contains(invented), "invented a measurement: {invented}");
         }
+    }
+
+    /// An IOR for `type_id` at a fictional endpoint, carrying `components`.
+    fn ior_for(type_id: &str, components: Vec<orbweaver_giop::TaggedComponent>) -> Ior {
+        Ior {
+            type_id: type_id.to_owned(),
+            profiles: vec![orbweaver_giop::IiopProfile {
+                version: orbweaver_giop::Version::V1_2,
+                host: "target.example.internal".into(),
+                port: 2809,
+                object_key: b"very-distinctive-object-key".to_vec(),
+                components,
+            }],
+        }
+    }
+
+    /// A `TAG_CSI_SEC_MECH_LIST` whose one mechanism accepts an asserted
+    /// principal name — the advertisement neither project fixture makes.
+    fn identity_asserting_mechanism_list(
+        endian: orbweaver_cdr::Endian,
+    ) -> orbweaver_giop::TaggedComponent {
+        use orbweaver_cdr::Encoder;
+        use orbweaver_giop::csiv2::{TAG_CSI_SEC_MECH_LIST, TAG_NULL_TAG, options};
+        let mut e = Encoder::encapsulation(endian);
+        e.put_bool(false); // stateful
+        e.put_u32(1); // one mechanism
+        e.put_u16(0); // target_requires
+        e.put_u32(TAG_NULL_TAG); // no transport mechanism
+        e.put_octet_seq(&[]);
+        e.put_u16(0); // AS_ContextSec: none offered
+        e.put_u16(0);
+        e.put_octet_seq(&[]);
+        e.put_octet_seq(&[]);
+        e.put_u16(options::IDENTITY_ASSERTION); // SAS_ContextSec supports
+        e.put_u16(0);
+        e.put_u32(0); // privilege authorities
+        e.put_u32(0); // naming mechanisms
+        e.put_u32(2); // ITTPrincipalName
+        orbweaver_giop::TaggedComponent { tag: TAG_CSI_SEC_MECH_LIST, data: e.finish().unwrap() }
+    }
+
+    /// PLAN §4.8: the catalogue says, per peer, whether the target can enforce
+    /// a caller identity — and the words are the bridge's, not this crate's.
+    #[test]
+    fn a_peer_reference_puts_the_targets_capability_record_beside_its_interface() {
+        let r = registry(IDL);
+        let mut c = catalog(&r, Exposure::nothing().allow_interface(ACCOUNT), None);
+        // Nothing attached yet: unmeasured is said in words, not left blank.
+        assert!(interface(&c, ACCOUNT).peers.is_empty());
+        let before = render_html(&c);
+        assert!(before.contains("no peer reference supplied"), "{before}");
+        assert!(before.contains("unmeasured here"), "{before}");
+        assert!(!before.contains("identity: not enforced"), "not measured, not said");
+        assert_eq!(c.peer_count(), 0);
+
+        // The legacy baseline: an IOR advertising nothing.
+        c.attach_peer("spikes/echo.ior", &ior_for(ACCOUNT, Vec::new()));
+        // And, in both byte orders, one that advertises identity assertion.
+        for (label, endian) in [
+            ("fabricated-be.ior", orbweaver_cdr::Endian::Big),
+            ("fabricated-le.ior", orbweaver_cdr::Endian::Little),
+        ] {
+            c.attach_peer(label, &ior_for(LEDGER, vec![identity_asserting_mechanism_list(endian)]));
+        }
+
+        let account = interface(&c, ACCOUNT);
+        assert_eq!(account.peers.len(), 1);
+        let bare = &account.peers[0];
+        assert_eq!(bare.label, "spikes/echo.ior");
+        assert!(bare.bridge_only());
+        assert!(!bare.enforces_identity && !bare.transport_secured);
+        assert_eq!(bare.enforcement_point, "bridge only");
+        // The record's own words, carried rather than rephrased.
+        let record = PeerCapability::of_ior(&ior_for(ACCOUNT, Vec::new()));
+        assert_eq!(bare.identity, record.identity_sentence());
+        assert_eq!(bare.transport, record.transport_sentence());
+
+        let ledger = interface(&c, LEDGER);
+        assert_eq!(ledger.peers.len(), 2, "one per byte order");
+        for peer in &ledger.peers {
+            assert!(peer.enforces_identity, "{}", peer.label);
+            assert!(!peer.bridge_only());
+            assert_eq!(peer.enforcement_point, "target");
+            assert!(peer.identity.starts_with("enforced by the target"), "{}", peer.identity);
+        }
+        assert_eq!(c.peer_count(), 3);
+        assert_eq!(c.bridge_only_count(), 1);
+        assert!(c.unmatched_peers.is_empty());
+
+        // The page says it in words, per peer, and counts it up top.
+        let html = render_html(&c);
+        assert!(html.contains("identity: not enforced by the target — the bridge is the only enforcement point (no CSIv2 mechanism list in the IOR)"), "{html}");
+        assert!(html.contains("transport: cleartext — no TAG_SSL_SEC_TRANS in the IOR"), "{html}");
+        assert!(html.contains("enforced by: bridge only"), "{html}");
+        assert!(html.contains("enforced by: target"), "{html}");
+        assert!(
+            html.contains("<b>1</b> targets where the bridge is the only enforcement point"),
+            "{html}"
+        );
+        assert!(html.contains("<b>3</b> peer references supplied"), "{html}");
+        // And nothing dialable reached it.
+        for needle in ["target.example.internal", "2809", "very-distinctive"] {
+            assert!(!html.contains(needle), "{needle} on the page");
+        }
+
+        let text = render_text(&c);
+        assert!(
+            text.contains(
+                "3 peer reference(s) supplied, 1 where the bridge is the only enforcement point"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("peer: spikes/echo.ior enforced-by=bridge only transport=cleartext"),
+            "{text}"
+        );
+        assert!(
+            text.contains("peer: fabricated-be.ior enforced-by=target transport=cleartext"),
+            "{text}"
+        );
+        assert!(text.contains("identity: not enforced by the target — the bridge is the only enforcement point (no CSIv2 mechanism list in the IOR)"), "{text}");
+        for needle in ["target.example.internal", "2809", "very-distinctive"] {
+            assert!(!text.contains(needle), "{needle} in the text");
+        }
+    }
+
+    /// A reference whose type no loaded contract declares is rendered under
+    /// its own heading, record and all: the record is a fact about the IOR.
+    #[test]
+    fn a_peer_whose_type_is_not_in_the_catalog_is_listed_not_dropped() {
+        let r = registry(IDL);
+        let mut c = catalog(&r, Exposure::nothing(), None);
+        c.attach_peer("spikes/jacorb.ior", &ior_for("IDL:spike/Echo:1.0", Vec::new()));
+        assert_eq!(c.unmatched_peers.len(), 1);
+        assert_eq!(c.unmatched_peers[0].type_id, "IDL:spike/Echo:1.0");
+        assert_eq!(c.peer_count(), 1);
+        assert_eq!(c.bridge_only_count(), 1);
+        for iface in &c.interfaces {
+            assert!(iface.peers.is_empty(), "{}", iface.id);
+        }
+        let html = render_html(&c);
+        assert!(html.contains("Peers whose type is not in the catalog"), "{html}");
+        assert!(html.contains("spikes/jacorb.ior"), "{html}");
+        assert!(html.contains("enforced by: bridge only"), "{html}");
+        let text = render_text(&c);
+        assert!(text.contains("PEERS WHOSE TYPE IS NOT IN THE CATALOG"), "{text}");
+        assert!(
+            text.contains(
+                "peer: spikes/jacorb.ior enforced-by=bridge only type=IDL:spike/Echo:1.0"
+            ),
+            "{text}"
+        );
     }
 }

@@ -50,6 +50,7 @@ use crate::identity::Caller;
 use crate::interceptor::{CallContext, Chain};
 use crate::policy::{Approval, Denied, Exposure};
 use crate::promote::CallStats;
+use crate::telemetry::CallPath;
 
 /// The repository id `NO_PERMISSION` travels under.
 pub const NO_PERMISSION: &str = "IDL:omg.org/CORBA/NO_PERMISSION:1.0";
@@ -317,7 +318,29 @@ impl<'r, C: Invoker> Guarded<'r, C> {
         approval: Approval,
         handles: SharedTable,
     ) -> Self {
-        Self { conn, registry, caller, id, approval, chain: Chain::standard(exposure), handles }
+        let mut chain = Chain::standard(exposure);
+        // Whatever store this guard ends up counting into — its own, or the
+        // issuing session's after `counting_into` — it counts under the static
+        // column: this type *is* the static path, so that is a fact rather
+        // than an inference (see `CallPath`).
+        if let Some(stats) = chain.stats_mut() {
+            let mine = stats.handle(CallPath::Static);
+            *stats = mine;
+        }
+        Self { conn, registry, caller, id, approval, chain, handles }
+    }
+
+    /// Points this guard's telemetry at `session`'s store, static column.
+    ///
+    /// The one place IF2 is wired: [`crate::Bridge::connect_static`] calls it
+    /// with the bridge's own counters, so `Bridge::stats()` sees the static
+    /// path's calls without a merge step. A guard assembled without it (the
+    /// tests') keeps a store of its own.
+    pub(crate) fn counting_into(mut self, session: &CallStats) -> Self {
+        if let Some(stats) = self.chain.stats_mut() {
+            *stats = session.handle(CallPath::Static);
+        }
+        self
     }
 
     /// Every decision this guard has made, oldest first.
@@ -345,21 +368,16 @@ impl<'r, C: Invoker> Guarded<'r, C> {
         self.chain.audit_dropped()
     }
 
-    /// What the guard's telemetry stage counted.
+    /// The counters this guard's telemetry stage records into.
     ///
-    /// These counters are the *static* path's and they live and die with this
-    /// `Guarded`. PLAN-MOE **IF2** asks for one store, and
-    /// [`crate::promote::CallStats::merge`] is how a deployment gets one —
-    /// `bridge.absorb_static(guarded.stats())` before the guard is dropped.
-    ///
-    /// It is not automatic, and that is a decision rather than an omission:
-    /// [`crate::promote::PromotionPolicy::recommend`] answers "which dynamic
-    /// path has earned a compiled stub", and a static call is evidence that a
-    /// path *already has one*. Merging by default would keep a promoted path
-    /// looking hot and have the policy recommend promoting it again. So the two
-    /// stores answer two questions, and joining them is the caller's act, taken
-    /// when the question is traffic rather than promotion.
-    pub fn stats(&self) -> &CallStats {
+    /// For a guard [`crate::Bridge::connect_static`] issued, that is the
+    /// issuing session's own store (PLAN-MOE **IF2**: one store, not two), so
+    /// `bridge.stats()` and this return handles to the same counters and no
+    /// merge step exists. The guard's calls are recorded under
+    /// [`CallPath::Static`], which is what keeps the promotion policy —
+    /// which reads the dynamic column — from recommending a path that
+    /// already has a stub; see [`CallStats`].
+    pub fn stats(&self) -> CallStats {
         self.chain.stats()
     }
 

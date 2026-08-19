@@ -3,7 +3,7 @@
 //! ```text
 //! orbweaver-console catalog <file.idl>... [-I <dir>]... [--expose <id>]
 //!                           [--expose-op <id> <op>] [--caller <principal>]
-//!                           [--scope <scope>] [--approved]
+//!                           [--scope <scope>] [--approved] [--ior <file>]...
 //!                           [--html <out.html>] [--text]
 //! orbweaver-console diff    <released.idl> <proposed.idl> [-I <dir>]...
 //!                           [--html <out.html>] [--text]
@@ -13,6 +13,12 @@
 //! `-I` is `sidl-validate`'s flag and means the same thing: another directory
 //! to resolve `#include` against. The quoted form searches the including file's
 //! own directory first, so an estate stored as one tree needs no `-I` at all.
+//!
+//! `--ior` names a file holding one stringified reference (`IOR:…`), as the
+//! fixtures publish them. The page then carries that peer's CSIv2 capability
+//! record — whether the target can enforce a caller identity, or the bridge is
+//! the only enforcement point (PLAN §4.8) — beside the interface its type
+//! names. The reference is read for its tagged components and not dialed.
 //!
 //! Exit status: 0 rendered, 2 could not run.
 //!
@@ -29,6 +35,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use orbweaver_console::{catalog, contract, load, traces};
+use orbweaver_giop::Ior;
 use orbweaver_idl::include::SearchPath;
 use orbweaver_mcp::identity::Caller;
 use orbweaver_mcp::interceptor::Chain;
@@ -39,7 +46,7 @@ const USAGE: &str = "\
 usage:
   orbweaver-console catalog <file.idl>... [-I <dir>]... [--expose <id>]
                             [--expose-op <id> <op>] [--caller <principal>]
-                            [--scope <scope>] [--approved]
+                            [--scope <scope>] [--approved] [--ior <file>]...
                             [--html <out.html>] [--text]
   orbweaver-console diff    <released.idl> <proposed.idl> [-I <dir>]...
                             [--html <out.html>] [--text]
@@ -47,6 +54,9 @@ usage:
 
 -I adds a directory to resolve #include against, as sidl-validate does. Every
 file is read as a translation unit: what it includes is part of what it says.
+--ior names a file holding a stringified reference; the page carries what that
+peer's IOR says it can enforce (CSIv2 mechanism list, TAG_SSL_SEC_TRANS). It
+is read, not dialed.
 
 The console renders what the registry, the differ and the audit already
 decided. It takes no decision of its own and exits 0 whether the news is good
@@ -110,12 +120,19 @@ fn catalog_command(args: Vec<String>) -> Result<(), String> {
     let mut approval = Approval::default();
     let mut out = Output { html: None, text: false };
     let mut search = SearchPath::new();
+    let mut peers: Vec<(String, Ior)> = Vec::new();
 
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "-I" => {
                 search.push(need(&mut it, "-I <dir>")?);
+            }
+            "--ior" => {
+                let path = need(&mut it, "--ior <file>")?;
+                let text = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
+                let ior = Ior::parse(text.trim()).map_err(|e| format!("{path}: {e}"))?;
+                peers.push((path, ior));
             }
             "--expose" => exposure = exposure.allow_interface(need(&mut it, "--expose <id>")?),
             "--expose-op" => {
@@ -147,7 +164,10 @@ fn catalog_command(args: Vec<String>) -> Result<(), String> {
     // renders through the library, passing its own chain, which is why
     // `catalog::build` takes one rather than building it.
     let mut chain = Chain::standard(exposure.clone());
-    let view = catalog::build(&mut chain, &registry, &exposure, caller.as_ref(), approval);
+    let mut view = catalog::build(&mut chain, &registry, &exposure, caller.as_ref(), approval);
+    for (label, ior) in &peers {
+        view.attach_peer(label.as_str(), ior);
+    }
 
     out.deliver(|| catalog::render_html(&view), || catalog::render_text(&view))
 }

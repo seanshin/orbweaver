@@ -701,11 +701,6 @@ struct Stage {
     interceptor: Box<dyn Interceptor>,
 }
 
-/// The readout fallback for a chain with no telemetry stage. Reachable only
-/// through [`Chain::empty`] plus insertions: [`Chain::standard`] always has one
-/// and nothing can remove it.
-static NO_COUNTERS: CallStats = CallStats::empty();
-
 impl Chain {
     /// A chain with no stages, which refuses nothing and records nothing.
     pub fn empty() -> Self {
@@ -1010,16 +1005,19 @@ impl Chain {
         self.stages.iter_mut().find_map(|s| s.interceptor.counters_mut())
     }
 
-    /// The counters the chain's telemetry stage kept. Empty when there is no
-    /// such stage.
-    pub fn stats(&self) -> &CallStats {
+    /// The counters the chain's telemetry stage kept — a handle to the stage's
+    /// own store ([`CallStats::handle`]), so a reader sees calls recorded after
+    /// it asked. A fresh, empty, unshared store when there is no such stage,
+    /// which is reachable only through [`Chain::empty`] plus insertions:
+    /// [`Chain::standard`] always has one and nothing can remove it.
+    pub fn stats(&self) -> CallStats {
         self.stages
             .iter()
             .find_map(|s| match s.interceptor.record() {
-                Record::Counters(stats) => Some(stats),
+                Record::Counters(stats) => Some(stats.handle(stats.path())),
                 _ => None,
             })
-            .unwrap_or(&NO_COUNTERS)
+            .unwrap_or_default()
     }
 }
 

@@ -100,9 +100,9 @@
 //! [`crate::interceptor::Chain`], so a quota installed per chain would be one
 //! budget per stub — and a stub with its own budget is §4.7's bypass wearing a
 //! limit. Install `quota.clone()` on each chain and there is one ledger behind
-//! all of them. (This is the shared-store shape `Guarded::stats` says it has
-//! not got for PLAN-MOE **IF2**; here it was cheap enough to do, because a
-//! budget that does not add up is not a budget at all.)
+//! all of them. (The same shared-store shape [`crate::promote::CallStats`]
+//! took on 2026-08-19 for PLAN-MOE **IF2**; here it was never optional,
+//! because a budget that does not add up is not a budget at all.)
 //!
 //! The ledger is [`Rc<RefCell<…>>`] and therefore single-threaded, like every
 //! other chain stage — [`crate::interceptor::Interceptor`] is not `Send` and a

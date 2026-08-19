@@ -32,16 +32,18 @@
 //!
 //! Honestly stated, per the operating model:
 //!
-//! - **Wiring into the bridge.** Landed since this note was written:
-//!   `Bridge::invoke` records every call into its [`CallStats`] — since F4
-//!   through [`crate::interceptor::TelemetryInterceptor`], the §4.5 stage that
-//!   owns the counters, so that the chain's telemetry and this module's
-//!   promotion statistics are one store and not two (PLAN-MOE **IF2**) — and it
-//!   writes its audit lines through the same formatter the guard uses — so
-//!   the dynamic line this gate parses can be *captured* from
-//!   `Bridge::audit()` rather than reconstructed from session state. The
-//!   gen-corpus oracle's I4 section still reconstructs; flipping it to
-//!   capture is a one-line change in `orbweaver-gen` owned by a later batch.
+//! - **Wiring into the bridge.** Landed: `Bridge::invoke` records every call
+//!   into its [`CallStats`] through [`crate::interceptor::TelemetryInterceptor`],
+//!   the §4.5 stage that owns the counters; and since 2026-08-19 a
+//!   [`crate::guard::Guarded`] from `Bridge::connect_static` records into the
+//!   **same** store, under the static column — so the chain's telemetry, the
+//!   static path's traffic and this module's promotion statistics are one
+//!   store and not two (PLAN-MOE **IF2**), and `Bridge::stats()` is true of
+//!   both paths. The bridge writes its audit lines through the same formatter
+//!   the guard uses, so the dynamic line this gate parses is *captured* from
+//!   `Bridge::audit()`, never reconstructed — the gen-corpus oracle's I4
+//!   section captures both lines and reads both paths' counts from
+//!   `Bridge::stats()`.
 //! - **The live static-vs-dynamic comparison.** [`verify_promotion`] compares
 //!   two outcomes it is handed; producing those outcomes by running the
 //!   generated stub and the dynamic invoker against a real peer, both byte
@@ -49,94 +51,185 @@
 //!   not here. This module is the deterministic judgement, not the
 //!   measurement.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use orbweaver_dynamic::invoke::Outcome;
+
+use crate::telemetry::CallPath;
 
 /// Per-(repository id, operation) call counters, feeding [`PromotionPolicy`].
 ///
 /// Counts only — see the module docs for why there is no clock here.
-#[derive(Debug, Default)]
+///
+/// # One store, two columns
+///
+/// A `CallStats` is a **handle** to a store, and every count in the store is
+/// kept under the [`CallPath`] it arrived by. Both facts exist for PLAN-MOE
+/// **IF2** — *F4's telemetry and stream B's promotion stats are one store,
+/// not two* — read together with the property this module's promotion
+/// question depends on:
+///
+/// - The handle is what lets a [`crate::guard::Guarded`] issued by
+///   [`crate::Bridge::connect_static`] record into the *issuing session's*
+///   store rather than a private one, so `Bridge::stats()` is true of the
+///   static path too. [`CallStats::handle`] is another handle to the same
+///   counters; [`CallStats::new`] is a fresh store.
+/// - The column is what keeps the number honest. [`PromotionPolicy::recommend`]
+///   answers "which **dynamic** path has earned a compiled stub", and a static
+///   call is evidence that a path *already has one*; folded into one number,
+///   a promoted path would keep looking hot and be recommended again. So the
+///   guard records under [`CallPath::Static`], the bridge under
+///   [`CallPath::Dynamic`], [`recommend`](PromotionPolicy::recommend) reads
+///   the dynamic column, and [`CallStats::calls`] — the traffic question —
+///   reads both.
+///
+/// Until 2026-08-19 these were two stores joined only by an explicit
+/// [`CallStats::merge`], for the second reason; the column is what made the
+/// first reason affordable without giving up the second.
+///
+/// **한 저장소, 두 열.** 정적 호출은 그 경로가 *이미* 스텁을 가졌다는 증거이므로
+/// 승격 정책은 동적 열만 읽는다; 트래픽 질문(`calls`)은 두 열을 더한다. 그래서
+/// 정적 경로가 같은 저장소에 기록해도 승격된 경로가 다시 추천되지 않는다.
+#[derive(Debug)]
 pub struct CallStats {
-    counts: BTreeMap<(String, String), Counts>,
+    counts: Rc<RefCell<BTreeMap<(String, String), Counts>>>,
+    /// The column this handle records under.
+    path: CallPath,
+}
+
+impl Default for CallStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// One (id, operation)'s counts, per path.
+#[derive(Debug, Default, Clone, Copy)]
+struct Counts {
+    dynamic: Tally,
+    stub: Tally,
+}
+
+impl Counts {
+    fn on(&self, path: CallPath) -> Tally {
+        match path {
+            CallPath::Dynamic => self.dynamic,
+            CallPath::Static => self.stub,
+        }
+    }
+
+    fn on_mut(&mut self, path: CallPath) -> &mut Tally {
+        match path {
+            CallPath::Dynamic => &mut self.dynamic,
+            CallPath::Static => &mut self.stub,
+        }
+    }
+
+    fn total(&self) -> Tally {
+        Tally {
+            calls: self.dynamic.calls + self.stub.calls,
+            failures: self.dynamic.failures + self.stub.failures,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-struct Counts {
+struct Tally {
     calls: u64,
     failures: u64,
 }
 
 impl CallStats {
-    /// An empty history.
+    /// A fresh, empty store, recording under [`CallPath::Dynamic`].
     pub fn new() -> Self {
-        Self::default()
+        Self { counts: Rc::new(RefCell::new(BTreeMap::new())), path: CallPath::Dynamic }
     }
 
-    /// An empty history, in a constant.
+    /// Another handle to the **same** counters, recording under `path`.
     ///
-    /// [`crate::interceptor::Chain::stats`] hands out a reference and has to
-    /// have something to point at when a chain carries no telemetry stage.
-    /// Returning `Option` there would push the same empty case onto every
-    /// caller of `Bridge::stats`, which reads a history for a session that has
-    /// made no calls in exactly the same way.
-    pub const fn empty() -> Self {
-        Self { counts: BTreeMap::new() }
+    /// Not `Clone`, on purpose: a clone that shared its counters would surprise
+    /// a reader who expected a copy, and one that copied them would surprise
+    /// the reader who expected IF2's one store. This is the one way to a
+    /// second handle, and it says which column it writes.
+    pub fn handle(&self, path: CallPath) -> Self {
+        Self { counts: Rc::clone(&self.counts), path }
     }
 
-    /// Records one call of `operation` on the interface `id` names.
+    /// The column this handle records under.
+    pub fn path(&self) -> CallPath {
+        self.path
+    }
+
+    /// Whether `other` is a handle to the same counters as this one.
+    pub fn shares_store_with(&self, other: &CallStats) -> bool {
+        Rc::ptr_eq(&self.counts, &other.counts)
+    }
+
+    /// Records one call of `operation` on the interface `id` names, under this
+    /// handle's [`CallPath`].
     ///
     /// `ok` is whether the call completed; a refusal, a marshalling error and
     /// a transport error all count as failures alike, because a path that
     /// fails for any reason is not one to freeze into compiled code yet.
     pub fn record(&mut self, id: &str, operation: &str, ok: bool) {
-        let c = self.counts.entry((id.to_owned(), operation.to_owned())).or_default();
-        c.calls += 1;
+        let mut counts = self.counts.borrow_mut();
+        let t = counts.entry((id.to_owned(), operation.to_owned())).or_default().on_mut(self.path);
+        t.calls += 1;
         if !ok {
-            c.failures += 1;
+            t.failures += 1;
         }
     }
 
-    /// Adds another history into this one.
+    /// Adds another store's history into this one, column by column.
     ///
-    /// Exists so that PLAN-MOE's **IF2** — one store, not two — is reachable by
-    /// a deployment that wants a single operational view across the dynamic
-    /// session and the static guards it handed out. It is deliberately **not**
-    /// done automatically, and the reason is the signal rather than the
-    /// plumbing: [`PromotionPolicy::recommend`] answers "which dynamic path has
-    /// earned a compiled stub", and a static call is evidence that a path
-    /// *already has one*. Folding static counts in by default would keep a
-    /// promoted path looking hot and have the policy recommend promoting it
-    /// again — the store would be one, and the number in it would mean two
-    /// things at once.
-    ///
-    /// So merging is the caller's explicit act, taken when the question is
-    /// "how much traffic does this operation carry" rather than "what should be
-    /// promoted next".
-    ///
-    /// **IF2는 이 함수로 도달 가능하지만 자동이 아니다.** 정적 호출은 그 경로가
-    /// *이미* 스텁을 가졌다는 증거이므로, 기본으로 합치면 승격된 경로가 계속
-    /// 뜨거워 보이고 정책이 같은 것을 또 승격하라고 말한다.
+    /// For a history kept somewhere else — a guard from *another* session, a
+    /// store read back from a file. A guard this session issued already shares
+    /// the store (see the type docs), and merging a store into itself is a
+    /// no-op rather than a doubling.
     pub fn merge(&mut self, other: &CallStats) {
-        for ((id, operation), c) in &other.counts {
-            let mine = self.counts.entry((id.clone(), operation.clone())).or_default();
-            mine.calls += c.calls;
-            mine.failures += c.failures;
+        if self.shares_store_with(other) {
+            return;
+        }
+        let theirs = other.counts.borrow();
+        let mut mine = self.counts.borrow_mut();
+        for ((id, operation), c) in theirs.iter() {
+            let m = mine.entry((id.clone(), operation.clone())).or_default();
+            for path in [CallPath::Dynamic, CallPath::Static] {
+                m.on_mut(path).calls += c.on(path).calls;
+                m.on_mut(path).failures += c.on(path).failures;
+            }
         }
     }
 
-    /// How many calls of `operation` on `id` have been recorded.
+    /// How many calls of `operation` on `id` have been recorded, on either
+    /// path — the traffic question.
     pub fn calls(&self, id: &str, operation: &str) -> u64 {
-        self.get(id, operation).calls
+        self.get(id, operation).total().calls
     }
 
-    /// How many of those calls failed.
+    /// How many of those calls failed, on either path.
     pub fn failures(&self, id: &str, operation: &str) -> u64 {
-        self.get(id, operation).failures
+        self.get(id, operation).total().failures
+    }
+
+    /// How many calls of `operation` on `id` were recorded on `path`.
+    pub fn calls_on(&self, path: CallPath, id: &str, operation: &str) -> u64 {
+        self.get(id, operation).on(path).calls
+    }
+
+    /// How many of the calls on `path` failed.
+    pub fn failures_on(&self, path: CallPath, id: &str, operation: &str) -> u64 {
+        self.get(id, operation).on(path).failures
     }
 
     fn get(&self, id: &str, operation: &str) -> Counts {
-        self.counts.get(&(id.to_owned(), operation.to_owned())).copied().unwrap_or_default()
+        self.counts
+            .borrow()
+            .get(&(id.to_owned(), operation.to_owned()))
+            .copied()
+            .unwrap_or_default()
     }
 }
 
@@ -160,23 +253,29 @@ pub struct Candidate {
     pub id: String,
     /// The operation on it.
     pub operation: String,
-    /// How many calls were recorded.
+    /// How many dynamic calls were recorded.
     pub calls: u64,
-    /// The recorded failure rate, `failures / calls`.
+    /// The recorded failure rate over them, `failures / calls`.
     pub failure_rate: f64,
 }
 
 impl PromotionPolicy {
-    /// Every path that crossed `min_calls` with a failure rate within
-    /// `max_failure_rate`, hottest first, ties broken by (id, operation).
+    /// Every **dynamic** path that crossed `min_calls` with a failure rate
+    /// within `max_failure_rate`, hottest first, ties broken by (id,
+    /// operation).
+    ///
+    /// The dynamic column only: a call that arrived through a generated stub
+    /// is evidence the path already has one, and counting it here would have
+    /// a promoted path recommended again (see [`CallStats`]).
     ///
     /// The ordering is pinned because the recommendation is an input to a
     /// batch: "generate stubs for the top N" must name the same N for the
     /// same history, or the batch is not reproducible.
     pub fn recommend(&self, stats: &CallStats) -> Vec<Candidate> {
-        let mut out: Vec<Candidate> = stats
-            .counts
+        let counts = stats.counts.borrow();
+        let mut out: Vec<Candidate> = counts
             .iter()
+            .map(|(key, c)| (key, c.on(CallPath::Dynamic)))
             .filter(|(_, c)| c.calls >= self.min_calls)
             .map(|((id, operation), c)| Candidate {
                 id: id.clone(),
@@ -410,33 +509,46 @@ pub fn verify_promotion(
 mod tests {
     use std::collections::BTreeMap;
 
-    /// IF2 is reachable, and deliberately not automatic. Merging is what a
-    /// deployment does when the question is traffic; leaving the stores apart
-    /// is what keeps the promotion signal meaning one thing.
+    /// IF2 is one store, and the store still means one thing: forty calls
+    /// through a stub sit in the static column, are traffic, and are not
+    /// evidence that the path needs a stub. Before the column existed the
+    /// stores were kept apart for exactly this reason (and this test asserted
+    /// that folding them *would* distort the signal); now folding is the
+    /// default and the signal is intact.
     #[test]
-    fn merging_is_available_and_would_distort_the_promotion_signal() {
-        let mut dynamic = CallStats::new();
+    fn the_static_column_is_traffic_and_never_a_candidate() {
+        let mut store = CallStats::new();
         for _ in 0..3 {
-            dynamic.record("IDL:m/I:1.0", "hot", true);
+            store.record("IDL:m/I:1.0", "hot", true);
         }
-        let mut static_side = CallStats::new();
+        let mut through_the_stub = store.handle(CallPath::Static);
         for _ in 0..40 {
-            static_side.record("IDL:m/I:1.0", "hot", true);
+            through_the_stub.record("IDL:m/I:1.0", "hot", true);
         }
+        assert!(store.shares_store_with(&through_the_stub));
 
-        // Apart: a policy wanting ten calls does not see a promoted path as a
-        // candidate, which is the answer promotion needs.
+        // The traffic question sees all forty-three; the promotion question
+        // sees three, and a policy wanting ten names nothing.
+        assert_eq!(store.calls("IDL:m/I:1.0", "hot"), 43);
+        assert_eq!(store.calls_on(CallPath::Dynamic, "IDL:m/I:1.0", "hot"), 3);
+        assert_eq!(store.calls_on(CallPath::Static, "IDL:m/I:1.0", "hot"), 40);
         let policy = PromotionPolicy { min_calls: 10, max_failure_rate: 0.5 };
-        assert!(policy.recommend(&dynamic).is_empty());
+        assert!(policy.recommend(&store).is_empty(), "forty stub calls are not a candidate");
 
-        // Folded: the same history now recommends promoting a path that is
-        // already static — the number means two things at once, which is why
-        // this is the caller's explicit act and not the default.
-        let mut joined = CallStats::new();
-        joined.merge(&dynamic);
-        joined.merge(&static_side);
-        assert_eq!(joined.calls("IDL:m/I:1.0", "hot"), 43);
-        assert_eq!(policy.recommend(&joined).len(), 1);
+        // A history from elsewhere merges column by column, and merging a
+        // store into itself is a no-op rather than a doubling.
+        let mut elsewhere = CallStats::new();
+        for i in 0..7 {
+            elsewhere.record("IDL:m/I:1.0", "hot", i >= 2);
+        }
+        store.merge(&elsewhere);
+        store.merge(&through_the_stub);
+        assert_eq!(store.calls_on(CallPath::Dynamic, "IDL:m/I:1.0", "hot"), 10);
+        assert_eq!(store.failures_on(CallPath::Dynamic, "IDL:m/I:1.0", "hot"), 2);
+        assert_eq!(store.calls_on(CallPath::Static, "IDL:m/I:1.0", "hot"), 40);
+        let candidates = policy.recommend(&store);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!((candidates[0].calls, candidates[0].failure_rate), (10, 0.2));
     }
 
     use orbweaver_cdr::{Encoder, Endian};
