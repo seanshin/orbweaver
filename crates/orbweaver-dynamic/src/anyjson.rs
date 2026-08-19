@@ -39,7 +39,7 @@ use orbweaver_cdr::{Decoder, Encoder, Endian};
 use orbweaver_giop::typecode::{Member, TypeCode, UnionCase};
 
 use crate::json::Json;
-use crate::{Error, Result, Value};
+use crate::{Error, Path, Result, Value};
 
 /// Where an object reference is parked while its name crosses the boundary.
 ///
@@ -121,13 +121,24 @@ fn index(path: &str, i: usize) -> String {
 
 /// Converts a CDR value to its AnyJSON form.
 pub fn to_json(tc: &TypeCode, v: &Value, handles: &mut dyn References) -> Result<Json> {
-    to_json_at(tc, v, handles, "")
+    to_json_at(tc, v, handles, &Path::root())
 }
 
 /// Converts an AnyJSON document to the CDR value `tc` describes.
 pub fn from_json(tc: &TypeCode, j: &Json, handles: &dyn References) -> Result<Value> {
-    from_json_at(tc, j, handles, "")
+    from_json_at(tc, j, handles, &Path::root())
 }
+
+// The walk below stands on the marshaller's own `Path`, not on a string. The
+// registry represents a cycle as `TypeCode::Recursive` carrying only the id
+// of the type it points back at, so a converter that looks at the `TypeCode`
+// alone has nothing to convert against — which is what this one did until
+// 2026-08-19, refusing every non-empty value under a marker with "… is not a
+// value of <id>" while the CDR encoder beside it had resolved the same marker
+// against the enclosing type since Phase 5. Reusing that path — its `open`
+// chain, `open_recursive`, and `MAX_NESTING` — is what makes the two halves
+// agree, and a document nested past the bound is refused with the same words
+// a hostile CDR stream gets, rather than followed until the stack ends.
 
 fn resolved(tc: &TypeCode) -> &TypeCode {
     let mut t = tc;
@@ -164,8 +175,23 @@ fn special_float(tag: &str) -> Json {
     Json::Object(BTreeMap::from([("_f".to_owned(), Json::String(tag.to_owned()))]))
 }
 
-fn to_json_at(tc: &TypeCode, v: &Value, h: &mut dyn References, p: &str) -> Result<Json> {
-    Ok(match (resolved(tc), v) {
+fn to_json_at(tc: &TypeCode, v: &Value, h: &mut dyn References, at: &Path<'_>) -> Result<Json> {
+    // An alias is transparent to the document and *not* transparent to a
+    // cycle: `corpus/golden/15`'s marker for `typedef sequence<Tree> TreeSeq;
+    // struct Tree { TreeSeq kids; }` names TreeSeq, not Tree. Recording the
+    // alias before seeing through it is what lets that marker resolve.
+    if let TypeCode::Alias { aliased, .. } = tc {
+        let here = at.entering(tc);
+        return to_json_at(aliased, v, h, &here);
+    }
+    let rendered = at.render();
+    let p = rendered.as_str();
+    Ok(match (tc, v) {
+        (TypeCode::Recursive(id), _) => {
+            let target = crate::open_recursive(id, at)?;
+            let entered = at.entering(target);
+            return to_json_at(target, v, h, &entered);
+        }
         (TypeCode::Boolean, Value::Bool(x)) => Json::Bool(*x),
         (TypeCode::Octet, Value::Octet(x)) => number(x),
         (TypeCode::Short, Value::Short(x)) => number(x),
@@ -197,9 +223,12 @@ fn to_json_at(tc: &TypeCode, v: &Value, h: &mut dyn References, p: &str) -> Resu
             TypeCode::Struct { members, .. } | TypeCode::Except { members, .. },
             Value::Struct(given),
         ) => {
+            // `entering` before descending, so a `Recursive` marker anywhere
+            // below can find this type again.
+            let here = at.entering(tc);
             let mut out = BTreeMap::new();
             for (m, (name, val)) in members.iter().zip(given) {
-                out.insert(m.name.clone(), to_json_at(&m.tc, val, h, &member(p, name))?);
+                out.insert(m.name.clone(), to_json_at(&m.tc, val, h, &here.member(name))?);
             }
             Json::Object(out)
         }
@@ -208,15 +237,16 @@ fn to_json_at(tc: &TypeCode, v: &Value, h: &mut dyn References, p: &str) -> Resu
             TypeCode::Union { discriminator, cases, default_index, .. },
             Value::Union { discriminator: d, value },
         ) => {
+            let here = at.entering(tc);
             let mut out = BTreeMap::new();
-            out.insert("_d".to_owned(), to_json_at(discriminator, d, h, &member(p, "_d"))?);
+            out.insert("_d".to_owned(), to_json_at(discriminator, d, h, &here.member("_d"))?);
             if let Some(val) = value {
                 let case = crate::select_case_public(discriminator, cases, *default_index, d, p)?;
                 let tc = case.map(|c| &c.tc).ok_or_else(|| Error {
                     path: p.to_owned(),
                     message: "a union with a value but no selected branch".into(),
                 })?;
-                out.insert("_v".to_owned(), to_json_at(tc, val, h, &member(p, "_v"))?);
+                out.insert("_v".to_owned(), to_json_at(tc, val, h, &here.member("_v"))?);
             }
             Json::Object(out)
         }
@@ -238,13 +268,13 @@ fn to_json_at(tc: &TypeCode, v: &Value, h: &mut dyn References, p: &str) -> Resu
             items
                 .iter()
                 .enumerate()
-                .map(|(i, x)| to_json_at(element, x, h, &index(p, i)))
+                .map(|(i, x)| to_json_at(element, x, h, &at.index(i)))
                 .collect::<Result<_>>()?,
         ),
 
         (TypeCode::Any, Value::Any(inner_tc, inner)) => Json::Object(BTreeMap::from([
             ("_t".to_owned(), tc_to_json(inner_tc)),
-            ("_v".to_owned(), to_json_at(inner_tc, inner, h, &member(p, "_v"))?),
+            ("_v".to_owned(), to_json_at(inner_tc, inner, h, &at.member("_v"))?),
         ])),
 
         // A TypeCode standing on its own. The same structural form as `_t`,
@@ -273,9 +303,21 @@ fn to_json_at(tc: &TypeCode, v: &Value, h: &mut dyn References, p: &str) -> Resu
     })
 }
 
-fn from_json_at(tc: &TypeCode, j: &Json, h: &dyn References, p: &str) -> Result<Value> {
-    let t = resolved(tc);
-    Ok(match t {
+fn from_json_at(tc: &TypeCode, j: &Json, h: &dyn References, at: &Path<'_>) -> Result<Value> {
+    if let TypeCode::Alias { aliased, .. } = tc {
+        let here = at.entering(tc);
+        return from_json_at(aliased, j, h, &here);
+    }
+    let rendered = at.render();
+    let p = rendered.as_str();
+    Ok(match tc {
+        // The document's depth is the sender's choice, so this is where the
+        // marshaller's bound does for JSON what it does for a CDR stream.
+        TypeCode::Recursive(id) => {
+            let target = crate::open_recursive(id, at)?;
+            let entered = at.entering(target);
+            return from_json_at(target, j, h, &entered);
+        }
         TypeCode::Boolean => match j {
             Json::Bool(b) => Value::Bool(*b),
             other => return wrong(p, "a boolean", other),
@@ -348,12 +390,13 @@ fn from_json_at(tc: &TypeCode, j: &Json, h: &dyn References, p: &str) -> Result<
                 // knowing before the bytes go out.
                 return fail(p, format!("{name} has no member(s) {}", extra.join(", ")));
             }
+            let here = at.entering(tc);
             let mut out = Vec::with_capacity(members.len());
             for m in members {
                 let Some(v) = map.get(&m.name) else {
                     return fail(p, format!("{name} needs a member {:?}", m.name));
                 };
-                out.push((m.name.clone(), from_json_at(&m.tc, v, h, &member(p, &m.name))?));
+                out.push((m.name.clone(), from_json_at(&m.tc, v, h, &here.member(&m.name))?));
             }
             Value::Struct(out)
         }
@@ -362,11 +405,12 @@ fn from_json_at(tc: &TypeCode, j: &Json, h: &dyn References, p: &str) -> Result<
             let Some(dj) = j.get("_d") else {
                 return fail(p, format!("a {name} needs an explicit discriminator in \"_d\""));
             };
-            let d = from_json_at(discriminator, dj, h, &member(p, "_d"))?;
+            let here = at.entering(tc);
+            let d = from_json_at(discriminator, dj, h, &here.member("_d"))?;
             let case = crate::select_case_public(discriminator, cases, *default_index, &d, p)?;
             let value = match (case, j.get("_v")) {
                 (Some(c), Some(vj)) => {
-                    Some(Box::new(from_json_at(&c.tc, vj, h, &member(p, "_v"))?))
+                    Some(Box::new(from_json_at(&c.tc, vj, h, &here.member("_v"))?))
                 }
                 (Some(c), None) => {
                     return fail(p, format!("branch {:?} of {name} needs a \"_v\"", c.name));
@@ -387,7 +431,7 @@ fn from_json_at(tc: &TypeCode, j: &Json, h: &dyn References, p: &str) -> Result<
                 items
                     .iter()
                     .enumerate()
-                    .map(|(i, x)| from_json_at(element, x, h, &index(p, i)))
+                    .map(|(i, x)| from_json_at(element, x, h, &at.index(i)))
                     .collect::<Result<_>>()?,
             ),
             other => return wrong(p, "an array", other),
@@ -397,7 +441,7 @@ fn from_json_at(tc: &TypeCode, j: &Json, h: &dyn References, p: &str) -> Result<
                 items
                     .iter()
                     .enumerate()
-                    .map(|(i, x)| from_json_at(element, x, h, &index(p, i)))
+                    .map(|(i, x)| from_json_at(element, x, h, &at.index(i)))
                     .collect::<Result<_>>()?,
             ),
             Json::Array(items) => {
@@ -411,7 +455,7 @@ fn from_json_at(tc: &TypeCode, j: &Json, h: &dyn References, p: &str) -> Result<
                 return fail(p, "an any is {\"_t\": <type>, \"_v\": <value>}");
             };
             let inner = tc_from_json(tj, &member(p, "_t"))?;
-            let val = from_json_at(&inner, vj, h, &member(p, "_v"))?;
+            let val = from_json_at(&inner, vj, h, &at.member("_v"))?;
             Value::Any(Box::new(inner), Box::new(val))
         }
 
@@ -769,7 +813,7 @@ fn label_json(label: &[u8], disc: &TypeCode) -> Json {
     match crate::decode(&mut d, disc) {
         Ok(v) => {
             let mut none = LocalReferences::new();
-            to_json_at(disc, &v, &mut none, "").unwrap_or_else(|_| raw_label(label))
+            to_json(disc, &v, &mut none).unwrap_or_else(|_| raw_label(label))
         }
         Err(_) => raw_label(label),
     }
@@ -784,7 +828,12 @@ fn label_bytes(j: &Json, disc: &TypeCode, p: &str) -> Result<Vec<u8>> {
     if let Some(raw) = j.get("_raw") {
         return unbase64(raw, p);
     }
-    let v = from_json_at(disc, j, &LocalReferences::new(), p)?;
+    // From the root, because a discriminator is a primitive or an enum and
+    // stands inside no cycle; the caller's path is put back on the error.
+    let v = from_json(disc, j, &LocalReferences::new()).map_err(|e| Error {
+        path: if e.path.is_empty() { p.to_owned() } else { member(p, &e.path) },
+        message: e.message,
+    })?;
     let mut e = Encoder::new(Endian::Big);
     crate::encode(&mut e, disc, &v)?;
     e.finish().map_err(|err| Error { path: p.to_owned(), message: err.to_string() })
@@ -1284,5 +1333,165 @@ mod tests {
                 ("rate".into(), Value::Double(1.0 / 3.0)),
             ]),
         );
+    }
+
+    // ── Values beneath a recursion marker ───────────────────────────────────
+
+    /// `struct Tree { string label; sequence<Tree> kids; }`, exactly as
+    /// `crate::tests::tree` spells it and `corpus/golden/15` produces it.
+    fn tree() -> TypeCode {
+        TypeCode::Struct {
+            id: "IDL:gc15/Tree:1.0".into(),
+            name: "Tree".into(),
+            members: vec![
+                Member { name: "label".into(), tc: TypeCode::String(0) },
+                Member {
+                    name: "kids".into(),
+                    tc: TypeCode::Sequence {
+                        element: Box::new(TypeCode::Recursive("IDL:gc15/Tree:1.0".into())),
+                        bound: 0,
+                    },
+                },
+            ],
+        }
+    }
+
+    fn node(label: &str, kids: Vec<Value>) -> Value {
+        Value::Struct(vec![
+            ("label".into(), Value::String(label.into())),
+            ("kids".into(), Value::List(kids)),
+        ])
+    }
+
+    /// The gap D010 A4 measured on 2026-08-19: `to_json` and `from_json`
+    /// resolved aliases and nothing else, so the first *non-empty* value under
+    /// a `Recursive` marker was refused with "… is not a value of <id>". The
+    /// CDR encoder had resolved the same marker against the enclosing type
+    /// since Phase 5; the JSON side never had, and nothing was red because
+    /// every witness that reached this mapping was the empty list.
+    #[test]
+    fn a_value_beneath_a_recursion_marker_crosses_and_comes_back() {
+        // Depth 3, so the marker is followed twice, not once.
+        bytes_survive(
+            &tree(),
+            &node("root", vec![node("a", vec![node("a1", vec![])]), node("b", vec![])]),
+        );
+
+        // The document reads as the tree it is — no marker, no indirection.
+        let mut h = LocalReferences::new();
+        let j = to_json(&tree(), &node("r", vec![node("k", vec![])]), &mut h).expect("to_json");
+        assert_eq!(j.to_string(), r#"{"kids":[{"kids":[],"label":"k"}],"label":"r"}"#);
+    }
+
+    /// The cycle can name the typedef rather than the struct — the spelling
+    /// `corpus/golden/15` produces for `TreeSeq` — and an alias is transparent
+    /// to the bytes but not to the cycle, so it has to be recorded before it is
+    /// seen through.
+    #[test]
+    fn a_cycle_through_a_typedef_crosses_too() {
+        let tc = TypeCode::Alias {
+            id: "IDL:gc15/TreeSeq:1.0".into(),
+            name: "TreeSeq".into(),
+            aliased: Box::new(TypeCode::Sequence {
+                element: Box::new(TypeCode::Struct {
+                    id: "IDL:gc15/Tree:1.0".into(),
+                    name: "Tree".into(),
+                    members: vec![
+                        Member { name: "label".into(), tc: TypeCode::String(0) },
+                        Member {
+                            name: "kids".into(),
+                            tc: TypeCode::Recursive("IDL:gc15/TreeSeq:1.0".into()),
+                        },
+                    ],
+                }),
+                bound: 0,
+            }),
+        };
+        let leaf = node("leaf", vec![]);
+        let branch = node("branch", vec![node("twig", vec![leaf.clone()])]);
+        bytes_survive(&tc, &Value::List(vec![branch, leaf]));
+    }
+
+    /// The same marker inside an `any`, where the TypeCode travels in `_t`
+    /// and the value beneath it in `_v` — the shape an agent actually
+    /// receives from a servant that returns a recursive struct as an `any`.
+    #[test]
+    fn a_recursive_value_inside_an_any_crosses() {
+        let carried = Value::Any(
+            Box::new(tree()),
+            Box::new(node("root", vec![node("kid", vec![node("grandkid", vec![])])])),
+        );
+        bytes_survive(&TypeCode::Any, &carried);
+    }
+
+    /// A marker whose type is not enclosing is a diagnosable mistake, in the
+    /// same words the CDR path uses, rather than the old "not a value of".
+    #[test]
+    fn an_unresolvable_marker_names_the_id_it_could_not_find() {
+        let h = LocalReferences::new();
+        let tc = TypeCode::Recursive("IDL:gc15/Tree:1.0".into());
+        let err = from_json(&tc, &Json::parse("\"x\"").unwrap(), &h).expect_err("must refuse");
+        assert!(err.message.contains("IDL:gc15/Tree:1.0"), "{err}");
+        assert!(err.message.contains("cannot be resolved"), "{err}");
+    }
+
+    /// The depth an agent's document nests to is the agent's choice, exactly
+    /// as a peer chooses the depth of a CDR stream, so the mapping shares the
+    /// marshaller's bound: past it the document is refused with a message,
+    /// not followed until the stack ends. `Json::parse` refuses at its own
+    /// depth first, so the document is built rather than parsed — the way a
+    /// caller holding a `Json` it assembled itself would hand it over.
+    #[test]
+    fn a_document_nesting_past_the_bound_is_refused_not_followed() {
+        let h = LocalReferences::new();
+        let leaf = |kids: Json| {
+            Json::Object(BTreeMap::from([
+                ("label".to_owned(), Json::String("x".into())),
+                ("kids".to_owned(), kids),
+            ]))
+        };
+        let mut deep = leaf(Json::Array(vec![]));
+        for _ in 0..crate::MAX_NESTING + 4 {
+            deep = leaf(Json::Array(vec![deep]));
+        }
+        let err = from_json(&tree(), &deep, &h).expect_err("must refuse");
+        assert!(err.message.contains(&crate::MAX_NESTING.to_string()), "{err}");
+
+        // The encode half too: a `Value` this deep is one our own decoder
+        // would already have refused to produce, and the JSON side must not be
+        // the path that follows it anyway.
+        let mut value = node("leaf", vec![]);
+        for _ in 0..crate::MAX_NESTING + 4 {
+            value = node("x", vec![value]);
+        }
+        let mut hm = LocalReferences::new();
+        let err = to_json(&tree(), &value, &mut hm).expect_err("must refuse");
+        assert!(err.message.contains(&crate::MAX_NESTING.to_string()), "{err}");
+
+        // A struct that contains itself directly is not a type any IDL can
+        // declare, but a TypeCode document can spell it (`agent-fuzz` seeds
+        // one), so a `from_json` that follows the marker must still stop.
+        let looped = TypeCode::Struct {
+            id: "IDL:x/Loop:1.0".into(),
+            name: "Loop".into(),
+            members: vec![Member {
+                name: "me".into(),
+                tc: TypeCode::Recursive("IDL:x/Loop:1.0".into()),
+            }],
+        };
+        let mut doc = Json::Null;
+        for _ in 0..crate::MAX_NESTING + 4 {
+            doc = Json::Object(BTreeMap::from([("me".to_owned(), doc)]));
+        }
+        let err = from_json(&looped, &doc, &h).expect_err("must refuse");
+        assert!(err.message.contains(&crate::MAX_NESTING.to_string()), "{err}");
+
+        // And a document inside the bound still crosses, so the refusal is
+        // about the depth and not the shape.
+        let mut ok = leaf(Json::Array(vec![]));
+        for _ in 0..8 {
+            ok = leaf(Json::Array(vec![ok]));
+        }
+        from_json(&tree(), &ok, &h).expect("nine levels are well inside the bound");
     }
 }
