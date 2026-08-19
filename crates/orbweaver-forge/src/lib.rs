@@ -101,6 +101,58 @@ impl Severity {
     }
 }
 
+/// Which wire S4 judges a contract for — the one decision that changes a
+/// finding's severity rather than its text.
+///
+/// `docs/PLAN.md` §4.4 defers `valuetype`, abstract interfaces and `fixed`:
+/// the parser accepts them (it must — `omniidl` does, and agreement with the
+/// oracle is what the front end's correctness means), the wire does not carry
+/// them, and `orbweaver-gen` skips every item that reaches one. Until this
+/// existed the three facts never met: a contract using them passed S4 and was
+/// unservable, and the only place that said so was the generator's skip list.
+///
+/// **Warning by default, error under [`WireGate::V1`].** The default has to be
+/// the warning, because S4's acceptance criterion over `corpus/golden/` is the
+/// oracle's, and golden 20 and 21 exist precisely to pin that the deferred
+/// constructs *parse* — a gate that refused them by default would fail the
+/// harness on IDL both oracles accept, or push those two files out of the
+/// directory whose sweeps (generation, property, DynAny) are the only place
+/// their skips are counted. But the *pipeline* is a different caller: what it
+/// gates is a contract a model just wrote for this ORB, and for that caller
+/// "valid, with a note" is the wrong answer — the repair loop should be told
+/// to model the amount as a string now, not after generation skips it. So
+/// [`pipeline::ValidateStage`] gates for `V1` unless told otherwise, and
+/// `sidl-validate --wire v1` is the same form at the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WireGate {
+    /// The v1 wire: a declaration that reaches a §4.4 construct is refused
+    /// ([`Severity::Error`], rule [`orbweaver_idl::DEFERRED_WIRE_RULE`]).
+    V1,
+    /// The decision is deferred along with the constructs: the same findings
+    /// as warnings, and the file passes. The library default.
+    #[default]
+    Deferred,
+}
+
+impl WireGate {
+    /// The command-line spelling, `v1` or `deferred`.
+    pub fn parse(text: &str) -> Option<WireGate> {
+        match text {
+            "v1" => Some(WireGate::V1),
+            "deferred" => Some(WireGate::Deferred),
+            _ => None,
+        }
+    }
+
+    /// The severity a §4.4 finding takes under this gate.
+    pub fn severity(self) -> Severity {
+        match self {
+            WireGate::V1 => Severity::Error,
+            WireGate::Deferred => Severity::Warning,
+        }
+    }
+}
+
 /// One thing wrong, in the form a generator can act on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
@@ -292,8 +344,13 @@ pub fn validate(src: &str) -> Report {
 /// With [`Source::anonymous`] this is byte-for-byte the old [`validate`]: same
 /// unit, same diagnostics, same refusal for an unresolvable include.
 pub fn validate_source(src: Source<'_>, search: &SearchPath) -> Report {
+    validate_source_for(src, search, WireGate::Deferred)
+}
+
+/// [`validate_source`], judging for a chosen wire — see [`WireGate`].
+pub fn validate_source_for(src: Source<'_>, search: &SearchPath, wire: WireGate) -> Report {
     let unit = orbweaver_idl::preprocess(src.text, src.origin, search);
-    let mut report = validate_unit(&unit);
+    let mut report = validate_unit_for(&unit, wire);
     locate_findings(&mut report, &unit);
     report
 }
@@ -347,12 +404,18 @@ fn locate_findings(report: &mut Report, unit: &orbweaver_idl::include::Unit) {
 /// rather than an include guard. So a caller that has resolved the includes
 /// hands the unit in instead of handing the text back.
 pub fn validate_unit(unit: &orbweaver_idl::include::Unit) -> Report {
-    validate_checked(&unit.text, orbweaver_idl::check_unit(unit))
+    validate_unit_for(unit, WireGate::Deferred)
+}
+
+/// [`validate_unit`], judging for a chosen wire — see [`WireGate`].
+pub fn validate_unit_for(unit: &orbweaver_idl::include::Unit, wire: WireGate) -> Report {
+    validate_checked(&unit.text, orbweaver_idl::check_unit(unit), wire)
 }
 
 fn validate_checked(
     src: &str,
     checked: std::result::Result<orbweaver_idl::ast::Spec, Vec<orbweaver_idl::Diagnostic>>,
+    wire: WireGate,
 ) -> Report {
     let mut findings = Vec::new();
 
@@ -376,7 +439,7 @@ fn validate_checked(
                 });
             }
             findings.extend(explicit_ids(&spec));
-            findings.extend(wire_support(src, &spec));
+            findings.extend(wire_support(src, &spec, wire));
             findings.extend(annotation_advice(src, &spec));
         }
     }
@@ -395,6 +458,16 @@ fn validate_checked(
 /// an outage.
 pub fn validate_against(src: &str, released: &str) -> Report {
     validate_source_against(Source::anonymous(src), Source::anonymous(released), &SearchPath::new())
+}
+
+/// [`validate_against`], judging for a chosen wire — see [`WireGate`].
+pub fn validate_against_for(src: &str, released: &str, wire: WireGate) -> Report {
+    validate_source_against_for(
+        Source::anonymous(src),
+        Source::anonymous(released),
+        &SearchPath::new(),
+        wire,
+    )
 }
 
 /// Says, in the report, that the §5.3 comparison did not run.
@@ -443,8 +516,21 @@ pub fn validate_source_against(
     released: Source<'_>,
     search: &SearchPath,
 ) -> Report {
+    validate_source_against_for(proposed, released, search, WireGate::Deferred)
+}
+
+/// [`validate_source_against`], judging for a chosen wire — see [`WireGate`].
+///
+/// The gate applies to the *proposal* only. The released contract is not
+/// re-judged: it shipped, and whatever it carries is what it carries.
+pub fn validate_source_against_for(
+    proposed: Source<'_>,
+    released: Source<'_>,
+    search: &SearchPath,
+    wire: WireGate,
+) -> Report {
     let unit = orbweaver_idl::preprocess(proposed.text, proposed.origin, search);
-    let mut report = validate_unit(&unit);
+    let mut report = validate_unit_for(&unit, wire);
     locate_findings(&mut report, &unit);
     if !report.is_ok() {
         return report;
@@ -558,7 +644,6 @@ fn fix_for(d: &Diagnostic, src: &str) -> Option<String> {
     }
 }
 
-/// Things that compile and will not work on this project's wire (§4.4).
 /// An explicit `#pragma ID` that is not a well-formed repository id.
 ///
 /// A repository id is identity: `_is_a`, the IFR facade, ingestion's matching,
@@ -632,29 +717,32 @@ fn explicit_ids(spec: &orbweaver_idl::ast::Spec) -> Vec<Finding> {
     out
 }
 
-fn wire_support(src: &str, spec: &orbweaver_idl::ast::Spec) -> Vec<Finding> {
-    let mut out = Vec::new();
-    walk(&spec.definitions, &mut |def| {
-        if let orbweaver_idl::ast::Definition::ValueType(v) = def {
-            out.push(Finding {
-                rule: "wire/valuetype".into(),
-                severity: Severity::Warning,
-                message: format!(
-                    "valuetype {:?} parses but v1 cannot marshal it (docs/PLAN.md §4.4)",
-                    v.name.text
-                ),
-                line: v.name.span.line,
-                column: v.name.span.column,
-                source: src.get(v.name.span.start..v.name.span.end).unwrap_or_default().to_owned(),
-                fix: Some(
-                    "model the data as a struct, or keep the valuetype out of any operation \
-                     signature until v2"
-                        .into(),
-                ),
-            });
-        }
-    });
-    out
+/// The v1 wire's refusals, from the front end's closure (docs/PLAN.md §4.4).
+///
+/// The set is computed in `orbweaver-idl` — [`orbweaver_idl::deferred_wire_types`]
+/// — because deciding it needs name resolution, and it is the same closure
+/// `orbweaver-gen` computes when it skips: a struct with a `fixed` member, the
+/// interface returning that struct, the interface inheriting that operation.
+/// `orbweaver-gen`'s `deferred_wire_agreement` test holds the two sets equal.
+/// This function only chooses the severity, which is [`WireGate`]'s.
+///
+/// The predecessor of this rule, `wire/valuetype`, named the valuetype and
+/// stopped: `fixed` — the construct the golden corpus actually carries in a
+/// signature — was reported by nothing at S4, and an interface *returning* a
+/// valuetype was reported nowhere at all.
+fn wire_support(src: &str, spec: &orbweaver_idl::ast::Spec, wire: WireGate) -> Vec<Finding> {
+    orbweaver_idl::deferred_wire_types(spec)
+        .iter()
+        .map(|d| Finding {
+            rule: orbweaver_idl::DEFERRED_WIRE_RULE.into(),
+            severity: wire.severity(),
+            message: d.message(),
+            line: d.span.line,
+            column: d.span.column,
+            source: src.get(d.span.start..d.span.end).unwrap_or_default().to_owned(),
+            fix: Some(d.fix()),
+        })
+        .collect()
 }
 
 /// What a contract needs before an agent can use it (§2.2).
@@ -914,15 +1002,67 @@ mod tests {
         assert!(fs[0].get("line").is_some(), "{text}");
     }
 
-    /// A valuetype compiles and cannot go on this project's wire. Warning, not
-    /// error: it is legal IDL, and the file may exist for a v2 that can.
+    /// A valuetype compiles and cannot go on this project's wire. Warning by
+    /// default: it is legal IDL, and the file may exist for a v2 that can.
     #[test]
     fn a_valuetype_is_a_warning_that_names_the_limit() {
         let r = validate("module m { valuetype V { public long a; }; };");
         assert!(r.is_ok(), "still valid IDL");
-        let f = r.findings.iter().find(|f| f.rule == "wire/valuetype").expect("warned");
+        let f = r.findings.iter().find(|f| f.rule == "wire/deferred-type").expect("warned");
         assert_eq!(f.severity, Severity::Warning);
         assert!(f.message.contains("§4.4"));
+        assert_eq!(f.source, "V", "the span is the declaration's name");
+    }
+
+    /// `corpus/golden/21`'s shape under both gates: the same three findings,
+    /// the same text, and only the severity — and so the verdict — differs.
+    /// The fix names the edit a generator can make.
+    #[test]
+    fn fixed_is_a_warning_by_default_and_a_refusal_for_the_v1_wire() {
+        let src = "module m { typedef fixed<9,2> Amount; struct Invoice { Amount total; }; \
+                   interface Billing { Amount sum(in Amount a, in Amount b); }; };";
+        let lax = validate(src);
+        assert!(lax.is_ok(), "{:?}", lax.findings);
+        let strict = validate_source_for(Source::anonymous(src), &SearchPath::new(), WireGate::V1);
+        assert!(!strict.is_ok());
+        let pick = |r: &Report| {
+            r.findings
+                .iter()
+                .filter(|f| f.rule == "wire/deferred-type")
+                .map(|f| (f.source.clone(), f.message.clone(), f.fix.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(pick(&lax), pick(&strict), "only the severity may differ");
+        assert_eq!(
+            pick(&strict).iter().map(|(s, _, _)| s.as_str()).collect::<Vec<_>>(),
+            ["Amount", "Invoice", "Billing"]
+        );
+        assert!(
+            strict
+                .findings
+                .iter()
+                .all(|f| f.severity == Severity::Error || f.rule != "wire/deferred-type")
+        );
+        let fix = pick(&strict)[0].2.clone().expect("a fix");
+        assert!(fix.contains("string"), "{fix}");
+        // The repair prompt groups the three under the one cause.
+        let prompt = strict.repair_prompt();
+        assert_eq!(prompt.matches("[wire/deferred-type]").count(), 1, "{prompt}");
+        assert!(prompt.contains("3 occurrence(s)"), "{prompt}");
+    }
+
+    /// The strict form refuses only what reaches a §4.4 construct: a file
+    /// with none is identical under both gates.
+    #[test]
+    fn the_v1_gate_changes_nothing_for_a_contract_the_wire_carries() {
+        let src = "module m { struct S { long a; }; interface I { S get(); }; };";
+        assert_eq!(
+            validate(src).findings,
+            validate_source_for(Source::anonymous(src), &SearchPath::new(), WireGate::V1).findings
+        );
+        assert_eq!(WireGate::parse("v1"), Some(WireGate::V1));
+        assert_eq!(WireGate::parse("deferred"), Some(WireGate::Deferred));
+        assert_eq!(WireGate::parse("any"), None);
     }
 
     /// Missing annotations are advice, because unannotated IDL is valid CORBA

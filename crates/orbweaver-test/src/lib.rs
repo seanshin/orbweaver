@@ -148,6 +148,31 @@ pub fn has_defect(report: &Report) -> bool {
     report.findings.iter().any(|f| f.severity == Severity::Error)
 }
 
+/// The types the property half could not measure **because the v1 wire does
+/// not carry them** (docs/PLAN.md §4.4) — the `prop/unsupported-type` and
+/// `json/unmapped` findings that cite the section, counted once per type.
+///
+/// Advice, still, and deliberately: the sweep cannot round-trip a `fixed`, so
+/// there is no defect to report and no severity to raise. What was missing was
+/// the *number*. Over `corpus/golden/` these findings were two advice lines
+/// among a hundred, indistinguishable in the summary from an unannotated
+/// operation, and the count of types the wire cannot serve was visible
+/// nowhere a harness could pin. `contract-check` prints this beside the
+/// closure S4 computes ([`orbweaver_idl::deferred_wire_types`]); the two are
+/// not the same number, and the difference is itself a measurement — see the
+/// binary.
+pub fn deferred_wire_gaps(report: &Report) -> std::collections::BTreeSet<String> {
+    report
+        .findings
+        .iter()
+        .filter(|f| {
+            matches!(f.rule.as_str(), "prop/unsupported-type" | "json/unmapped")
+                && f.message.contains("§4.4")
+        })
+        .map(|f| f.source.clone())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,6 +204,29 @@ mod tests {
             "the contract half ran too: {:?}",
             report.findings
         );
+    }
+
+    /// `corpus/golden/21`'s shape: the property cannot sample `fixed`, and the
+    /// two advice findings that say so are counted once per type — the typedef
+    /// and the struct carrying it — while the interface, which has no
+    /// `TypeCode`, is S4's to count. A file the wire carries counts zero.
+    #[test]
+    fn the_types_the_wire_defers_are_counted_once_each_and_stay_advice() {
+        let r = registry(
+            "module m { typedef fixed<9,2> Amount; struct Invoice { Amount total; }; \
+             interface Billing { Amount sum(in Amount a); }; };",
+        );
+        let report = check(&r, 4);
+        assert!(!has_defect(&report), "{:?}", report.findings);
+        let gaps = deferred_wire_gaps(&report);
+        assert_eq!(gaps.len(), 2, "{gaps:?}");
+        assert!(gaps.iter().all(|id| id.contains("Amount") || id.contains("Invoice")), "{gaps:?}");
+        // Four findings feed two entries: json/unmapped and prop/unsupported-type
+        // for each of the two types.
+        assert_eq!(report.findings.iter().filter(|f| f.message.contains("§4.4")).count(), 4);
+
+        let clean = registry("module m { struct S { long a; }; };");
+        assert!(deferred_wire_gaps(&check(&clean, 4)).is_empty());
     }
 
     /// Advice must never reach `Severity::Error`, whatever it finds. The
