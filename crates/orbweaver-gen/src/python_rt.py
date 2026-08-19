@@ -1,4 +1,4 @@
-"""The runtime generated Python marshals through — AnyJSON v1, and nothing else.
+"""The runtime generated Python marshals through — AnyJSON v1.1, and nothing else.
 
 Copyright (c) Orbweaver contributors. MIT.
 
@@ -41,18 +41,33 @@ data so that a generated module is readable and needs nothing at import time:
 References are by repository id rather than by Python name so that a module can
 name a type declared after it — IDL recursion is legal and Python has no
 forward declaration.
+
+# The type language and the wire's own (AnyJSON v1.1, D008)
+
+An ``any`` carries its type in ``_t``: a name for a primitive, and for
+everything else the **structural form** — ``{"kind": "struct", "id": ..,
+"name": .., "members": [..]}`` — the same document ``::CORBA::TypeCode``
+crosses as when it is a value. Descriptors and forms describe the same types
+in two spellings, one for a generated module to be readable in and one for a
+document to be self-contained in, and this file converts each way:
+``_desc_of`` reads a form as a descriptor (the reverse of the generator's
+``descriptor``) and ``_form_of`` writes a descriptor as a form. A form naming a
+type this package never declared is **synthesised** — a class built from the
+document and registered under its id — because the point of a type that
+describes itself is that the reader needs no prior copy of it.
 """
 
 import base64
 import json
+import keyword
 import math
 import os
 import subprocess
 
 __all__ = [
     "Error", "MarshalError", "TransportError", "SystemException", "UserException",
-    "Struct", "Union", "Enum", "EnumItem", "ObjectRef", "LongDouble",
-    "TYPES", "register", "register_alias", "resolve",
+    "Struct", "Union", "Enum", "EnumItem", "ObjectRef", "LongDouble", "TypeCode",
+    "TYPES", "NAMES", "register", "register_alias", "register_name", "resolve",
     "to_json", "from_json", "call", "Bridge", "Loopback", "connect",
 ]
 
@@ -216,17 +231,16 @@ class Enum(object):
 class TypeCode(object):
     """A ``::CORBA::TypeCode`` as a value — AnyJSON v1.1's structural form.
 
-    Held as the document rather than as a parsed type, and that is the whole
-    design. A Python client needs a TypeCode for three things: to receive one,
-    to hand it back, and to look at it — ``tc.kind`` answers "what is this",
-    ``tc.form`` is the structure underneath. What it does **not** do is become
-    a descriptor you can marshal a value against; that would mean Python
-    deciding CDR questions, and this package contains no wire (D007).
+    Held as the document, exactly as it arrived, so that relaying one is exact
+    even where this runtime has nothing to say about a kind (``fixed``, say).
+    ``tc.kind`` answers "what is this", ``tc.form`` is the structure underneath,
+    and :meth:`descriptor` is the same type in the language generated code
+    speaks — which is what lets an ``any`` be read against a TypeCode a peer
+    described rather than against a class this package happened to declare.
+    :meth:`of` goes the other way, for a TypeCode a caller wants to send.
 
-    One limit is not Python's fault and is written here because this is where
-    somebody meets it: a union's case labels arrive as base64 of raw bytes,
-    whose byte order the TypeCode does not record. Relaying one is exact.
-    Reading one is not yet possible for anybody, in either language.
+    None of this decides a CDR question: a descriptor is a spelling of a type,
+    and the bytes are still the bridge's business (D007).
     """
 
     __slots__ = ("form",)
@@ -235,6 +249,15 @@ class TypeCode(object):
         if not isinstance(form, (str, dict)):
             raise MarshalError(path, "a TypeCode is a name or a type object, got %r" % (form,))
         self.form = form
+
+    @classmethod
+    def of(cls, desc):
+        """The TypeCode of a descriptor: ``TypeCode.of(("ref", "IDL:m/T:1.0"))``."""
+        return cls(_form_of(desc, ""))
+
+    def descriptor(self):
+        """This type as a descriptor, synthesising any type not declared here."""
+        return _desc_of(self.form, "")
 
     @property
     def kind(self):
@@ -397,16 +420,43 @@ class LongDouble(object):
 #: Repository id -> generated class, or -> descriptor for a typedef.
 TYPES = {}
 
+#: Repository id -> the IDL name a TypeCode carries beside it.
+#:
+#: A descriptor names a type by id alone, and that is enough to marshal a
+#: value; it is not enough to *describe* one, because the TypeCode a peer
+#: receives inside an ``any`` carries the short name too and a peer that
+#: compares TypeCodes compares names. So the name is a fact the generated
+#: module states once, here, and never derives from the id: ``#pragma ID``
+#: exists precisely to make the two disagree.
+#:
+#: Seeded with the two references the IDL language itself types and no
+#: contract ever declares — the same two the registry spells out for
+#: ``Object`` and ``ValueBase``. Found by the sweep, not by reading: a struct
+#: with an ``Object`` member came back with an unnamed TypeCode.
+NAMES = {
+    "IDL:omg.org/CORBA/Object:1.0": "Object",
+    "IDL:omg.org/CORBA/ValueBase:1.0": "ValueBase",
+}
+
 
 def register(cls):
     """Records a generated class under its repository id. Usable as a decorator."""
     TYPES[cls._idl_id] = cls
+    NAMES[cls._idl_id] = getattr(cls, "_idl_name", cls.__name__)
     return cls
 
 
-def register_alias(id, desc):
+def register_alias(id, desc, name=""):
     """Records a typedef: an id that resolves to another descriptor."""
     TYPES[id] = desc
+    if name:
+        NAMES[id] = name
+
+
+def register_name(id, name):
+    """Records the name of a type that has an id and no body here — an interface
+    declared and never defined, whose descriptor is a bare ``("objref", id)``."""
+    NAMES[id] = name
 
 
 def resolve(desc):
@@ -444,16 +494,26 @@ _INT_RANGE = {
 #: every mainstream implementation, so anything past 2^53 loses digits silently.
 _WIDE = ("longlong", "ulonglong")
 
-#: The name an ``any`` carries in ``_t``. These spellings are the mapping's,
-#: not Python's, and must match the Rust side exactly.
+#: The name a type whose whole identity fits in one carries in ``_t``, keyed by
+#: its descriptor. These spellings are the mapping's, not Python's, and must
+#: match the Rust side's ``short_name`` exactly — every name that one writes,
+#: this table must read, or the mapping writes a document it cannot read back
+#: (the defect D008 was drafted from). ``string`` and ``wstring`` are the
+#: unbounded case only; a bound is a fact the name would lose, so a bounded
+#: string crosses in the structural form like a constructed type.
 _ANY_NAME = {
     "boolean": "boolean", "octet": "octet", "char": "char", "wchar": "wchar",
     "short": "short", "ushort": "unsigned short", "long": "long",
     "ulong": "unsigned long", "longlong": "long long",
     "ulonglong": "unsigned long long", "float": "float", "double": "double",
     "longdouble": "long double", "string": "string", "wstring": "wstring",
+    "any": "any", "typecode": "typecode", "void": "void", "null": "null",
 }
 _ANY_DESC = dict((v, k) for k, v in _ANY_NAME.items())
+
+#: The kinds whose structural form has a repository id and a body, and so map
+#: to a ``("ref", id)`` descriptor: a class, or a typedef's descriptor.
+_NAMED_KINDS = ("struct", "except", "enum", "union", "alias")
 
 
 def _member(path, name):
@@ -538,7 +598,7 @@ def to_json(desc, value, path=""):
             if not isinstance(value, TypeCode):
                 raise MarshalError(path, "expected a TypeCode, got %r" % (value,))
             return value.form
-        if d == "void":
+        if d in ("void", "null"):
             return None
         raise MarshalError(path, "no AnyJSON form for %r" % (d,))
 
@@ -601,18 +661,21 @@ def to_json(desc, value, path=""):
 
 
 def _any_out(value, path):
-    """``any`` carries its own type: ``{"_t": <name>, "_v": <value>}``."""
+    """``any`` carries its own type: ``{"_t": <type>, "_v": <value>}``.
+
+    The pair is ``(descriptor, value)``, or ``(TypeCode, value)`` for a caller
+    relaying a type a peer described — in which case the document that arrived
+    is the document that leaves, unrebuilt, so nothing this runtime does not
+    understand about it can be lost on the way through.
+    """
     if not isinstance(value, tuple) or len(value) != 2:
         raise MarshalError(path, "an any is the pair (descriptor, value)")
     inner, v = value
-    name = _ANY_NAME.get(inner if isinstance(inner, str) else
-                         (inner[0] if isinstance(inner, tuple) else None))
-    if name is None:
-        raise MarshalError(
-            path,
-            "only primitive types may cross in an any until the registry is consulted; "
-            "%r is not one" % (inner,))
-    return {"_t": name, "_v": to_json(inner, v, _member(path, "_v"))}
+    if isinstance(inner, TypeCode):
+        form, inner = inner.form, inner.descriptor()
+    else:
+        form = _form_of(inner, _member(path, "_t"))
+    return {"_t": form, "_v": to_json(inner, v, _member(path, "_v"))}
 
 
 def from_json(desc, j, path=""):
@@ -648,7 +711,7 @@ def from_json(desc, j, path=""):
             return _any_in(j, path)
         if d == "typecode":
             return TypeCode(j, path)
-        if d == "void":
+        if d in ("void", "null"):
             return None
         raise MarshalError(path, "no AnyJSON form for %r" % (d,))
 
@@ -714,21 +777,246 @@ def from_json(desc, j, path=""):
 def _any_in(j, path):
     if not isinstance(j, dict) or "_t" not in j or "_v" not in j:
         raise MarshalError(path, "an any is {\"_t\": <type>, \"_v\": <value>}")
-    inner = _ANY_DESC.get(j["_t"]) if isinstance(j["_t"], str) else None
-    if inner is None:
-        # AnyJSON v1.1 gives `_t` a structural form and the Rust side both
-        # writes and reads it. This runtime does not yet turn one back into a
-        # descriptor, so it refuses rather than guessing — the same rule the
-        # Rust side follows, applied to the half that is behind. What it must
-        # never do is accept the document and marshal `_v` as something else.
-        raise MarshalError(
-            path,
-            "this runtime reads only a named type in an any's _t; %r is "
-            "AnyJSON v1.1's structural form, which the Python side does not "
-            "yet map to a descriptor (D008)" % (j["_t"],))
-    if inner in ("string", "wstring"):
-        inner = (inner, 0)
+    inner = _desc_of(j["_t"], _member(path, "_t"))
     return (inner, from_json(inner, j["_v"], _member(path, "_v")))
+
+
+# ── descriptors <-> the structural TypeCode form (AnyJSON v1.1, D008) ────────
+
+def _py_attr(name):
+    """The attribute a synthesised member is held under: the OMG mapping's
+    leading-underscore escape, the same rule the generator applies."""
+    return "_" + name if keyword.iskeyword(name) or name in ("self", "cls") else name
+
+
+def _form_field(form, key, path, types):
+    if key not in form:
+        raise MarshalError(path, "a %r type object needs a %r field" % (form.get("kind"), key))
+    v = form[key]
+    if not isinstance(v, types) or isinstance(v, bool):
+        raise MarshalError(path, "%r in a %r type object is %r, not %s"
+                           % (key, form.get("kind"), v, types))
+    return v
+
+
+def _desc_of(form, path):
+    """A structural type form as a descriptor — the reverse of the generator's
+    ``descriptor``, so ``("ref", id)`` for anything with an id and a body.
+
+    A type this package does not declare is synthesised from the form and
+    registered, so it resolves the same way a generated one does. A type it
+    does declare is used as declared: the id is the contract, and a peer whose
+    document disagrees with it about the members is met at the member, with a
+    path, by the ordinary struct check.
+    """
+    if isinstance(form, str):
+        d = _ANY_DESC.get(form)
+        if d is None:
+            raise MarshalError(path, "%r is not a type name AnyJSON knows" % (form,))
+        return (d, 0) if d in ("string", "wstring") else d
+    if not isinstance(form, dict) or not isinstance(form.get("kind"), str):
+        raise MarshalError(path, "a type is a name or an object with a \"kind\", got %r" % (form,))
+    kind = form["kind"]
+    if kind in ("string", "wstring"):
+        return (kind, _form_field(form, "bound", path, int))
+    if kind == "seq":
+        return ("seq", _desc_of(_form_field(form, "element", path, (str, dict)),
+                                _member(path, "element")),
+                _form_field(form, "bound", path, int))
+    if kind == "array":
+        return ("array", _desc_of(_form_field(form, "element", path, (str, dict)),
+                                  _member(path, "element")),
+                _form_field(form, "length", path, int))
+    if kind == "objref":
+        id = _form_field(form, "id", path, str)
+        NAMES.setdefault(id, _form_field(form, "name", path, str))
+        return ("objref", id)
+    if kind == "recursive":
+        # Resolved when the value is marshalled, like every other reference:
+        # by then the type it re-enters has been registered, because the form
+        # that carried the marker is the form that declared the type.
+        return ("ref", _form_field(form, "id", path, str))
+    if kind in _NAMED_KINDS:
+        id = _form_field(form, "id", path, str)
+        if id not in TYPES:
+            _synthesise(kind, id, form, path)
+        return ("ref", id)
+    if kind == "fixed":
+        raise MarshalError(path, "fixed<%s,%s> is deferred at wire level (§4.4)"
+                           % (form.get("digits"), form.get("scale")))
+    raise MarshalError(path, "no AnyJSON value form for a %r type" % (kind,))
+
+
+def _init_members(self, *args, **kw):
+    """The constructor of a synthesised struct or exception: members in
+    declaration order, by position or by name, all of them required."""
+    attrs = [a for _, a, _ in self._idl_members]
+    if len(args) > len(attrs):
+        raise TypeError("%s takes %d member(s), %d given"
+                        % (type(self).__name__, len(attrs), len(args)))
+    for a, v in zip(attrs, args):
+        setattr(self, a, v)
+    for k, v in kw.items():
+        if k not in attrs:
+            raise TypeError("%s has no member %r" % (type(self).__name__, k))
+        setattr(self, k, v)
+    missing = [a for a in attrs if not hasattr(self, a)]
+    if missing:
+        raise TypeError("%s needs %s" % (type(self).__name__, ", ".join(missing)))
+
+
+def _synthesise(kind, id, form, path):
+    """Builds and registers the class (or typedef) a structural form describes.
+
+    Registered **before** its members are read for a struct, union or
+    exception, so that a member which re-enters the type — directly, or through
+    a ``recursive`` marker naming it — finds it there.
+    """
+    name = _form_field(form, "name", path, str)
+    if kind in ("struct", "except"):
+        base = Struct if kind == "struct" else UserException
+        cls = type(name, (base,), {
+            "_idl_id": id, "_idl_name": name, "_idl_members": (),
+            "__init__": _init_members,
+            "__doc__": "IDL %s `%s`, synthesised from the type an any described." % (kind, id),
+        })
+        register(cls)
+        members = []
+        for i, m in enumerate(_form_field(form, "members", path, list)):
+            at = _index(_member(path, "members"), i)
+            if not isinstance(m, dict):
+                raise MarshalError(at, "a member is {\"name\": .., \"type\": ..}")
+            mname = _form_field(m, "name", at, str)
+            members.append((mname, _py_attr(mname),
+                            _desc_of(_form_field(m, "type", at, (str, dict)), at)))
+        cls._idl_members = tuple(members)
+        return
+    if kind == "enum":
+        members = _form_field(form, "members", path, list)
+        if not all(isinstance(m, str) for m in members):
+            raise MarshalError(path, "an enum's members are names")
+        cls = type(name, (Enum,), {
+            "_idl_id": id, "_idl_name": name, "_idl_members": tuple(members),
+            "__doc__": "IDL enum `%s`, synthesised from the type an any described." % (id,),
+        })
+        cls._items = {}
+        for i, m in enumerate(members):
+            item = EnumItem(m, i, id)
+            cls._items[m] = item
+            # The enumerators live on the class, since there is no module for
+            # the OMG mapping to put them in.
+            setattr(cls, _py_attr(m), item)
+        register(cls)
+        return
+    if kind == "union":
+        cls = type(name, (Union,), {
+            "_idl_id": id, "_idl_name": name, "_idl_disc": "long",
+            "_idl_cases": (), "_idl_default": -1,
+            "__doc__": "IDL union `%s`, synthesised from the type an any described." % (id,),
+        })
+        register(cls)
+        cls._idl_disc = _desc_of(_form_field(form, "discriminator", path, (str, dict)),
+                                 _member(path, "discriminator"))
+        default = _form_field(form, "default", path, int)
+        # The wire's cases are one per label; a class holds one branch per
+        # member with its labels together, which is what the generator writes.
+        branches = []
+        for i, c in enumerate(_form_field(form, "cases", path, list)):
+            at = _index(_member(path, "cases"), i)
+            if not isinstance(c, dict):
+                raise MarshalError(at, "a case is {\"label\": .., \"name\": .., \"type\": ..}")
+            cname = _form_field(c, "name", at, str)
+            ctype = _desc_of(_form_field(c, "type", at, (str, dict)), at)
+            if i == default:
+                branches.append(([], cname, ctype, True))
+                continue
+            label = c.get("label")
+            if branches and branches[-1][1] == cname and not branches[-1][3]:
+                branches[-1][0].append(label)
+            else:
+                branches.append(([label], cname, ctype, False))
+        cls._idl_cases = tuple((tuple(ls), n, t) for ls, n, t, _ in branches)
+        cls._idl_default = next((i for i, b in enumerate(branches) if b[3]), -1)
+        return
+    if kind == "alias":
+        register_alias(id, _desc_of(_form_field(form, "aliased", path, (str, dict)),
+                                    _member(path, "aliased")), name)
+        return
+    raise MarshalError(path, "no synthesis for a %r type" % (kind,))
+
+
+def _form_of(desc, path, visiting=()):
+    """A descriptor as the structural form the wire carries — what the
+    generator's ``descriptor`` would have been written from.
+
+    ``visiting`` is the chain of ids being described; a reference back into it
+    is a ``recursive`` marker, which is exactly where the registry puts one:
+    at the point a type re-enters something still being defined.
+    """
+    if isinstance(desc, str):
+        if desc in _ANY_NAME:
+            return _ANY_NAME[desc]
+        raise MarshalError(path, "no TypeCode form for %r" % (desc,))
+    if isinstance(desc, tuple):
+        kind = desc[0]
+        if kind in ("string", "wstring"):
+            return kind if desc[1] == 0 else {"kind": kind, "bound": desc[1]}
+        if kind == "seq":
+            return {"kind": "seq", "element": _form_of(desc[1], path, visiting),
+                    "bound": desc[2]}
+        if kind == "array":
+            return {"kind": "array", "element": _form_of(desc[1], path, visiting),
+                    "length": desc[2]}
+        if kind == "objref":
+            return {"kind": "objref", "id": desc[1], "name": NAMES.get(desc[1], "")}
+        if kind == "ref":
+            id = desc[1]
+            if id in visiting:
+                return {"kind": "recursive", "id": id}
+            if id not in TYPES:
+                raise MarshalError(path, "no type is registered under %r" % (id,))
+            target = TYPES[id]
+            if isinstance(target, type):
+                return _class_form(target, path, visiting + (id,))
+            return {"kind": "alias", "id": id, "name": NAMES.get(id, ""),
+                    "aliased": _form_of(target, path, visiting + (id,))}
+        raise MarshalError(path, "no TypeCode form for %r" % (kind,))
+    if isinstance(desc, type):
+        return _class_form(desc, path, visiting + (getattr(desc, "_idl_id", ""),))
+    raise MarshalError(path, "no TypeCode form for %r" % (desc,))
+
+
+def _class_form(cls, path, visiting):
+    id = cls._idl_id
+    named = {"id": id, "name": NAMES.get(id, getattr(cls, "_idl_name", cls.__name__))}
+    if issubclass(cls, (Struct, UserException)):
+        named["kind"] = "struct" if issubclass(cls, Struct) else "except"
+        named["members"] = [{"name": n, "type": _form_of(d, _member(path, n), visiting)}
+                            for n, _, d in cls._idl_members]
+        return named
+    if issubclass(cls, Enum):
+        named["kind"] = "enum"
+        named["members"] = list(cls._idl_members)
+        return named
+    if issubclass(cls, Union):
+        named["kind"] = "union"
+        named["discriminator"] = _form_of(cls._idl_disc, _member(path, "_d"), visiting)
+        cases = []
+        default = -1
+        for i, (labels, member, d) in enumerate(cls._idl_cases):
+            t = _form_of(d, _member(path, member), visiting)
+            if i == cls._idl_default:
+                # The default branch has no label of its own; the registry
+                # gives it none, and none is what base64 of nothing spells.
+                default = len(cases)
+                cases.append({"label": {"_raw": ""}, "name": member, "type": t})
+                continue
+            for label in labels:
+                cases.append({"label": label, "name": member, "type": t})
+        named["cases"] = cases
+        named["default"] = default
+        return named
+    raise MarshalError(path, "%s is not a type a value can be described by" % (cls.__name__,))
 
 
 def _unbase64(j, path):

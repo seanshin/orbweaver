@@ -95,7 +95,12 @@ fn witness(tc: &TypeCode, visiting: &mut Vec<String>) -> Option<Value> {
         }
         TypeCode::String(bound) => Value::String(bounded_text("orbweaver", *bound)),
         TypeCode::WString(bound) => Value::WString(bounded_text("정적 스텁", *bound)),
-        TypeCode::Any => Value::Any(Box::new(TypeCode::Double), Box::new(Value::Double(-0.125))),
+        // A constructed type, on purpose, and one no generated package
+        // declares: `_t` is then AnyJSON v1.1's structural form and Python has
+        // to build the type from the document (D008). It was a bare double
+        // until 2026-08-19, which crossed as a name string and proved nothing
+        // about the form every `any` with a struct in it actually carries.
+        TypeCode::Any => Value::Any(Box::new(described()), Box::new(described_value())),
         TypeCode::ObjRef { .. } => Value::ObjRef(Some(sample_ior())),
         TypeCode::Enum { members, .. } => Value::Enum(members.last()?.clone()),
         TypeCode::Sequence { element, bound } => {
@@ -136,19 +141,76 @@ fn witness(tc: &TypeCode, visiting: &mut Vec<String>) -> Option<Value> {
         // primitive would cross as the same name string v1 already used, so it
         // would prove nothing about the structural form the ir-subset
         // descriptions are actually made of.
-        TypeCode::TypeCode => Value::TypeCode(Box::new(TypeCode::Struct {
-            id: "IDL:witness/Described:1.0".into(),
-            name: "Described".into(),
-            members: vec![
-                Member { name: "label".into(), tc: TypeCode::String(12) },
-                Member {
-                    name: "points".into(),
-                    tc: TypeCode::Sequence { element: Box::new(TypeCode::Double), bound: 0 },
-                },
-            ],
-        })),
+        TypeCode::TypeCode => Value::TypeCode(Box::new(described())),
         _ => return None,
     })
+}
+
+/// The type an `any` carries in this sweep: a struct declared by no corpus
+/// file, so that Python meets it only as a document.
+///
+/// Its members are chosen for what they make the two implementations agree on
+/// through one value: a **bound** (`string<12>` is structural where `string`
+/// is a name), an anonymous sequence, and a `sequence<any>` holding one `any`
+/// per short-named type — every name the Rust side's `short_name` writes, the
+/// Python table has to read back, and this is the one place that inverse is
+/// held across the language boundary rather than one table apart.
+fn described() -> TypeCode {
+    TypeCode::Struct {
+        id: "IDL:witness/Described:1.0".into(),
+        name: "Described".into(),
+        members: vec![
+            Member { name: "label".into(), tc: TypeCode::String(12) },
+            Member {
+                name: "points".into(),
+                tc: TypeCode::Sequence { element: Box::new(TypeCode::Double), bound: 0 },
+            },
+            Member {
+                name: "each".into(),
+                tc: TypeCode::Sequence { element: Box::new(TypeCode::Any), bound: 0 },
+            },
+        ],
+    }
+}
+
+fn described_value() -> Value {
+    let any = |tc: TypeCode, v: Value| Value::Any(Box::new(tc), Box::new(v));
+    Value::Struct(vec![
+        ("label".into(), Value::String("witnessed".into())),
+        ("points".into(), Value::List(vec![Value::Double(0.5), Value::Double(-2.0)])),
+        (
+            "each".into(),
+            Value::List(vec![
+                any(TypeCode::Boolean, Value::Bool(false)),
+                any(TypeCode::Octet, Value::Octet(0x5A)),
+                any(TypeCode::Char, Value::Char(b'c')),
+                any(TypeCode::WChar, Value::WChar('글')),
+                any(TypeCode::Short, Value::Short(-7)),
+                any(TypeCode::UShort, Value::UShort(7)),
+                any(TypeCode::Long, Value::Long(-70_000)),
+                any(TypeCode::ULong, Value::ULong(70_000)),
+                any(TypeCode::LongLong, Value::LongLong(-9_007_199_254_740_995)),
+                any(TypeCode::ULongLong, Value::ULongLong(18_014_398_509_481_987)),
+                any(TypeCode::Float, Value::Float(1.5)),
+                any(TypeCode::Double, Value::Double(-0.125)),
+                any(TypeCode::LongDouble, Value::LongDouble([0xAB; 16])),
+                any(TypeCode::String(0), Value::String("unbounded".into())),
+                any(TypeCode::WString(0), Value::WString("넓은".into())),
+                any(TypeCode::String(5), Value::String("bound".into())),
+                any(TypeCode::WString(2), Value::WString("두자".into())),
+                any(
+                    TypeCode::Sequence { element: Box::new(TypeCode::Long), bound: 3 },
+                    Value::List(vec![Value::Long(1), Value::Long(2)]),
+                ),
+                any(
+                    TypeCode::Array { element: Box::new(TypeCode::Octet), length: 2 },
+                    Value::List(vec![Value::Octet(1), Value::Octet(2)]),
+                ),
+                any(TypeCode::TypeCode, Value::TypeCode(Box::new(TypeCode::Long))),
+                any(TypeCode::Any, any(TypeCode::Double, Value::Double(2.5))),
+            ]),
+        ),
+    ])
 }
 
 /// Whether a sequence element would re-enter a type already being built.
@@ -341,17 +403,38 @@ fn run_corpus(dir: &str) -> Outcome {
             }
             match registry.get(id) {
                 Some(Entry::Type(tc)) => {
-                    if descriptor(tc).is_err() || matches!(tc, TypeCode::ObjRef { .. }) {
+                    if descriptor(tc).is_err() {
                         continue;
                     }
                     let Some(v) = witness(tc, &mut Vec::new()) else { continue };
-                    let Ok(j) = anyjson::to_json(tc, &v, &mut handles) else { continue };
+                    // A forward-declared interface has no `("ref", id)` to be
+                    // read through — its descriptor is `("objref", id)` and its
+                    // Python name is bound to that — so it is measured only
+                    // through the `any` below, where the document names it.
+                    if !matches!(tc, TypeCode::ObjRef { .. }) {
+                        let Ok(j) = anyjson::to_json(tc, &v, &mut handles) else { continue };
+                        values.push(json_obj([
+                            ("id", Json::String(id.clone())),
+                            ("desc", Json::String(format!("(\"ref\", {id:?})"))),
+                            ("json", j),
+                        ]));
+                        expected.push((id.clone(), tc.clone(), v.clone()));
+                    }
+                    // The same value inside an `any`, so `_t` is this type's
+                    // structural form and Python must rebuild it — name, alias
+                    // layers, recursion markers and union labels included —
+                    // from the class the package declared, or the encoded
+                    // TypeCode comes back as different bytes.
+                    let carried = Value::Any(Box::new(tc.clone()), Box::new(v));
+                    let Ok(j) = anyjson::to_json(&TypeCode::Any, &carried, &mut handles) else {
+                        continue;
+                    };
                     values.push(json_obj([
-                        ("id", Json::String(id.clone())),
-                        ("desc", Json::String(format!("(\"ref\", {id:?})"))),
+                        ("id", Json::String(format!("{id} in an any"))),
+                        ("desc", Json::String("\"any\"".into())),
                         ("json", j),
                     ]));
-                    expected.push((id.clone(), tc.clone(), v));
+                    expected.push((format!("{id} in an any"), TypeCode::Any, carried));
                 }
                 Some(Entry::Interface(_)) => {
                     let module: Vec<String> = registry
@@ -668,9 +751,14 @@ fn array<'a>(j: &'a Json, key: &str) -> &'a [Json] {
 fn the_golden_corpus_crosses_to_python_and_back_unchanged() {
     let out = run_corpus("corpus/golden");
     assert!(out.files >= 20, "the corpus shrank: {} file(s)", out.files);
+    // Pinned at what was measured on 2026-08-19, when every registered type
+    // gained its twin inside an `any` (78/132 before, 158/132 after). A floor,
+    // not an equality: the corpus growing should raise it, and nothing else
+    // should move it — a drop is the oracle quietly measuring less, which is
+    // the failure a passing run otherwise throws away.
     assert!(
-        out.values > 50 && out.calls > 20,
-        "the oracle measured almost nothing: {} value(s), {} call(s)",
+        out.values >= 158 && out.calls >= 132,
+        "the oracle measures less than it did: {} value(s), {} call(s)",
         out.values,
         out.calls
     );
@@ -688,6 +776,13 @@ fn the_golden_corpus_crosses_to_python_and_back_unchanged() {
 fn the_services_corpus_crosses_to_python_and_back_unchanged() {
     let out = run_corpus("corpus/services");
     assert!(out.files > 0, "corpus/services must not be empty");
+    // 35/46 before the `any` twins, 70/46 after (2026-08-19); a floor, as above.
+    assert!(
+        out.values >= 70 && out.calls >= 46,
+        "the oracle measures less than it did: {} value(s), {} call(s)",
+        out.values,
+        out.calls
+    );
     assert!(out.failures.is_empty(), "{}", out.failures.join("\n"));
 }
 
@@ -796,6 +891,152 @@ print("oneway:", loop.requests[0])
     assert!(out.contains("system exception: IDL:omg.org/CORBA/NO_PERMISSION:1.0"), "{out}");
     assert!(out.contains("unknown user exception:"), "{out}");
     assert!(out.contains("oneway:"), "{out}");
+}
+
+/// An `any` whose type no generated package declares: the structural form is
+/// all Python has, and it must build the type from it and hand back the same
+/// bytes (D008 — a self-describing type needs no prior copy at the reader).
+///
+/// The corpus sweep reaches this path only for a struct; the kinds a peer's
+/// document can also carry — an enum, a union with a default, a typedef, a
+/// recursion marker, a member whose name is a Python keyword — are driven
+/// here. The document is written by the Rust mapping, never by hand, so the
+/// spelling Python is held to is the spelling that actually crosses.
+#[test]
+fn an_any_describing_a_type_the_package_never_declared_is_read_and_reproduced() {
+    use orbweaver_giop::typecode::UnionCase;
+    let reading_id = "IDL:elsewhere/Reading:1.0";
+    let reading = TypeCode::Struct {
+        id: reading_id.into(),
+        name: "Reading".into(),
+        members: vec![
+            Member {
+                name: "unit".into(),
+                tc: TypeCode::Enum {
+                    id: "IDL:elsewhere/Unit:1.0".into(),
+                    name: "Unit".into(),
+                    members: vec!["C".into(), "F".into()],
+                },
+            },
+            Member {
+                name: "value".into(),
+                tc: TypeCode::Union {
+                    id: "IDL:elsewhere/Val:1.0".into(),
+                    name: "Val".into(),
+                    discriminator: Box::new(TypeCode::Long),
+                    default_index: 2,
+                    cases: vec![
+                        UnionCase {
+                            label: 1i32.to_be_bytes().to_vec(),
+                            name: "i".into(),
+                            tc: TypeCode::Long,
+                        },
+                        UnionCase {
+                            label: 2i32.to_be_bytes().to_vec(),
+                            name: "i".into(),
+                            tc: TypeCode::Long,
+                        },
+                        UnionCase { label: Vec::new(), name: "s".into(), tc: TypeCode::String(0) },
+                    ],
+                },
+            },
+            Member {
+                name: "kids".into(),
+                tc: TypeCode::Alias {
+                    id: "IDL:elsewhere/Readings:1.0".into(),
+                    name: "Readings".into(),
+                    aliased: Box::new(TypeCode::Sequence {
+                        element: Box::new(TypeCode::Recursive(reading_id.into())),
+                        bound: 0,
+                    }),
+                },
+            },
+            Member { name: "lambda".into(), tc: TypeCode::Boolean },
+        ],
+    };
+    // `kids` is empty because the reference mapping refuses a value *under* a
+    // recursion marker: `anyjson::to_json` resolves aliases and nothing else,
+    // so a non-empty `sequence<Reading>` inside `Reading` fails on the Rust
+    // side before Python is reached ("... is not a value of IDL:elsewhere/
+    // Reading:1.0", measured 2026-08-19). The marker is still in the TypeCode,
+    // which is what this test holds Python to; the value beneath it is a gap
+    // in `orbweaver-dynamic`, reported with this batch and not this crate's
+    // to close.
+    let root = Value::Struct(vec![
+        ("unit".into(), Value::Enum("F".into())),
+        (
+            "value".into(),
+            Value::Union {
+                discriminator: Box::new(Value::Long(9)),
+                value: Some(Box::new(Value::String("nine".into()))),
+            },
+        ),
+        ("kids".into(), Value::List(vec![])),
+        ("lambda".into(), Value::Bool(true)),
+    ]);
+    let carried = Value::Any(Box::new(reading), Box::new(root));
+    let mut handles = LocalReferences::new();
+    let doc = anyjson::to_json(&TypeCode::Any, &carried, &mut handles).expect("Rust writes it");
+
+    let script = r#"
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from undeclared import _rt
+
+doc = json.loads(r'''__DOC__''')
+desc, v = _rt.from_json("any", doc)
+assert desc == ("ref", "IDL:elsewhere/Reading:1.0"), desc
+assert type(v).__name__ == "Reading" and isinstance(v, _rt.Struct), v
+assert v.unit == _rt.EnumItem("F", 1, "IDL:elsewhere/Unit:1.0"), v.unit
+assert v.value._d == 9 and v.value._v == "nine", repr(v.value)
+assert v._lambda is True, "a keyword member is escaped as the generator escapes it"
+assert v.kids == [], repr(v.kids)
+print("read:", repr(v))
+
+# The type it described is now a type this package can speak, recursion
+# included: a Reading inside a Reading marshals through the synthesised class
+# even though the reference mapping cannot yet read the result back.
+Reading = _rt.TYPES["IDL:elsewhere/Reading:1.0"]
+Unit = _rt.TYPES["IDL:elsewhere/Unit:1.0"]
+Val = _rt.TYPES["IDL:elsewhere/Val:1.0"]
+nested = _rt.to_json("any", (desc, Reading(Unit.C, Val(1, 1), [Reading(Unit.F, Val(2, 2), [], False)], False)))
+assert nested["_v"]["kids"][0]["value"] == {"_d": 2, "_v": 2}, nested
+assert Val(3, "three")._d == 3, "the default branch"
+again = Reading(Unit.C, v.value, [], False)
+assert _rt.TypeCode.of(("ref", "IDL:elsewhere/Reading:1.0")).form == doc["_t"], "of()"
+assert _rt.TypeCode(doc["_t"]).descriptor() == desc, "descriptor()"
+
+open(sys.argv[1] + "/back.json", "w").write(json.dumps(_rt.to_json("any", (desc, v))))
+open(sys.argv[1] + "/again.json", "w").write(json.dumps(_rt.to_json("any", (desc, again))))
+print("wrote it back")
+"#;
+    let text = doc.to_string();
+    assert!(!text.contains("'''"), "the document cannot be embedded verbatim: {text}");
+    let tmp = Path::new(env!("CARGO_TARGET_TMPDIR")).join("python-target/undeclared");
+    let out = run_script(
+        "undeclared",
+        "module undeclared_m { interface Nothing {}; };",
+        &script.replace("__DOC__", &text),
+    );
+    assert!(out.contains("read: Reading("), "{out}");
+    assert!(out.contains("wrote it back"), "{out}");
+
+    let back = std::fs::read_to_string(tmp.join("back.json")).expect("back");
+    let back = Json::parse(&back).expect("json");
+    let after = anyjson::from_json(&TypeCode::Any, &back, &handles)
+        .unwrap_or_else(|e| panic!("what Python produced is not an any: {e}\n  {back}"));
+    same_bytes(&TypeCode::Any, &carried, &after).unwrap_or_else(|why| panic!("{why}\n  {back}"));
+
+    // A value built from the synthesised class, not merely relayed.
+    let again = std::fs::read_to_string(tmp.join("again.json")).expect("again");
+    let again = Json::parse(&again).expect("json");
+    let Value::Any(tc, _) = anyjson::from_json(&TypeCode::Any, &again, &handles)
+        .expect("a value of the described type")
+    else {
+        panic!("not an any");
+    };
+    let Value::Any(want, _) = &carried else { unreachable!() };
+    assert_eq!(&tc, want, "the rebuilt TypeCode is the one that was described");
 }
 
 /// A union's Python surface: `_d`/`_v`, the named branch accessors, and the

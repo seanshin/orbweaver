@@ -220,10 +220,10 @@ pub fn descriptor(tc: &TypeCode) -> Result<String, String> {
             return Err(format!("fixed<{digits},{scale}> is deferred at wire level (§4.4)"));
         }
         // D008: a TypeCode is a value, and its AnyJSON form is the structural
-        // one. Python holds it as `_rt.TypeCode` — the document, unread — which
-        // is enough to receive one, pass one on, and inspect its `kind`; it is
-        // not enough to marshal a value *described* by one, and the runtime
-        // says so rather than guessing.
+        // one. Python holds it as `_rt.TypeCode` — the document, kept whole so
+        // relaying it is exact — and `_rt._desc_of` reads that document as a
+        // descriptor, which is this function run backwards: `("ref", id)` for
+        // anything with a body, synthesised when the package never declared it.
         TypeCode::TypeCode => "\"typecode\"".into(),
         other => return Err(format!("no AnyJSON form for {other:?}")),
     })
@@ -454,6 +454,7 @@ fn emit_type(id: &str, tc: &TypeCode) -> Result<String, String> {
             let _ = writeln!(s, "class {}({base}):", py_ident(name));
             docstring(&mut s, "    ", &format!("IDL {kind} `{id}`."));
             let _ = writeln!(s, "    _idl_id = {}", py_str(id));
+            let _ = writeln!(s, "    _idl_name = {}", py_str(name));
             // (the name on the wire, the attribute here, the type). The first
             // two differ exactly when the member's IDL name is a Python
             // keyword; a runtime that assumed they were the same would read
@@ -505,6 +506,7 @@ fn emit_type(id: &str, tc: &TypeCode) -> Result<String, String> {
                 ),
             );
             let _ = writeln!(s, "    _idl_id = {}", py_str(id));
+            let _ = writeln!(s, "    _idl_name = {}", py_str(name));
             let _ = write!(s, "    _idl_members = (");
             for m in members {
                 let _ = write!(s, "{}, ", py_str(m));
@@ -558,6 +560,7 @@ fn emit_type(id: &str, tc: &TypeCode) -> Result<String, String> {
                 ),
             );
             let _ = writeln!(s, "    _idl_id = {}", py_str(id));
+            let _ = writeln!(s, "    _idl_name = {}", py_str(name));
             let _ = writeln!(s, "    _idl_disc = {}", descriptor(discriminator)?);
             let _ = writeln!(s, "    _idl_cases = (");
             for (labels, member, tc, _) in &branches {
@@ -602,7 +605,17 @@ fn emit_type(id: &str, tc: &TypeCode) -> Result<String, String> {
                 ),
             );
             let _ = writeln!(s, "{} = {}", py_ident(name), descriptor(aliased)?);
-            let _ = writeln!(s, "_rt.register_alias({}, {})", py_str(id), descriptor(aliased)?);
+            // The name travels too: the TypeCode of an `any` carrying this
+            // typedef names it, and the runtime rebuilds that TypeCode from
+            // what is registered — a name it does not have is a name it
+            // cannot write, and the id is not a place to derive one from.
+            let _ = writeln!(
+                s,
+                "_rt.register_alias({}, {}, {})",
+                py_str(id),
+                descriptor(aliased)?,
+                py_str(name)
+            );
             Ok(s)
         }
 
@@ -619,9 +632,12 @@ fn emit_type(id: &str, tc: &TypeCode) -> Result<String, String> {
         TypeCode::ObjRef { name, .. } => Ok(format!(
             "#: IDL `{id}`, declared and not defined in this file: a reference is all\n\
              #: the v1 wire carries for it (§4.4).\n\
-             {} = (\"objref\", {})\n",
+             {} = (\"objref\", {})\n\
+             _rt.register_name({}, {})\n",
             py_ident(name),
-            py_str(id)
+            py_str(id),
+            py_str(id),
+            py_str(name)
         )),
 
         other => Err(match descriptor(other) {
@@ -828,6 +844,7 @@ fn emit_interface(registry: &Registry, id: &str, cx: &Cx<'_>) -> Result<String, 
         ),
     );
     let _ = writeln!(s, "    _idl_id = {}", py_str(id));
+    let _ = writeln!(s, "    _idl_name = {}", py_str(&name));
     let _ = writeln!(s);
     let _ = writeln!(s, "    def __init__(self, invoker):");
     let _ = writeln!(s, "        self._invoker = invoker");
