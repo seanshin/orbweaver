@@ -13,6 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
+use orbweaver_dynamic::Value;
 use orbweaver_forge::Severity;
 use orbweaver_registry::Registry;
 use orbweaver_test::{contract, prop};
@@ -131,4 +132,49 @@ fn contract_advice_over_the_corpus_never_reaches_error() {
         }
     }
     assert!(total > 0, "checks that find nothing on our own corpus are not worth having");
+}
+
+/// The recursive witnesses of `corpus/golden/15`, measured rather than
+/// assumed. A green property over a recursive type proves nothing if every
+/// value it generated was the empty list — and for `TreeSeq` that is what it
+/// was: over the 32 default seeds, 22 cases sampled to `None` and were skipped
+/// without a finding, and the 10 that ran were all empty (2026-08-19). This
+/// pins the two shapes the file produces — the marker as a sequence element
+/// naming the struct (`Tree`) and as a struct member naming the typedef
+/// (`TreeSeq`) — to a witness that follows the marker on the batch seed.
+#[test]
+fn golden_15s_recursive_witnesses_are_not_the_empty_list() {
+    fn depth(v: &Value) -> usize {
+        match v {
+            Value::Struct(ms) => 1 + ms.iter().map(|(_, v)| depth(v)).max().unwrap_or(0),
+            Value::List(items) => items.iter().map(depth).max().unwrap_or(0),
+            _ => 0,
+        }
+    }
+    let path = corpus("corpus/golden")
+        .into_iter()
+        .find(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("15-")))
+        .expect("corpus/golden/15");
+    let reg = registry_of(&path);
+    let cases = 32u64;
+    for (id, min_depth) in [("IDL:gc15/Tree:1.0", 2), ("IDL:gc15/TreeSeq:1.0", 1)] {
+        let tc = reg.typecode(id).unwrap_or_else(|| panic!("{id} is in the registry"));
+        let mut produced = 0;
+        let mut followed = 0;
+        for i in 0..cases {
+            let Some(v) = prop::sample(tc, prop::case_seed(prop::DEFAULT_SEED, i)) else {
+                panic!("{id}: case {i} produced no value, so it ran nothing");
+            };
+            produced += 1;
+            if depth(&v) >= min_depth {
+                followed += 1;
+            }
+        }
+        assert_eq!(produced, cases, "{id}: every case must produce a value");
+        assert!(
+            followed > 0,
+            "{id}: no case over the batch seed reached depth {min_depth}; the recursive \
+             marker was never followed and the property measured nothing about recursion"
+        );
+    }
 }

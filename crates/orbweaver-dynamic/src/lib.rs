@@ -134,7 +134,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// path allocates nothing, and the path is only rendered when something is
 /// already wrong.
 #[derive(Clone, Copy)]
-struct Path<'a> {
+pub(crate) struct Path<'a> {
     parent: Option<&'a Path<'a>>,
     step: Step<'a>,
     /// The constructed type this node entered, when it entered one.
@@ -154,6 +154,11 @@ struct Path<'a> {
     /// is plain nested structs, and its depth is decided by the sequence
     /// lengths, not by the type. So resolving the marker and continuing inline
     /// is the whole of it.
+    ///
+    /// [`anyjson`] walks on the same path for the same reason: it had its own
+    /// string path and no `open` chain, and so repeated the refusal above
+    /// ("… is not a value of <id>") for three phases after the CDR side was
+    /// fixed. One mechanism, shared, is how the two halves stay in agreement.
     open: Option<&'a TypeCode>,
 }
 
@@ -165,15 +170,15 @@ enum Step<'a> {
 }
 
 impl<'a> Path<'a> {
-    fn root() -> Self {
+    pub(crate) fn root() -> Self {
         Path { parent: None, step: Step::Root, open: None }
     }
 
-    fn member(&'a self, name: &'a str) -> Self {
+    pub(crate) fn member(&'a self, name: &'a str) -> Self {
         Path { parent: Some(self), step: Step::Member(name), open: None }
     }
 
-    fn index(&'a self, i: usize) -> Self {
+    pub(crate) fn index(&'a self, i: usize) -> Self {
         Path { parent: Some(self), step: Step::Index(i), open: None }
     }
 
@@ -181,7 +186,7 @@ impl<'a> Path<'a> {
     ///
     /// [`Step::Root`] because this is bookkeeping, not a step a reader took:
     /// it renders as nothing, so error paths read exactly as they did before.
-    fn entering(&'a self, tc: &'a TypeCode) -> Self {
+    pub(crate) fn entering(&'a self, tc: &'a TypeCode) -> Self {
         Path { parent: Some(self), step: Step::Root, open: Some(tc) }
     }
 
@@ -206,7 +211,7 @@ impl<'a> Path<'a> {
         usize::from(self.open.is_some()) + self.parent.map_or(0, Path::depth)
     }
 
-    fn render(&self) -> String {
+    pub(crate) fn render(&self) -> String {
         let mut out = match self.parent {
             Some(p) => p.render(),
             None => String::new(),
@@ -224,7 +229,7 @@ impl<'a> Path<'a> {
         out
     }
 
-    fn fail<T>(&self, message: impl Into<String>) -> Result<T> {
+    pub(crate) fn fail<T>(&self, message: impl Into<String>) -> Result<T> {
         Err(Error { path: self.render(), message: message.into() })
     }
 }
@@ -367,10 +372,10 @@ fn type_id_of(tc: &TypeCode) -> Option<&str> {
 /// built ourselves, where hitting it means a bug rather than an attack. Both
 /// report the same way, because a marshaller that treats its own overflow as
 /// impossible is how the first one gets found in production.
-const MAX_NESTING: usize = 64;
+pub(crate) const MAX_NESTING: usize = 64;
 
 /// The type a recursive marker names, or an error naming what went wrong.
-fn open_recursive<'a>(id: &str, p: &Path<'a>) -> Result<&'a TypeCode> {
+pub(crate) fn open_recursive<'a>(id: &str, p: &Path<'a>) -> Result<&'a TypeCode> {
     if p.depth() >= MAX_NESTING {
         return p.fail(format!(
             "recursive type {id} nests deeper than {MAX_NESTING} levels; refusing to follow it"

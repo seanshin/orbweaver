@@ -72,7 +72,15 @@ fn load(path: &Path) -> Option<Registry> {
 /// in a thousand is a flake, and the property this test is after — that two
 /// implementations of one mapping agree — does not need search to find, it
 /// needs coverage of every shape the corpus declares.
-fn witness(tc: &TypeCode, visiting: &mut Vec<String>) -> Option<Value> {
+///
+/// `open` is the chain of constructed types under construction, innermost
+/// last, with the `TypeCode` each one names. It is what lets a
+/// [`TypeCode::Recursive`] marker be followed: the registry represents a
+/// cycle as the marker and an id, so a witness that read the `TypeCode` alone
+/// could only produce the empty case — which is what this one did until
+/// 2026-08-19, and why `anyjson`'s refusal of every non-empty value under a
+/// marker was never red here.
+fn witness(tc: &TypeCode, open: &mut Vec<(String, TypeCode)>) -> Option<Value> {
     Some(match tc {
         TypeCode::Boolean => Value::Bool(true),
         TypeCode::Octet => Value::Octet(0xA7),
@@ -104,39 +112,59 @@ fn witness(tc: &TypeCode, visiting: &mut Vec<String>) -> Option<Value> {
         TypeCode::ObjRef { .. } => Value::ObjRef(Some(sample_ior())),
         TypeCode::Enum { members, .. } => Value::Enum(members.last()?.clone()),
         TypeCode::Sequence { element, bound } => {
-            // A sequence back into a type still being built is where recursion
-            // terminates; an empty one is a legal value and the only finite one.
-            if terminates(element, visiting) {
+            // A sequence back into a type already re-entered once is where
+            // recursion terminates: the marker is followed one level, so the
+            // value beneath it is a real one, and below that the empty list is
+            // the only finite value. One level, deliberately: the document
+            // doubles per level and the property is that the marker crosses,
+            // not how far.
+            if terminates(element, open) {
                 Value::List(Vec::new())
             } else {
                 let n = if *bound == 0 { 2 } else { (*bound).min(2) } as usize;
-                Value::List((0..n).map(|_| witness(element, visiting)).collect::<Option<_>>()?)
+                Value::List((0..n).map(|_| witness(element, open)).collect::<Option<_>>()?)
             }
         }
         TypeCode::Array { element, length } => {
-            Value::List((0..*length).map(|_| witness(element, visiting)).collect::<Option<_>>()?)
+            Value::List((0..*length).map(|_| witness(element, open)).collect::<Option<_>>()?)
         }
         TypeCode::Struct { id, members, .. } | TypeCode::Except { id, members, .. } => {
-            visiting.push(id.clone());
+            open.push((id.clone(), tc.clone()));
             let out = members
                 .iter()
-                .map(|m| Some((m.name.clone(), witness(&m.tc, visiting)?)))
+                .map(|m| Some((m.name.clone(), witness(&m.tc, open)?)))
                 .collect::<Option<Vec<_>>>();
-            visiting.pop();
+            open.pop();
             Value::Struct(out?)
         }
         TypeCode::Union { id, discriminator, cases, default_index, .. } => {
-            visiting.push(id.clone());
+            open.push((id.clone(), tc.clone()));
             // The *last* case rather than the first: with a `default:` present
             // it is usually the default branch, which is the one a generator
             // gets wrong.
             let (i, case) = cases.iter().enumerate().next_back()?;
             let d = label_value(&case.label, discriminator, i as i32 == *default_index)?;
-            let v = witness(&case.tc, visiting);
-            visiting.pop();
+            let v = witness(&case.tc, open);
+            open.pop();
             Value::Union { discriminator: Box::new(d), value: Some(Box::new(v?)) }
         }
-        TypeCode::Alias { aliased, .. } => witness(aliased, visiting)?,
+        // Recorded like a struct: a cycle can name the typedef rather than the
+        // type it wraps — `corpus/golden/15`'s `TreeSeq` — and a witness that
+        // saw through aliases could never resolve that marker.
+        TypeCode::Alias { id, aliased, .. } => {
+            open.push((id.clone(), tc.clone()));
+            let v = witness(aliased, open);
+            open.pop();
+            v?
+        }
+        // The marker, resolved against the type under construction that it
+        // names. Termination is `terminates`' job, one sequence up; a marker
+        // reached with nothing to resolve against is a TypeCode fragment, and
+        // has no witness.
+        TypeCode::Recursive(id) => {
+            let target = open.iter().rev().find(|(k, _)| k == id)?.1.clone();
+            witness(&target, open)?
+        }
         // A TypeCode as a value (D008). Deliberately a constructed one: a
         // primitive would cross as the same name string v1 already used, so it
         // would prove nothing about the structural form the ir-subset
@@ -213,16 +241,19 @@ fn described_value() -> Value {
     ])
 }
 
-/// Whether a sequence element would re-enter a type already being built.
-fn terminates(element: &TypeCode, visiting: &[String]) -> bool {
+/// Whether a sequence element would re-enter, for the second time, a type
+/// already being built — once is the level the witness follows the marker
+/// to; twice is where it stops.
+fn terminates(element: &TypeCode, open: &[(String, TypeCode)]) -> bool {
+    let entered = |id: &str| open.iter().filter(|(k, _)| k == id).count() >= 2;
     match element {
-        TypeCode::Recursive(id) => visiting.iter().any(|v| v == id),
+        TypeCode::Recursive(id) => entered(id),
         TypeCode::Struct { id, .. } | TypeCode::Union { id, .. } | TypeCode::Except { id, .. } => {
-            visiting.iter().any(|v| v == id)
+            entered(id)
         }
-        TypeCode::Alias { aliased, .. } => terminates(aliased, visiting),
+        TypeCode::Alias { aliased, .. } => terminates(aliased, open),
         TypeCode::Sequence { element, .. } | TypeCode::Array { element, .. } => {
-            terminates(element, visiting)
+            terminates(element, open)
         }
         _ => false,
     }
@@ -954,14 +985,27 @@ fn an_any_describing_a_type_the_package_never_declared_is_read_and_reproduced() 
             Member { name: "lambda".into(), tc: TypeCode::Boolean },
         ],
     };
-    // `kids` is empty because the reference mapping refuses a value *under* a
-    // recursion marker: `anyjson::to_json` resolves aliases and nothing else,
-    // so a non-empty `sequence<Reading>` inside `Reading` fails on the Rust
-    // side before Python is reached ("... is not a value of IDL:elsewhere/
-    // Reading:1.0", measured 2026-08-19). The marker is still in the TypeCode,
-    // which is what this test holds Python to; the value beneath it is a gap
-    // in `orbweaver-dynamic`, reported with this batch and not this crate's
-    // to close.
+    // `kids` carries a Reading, so the value *under* the recursion marker
+    // crosses and not only the marker. Until 2026-08-19 it had to be empty:
+    // `anyjson::to_json` resolved aliases and nothing else, so a non-empty
+    // `sequence<Reading>` inside `Reading` failed on the Rust side before
+    // Python was reached ("... is not a value of IDL:elsewhere/Reading:1.0"),
+    // and this test held Python to the marker in the TypeCode while the value
+    // beneath it stayed a gap in `orbweaver-dynamic`. The gap closed with the
+    // marker now resolved against the enclosing type on both sides of the
+    // mapping, and this is the document that proves it end to end.
+    let leaf = Value::Struct(vec![
+        ("unit".into(), Value::Enum("C".into())),
+        (
+            "value".into(),
+            Value::Union {
+                discriminator: Box::new(Value::Long(2)),
+                value: Some(Box::new(Value::Long(22))),
+            },
+        ),
+        ("kids".into(), Value::List(vec![])),
+        ("lambda".into(), Value::Bool(false)),
+    ]);
     let root = Value::Struct(vec![
         ("unit".into(), Value::Enum("F".into())),
         (
@@ -971,7 +1015,7 @@ fn an_any_describing_a_type_the_package_never_declared_is_read_and_reproduced() 
                 value: Some(Box::new(Value::String("nine".into()))),
             },
         ),
-        ("kids".into(), Value::List(vec![])),
+        ("kids".into(), Value::List(vec![leaf])),
         ("lambda".into(), Value::Bool(true)),
     ]);
     let carried = Value::Any(Box::new(reading), Box::new(root));
@@ -990,12 +1034,13 @@ assert type(v).__name__ == "Reading" and isinstance(v, _rt.Struct), v
 assert v.unit == _rt.EnumItem("F", 1, "IDL:elsewhere/Unit:1.0"), v.unit
 assert v.value._d == 9 and v.value._v == "nine", repr(v.value)
 assert v._lambda is True, "a keyword member is escaped as the generator escapes it"
-assert v.kids == [], repr(v.kids)
+assert len(v.kids) == 1 and type(v.kids[0]).__name__ == "Reading", repr(v.kids)
+assert v.kids[0].value._d == 2 and v.kids[0].value._v == 22 and v.kids[0].kids == [], repr(v.kids[0])
 print("read:", repr(v))
 
 # The type it described is now a type this package can speak, recursion
-# included: a Reading inside a Reading marshals through the synthesised class
-# even though the reference mapping cannot yet read the result back.
+# included: a Reading inside a Reading marshals through the synthesised class,
+# and the reference mapping reads the result back (below).
 Reading = _rt.TYPES["IDL:elsewhere/Reading:1.0"]
 Unit = _rt.TYPES["IDL:elsewhere/Unit:1.0"]
 Val = _rt.TYPES["IDL:elsewhere/Val:1.0"]

@@ -184,7 +184,18 @@ pub fn roundtrip_property_seeded(tc: &TypeCode, cases: usize, root: u64) -> Vec<
         let phase = index % 8;
         let mut sampler =
             Sampler { rng: Rng::new(seed), gaps: BTreeSet::new(), depth: 0, open: Vec::new() };
-        let Some(value) = sampler.sample(tc) else { continue };
+        let Some(value) = sampler.sample(tc) else {
+            // The root seed sampled this type, so a later seed that cannot is
+            // the generator disagreeing with itself — and a case that ran
+            // nothing must not count as one that passed. Until 2026-08-19 this
+            // was a bare `continue`, and 22 of `corpus/golden/15`'s 32
+            // `TreeSeq` cases fell through it with the report still green.
+            gaps.insert(format!(
+                "case {index} (seed 0x{seed:016x}) produced no value and ran nothing; the \
+                 sampler refused a shape its own predicate accepted, so the case is unmeasured"
+            ));
+            continue;
+        };
         gaps.append(&mut sampler.gaps);
         for endian in [Endian::Big, Endian::Little] {
             out.extend(one_case(tc, &value, seed, endian, phase));
@@ -447,7 +458,10 @@ impl Sampler {
                 // empty sequence, which is a real value and a real gap. Both
                 // are recorded: the value goes on the wire, the gap goes in the
                 // report.
-                if self.depth >= MAX_DEPTH || !self.can_sample(element) {
+                //
+                // Asked at the elements' depth, not this sequence's: they are
+                // sampled one level down, and their members one below that.
+                if self.depth >= MAX_DEPTH || !self.can_sample_at(element, self.depth + 1) {
                     if let Some(reason) = self.gap_reason(element) {
                         self.gaps.insert(reason);
                     }
@@ -550,34 +564,55 @@ impl Sampler {
         })
     }
 
-    /// Whether `sample` would succeed, without consuming randomness.
+    /// Whether `sample` would succeed here, without consuming randomness.
+    fn can_sample(&self, tc: &TypeCode) -> bool {
+        self.can_sample_at(tc, self.depth)
+    }
+
+    /// Whether `sample` would succeed at `depth`, without consuming randomness.
     ///
     /// Kept separate so that deciding to emit an empty sequence does not shift
     /// every later draw — a predicate that advanced the generator would make
     /// the seed depend on the shape of the type in a way nobody could follow.
-    fn can_sample(&self, tc: &TypeCode) -> bool {
+    ///
+    /// The depth is walked exactly as `sample` walks it — a member or an
+    /// element is one level below its container — because the question is
+    /// only useful if it is the same question `sample` will answer. It was not:
+    /// the recursive arm asked at "one level below the sequence", which is
+    /// where the *element* is sampled and not where the element's *members*
+    /// are, so `corpus/golden/15`'s `TreeSeq` passed the guard, went one level
+    /// deeper than the guard had checked, hit [`MAX_DEPTH`] as a struct
+    /// member (which has no empty case to fall back to), and the whole sample
+    /// came back `None`. Measured 2026-08-19 over the 32 default seeds:
+    /// 22 cases produced no value and were skipped without a finding, and the
+    /// 10 that survived were all the empty list. The recursive witness for
+    /// that type was the empty list, and the report was green.
+    fn can_sample_at(&self, tc: &TypeCode, depth: u32) -> bool {
         match tc {
-            TypeCode::Alias { aliased, .. } => self.can_sample(aliased),
+            TypeCode::Alias { aliased, .. } => self.can_sample_at(aliased, depth),
             TypeCode::Fixed { .. } | TypeCode::Principal => false,
-            // Samplable exactly when the type it names is under way and there
-            // is depth left to expand it into. `depth + 1` because the caller
-            // asking this question is a sequence, and its elements are sampled
-            // one level below it: asking at the sequence's own depth would let
-            // the guard pass and the element then fail, which does not produce
-            // an empty sequence — it produces no value at all, and the whole
-            // enclosing type reports as unsamplable. That is exactly the bug
-            // this arm was written to fix, one level up.
+            // Samplable exactly when the type it names is under way, there is
+            // depth left to expand it into, and the type it names is itself
+            // samplable from here — a cycle with no sequence in it (`struct
+            // Loop { Loop me; }`) has no finite value at any depth.
             TypeCode::Recursive(id) => {
-                self.depth + 1 < MAX_DEPTH && self.open.iter().any(|(k, _)| k == id)
+                depth < MAX_DEPTH
+                    && self
+                        .open
+                        .iter()
+                        .rev()
+                        .find(|(k, _)| k == id)
+                        .is_some_and(|(_, open)| self.can_sample_at(open, depth))
             }
             TypeCode::Struct { members, .. } | TypeCode::Except { members, .. } => {
-                members.iter().all(|m| self.can_sample(&m.tc))
+                members.iter().all(|m| self.can_sample_at(&m.tc, depth + 1))
             }
-            TypeCode::Array { element, .. } => self.can_sample(element),
+            TypeCode::Array { element, .. } => self.can_sample_at(element, depth + 1),
             // A sequence is always samplable: worst case it is empty.
             TypeCode::Sequence { .. } => true,
             TypeCode::Union { discriminator, cases, .. } => {
-                self.can_sample(discriminator) && cases.iter().all(|c| self.can_sample(&c.tc))
+                self.can_sample_at(discriminator, depth)
+                    && cases.iter().all(|c| self.can_sample_at(&c.tc, depth + 1))
             }
             _ => true,
         }
@@ -1053,6 +1088,51 @@ mod tests {
             matches!(v, Some(Value::Struct(ref m)) if matches!(&m[1].1, Value::List(k) if !k.is_empty()))
         });
         assert!(grew, "no generated tree had a child; the recursive arm is still unmeasured");
+    }
+
+    /// The other spelling of the same cycle — the one `corpus/golden/15`
+    /// produces for `TreeSeq`, where the marker is a struct *member* naming
+    /// the typedef rather than a sequence element naming the struct. Its
+    /// witness was the empty list on every measured case and `None` on the
+    /// rest (22 of 32 over the default seeds, skipped without a finding),
+    /// because the predicate that decides whether a sequence may be non-empty
+    /// asked its question one level higher than the sampler then went. Every
+    /// case must now produce a value, none may fall through silently, and at
+    /// least one over the batch seed must actually contain a tree.
+    #[test]
+    fn a_cycle_through_a_typedef_member_is_generated_on_every_case() {
+        let tree_seq = TypeCode::Alias {
+            id: "IDL:m/TreeSeq:1.0".into(),
+            name: "TreeSeq".into(),
+            aliased: Box::new(TypeCode::Sequence {
+                element: Box::new(tc_struct(
+                    "Tree",
+                    vec![
+                        ("label", TypeCode::String(0)),
+                        ("kids", TypeCode::Recursive("IDL:m/TreeSeq:1.0".into())),
+                    ],
+                )),
+                bound: 0,
+            }),
+        };
+        let findings = roundtrip_property(&tree_seq, 32);
+        assert!(findings.is_empty(), "{findings:?}");
+
+        let mut produced = 0;
+        let mut non_empty = 0;
+        for i in 0..32u64 {
+            match sample(&tree_seq, case_seed(DEFAULT_SEED, i)) {
+                Some(Value::List(items)) => {
+                    produced += 1;
+                    if !items.is_empty() {
+                        non_empty += 1;
+                    }
+                }
+                other => panic!("case {i}: {other:?}"),
+            }
+        }
+        assert_eq!(produced, 32, "a case that produces no value has run nothing");
+        assert!(non_empty > 0, "every TreeSeq was empty; the recursive witness measures nothing");
     }
 
     /// A cycle that cannot be resolved still generates empty sequences and
