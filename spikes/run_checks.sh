@@ -233,7 +233,8 @@ fi
 # discriminator's width of zeros, ignored on read (§9.3.5.1.4: the value "has
 # no semantic significance") — the only form omniORB (writes an unused value,
 # ignores it) and JacORB (writes zeros, reads one octet that must be 0) both
-# accept in both byte orders. Nine omniORB captures retaken live here.
+# accept in both byte orders. Seventeen omniORB captures retaken live here
+# (nine for the label, eight for the member list).
 # Negative control: with typecode.rs's change stashed, the registry test
 # fails 14 times ("implausible CDR length prefix", both orders) and the peer
 # test 3 of 4 (ours 4–8 bytes shorter than the recording).
@@ -249,6 +250,17 @@ if cargo test -q -p orbweaver-giop --test union_default_label_from_a_peer >/dev/
   echo "  ok   a union with a default: label slot at the discriminator's width, ignored on read, both orders"
 else
   echo "  FAIL a defaulted union TypeCode does not survive the wire"; fail_total=$((fail_total+1))
+fi
+# The member list itself (f8daa21): a branch that is both labelled and
+# `default:` is one member per label plus a labelless default member where
+# `default:` was written — omniidl's list, member for member, structurally
+# equal (==) to the peer's decoded TypeCode over 8 more captures in both
+# stream orders (17 recordings retaken by the capture script now). Negative
+# control: the folded form fails 6 of 8 comparisons.
+if cargo test -q -p orbweaver-registry --test union_shape_from_a_peer >/dev/null 2>&1; then
+  echo "  ok   a union's member list is omniidl's: one member per label, the default its own member where written, both orders"
+else
+  echo "  FAIL the registry's union TypeCode is not structurally equal to the peer's"; fail_total=$((fail_total+1))
 fi
 
 hr "performance — the dynamic path against the static stub"

@@ -49,6 +49,27 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### ⚠ Wire behaviour changed / 와이어 동작 변경
 
+- **A union branch that is both labelled and `default:` now produces one
+  TypeCode member per label plus a labelless default member at the position
+  `default:` was written, `default_index` on it** — structurally equal (`==`)
+  to omniidl's and JacORB's IDL-derived TypeCode (measured against 8 omniORB
+  captures, both stream orders). Before, `case 2: default: string rest;` was
+  two members with `default_index` on `(2, rest)`: the same branch selected at
+  both peers, but a different `member_count`/`default_index` on the wire, and
+  IDL regenerated from our own decoded TypeCode lost the `case 2:`. Value
+  encoding unchanged; Rust stubs unchanged (emitter output over all 31 golden
+  files identical); Python classes gain `_idl_default_slot`; sweep 170/137 +
+  70/46, 0 divergences. Found and not fixed: the §5.3 differ compares the
+  default member by label, not by role.
+
+  **라벨과 `default:`를 함께 가진 union 분기는 이제 라벨마다 한 멤버에 더해
+  `default:`가 쓰인 위치에 라벨 없는 default 멤버를 하나 더 만들고
+  `default_index`가 그것을 가리킨다** — omniidl·JacORB가 같은 IDL에서 만드는
+  TypeCode와 구조적으로 동일(`==`, omniORB 캡처 8건, 양쪽 바이트 순서). 이전에는
+  `case 2: default: string rest;`가 두 멤버였고 양쪽 피어의 분기 선택은 같았지만
+  와이어의 `member_count`/`default_index`가 달랐으며 재생성한 IDL은 `case 2:`를
+  잃었다. 값 인코딩 불변, Rust 스텁 불변, Python 클래스에 `_idl_default_slot`
+  추가. 보고만: §5.3 differ가 default 멤버를 역할이 아닌 라벨로 비교한다.
 - **A union TypeCode's `default:` member is written with a label of the
   discriminator's width — zeros — and that slot is ignored on read** (was:
   zero bytes for a bare default, so any `any` carrying `corpus/golden/06`'s
