@@ -49,6 +49,39 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### ⚠ Wire behaviour changed / 와이어 동작 변경
 
+- **A union TypeCode's `default:` member is written with a label of the
+  discriminator's width — zeros — and that slot is ignored on read** (was:
+  zero bytes for a bare default, so any `any` carrying `corpus/golden/06`'s
+  `WithDefault` went out malformed; our own decode failed "implausible CDR
+  length prefix", omniORB `MARSHAL_PassEndOfMessage`, JacORB "buffer too
+  small", never red because every gate ran both ends through one encoder —
+  found by golden 29 the same day). §9.3.5.1.4: the value "has no semantic
+  significance … should be ignored". Zeros because JacORB 3.9 reads the slot
+  as one octet that must be 0 (omniORB's unused-value choice fails it
+  big-endian; the registry's labelled default written as its own label failed
+  it little-endian), and omniORB ignores the value entirely. Recorded with
+  provenance in `tests/union_default_label_from_a_peer.rs` (omniORB 4.3.4,
+  nine captures including a big-endian stream), retaken by
+  `spikes/union_default_capture.py`. Registry unchanged: a bare default keeps
+  its empty label in memory; the codec translates. Measured after: omniORB and
+  JacORB decode golden 06/29's TypeCodes in both byte orders and select the
+  same branch for every discriminator. Found and not fixed: the registry folds
+  `case 2: default:` where omniidl expands it (same selection everywhere,
+  different `member_count`); omniORBpy segfaults on `default_index == 0`
+  without a stub loaded; JacORB misreads a `long long` default label from any
+  conformant peer.
+
+  **유니온 TypeCode의 `default:` 멤버는 판별자 폭만큼의 레이블(0으로 채움)로
+  기록하고, 읽을 때는 그 슬롯의 값을 무시한다**(이전: 레이블 없는 default를
+  0바이트로 기록 — `golden/06`의 `WithDefault`를 담은 모든 `any`가 잘못된
+  형태로 나갔고, 우리 디코더·omniORB·JacORB 모두 거부; 양 끝이 같은 인코더를
+  거쳐 한 번도 붉어지지 않았다). §9.3.5.1.4: 그 값은 "의미가 없으며 무시해야
+  한다". 0인 이유: JacORB 3.9는 이 슬롯을 옥텟 하나로 읽고 0이 아니면
+  거부(omniORB의 미사용값은 빅엔디언에서, 레이블 붙은 default를 그 레이블로
+  쓰면 리틀엔디언에서 실패), omniORB는 값을 완전히 무시. omniORB 4.3.4 캡처
+  9건을 출처와 함께 기록, `spikes/union_default_capture.py`로 재채취.
+  레지스트리는 변경 없음. 보고만: 레지스트리는 `case 2: default:`를 한 멤버로
+  접고 omniidl은 둘로 편다(선택은 같음, `member_count`는 다름).
 - **1.1 `wchar` measured against JacORB 3.9, both directions and both byte
   orders** (D010 B5, second half; `spikes/wide.idl`, `spikes/jacorb_wchar11.sh`,
   `tests/wide_1_1_from_a_peer.rs` appended). A 1.1 `wchar` is its two octets

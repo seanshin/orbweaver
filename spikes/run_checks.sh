@@ -226,6 +226,30 @@ else
   echo "  FAIL a union TypeCode from a little-endian peer does not round-trip"
   fail_total=$((fail_total+1))
 fi
+# The default member's label (3a061d8): a bare `default:` used to write NO
+# label bytes, so any `any` carrying golden 06's WithDefault went out
+# malformed — our own decode, omniORB and JacORB all refused it, and nothing
+# was red because every gate ran both ends through one encoder. Now the
+# discriminator's width of zeros, ignored on read (§9.3.5.1.4: the value "has
+# no semantic significance") — the only form omniORB (writes an unused value,
+# ignores it) and JacORB (writes zeros, reads one octet that must be 0) both
+# accept in both byte orders. Nine omniORB captures retaken live here.
+# Negative control: with typecode.rs's change stashed, the registry test
+# fails 14 times ("implausible CDR length prefix", both orders) and the peer
+# test 3 of 4 (ours 4–8 bytes shorter than the recording).
+udc_out=$(python3 spikes/union_default_capture.py 2>&1); udc_rc=$?
+printf '%s\n' "$udc_out"
+if [ "$udc_rc" -eq 2 ]; then
+  skipped=$((skipped+1))
+elif [ "$udc_rc" -ne 0 ]; then
+  echo "  FAIL the recorded default-label bytes no longer match the live peer"; fail_total=$((fail_total+1))
+fi
+if cargo test -q -p orbweaver-giop --test union_default_label_from_a_peer >/dev/null 2>&1 \
+   && cargo test -q -p orbweaver-registry --test union_default_round_trip >/dev/null 2>&1; then
+  echo "  ok   a union with a default: label slot at the discriminator's width, ignored on read, both orders"
+else
+  echo "  FAIL a defaulted union TypeCode does not survive the wire"; fail_total=$((fail_total+1))
+fi
 
 hr "performance — the dynamic path against the static stub"
 # §8 has cited a LAN echo benchmark since v0.2 and there was none. This runs
