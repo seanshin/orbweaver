@@ -490,59 +490,50 @@ fn a_1_1_wchar_refuses_what_is_not_a_character_and_keeps_feff_as_data() {
 // And one finding at 1.2, from the self-consistency arm and then against
 // JacORB in both directions with the same binary:
 //
-// 6. **U+FEFF as a 1.2 `wchar` crosses neither stack.** Both writers — ours
-//    and JacORB 3.9's — write it as `02 fe ff`: an octet count of two and the
-//    unit, no mark before it. Both readers then take a leading `fe ff` for
-//    the mark §9.3.1.6 says an ORB "shall remove … before passing the value
-//    to the user", and are left with nothing: JacORB hands its user U+0000
-//    and echoes `02 00 00`; our reader refuses the empty remainder with
-//    MARSHAL. Under the paragraph as written a writer that means the
-//    character has to put a mark in front of it (`04 fe ff fe ff`), which
-//    neither does. `codeset.rs` was outside the batch that found this; the
-//    test below pins the *measured* octets so that whoever changes
-//    `put_wchar` at 1.2 has to revise this record in the same commit — and
-//    should measure the marked form against JacORB before adopting it, since
-//    what its reader does with `04 fe ff fe ff` has not been asked.
+// 6. **U+FEFF as a 1.2 `wchar` crossed neither stack** (as first measured;
+//    revised the same day, below). Both writers — ours and JacORB 3.9's —
+//    wrote it as `02 fe ff`: an octet count of two and the unit, no mark
+//    before it. Both readers then took a leading `fe ff` for the mark
+//    §9.3.1.6 says an ORB "shall remove … before passing the value to the
+//    user", and were left with nothing: JacORB hands its user U+0000 and
+//    echoes `02 00 00`; our reader refused the empty remainder with MARSHAL.
+//    Under the paragraph as written a writer that means the character has to
+//    put a mark in front of it (`04 fe ff fe ff`), which neither did.
+//    **Revised:** JacORB's reader was then asked about the marked form and
+//    honours it (fact 7, `tests/wide_1_2_from_a_peer.rs`, where the 1.2
+//    octets and their tests now live); `put_wchar` at 1.2 marks U+FEFF and
+//    U+FFFE, `get_wchar` at 1.2 reads a bare two-octet mark as the unit it
+//    is, and the code point crosses both ways. JacORB's own writer still
+//    writes `02 fe ff` (fact 8). The test below keeps only what this file
+//    is about — the 1.1 arm, where U+FEFF is data with no mark to be
+//    confused with — and that the bare 1.2 form is no longer ours.
 
-/// JacORB's `echo_wchar(U+FEFF)` at GIOP 1.2, big-endian, from
-/// `spikes/wide_rust.sh`'s tap: the request body, and — to our identical
-/// request — the reply body its server wrote. Ours to the same request is a
-/// MARSHAL reply.
+/// What JacORB writes for `echo_wchar(U+FEFF)` at GIOP 1.2, and what we
+/// wrote before the writer learned to mark: pinned in full, with its reader's
+/// matrix, in `tests/wide_1_2_from_a_peer.rs`; here only as the form our
+/// writer no longer produces.
 const JACORB_WCHAR_FEFF_1_2: &[u8] = &[0x02, 0xfe, 0xff];
-const JACORB_ECHO_OF_FEFF_1_2: &[u8] = &[0x02, 0x00, 0x00];
 
-/// The 1.2 defect, pinned as measured (fact 6): we write JacORB's `02 fe ff`
-/// for U+FEFF, and our reader — like JacORB's — does not read U+FEFF back
-/// from it. JacORB's echo `02 00 00` is U+0000 to our reader, which is what
-/// its user got. Revise this test with the writer, not around it.
+/// Fact 6 as revised: the 1.1 arm keeps U+FEFF as data (fact 4), which is why
+/// the same unit round-trips at 1.1 in every seat of `spikes/wide_rust.sh`;
+/// and at 1.2 our writer no longer produces the bare form JacORB does — the
+/// marked form and both readers' behaviour are `wide_1_2_from_a_peer.rs`'s.
 #[test]
-fn at_1_2_a_wchar_that_is_itself_a_mark_is_written_bare_by_both_writers_and_read_by_neither() {
+fn at_1_2_a_wchar_that_is_itself_a_mark_is_no_longer_written_bare_and_at_1_1_it_never_was_a_mark() {
     let w12 = WideCodec::new(Version::V1_2, CodeSetId::UTF_16).expect("1.2 + UTF-16");
     for endian in [Endian::Big, Endian::Little] {
         let mut e = Encoder::new(endian);
         w12.put_wchar(&mut e, '\u{FEFF}').expect("FEFF is a character");
-        assert_eq!(
-            e.finish().expect("finish"),
-            JACORB_WCHAR_FEFF_1_2,
-            "{endian:?}: the same three octets JacORB writes for U+FEFF at 1.2"
-        );
-        let mut d = Decoder::new(JACORB_WCHAR_FEFF_1_2, endian);
-        assert!(
-            w12.get_wchar(&mut d).is_err(),
-            "{endian:?}: fe ff after the count is taken for a mark and nothing is left — MARSHAL on the wire"
-        );
-        let mut d = Decoder::new(JACORB_ECHO_OF_FEFF_1_2, endian);
-        assert_eq!(
-            w12.get_wchar(&mut d).expect("two octets"),
-            '\u{0000}',
-            "{endian:?}: what JacORB's user got, and echoed"
-        );
+        let ours = e.finish().expect("finish");
+        assert_ne!(ours, JACORB_WCHAR_FEFF_1_2, "{endian:?}: JacORB's bare form was the defect");
+        assert_eq!(ours[0], 4, "{endian:?}: a mark and the unit — four octets");
+        let mut d = Decoder::new(&ours, endian);
+        assert_eq!(w12.get_wchar(&mut d).expect("our own marked form"), '\u{FEFF}', "{endian:?}");
     }
-    // The 1.1 arm keeps FEFF as data (fact 4), which is why the same unit
-    // round-trips at 1.1 in every seat of spikes/wide_rust.sh and not at 1.2.
     let mut e = Encoder::new(Endian::Big);
     codec().put_wchar(&mut e, '\u{FEFF}').expect("FEFF");
     let bytes = e.finish().expect("finish");
+    assert_eq!(bytes, JACORB_WCHAR_FEFF, "1.1: two octets, no count, nothing to take for a mark");
     let mut d = Decoder::new(&bytes, Endian::Big);
     assert_eq!(codec().get_wchar(&mut d).expect("data at 1.1"), '\u{FEFF}');
 }

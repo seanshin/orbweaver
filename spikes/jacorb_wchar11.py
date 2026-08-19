@@ -25,7 +25,16 @@ Used by spikes/jacorb_wchar11.sh (D010 B5, second half). Two roles:
 
   recorded — prints a `const NAME: &[u8]` from a Rust test file as hex, so the
             live bytes can be compared to the recording (the pattern of
-            spikes/wide_char_capture.py).
+            spikes/wide_char_capture.py); `recorded-pairs` prints a
+            `const NAME: &[(&[u8], &[u8], char)]` table one "sent echoed" hex
+            pair per line, so a script can drive the peer with the recorded
+            octets and compare its echoes without restating the table.
+
+The client follows the profile it is given: an IIOP 1.1 profile gets 1.1
+requests, an IIOP 1.2 profile 1.2 ones (`--expect-minor` says which the
+caller meant to measure), and a `raw:HEX` case puts the wchar's wire form on
+the wire verbatim — at 1.2 the octet count and the octets after it — so a
+peer's reader can be asked about a form no writer of ours produces.
 
 The wchar itself is written and read the way crates/orbweaver-giop/src/
 codeset.rs writes and reads it at 1.1 — two octets, no length indication, no
@@ -364,6 +373,14 @@ def cases_from(names):
                 return bytes(o.buf)
 
             out.append(Case("wstring-feff", "echo_wstring", ws, "wstring FEFF 0078 + terminator"))
+        elif name.startswith("raw:"):
+            # The wchar's wire form given verbatim, whatever the version: at
+            # 1.2 that is the octet count and the octets after it, so a peer's
+            # reader can be asked about a marked value (`raw:04feffbeff`)
+            # without any writer of ours deciding the form. What comes back is
+            # described, not judged — the caller says what it expected.
+            octets = bytes.fromhex(name[4:])
+            out.append(Case(name, "echo_wchar", lambda order, o=octets: o, f"octets {octets.hex()}"))
         else:
             unit = int(name, 16)
             out.append(
@@ -382,9 +399,12 @@ def run_client(opts):
         logf.write(line + "\n")
 
     print(f"  info profile IIOP {major}.{minor} at {host}:{port}, type {type_id}")
-    log(f"client -> {host}:{port} (profile IIOP {major}.{minor}), requests GIOP 1.1 {opts.order.upper()}")
-    if (major, minor) != (1, 1):
-        print(f"  FAIL the server's profile says IIOP {major}.{minor}, not 1.1: our client would not speak 1.1 to it")
+    log(f"client -> {host}:{port} (profile IIOP {major}.{minor}), requests GIOP {major}.{minor} {opts.order.upper()}")
+    if (major, minor) not in ((1, 1), (1, 2)):
+        print(f"  FAIL the server's profile says IIOP {major}.{minor}, not 1.1 or 1.2: this client speaks only those")
+        return 1
+    if minor != opts.expect_minor:
+        print(f"  FAIL the server's profile says IIOP {major}.{minor}, not 1.{opts.expect_minor}: the wrong version would be measured")
         return 1
 
     big = opts.order == "be"
@@ -396,10 +416,13 @@ def run_client(opts):
     for case in cases_from(opts.cases):
         rid += 2
         o = Out(big)
-        giop_header(o, 1, 0)
-        if first:
+        giop_header(o, minor, 0)
+
+        def contexts(o):
             # The CodeSets context, on the first request only, as our
             # Connection sends it: char UTF-8, wchar UTF-16.
+            if o is None:
+                return
             o.u32(1)
             o.u32(SERVICE_ID_CODE_SETS)
 
@@ -408,21 +431,40 @@ def run_client(opts):
                 c.u32(UTF_16)
 
             o.encapsulation(ctx)
-            first = False
-        else:
-            o.u32(0)
-        o.u32(rid)
-        o.u8(1)  # response_expected
-        o.raw(b"\0\0\0")  # reserved (1.1)
-        o.sequence(key)
-        o.string(case.op)
-        o.u32(0)  # requesting_principal
+
         sent = case.octets_of(unit_order)
-        o.align(2 if case.op == "echo_wchar" else 4)
+        if minor >= 2:
+            # 1.2: id, response flags, reserved, KeyAddr + key, operation,
+            # contexts; the body starts on an 8-octet boundary.
+            o.u32(rid)
+            o.u8(3)  # response expected
+            o.raw(b"\0\0\0")
+            o.u16(0)  # KeyAddr
+            o.sequence(key)
+            o.string(case.op)
+            if first:
+                contexts(o)
+                first = False
+            else:
+                o.u32(0)
+            o.align(8)
+        else:
+            if first:
+                contexts(o)
+                first = False
+            else:
+                o.u32(0)
+            o.u32(rid)
+            o.u8(1)  # response_expected
+            o.raw(b"\0\0\0")  # reserved (1.1)
+            o.sequence(key)
+            o.string(case.op)
+            o.u32(0)  # requesting_principal
+            o.align(2 if case.op == "echo_wchar" else 4)
         o.raw(sent)
         req = finish_message(o)
         sock.sendall(req)
-        log(f"C->S GIOP 1.1 Request {opts.order.upper()} id={rid} op={case.op} ({case.describe})"
+        log(f"C->S GIOP 1.{minor} Request {opts.order.upper()} id={rid} op={case.op} ({case.describe})"
             f"\n    request body: {sent.hex()} unit order {unit_order}\n" + hexdump(req))
         reply = read_message(sock)
         if reply is None:
@@ -433,9 +475,16 @@ def run_client(opts):
         rminor = reply[5]
         rorder = order_of(reply)
         d = In(reply, rorder == "be", pos=12)
-        read_contexts(d)
-        got_id = d.u32()
-        status = d.u32()
+        if rminor >= 2:
+            got_id = d.u32()
+            status = d.u32()
+            read_contexts(d)
+            if d.remaining():
+                d.align(8)
+        else:
+            read_contexts(d)
+            got_id = d.u32()
+            status = d.u32()
         log(f"S->C GIOP 1.{rminor} Reply {rorder.upper()} id={got_id} status={status}\n" + hexdump(reply))
         if got_id != rid or status != 0:
             exc = ""
@@ -448,15 +497,34 @@ def run_client(opts):
             fails += 1
             continue
         if case.op == "echo_wchar":
-            d.align(2)
-            body = d.octets(2)
-            unit = unit_of(body, rorder)
-            rest = d.remaining()
-            note = f"reply GIOP 1.{rminor} {rorder.upper()} body={body.hex()} -> U+{unit:04X}" + (
-                f" (+{rest} octet(s))" if rest else ""
-            )
-            if case.name in ("pair",):
-                print(f"  info {case.name}: sent {sent.hex()} ({case.describe}); {note}")
+            if rminor >= 2:
+                # Count and octets; described as §9.3.1.6 reads them — a
+                # leading mark names the order and is removed, else
+                # big-endian — and printed whole so the raw form is on record.
+                n = d.u8()
+                body = d.octets(n)
+                units = body
+                order12 = "be"
+                if body[:2] == b"\xfe\xff":
+                    units, order12 = body[2:], "be"
+                elif body[:2] == b"\xff\xfe":
+                    units, order12 = body[2:], "le"
+                unit = unit_of(units[:2], order12) if len(units) >= 2 else -1
+                shown = f"U+{unit:04X}" if unit >= 0 else "nothing after the mark"
+                rest = d.remaining()
+                note = f"reply GIOP 1.{rminor} {rorder.upper()} body={body.hex()} (count {n}) -> {shown}" + (
+                    f" (+{rest} octet(s))" if rest else ""
+                )
+            else:
+                d.align(2)
+                body = d.octets(2)
+                unit = unit_of(body, rorder)
+                rest = d.remaining()
+                note = f"reply GIOP 1.{rminor} {rorder.upper()} body={body.hex()} -> U+{unit:04X}" + (
+                    f" (+{rest} octet(s))" if rest else ""
+                )
+            if case.name in ("pair",) or case.name.startswith("raw:"):
+                print(f"  info {case.name}: sent {sent.hex()} ({case.describe}) in a {opts.order.upper()} message; {note}")
             else:
                 want = int(case.name, 16)
                 verdict = "ok  " if unit == want else "FAIL"
@@ -469,8 +537,8 @@ def run_client(opts):
             units = " ".join(f"U+{unit_of(body[i:i + 2], rorder):04X}" for i in range(0, len(body), 2))
             print(f"  info {case.name}: sent {sent.hex()} ({case.describe});"
                   f" reply GIOP 1.{rminor} {rorder.upper()} count={count} body={body.hex()} -> {units}")
-        if rminor != 1:
-            print(f"  FAIL {case.name}: the reply came back at GIOP 1.{rminor}, not 1.1")
+        if rminor != minor:
+            print(f"  FAIL {case.name}: the reply came back at GIOP 1.{rminor}, not 1.{minor}")
             fails += 1
     sock.close()
     return 1 if fails else 0
@@ -489,6 +557,22 @@ def run_recorded(opts):
     return 0
 
 
+def run_recorded_pairs(opts):
+    text = open(opts.rs).read()
+    m = re.search(
+        r"const %s: &\[\(&\[u8\], &\[u8\], char\)\] = &\[(.*?)\n\];" % re.escape(opts.name), text, re.S
+    )
+    if not m:
+        print(f"no pair table {opts.name} in {opts.rs}")
+        return 1
+    for sent, echoed in re.findall(r"\(&\[([^\]]*)\], &\[([^\]]*)\], '", m.group(1)):
+        print(
+            "".join(re.findall(r"0x([0-9a-fA-F]{2})", sent)).lower(),
+            "".join(re.findall(r"0x([0-9a-fA-F]{2})", echoed)).lower(),
+        )
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="role", required=True)
@@ -502,15 +586,22 @@ def main():
     c.add_argument("--log", required=True)
     c.add_argument("--order", choices=["be", "le"], default="be")
     c.add_argument("--unit-order", choices=["message", "big"], default="message")
-    c.add_argument("cases", nargs="+", help="hex UTF-16 units, or 'pair', or 'wstring-feff'")
-    r = sub.add_parser("recorded")
-    r.add_argument("--rs", required=True)
-    r.add_argument("--name", required=True)
+    c.add_argument(
+        "--expect-minor", type=int, choices=[1, 2], default=1,
+        help="the IIOP version the profile must advertise (the request follows the profile)",
+    )
+    c.add_argument("cases", nargs="+", help="hex UTF-16 units, 'pair', 'wstring-feff', or 'raw:HEX' (the wchar's wire form verbatim)")
+    for role in ("recorded", "recorded-pairs"):
+        r = sub.add_parser(role)
+        r.add_argument("--rs", required=True)
+        r.add_argument("--name", required=True)
     opts = ap.parse_args()
     if opts.role == "server":
         return run_server(opts)
     if opts.role == "client":
         return run_client(opts)
+    if opts.role == "recorded-pairs":
+        return run_recorded_pairs(opts)
     return run_recorded(opts)
 
 

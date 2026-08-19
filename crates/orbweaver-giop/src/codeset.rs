@@ -1174,6 +1174,12 @@ fn unmarked_order(version: Version, tcs: CodeSetId, stream: Endian) -> Endian {
     if tcs == CodeSetId::UTF_16 && version.minor >= 2 { Endian::Big } else { stream }
 }
 
+/// Whether two octets are a byte-order mark in either order — the two
+/// sequences §9.3.1.6 makes a reader remove from the front of a UTF-16 value.
+fn is_mark(octets: &[u8]) -> bool {
+    matches!(octets, [0xFE, 0xFF] | [0xFF, 0xFE])
+}
+
 /// Whether a wide value in `tcs` is written with a leading byte-order mark.
 /// Only UTF-16 defines one; a UCS-2 peer would render `U+FEFF` as a
 /// zero-width no-break space in the middle of the text.
@@ -1398,6 +1404,26 @@ impl WideCodec {
     /// message's. Hard-coding big-endian here while the reader used the stream
     /// is what made the two disagree for UCS-2 and agree for UTF-16 by luck.
     ///
+    /// **Two UTF-16 units are written behind an explicit mark at 1.2: U+FEFF
+    /// and U+FFFE.** Bare, their big-endian octets are `fe ff` and `ff fe` —
+    /// the two sequences §9.3.1.6 makes a reader remove: "if a BOM is present
+    /// at the beginning of a wchar or wstring received in a GIOP message, the
+    /// ORB shall remove the BOM before passing the value to the user". A
+    /// writer that means the character therefore has to put a mark in front
+    /// of it — the same paragraph's "if an ORB decides to use BOM to indicate
+    /// endianness, it shall add the BOM …" — and this one does: `04 fe ff
+    /// fe ff` for U+FEFF, `04 fe ff ff fe` for U+FFFE, in either stream order
+    /// (the mark states the order the rest of this writer's 1.2 units are in
+    /// anyway). Every other unit keeps its measured bare form. **Measured**
+    /// against JacORB 3.9 (`spikes/wide_rust.sh`, 2026-08-19, wchar=UTF-16):
+    /// its 1.2 reader hands its user U+FEFF from `04 fe ff fe ff` and from
+    /// `04 ff fe ff fe`, U+D55C from `04 fe ff d5 5c` and `04 ff fe 5c d5`,
+    /// in a big-endian and a little-endian message alike, while `02 fe ff` —
+    /// what both writers wrote for U+FEFF before this — reaches its user as
+    /// U+0000. Its own writer still writes `02 fe ff`; what our reader does
+    /// with that is [`WideCodec::get_wchar`]'s. UCS-2 has no mark and gets
+    /// none: a UCS-2 reader takes `fe ff` for the character it is.
+    ///
     /// The 1.1 unit is two octets in the stream's order and nothing else —
     /// no length, no mark — and that too is measured, against JacORB 3.9
     /// (`spikes/jacorb_wchar11.sh`, 2026-08-19): our `d5 5c` in a big-endian
@@ -1415,11 +1441,24 @@ impl WideCodec {
         }
         if self.version.minor >= 2 {
             let unit = units[0];
-            let octets = match unmarked_order(self.version, self.tcs, e.endian()) {
+            let order = unmarked_order(self.version, self.tcs, e.endian());
+            let octets = match order {
                 Endian::Big => unit.to_be_bytes(),
                 Endian::Little => unit.to_le_bytes(),
             };
-            e.put_u8(2); // octet count
+            // A unit whose bare octets are a mark would be removed by the
+            // reader as one; it goes behind an explicit mark in the same
+            // order (see the doc comment). Only UTF-16 has a mark to write.
+            if marks_its_order(self.tcs) && is_mark(&octets) {
+                let mark = match order {
+                    Endian::Big => BOM.to_be_bytes(),
+                    Endian::Little => BOM.to_le_bytes(),
+                };
+                e.put_u8(4); // octet count: the mark and the unit
+                e.put_bytes(&mark);
+            } else {
+                e.put_u8(2); // octet count
+            }
             e.put_bytes(&octets);
         } else {
             e.put_u16(units[0]);
@@ -1435,6 +1474,18 @@ impl WideCodec {
     /// message, the ORB **shall** remove the BOM before passing the value to
     /// the user". Insisting on a count of exactly two refused a legal encoding
     /// we happen not to emit, which is why nothing here ever went red over it.
+    ///
+    /// **A 1.2 body that is exactly a mark and nothing else is the unit, read
+    /// as an unmarked one** — `02 fe ff` is U+FEFF and `02 ff fe` is U+FFFE.
+    /// A `wchar` is never empty, so no writer that marks can produce these
+    /// octets; the only writer that does is one that means the character and
+    /// did not mark it, which is what JacORB 3.9 writes for both units at 1.2
+    /// (`02 fe ff` for U+FEFF, `02 ff fe` for U+FFFE — `spikes/wide_rust.sh`,
+    /// 2026-08-19) and what this codec wrote for U+FEFF until it learned to
+    /// mark. Refusing them cost the one code point a peer could not get across
+    /// to us; JacORB's own reader, given the same octets, hands its user
+    /// U+0000. The marked form our writer emits (`04 fe ff fe ff`) is read
+    /// the ordinary way: mark removed, unit in the mark's order.
     ///
     /// GIOP 1.1 keeps the stream's order. It has no length indication, so it
     /// has nowhere to put a mark, and §9.3.1.6 phrases the byte-order bullets
@@ -1452,7 +1503,13 @@ impl WideCodec {
         let unit = if self.version.minor >= 2 {
             let n = d.get_u8().map_err(|_| bad())?;
             let raw = d.get_bytes(n as usize).map_err(|_| bad())?;
-            let (order, body) = wide_order(raw, self.version, self.tcs, d.endian());
+            let (order, body) = if raw.len() == 2 && is_mark(raw) {
+                // The mark with nothing after it: the unit itself, unmarked
+                // (see the doc comment).
+                (unmarked_order(self.version, self.tcs, d.endian()), raw)
+            } else {
+                wide_order(raw, self.version, self.tcs, d.endian())
+            };
             // An odd count is refused rather than truncated: `chunks_exact`
             // would drop the trailing octet and hand back a plausible
             // character, having consumed a byte nothing accounts for.
