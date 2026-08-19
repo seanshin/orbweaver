@@ -29,10 +29,12 @@
 #                 advertise IIOP 1.1 (control: without the property it says
 #                 1.2); spike-interop then runs its whole case list at 1.1
 #                 through the tap, and JacORB's echo_wstring reply is checked
-#                 against what we sent — a mark we wrote must not come back
-#                 as a character. spike-interop's own verdict cannot see this,
-#                 because our reader strips a leading U+FEFF, which is exactly
-#                 the case this line exists to catch.
+#                 against what we sent — we must write no mark at 1.1, and
+#                 the reply must be exactly as long as the request.
+#                 spike-interop's own verdict cannot see a mark echoed as a
+#                 character, because our reader strips a leading U+FEFF, which
+#                 is exactly the case this line exists to catch (it did, on
+#                 2026-08-19: 4/4 exchanges, fixed in codeset.rs the same day).
 #
 # Wire versions are asserted from bytes (the tap parses every header) and from
 # the Rust server's log, never from what a fixture was *told*.
@@ -234,24 +236,29 @@ else
   grep "  FAIL" "$D/r.interop.log" | head -3 | sed 's/^/       /'
 fi
 # What spike-interop's green cannot see: JacORB's reply, in wide characters,
-# against our request. We write a byte-order mark; if JacORB read it as a mark
-# the reply is one unit shorter than the request, and if it read it as text
-# the counts are equal — and our reader then strips the U+FEFF it hands back,
-# so the round trip looks fine either way. Only the counts on the wire tell.
+# against our request. Until 2026-08-19 we wrote a byte-order mark at 1.1 as
+# at 1.2; JacORB read it as text, echoed it as the first unit, and our reader
+# stripped that U+FEFF as a mark — so the round trip was green in 4/4
+# exchanges while JacORB's own user saw U+FEFF + text. Only the wire tells:
+# our request must carry no mark, and the reply must be exactly as long as
+# the request. (A reply one unit shorter would mean we marked again and the
+# peer stripped it; a reply as long as a marked request is the original bug.)
 r_counts=$(awk '
   function id_of(s,  m) { match(s, / id=[0-9]+/); return substr(s, RSTART+4, RLENGTH-4) }
+  function count_of(s) { match(s, /count=[0-9]+/); return substr(s, RSTART+6, RLENGTH-6) }
+  function marked(s) { match(s, /body=[0-9a-f]+/); b = substr(s, RSTART+5, 4); return (b == "feff" || b == "fffe") ? "marked" : "unmarked" }
   /^\[[0-9]+\] C->S GIOP 1\.1 Request .*op=echo_wstring/ { pending = $1 " " id_of($0); next }
-  pending != "" && /request body: wstring 1\.1 count=/ { match($0, /count=[0-9]+/); req[pending] = substr($0, RSTART+6, RLENGTH-6); pending = "" }
+  pending != "" && /request body: wstring 1\.1 count=/ { req[pending] = count_of($0) " " marked($0); pending = "" }
   /^\[[0-9]+\] S->C GIOP 1\.1 Reply .*for=echo_wstring/ { rpending = $1 " " id_of($0); next }
-  rpending != "" && /reply body: wstring 1\.1 count=/ { match($0, /count=[0-9]+/); print req[rpending], substr($0, RSTART+6, RLENGTH-6); rpending = "" }
+  rpending != "" && /reply body: wstring 1\.1 count=/ { print req[rpending], count_of($0); rpending = "" }
 ' "$D/r.tap.log")
 r_pairs=$(printf '%s\n' "$r_counts" | grep -c '[0-9]')
-r_kept_mark=$(printf '%s\n' "$r_counts" | awk 'NF == 2 && $2 != $1 - 1 { n++ } END { print n + 0 }')
-if [ "$r_pairs" -ge 1 ] && [ "$r_kept_mark" -eq 0 ]; then
-  ok "JacORB's 1.1 wstring replies are one wide character shorter than our marked requests ($r_pairs exchange(s)): the mark was read as a mark"
+r_bad=$(printf '%s\n' "$r_counts" | awk 'NF == 3 && ($2 != "unmarked" || $3 != $1) { n++ } END { print n + 0 }')
+if [ "$r_pairs" -ge 1 ] && [ "$r_bad" -eq 0 ]; then
+  ok "our 1.1 wstring requests carry no mark and JacORB's replies are exactly as long ($r_pairs exchange(s), both byte orders): no U+FEFF reached either user"
 elif [ "$r_pairs" -ge 1 ]; then
-  fail "JacORB's 1.1 wstring reply is as long as our marked request in $r_kept_mark of $r_pairs exchange(s): our byte-order mark came back as U+FEFF text, and our reader hid it"
-  printf '%s\n' "$r_counts" | head -2 | sed 's/^/       request count, reply count: /'
+  fail "1.1 wstring: $r_bad of $r_pairs exchange(s) either carried a mark from us or came back a different length (a marked request echoed at equal length is U+FEFF in JacORB's user's text, hidden by our reader)"
+  printf '%s\n' "$r_counts" | head -2 | sed 's/^/       request count, marked?, reply count: /'
 else
   fail "no echo_wstring exchange at 1.1 was recorded by the tap"
 fi
