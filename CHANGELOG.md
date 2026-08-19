@@ -718,6 +718,25 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **`spike-events` read a counter another thread was about to increment.**
+  Its phase-2 "the dead consumer's backlog must be counted as dropped" check
+  snapshotted `stats.dropped` the instant `disconnected_for_failure` read 1,
+  while the relay thread counts the backlog *after* disconnecting; every other
+  phase-2 condition waited with a deadline, this one did not. It fired once on
+  a loaded CI runner (run for 46ccaae) and passed on the next commit with the
+  same code — a race, not a transient: it now waits like the rest. The
+  harness's "holding event channel never came up" line prints the fixture's
+  log tail so the next such failure has something to read; that half did not
+  reproduce and is not claimed diagnosed.
+
+  **`spike-events`가 다른 스레드가 막 올리려는 카운터를 읽었다.** 죽은
+  소비자의 백로그를 dropped로 세는 검사가 `disconnected_for_failure`가 1이
+  되는 순간 스냅샷을 찍었는데, 릴레이 스레드는 연결을 끊은 *뒤에* 센다 —
+  2단계의 다른 조건은 모두 기한을 두고 기다렸고 이것만 아니었다. CI 러너에서
+  한 번 발화(46ccaae), 같은 코드의 다음 커밋에서 통과 — 이제 나머지처럼
+  기다린다. "holding event channel never came up" 줄은 픽스처 로그 꼬리를
+  찍는다; 그 절반은 재현되지 않았고 진단됐다고 주장하지 않는다.
+
 - **The live dynamic call's marshalling error names the argument and the path
   inside it** (`at key.tag[2]: string is bounded at 8 but 9 were given`), on
   the marshaller's own `Path`; `encode_named`/`decode_named` (+`_with`) added

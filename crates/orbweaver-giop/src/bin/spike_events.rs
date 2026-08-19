@@ -253,6 +253,16 @@ fn run(out_path: &str, hold: bool) -> Result<(), Box<dyn std::error::Error>> {
     )?;
     ok("dead consumer disconnected after the failure threshold; live one got all 6, in order");
 
+    // The dead consumer's backlog is counted as dropped by the relay thread
+    // *after* it disconnects the consumer, so a snapshot taken the instant
+    // `disconnected_for_failure` reads 1 can still show dropped == 0. It did,
+    // once, on a loaded CI runner (2026-08-19, run for 46ccaae) — every other
+    // phase-2 condition here waits with a deadline; this one read a counter
+    // another thread was about to increment. Wait for it like the rest.
+    require(
+        handle.wait_until(T, |s| s.dropped > 0),
+        "the dead consumer's backlog must be counted as dropped, loudly",
+    )?;
     let stats = handle.stats();
     println!(
         "  drop report: accepted={} delivered={} dropped={} push_failures={} \
@@ -268,7 +278,6 @@ fn run(out_path: &str, hold: bool) -> Result<(), Box<dyn std::error::Error>> {
         stats.push_failures == u64::from(MAX_CONSECUTIVE_FAILURES),
         "exactly the threshold's worth of failures should have been spent on the dead consumer",
     )?;
-    require(stats.dropped > 0, "the dead consumer's backlog must be counted as dropped, loudly")?;
     ok("drops were counted and reported, none silent");
 
     drop(supplier);

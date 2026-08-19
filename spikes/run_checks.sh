@@ -2342,7 +2342,12 @@ if [ "$ev_up" -eq 1 ]; then
     *) echo "  FAIL cross-ORB consumer: $(printf '%s' "$ev_out" | tail -2 | tr '\n' ' ')"; ev_fail=1 ;;
   esac
 else
-  echo "  FAIL the holding event channel never came up"; ev_fail=1
+  # Print what the fixture said: on CI (run for 46ccaae, 2026-08-19) this line
+  # fired once with nothing to read, right after the self-consistency spike
+  # had failed on a race, and did not reproduce on the next run.
+  echo "  FAIL the holding event channel never came up within 12s; its log:"
+  tail -5 /tmp/orbweaver-events-hold.log 2>/dev/null | sed 's/^/       | /'
+  ev_fail=1
 fi
 kill "$EV_PID" >/dev/null 2>&1 || true
 wait "$EV_PID" 2>/dev/null || true
