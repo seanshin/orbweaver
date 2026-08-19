@@ -132,15 +132,19 @@ Proposition 3 is not a guess. [AutoMCP](https://arxiv.org/html/2507.16044v2) com
   requirement                (compiler-verified)              (no stubs)
 ```
 
-| Stage | 단계 | Input → Output | Target |
-|---|---|---|---|
-| **S1** Ingest | 흡수 | requirements / legacy source / existing IDL → IR | 95% |
-| **S2** Synthesize | 합성 | IR → OMG IDL 4.2 draft | 90% |
-| **S3** Annotate | 의미부착 | IDL → SIDL (`@ai_*` semantics) | 80% |
-| **S4** Validate | 검증 | SIDL → compile gate + self-repair loop | 100% |
-| **S5** Register | 등록 | SIDL → type registry + semantic index | 100% |
-| **S6** Bind | 연동 | catalog → dynamic call, or generated stubs | 85% |
-| **S7** Verify | 검증·운영 | binding → contract tests, interceptors, tracing | 90% |
+| Stage | 단계 | Input → Output |
+|---|---|---|
+| **S1** Ingest | 흡수 | requirements / legacy source / existing IDL → IR |
+| **S2** Synthesize | 합성 | IR → OMG IDL 4.2 draft |
+| **S3** Annotate | 의미부착 | IDL → SIDL (`@ai_*` semantics) |
+| **S4** Validate | 검증 | SIDL → compile gate + self-repair loop |
+| **S5** Register | 등록 | SIDL → type registry + semantic index |
+| **S6** Bind | 연동 | catalog → dynamic call, or generated stubs |
+| **S7** Verify | 검증·운영 | binding → contract tests, interceptors, tracing |
+
+Until 2026-08-19 this table carried a *Target* column — seven percentages, one per stage, copied from the plan's own table and drifting from nothing only because neither copy could be measured. No run in the tree computes an "automation" percentage for any stage; what a stage *does* report is in [`PLAN.md`](docs/PLAN.md) §5, under the table, and the seven numbers live where untestable numbers are kept: aspiration **A9** in [PLAN §11](docs/PLAN.md#11-success-metrics), with the trigger that would make them testable. This file does not carry them.
+
+이 표는 2026-08-19까지 *목표* 열을 달고 있었습니다 — 단계마다 하나씩 백분율 일곱 개로, 계획서의 표를 그대로 베낀 것이었고, 두 사본이 서로 어긋나지 않았던 이유는 어느 쪽도 측정할 수 없었기 때문입니다. 트리의 어떤 실행도 단계의 "자동화" 백분율을 계산하지 않습니다. 단계가 실제로 보고하는 것은 [`PLAN.ko.md`](docs/PLAN.ko.md) §5의 표 아래에 있고, 일곱 수치는 시험 불가한 수치가 사는 곳 — [계획서 §11](docs/PLAN.ko.md#11-성공-지표)의 지향 **A9** — 에 방아쇠와 함께 있습니다. 이 파일은 그 수치를 담지 않습니다.
 
 **S4 is the safety belt.** An LLM writes plausible IDL that may be wrong; an IDL compiler rejects wrong IDL every single time. That asymmetry — *generative synthesis, deterministic verification* — is the trust model this whole system rests on.
 
@@ -302,8 +306,8 @@ Four assumptions get tested before anything else is built. Two of them can inval
 
 - **A — GIOP interop is reachable.** Hand-encode a GIOP 1.2 `Request` and get a correct reply from a stock TAO and omniORB server. *If a minimal ORB cannot interoperate, the in-house path fails and the MIT-only constraint must be revisited.*
   **GIOP 상호운용이 가능한가.** GIOP 1.2 `Request`를 직접 인코딩해 순정 TAO·omniORB 서버로부터 정상 응답을 받아낸다. *최소 ORB가 상호운용되지 않으면 자체 구현 경로가 무너지고 MIT 전용 제약을 재검토해야 한다.*
-- **B — LLMs write compilable IDL.** 20 requirements → IDL. Target ≥60% first-pass compile, ≥95% within three self-repair rounds.
-  **LLM이 컴파일되는 IDL을 쓰는가.** 요구사항 20건 → IDL. 목표 1차 통과 ≥60%, 자가수정 3회 내 ≥95%.
+- **B — LLMs write compilable IDL.** 20 requirements → IDL, one pass, no compiler feedback, then the oracle over the whole batch. The threshold the spike was gated on and what it measured against that threshold are one dated record, [`PHASE0.md`](docs/PHASE0.md) *Assumption B*; the standing first-pass and three-round targets are two rows of [PLAN §11](docs/PLAN.md#11-success-metrics) with the instrument that takes each number. Until 2026-08-19 this line carried the spike's pair while PLAN carried the standing pair, and a reader could not tell they were two facts. This file carries neither.
+  **LLM이 컴파일되는 IDL을 쓰는가.** 요구사항 20건 → IDL, 컴파일러 피드백 없이 1회 생성한 뒤 전체를 오라클에 통과시킵니다. 스파이크의 관문 기준값과 그 기준에 대한 실측치는 날짜가 박힌 기록 하나 — [`PHASE0.md`](docs/PHASE0.md) *가정 B* — 에 있고, 상시 목표인 1차 통과율과 자가수정 3회 내 통과율은 [계획서 §11](docs/PLAN.ko.md#11-성공-지표)의 두 행에 수치를 재는 계측기와 함께 있습니다. 2026-08-19까지 이 줄은 스파이크의 값을, 계획서는 상시 목표를 각각 들고 있어 읽는 사람이 둘이 별개의 사실임을 알 수 없었습니다. 이 파일은 어느 쪽도 담지 않습니다.
 - **C — `@annotation` survives real toolchains.** Most deployed ORB compilers are CORBA 2.x/3.x era and may reject IDL 4 annotations. *Fallback: structured comments plus a sidecar YAML — viable because we own the parser.*
   **`@annotation`이 실제 툴체인에서 통과하는가.** 배포된 ORB 컴파일러 대부분은 CORBA 2.x/3.x 세대라 IDL 4 어노테이션을 거부할 수 있다. *폴백: 구조화 주석 + 사이드카 YAML — 파서를 우리가 소유하므로 가능하다.*
 - **D — IOR addressing works under NAT/containers.** IORs embed addresses; a container's internal IP makes them uncallable from outside. Verify endpoint rewriting under Kubernetes early.
@@ -313,16 +317,9 @@ Four assumptions get tested before anything else is built. Two of them can inval
 
 ## Targets / 목표 지표
 
-| Metric | 지표 | Baseline | Target |
-|---|---|---|---|
-| Time to define a new interface | 신규 인터페이스 정의 | 3–10 days | **< 1 hour** |
-| Time to bind a new service (dynamic) | 신규 연동 (동적) | 2–4 weeks | **< 10 min** |
-| IDL first-pass compile rate | IDL 1차 컴파일 통과율 | — | **≥ 85%** |
-| Compile rate within 3 self-repairs | 자가수정 3회 내 통과율 | — | **≥ 98%** |
-| Semantic annotation coverage | 어노테이션 커버리지 | 0% | **≥ 90%** |
-| Contract tests auto-generated | 계약 테스트 자동 생성률 | 0% | **≥ 80%** |
-| Breaking changes caught pre-merge | 파괴적 변경 사전 탐지율 | manual | **100%** |
-| Human intervention across pipeline | 파이프라인 사람 개입 비율 | 100% | **≤ 15%** |
+The success metrics — each with its baseline, its target and **the instrument that takes the number** — live in [`PLAN.md` §11](docs/PLAN.md#11-success-metrics) and nowhere else. That last column is what separates a gate from a wish: the rows reading **none** are collected under it as *aspirations*, each with the observable trigger that would give it an instrument, and the rows with an instrument name the binary and the flag that fail them. Until 2026-08-19 this section carried a copy of the table with the targets and without the instrument column, so every row read as a gate; the copy is gone and this file points instead.
+
+성공 지표는 — 각각의 기준선, 목표, 그리고 **수치를 재는 계측기**와 함께 — [`PLAN.ko.md` §11](docs/PLAN.ko.md#11-성공-지표)에만 삽니다. 그 마지막 열이 관문과 소망을 가르는 것으로, **없음**이라 적힌 행들은 그 아래 *지향*으로 모여 계측기를 얻으려면 무엇이 관측되어야 하는지 방아쇠를 달고 있고, 계측기가 있는 행은 그것을 실패시키는 바이너리와 플래그를 이름으로 적습니다. 2026-08-19까지 이 절은 그 표를 목표만 남기고 계측기 열 없이 베껴 두어 모든 행이 관문처럼 읽혔습니다. 사본은 지웠고 이 파일은 그곳을 가리킵니다.
 
 ---
 
