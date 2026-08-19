@@ -82,6 +82,27 @@ records what changed and, where it matters, what it changes on the wire.
   9건을 출처와 함께 기록, `spikes/union_default_capture.py`로 재채취.
   레지스트리는 변경 없음. 보고만: 레지스트리는 `case 2: default:`를 한 멤버로
   접고 omniidl은 둘로 편다(선택은 같음, `member_count`는 다름).
+- **`wide.idl` from our own stack.** `spike-wide` (orbweaver-object) serves
+  and dials `IDL:spike/Wide:1.0` through `Server`/`Connection`;
+  `spikes/wide_rust.sh` re-runs 382baa9's matrix with the Rust stack in each
+  seat plus 1.0/1.1/1.2 self-consistency in both orders, and checks the live
+  octets against `wide_1_1_from_a_peer.rs` — the real server writes exactly
+  the recorded replies in both orders and our 1.1 request is octet-for-octet
+  JacORB's. Recorded: JacORB's lone surrogate is refused by the real reader
+  (MARSHAL). **Found, not fixed:** U+FEFF as a GIOP 1.2 `wchar` crosses
+  neither stack — both writers write `02 fe ff`, both readers strip it as a
+  mark (JacORB → U+0000, ours → MARSHAL); pinned until `put_wchar` at 1.2
+  changes, and the proposed `04 fe ff fe ff` must be measured against JacORB's
+  reader before it is adopted.
+
+  **`wide.idl`을 우리 스택으로.** `spike-wide`가 `Server`/`Connection`으로
+  `IDL:spike/Wide:1.0`을 서빙·호출; `spikes/wide_rust.sh`가 382baa9의 행렬을
+  Rust 스택을 양쪽 자리에 앉혀 다시 재고 1.0/1.1/1.2 자기일관성을 더하며 실측
+  옥텟을 기록과 대조 — 실제 서버가 기록된 응답을 두 순서 모두 옥텟 단위로 쓰고,
+  우리 1.1 요청은 JacORB의 것과 옥텟 단위로 같다. **발견, 미수정:** GIOP 1.2
+  `wchar` U+FEFF는 어느 스택도 건너지 못한다(두 라이터 모두 `02 fe ff`, 두 리더
+  모두 마크로 벗김); `put_wchar` 1.2가 바뀔 때까지 고정, 제안 형태는 JacORB
+  리더로 먼저 재야 한다.
 - **1.1 `wchar` measured against JacORB 3.9, both directions and both byte
   orders** (D010 B5, second half; `spikes/wide.idl`, `spikes/jacorb_wchar11.sh`,
   `tests/wide_1_1_from_a_peer.rs` appended). A 1.1 `wchar` is its two octets
