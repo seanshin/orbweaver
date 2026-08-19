@@ -221,6 +221,73 @@ impl ReplyStatus {
     }
 }
 
+/// A redirect: where a request goes instead, and whether the caller may
+/// forget the reference it dialled.
+///
+/// The two are §9.4.3.2's `LOCATION_FORWARD` (status 3) and
+/// `LOCATION_FORWARD_PERM` (status 4, GIOP 1.2 and later). Both carry an IOR
+/// and both oblige the client to retry there without the application noticing.
+/// What differs is what the client may *conclude*: after a temporary forward
+/// the reference it dialled is still valid and is where it falls back to when
+/// the new one stops answering; after a permanent one the object lives at the
+/// new reference and the client may replace what it holds. A servant that has
+/// moved an object for good says so with [`Forward::Permanent`] — until this
+/// type existed nothing a servant could return said it, and every mover was
+/// re-forwarding every caller on every call.
+///
+/// `From<Ior>` is the temporary case, so a bare reference keeps meaning what
+/// it always meant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Forward {
+    /// `LOCATION_FORWARD`: retry there; the reference you dialled is still good.
+    Temporary(Ior),
+    /// `LOCATION_FORWARD_PERM`: it lives there now.
+    Permanent(Ior),
+}
+
+impl Forward {
+    /// The reference to retry against.
+    pub fn ior(&self) -> &Ior {
+        match self {
+            Forward::Temporary(ior) | Forward::Permanent(ior) => ior,
+        }
+    }
+
+    /// The reference to retry against, owned.
+    pub fn into_ior(self) -> Ior {
+        match self {
+            Forward::Temporary(ior) | Forward::Permanent(ior) => ior,
+        }
+    }
+
+    /// Whether the caller may replace the reference it dialled.
+    pub fn is_permanent(&self) -> bool {
+        matches!(self, Forward::Permanent(_))
+    }
+
+    /// The reply status this travels under when answering a `version` peer.
+    ///
+    /// `LOCATION_FORWARD_PERM` is status 4, and `ReplyStatusType_1_0` — the
+    /// enumeration GIOP 1.0 and 1.1 both use — stops at 3. A 1.0/1.1 peer
+    /// therefore cannot be told *permanent*; it is told `LOCATION_FORWARD`,
+    /// which is true (the object is there) and loses only the permission to
+    /// forget the old address. Refusing the reply instead would drop a
+    /// legitimate redirect on the floor for the crime of being sent to an
+    /// older client.
+    pub const fn reply_status(&self, version: Version) -> ReplyStatus {
+        match self {
+            Forward::Permanent(_) if version.is_1_2_layout() => ReplyStatus::LocationForwardPerm,
+            Forward::Permanent(_) | Forward::Temporary(_) => ReplyStatus::LocationForward,
+        }
+    }
+}
+
+impl From<Ior> for Forward {
+    fn from(ior: Ior) -> Self {
+        Forward::Temporary(ior)
+    }
+}
+
 /// Anything that can go wrong invoking over GIOP.
 #[derive(Debug)]
 pub enum Error {
@@ -1599,6 +1666,9 @@ pub struct Connection {
     fragment_threshold: usize,
     /// Largest number of fragments any one reply arrived in.
     max_reply_fragments: usize,
+    /// The redirect most recently followed, if any. See
+    /// [`Connection::forwarded`].
+    forwarded: Option<Forward>,
     /// The TLS policy this connection was dialed with, if any. Kept so a
     /// `LOCATION_FORWARD` is followed at the same security level: a
     /// connection whose caller demanded TLS must never chase a redirect back
@@ -1773,6 +1843,7 @@ impl Connection {
             codeset_context_pending,
             fragment_threshold: DEFAULT_FRAGMENT_THRESHOLD,
             max_reply_fragments: 1,
+            forwarded: None,
             #[cfg(feature = "ssliop")]
             tls_config: None,
         }
@@ -1875,6 +1946,24 @@ impl Connection {
     /// tested nothing.
     pub fn max_reply_fragments(&self) -> usize {
         self.max_reply_fragments
+    }
+
+    /// The redirect this connection most recently followed, or `None` if it
+    /// is still talking to the reference it dialled.
+    ///
+    /// [`Connection::invoke`] follows every forward transparently and — as
+    /// §9.4.3.2 permits — keeps talking to the new endpoint afterwards, so
+    /// from the returned `Reply` a caller cannot tell whether a redirect
+    /// happened, let alone whether the servant said *permanent*. This is how
+    /// it can tell. A permanent forward is the servant's leave to replace the
+    /// reference the caller holds; a temporary one is not, and a caller that
+    /// republishes a temporary target as if it were the object's address is
+    /// publishing something the servant did not say.
+    ///
+    /// Only the last hop of a chain is kept: it is the one this connection is
+    /// now on.
+    pub fn forwarded(&self) -> Option<&Forward> {
+        self.forwarded.as_ref()
     }
 
     /// The object key extracted from the IOR.
@@ -2028,20 +2117,21 @@ impl Connection {
         for _ in 0..MAX_FORWARD_HOPS {
             match self.invoke_once(operation, &write_args)? {
                 Outcome::Done(reply) => return Ok(reply),
-                Outcome::Forwarded(ior) => {
+                Outcome::Forwarded(forward) => {
                     // A forwarded reference is a full IOR and may itself name
                     // several endpoints, so it gets the same failover as the
                     // original connect did — over the same transport: a TLS
                     // connection follows the forward with the policy it was
                     // dialed with, and fails rather than downgrade to
                     // cleartext if the new IOR advertises no TLS endpoint.
+                    let ior = forward.ior();
                     #[cfg(feature = "ssliop")]
                     let next = match &self.tls_config {
-                        Some(cfg) => Self::connect_tls(&ior, Duration::from_secs(10), cfg.clone())?,
-                        None => Self::connect(&ior, Duration::from_secs(10))?,
+                        Some(cfg) => Self::connect_tls(ior, Duration::from_secs(10), cfg.clone())?,
+                        None => Self::connect(ior, Duration::from_secs(10))?,
                     };
                     #[cfg(not(feature = "ssliop"))]
-                    let next = Self::connect(&ior, Duration::from_secs(10))?;
+                    let next = Self::connect(ior, Duration::from_secs(10))?;
                     let endian = self.endian;
                     let converting = self.caller_converts_chars;
                     // §7.10.2.5 negotiates per *connection*, and a forward is a
@@ -2053,6 +2143,7 @@ impl Connection {
                     let before = self.char_codeset.agreed().map(|c| c.id());
                     *self = next;
                     self.endian = endian;
+                    self.forwarded = Some(forward);
                     if converting {
                         let after = self.char_codeset.agreed().map(|c| c.id());
                         if after != before {
@@ -2207,10 +2298,13 @@ impl Connection {
                 let id = reply.body()?.get_string().unwrap_or_else(|_| "<unreadable>".into());
                 Err(Error::UserException { id, reply: Box::new(reply) })
             }
-            ReplyStatus::LocationForward | ReplyStatus::LocationForwardPerm => {
+            ReplyStatus::LocationForward => {
                 let mut b = reply.body()?;
-                let ior = Ior::read_from(&mut b)?;
-                Ok(Outcome::Forwarded(ior))
+                Ok(Outcome::Forwarded(Forward::Temporary(Ior::read_from(&mut b)?)))
+            }
+            ReplyStatus::LocationForwardPerm => {
+                let mut b = reply.body()?;
+                Ok(Outcome::Forwarded(Forward::Permanent(Ior::read_from(&mut b)?)))
             }
             ReplyStatus::NeedsAddressingMode => {
                 // Answering this requires the ProfileAddr and ReferenceAddr
@@ -2229,7 +2323,7 @@ impl Connection {
 
 enum Outcome {
     Done(Reply),
-    Forwarded(Ior),
+    Forwarded(Forward),
 }
 
 /// What §7.10.2 produced for `char` data against one profile.

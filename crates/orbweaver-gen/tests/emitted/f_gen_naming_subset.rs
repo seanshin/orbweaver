@@ -297,13 +297,28 @@ pub mod CosNaming {
         ///
         /// So the default is `None` — served here — and it is a default rather
         /// than a silence: this method exists, is documented, and is the one place
-        /// to override. Note the two limits the runtime imposes and this cannot
+        /// to override. Note the one limit the runtime imposes and this cannot
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
-        /// the address, and `LOCATION_FORWARD_PERM` is not reachable through
-        /// `rt::Dispatch` at all.
+        /// the address. This hook is the *temporary* forward; an object that has
+        /// moved for good says so through `redirect`, below.
         fn forward(&mut self, __at: &BindingIteratorTarget<'_>) -> Option<rt::Ior> {
             let _ = __at;
             None
+        }
+        /// Where this request should be sent instead, and whether for good.
+        ///
+        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
+        /// the temporary form, its reply-status enumeration having no other),
+        /// and is the one thing a servant can say that lets a client replace the
+        /// reference it holds rather than keep the old one as a fallback.
+        ///
+        /// Defaults to `forward` wrapped as temporary, so a servant that
+        /// overrides only `forward` behaves as it always did. Override this one
+        /// to say *permanent*; there is no reason to override both.
+        fn redirect(&mut self, __at: &BindingIteratorTarget<'_>) -> Option<rt::Forward> {
+            self.forward(__at).map(rt::Forward::Temporary)
         }
         /// Releases the iterator
         ///
@@ -439,6 +454,11 @@ pub mod CosNaming {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = BindingIteratorTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
+        }
+        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+            let __oid = self.refs.oid_of(&__req.object_key)?;
+            let __at = BindingIteratorTarget::new(__oid, &self.refs);
+            self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
@@ -965,13 +985,28 @@ pub mod CosNaming {
         ///
         /// So the default is `None` — served here — and it is a default rather
         /// than a silence: this method exists, is documented, and is the one place
-        /// to override. Note the two limits the runtime imposes and this cannot
+        /// to override. Note the one limit the runtime imposes and this cannot
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
-        /// the address, and `LOCATION_FORWARD_PERM` is not reachable through
-        /// `rt::Dispatch` at all.
+        /// the address. This hook is the *temporary* forward; an object that has
+        /// moved for good says so through `redirect`, below.
         fn forward(&mut self, __at: &NamingContextTarget<'_>) -> Option<rt::Ior> {
             let _ = __at;
             None
+        }
+        /// Where this request should be sent instead, and whether for good.
+        ///
+        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
+        /// the temporary form, its reply-status enumeration having no other),
+        /// and is the one thing a servant can say that lets a client replace the
+        /// reference it holds rather than keep the old one as a fallback.
+        ///
+        /// Defaults to `forward` wrapped as temporary, so a servant that
+        /// overrides only `forward` behaves as it always did. Override this one
+        /// to say *permanent*; there is no reason to override both.
+        fn redirect(&mut self, __at: &NamingContextTarget<'_>) -> Option<rt::Forward> {
+            self.forward(__at).map(rt::Forward::Temporary)
         }
         /// Binds a name to an object in this context
         ///
@@ -1233,6 +1268,11 @@ pub mod CosNaming {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = NamingContextTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
+        }
+        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+            let __oid = self.refs.oid_of(&__req.object_key)?;
+            let __at = NamingContextTarget::new(__oid, &self.refs);
+            self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
@@ -1877,13 +1917,28 @@ pub mod CosNaming {
         ///
         /// So the default is `None` — served here — and it is a default rather
         /// than a silence: this method exists, is documented, and is the one place
-        /// to override. Note the two limits the runtime imposes and this cannot
+        /// to override. Note the one limit the runtime imposes and this cannot
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
-        /// the address, and `LOCATION_FORWARD_PERM` is not reachable through
-        /// `rt::Dispatch` at all.
+        /// the address. This hook is the *temporary* forward; an object that has
+        /// moved for good says so through `redirect`, below.
         fn forward(&mut self, __at: &NamingContextExtTarget<'_>) -> Option<rt::Ior> {
             let _ = __at;
             None
+        }
+        /// Where this request should be sent instead, and whether for good.
+        ///
+        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
+        /// the temporary form, its reply-status enumeration having no other),
+        /// and is the one thing a servant can say that lets a client replace the
+        /// reference it holds rather than keep the old one as a fallback.
+        ///
+        /// Defaults to `forward` wrapped as temporary, so a servant that
+        /// overrides only `forward` behaves as it always did. Override this one
+        /// to say *permanent*; there is no reason to override both.
+        fn redirect(&mut self, __at: &NamingContextExtTarget<'_>) -> Option<rt::Forward> {
+            self.forward(__at).map(rt::Forward::Temporary)
         }
         /// Binds a name to an object in this context
         ///
@@ -2201,6 +2256,11 @@ pub mod CosNaming {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = NamingContextExtTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
+        }
+        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+            let __oid = self.refs.oid_of(&__req.object_key)?;
+            let __at = NamingContextExtTarget::new(__oid, &self.refs);
+            self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,

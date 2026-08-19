@@ -379,13 +379,28 @@ pub mod CORBA {
         ///
         /// So the default is `None` — served here — and it is a default rather
         /// than a silence: this method exists, is documented, and is the one place
-        /// to override. Note the two limits the runtime imposes and this cannot
+        /// to override. Note the one limit the runtime imposes and this cannot
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
-        /// the address, and `LOCATION_FORWARD_PERM` is not reachable through
-        /// `rt::Dispatch` at all.
+        /// the address. This hook is the *temporary* forward; an object that has
+        /// moved for good says so through `redirect`, below.
         fn forward(&mut self, __at: &ContainedTarget<'_>) -> Option<rt::Ior> {
             let _ = __at;
             None
+        }
+        /// Where this request should be sent instead, and whether for good.
+        ///
+        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
+        /// the temporary form, its reply-status enumeration having no other),
+        /// and is the one thing a servant can say that lets a client replace the
+        /// reference it holds rather than keep the old one as a fallback.
+        ///
+        /// Defaults to `forward` wrapped as temporary, so a servant that
+        /// overrides only `forward` behaves as it always did. Override this one
+        /// to say *permanent*; there is no reason to override both.
+        fn redirect(&mut self, __at: &ContainedTarget<'_>) -> Option<rt::Forward> {
+            self.forward(__at).map(rt::Forward::Temporary)
         }
         /// The fully scoped IDL name, leading colons included
         ///
@@ -577,6 +592,11 @@ pub mod CORBA {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = ContainedTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
+        }
+        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+            let __oid = self.refs.oid_of(&__req.object_key)?;
+            let __at = ContainedTarget::new(__oid, &self.refs);
+            self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
@@ -946,13 +966,28 @@ pub mod CORBA {
         ///
         /// So the default is `None` — served here — and it is a default rather
         /// than a silence: this method exists, is documented, and is the one place
-        /// to override. Note the two limits the runtime imposes and this cannot
+        /// to override. Note the one limit the runtime imposes and this cannot
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
-        /// the address, and `LOCATION_FORWARD_PERM` is not reachable through
-        /// `rt::Dispatch` at all.
+        /// the address. This hook is the *temporary* forward; an object that has
+        /// moved for good says so through `redirect`, below.
         fn forward(&mut self, __at: &ContainerTarget<'_>) -> Option<rt::Ior> {
             let _ = __at;
             None
+        }
+        /// Where this request should be sent instead, and whether for good.
+        ///
+        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
+        /// the temporary form, its reply-status enumeration having no other),
+        /// and is the one thing a servant can say that lets a client replace the
+        /// reference it holds rather than keep the old one as a fallback.
+        ///
+        /// Defaults to `forward` wrapped as temporary, so a servant that
+        /// overrides only `forward` behaves as it always did. Override this one
+        /// to say *permanent*; there is no reason to override both.
+        fn redirect(&mut self, __at: &ContainerTarget<'_>) -> Option<rt::Forward> {
+            self.forward(__at).map(rt::Forward::Temporary)
         }
         /// Adds a module to the repository; refused on a read-only facade
         ///
@@ -1102,6 +1137,11 @@ pub mod CORBA {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = ContainerTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
+        }
+        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+            let __oid = self.refs.oid_of(&__req.object_key)?;
+            let __at = ContainerTarget::new(__oid, &self.refs);
+            self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
@@ -1545,13 +1585,28 @@ pub mod CORBA {
         ///
         /// So the default is `None` — served here — and it is a default rather
         /// than a silence: this method exists, is documented, and is the one place
-        /// to override. Note the two limits the runtime imposes and this cannot
+        /// to override. Note the one limit the runtime imposes and this cannot
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
-        /// the address, and `LOCATION_FORWARD_PERM` is not reachable through
-        /// `rt::Dispatch` at all.
+        /// the address. This hook is the *temporary* forward; an object that has
+        /// moved for good says so through `redirect`, below.
         fn forward(&mut self, __at: &IDLTypeTarget<'_>) -> Option<rt::Ior> {
             let _ = __at;
             None
+        }
+        /// Where this request should be sent instead, and whether for good.
+        ///
+        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
+        /// the temporary form, its reply-status enumeration having no other),
+        /// and is the one thing a servant can say that lets a client replace the
+        /// reference it holds rather than keep the old one as a fallback.
+        ///
+        /// Defaults to `forward` wrapped as temporary, so a servant that
+        /// overrides only `forward` behaves as it always did. Override this one
+        /// to say *permanent*; there is no reason to override both.
+        fn redirect(&mut self, __at: &IDLTypeTarget<'_>) -> Option<rt::Forward> {
+            self.forward(__at).map(rt::Forward::Temporary)
         }
         /// Which kind of IDL construct this object describes
         ///
@@ -1687,6 +1742,11 @@ pub mod CORBA {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = IDLTypeTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
+        }
+        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+            let __oid = self.refs.oid_of(&__req.object_key)?;
+            let __at = IDLTypeTarget::new(__oid, &self.refs);
+            self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
@@ -2002,13 +2062,28 @@ pub mod CORBA {
         ///
         /// So the default is `None` — served here — and it is a default rather
         /// than a silence: this method exists, is documented, and is the one place
-        /// to override. Note the two limits the runtime imposes and this cannot
+        /// to override. Note the one limit the runtime imposes and this cannot
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
-        /// the address, and `LOCATION_FORWARD_PERM` is not reachable through
-        /// `rt::Dispatch` at all.
+        /// the address. This hook is the *temporary* forward; an object that has
+        /// moved for good says so through `redirect`, below.
         fn forward(&mut self, __at: &IRObjectTarget<'_>) -> Option<rt::Ior> {
             let _ = __at;
             None
+        }
+        /// Where this request should be sent instead, and whether for good.
+        ///
+        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
+        /// the temporary form, its reply-status enumeration having no other),
+        /// and is the one thing a servant can say that lets a client replace the
+        /// reference it holds rather than keep the old one as a fallback.
+        ///
+        /// Defaults to `forward` wrapped as temporary, so a servant that
+        /// overrides only `forward` behaves as it always did. Override this one
+        /// to say *permanent*; there is no reason to override both.
+        fn redirect(&mut self, __at: &IRObjectTarget<'_>) -> Option<rt::Forward> {
+            self.forward(__at).map(rt::Forward::Temporary)
         }
         /// Which kind of IDL construct this object describes
         ///
@@ -2144,6 +2219,11 @@ pub mod CORBA {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = IRObjectTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
+        }
+        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+            let __oid = self.refs.oid_of(&__req.object_key)?;
+            let __at = IRObjectTarget::new(__oid, &self.refs);
+            self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
@@ -2553,13 +2633,28 @@ pub mod CORBA {
         ///
         /// So the default is `None` — served here — and it is a default rather
         /// than a silence: this method exists, is documented, and is the one place
-        /// to override. Note the two limits the runtime imposes and this cannot
+        /// to override. Note the one limit the runtime imposes and this cannot
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
-        /// the address, and `LOCATION_FORWARD_PERM` is not reachable through
-        /// `rt::Dispatch` at all.
+        /// the address. This hook is the *temporary* forward; an object that has
+        /// moved for good says so through `redirect`, below.
         fn forward(&mut self, __at: &InterfaceDefTarget<'_>) -> Option<rt::Ior> {
             let _ = __at;
             None
+        }
+        /// Where this request should be sent instead, and whether for good.
+        ///
+        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
+        /// the temporary form, its reply-status enumeration having no other),
+        /// and is the one thing a servant can say that lets a client replace the
+        /// reference it holds rather than keep the old one as a fallback.
+        ///
+        /// Defaults to `forward` wrapped as temporary, so a servant that
+        /// overrides only `forward` behaves as it always did. Override this one
+        /// to say *permanent*; there is no reason to override both.
+        fn redirect(&mut self, __at: &InterfaceDefTarget<'_>) -> Option<rt::Forward> {
+            self.forward(__at).map(rt::Forward::Temporary)
         }
         /// Adds a module to the repository; refused on a read-only facade
         ///
@@ -2807,6 +2902,11 @@ pub mod CORBA {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = InterfaceDefTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
+        }
+        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+            let __oid = self.refs.oid_of(&__req.object_key)?;
+            let __at = InterfaceDefTarget::new(__oid, &self.refs);
+            self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
@@ -3198,13 +3298,28 @@ pub mod CORBA {
         ///
         /// So the default is `None` — served here — and it is a default rather
         /// than a silence: this method exists, is documented, and is the one place
-        /// to override. Note the two limits the runtime imposes and this cannot
+        /// to override. Note the one limit the runtime imposes and this cannot
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
-        /// the address, and `LOCATION_FORWARD_PERM` is not reachable through
-        /// `rt::Dispatch` at all.
+        /// the address. This hook is the *temporary* forward; an object that has
+        /// moved for good says so through `redirect`, below.
         fn forward(&mut self, __at: &ModuleDefTarget<'_>) -> Option<rt::Ior> {
             let _ = __at;
             None
+        }
+        /// Where this request should be sent instead, and whether for good.
+        ///
+        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
+        /// the temporary form, its reply-status enumeration having no other),
+        /// and is the one thing a servant can say that lets a client replace the
+        /// reference it holds rather than keep the old one as a fallback.
+        ///
+        /// Defaults to `forward` wrapped as temporary, so a servant that
+        /// overrides only `forward` behaves as it always did. Override this one
+        /// to say *permanent*; there is no reason to override both.
+        fn redirect(&mut self, __at: &ModuleDefTarget<'_>) -> Option<rt::Forward> {
+            self.forward(__at).map(rt::Forward::Temporary)
         }
     }
     /// One object of `IDL:omg.org/CORBA/ModuleDef:1.0`, for a servant that keeps a value per object.
@@ -3326,6 +3441,11 @@ pub mod CORBA {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = ModuleDefTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
+        }
+        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+            let __oid = self.refs.oid_of(&__req.object_key)?;
+            let __at = ModuleDefTarget::new(__oid, &self.refs);
+            self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
@@ -3796,13 +3916,28 @@ pub mod CORBA {
         ///
         /// So the default is `None` — served here — and it is a default rather
         /// than a silence: this method exists, is documented, and is the one place
-        /// to override. Note the two limits the runtime imposes and this cannot
+        /// to override. Note the one limit the runtime imposes and this cannot
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
-        /// the address, and `LOCATION_FORWARD_PERM` is not reachable through
-        /// `rt::Dispatch` at all.
+        /// the address. This hook is the *temporary* forward; an object that has
+        /// moved for good says so through `redirect`, below.
         fn forward(&mut self, __at: &RepositoryTarget<'_>) -> Option<rt::Ior> {
             let _ = __at;
             None
+        }
+        /// Where this request should be sent instead, and whether for good.
+        ///
+        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
+        /// the temporary form, its reply-status enumeration having no other),
+        /// and is the one thing a servant can say that lets a client replace the
+        /// reference it holds rather than keep the old one as a fallback.
+        ///
+        /// Defaults to `forward` wrapped as temporary, so a servant that
+        /// overrides only `forward` behaves as it always did. Override this one
+        /// to say *permanent*; there is no reason to override both.
+        fn redirect(&mut self, __at: &RepositoryTarget<'_>) -> Option<rt::Forward> {
+            self.forward(__at).map(rt::Forward::Temporary)
         }
         /// Adds a module to the repository; refused on a read-only facade
         ///
@@ -3966,6 +4101,11 @@ pub mod CORBA {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = RepositoryTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
+        }
+        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+            let __oid = self.refs.oid_of(&__req.object_key)?;
+            let __at = RepositoryTarget::new(__oid, &self.refs);
+            self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,

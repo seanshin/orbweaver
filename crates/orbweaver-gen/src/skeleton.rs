@@ -18,7 +18,7 @@
 //!   accessor, each taking an `<I>Target` and then **decoded Rust arguments**,
 //!   returning `Result<Ret, <I>Fault>`. No `Encoder`, no `Decoder`, no
 //!   operation names: a servant that never sees the wire cannot get the wire
-//!   wrong. Plus `knows` (required) and `forward` (defaulted);
+//!   wrong. Plus `knows` (required) and `forward` / `redirect` (defaulted);
 //! * `<I>Object` and `<I>Objects<S>` — the other shape: one value per object,
 //!   behind a map, implemented in terms of `<I>Servant`;
 //! * `<I>Skeleton<S>` — the [`rt::Dispatch`](crate::rt::Dispatch)
@@ -533,10 +533,10 @@ fn emit_trait(
         "",
         "So the default is `None` — served here — and it is a default rather",
         "than a silence: this method exists, is documented, and is the one place",
-        "to override. Note the two limits the runtime imposes and this cannot",
+        "to override. Note the one limit the runtime imposes and this cannot",
         "lift: a `oneway` is never forwarded, because there is no reply to carry",
-        "the address, and `LOCATION_FORWARD_PERM` is not reachable through",
-        "`rt::Dispatch` at all.",
+        "the address. This hook is the *temporary* forward; an object that has",
+        "moved for good says so through `redirect`, below.",
     ] {
         if line.is_empty() {
             let _ = writeln!(s, "    ///");
@@ -547,6 +547,32 @@ fn emit_trait(
     let _ = writeln!(s, "    fn forward(&mut self, __at: &{name}Target<'_>) -> Option<rt::Ior> {{");
     let _ = writeln!(s, "        let _ = __at;");
     let _ = writeln!(s, "        None");
+    let _ = writeln!(s, "    }}");
+    for line in [
+        "Where this request should be sent instead, and whether for good.",
+        "",
+        "The method the runtime actually asks. `rt::Forward::Temporary` is a",
+        "`LOCATION_FORWARD`; `rt::Forward::Permanent` is a",
+        "`LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told",
+        "the temporary form, its reply-status enumeration having no other),",
+        "and is the one thing a servant can say that lets a client replace the",
+        "reference it holds rather than keep the old one as a fallback.",
+        "",
+        "Defaults to `forward` wrapped as temporary, so a servant that",
+        "overrides only `forward` behaves as it always did. Override this one",
+        "to say *permanent*; there is no reason to override both.",
+    ] {
+        if line.is_empty() {
+            let _ = writeln!(s, "    ///");
+        } else {
+            let _ = writeln!(s, "    /// {line}");
+        }
+    }
+    let _ = writeln!(
+        s,
+        "    fn redirect(&mut self, __at: &{name}Target<'_>) -> Option<rt::Forward> {{"
+    );
+    let _ = writeln!(s, "        self.forward(__at).map(rt::Forward::Temporary)");
     let _ = writeln!(s, "    }}");
     for (wire, rust, sig) in methods(ops, attrs) {
         let shape = op_shape(&sig, cx)?;
@@ -785,11 +811,20 @@ fn emit_dispatch(
     let _ = writeln!(s, "        }}");
     let _ = writeln!(s, "    }}");
     // The forward seam. Everything here is derivable; the decision inside
-    // `servant.forward` is not — see the trait method's documentation.
+    // `servant.forward` / `servant.redirect` is not — see the trait method's
+    // documentation. `redirect` is what `rt::Server` asks; `forward` is
+    // generated too so a skeleton driven directly answers the same as one
+    // driven through the server.
     let _ = writeln!(s, "    fn forward(&mut self, __req: &rt::Request) -> Option<rt::Ior> {{");
     let _ = writeln!(s, "        let __oid = self.refs.oid_of(&__req.object_key)?;");
     let _ = writeln!(s, "        let __at = {name}Target::new(__oid, &self.refs);");
     let _ = writeln!(s, "        self.servant.forward(&__at)");
+    let _ = writeln!(s, "    }}");
+    let _ =
+        writeln!(s, "    fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {{");
+    let _ = writeln!(s, "        let __oid = self.refs.oid_of(&__req.object_key)?;");
+    let _ = writeln!(s, "        let __at = {name}Target::new(__oid, &self.refs);");
+    let _ = writeln!(s, "        self.servant.redirect(&__at)");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "    fn dispatch_body(");
     let _ = writeln!(s, "        &mut self,");
@@ -1137,12 +1172,26 @@ mod tests {
             t.contains("fn forward(&mut self, __at: &ITarget<'_>) -> Option<rt::Ior> {"),
             "{t}"
         );
+        // The permanent form is a second, defaulted hook — not a changed
+        // return type — so every servant that already implements `forward`
+        // keeps compiling and keeps meaning temporary.
+        assert!(
+            t.contains("fn redirect(&mut self, __at: &ITarget<'_>) -> Option<rt::Forward> {"),
+            "{t}"
+        );
+        assert!(t.contains("self.forward(__at).map(rt::Forward::Temporary)"), "{t}");
+        assert!(!t.contains("LOCATION_FORWARD_PERM` is not reachable"), "{t}");
         let d = g.source.split("impl<S: IServant> rt::Dispatch").nth(1).expect("the dispatch");
         assert!(
             d.contains("fn forward(&mut self, __req: &rt::Request) -> Option<rt::Ior> {"),
             "{d}"
         );
         assert!(d.contains("self.servant.forward(&__at)"), "{d}");
+        assert!(
+            d.contains("fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {"),
+            "{d}"
+        );
+        assert!(d.contains("self.servant.redirect(&__at)"), "{d}");
     }
 
     /// An operation returning an object reference must be answerable without

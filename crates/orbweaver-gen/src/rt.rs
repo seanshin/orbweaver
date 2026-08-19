@@ -13,7 +13,7 @@ pub use orbweaver_giop::server::{
     SystemException, UNKNOWN,
 };
 pub use orbweaver_giop::{
-    Connection, Error as GiopError, IiopProfile, Invoker, Ior, Reply, Version,
+    Connection, Error as GiopError, Forward, IiopProfile, Invoker, Ior, Reply, Version,
 };
 
 /// Repository id every CORBA object answers `_is_a` to.
@@ -443,6 +443,15 @@ impl Dispatch for Servants {
     fn forward(&mut self, request: &Request) -> Option<Ior> {
         let at = self.route(&request.object_key)?;
         self.entries[at].forward(request)
+    }
+
+    /// Delegated explicitly, not left to the default: the default wraps
+    /// *this type's* `forward`, which asks the member's `forward` — the
+    /// temporary hook — and a member that only ever answers `redirect` with
+    /// `Permanent` would be heard as "no forward" through the multiplexer.
+    fn redirect(&mut self, request: &Request) -> Option<Forward> {
+        let at = self.route(&request.object_key)?;
+        self.entries[at].redirect(request)
     }
 
     fn dispatch_body(

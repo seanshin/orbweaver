@@ -111,6 +111,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+pub use crate::Forward;
 use crate::{
     DEFAULT_MAX_MESSAGE_SIZE, Error, HEADER_LEN, MAGIC, MsgType, RawMessage, ReplyStatus, Result,
     Version, fragment_message, read_message,
@@ -458,25 +459,30 @@ where
     e.finish().map_err(Error::Cdr)
 }
 
-/// Encodes a `LOCATION_FORWARD` reply, whose body is the new reference.
+/// Encodes a `LOCATION_FORWARD` or `LOCATION_FORWARD_PERM` reply, whose body
+/// is the new reference.
 ///
 /// §9.4.3.2 requires the client to retry against it *transparently*, so this is
 /// how a `ServantLocator` moves a caller without the caller noticing. Phase 1
 /// taught us to follow one of these; until now we could not send one.
+///
+/// Which of the two statuses goes on the wire is [`Forward::reply_status`]'s
+/// decision, and it depends on `version`: status 4 does not exist below GIOP
+/// 1.2, so a permanent forward to a 1.0/1.1 peer travels as status 3 rather
+/// than not travelling at all.
 pub fn encode_location_forward(
     version: Version,
     endian: Endian,
     request_id: u32,
-    to: &crate::Ior,
+    to: &Forward,
 ) -> Result<Vec<u8>> {
     let mut err = None;
-    let bytes =
-        encode_reply(version, endian, request_id, ReplyStatus::LocationForward, None, |b| {
-            // The IOR is marshalled inline here, not as an encapsulation (§9.3.6).
-            if let Err(e) = to.write_to(b) {
-                err = Some(e);
-            }
-        })?;
+    let bytes = encode_reply(version, endian, request_id, to.reply_status(version), None, |b| {
+        // The IOR is marshalled inline here, not as an encapsulation (§9.3.6).
+        if let Err(e) = to.ior().write_to(b) {
+            err = Some(e);
+        }
+    })?;
     match err {
         Some(e) => Err(e),
         None => Ok(bytes),
@@ -655,8 +661,26 @@ pub trait Dispatch {
     /// the client to retry against transparently. It lives here rather than in
     /// `dispatch` because a forward *replaces* the reply rather than filling
     /// one in.
+    ///
+    /// This is the temporary forward and nothing else; a servant that has
+    /// moved an object for good overrides [`Dispatch::redirect`] instead,
+    /// which is the method the server actually asks.
     fn forward(&mut self, _request: &Request) -> Option<crate::Ior> {
         None
+    }
+
+    /// Where to redirect this request, and whether for good.
+    ///
+    /// The method [`Server`] asks. The default wraps [`Dispatch::forward`] as
+    /// [`Forward::Temporary`], so a servant that only ever needed a temporary
+    /// forward implements `forward` and nothing changes for it; a servant that
+    /// needs `LOCATION_FORWARD_PERM` overrides this one and returns
+    /// [`Forward::Permanent`]. Two hooks rather than one changed return type
+    /// because the return type was already implemented in every generated
+    /// skeleton and four hand-written servants, and a permanent forward is an
+    /// addition to what a servant can say, not a correction to what it said.
+    fn redirect(&mut self, request: &Request) -> Option<Forward> {
+        self.forward(request).map(Forward::Temporary)
     }
 }
 
@@ -688,6 +712,10 @@ impl<D: Dispatch + ?Sized> Dispatch for &mut D {
 
     fn forward(&mut self, request: &Request) -> Option<crate::Ior> {
         (**self).forward(request)
+    }
+
+    fn redirect(&mut self, request: &Request) -> Option<Forward> {
+        (**self).redirect(request)
     }
 }
 
@@ -749,9 +777,16 @@ pub trait SharedDispatch: Sync {
         true
     }
 
-    /// A reference to redirect this request to, instead of serving it.
+    /// A reference to redirect this request to, instead of serving it — the
+    /// temporary forward. See [`Dispatch::forward`].
     fn forward(&self, _request: &Request) -> Option<crate::Ior> {
         None
+    }
+
+    /// Where to redirect this request, and whether for good. See
+    /// [`Dispatch::redirect`]; the default is the same wrapping of `forward`.
+    fn redirect(&self, request: &Request) -> Option<Forward> {
+        self.forward(request).map(Forward::Temporary)
     }
 
     /// One whole request — the method [`Server`] calls, and the unit of
@@ -773,7 +808,7 @@ pub trait SharedDispatch: Sync {
         if !self.knows(&request.object_key) {
             return Ok(Served::UnknownObject);
         }
-        if let Some(to) = self.forward(request) {
+        if let Some(to) = self.redirect(request) {
             return Ok(Served::Forward(to));
         }
         self.dispatch_body(request, out).map(Served::Body)
@@ -785,8 +820,9 @@ pub trait SharedDispatch: Sync {
 pub enum Served {
     /// A body was written; this says which reply status it travels under.
     Body(DispatchBody),
-    /// Not answered here: redirect the caller (§9.4.3.2).
-    Forward(crate::Ior),
+    /// Not answered here: redirect the caller (§9.4.3.2), temporarily or for
+    /// good.
+    Forward(Forward),
     /// The servant does not answer to this object key.
     UnknownObject,
 }
@@ -842,6 +878,10 @@ impl<D: Dispatch + Send> SharedDispatch for Serialized<D> {
         lock(&self.servant).forward(request)
     }
 
+    fn redirect(&self, request: &Request) -> Option<Forward> {
+        lock(&self.servant).redirect(request)
+    }
+
     /// The lock spans knows/forward/dispatch — one request is one indivisible
     /// look at the servant, which is what this path has always given and what
     /// composing the three separately would have quietly taken away.
@@ -854,7 +894,7 @@ impl<D: Dispatch + Send> SharedDispatch for Serialized<D> {
         if !servant.knows(&request.object_key) {
             return Ok(Served::UnknownObject);
         }
-        if let Some(to) = servant.forward(request) {
+        if let Some(to) = servant.redirect(request) {
             return Ok(Served::Forward(to));
         }
         servant.dispatch_body(request, out).map(Served::Body)
@@ -1469,6 +1509,10 @@ impl Server {
                     // serving it.
                     return Ok(None);
                 }
+                // Temporary or permanent is the servant's to say and
+                // `Forward::reply_status` is what puts it on the wire — as
+                // status 4 to a 1.2 peer, and as status 3 to a 1.0/1.1 peer,
+                // whose reply-status enumeration has no 4.
                 Ok(Some(encode_location_forward(req.version, req.endian, req.request_id, &to)?))
             }
             Ok(Served::Body(kind)) => {
@@ -1661,6 +1705,115 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    /// A permanent forward is status 4 to a 1.2 peer and status 3 to a 1.0 or
+    /// 1.1 peer, whose `ReplyStatusType_1_0` stops at 3; a temporary one is 3
+    /// everywhere. The IOR travels the same way under both.
+    #[test]
+    fn a_permanent_forward_is_status_4_at_1_2_and_downgrades_below() {
+        let to = crate::Ior {
+            type_id: "IDL:spike/Echo:1.0".into(),
+            profiles: vec![crate::IiopProfile {
+                version: Version::V1_2,
+                host: "127.0.0.1".into(),
+                port: 4321,
+                object_key: b"moved".to_vec(),
+                components: Vec::new(),
+            }],
+        };
+        for endian in [Endian::Big, Endian::Little] {
+            for (version, forward, want) in [
+                (Version::V1_2, Forward::Permanent(to.clone()), ReplyStatus::LocationForwardPerm),
+                (Version::V1_1, Forward::Permanent(to.clone()), ReplyStatus::LocationForward),
+                (Version::V1_0, Forward::Permanent(to.clone()), ReplyStatus::LocationForward),
+                (Version::V1_2, Forward::Temporary(to.clone()), ReplyStatus::LocationForward),
+                (Version::V1_0, Forward::Temporary(to.clone()), ReplyStatus::LocationForward),
+            ] {
+                assert_eq!(forward.reply_status(version), want, "{version} {forward:?}");
+                let wire = encode_location_forward(version, endian, 7, &forward).unwrap();
+                let mut cursor: &[u8] = &wire;
+                let msg = read_message(&mut cursor, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+                let reply = crate::decode_reply(msg).unwrap();
+                assert_eq!(reply.status, want, "{version} {endian:?} {forward:?}");
+                assert_eq!(reply.request_id, 7);
+                let mut b = reply.body().unwrap();
+                assert_eq!(crate::Ior::read_from(&mut b).unwrap(), to, "{version} {endian:?}");
+            }
+        }
+        // A bare reference still means what it always meant.
+        assert_eq!(Forward::from(to.clone()), Forward::Temporary(to.clone()));
+        assert!(!Forward::from(to.clone()).is_permanent());
+        assert!(Forward::Permanent(to.clone()).is_permanent());
+        assert_eq!(Forward::Permanent(to.clone()).into_ior(), to);
+    }
+
+    /// `redirect` is what the server asks, and its default is `forward`
+    /// wrapped as temporary — so a servant that implements only `forward`
+    /// still forwards, and one that overrides `redirect` is heard as
+    /// permanent through both dispatch shapes and the blanket `&mut D`.
+    #[test]
+    fn redirect_defaults_to_a_temporary_forward_and_permanent_reaches_the_server() {
+        struct OnlyForward(crate::Ior);
+        impl Dispatch for OnlyForward {
+            fn dispatch(
+                &mut self,
+                _: &Request,
+                _: &mut Encoder,
+            ) -> std::result::Result<(), SystemException> {
+                Ok(())
+            }
+            fn forward(&mut self, _: &Request) -> Option<crate::Ior> {
+                Some(self.0.clone())
+            }
+        }
+        struct Moved(crate::Ior);
+        impl Dispatch for Moved {
+            fn dispatch(
+                &mut self,
+                _: &Request,
+                _: &mut Encoder,
+            ) -> std::result::Result<(), SystemException> {
+                Ok(())
+            }
+            fn redirect(&mut self, _: &Request) -> Option<Forward> {
+                Some(Forward::Permanent(self.0.clone()))
+            }
+        }
+        let to = crate::Ior {
+            type_id: "IDL:spike/Echo:1.0".into(),
+            profiles: vec![crate::IiopProfile {
+                version: Version::V1_2,
+                host: "127.0.0.1".into(),
+                port: 1,
+                object_key: b"k".to_vec(),
+                components: Vec::new(),
+            }],
+        };
+        let req = decode_request(
+            read_message(
+                &mut &encode_request(Version::V1_2, Endian::Big, 1, b"k", "op", true, |_| {})
+                    .unwrap()[..],
+                DEFAULT_MAX_MESSAGE_SIZE,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mut only = OnlyForward(to.clone());
+        assert_eq!(only.redirect(&req), Some(Forward::Temporary(to.clone())));
+        let via_ref: &mut dyn Dispatch = &mut only;
+        assert_eq!(via_ref.redirect(&req), Some(Forward::Temporary(to.clone())));
+        let mut moved = Moved(to.clone());
+        assert_eq!(moved.forward(&req), None, "the temporary hook is not where permanent lives");
+        let via_ref: &mut dyn Dispatch = &mut moved;
+        assert_eq!(via_ref.redirect(&req), Some(Forward::Permanent(to.clone())));
+
+        let mut out = Encoder::continuing_at(Endian::Big, 24);
+        let served = Serialized::new(Moved(to.clone())).serve_one(&req, &mut out).unwrap();
+        assert!(matches!(served, Served::Forward(Forward::Permanent(ref ior)) if *ior == to));
+        let served = Serialized::new(OnlyForward(to.clone())).serve_one(&req, &mut out).unwrap();
+        assert!(matches!(served, Served::Forward(Forward::Temporary(ref ior)) if *ior == to));
     }
 
     /// §9.4.6: a LocateReply body follows the header with no alignment, unlike
