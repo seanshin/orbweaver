@@ -2541,6 +2541,19 @@ if start_server; then
   else
     echo "  note omniORB advertises: $csi"
   fi
+  # PLAN §4.8's per-peer record, through the page an operator reads (1d4404b,
+  # 2026-08-19): the console catalog carries each reference's CSIv2 capability
+  # beside its interface — the same classification RecordedOnly and the audit
+  # line derive from. Negative control: tests/peer_record.rs fabricates an
+  # IOR with an identity-asserting mechanism list, both byte orders, and reads
+  # enforced-by=target.
+  rec=$(cargo run -q -p orbweaver-console --bin orbweaver-console -- \
+          catalog spikes/echo.idl --ior spikes/echo.ior --text 2>&1 | grep '^  peer: ')
+  case "$rec" in
+    *"enforced-by=bridge only"*) echo "  ok   omniORB 4.3.4 on the catalog page: enforced-by=bridge only — the record, not a sentence" ;;
+    *"enforced-by=target"*)      echo "  note omniORB advertises identity assertion: $rec" ;;
+    *) echo "  FAIL the catalog page carries no peer record for spikes/echo.ior"; id_fail=1 ;;
+  esac
   ssl=$(cargo run -q --bin spike-dump -- spikes/echo.ior 2>/dev/null | grep '^ssliop')
   if printf '%s' "$ssl" | grep -q "no TAG_SSL_SEC_TRANS"; then
     echo "  ok   and no TAG_SSL_SEC_TRANS either — TLS work (D002) starts from a measured baseline"
@@ -2567,6 +2580,19 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
       echo "  ok   JacORB 3.9 advertises none either — two peers, same answer"
     else
       echo "  note JacORB advertises: $csi"
+    fi
+    rec=$(cargo run -q -p orbweaver-console --bin orbweaver-console -- \
+            catalog spikes/echo.idl --ior spikes/jacorb.ior --text 2>&1 | grep '^  peer: ')
+    case "$rec" in
+      *"enforced-by=bridge only"*) echo "  ok   JacORB 3.9 on the catalog page: enforced-by=bridge only" ;;
+      *"enforced-by=target"*)      echo "  note JacORB advertises identity assertion: $rec" ;;
+      *) echo "  FAIL the catalog page carries no peer record for spikes/jacorb.ior"; id_fail=1 ;;
+    esac
+    nc=$(cargo test -q -p orbweaver-console --test peer_record 2>&1)
+    if printf '%s' "$nc" | grep -q '^test result: ok'; then
+      echo "  ok   negative control: a fabricated mechanism list reads enforced-by=target, both byte orders"
+    else
+      echo "  FAIL negative control for the peer record"; id_fail=1
     fi
   else
     echo "  FAIL JacORB server did not publish an IOR"; id_fail=1
@@ -2709,7 +2735,7 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
         echo "  ok   the generated stub calls omniORB: 10/10 cases, both byte orders"
         echo "  ok   I1: the same stub through the guard — exposure, ai_authz scope and audit bind it"
         echo "  ok   I1: a refused call never reaches the wire; the audit holds nothing dialable"
-        printf '%s' "$so" | grep "I4:" | sed 's/^  ok   /  ok   /' | head -3
+        printf '%s' "$so" | grep "I4:" | sed 's/^  ok   /  ok   /' | head -5
       else
         echo "  FAIL static did not equal dynamic"
         printf '%s' "$so" | grep "FAIL" | head -3 | sed 's/^/       /'

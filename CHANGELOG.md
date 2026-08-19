@@ -12,6 +12,38 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **The catalogue says, per peer, who enforces a caller identity.**
+  `orbweaver-console catalog … --ior <file>` carries each reference's CSIv2
+  capability record beside its interface — `enforces_identity`,
+  `transport_secured`, enforcement point `target` | `bridge only` — read off
+  the IOR's `TAG_CSI_SEC_MECH_LIST` / `TAG_SSL_SEC_TRANS` by
+  `identity::PeerCapability`, the same classification `Assertion::RecordedOnly`
+  and the audit line now derive from. Measured on both fixtures: omniORB 4.3.4
+  and JacORB 3.9 read `enforced-by=bridge only, cleartext`; negative control:
+  a fabricated identity-asserting IOR reads `enforced-by=target` in both byte
+  orders (`tests/peer_record.rs`). An interface nobody handed a reference for
+  says *unmeasured here*, not "bridge only". `Bridge::peer_capability(handle)`
+  gives the record without the IOR leaving the table.
+- **`Bridge::stats()` fills through `connect_static`.** `CallStats` is one
+  store with a `CallPath` column; a guard's calls land in the issuing session's
+  counters under `static` the moment they complete, `recommend` reads the
+  dynamic column only (a promoted path is never re-recommended), and the
+  gen-corpus I4 oracle's local `CallStats` is gone. `promote.rs`'s stale
+  "still reconstructs" sentence corrected.
+
+  **카탈로그가 피어별로 누가 호출자 신원을 강제하는지 말한다.**
+  `orbweaver-console catalog … --ior <file>`이 각 참조의 CSIv2 능력 레코드를
+  인터페이스 옆에 싣는다 — `enforces_identity`, `transport_secured`, 강제 지점
+  `target` | `bridge only`. IOR의 `TAG_CSI_SEC_MECH_LIST`/`TAG_SSL_SEC_TRANS`를
+  `identity::PeerCapability`가 읽고, `Assertion::RecordedOnly`와 감사 줄도 같은
+  분류에서 파생된다. 두 픽스처 실측: omniORB 4.3.4·JacORB 3.9 모두
+  `enforced-by=bridge only, cleartext`; 음성 대조군: 신원 단언을 광고하도록 조작한
+  IOR은 양 바이트 순서 모두 `enforced-by=target`. **`Bridge::stats()`가
+  `connect_static`을 통해 채워진다** — `CallStats`는 `CallPath` 열을 가진 하나의
+  저장소; gen-corpus I4 오라클의 로컬 `CallStats`는 사라졌다.
+
+### Added / 추가
+
 - **`idl-diff --approve` is now a record, not a printed line.** Each blocking
   finding accepted under `--approve <reason>` is appended to
   `<proposed>.approvals.tsv` (or `--approvals <file>`) with the two units'
