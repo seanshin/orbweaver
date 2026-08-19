@@ -49,6 +49,31 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### ⚠ Wire behaviour changed / 와이어 동작 변경
 
+- **1.1 `wchar` measured against JacORB 3.9, both directions and both byte
+  orders** (D010 B5, second half; `spikes/wide.idl`, `spikes/jacorb_wchar11.sh`,
+  `tests/wide_1_1_from_a_peer.rs` appended). A 1.1 `wchar` is its two octets
+  in the **message's** order and nothing else — JacORB writes `d5 5c` for
+  U+D55C in its big-endian messages, reads our `5c d5` in a little-endian
+  reply as U+D55C and the control `d5 5c` in the same frame as U+5CD5 (4/4
+  units, both directions); U+FEFF is data at 1.1 on both sides. That is what
+  `put_wchar`/`get_wchar` always did — **no code change**; the "unmeasured"
+  doc paragraph is replaced by the measurement. Recorded behaviour: a lone
+  surrogate crosses as two octets (we refuse it as not a character, and refuse
+  U+1F600 as two units); four octets offered as one wchar: JacORB takes the
+  first two. JacORB's whole request and reply are recorded and decode through
+  `decode_request`/`decode_reply`; the live octets are re-checked against the
+  recording on every run. Not measured: our live Rust stack on this contract
+  (the hand-built peer stands in; the codec is held to the octets by tests);
+  JacORB's writer in a little-endian 1.1 message.
+
+  **1.1 `wchar`를 JacORB 3.9에 대해 양방향·양 바이트 순서로 측정**(D010 B5
+  후반). 1.1 `wchar`는 **메시지의** 순서로 놓인 두 옥텟이고 그 이상이 아니다 —
+  JacORB는 U+D55C를 빅엔디언 메시지에 `d5 5c`로 쓰고, 우리가 리틀엔디언 응답에
+  넣은 `5c d5`를 U+D55C로, 대조군 `d5 5c`를 U+5CD5로 읽었다(양방향 4/4).
+  U+FEFF는 양쪽 모두 데이터. 코덱이 원래 하던 그대로 — **코드 변경 없음**;
+  "미측정" 문단을 측정으로 교체. JacORB의 요청·응답 전체를 기록하고 실행마다
+  라이브 옥텟과 대조한다. 미측정: 이 계약에서 우리 실제 Rust 스택(손으로 만든
+  피어가 대신 섬); 리틀엔디언 1.1 메시지의 JacORB 라이터.
 - **`wstring` at GIOP 1.0/1.1 is written without a byte-order mark and with
   its units in the message's byte order** (was: BOM + stream order, as at
   1.2). D010 B5's first step was a JacORB-at-1.1 fixture, and it found this the

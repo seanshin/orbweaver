@@ -1160,7 +1160,7 @@ else
   [ "$jfail" -eq 0 ] || fail_total=$((fail_total+1))
 fi
 
-hr "GIOP 1.1 against JacORB — version from the wire, then one wide string each way (D010 B5)"
+hr "GIOP 1.1 against JacORB — version from the wire, then wide text each way: wstring and the single wchar (D010 B5)"
 # spikes/jacorb_giop11.sh: a recording tap republishes the IOR at 1.1 and
 # parses every GIOP header it relays; our server's log is the second witness.
 # JacORB's giop_minor_version sets the version of the IORs it *creates*; its
@@ -1180,6 +1180,23 @@ if [ "$g11_rc" -eq 2 ]; then
   skipped=$((skipped+1))
 elif [ "$g11_rc" -ne 0 ]; then
   echo "  FAIL GIOP 1.1 against JacORB — see /tmp/orbweaver-giop11"
+  fail_total=$((fail_total+1))
+fi
+# spikes/jacorb_wchar11.sh: the single wide character (spikes/wide.idl —
+# echo.idl has none). A 1.1 wchar has no length indication and nowhere for a
+# mark; the only question is the order of its two octets. Measured 2026-08-19
+# (382baa9): JacORB reads it in the MESSAGE's order (a little-endian reply with
+# the unit in message order reaches its user as sent; big-endian units in the
+# same frame reach it swapped, 4/4) and writes it in its message's order;
+# U+FEFF is data. The recording in tests/wide_1_1_from_a_peer.rs is re-checked
+# against the live octets on every run. Negative control: `--expect-han 5CD5`
+# goes red (3 lines).
+w11=$(./spikes/jacorb_wchar11.sh 2>&1); w11_rc=$?
+printf '%s\n' "$w11" | grep -E "^  (ok|FAIL|info|SKIPPED)" | cut -c1-150
+if [ "$w11_rc" -eq 2 ]; then
+  skipped=$((skipped+1))
+elif [ "$w11_rc" -ne 0 ]; then
+  echo "  FAIL 1.1 wchar against JacORB — see /tmp/orbweaver-wchar11"
   fail_total=$((fail_total+1))
 fi
 
