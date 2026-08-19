@@ -477,6 +477,25 @@ records what changed and, where it matters, what it changes on the wire.
   요약 줄이 건넌 수를 찍고 하네스가 바닥을 고정(golden 5248/5248, 네 코퍼스
   12,928). 1차 통과 0건; 음성 대조 2건 적색(2712, 70).
 
+- **The CLI's dry run takes values, and the static guard's dry run resolves
+  the session's handles.** `orbweaver-mcp-server --dry-run=<id>.<operation>
+  [--dry-run-args <json>]` asks about one operation with values: the document
+  carries `payload`/`payload_why`/`raises` and `would: marshal` past the gate;
+  surveys unchanged (`allow=10 need_scope=1 stray=0`). `Guarded::dry_run_with`
+  resolves declared handles against the session's table, shared with the
+  bridge (`Bridge::handles()` returns `RefMut`; `Bridge` is `!Send`), a forged
+  handle predicts `would_not_marshal` naming it, nothing dials. Mapping errors
+  inside an argument now name the parameter. `tests/ifr_reaches_the_agent.rs`
+  witnesses non-empty sequences and asserts it — the third empty recursive
+  witness, closed; nothing went red under it.
+
+  **CLI 드라이런이 값을 받고, 정적 가드의 드라이런이 세션 핸들을 해석한다.**
+  `--dry-run=<id>.<operation> [--dry-run-args <json>]`은 연산 하나를 값과
+  함께 묻는다 — `payload`/`payload_why`/`raises`가 실리고 게이트 통과 후 `would:
+  marshal`; 서베이는 그대로. `Guarded::dry_run_with`는 선언된 핸들을 브리지와
+  공유하는 세션 테이블에 대해 해석하고(`Bridge`는 `!Send`), 위조 핸들은 이름을
+  붙여 `would_not_marshal`, 다이얼 없음. IFR 증인이 비어 있지 않은 시퀀스를
+  만들고 단언한다 — 세 번째 빈 재귀 증인 닫힘.
 - **The content seat sees a static call's payload** (D010 A3, 2026-08-19).
   `Guarded` reads a stub's own bytes back through the contract and hands the
   chain the same AnyJSON document the dynamic path hands it — no stub, trait

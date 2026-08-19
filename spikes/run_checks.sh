@@ -1742,6 +1742,19 @@ else
   echo "  FAIL the dry-run preview did not hold (allow=$allowed need_scope=$scoped stray=$stray)"
   fail_total=$((fail_total+1))
 fi
+# A value-carrying dry run from the CLI (4bb9742): one operation, declared
+# values, no target — the document says `marshal` for string<8> given nine.
+# Negative control: drop --dry-run-args and the same command says `allow None`.
+dv=$(cargo run -q -p orbweaver-mcp --bin orbweaver-mcp-server -- \
+     --idl corpus/golden/27-bounds.idl --expose IDL:gc27/Ledger:1.0 --assume-effect read_only \
+     --as harness --dry-run=IDL:gc27/Ledger:1.0.keep \
+     --dry-run-args '{"key":"123456789","entry":{"label":"ok","payload":"AQID","wide":"ab"}}' 2>/dev/null)
+dv_would=$(printf '%s' "$dv" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["would"], d.get("payload"))' 2>/dev/null)
+if [ "$dv_would" = "marshal would_not_marshal" ]; then
+  echo "  ok   a value-carrying dry run from the CLI predicts MARSHAL for string<8> given nine (no target)"
+else
+  echo "  FAIL the CLI dry run with values did not predict marshal (got: ${dv_would:-nothing})"; fail_total=$((fail_total+1))
+fi
 
 # ── Service coverage: every declared operation, over the wire ───────────────
 hr "service coverage — what the five servants actually serve"
