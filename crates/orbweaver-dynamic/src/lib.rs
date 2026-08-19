@@ -268,6 +268,32 @@ pub fn encode_with(e: &mut Encoder, tc: &TypeCode, value: &Value, wide: WideCode
     encode_at(e, tc, value, &Path::root(), wide)
 }
 
+/// Encodes `value` as `tc` under `name`, so a diagnostic says which value.
+///
+/// [`encode`] starts its path inside the value: a bounded string that does not
+/// fit renders as "string is bounded at 8 but 9 were given", and a member of
+/// it as "at tag[2]: …". That is complete for one value and useless for one
+/// of several — an operation's arguments, a struct's fields marshalled one by
+/// one — where the reader's first question is *which*. This entry point roots
+/// the path at `name` ("at key: …", "at key.tag[2]: …"), on the same [`Path`]
+/// the marshaller and [`anyjson`] walk — so no caller has to prepend the name
+/// to a rendered sentence, and none can end up with it twice.
+pub fn encode_named(e: &mut Encoder, tc: &TypeCode, value: &Value, name: &str) -> Result<()> {
+    encode_named_with(e, tc, value, name, default_codec())
+}
+
+/// [`encode_named`] with a specific wide-character codec.
+pub fn encode_named_with(
+    e: &mut Encoder,
+    tc: &TypeCode,
+    value: &Value,
+    name: &str,
+    wide: WideCodec,
+) -> Result<()> {
+    let root = Path::root();
+    encode_at(e, tc, value, &root.member(name), wide)
+}
+
 /// Decodes a value of type `tc` from `d`.
 pub fn decode(d: &mut Decoder<'_>, tc: &TypeCode) -> Result<Value> {
     decode_with(d, tc, default_codec())
@@ -276,6 +302,23 @@ pub fn decode(d: &mut Decoder<'_>, tc: &TypeCode) -> Result<Value> {
 /// Decodes with a specific wide-character codec.
 pub fn decode_with(d: &mut Decoder<'_>, tc: &TypeCode, wide: WideCodec) -> Result<Value> {
     decode_at(d, tc, &Path::root(), wide)
+}
+
+/// Decodes a value of type `tc` under `name`; the read-side twin of
+/// [`encode_named`], for a reply's `out` parameters.
+pub fn decode_named(d: &mut Decoder<'_>, tc: &TypeCode, name: &str) -> Result<Value> {
+    decode_named_with(d, tc, name, default_codec())
+}
+
+/// [`decode_named`] with a specific wide-character codec.
+pub fn decode_named_with(
+    d: &mut Decoder<'_>,
+    tc: &TypeCode,
+    name: &str,
+    wide: WideCodec,
+) -> Result<Value> {
+    let root = Path::root();
+    decode_at(d, tc, &root.member(name), wide)
 }
 
 /// Follows `alias` links to the type that actually governs encoding.

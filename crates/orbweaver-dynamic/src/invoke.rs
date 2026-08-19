@@ -28,7 +28,7 @@ use orbweaver_registry::{OperationSig, ParamDirection, Registry};
 
 use orbweaver_giop::codeset::{CodeSetId, WideCodec};
 
-use crate::{Error, Result, Value, decode_with, encode_with};
+use crate::{Error, Result, Value, decode_named_with, decode_with, encode_named_with};
 
 /// What came back from a call.
 #[derive(Debug, Clone, PartialEq)]
@@ -164,7 +164,7 @@ pub fn invoke(
     let mut outputs = BTreeMap::new();
     for p in &sig.params {
         if matches!(p.direction, ParamDirection::Out | ParamDirection::InOut) {
-            outputs.insert(p.name.clone(), decode_with(&mut body, &p.tc, wide)?);
+            outputs.insert(p.name.clone(), decode_named_with(&mut body, &p.tc, &p.name, wide)?);
         }
     }
     Ok(Outcome { returns, outputs })
@@ -232,7 +232,11 @@ fn write_args(
     for p in &sig.params {
         if matches!(p.direction, ParamDirection::In | ParamDirection::InOut) {
             let v = args.get(&p.name).expect("checked by check_arguments");
-            encode_with(e, &p.tc, v, wide)?;
+            // Rooted at the parameter's name: "at key.tag[2]: string is
+            // bounded at 8 but 9 were given" says which argument to fix, where
+            // the value's own path alone would say "at tag[2]" — or, for a
+            // bound the whole argument breaks, nothing at all.
+            encode_named_with(e, &p.tc, v, &p.name, wide)?;
         }
     }
     Ok(())
@@ -381,6 +385,51 @@ mod tests {
             vec![0, 0, 0, 1, 0, 0, 0, 2],
             "zebra is declared first and must travel first"
         );
+    }
+
+    /// The marshalling sentence must say *which* argument does not fit. A
+    /// caller sending nine characters into a `string<8>` in the second
+    /// position was told "string is bounded at 8 but 9 were given" and left to
+    /// guess between the two; the dry-run prediction in `orbweaver-mcp` had to
+    /// prepend the name itself. Both byte orders, because the encoder is
+    /// entered per order and a path kept on one side only would pass here.
+    #[test]
+    fn a_marshalling_error_names_the_argument_and_the_path_inside_it() {
+        let r = registry(
+            "module m {
+               struct Tagged { sequence<string<8> > tag; };
+               interface I {
+                 void f(in string<8> a, in string<8> key);
+                 void g(in long a, in Tagged key);
+               };
+             };",
+        );
+        let wide = WideCodec::new(orbweaver_giop::Version::V1_2, CodeSetId::UTF_16).unwrap();
+        for endian in [orbweaver_cdr::Endian::Big, orbweaver_cdr::Endian::Little] {
+            let (_, sig) = r.resolve_operation("IDL:m/I:1.0", "f").unwrap();
+            let args = BTreeMap::from([
+                ("a".to_owned(), Value::String("fits".into())),
+                ("key".to_owned(), Value::String("nine char".into())),
+            ]);
+            let mut e = Encoder::new(endian);
+            let msg = write_args(&mut e, sig, &args, wide).expect_err("9 > 8").to_string();
+            assert_eq!(msg, "at key: string is bounded at 8 but 9 were given", "{endian:?}");
+
+            let (_, sig) = r.resolve_operation("IDL:m/I:1.0", "g").unwrap();
+            let tagged = Value::Struct(vec![(
+                "tag".to_owned(),
+                Value::List(vec![
+                    Value::String("ok".into()),
+                    Value::String("ok".into()),
+                    Value::String("nine char".into()),
+                ]),
+            )]);
+            let args =
+                BTreeMap::from([("a".to_owned(), Value::Long(1)), ("key".to_owned(), tagged)]);
+            let mut e = Encoder::new(endian);
+            let msg = write_args(&mut e, sig, &args, wide).expect_err("9 > 8").to_string();
+            assert_eq!(msg, "at key.tag[2]: string is bounded at 8 but 9 were given", "{endian:?}");
+        }
     }
 
     #[test]
