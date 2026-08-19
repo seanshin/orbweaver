@@ -142,11 +142,18 @@ fn close_connection_under_a_temporary_forward_restarts_at_the_origin_in_the_same
     for endian in [Endian::Big, Endian::Little] {
         let (target, target_done) = scripted(|l| {
             let (mut s, _) = l.accept().expect("the forwarded call");
+            // The listener goes BEFORE CloseConnection is sent, so the
+            // client's redial of the forwarding information is refused
+            // outright. Dropping it with the script let the redial race the
+            // drop on Linux: connect() landed in the backlog, the listener
+            // closed, and the re-issued request died with ECONNRESET — an
+            // unknown-completion failure the client correctly does not
+            // restart from. CI 2 of 5 runs (b5e2fb0); never on macOS.
+            drop(l);
             let (id, e) = take_request(&mut s);
             reply_long(&mut s, id, e, 42);
             let (_, e) = take_request(&mut s);
             close(&mut s, e);
-            // Listener dropped with the script: the redial is refused.
         });
         let to = Forward::Temporary(ior_at(target, b"new"));
         let (orig, orig_done) = origin(to, 1, 1);
