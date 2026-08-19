@@ -128,6 +128,17 @@ pub const VOCABULARY: [&str; 8] = [
     "ai_authz",
 ];
 
+/// The SIDL version [`VOCABULARY`] is the vocabulary of — the number a
+/// contract's `//@ sidl_version: N` is compared against.
+///
+/// Mirrored in `orbweaver-forge`'s `annotate::SIDL_VERSION` beside that
+/// crate's copy of the vocabulary; the two move together or not at all, and
+/// `the_mirror_matches_the_s7_authority` below holds both copies of both
+/// constants equal. Until 2026-08-19 the "v1" in every message this module
+/// prints was a doc comment with no constant behind it, so a v2 key would
+/// have been reported as a v1 typo and nothing could have said otherwise.
+pub const SIDL_VERSION: &str = "1";
+
 /// `ai_effect` values that `orbweaver-mcp` treats as needing no approval.
 ///
 /// Mirrored from `crates/orbweaver-mcp/src/policy.rs::destructive_effect`,
@@ -588,9 +599,9 @@ fn inference_findings(at: &str, sig: &OperationSig) -> Vec<Finding> {
                 Severity::Warning,
                 format!(
                     "{at} carries {key:?}, and infer::approve would promote it to {target:?}, \
-                     which is not in the SIDL v1 vocabulary; the promotion would manufacture an \
-                     annotation no consumer reads, out of a human approval that was given in the \
-                     belief it enabled something"
+                     which is not in the SIDL v{SIDL_VERSION} vocabulary; the promotion would manufacture \
+                     an annotation no consumer reads, out of a human approval that was given in \
+                     the belief it enabled something"
                 ),
                 at.to_owned(),
                 Some(format!(
@@ -683,9 +694,9 @@ fn unknown_keys(id: &RepositoryId, what: &str, ann: &BTreeMap<String, String>) -
                 "contract/unknown-annotation",
                 Severity::Warning,
                 format!(
-                    "{what} of {id} carries {k:?}, which is not in the SIDL v1 vocabulary; the \
-                     registry keeps it and no consumer reads it, so the annotation is present in \
-                     the source and absent from every decision"
+                    "{what} of {id} carries {k:?}, which is not in the SIDL v{SIDL_VERSION} vocabulary; \
+                     the registry keeps it and no consumer reads it, so the annotation is present \
+                     in the source and absent from every decision"
                 ),
                 format!("{id}.{what}"),
                 Some(format!(
@@ -696,6 +707,52 @@ fn unknown_keys(id: &RepositoryId, what: &str, ann: &BTreeMap<String, String>) -
             )
         })
         .collect()
+}
+
+/// Whether the SIDL version a file declares is the one this checker reads.
+///
+/// Read from the syntax tree, not the registry: the marker is written at the
+/// top of a file, where the lexer hands it to the first declaration — usually
+/// a `module`, whose annotations the registry does not keep — so it is the one
+/// annotation `contract_findings` cannot see. `contract-check` calls this
+/// beside it. The reader is `orbweaver_forge::annotate::declared_sidl_version`,
+/// so S3's gate and this checker cannot disagree about where a marker may sit.
+///
+/// [`Severity::Warning`], by this module's own definition of it: a contract
+/// written to a later SIDL states things **no consumer here reads**, and a
+/// pass over it is a pass over the part this vocabulary covers. No marker is
+/// v1 and silent — every contract written before the marker existed is v1,
+/// and a finding on all of them would report the calendar. Not Advice,
+/// because no consumer acts on the version; not Error, because a file newer
+/// than the tool is the tool's problem to report and not the contract's to
+/// fail on. *선언 없음 = v1, 무음. 아는 버전 = 무음. 모르는 버전 = Warning.*
+pub fn sidl_version_findings(spec: &orbweaver_idl::ast::Spec) -> Vec<Finding> {
+    use orbweaver_forge::annotate::{SIDL_VERSION_KEY, declared_sidl_version};
+    let Some(marker) = declared_sidl_version(spec) else { return Vec::new() };
+    let declared = marker.value.trim();
+    if declared == SIDL_VERSION {
+        return Vec::new();
+    }
+    let relation = match (declared.parse::<u32>(), SIDL_VERSION.parse::<u32>()) {
+        (Ok(theirs), Ok(ours)) if theirs > ours => "later than",
+        (Ok(_), Ok(_)) => "not",
+        _ => "not a version number, so not",
+    };
+    vec![finding(
+        "contract/unknown-sidl-version",
+        Severity::Warning,
+        format!(
+            "the file declares {SIDL_VERSION_KEY} {declared:?}, which is {relation} the SIDL \
+             v{SIDL_VERSION} this checker and every consumer in the tree read; any key that \
+             version adds is kept by the registry and read by nobody here, so a clean report \
+             on this file covers the part of the contract this vocabulary understands"
+        ),
+        format!("{}: {}", marker.key, marker.value),
+        Some(format!(
+            "write `//@ {SIDL_VERSION_KEY}: {SIDL_VERSION}` if the file is a v{SIDL_VERSION} \
+             contract, or upgrade the checker before trusting its verdict on this file"
+        )),
+    )]
 }
 
 /// The mutation verb an operation name contains, if any.
@@ -1150,6 +1207,73 @@ mod tests {
         assert_eq!(GATED_EFFECTS, ["destructive"]);
         // And the two sets must not overlap, or a value would be both.
         assert!(UNGATED_EFFECTS.iter().all(|u| !GATED_EFFECTS.contains(u)));
+    }
+
+    /// The S3 mirror in `orbweaver-forge` says what this module says: same
+    /// vocabulary, same version. Forge cannot see this crate (the dependency
+    /// runs the other way), so this is the one place both copies of both
+    /// constants meet. Until 2026-08-19 the vocabulary was pinned only against
+    /// forge's *prompt*, and the version was a doc comment in both crates.
+    #[test]
+    fn the_mirror_matches_the_s7_authority() {
+        use orbweaver_forge::annotate;
+        assert_eq!(annotate::VOCABULARY, VOCABULARY, "S3's vocabulary drifted from S7's");
+        assert_eq!(annotate::SIDL_VERSION, SIDL_VERSION, "S3's SIDL version drifted from S7's");
+        assert_eq!(annotate::UNGATED_EFFECTS, UNGATED_EFFECTS);
+        assert_eq!(annotate::READ_ONLY_EFFECTS, READ_ONLY_EFFECTS);
+        assert_eq!(annotate::GATED_EFFECTS, GATED_EFFECTS);
+        assert_eq!(annotate::PII_LEVELS, PII_LEVELS);
+        // A version is a number a file can declare and be compared against.
+        assert!(SIDL_VERSION.parse::<u32>().is_ok(), "{SIDL_VERSION:?}");
+        // The marker is not vocabulary: it says nothing an agent reads.
+        assert!(!VOCABULARY.contains(&annotate::SIDL_VERSION_KEY));
+    }
+
+    fn version_rules(src: &str) -> Vec<Finding> {
+        sidl_version_findings(&orbweaver_idl::check(src).expect("checks"))
+    }
+
+    /// The marker at the top of a file lands on the `module`, whose
+    /// annotations the registry drops — which is why this reads the syntax
+    /// tree, and why the test says so with a registry that has never heard of
+    /// the marker beside a reader that has.
+    #[test]
+    fn a_declared_v1_or_no_declaration_is_silent() {
+        let v1 = "//@ sidl_version: 1\nmodule m { interface I { //@ ai_effect: read_only\n long \
+                  peek(); }; };";
+        assert!(version_rules(v1).is_empty(), "{:?}", version_rules(v1));
+        assert!(rules(v1).is_empty(), "the marker is not an ai_* key: {:?}", rules(v1));
+        let r = registry(v1);
+        assert!(
+            r.ids().all(|id| r.annotations(id).is_none_or(|a| !a.contains_key("sidl_version"))),
+            "the registry keeps no module annotations, so it cannot be where the marker is read"
+        );
+        let none = "module m { interface I { //@ ai_effect: read_only\n long peek(); }; };";
+        assert!(version_rules(none).is_empty());
+    }
+
+    /// A contract written to a SIDL this checker does not know is a Warning:
+    /// the file states things nobody here reads. And it is one finding on the
+    /// file, not one per operation.
+    #[test]
+    fn a_later_sidl_version_is_one_warning_on_the_file() {
+        let v2 = "//@ sidl_version: 2\nmodule m { interface I { //@ ai_effect: read_only\n long \
+                  peek();\n //@ ai_effect: read_only\n long poke(); }; };";
+        let f = version_rules(v2);
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].rule, "contract/unknown-sidl-version");
+        assert_eq!(f[0].severity, Severity::Warning);
+        assert!(f[0].message.contains("later than"), "{}", f[0].message);
+        assert_eq!(f[0].source, "sidl_version: 2");
+        assert!(f[0].fix.as_deref().is_some_and(|x| x.contains("//@ sidl_version: 1")));
+        // The registry-side checks say nothing about it, so the two halves
+        // together produce exactly one finding for a v2 file.
+        assert!(rules(v2).is_empty(), "{:?}", rules(v2));
+        // Not a number at all: still one Warning, and it says so.
+        let words = "//@ sidl_version: two\nmodule m { interface I { long peek(); }; };";
+        let f = version_rules(words);
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(f[0].message.contains("not a version number"), "{}", f[0].message);
     }
 
     #[test]

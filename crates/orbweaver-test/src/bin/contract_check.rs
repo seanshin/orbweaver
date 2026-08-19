@@ -24,7 +24,7 @@ use orbweaver_dynamic::json::Json;
 use orbweaver_forge::{Report, Severity};
 use orbweaver_registry::Registry;
 use orbweaver_test::prop::{DEFAULT_SEED, Measured};
-use orbweaver_test::{check_measured, has_defect};
+use orbweaver_test::{check_source_measured, has_defect};
 
 const DEFAULT_CASES: usize = 32;
 
@@ -101,7 +101,8 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
         let types = registry.ids().filter(|id| registry.typecode(id).is_some()).count();
-        let (report, m) = check_measured(&registry, cases, seed.unwrap_or(DEFAULT_SEED));
+        let (report, m) =
+            check_source_measured(&spec, &registry, cases, seed.unwrap_or(DEFAULT_SEED));
         measured.add(m);
         reports.push((path.clone(), report, types));
     }

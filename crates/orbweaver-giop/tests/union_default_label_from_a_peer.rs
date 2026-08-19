@@ -508,3 +508,199 @@ fn a_labelled_default_is_one_member_per_label_default_included() {
     assert_eq!(cases[1], ("rest".to_owned(), vec![0, 0, 0, 2]), "the label 2 is a real case");
     assert_eq!(cases[2], ("rest".to_owned(), vec![]), "the default is the labelless one");
 }
+
+// ── R18: a conformant third peer writes a NON-ZERO default label ─────────────
+//
+// Everything above is the intersection of two peers: omniORB writes an unused
+// value and ignores what it reads, JacORB writes zeros and reads one octet
+// that must be zero. §9.3.5.1.4 permits a third peer to write **any valid
+// value of the discriminator type** in the slot — the value that collides
+// with a real case included — and the two fixtures available cannot produce
+// that half. omniORB's own captures above already carry non-zero labels
+// (`00 00 00 80`, `00 80`, `ff`, `01 00 00 00`, `..80`), so the recordings
+// prove "omniORB's value is ignored". The tests below prove "any value is":
+// hand-built encapsulations, one per discriminator kind already recorded
+// here, in both stream byte orders, with the slot set to the type's maximum,
+// its minimum, the label of a real case, and a bit pattern that is not a
+// valid value at all — and the decoded TypeCode must be **structurally
+// equal** to the one the zero label yields, which is also the one omniORB's
+// value yields. Nothing about the peer's bytes is edited; the base shape is
+// each recording decoded, and the builder is checked against our own encoder
+// on the zero label first, so a builder that put the slot in the wrong place
+// would fail its own sanity check before it could pass this one.
+//
+// (`orbweaver-dynamic/tests/union_value_after_a_nonzero_default_label.rs`
+// takes the same bytes one step further: a *value* of each union decodes and
+// re-encodes under the TypeCode read from them, and a discriminator equal to
+// the non-zero default label still selects the real case, not the default.)
+
+/// The union TypeCode encapsulation §9.3.5.1.4 describes, built by hand from
+/// a decoded shape, with `default_label` in the default member's slot at the
+/// discriminator's width — in the stream's byte order, which is where we put
+/// an encapsulation's flag.
+fn hand_built(tc: &TypeCode, endian: Endian, default_label: u64) -> Vec<u8> {
+    let TypeCode::Union { id, name, discriminator, default_index, cases } = tc else {
+        panic!("not a union: {tc:?}")
+    };
+    let width = match discriminator.as_ref() {
+        TypeCode::Boolean | TypeCode::Char | TypeCode::Octet => 1,
+        TypeCode::Short | TypeCode::UShort => 2,
+        TypeCode::LongLong | TypeCode::ULongLong => 8,
+        _ => 4,
+    };
+    let in_order = |be: &[u8]| -> Vec<u8> {
+        match endian {
+            Endian::Big => be.to_vec(),
+            Endian::Little => be.iter().rev().copied().collect(),
+        }
+    };
+    let mut inner = Encoder::encapsulation(endian);
+    inner.put_str(id);
+    inner.put_str(name);
+    encode(&mut inner, discriminator).expect("discriminator");
+    inner.put_i32(*default_index);
+    inner.put_u32(cases.len() as u32);
+    for (i, c) in cases.iter().enumerate() {
+        inner.align_to(width.min(8));
+        let label = if *default_index >= 0 && i == *default_index as usize {
+            in_order(&default_label.to_be_bytes()[8 - width..])
+        } else {
+            assert_eq!(c.label.len(), width, "{name}.{}: label width", c.name);
+            in_order(&c.label)
+        };
+        inner.put_bytes(&label);
+        inner.put_str(&c.name);
+        encode(&mut inner, &c.tc).expect("member");
+    }
+    let mut outer = Encoder::new(endian);
+    outer.put_u32(16); // tk_union
+    outer.put_encapsulation(inner);
+    outer.finish().expect("finish")
+}
+
+/// (what, the recording, non-zero labels a conformant peer could write:
+/// (name, value))
+type ThirdPeer = (&'static str, &'static [u8], Vec<(&'static str, u64)>);
+
+fn third_peer_labels() -> Vec<ThirdPeer> {
+    vec![
+        (
+            "long",
+            LONG_DEFAULT,
+            vec![
+                ("i32::MAX", i32::MAX as u32 as u64),
+                ("i32::MIN (omniORB's)", i32::MIN as u32 as u64),
+                ("-1", u32::MAX as u64),
+                ("1, the label of `case 1:`", 1),
+            ],
+        ),
+        (
+            "short",
+            SHORT_DEFAULT,
+            vec![
+                ("i16::MAX", i16::MAX as u16 as u64),
+                ("i16::MIN (omniORB's)", i16::MIN as u16 as u64),
+                ("-1", u16::MAX as u64),
+                ("1, the label of `case 1:`", 1),
+            ],
+        ),
+        (
+            "long long",
+            LONG_LONG_DEFAULT,
+            vec![
+                ("i64::MAX", i64::MAX as u64),
+                ("i64::MIN (omniORB's)", i64::MIN as u64),
+                ("-1", u64::MAX),
+                ("1, the label of `case 1:`", 1),
+            ],
+        ),
+        (
+            "boolean",
+            BOOLEAN_DEFAULT,
+            vec![("TRUE, the label of `case TRUE:`", 1), ("0xff, not a boolean at all", 0xff)],
+        ),
+        (
+            "char",
+            CHAR_DEFAULT,
+            vec![
+                ("'\\377' (omniORB's)", 0xff),
+                ("'\\177'", 0x7f),
+                ("'a', the label of `case 'a':`", u64::from(b'a')),
+            ],
+        ),
+        (
+            "enum",
+            ENUM_DEFAULT,
+            vec![
+                ("GREEN, unused (omniORB's)", 1),
+                ("BLUE, unused", 2),
+                ("3, past the last enumerator", 3),
+                ("0xffffffff, not an ordinal at all", u32::MAX as u64),
+            ],
+        ),
+    ]
+}
+
+/// The builder reproduces our own encoder on the zero label, byte for byte,
+/// in both orders — so a slot it wrote anywhere else would show here first.
+#[test]
+fn the_hand_builder_agrees_with_our_encoder_on_the_zero_label() {
+    for (what, recording, _) in third_peer_labels() {
+        let base = decode(&mut Decoder::new(recording, Endian::Little)).expect("decode");
+        for endian in [Endian::Big, Endian::Little] {
+            let mut e = Encoder::new(endian);
+            encode(&mut e, &base).expect("encode");
+            let ours = e.finish().expect("finish");
+            assert_eq!(hand_built(&base, endian, 0), ours, "{what} {endian:?}");
+        }
+    }
+}
+
+/// Any value in the default member's label slot — maximum, minimum, a real
+/// case's own label, a pattern that is not a value of the type — decodes to
+/// the TypeCode the zero label decodes to: default member labelless, the
+/// same `default_index`, every real case with its own label. Both stream
+/// orders. Twenty-one labels × two orders = forty-two encapsulations, and
+/// each must also differ from the zero-label bytes, or a builder that
+/// silently wrote zeros would pass this by tautology.
+#[test]
+fn a_third_peers_non_zero_default_label_is_ignored_whatever_it_is() {
+    let mut failures = Vec::new();
+    let mut measured = 0;
+    for (what, recording, labels) in third_peer_labels() {
+        let base = decode(&mut Decoder::new(recording, Endian::Little)).expect("decode");
+        for endian in [Endian::Big, Endian::Little] {
+            let zeros = hand_built(&base, endian, 0);
+            for (label_name, value) in &labels {
+                let bytes = hand_built(&base, endian, *value);
+                assert_ne!(
+                    bytes, zeros,
+                    "{what} {endian:?} label {label_name}: builder wrote zeros"
+                );
+                measured += 1;
+                match decode(&mut Decoder::new(&bytes, endian)) {
+                    Err(e) => failures.push(format!("{what} {endian:?} label {label_name}: {e}")),
+                    Ok(tc) if tc != base => failures.push(format!(
+                        "{what} {endian:?} label {label_name}: decoded {:?}, wanted {:?}",
+                        cases_of(&tc),
+                        cases_of(&base)
+                    )),
+                    Ok(tc) => {
+                        // And what we then write for it is what we always
+                        // write: zeros in the slot, decodable in either order.
+                        for out in [Endian::Big, Endian::Little] {
+                            let mut e = Encoder::new(out);
+                            encode(&mut e, &tc).expect("encode");
+                            let ours = e.finish().expect("finish");
+                            assert_eq!(ours, hand_built(&base, out, 0), "{what} via {out:?}");
+                            let back = decode(&mut Decoder::new(&ours, out)).expect("decode ours");
+                            assert_eq!(back, base, "{what} {label_name} via {out:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{} failure(s):\n  {}", failures.len(), failures.join("\n  "));
+    assert_eq!(measured, 42, "the matrix is six kinds × their labels × two orders");
+}
