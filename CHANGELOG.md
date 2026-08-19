@@ -504,6 +504,26 @@ records what changed and, where it matters, what it changes on the wire.
   `allow`였던 자리에서 `marshal`을 예측한다. 아무것도 다이얼하지 않는다.
   고치지 않고 못 박은 것: 스텁의 상한 초과 인자는 가드가 듣기 전에 스텁의
   프로브가 거절한다.
+- **Fallback-on-failure oracle for `LOCATION_FORWARD` vs
+  `LOCATION_FORWARD_PERM`** (`spikes/perm_fallback.sh`,
+  `crates/orbweaver-gen/tests/forward_fallback.rs`): two servers, the
+  forwarded-to one killed by PID. omniORB 4.3.4 restarts at the original after
+  a temporary forward (§9.6 "shall") and stays on the dead address after a
+  permanent one (§9.6 "may replace") — the first peer measurement that tells
+  the two statuses apart, and through which a server that downgrades status 4
+  to 3 goes red. Ours measured and pinned: `Connection` returns Err under both
+  (holds no original address); `Reference` re-asks the original on every call
+  under both (never caches a forward, never replaces on permanent).
+  `spike-server` gains `ORBWEAVER_FORWARD_TO/_STATUS/_PING_ANSWER`.
+
+  **`LOCATION_FORWARD`와 `LOCATION_FORWARD_PERM`을 구별하는 장애-시-복귀
+  오라클**(`spikes/perm_fallback.sh`, `tests/forward_fallback.rs`): 서버 두 대,
+  전달받은 쪽을 PID로 종료. omniORB 4.3.4는 임시 전달 뒤에는 원래 주소로
+  되돌아가고(§9.6 "shall") 영구 전달 뒤에는 죽은 주소에 머문다(§9.6 "may
+  replace") — 두 상태를 구별하는 최초의 피어 측정이며, 상태 4를 3으로 낮추는
+  서버가 이것으로 빨갛게 된다. 우리 쪽: `Connection`은 두 상태 모두 Err(원래
+  주소를 갖고 있지 않음); `Reference`는 두 상태 모두 매 호출마다 원래 주소에
+  다시 묻는다.
 - **The pool says which forward it followed.** `mux::Sent::Forward` carries
   `Forward`, not a bare `Ior`; `Pool::invoke_tracking` returns the reply and
   the last hop followed; `Reference::forwarded()` is the pooled

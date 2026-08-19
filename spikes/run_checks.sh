@@ -978,6 +978,23 @@ case "$poolout" in
      fail_total=$((fail_total+1)) ;;
 esac
 
+hr "LOCATION_FORWARD vs _PERM — fallback-on-failure: the forwarded-to server killed, does the client go back?"
+# 680aa41: a request count is 1 under both statuses. The oracle is §9.6:
+# temporary -> the client shall restart at the original address; permanent ->
+# it may have replaced the reference. Measured 2026-08-19 (af73b2f): omniORB
+# 4.3.4 re-asks under temporary and stays on the dead address under
+# permanent — asserted. Server-side control in af73b2f: PERM downgraded to 3
+# -> omniORB re-asks -> red. Our Connection/Reference cells are printed as
+# measured (neither distinguishes the two; the test's doc says why). Negative
+# control for the group: `--only omni --expect-permanent reask` goes red.
+pfout=$(./spikes/perm_fallback.sh --expect-permanent stay 2>&1); pfrc=$?
+printf '%s\n' "$pfout" | grep -E '^  (ok|FAIL|SKIPPED|\.\.) ' | cut -c1-150
+case "$pfrc" in
+  0) ;;
+  2) skipped=$((skipped+1)) ;;
+  *) fail_total=$((fail_total+1)) ;;
+esac
+
 # ── Registry: does IDL-derived type metadata match the wire? ────────────────
 hr "type registry — TypeCode derived from IDL vs the peer's"
 # Deriving a TypeCode and encoding it with our own encoder proves only that two
