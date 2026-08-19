@@ -313,6 +313,14 @@ class Union(object):
     _idl_cases = ()
     #: Index into ``_idl_cases`` of the ``default:`` branch, or -1.
     _idl_default = -1
+    #: Where ``default:`` was written among the default branch's labels: the
+    #: number of labels that precede it (0 for a bare ``default:`` and for
+    #: ``default: case 5: case 6:``, 1 for ``case 2: default:``). The TypeCode
+    #: lists one member per label with the default as a member of its own, in
+    #: source order — omniidl's list and the registry's — so ``_class_form``
+    #: needs the slot to put the default member back where ``default_index``
+    #: will find it.
+    _idl_default_slot = 0
 
     def __init__(self, d, v=None):
         self._d = d
@@ -911,19 +919,23 @@ def _synthesise(kind, id, form, path):
     if kind == "union":
         cls = type(name, (Union,), {
             "_idl_id": id, "_idl_name": name, "_idl_disc": "long",
-            "_idl_cases": (), "_idl_default": -1,
+            "_idl_cases": (), "_idl_default": -1, "_idl_default_slot": 0,
             "__doc__": "IDL union `%s`, synthesised from the type an any described." % (id,),
         })
         register(cls)
         cls._idl_disc = _desc_of(_form_field(form, "discriminator", path, (str, dict)),
                                  _member(path, "discriminator"))
         default = _form_field(form, "default", path, int)
-        # The wire's cases are one per label; a class holds one branch per
-        # member with its labels together, which is what the generator writes.
-        # The default case keeps its label when it has one (`case 2: default:`
-        # is one case, labelled 2, at the default index); only a bare
-        # `default:` carries the registry's empty label, which is no label.
+        # The wire's cases are one per label, the default a case of its own
+        # with the registry's empty label (`case 2: default: string rest;` is
+        # `(2, rest)` then the default `rest`, as omniidl lists it); a class
+        # holds one branch per member with its labels together, which is what
+        # the generator writes, and remembers where among them the default sat
+        # (`_idl_default_slot`) so `_class_form` can put it back there. A
+        # default case that arrives with a label of its own — the folded shape
+        # this runtime read until 2026-08-19 — keeps the label as a label.
         branches = []
+        slot = 0
         for i, c in enumerate(_form_field(form, "cases", path, list)):
             at = _index(_member(path, "cases"), i)
             if not isinstance(c, dict):
@@ -933,13 +945,17 @@ def _synthesise(kind, id, form, path):
             label = c.get("label")
             labels = [] if label == {"_raw": ""} else [label]
             if branches and branches[-1][1] == cname:
-                branches[-1][0].extend(labels)
-                if i == default:
+                if i == default and not branches[-1][3]:
+                    slot = len(branches[-1][0])
                     branches[-1] = branches[-1][:3] + (True,)
+                branches[-1][0].extend(labels)
             else:
+                if i == default:
+                    slot = 0
                 branches.append((labels, cname, ctype, i == default))
         cls._idl_cases = tuple((tuple(ls), n, t) for ls, n, t, _ in branches)
         cls._idl_default = next((i for i, b in enumerate(branches) if b[3]), -1)
+        cls._idl_default_slot = slot
         return
     if kind == "alias":
         register_alias(id, _desc_of(_form_field(form, "aliased", path, (str, dict)),
@@ -1008,17 +1024,19 @@ def _class_form(cls, path, visiting):
         default = -1
         for i, (labels, member, d) in enumerate(cls._idl_cases):
             t = _form_of(d, _member(path, member), visiting)
-            if i == cls._idl_default:
-                # The default is the branch's first case. A bare `default:` has
-                # no label of its own; the registry gives it none, and none is
-                # what base64 of nothing spells. One that is labelled as well
-                # keeps its labels, one case each, as the registry holds them.
-                default = len(cases)
-                if not labels:
+            for k, label in enumerate(labels):
+                if i == cls._idl_default and k == cls._idl_default_slot:
+                    # The default is a case of its own among the branch's
+                    # labels, where `default:` was written. It has no label:
+                    # the registry gives it none, and none is what base64 of
+                    # nothing spells.
+                    default = len(cases)
                     cases.append({"label": {"_raw": ""}, "name": member, "type": t})
-                    continue
-            for label in labels:
                 cases.append({"label": label, "name": member, "type": t})
+            if i == cls._idl_default and cls._idl_default_slot >= len(labels):
+                # After the branch's labels, or a bare `default:` with none.
+                default = len(cases)
+                cases.append({"label": {"_raw": ""}, "name": member, "type": t})
         named["cases"] = cases
         named["default"] = default
         return named

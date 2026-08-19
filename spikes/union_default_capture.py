@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """Re-capture a peer's `default:`-bearing union TypeCodes and check the recording.
 
-`crates/orbweaver-giop/tests/union_default_label_from_a_peer.rs` holds byte
-sequences omniORB wrote for unions with a `default:` branch — one per
-discriminator kind that gives a label a different width, plus the two corpus
-unions the defect was found on. This regenerates them from the live fixture
-and compares, padding excluded (`pad_mask` from `union_label_capture.py`, the
-sibling that recorded the labelled cases and learned not to list offsets).
+Two test files hold byte sequences omniORB wrote for unions with a `default:`
+branch, and this regenerates all of them from the live fixture and compares,
+padding excluded (`pad_mask` from `union_label_capture.py`, the sibling that
+recorded the labelled cases and learned not to list offsets):
+
+- `crates/orbweaver-giop/tests/union_default_label_from_a_peer.rs` — one per
+  discriminator kind that gives a label a different width, plus the two corpus
+  unions the default-label defect was found on. What the *codec* is held to.
+- `crates/orbweaver-registry/tests/union_shape_from_a_peer.rs` — the four
+  corpus unions with a default (`golden/06` WithDefault, `golden/29` Coded,
+  Spread, Tint), each in a little-endian and a big-endian stream. What the
+  *registry's derived member list* is held to: one member per label with the
+  default a member of its own, in source order.
 
 `--emit` prints the live capture as Rust constants instead of comparing, for
 the day the recording has to be retaken.
@@ -27,7 +34,8 @@ from pathlib import Path
 from union_label_capture import pad_mask
 
 ROOT = Path(__file__).resolve().parent.parent
-TEST = ROOT / "crates/orbweaver-giop/tests/union_default_label_from_a_peer.rs"
+CODEC_TEST = ROOT / "crates/orbweaver-giop/tests/union_default_label_from_a_peer.rs"
+SHAPE_TEST = ROOT / "crates/orbweaver-registry/tests/union_shape_from_a_peer.rs"
 
 # `udef`, not `dl`: `module dl { union DL ... }` is the case-insensitive clash
 # omniidl rejects, and it was the first thing this script's author wrote.
@@ -55,20 +63,40 @@ module gc29 {
     case 2:
     default: string rest;
   };
+  union Spread switch (short) {
+    default:
+    case 5:
+    case 6: short misc;
+    case 7: long seven;
+  };
+  enum Hue { RED, GREEN, BLUE };
+  union Tint switch (Hue) {
+    case RED: octet warm;
+    case GREEN:
+    default: string named;
+  };
 };
 """
 
-# (Rust constant, module attribute, byte order flag for cdrMarshal)
+# (Rust constant, module attribute, byte order flag for cdrMarshal, test file)
 RECORDINGS = [
-    ("LONG_DEFAULT", "udef._tc_DL", 1),
-    ("LONG_DEFAULT_BIG_ENDIAN_STREAM", "udef._tc_DL", 0),
-    ("SHORT_DEFAULT", "udef._tc_DS", 1),
-    ("BOOLEAN_DEFAULT", "udef._tc_DB", 1),
-    ("CHAR_DEFAULT", "udef._tc_DC", 1),
-    ("ENUM_DEFAULT", "udef._tc_DE", 1),
-    ("LONG_LONG_DEFAULT", "udef._tc_DLL", 1),
-    ("GOLDEN_06_WITH_DEFAULT", "gc06._tc_WithDefault", 1),
-    ("GOLDEN_29_CODED", "gc29._tc_Coded", 1),
+    ("LONG_DEFAULT", "udef._tc_DL", 1, CODEC_TEST),
+    ("LONG_DEFAULT_BIG_ENDIAN_STREAM", "udef._tc_DL", 0, CODEC_TEST),
+    ("SHORT_DEFAULT", "udef._tc_DS", 1, CODEC_TEST),
+    ("BOOLEAN_DEFAULT", "udef._tc_DB", 1, CODEC_TEST),
+    ("CHAR_DEFAULT", "udef._tc_DC", 1, CODEC_TEST),
+    ("ENUM_DEFAULT", "udef._tc_DE", 1, CODEC_TEST),
+    ("LONG_LONG_DEFAULT", "udef._tc_DLL", 1, CODEC_TEST),
+    ("GOLDEN_06_WITH_DEFAULT", "gc06._tc_WithDefault", 1, CODEC_TEST),
+    ("GOLDEN_29_CODED", "gc29._tc_Coded", 1, CODEC_TEST),
+    ("GOLDEN_06_WITH_DEFAULT_LITTLE", "gc06._tc_WithDefault", 1, SHAPE_TEST),
+    ("GOLDEN_06_WITH_DEFAULT_BIG", "gc06._tc_WithDefault", 0, SHAPE_TEST),
+    ("GOLDEN_29_CODED_LITTLE", "gc29._tc_Coded", 1, SHAPE_TEST),
+    ("GOLDEN_29_CODED_BIG", "gc29._tc_Coded", 0, SHAPE_TEST),
+    ("GOLDEN_29_SPREAD_LITTLE", "gc29._tc_Spread", 1, SHAPE_TEST),
+    ("GOLDEN_29_SPREAD_BIG", "gc29._tc_Spread", 0, SHAPE_TEST),
+    ("GOLDEN_29_TINT_LITTLE", "gc29._tc_Tint", 1, SHAPE_TEST),
+    ("GOLDEN_29_TINT_BIG", "gc29._tc_Tint", 0, SHAPE_TEST),
 ]
 
 MARSHAL = """
@@ -85,12 +113,13 @@ for const, attr, endian in %r:
 
 
 def recorded():
-    text = TEST.read_text()
+    texts = {}
     out = {}
-    for const, _, _ in RECORDINGS:
+    for const, _, _, test in RECORDINGS:
+        text = texts.setdefault(test, test.read_text())
         m = re.search(r"const %s: &\[u8\] = &\[(.*?)\];" % const, text, re.S)
         if not m:
-            print("  FAIL %s is not in %s any more" % (const, TEST.name))
+            print("  FAIL %s is not in %s any more" % (const, test.name))
             return None
         out[const] = [int(x, 16) for x in re.findall(r"0x([0-9a-f]{2})", m.group(1))]
     return out
@@ -103,7 +132,7 @@ def captured(work):
     if r.returncode != 0:
         print("  omniidl refused the IDL:", r.stderr.strip().splitlines()[-1:])
         return None
-    script = MARSHAL % (str(work), RECORDINGS)
+    script = MARSHAL % (str(work), [(c, a, e) for c, a, e, _ in RECORDINGS])
     r = subprocess.run([sys.executable, "-c", script], cwd=work,
                        capture_output=True, text=True)
     if r.returncode != 0:
@@ -119,9 +148,10 @@ def captured(work):
 
 
 def emit(cap):
-    for const, attr, endian in RECORDINGS:
+    for const, attr, endian, test in RECORDINGS:
         b = cap[const]
-        print("const %s: &[u8] = &[  // %s, %s stream" % (const, attr, "little-endian" if endian else "big-endian"))
+        print("const %s: &[u8] = &[  // %s, %s stream -> %s"
+              % (const, attr, "little-endian" if endian else "big-endian", test.name))
         for i in range(0, len(b), 16):
             print("    " + " ".join("0x%02x," % x for x in b[i:i + 16]))
         print("];")
@@ -140,7 +170,7 @@ def main():
     if rec is None:
         return 1
     bad = 0
-    for const, _, endian in RECORDINGS:
+    for const, _, endian, _ in RECORDINGS:
         a, b = rec[const], cap.get(const)
         if b is None:
             print("  FAIL the fixture wrote nothing for %s" % const)

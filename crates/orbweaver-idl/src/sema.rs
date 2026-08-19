@@ -529,7 +529,7 @@ impl Analyser {
         let mut seen: HashMap<String, Span> = HashMap::new();
         let mut default_at: Option<Span> = None;
         for c in &u.cases {
-            if c.is_default {
+            if c.is_default() {
                 if let Some(prev) = default_at {
                     self.diagnostics.push(Diagnostic {
                         message: format!(

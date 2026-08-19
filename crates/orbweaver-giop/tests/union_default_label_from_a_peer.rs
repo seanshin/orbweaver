@@ -156,9 +156,12 @@ const GOLDEN_06_WITH_DEFAULT: &[u8] = &[
 
 /// `corpus/golden/29-labelled-default.idl`'s `Coded`: `case 1: long one;
 /// case 2: default: string rest;`. omniidl makes **three** members of it —
-/// `(1, one)`, `(2, rest)` and a default `rest` — where the registry keeps
-/// `case 2: default:` as one case, labelled 2, at `default_index`. See
-/// [`the_registry_folds_a_labelled_default_where_omniidl_expands_it`].
+/// `(1, one)`, `(2, rest)` and a default `rest` — and since 2026-08-19 so
+/// does the registry; until then it kept `case 2: default:` as one case,
+/// labelled 2, at `default_index`. See
+/// [`a_labelled_default_is_one_member_per_label_default_included`] here for
+/// the peer's side, and `orbweaver-registry/tests/union_shape_from_a_peer.rs`
+/// for ours held equal to it.
 const GOLDEN_29_CODED: &[u8] = &[
     0x10, 0x00, 0x00, 0x00, 0x74, 0x00, 0x00, 0x00, 0x01, 0x61, 0x99, 0x07, 0x13, 0x00, 0x00, 0x00,
     0x49, 0x44, 0x4c, 0x3a, 0x67, 0x63, 0x32, 0x39, 0x2f, 0x43, 0x6f, 0x64, 0x65, 0x64, 0x3a, 0x31,
@@ -478,27 +481,30 @@ fn a_defaulted_union_survives_either_byte_order() {
     }
 }
 
-/// omniidl and the registry disagree on how many members `case 2: default:
-/// string rest;` is. omniidl: three — `(1, one)`, `(2, rest)`, default `rest`
-/// — one per label with the `default` as a label of its own, which is also
-/// how the registry already expands `case 2: case 3:`. The registry: two,
-/// with the `default` folded onto the labelled case. This test pins the
-/// *peer's* count and the fact that the label 2 survives our decoder next to
-/// the ignored default one; whether the registry should expand is recorded
-/// with the batch that added this file, and is not this file's to decide.
+/// How many members `case 2: default: string rest;` is, on the peer's side:
+/// three — `(1, one)`, `(2, rest)`, default `rest` — one per label with the
+/// `default` a member of its own, where it was written, which is also how
+/// `case 2: case 3:` expands. This test pins the *peer's* count and the fact
+/// that the label 2 survives our decoder next to the ignored default one.
 ///
-/// Measured 2026-08-19: omniORB decodes the registry's two-member `Coded`
-/// (`cdrUnmarshal(_tc_TypeCode)`: `members=2 default_index=1`) and selects
-/// `one` for 1, `rest` for 2, and `rest` by default for 99 and `i32::MIN` —
-/// so the fold is not an interoperability failure. It is a
-/// `TypeCode::equivalent` failure against a peer's IDL-derived TypeCode
-/// (member counts 2 ≠ 3), which nothing in this project measures yet.
+/// Until 2026-08-19 this test was named for the disagreement: the registry
+/// kept two members, the `default` folded onto the labelled case, and
+/// `default_index` on it. Measured that day: omniORB decoded the two-member
+/// `Coded` and selected `one` for 1, `rest` for 2 and by default for 99 and
+/// `i32::MIN` — not an interoperability failure at the value level, but a
+/// different `member_count` and `default_index` on the wire and a `TypeCode`
+/// no peer's IDL-derived one equalled. The registry now derives the peer's
+/// list (source order, the default a labelless member of its own), and
+/// `orbweaver-registry/tests/union_shape_from_a_peer.rs` holds it `==` to
+/// what these bytes decode to, for all four corpus unions with a default,
+/// both stream orders. This crate cannot see the registry, so the peer's
+/// half of the fact stays pinned here.
 #[test]
-fn the_registry_folds_a_labelled_default_where_omniidl_expands_it() {
+fn a_labelled_default_is_one_member_per_label_default_included() {
     let tc = decode(&mut Decoder::new(GOLDEN_29_CODED, Endian::Little)).expect("decode");
     let (cases, default_index) = cases_of(&tc);
     assert_eq!(cases.len(), 3, "omniidl writes one member per label, default included");
-    assert_eq!(default_index, 2);
+    assert_eq!(default_index, 2, "the default member sits where `default:` was written: last");
     assert_eq!(cases[1], ("rest".to_owned(), vec![0, 0, 0, 2]), "the label 2 is a real case");
     assert_eq!(cases[2], ("rest".to_owned(), vec![]), "the default is the labelless one");
 }
