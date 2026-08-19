@@ -535,6 +535,25 @@ records what changed and, where it matters, what it changes on the wire.
   요약 줄이 건넌 수를 찍고 하네스가 바닥을 고정(golden 5248/5248, 네 코퍼스
   12,928). 1차 통과 0건; 음성 대조 2건 적색(2712, 70).
 
+- **`--dry-run-handle <name>=<IOR|file>` (repeatable): the CLI's
+  value-carrying dry run holds an object reference without dialing it.** The
+  IOR is parsed and issued into the session's capability table through the
+  serving path's own `issue_checked`; `--dry-run-args` names it as
+  `{"_ref":"<name>"}` (D008's notation) and the CLI rewrites the name to the
+  issued token before the library sees the document. With it,
+  `heartbeat(in Expert e, …)` predicts `allow`/`marshals` from the command
+  line; without it, `marshal`/`would_not_marshal` naming the parameter and
+  handle — every answer the CLI could give before. The document carries
+  `handles`; the target reaches no output and every ledger line is `DRYRUN-`
+  (`tests/dryrun_handle.rs`: a listener the test owns is never contacted).
+  Closes the gap 4bb9742 reported.
+
+  **`--dry-run-handle <이름>=<IOR|파일>`(반복 가능): CLI의 값 동반 드라이런이
+  객체 참조를 다이얼하지 않고 보유한다.** IOR은 파싱만 되어 라이브 경로와 같은
+  `issue_checked`로 세션 테이블에 발급되고, `--dry-run-args`는 D008 표기
+  `{"_ref":"<이름>"}`으로 이름을 대며 CLI가 라이브러리에 넘기기 전에 토큰으로
+  바꾼다. 있으면 `allow`/`marshals`, 없으면 `marshal`/`would_not_marshal`(음성
+  대조군). 대상의 host/port/key는 어떤 출력에도 닿지 않고 원장은 전부 `DRYRUN-`.
 - **The CLI's dry run takes values, and the static guard's dry run resolves
   the session's handles.** `orbweaver-mcp-server --dry-run=<id>.<operation>
   [--dry-run-args <json>]` asks about one operation with values: the document

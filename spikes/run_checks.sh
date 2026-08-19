@@ -1796,6 +1796,30 @@ if [ "$dv_would" = "marshal would_not_marshal" ]; then
 else
   echo "  FAIL the CLI dry run with values did not predict marshal (got: ${dv_would:-nothing})"; fail_total=$((fail_total+1))
 fi
+# A held reference from the CLI (ea25fce): heartbeat(in Expert e, …) with
+# --dry-run-handle naming an IOR that is parsed and never dialed (TEST-NET-1
+# 192.0.2.77:31337, nothing answers there and nothing is asked to) predicts
+# `allow marshals`. Negative control: drop --dry-run-handle and the same
+# command says `marshal would_not_marshal` ("no reference is held under
+# handle \"expert\"") — every answer the CLI could give before it.
+dh_ior='IOR:010000001300000049444c3a6d6f652f4578706572743a312e30000001000000000000003c000000010102000b0000003139322e302e322e37370000697a00001b000000766572792d64697374696e63746976652d6f626a6563742d6b65790000000000'
+dh_cap='{"id":"x","cost":1,"latency_p99_ms":1,"load":0.5,"state":"RESIDENT","mem_footprint":1,"route_freq":0,"placement_node":"n","contract_version":"1.0"}'
+dh=$(cargo run -q -p orbweaver-mcp --bin orbweaver-mcp-server -- \
+     --idl corpus/golden/22-moe-control-plane.idl --expose IDL:moe/ExpertRegistry:1.0 \
+     --as harness --scope moe.registry.write --dry-run=IDL:moe/ExpertRegistry:1.0.heartbeat \
+     --dry-run-handle "expert=$dh_ior" \
+     --dry-run-args '{"e":{"_ref":"expert"},"updated_cap":'"$dh_cap"'}' 2>/dev/null)
+dh_would=$(printf '%s' "$dh" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["would"], d.get("payload"))' 2>/dev/null)
+dn=$(cargo run -q -p orbweaver-mcp --bin orbweaver-mcp-server -- \
+     --idl corpus/golden/22-moe-control-plane.idl --expose IDL:moe/ExpertRegistry:1.0 \
+     --as harness --scope moe.registry.write --dry-run=IDL:moe/ExpertRegistry:1.0.heartbeat \
+     --dry-run-args '{"e":{"_ref":"expert"},"updated_cap":'"$dh_cap"'}' 2>/dev/null)
+dn_would=$(printf '%s' "$dn" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["would"], d.get("payload"))' 2>/dev/null)
+if [ "$dh_would" = "allow marshals" ] && [ "$dn_would" = "marshal would_not_marshal" ]; then
+  echo "  ok   a --dry-run-handle reference resolves from the CLI (allow marshals); without it, marshal would_not_marshal (no target)"
+else
+  echo "  FAIL the CLI dry run with a held reference did not hold (with: ${dh_would:-nothing}; without: ${dn_would:-nothing})"; fail_total=$((fail_total+1))
+fi
 
 # ── Service coverage: every declared operation, over the wire ───────────────
 hr "service coverage — what the five servants actually serve"
