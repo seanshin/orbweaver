@@ -943,6 +943,20 @@ case "$permout" in
      printf '%s' "$permout" | grep -E "panicked|left:|right:" | head -4 | sed 's/^/       /'
      fail_total=$((fail_total+1)) ;;
 esac
+# The pool half (b77c9fb): Sent::Forward carries Forward, Pool::invoke_tracking
+# and Reference::forwarded() report the last hop. Negative controls in that
+# commit: interpret forced all-temporary -> red at 1.2 x Permanent, forced
+# all-permanent -> red at 1.0 x Temporary.
+poolout=$(cargo test -q -p orbweaver-giop --test mux_pool -- \
+            the_pool_follows_both_forward_statuses_and_reports_permanent_only_at_1_2 \
+            a_real_server_is_heard_as_permanent_only_at_1_2 2>&1)
+case "$poolout" in
+  *"test result: ok. 2 passed"*)
+    echo "  ok   pool: permanent reported only for 1.2 x permanent — 12 scripted cells (both reply orders) + real Server, native" ;;
+  *) echo "  FAIL pool forward reporting"
+     printf '%s' "$poolout" | grep -E "panicked|left:|right:" | head -4 | sed 's/^/       /'
+     fail_total=$((fail_total+1)) ;;
+esac
 
 # ── Registry: does IDL-derived type metadata match the wire? ────────────────
 hr "type registry — TypeCode derived from IDL vs the peer's"

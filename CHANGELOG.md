@@ -455,6 +455,22 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **The pool says which forward it followed.** `mux::Sent::Forward` carries
+  `Forward`, not a bare `Ior`; `Pool::invoke_tracking` returns the reply and
+  the last hop followed; `Reference::forwarded()` is the pooled
+  `Connection::forwarded()`. Following is unchanged. Measured: 2 kinds × 3
+  versions × 2 reply byte orders against a scripted peer, plus the same matrix
+  through our own `Server` (native order) — permanent reported only for 1.2 ×
+  permanent. Negative controls: interpret forced all-temporary and
+  all-permanent, `Reference` recording nothing — each red once.
+
+  **풀이 어떤 포워드를 따랐는지 말한다.** `mux::Sent::Forward`가 `Ior` 대신
+  `Forward`를 나른다. `Pool::invoke_tracking`은 응답과 마지막으로 따라간 홉을
+  돌려주고, `Reference::forwarded()`는 `Connection::forwarded()`의 풀 판이다.
+  따라가는 동작은 그대로다. 측정: 스크립트 피어로 2종 × 3버전 × 2응답 바이트
+  순서, 같은 행렬을 우리 `Server`로(네이티브 순서) — 1.2 × permanent에서만
+  permanent로 보고. 음성 대조: 전부 temporary/전부 permanent 강제, `Reference`
+  미기록 — 각각 한 번 빨강.
 - **`LOCATION_FORWARD_PERM` is reachable from a servant** (D010 A1).
   `Forward { Temporary, Permanent }` and a defaulted `redirect` on
   `Dispatch`/`SharedDispatch` (giop) and on every generated servant trait
