@@ -32,6 +32,27 @@
 //! body. The filler is `0xEE` rather than zero so that padding — which the
 //! encoder writes as zeros — stays distinguishable in a hex dump of a failure.
 //!
+//! # The AnyJSON leg
+//!
+//! Every value the CDR leg round-trips is also taken across the agent
+//! boundary and back: [`anyjson::to_json`], the document rendered to text and
+//! parsed again (the text is what actually crosses, and it is the only place
+//! the string escaping meets a generated string), [`anyjson::from_json`], then
+//! encoded in the same byte order at the same phase — and the bytes must equal
+//! the CDR-only leg's. Byte equality is legitimate here for the same reason
+//! it is above: both buffers come from our own encoder, so padding is ours to
+//! be consistent about, and the JSON mapping is ours too. This leg did not
+//! exist until 2026-08-19: the sweep round-tripped CDR only, and the mapping's
+//! refusal of every non-empty value under a `TypeCode::Recursive` marker was
+//! not something it could have seen at any witness.
+//!
+//! A type the mapping documents as not crossing (`fixed`, `Principal`, a
+//! `void` where a type belongs — the arms `from_json` answers "cannot cross
+//! yet") is a **`json/unmapped`** finding, advice, once per type, and the leg
+//! is not run for it. That is a distinct class rather than a silent skip so a
+//! caller can pin the list; a new member is a finding about the mapping, not
+//! about the type.
+//!
 //! # Seed discipline
 //!
 //! *A failing case must be reproducible from its seed. That is the entire
@@ -60,11 +81,15 @@
 //!   the regression.
 //!
 //! [`Encoder::continuing_at`]: orbweaver_cdr::Encoder::continuing_at
+//! [`anyjson::to_json`]: orbweaver_dynamic::anyjson::to_json
+//! [`anyjson::from_json`]: orbweaver_dynamic::anyjson::from_json
 
 use std::collections::BTreeSet;
 
 use orbweaver_cdr::{Decoder, Encoder, Endian};
 use orbweaver_dynamic::Value;
+use orbweaver_dynamic::anyjson::{self, LocalReferences};
+use orbweaver_dynamic::json::Json;
 use orbweaver_forge::{Finding, Severity};
 use orbweaver_giop::typecode::TypeCode;
 use orbweaver_giop::{IiopProfile, Ior, Version};
@@ -140,6 +165,32 @@ pub fn case_seed(root: u64, index: u64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// What a property run measured, as distinct from what it found.
+///
+/// A report of findings cannot say how much ran: a sweep whose JSON leg was
+/// skipped for every value prints the same empty list as one that crossed
+/// them all, and until 2026-08-19 that was exactly the state of things — the
+/// leg did not exist and nothing said so. These counts are printed by
+/// `contract-check` beside the case count so a leg that stops running is a
+/// visible number, not a silent one.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Measured {
+    /// Values that were round-tripped through CDR, counted once per byte
+    /// order — a case that produced a value contributes two.
+    pub cdr: usize,
+    /// Of those, the ones that were also taken across AnyJSON and back and
+    /// re-encoded. Less than `cdr` only where a type is `json/unmapped`.
+    pub json: usize,
+}
+
+impl Measured {
+    /// Adds another run's counts to this one.
+    pub fn add(&mut self, other: Measured) {
+        self.cdr += other.cdr;
+        self.json += other.json;
+    }
+}
+
 /// Runs `cases` round-trip cases against `tc` from [`DEFAULT_SEED`].
 pub fn roundtrip_property(tc: &TypeCode, cases: usize) -> Vec<Finding> {
     roundtrip_property_seeded(tc, cases, DEFAULT_SEED)
@@ -152,17 +203,53 @@ pub fn roundtrip_property(tc: &TypeCode, cases: usize) -> Vec<Finding> {
 /// remaining phases unmeasured — which is stated here rather than hidden,
 /// per the harness rule that an unmeasured check is not a pass.
 pub fn roundtrip_property_seeded(tc: &TypeCode, cases: usize, root: u64) -> Vec<Finding> {
+    roundtrip_property_measured(tc, cases, root).0
+}
+
+/// [`roundtrip_property_seeded`], also returning how much it measured.
+pub fn roundtrip_property_measured(
+    tc: &TypeCode,
+    cases: usize,
+    root: u64,
+) -> (Vec<Finding>, Measured) {
     let mut out = Vec::new();
     let mut gaps = BTreeSet::new();
+    let mut measured = Measured::default();
 
     if cases == 0 {
-        return out;
+        return (out, measured);
     }
+
+    // The mapping's own limit, stated once per type and before any case runs,
+    // so it reads the same whether or not the sampler can build the type. A
+    // `fixed` member makes a type both unsampled (§4.4) and unmapped, and the
+    // two are different facts about two different modules.
+    let cross_json = match json_unmapped(tc) {
+        Some(reason) => {
+            out.push(finding(
+                "json/unmapped",
+                Severity::Advice,
+                format!(
+                    "{} is not taken across AnyJSON by the property, so the JSON leg is \
+                     unmeasured for it: {reason}",
+                    describe(tc)
+                ),
+                type_id(tc),
+                Some(
+                    "a documented limit of the mapping rather than a defect; when the mapping \
+                     grows the type, remove it from json_unmapped and the leg runs"
+                        .into(),
+                ),
+            ));
+            false
+        }
+        None => true,
+    };
 
     let mut sampler =
         Sampler { rng: Rng::new(root), gaps: BTreeSet::new(), depth: 0, open: Vec::new() };
     if sampler.sample(tc).is_none() {
-        return vec![finding(
+        out.push(finding(
             "prop/unsupported-type",
             Severity::Advice,
             format!(
@@ -176,7 +263,8 @@ pub fn roundtrip_property_seeded(tc: &TypeCode, cases: usize, root: u64) -> Vec<
                  hand-written case, or note the limit in docs/PLAN.md §4.4"
                     .into(),
             ),
-        )];
+        ));
+        return (out, measured);
     }
 
     for index in 0..cases {
@@ -198,7 +286,7 @@ pub fn roundtrip_property_seeded(tc: &TypeCode, cases: usize, root: u64) -> Vec<
         };
         gaps.append(&mut sampler.gaps);
         for endian in [Endian::Big, Endian::Little] {
-            out.extend(one_case(tc, &value, seed, endian, phase));
+            out.extend(one_case(tc, &value, seed, endian, phase, cross_json, &mut measured));
         }
     }
 
@@ -218,21 +306,25 @@ pub fn roundtrip_property_seeded(tc: &TypeCode, cases: usize, root: u64) -> Vec<
             ),
         ));
     }
-    out
+    (out, measured)
 }
 
 /// Re-runs one case, in both byte orders and at every alignment phase.
 ///
 /// The reproduction entry point: a finding reports a seed, and this takes the
-/// seed back to the failure without the batch that found it.
+/// seed back to the failure without the batch that found it. The JSON leg
+/// runs here too, for the same value, so a `json/*` finding reproduces the
+/// same way a `prop/*` one does.
 pub fn roundtrip_case(tc: &TypeCode, seed: u64) -> Vec<Finding> {
     let mut sampler =
         Sampler { rng: Rng::new(seed), gaps: BTreeSet::new(), depth: 0, open: Vec::new() };
     let Some(value) = sampler.sample(tc) else { return Vec::new() };
+    let cross_json = json_unmapped(tc).is_none();
+    let mut measured = Measured::default();
     let mut out = Vec::new();
     for phase in 0..8 {
         for endian in [Endian::Big, Endian::Little] {
-            out.extend(one_case(tc, &value, seed, endian, phase));
+            out.extend(one_case(tc, &value, seed, endian, phase, cross_json, &mut measured));
         }
     }
     out
@@ -244,8 +336,18 @@ pub fn sample(tc: &TypeCode, seed: u64) -> Option<Value> {
     Sampler { rng: Rng::new(seed), gaps: BTreeSet::new(), depth: 0, open: Vec::new() }.sample(tc)
 }
 
-/// Encode → decode → encode, once, at one byte order and one alignment phase.
-fn one_case(tc: &TypeCode, value: &Value, seed: u64, endian: Endian, phase: usize) -> Vec<Finding> {
+/// Encode → decode → encode, once, at one byte order and one alignment phase —
+/// and, when `cross_json`, the same value out through AnyJSON and back in,
+/// encoded again and compared with the first leg's bytes.
+fn one_case(
+    tc: &TypeCode,
+    value: &Value,
+    seed: u64,
+    endian: Endian,
+    phase: usize,
+    cross_json: bool,
+    measured: &mut Measured,
+) -> Vec<Finding> {
     let where_ = format!("seed=0x{seed:016x} endian={endian:?} phase={phase} type={}", type_id(tc));
     let reproduce = format!(
         "reproduce with orbweaver_test::prop::roundtrip_case(&tc, 0x{seed:016x}); the value is \
@@ -282,6 +384,8 @@ fn one_case(tc: &TypeCode, value: &Value, seed: u64, endian: Endian, phase: usiz
         }
     };
 
+    measured.cdr += 1;
+
     let mut out = Vec::new();
     if decoded != *value {
         out.push(finding(
@@ -312,19 +416,207 @@ fn one_case(tc: &TypeCode, value: &Value, seed: u64, endian: Endian, phase: usiz
                     .map(|i| i.saturating_sub(phase).to_string())
                     .unwrap_or_else(|| "the end".into()),
             ),
-            where_,
-            Some(reproduce),
+            where_.clone(),
+            Some(reproduce.clone()),
         )),
         Ok(_) => {}
         Err(e) => out.push(finding(
             "prop/encode-error",
             Severity::Error,
             format!("{} encoded, decoded, then failed to re-encode: {e}", describe(tc)),
-            where_,
-            Some(reproduce),
+            where_.clone(),
+            Some(reproduce.clone()),
+        )),
+    }
+
+    if cross_json {
+        measured.json += 1;
+        out.extend(json_leg(tc, value, &first, endian, phase, &where_, &reproduce));
+    }
+    out
+}
+
+/// The AnyJSON leg: `to_json` → text → `from_json` → CDR, against the bytes
+/// the CDR-only leg produced for the same value.
+///
+/// Comparing bytes rather than only values is legitimate here for the reason
+/// the module documentation gives: both buffers come from our own encoder,
+/// and the mapping in between is ours too, so a difference is a defect in one
+/// of the three and never padding a peer left undefined. Value equality is
+/// checked as well because it names *what* was lost; the bytes then catch what
+/// value equality forgives — `-0.0` compares equal to `0.0`, and does not
+/// encode equal.
+///
+/// The document goes through its text form on purpose. `to_json` hands back a
+/// tree, but what crosses the agent boundary is a string, and the escaping in
+/// `Json::write` meets a generated string nowhere else in the sweep.
+///
+/// The classes are the CDR leg's, prefixed `json/`, so a report groups them
+/// beside their CDR counterparts and a reader can tell at once which mechanism
+/// failed: `to-json-error` (the mapping refused a value the encoder accepted),
+/// `text-roundtrip` (the document did not survive its own text),
+/// `from-json-error` (the mapping refused what it wrote), `roundtrip-value`,
+/// `roundtrip-bytes`, `encode-error`.
+#[allow(clippy::too_many_arguments)]
+fn json_leg(
+    tc: &TypeCode,
+    value: &Value,
+    first: &[u8],
+    endian: Endian,
+    phase: usize,
+    where_: &str,
+    reproduce: &str,
+) -> Vec<Finding> {
+    let report = |rule: &str, message: String| {
+        vec![finding(rule, Severity::Error, message, where_.to_owned(), Some(reproduce.to_owned()))]
+    };
+    // One table for both directions: a handle `to_json` issues is what
+    // `from_json` resolves, exactly as at the MCP boundary within a session.
+    let mut refs = LocalReferences::new();
+
+    let doc = match anyjson::to_json(tc, value, &mut refs) {
+        Ok(d) => d,
+        Err(e) => {
+            return report(
+                "json/to-json-error",
+                format!(
+                    "a generated value of {} that CDR encoded was refused by AnyJSON to_json: {e}",
+                    describe(tc)
+                ),
+            );
+        }
+    };
+
+    let text = doc.to_string();
+    let reread = match Json::parse(&text) {
+        Ok(j) => j,
+        Err(e) => {
+            return report(
+                "json/text-roundtrip",
+                format!(
+                    "the AnyJSON document for {} does not parse back from its own text: {e}; \
+                     document {}",
+                    describe(tc),
+                    excerpt(&text)
+                ),
+            );
+        }
+    };
+    if reread != doc {
+        return report(
+            "json/text-roundtrip",
+            format!(
+                "the AnyJSON document for {} changed on the way through its own text; \
+                 document {}",
+                describe(tc),
+                excerpt(&text)
+            ),
+        );
+    }
+
+    let back = match anyjson::from_json(tc, &reread, &refs) {
+        Ok(v) => v,
+        Err(e) => {
+            return report(
+                "json/from-json-error",
+                format!(
+                    "AnyJSON refused the document it wrote for {}: {e}; document {}",
+                    describe(tc),
+                    excerpt(&text)
+                ),
+            );
+        }
+    };
+
+    let mut out = Vec::new();
+    if back != *value {
+        out.extend(report(
+            "json/roundtrip-value",
+            format!(
+                "{} did not survive AnyJSON: sent {value:?}, got back {back:?}; document {}",
+                describe(tc),
+                excerpt(&text)
+            ),
+        ));
+    }
+    match encode_at_phase(tc, &back, endian, phase) {
+        Ok(second) if second != first => out.extend(report(
+            "json/roundtrip-bytes",
+            format!(
+                "{} is not byte-stable across AnyJSON: the value read back from the document \
+                 encoded to {} octet(s) instead of {}, first differing at offset {}; document {}",
+                describe(tc),
+                second.len() - phase,
+                first.len() - phase,
+                first
+                    .iter()
+                    .zip(&second)
+                    .position(|(a, b)| a != b)
+                    .map(|i| i.saturating_sub(phase).to_string())
+                    .unwrap_or_else(|| "the end".into()),
+                excerpt(&text)
+            ),
+        )),
+        Ok(_) => {}
+        Err(e) => out.extend(report(
+            "json/encode-error",
+            format!(
+                "{} crossed AnyJSON and the value that came back failed to encode: {e}; \
+                 document {}",
+                describe(tc),
+                excerpt(&text)
+            ),
         )),
     }
     out
+}
+
+/// The head of a document, for a message. A finding names a seed that
+/// reproduces the whole thing; the excerpt is for reading the report.
+fn excerpt(text: &str) -> String {
+    const HEAD: usize = 240;
+    if text.len() <= HEAD {
+        return text.to_owned();
+    }
+    let cut = (0..=HEAD).rev().find(|&i| text.is_char_boundary(i)).unwrap_or(0);
+    format!("{}… ({} bytes)", &text[..cut], text.len())
+}
+
+/// Why a type is not taken across AnyJSON, or `None` when it is.
+///
+/// The list is the mapping's own: `from_json_at` answers "cannot cross yet"
+/// for exactly `void`, `null`, `fixed` and `Principal`, and `to_json_at` has
+/// no arm for any of them. Kept in one predicate so a test can pin the set of
+/// types it names over the corpus, and so growing the mapping is one edit
+/// here that makes the leg start running.
+fn json_unmapped(tc: &TypeCode) -> Option<String> {
+    match tc {
+        TypeCode::Alias { aliased, .. } => json_unmapped(aliased),
+        TypeCode::Fixed { .. } => Some(
+            "`fixed` has no AnyJSON form yet (from_json: \"cannot cross yet\"; the wire does \
+             not carry it either, docs/PLAN.md §4.4)"
+                .into(),
+        ),
+        TypeCode::Principal => {
+            Some("`Principal` has no AnyJSON form (withdrawn from CORBA)".into())
+        }
+        TypeCode::Void | TypeCode::Null => {
+            Some("`void` where a type belongs has no AnyJSON value form".into())
+        }
+        TypeCode::Struct { members, .. } | TypeCode::Except { members, .. } => {
+            members.iter().find_map(|m| json_unmapped(&m.tc))
+        }
+        TypeCode::Union { discriminator, cases, .. } => {
+            json_unmapped(discriminator).or_else(|| cases.iter().find_map(|c| json_unmapped(&c.tc)))
+        }
+        TypeCode::Sequence { element, .. } | TypeCode::Array { element, .. } => {
+            json_unmapped(element)
+        }
+        // A marker names a type that is under construction and has already
+        // been asked; `any` and `TypeCode` carry their own type per value and
+        // the mapping spells every TypeCode.
+        _ => None,
+    }
 }
 
 /// Encodes after `phase` filler octets, so the value starts off-alignment.
@@ -1172,8 +1464,15 @@ mod tests {
     /// gap, not a failure — the limit is documented in §4.4 and known.
     #[test]
     fn an_unmarshallable_type_is_a_coverage_gap_rather_than_a_defect() {
-        let findings = roundtrip_property(&TypeCode::Fixed { digits: 9, scale: 2 }, 8);
-        assert_eq!(findings.len(), 1);
+        // Two findings since the JSON leg landed — `fixed` is also
+        // `json/unmapped`, which the test below pins; this one is about the
+        // sampler's half.
+        let findings: Vec<Finding> =
+            roundtrip_property(&TypeCode::Fixed { digits: 9, scale: 2 }, 8)
+                .into_iter()
+                .filter(|f| f.rule.starts_with("prop/"))
+                .collect();
+        assert_eq!(findings.len(), 1, "{findings:?}");
         assert_eq!(findings[0].rule, "prop/unsupported-type");
         assert_eq!(findings[0].severity, Severity::Advice);
         assert!(findings[0].message.contains("§4.4"), "{}", findings[0].message);
@@ -1200,8 +1499,10 @@ mod tests {
             "the decoder must not invent the third member"
         );
         // And the finding for an encode failure carries the seed.
-        let f = one_case(&lying, &value, 0x1234, Endian::Big, 0);
+        let mut m = Measured::default();
+        let f = one_case(&lying, &value, 0x1234, Endian::Big, 0, true, &mut m);
         assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(m, Measured::default(), "a case that failed to encode measured nothing");
         assert_eq!(f[0].severity, Severity::Error);
         assert!(f[0].source.contains("seed=0x0000000000001234"), "{}", f[0].source);
         assert!(f[0].fix.as_deref().unwrap().contains("roundtrip_case"), "{f:?}");
@@ -1210,6 +1511,154 @@ mod tests {
     /// Zero cases measures nothing and must not look like a pass with content.
     #[test]
     fn zero_cases_produces_nothing() {
-        assert!(roundtrip_property(&TypeCode::Long, 0).is_empty());
+        let (findings, measured) = roundtrip_property_measured(&TypeCode::Long, 0, DEFAULT_SEED);
+        assert!(findings.is_empty());
+        assert_eq!(measured, Measured::default());
+    }
+
+    /// The JSON leg runs for every value the CDR leg ran, and says so in the
+    /// count. A leg that quietly stopped would leave the findings identical
+    /// and this ratio short.
+    #[test]
+    fn every_value_the_cdr_leg_ran_is_also_taken_across_anyjson() {
+        let inner = tc_struct("Inner", vec![("x", TypeCode::Short), ("y", TypeCode::Double)]);
+        let tree = TypeCode::Struct {
+            id: "IDL:m/Tree:1.0".into(),
+            name: "Tree".into(),
+            members: vec![
+                Member { name: "label".into(), tc: TypeCode::String(0) },
+                Member {
+                    name: "kids".into(),
+                    tc: TypeCode::Sequence {
+                        element: Box::new(TypeCode::Recursive("IDL:m/Tree:1.0".into())),
+                        bound: 0,
+                    },
+                },
+            ],
+        };
+        for tc in [
+            tc_struct(
+                "Ragged",
+                vec![
+                    ("a", TypeCode::Octet),
+                    ("b", TypeCode::LongLong),
+                    ("c", TypeCode::Float),
+                    ("d", TypeCode::Double),
+                    ("e", TypeCode::WChar),
+                    ("f", TypeCode::LongDouble),
+                    ("g", TypeCode::WString(0)),
+                ],
+            ),
+            TypeCode::Sequence { element: Box::new(inner.clone()), bound: 0 },
+            TypeCode::Sequence { element: Box::new(TypeCode::Octet), bound: 3 },
+            TypeCode::Array { element: Box::new(TypeCode::Long), length: 3 },
+            TypeCode::Any,
+            TypeCode::TypeCode,
+            TypeCode::Alias {
+                id: "IDL:m/A:1.0".into(),
+                name: "A".into(),
+                aliased: Box::new(inner),
+            },
+            TypeCode::Enum {
+                id: "IDL:m/E:1.0".into(),
+                name: "E".into(),
+                members: vec!["RED".into(), "GREEN".into()],
+            },
+            TypeCode::ObjRef { id: "IDL:m/I:1.0".into(), name: "I".into() },
+            TypeCode::Union {
+                id: "IDL:m/U:1.0".into(),
+                name: "U".into(),
+                discriminator: Box::new(TypeCode::Long),
+                default_index: 2,
+                cases: vec![
+                    UnionCase {
+                        label: 1i32.to_be_bytes().to_vec(),
+                        name: "one".into(),
+                        tc: TypeCode::Long,
+                    },
+                    UnionCase {
+                        label: 2i32.to_be_bytes().to_vec(),
+                        name: "two".into(),
+                        tc: TypeCode::String(0),
+                    },
+                    UnionCase { label: Vec::new(), name: "rest".into(), tc: TypeCode::Boolean },
+                ],
+            },
+            tree,
+        ] {
+            let (findings, measured) = roundtrip_property_measured(&tc, 24, DEFAULT_SEED);
+            assert!(findings.is_empty(), "{tc:?}: {findings:?}");
+            assert_eq!(measured.cdr, 48, "{tc:?}: 24 cases × 2 byte orders");
+            assert_eq!(measured.json, 48, "{tc:?}: every one of them across AnyJSON too");
+        }
+    }
+
+    /// A type the mapping cannot carry is a named class, once, and the count
+    /// shows the leg did not run — not a pass and not silence.
+    #[test]
+    fn a_type_anyjson_cannot_carry_is_reported_as_unmapped_and_not_counted() {
+        // `fixed`: unsampled by the CDR leg (§4.4) *and* unmapped, and both are
+        // said, because they are two facts about two modules.
+        let (findings, measured) =
+            roundtrip_property_measured(&TypeCode::Fixed { digits: 9, scale: 2 }, 8, DEFAULT_SEED);
+        let rules: Vec<&str> = findings.iter().map(|f| f.rule.as_str()).collect();
+        assert_eq!(rules, ["json/unmapped", "prop/unsupported-type"], "{findings:?}");
+        assert!(findings.iter().all(|f| f.severity == Severity::Advice), "{findings:?}");
+        assert!(findings[0].message.contains("cannot cross yet"), "{}", findings[0].message);
+        assert_eq!(measured, Measured::default());
+
+        // `void` where a type belongs: the CDR leg runs (void marshals to
+        // nothing), the JSON leg does not, and the ratio says so.
+        let tc = tc_struct("Odd", vec![("a", TypeCode::Long), ("nothing", TypeCode::Void)]);
+        let (findings, measured) = roundtrip_property_measured(&tc, 8, DEFAULT_SEED);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].rule, "json/unmapped");
+        assert_eq!(measured, Measured { cdr: 16, json: 0 });
+    }
+
+    /// The JSON leg must be able to fail, or it is decoration — and it must
+    /// fail on the *bytes* when the value survives, because that is the class
+    /// value equality forgives. There is no injectable mapping, so both arms
+    /// are driven with the honest type against a value or bytes that lie.
+    #[test]
+    fn the_json_leg_actually_reports_a_mismatch() {
+        let tc = tc_struct("S", vec![("a", TypeCode::Long), ("b", TypeCode::Double)]);
+        let value = sample(&tc, 7).expect("sampled");
+        let mut e = Encoder::new(Endian::Big);
+        orbweaver_dynamic::encode(&mut e, &tc, &value).expect("encodes");
+        let honest = e.finish().expect("finish");
+
+        // The value crosses; the bytes it is compared with are wrong by one
+        // octet — what a mapping that flattened `-0.0` to `0.0` would produce.
+        let mut lying = honest.clone();
+        *lying.last_mut().unwrap() ^= 0x01;
+        let f = json_leg(&tc, &value, &lying, Endian::Big, 0, "here", "seed");
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].rule, "json/roundtrip-bytes");
+        assert_eq!(f[0].severity, Severity::Error);
+        assert!(f[0].message.contains(&format!("offset {}", honest.len() - 1)), "{}", f[0].message);
+        assert!(f[0].message.contains("document {"), "{}", f[0].message);
+        assert_eq!(f[0].source, "here");
+        assert_eq!(f[0].fix.as_deref(), Some("seed"));
+
+        // And a value the mapping writes but will not read back — a member
+        // short, the shape of the negative control this leg was landed with —
+        // is the class that names the type and the member.
+        let short = Value::Struct(vec![("a".into(), Value::Long(1))]);
+        let f = json_leg(&tc, &short, &honest, Endian::Big, 0, "here", "seed");
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].rule, "json/from-json-error");
+        assert!(f[0].message.contains("S needs a member \"b\""), "{}", f[0].message);
+    }
+
+    /// The reproduction entry point runs the JSON leg too, so a `json/*`
+    /// finding's seed reproduces the same way a `prop/*` one does — and the
+    /// unmapped predicate is honoured there as well.
+    #[test]
+    fn roundtrip_case_takes_the_json_leg_and_honours_unmapped() {
+        let tc = tc_struct("R", vec![("a", TypeCode::Octet), ("b", TypeCode::Double)]);
+        assert!(roundtrip_case(&tc, case_seed(DEFAULT_SEED, 3)).is_empty());
+        let odd = tc_struct("Odd", vec![("a", TypeCode::Long), ("nothing", TypeCode::Void)]);
+        assert!(roundtrip_case(&odd, case_seed(DEFAULT_SEED, 3)).is_empty());
     }
 }

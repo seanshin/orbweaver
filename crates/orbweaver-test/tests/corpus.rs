@@ -82,6 +82,11 @@ fn the_coverage_gaps_over_the_corpus_are_the_known_ones() {
     }
     let recursive = gaps.iter().filter(|g| g.contains("prop/unmeasured")).count();
     let unsupported = gaps.iter().filter(|g| g.contains("prop/unsupported-type")).count();
+    let unmapped: Vec<&str> = gaps
+        .iter()
+        .filter(|g| g.contains("json/unmapped"))
+        .map(|g| g.rsplit(' ').next().unwrap_or(g))
+        .collect();
     // The recursive gap closed: markers now resolve against the enclosing type
     // the path is standing on, so `corpus/golden/15`'s trees are generated with
     // children and round-trip like anything else. It is asserted at zero rather
@@ -102,13 +107,67 @@ fn the_coverage_gaps_over_the_corpus_are_the_known_ones() {
         unsupported > 0,
         "corpus/golden/21-deferred-fixed.idl must report `fixed` as uncovered (§4.4)"
     );
-    // Everything non-Error is one of these two, or a new gap class has appeared
-    // and deserves a look rather than a silent pass.
+    // The types AnyJSON does not carry, pinned by id rather than counted. The
+    // JSON leg is skipped for exactly these and for nothing else; a new id here
+    // is a finding about the mapping (something stopped crossing) or about
+    // the corpus (a new use of a type the mapping never carried), and either
+    // deserves to be read rather than absorbed. `fixed` is on this list and on
+    // `prop/unsupported-type` above because those are two facts about two
+    // modules: the wire does not carry it (§4.4) and neither does the mapping.
     assert_eq!(
-        recursive + unsupported,
+        unmapped,
+        ["IDL:gc21/Amount:1.0", "IDL:gc21/Invoice:1.0"],
+        "the set of types the JSON leg does not run for changed:\n  {}",
+        gaps.iter()
+            .filter(|g| g.contains("json/unmapped"))
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    );
+    // Everything non-Error is one of these three, or a new gap class has
+    // appeared and deserves a look rather than a silent pass.
+    assert_eq!(
+        recursive + unsupported + unmapped.len(),
         gaps.len(),
         "unexpected gap class:\n  {}",
         gaps.join("\n  ")
+    );
+}
+
+/// Every value the CDR leg round-trips is also taken across AnyJSON and back,
+/// and the count proves it ran. The property sweep round-tripped CDR only
+/// until 2026-08-19, so the mapping's refusal of every non-empty value under a
+/// recursion marker (fixed in commit 1b6b4c8) was a defect this test could not
+/// have seen at any witness; now it would be a `json/*` error naming the type.
+#[test]
+fn every_golden_value_also_crosses_anyjson() {
+    let mut defects = Vec::new();
+    let mut total = prop::Measured::default();
+    for path in corpus("corpus/golden") {
+        let reg = registry_of(&path);
+        for id in reg.ids().cloned().collect::<Vec<_>>() {
+            let Some(tc) = reg.typecode(&id) else { continue };
+            let (findings, measured) =
+                prop::roundtrip_property_measured(tc, 16, prop::DEFAULT_SEED);
+            total.add(measured);
+            for f in findings {
+                if f.severity == Severity::Error && f.rule.starts_with("json/") {
+                    defects.push(format!("{}: {f}", path.display()));
+                }
+            }
+        }
+    }
+    assert!(defects.is_empty(), "AnyJSON is not a round trip:\n  {}", defects.join("\n  "));
+    // The ratio, not only the absence of findings: the leg that is skipped
+    // for a type is skipped under `json/unmapped`, which the test above pins,
+    // so here every CDR round trip must have had a JSON leg too.
+    assert!(total.cdr >= 60 * 16 * 2, "the corpus should measure far more than {}", total.cdr);
+    assert_eq!(
+        total.json,
+        total.cdr,
+        "{} CDR round trip(s) were not taken across AnyJSON and no json/unmapped finding \
+         accounts for them",
+        total.cdr - total.json
     );
 }
 
@@ -176,5 +235,22 @@ fn golden_15s_recursive_witnesses_are_not_the_empty_list() {
             "{id}: no case over the batch seed reached depth {min_depth}; the recursive \
              marker was never followed and the property measured nothing about recursion"
         );
+        // And the values that followed the marker cross AnyJSON and come back
+        // to the same bytes — the property 1b6b4c8 fixed the mapping for,
+        // measured here by the sweep's own reproduction entry point, which
+        // takes the JSON leg in both byte orders at every phase.
+        for i in 0..cases {
+            let seed = prop::case_seed(prop::DEFAULT_SEED, i);
+            let v = prop::sample(tc, seed).expect("valued above");
+            if depth(&v) < min_depth {
+                continue;
+            }
+            let findings = prop::roundtrip_case(tc, seed);
+            assert!(
+                findings.is_empty(),
+                "{id}: a value that followed the recursive marker did not cross AnyJSON: \
+                 {findings:?}"
+            );
+        }
     }
 }

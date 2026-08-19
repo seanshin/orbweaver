@@ -12,9 +12,11 @@
 //!
 //! [`prop::roundtrip_property`] generates deterministic sample [`Value`]s for a
 //! `TypeCode` and asserts that encode → decode → encode is byte-stable, in both
-//! byte orders and at every alignment phase. A failure here is a **defect**: the
-//! bytes we put on a wire disagree with the bytes we would put on it after
-//! reading our own message back, and no annotation opinion is involved. These
+//! byte orders and at every alignment phase — and, since 2026-08-19, that the
+//! same value taken out through AnyJSON and back in encodes to the same bytes.
+//! A failure here is a **defect**: the bytes we put on a wire disagree with the
+//! bytes we would put on it after reading our own message back, or after an
+//! agent read it and sent it back, and no annotation opinion is involved. These
 //! findings are [`Severity::Error`] and the CLI exits non-zero on them.
 //!
 //! # [`contract`] — advice, and never anything stronger
@@ -113,14 +115,29 @@ fn finding(
 /// signatures: a parameter's type is a registered type, so covering the types
 /// covers the signatures without generating the same value once per mention.
 pub fn check(registry: &orbweaver_registry::Registry, cases: usize) -> Report {
+    check_measured(registry, cases, prop::DEFAULT_SEED).0
+}
+
+/// [`check`] from an explicit batch seed, also returning how much the
+/// property half measured — the counts `contract-check` prints beside the
+/// case count, so a leg that stops running is a number that dropped rather
+/// than a finding that never appeared.
+pub fn check_measured(
+    registry: &orbweaver_registry::Registry,
+    cases: usize,
+    seed: u64,
+) -> (Report, prop::Measured) {
     let mut findings = contract::contract_findings(registry);
+    let mut measured = prop::Measured::default();
     for id in registry.ids().cloned().collect::<Vec<_>>() {
         if let Some(tc) = registry.typecode(&id) {
-            findings.extend(prop::roundtrip_property(tc, cases));
+            let (found, m) = prop::roundtrip_property_measured(tc, cases, seed);
+            findings.extend(found);
+            measured.add(m);
         }
     }
     findings.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.rule.cmp(&b.rule)));
-    Report { findings }
+    (Report { findings }, measured)
 }
 
 /// Whether a report contains a genuine defect, as opposed to advice.
