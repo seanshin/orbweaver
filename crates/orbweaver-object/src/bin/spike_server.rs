@@ -6,10 +6,34 @@
 //! Serves `spikes/echo.idl`, publishes an IOR, and waits for an omniORB client.
 //!
 //! Usage: `spike-server <ior-out-path> [host] [port]`
+//!
+//! Environment, all optional:
+//!
+//! * `ORBWEAVER_FRAGMENT_THRESHOLD=<bytes>` — fragment outbound messages
+//!   above it;
+//! * `ORBWEAVER_FORWARD_PING=1` — the first `ping` is answered with a
+//!   `LOCATION_FORWARD` to this same server (the one-server shape
+//!   `run_checks.sh` measures);
+//! * `ORBWEAVER_FORWARD_TO=<ior-file>` — every `ping` is answered with a
+//!   forward to the reference in that file **for as long as the file is
+//!   there**; once it is removed, `ping` is served here. This is the
+//!   two-server shape `spikes/perm_fallback.sh` needs: the file is the
+//!   forwarded-to server's published IOR, and removing it is how the harness
+//!   tells this server the target is gone, so that a client which restarts at
+//!   the original address gets an answer it can be seen to have got here;
+//! * `ORBWEAVER_FORWARD_STATUS=permanent|temporary` — which status the
+//!   `ORBWEAVER_FORWARD_TO` forward travels under (default temporary);
+//! * `ORBWEAVER_PING_ANSWER=<long>` — what `ping` returns (default 42), so two
+//!   servers of this binary can be told apart from the client's side.
+//!
+//! Every forward and every locally served `ping` is logged on stdout with a
+//! running count, so a harness reading the log can say how many requests
+//! reached this address before and after a change it made — the count is the
+//! measurement; the client's answer only corroborates it.
 
 use orbweaver_cdr::Encoder;
 use orbweaver_giop::server::{Dispatch, Request, Server, SystemException};
-use orbweaver_giop::{IiopProfile, Ior, Version};
+use orbweaver_giop::{Forward, IiopProfile, Ior, Version};
 use orbweaver_object::{ObjectOps, get_reference, is_equivalent, put_reference};
 use orbweaver_registry::{Registry, Strictness};
 
@@ -26,6 +50,17 @@ struct Echo {
     /// this reference instead of a result — the ServantLocator behaviour that
     /// moves an object without the caller noticing.
     forward_ping_to: Option<Ior>,
+    /// `ORBWEAVER_FORWARD_TO`: while this file holds an IOR, `ping` is
+    /// forwarded to it; once the file is gone, `ping` is served here.
+    forward_to: Option<std::path::PathBuf>,
+    /// `ORBWEAVER_FORWARD_STATUS`: whether the `forward_to` redirect is
+    /// `LOCATION_FORWARD_PERM` rather than `LOCATION_FORWARD`.
+    for_good: bool,
+    /// `ORBWEAVER_PING_ANSWER`.
+    ping_answer: i32,
+    /// Forwards emitted and `ping`s served here, for the log lines.
+    forwarded: u32,
+    pinged: u32,
     calls: u32,
     /// Versions actually seen on the wire. Recorded because "we tested three
     /// GIOP versions" is only true if the peer really used three, and an ORB
@@ -35,19 +70,51 @@ struct Echo {
 }
 
 impl Dispatch for Echo {
-    fn forward(&mut self, request: &Request) -> Option<Ior> {
+    fn redirect(&mut self, request: &Request) -> Option<Forward> {
+        if request.operation != "ping" {
+            return None;
+        }
+        if let Some(path) = &self.forward_to {
+            // The two-server shape. The file's presence is the switch: the
+            // harness removes it when it stops the forwarded-to server, and
+            // from then on `ping` is served here, so a client that comes back
+            // to this address is answered — and counted — here.
+            let Ok(text) = std::fs::read_to_string(path) else {
+                return None;
+            };
+            return match Ior::parse(text.trim()) {
+                Ok(to) => {
+                    self.forwarded += 1;
+                    let status =
+                        if self.for_good { "LOCATION_FORWARD_PERM" } else { "LOCATION_FORWARD" };
+                    println!(
+                        "forwarded ping() #{} with {status} to {}:{}",
+                        self.forwarded,
+                        to.primary().map(|p| p.host.as_str()).unwrap_or("?"),
+                        to.primary().map(|p| p.port).unwrap_or(0)
+                    );
+                    Some(if self.for_good {
+                        Forward::Permanent(to)
+                    } else {
+                        Forward::Temporary(to)
+                    })
+                }
+                Err(e) => {
+                    eprintln!("ORBWEAVER_FORWARD_TO holds no IOR ({e}); serving ping() here");
+                    None
+                }
+            };
+        }
         // Forward exactly once, so a client that follows it gets an answer on
         // the retry rather than looping.
-        if request.operation == "ping"
-            && let Some(to) = self.forward_ping_to.take()
-        {
+        if let Some(to) = self.forward_ping_to.take() {
             // Logged so a test can prove the forward was actually emitted,
             // rather than inferring it from a call that succeeded anyway.
             println!(
                 "emitted LOCATION_FORWARD for ping() to {} bytes of key",
                 to.primary().map(|p| p.object_key.len()).unwrap_or(0)
             );
-            return Some(to);
+            return Some(Forward::Temporary(to));
         }
         None
     }
@@ -80,7 +147,11 @@ impl Dispatch for Echo {
                 out.put_bool(other.as_ref().is_some_and(|o| is_equivalent(&self.self_ref, o)));
             }
 
-            "ping" => out.put_i32(42),
+            "ping" => {
+                self.pinged += 1;
+                println!("served ping() #{} here -> {}", self.pinged, self.ping_answer);
+                out.put_i32(self.ping_answer);
+            }
 
             "add" => {
                 let a = args.get_i32().map_err(|_| SystemException::marshal())?;
@@ -211,11 +282,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if forward_ping_to.is_some() {
         println!("ping() will answer with LOCATION_FORWARD");
     }
+    // The two-server shape: forward `ping` to another server's published IOR
+    // for as long as that file exists.
+    let forward_to = std::env::var_os("ORBWEAVER_FORWARD_TO").map(std::path::PathBuf::from);
+    let for_good = match std::env::var("ORBWEAVER_FORWARD_STATUS").ok().as_deref() {
+        None | Some("temporary") => false,
+        Some("permanent") => true,
+        Some(other) => {
+            return Err(format!(
+                "ORBWEAVER_FORWARD_STATUS={other}: expected permanent or temporary"
+            )
+            .into());
+        }
+    };
+    if let Some(path) = &forward_to {
+        println!(
+            "ping() will answer with {} to the IOR in {} while that file exists",
+            if for_good { "LOCATION_FORWARD_PERM" } else { "LOCATION_FORWARD" },
+            path.display()
+        );
+    }
+    let ping_answer = match std::env::var("ORBWEAVER_PING_ANSWER") {
+        Ok(v) => v.parse::<i32>().map_err(|e| format!("ORBWEAVER_PING_ANSWER={v}: {e}"))?,
+        Err(_) => 42,
+    };
 
     let mut echo = Echo {
         self_ref: ior.clone(),
         registry,
         forward_ping_to,
+        forward_to,
+        for_good,
+        ping_answer,
+        forwarded: 0,
+        pinged: 0,
         calls: 0,
         seen: Default::default(),
     };
