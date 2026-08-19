@@ -6,7 +6,7 @@
 //!                           [--scope <scope>] [--approved]
 //!                           [--html <out.html>] [--text]
 //! orbweaver-console diff    <released.idl> <proposed.idl> [-I <dir>]...
-//!                           [--html <out.html>] [--text]
+//!                           [--approvals <file>] [--html <out.html>] [--text]
 //! orbweaver-console traces  <spans.jsonl>... [--html <out.html>] [--text]
 //! ```
 //!
@@ -42,7 +42,7 @@ usage:
                             [--scope <scope>] [--approved]
                             [--html <out.html>] [--text]
   orbweaver-console diff    <released.idl> <proposed.idl> [-I <dir>]...
-                            [--html <out.html>] [--text]
+                            [--approvals <file>] [--html <out.html>] [--text]
   orbweaver-console traces  <spans.jsonl>... [--html <out.html>] [--text]
 
 -I adds a directory to resolve #include against, as sidl-validate does. Every
@@ -156,11 +156,15 @@ fn diff_command(args: Vec<String>) -> Result<(), String> {
     let mut files = Vec::new();
     let mut out = Output { html: None, text: false };
     let mut search = SearchPath::new();
+    let mut approvals: Option<PathBuf> = None;
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "-I" => {
                 search.push(need(&mut it, "-I <dir>")?);
+            }
+            "--approvals" => {
+                approvals = Some(PathBuf::from(need(&mut it, "--approvals <file>")?));
             }
             "--html" => out.html = Some(PathBuf::from(need(&mut it, "--html <path>")?)),
             "--text" => out.text = true,
@@ -174,13 +178,18 @@ fn diff_command(args: Vec<String>) -> Result<(), String> {
 
     // Both sides resolve their own includes. A revision that only changed a
     // shared header would otherwise diff as no change at all, which is the
-    // §5.3 verdict an operator would most regret trusting.
-    let mut old = Registry::new();
-    load_into(&mut old, released, &search)?;
-    let mut new = Registry::new();
-    load_into(&mut new, proposed, &search)?;
-
-    let view = contract::ContractDiff::new(released, proposed, &old, &new);
+    // §5.3 verdict an operator would most regret trusting. The same pass
+    // fingerprints each unit, which is what an approval on record binds to;
+    // the store is `--approvals`, or `<proposed>.approvals.tsv` if it exists.
+    let (view, advice) = contract::load(
+        std::path::Path::new(released),
+        std::path::Path::new(proposed),
+        &search,
+        approvals.as_deref(),
+    )?;
+    for note in advice {
+        eprintln!("note: {note}");
+    }
     out.deliver(|| contract::render_html(&view), || contract::render_text(&view))
 }
 

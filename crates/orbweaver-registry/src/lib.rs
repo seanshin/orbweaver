@@ -43,6 +43,7 @@
 
 #![deny(missing_docs)]
 
+pub mod approval;
 pub mod diff;
 pub mod ifr;
 pub mod ingest;
