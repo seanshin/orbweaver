@@ -705,10 +705,12 @@ fn the_pool_follows_both_forward_statuses_and_reports_permanent_only_at_1_2() {
                         assert_eq!(req.object_key, b"new", "the retry addresses the forwarded key");
                         reply_long(&mut s, req.version, reply_endian, req.request_id, 42);
                     }
-                    // A last call, answered where it was sent: the reference's
-                    // report must go back to "nothing followed".
+                    // A last call, sent straight to the new key — the
+                    // reference cached the forward (temporary) or re-pointed
+                    // itself (permanent) — and answered where it was sent.
                     let msg = read_message(&mut s, DEFAULT_MAX_MESSAGE_SIZE).expect("last");
                     let req = decode_request(msg).expect("decodes");
+                    assert_eq!(req.object_key, b"new", "the cached forward addresses the new key");
                     reply_long(&mut s, req.version, reply_endian, req.request_id, 7);
                 });
                 let label = format!(
@@ -732,16 +734,30 @@ fn the_pool_follows_both_forward_statuses_and_reports_permanent_only_at_1_2() {
                 assert_eq!(pool.stats().dialed, 1, "{label}: the hop stayed on one connection");
 
                 // The same fact through the `Invoker`-shaped handle, which is
-                // what a generated stub holds. `Reference::invoke` sends to
-                // the reference's own IOR, so this call is redirected too and
-                // reads the same way; the one after it is answered in place
-                // and must read as nothing followed.
+                // what a generated stub holds. `Reference::invoke` sends its
+                // first call to the reference's own IOR, so it is redirected
+                // too and reads the same way; the one after it goes straight
+                // to the forwarded-to key (§9.6: the forwarding information is
+                // kept — cached when temporary, the reference itself when
+                // permanent) and is answered in place, and the redirect in
+                // force still reads as what it is. Before this landed the
+                // second call was redirected all over again and read as
+                // nothing followed.
                 let mut r = pool.reference(old.clone());
                 assert!(r.forwarded().is_none(), "{label}: nothing followed before any call");
                 assert_eq!(body_i32(&r.invoke("op", |_| {}).expect("answered")), 42, "{label}");
                 assert_eq!(r.forwarded().map(Forward::is_permanent), Some(want), "{label}");
                 assert_eq!(body_i32(&r.invoke("op", |_| {}).expect("answered")), 7, "{label}");
-                assert!(r.forwarded().is_none(), "{label}: the last call was not redirected");
+                assert_eq!(
+                    r.forwarded().map(Forward::is_permanent),
+                    Some(want),
+                    "{label}: the redirect in force is still reported"
+                );
+                assert_eq!(
+                    r.ior().primary().expect("profile").object_key,
+                    if want { b"new".to_vec() } else { b"old".to_vec() },
+                    "{label}: re-pointed on permanent only"
+                );
                 done.recv_timeout(T).unwrap_or_else(|_| panic!("{label}: the peer finished"));
             }
         }

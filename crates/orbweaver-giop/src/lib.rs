@@ -77,6 +77,12 @@ pub const DEFAULT_MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
 /// How many `LOCATION_FORWARD` hops to follow before giving up.
 pub const MAX_FORWARD_HOPS: u8 = 8;
 
+/// How long [`Connection::invoke`] waits for a dial it makes itself — to a
+/// forwarded-to reference, or back to [`Connection::origin`] on a §9.6
+/// restart. The caller chose the first dial's timeout; these dials happen
+/// inside a call it has already made.
+pub const FOLLOW_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Body size above which an outbound message is split into fragments.
 ///
 /// Chosen below omniORB's 2 MiB default `giopMaxMsgSize` so a large sequence
@@ -1638,6 +1644,70 @@ impl fmt::Debug for Stream {
 /// that wants several requests in flight, or connections shared across
 /// references, wraps one in [`mux::Mux`] or asks [`pool::Pool`] for one —
 /// both of which take a `Connection` and keep everything it negotiated.
+///
+/// # After a forward: where it is, and where it restarts from
+///
+/// Following a forward replaces the socket, so a `Connection` that followed
+/// one *is* the connection to the forwarded-to endpoint (§9.4.3.2 permits
+/// staying there). It also keeps [`Connection::origin`] — the reference it
+/// was dialled from — because CORBA 3.4 Part 2 §9.6 says what happens when
+/// the forwarded-to endpoint stops answering, and it says it in *shall*:
+///
+/// > Once a connection based on location-forwarding information is closed,
+/// > a client can attempt to reuse the forwarding information it has, but,
+/// > if that fails, it shall restart the location process using the
+/// > original address specified in the initial object reference.
+///
+/// and, of `LOCATION_FORWARD_PERM` (§9.6, the same words at §9.4.3.2):
+///
+/// > ... it also provides an indication to the client that it may replace
+/// > the old IOR with the new IOR. ... both the old IOR and the new IOR are
+/// > valid, but the new IOR is preferred for future use.
+///
+/// [`Connection::invoke`] does both, in that order, once per call:
+///
+/// 1. **A temporary forward stands** ([`Connection::forwarded`] is
+///    [`Forward::Temporary`]) **and the attempt failed without the request
+///    having run** — the peer sent `CloseConnection` instead of a reply
+///    (§13.5.1: outstanding requests *"were not processed, and may be safely
+///    resent"*), or the request never left this side in full (a write
+///    failure, or a connection already poisoned by an earlier call), so the
+///    peer cannot have dispatched it. In every case the *connection* has
+///    failed — an encode error or a codeset refusal is this side's and
+///    leaves the connection sound, and is not a location event. Then the
+///    forwarding information is
+///    reused once — the forwarded-to endpoint is redialled and the request
+///    re-issued there — and if that dial fails, or the re-issued request
+///    fails the same way, the **origin** is redialled and the request
+///    re-issued there. After the restart `forwarded()` is `None` (or
+///    whatever the origin forwards to next).
+/// 2. **A permanent forward** takes up the *may*: the forwarded-to IOR
+///    becomes the origin. Nothing falls back past it — a permanent forward
+///    said the old address is no longer the preferred one, and this client
+///    believes it.
+///
+/// What does **not** trigger the restart, and why: a failure that arrives
+/// after a complete request went out and carries no proof of non-processing
+/// — a socket EOF or reset while waiting for the reply, a socket timeout, a
+/// `CloseConnection` that interrupted a reply already begun
+/// ([`Error::InterruptedMidReassembly`]) — leaves the request's completion
+/// **unknown**, and a request that may have executed must not be sent
+/// again: re-issuing a non-idempotent operation on a guess runs it twice.
+/// Those return the error, poison the connection, and the *next* call on
+/// it, whose request has never left, is what restarts (rule 1's third
+/// case). A reply-carrying failure — a system or user exception — is an
+/// answer, not a location failure, and is never retried anywhere. A
+/// forward whose target refuses the very first dial is not a closed
+/// forwarding connection either; it fails as it always did.
+///
+/// omniORB 4.3.4 restarts on that unknown case as well: in
+/// `spikes/perm_fallback.sh` its `ping` after the target was killed by PID —
+/// no `CloseConnection`, a bare close — is answered by the original on the
+/// same call under temporary, and its permanent arm shows what that failure
+/// was (`COMM_FAILURE`, `COMPLETED_MAYBE`, surfaced because there it does not
+/// retry). That is a wider retry than this one, on a promise the wire did
+/// not make; the difference is a call that fails here once, honestly, and
+/// recovers on the next.
 #[derive(Debug)]
 pub struct Connection {
     stream: Stream,
@@ -1669,6 +1739,10 @@ pub struct Connection {
     /// The redirect most recently followed, if any. See
     /// [`Connection::forwarded`].
     forwarded: Option<Forward>,
+    /// The reference this connection stands for: what it was dialled from,
+    /// or the last permanent forward. What §9.6's restart dials. See
+    /// [`Connection::origin`].
+    origin: Ior,
     /// The TLS policy this connection was dialed with, if any. Kept so a
     /// `LOCATION_FORWARD` is followed at the same security level: a
     /// connection whose caller demanded TLS must never chase a redirect back
@@ -1707,7 +1781,12 @@ impl Connection {
             for (host, port) in p.endpoints() {
                 tried += 1;
                 match Self::connect_endpoint(p, &host, port, timeout) {
-                    Ok(conn) => return Ok(conn),
+                    Ok(mut conn) => {
+                        // The whole IOR, not the one profile that answered:
+                        // a §9.6 restart gets the same failover this dial had.
+                        conn.origin = ior.clone();
+                        return Ok(conn);
+                    }
                     Err(e) => last = Some(e),
                 }
             }
@@ -1764,7 +1843,10 @@ impl Connection {
             let Some((host, port)) = ssliop::ssl_endpoint(p) else { continue };
             tried += 1;
             match Self::connect_tls_endpoint(p, &host, port, timeout, &tls_config) {
-                Ok(conn) => return Ok(conn),
+                Ok(mut conn) => {
+                    conn.origin = ior.clone();
+                    return Ok(conn);
+                }
                 Err(e) => last = Some(e),
             }
         }
@@ -1844,6 +1926,10 @@ impl Connection {
             fragment_threshold: DEFAULT_FRAGMENT_THRESHOLD,
             max_reply_fragments: 1,
             forwarded: None,
+            // The profile alone until the constructor that has the whole
+            // IOR overwrites it — `connect_to` has only the profile, and
+            // that is then exactly what it restarts from.
+            origin: Ior { type_id: String::new(), profiles: vec![p.clone()] },
             #[cfg(feature = "ssliop")]
             tls_config: None,
         }
@@ -1961,9 +2047,21 @@ impl Connection {
     /// publishing something the servant did not say.
     ///
     /// Only the last hop of a chain is kept: it is the one this connection is
-    /// now on.
+    /// now on. It goes back to `None` when a §9.6 restart lands the
+    /// connection at [`Connection::origin`] again — see the type's docs.
     pub fn forwarded(&self) -> Option<&Forward> {
         self.forwarded.as_ref()
+    }
+
+    /// The reference this connection stands for, and the address §9.6's
+    /// restart dials: the IOR it was connected from — the whole IOR, so a
+    /// restart has the failover the first dial had — or, after a
+    /// `LOCATION_FORWARD_PERM`, the forwarded-to IOR, since a permanent
+    /// forward is the servant's word that the new address is the one to
+    /// keep. A temporary forward never changes it: that is the difference
+    /// between the two statuses at this level.
+    pub fn origin(&self) -> &Ior {
+        &self.origin
     }
 
     /// The object key extracted from the IOR.
@@ -2106,7 +2204,11 @@ impl Connection {
     /// Invokes `operation`, writing arguments via `write_args`.
     ///
     /// Follows `LOCATION_FORWARD` transparently, as §9.4.3.2 requires, up to
-    /// [`MAX_FORWARD_HOPS`].
+    /// [`MAX_FORWARD_HOPS`]; and when a temporarily forwarded-to endpoint
+    /// has gone, restarts at [`Connection::origin`] as §9.6 requires — under
+    /// exactly the conditions the type's docs list, which are the conditions
+    /// under which the request provably did not run. A dial made here, for a
+    /// forward or a restart, waits [`FOLLOW_TIMEOUT`].
     pub fn invoke<F>(&mut self, operation: &str, write_args: F) -> Result<Reply>
     where
         F: Fn(&mut Encoder),
@@ -2114,48 +2216,50 @@ impl Connection {
         // Waiting for a reply is the longest block a servant can take, so this
         // is where holding a lock hurts most. See `crate::guarded`.
         guarded::assert_nothing_held("an invocation");
+        let mut fallback = Fallback::Reuse;
         for _ in 0..MAX_FORWARD_HOPS {
-            match self.invoke_once(operation, &write_args)? {
-                Outcome::Done(reply) => return Ok(reply),
-                Outcome::Forwarded(forward) => {
-                    // A forwarded reference is a full IOR and may itself name
-                    // several endpoints, so it gets the same failover as the
-                    // original connect did — over the same transport: a TLS
-                    // connection follows the forward with the policy it was
-                    // dialed with, and fails rather than downgrade to
-                    // cleartext if the new IOR advertises no TLS endpoint.
-                    let ior = forward.ior();
-                    #[cfg(feature = "ssliop")]
-                    let next = match &self.tls_config {
-                        Some(cfg) => Self::connect_tls(ior, Duration::from_secs(10), cfg.clone())?,
-                        None => Self::connect(ior, Duration::from_secs(10))?,
-                    };
-                    #[cfg(not(feature = "ssliop"))]
-                    let next = Self::connect(ior, Duration::from_secs(10))?;
-                    let endian = self.endian;
-                    let converting = self.caller_converts_chars;
-                    // §7.10.2.5 negotiates per *connection*, and a forward is a
-                    // different connection. A caller that took a converter is
-                    // still encoding through the one it holds, so the new
-                    // target agreeing on something else is a mismatch the
-                    // caller cannot see: it wrote its octets before the
-                    // redirect existed.
-                    let before = self.char_codeset.agreed().map(|c| c.id());
-                    *self = next;
-                    self.endian = endian;
-                    self.forwarded = Some(forward);
-                    if converting {
-                        let after = self.char_codeset.agreed().map(|c| c.id());
-                        if after != before {
-                            return Err(Error::CodesetNotApplied {
-                                // §7.10.2.5: absent an agreement the
-                                // transmission codeset *is* ISO-8859-1, so this
-                                // names what the new connection would transmit
-                                // under rather than inventing a placeholder.
-                                negotiated: after.unwrap_or(codeset::CodeSetId::ISO_8859_1),
-                            });
+            // Before anything is allocated or written: the `CodeSets` context
+            // and the octets that follow it must describe the same bytes.
+            // Checked per attempt rather than at connect time so the failure
+            // names the call that would have carried the mismatch, and so a
+            // hop or a restart — each a new connection with its own
+            // agreement — is never sent to with the check skipped.
+            self.char_codeset.may_send(self.caller_converts_chars)?;
+            match self.invoke_once(operation, &write_args) {
+                Ok(Outcome::Done(reply)) => return Ok(reply),
+                Ok(Outcome::Forwarded(forward)) => self.follow(forward)?,
+                Err(AttemptFailed { error, unsent }) => {
+                    // §9.6's restart, and only under its conditions: a
+                    // temporary forward stands, the *connection* failed (it
+                    // is poisoned — an encode error or a codeset refusal is
+                    // this side's, not the location's), the request did not
+                    // run, and this call has not spent its restart yet.
+                    // Everything else is the caller's error to see.
+                    let temporary = matches!(self.forwarded, Some(Forward::Temporary(_)));
+                    if !unsent || !self.poisoned || !temporary {
+                        return Err(error);
+                    }
+                    match fallback {
+                        Fallback::Reuse => {
+                            fallback = Fallback::Restart;
+                            let via = self.forwarded.as_ref().map(|f| f.ior().clone());
+                            let Some(via) = via else { return Err(error) };
+                            // "can attempt to reuse the forwarding
+                            // information it has": one redial of the
+                            // forwarded-to endpoint. Where it is stays as it
+                            // was — the same endpoint. "but, if that fails":
+                            // straight on to the origin, in this same call.
+                            if self.move_to(&via).is_ok() {
+                                continue;
+                            }
+                            fallback = Fallback::Spent;
+                            self.restart_at_origin()?;
                         }
-                        self.caller_converts_chars = true;
+                        Fallback::Restart => {
+                            fallback = Fallback::Spent;
+                            self.restart_at_origin()?;
+                        }
+                        Fallback::Spent => return Err(error),
                     }
                 }
             }
@@ -2163,19 +2267,93 @@ impl Connection {
         Err(Error::TooManyForwards)
     }
 
-    fn invoke_once<F>(&mut self, operation: &str, write_args: &F) -> Result<Outcome>
+    /// Moves to a forwarded-to reference and records the forward — the hop
+    /// §9.4.3.2 describes. A permanent forward also becomes the origin
+    /// (§9.6's *may replace the old IOR*); a temporary one leaves it alone.
+    fn follow(&mut self, forward: Forward) -> Result<()> {
+        self.move_to(forward.ior())?;
+        if forward.is_permanent() {
+            self.origin = forward.ior().clone();
+        }
+        self.forwarded = Some(forward);
+        Ok(())
+    }
+
+    /// "It shall restart the location process using the original address":
+    /// redials [`Connection::origin`]. Where it then is, is the origin, so
+    /// no forward stands any more — until the origin says otherwise.
+    fn restart_at_origin(&mut self) -> Result<()> {
+        let origin = self.origin.clone();
+        self.move_to(&origin)?;
+        self.forwarded = None;
+        Ok(())
+    }
+
+    /// Replaces this connection with a fresh one to `ior`, keeping everything
+    /// the caller decided — byte order, converter, TLS policy — and the
+    /// origin and the standing forward. On a dial failure `self` is left as
+    /// it was, poisoned or not.
+    fn move_to(&mut self, ior: &Ior) -> Result<()> {
+        // A forwarded reference is a full IOR and may itself name several
+        // endpoints, so it gets the same failover as the original connect
+        // did — over the same transport: a TLS connection follows the
+        // forward with the policy it was dialed with, and fails rather than
+        // downgrade to cleartext if the new IOR advertises no TLS endpoint.
+        #[cfg(feature = "ssliop")]
+        let next = match &self.tls_config {
+            Some(cfg) => Self::connect_tls(ior, FOLLOW_TIMEOUT, cfg.clone())?,
+            None => Self::connect(ior, FOLLOW_TIMEOUT)?,
+        };
+        #[cfg(not(feature = "ssliop"))]
+        let next = Self::connect(ior, FOLLOW_TIMEOUT)?;
+        let endian = self.endian;
+        let converting = self.caller_converts_chars;
+        let origin = self.origin.clone();
+        let forwarded = self.forwarded.take();
+        // §7.10.2.5 negotiates per *connection*, and a forward is a
+        // different connection. A caller that took a converter is
+        // still encoding through the one it holds, so the new
+        // target agreeing on something else is a mismatch the
+        // caller cannot see: it wrote its octets before the
+        // redirect existed.
+        let before = self.char_codeset.agreed().map(|c| c.id());
+        *self = next;
+        self.endian = endian;
+        self.origin = origin;
+        self.forwarded = forwarded;
+        if converting {
+            let after = self.char_codeset.agreed().map(|c| c.id());
+            if after != before {
+                return Err(Error::CodesetNotApplied {
+                    // §7.10.2.5: absent an agreement the
+                    // transmission codeset *is* ISO-8859-1, so this
+                    // names what the new connection would transmit
+                    // under rather than inventing a placeholder.
+                    negotiated: after.unwrap_or(codeset::CodeSetId::ISO_8859_1),
+                });
+            }
+            self.caller_converts_chars = true;
+        }
+        Ok(())
+    }
+
+    /// One attempt at one request on the connection as it stands. The error
+    /// says whether the request provably did not run — see [`AttemptFailed`]
+    /// — which is what [`Connection::invoke`] needs to know before it may
+    /// re-issue it anywhere.
+    fn invoke_once<F>(
+        &mut self,
+        operation: &str,
+        write_args: &F,
+    ) -> std::result::Result<Outcome, AttemptFailed>
     where
         F: Fn(&mut Encoder),
     {
         if self.poisoned {
-            return Err(Error::Desynchronized);
+            // Nothing was written for *this* request: whatever poisoned the
+            // connection was reported to the call it happened to.
+            return Err(AttemptFailed { error: Error::Desynchronized, unsent: true });
         }
-        // Before anything is allocated or written: the `CodeSets` context and
-        // the octets that follow it must describe the same bytes. Checked here
-        // rather than at connect time so the failure names the call that would
-        // have carried the mismatch, and so a connection is never left in a
-        // state where the check has been skipped once.
-        self.char_codeset.may_send(self.caller_converts_chars)?;
         let id = self.next_request_id();
         // §7.10.2.5 negotiates per connection, so the context goes on the
         // first request only. Sending it again on a later request would risk
@@ -2188,7 +2366,8 @@ impl Connection {
                         char_data: c.id(),
                         wchar_data: codeset::CodeSetId::UTF_16,
                     }
-                    .encode(self.endian)?,
+                    .encode(self.endian)
+                    .map_err(AttemptFailed::unsent)?,
                 }],
                 None => Vec::new(),
             }
@@ -2210,17 +2389,31 @@ impl Connection {
             // every existing call byte-identical.
             self.narrow_codec(),
             write_args,
-        )?;
+        )
+        .map_err(AttemptFailed::unsent)?;
         self.codeset_context_pending = false;
         // A failed write poisons too: a partially-written request leaves the
         // *outbound* half of the stream unframeable, exactly as unread bytes
         // do the inbound half. This was the one send path that did not poison
         // — found when a peer that closes on CancelRequest (omniORB below
         // GIOP 1.2) made the next write the first thing to fail.
-        for piece in fragment_message(msg, self.fragment_threshold)? {
-            self.stream.write_all(&piece).inspect_err(|_| self.poisoned = true)?;
+        //
+        // And a failed write is *unsent*: a GIOP message the peer never
+        // finished reading cannot be dispatched, and this connection is not
+        // reused, so the rest of it never arrives — the same reasoning as
+        // [`mux::Failed::unsent`].
+        for piece in
+            fragment_message(msg, self.fragment_threshold).map_err(AttemptFailed::unsent)?
+        {
+            self.stream
+                .write_all(&piece)
+                .inspect_err(|_| self.poisoned = true)
+                .map_err(|e| AttemptFailed::unsent(e.into()))?;
         }
-        self.stream.flush().inspect_err(|_| self.poisoned = true)?;
+        self.stream
+            .flush()
+            .inspect_err(|_| self.poisoned = true)
+            .map_err(|e| AttemptFailed::unsent(e.into()))?;
 
         // Exactly one message answers one request. This was written as a loop,
         // which said the opposite — that some messages could be skipped and the
@@ -2244,17 +2437,23 @@ impl Connection {
         // caller re-sending on that promise would run the operation twice. The
         // fact a caller needs is on the value: `is_orderly_close` says re-dial,
         // the variant says do not assume this call went unrun.
+        //
+        // From here on the whole request is with the peer, so nothing below
+        // is *unsent* except the one message that says so: an EOF, a reset or
+        // a timeout while waiting is a request whose completion is unknown.
         let raw = match read_message(&mut self.stream, self.max_message_size) {
             Ok(m) => m,
             Err(e) => {
                 self.poisoned = true;
-                return Err(e);
+                return Err(AttemptFailed::unknown(e));
             }
         };
         self.max_reply_fragments = self.max_reply_fragments.max(raw.fragments);
         match raw.msg_type {
             MsgType::Reply => {
-                let mut reply = decode_reply(raw).inspect_err(|_| self.poisoned = true)?;
+                let mut reply = decode_reply(raw)
+                    .inspect_err(|_| self.poisoned = true)
+                    .map_err(AttemptFailed::unknown)?;
                 // §7.1: one agreement for a call and its answer. The reply is
                 // encoded under what this connection negotiated, so it is read
                 // under the same thing rather than under whatever a later
@@ -2262,19 +2461,19 @@ impl Connection {
                 reply.set_codec(self.narrow_codec());
                 if reply.request_id != id {
                     self.poisoned = true;
-                    return Err(Error::Desynchronized);
+                    return Err(AttemptFailed::unknown(Error::Desynchronized));
                 }
-                self.interpret(reply)
+                self.interpret(reply).map_err(AttemptFailed::unknown)
             }
             MsgType::CloseConnection => {
                 // §9.4.7: the request was not processed and is safe to
                 // re-send on a fresh connection.
                 self.poisoned = true;
-                Err(Error::ConnectionClosed)
+                Err(AttemptFailed::unsent(Error::ConnectionClosed))
             }
             other => {
                 self.poisoned = true;
-                Err(Error::UnexpectedMessage(other))
+                Err(AttemptFailed::unknown(Error::UnexpectedMessage(other)))
             }
         }
     }
@@ -2324,6 +2523,43 @@ impl Connection {
 enum Outcome {
     Done(Reply),
     Forwarded(Forward),
+}
+
+/// One attempt's failure, and the one fact [`Connection::invoke`] must have
+/// before it may issue the request again anywhere: whether the peer provably
+/// did not run it.
+///
+/// `unsent` is set only where the specification, not optimism, says so:
+/// nothing — or not all of the message — was written, so the peer cannot
+/// have dispatched it; or the peer answered `CloseConnection`, which §13.5.1
+/// defines as *"were not processed, and may be safely resent"*. It is never
+/// set for a failure after a complete request went out with no such
+/// message back — that request may have run, and reporting it as unsent
+/// would run it twice. The same rule as [`mux::Failed::unsent`], for the
+/// same reason.
+struct AttemptFailed {
+    error: Error,
+    unsent: bool,
+}
+
+impl AttemptFailed {
+    fn unsent(error: Error) -> Self {
+        Self { error, unsent: true }
+    }
+    fn unknown(error: Error) -> Self {
+        Self { error, unsent: false }
+    }
+}
+
+/// How much of §9.6's fallback one call has left. In order: reuse the
+/// forwarding information (redial where the forward pointed), restart at the
+/// origin, and then nothing — a call that failed unsent at the origin too is
+/// reported, not looped.
+#[derive(Clone, Copy)]
+enum Fallback {
+    Reuse,
+    Restart,
+    Spent,
 }
 
 /// What §7.10.2 produced for `char` data against one profile.
