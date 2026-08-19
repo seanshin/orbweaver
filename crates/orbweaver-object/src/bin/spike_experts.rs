@@ -36,11 +36,24 @@
 //! closing with the last one — the same shape `spike-names`, `spike-events`
 //! and `spike-ifr` have, and the thing whose absence made
 //! `SERVICES-COVERAGE.md` §9 build a separate holder crate to address this
-//! servant from outside. Held state is what the checks left: three experts
+//! servant from outside. Held state is what the checks left: four experts
 //! registered, `expert-code` OFFLOADED, `expert-math` ACTIVE, `expert-vision`
-//! RESIDENT and pinned, and all three carrying an out-of-band specialization
-//! so `Router::select` has an answerable question to be asked. Stopped by
-//! killing the process; there is no remote shutdown.
+//! RESIDENT and pinned, the first three carrying an out-of-band specialization
+//! so `Router::select` has an answerable question to be asked, and
+//! `expert-math`/`expert-math-b` measured through the v1.1 path (windows 4
+//! and 5) so `ORDER BY latency_p50` has a complete answer. Stopped by killing
+//! the process; there is no remote shutdown.
+//!
+//! # Windows 4 and 5 — the contract's v1.1 half
+//!
+//! D010 A2: *a latency-ordered router prefers the experts nobody has
+//! measured.* Before those windows every offer arrived through v1.0 and has
+//! no `latency_p50`; the spike asks the engine for the fastest maths expert
+//! and checks that it **refuses** — sets the unmeasured one aside rather than
+//! ranking it. Then `register_measured` and `heartbeat_measured` (moe v1.1,
+//! `MeasuredCapability`) carry a measurement over the wire, and the same
+//! question gets a complete answer, and the answer is the one that was
+//! measured fastest. A v1.0 `heartbeat` in between must not erase it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -48,12 +61,13 @@ use std::time::Duration;
 use orbweaver_giop::server::{BAD_OPERATION, Server};
 use orbweaver_giop::{Connection, Error, IiopProfile, Ior, Version};
 use orbweaver_object::expert_service::{
-    BAD_PARAM, Capability, Constraints, EXPERT_ID, ExpertService, GateSignal, NO_IMPLEMENT,
-    NO_PERMISSION, TRANSIENT, residency_from_ordinal,
+    BAD_PARAM, Capability, Constraints, EXPERT_ID, ExpertService, GateSignal, MeasuredCapability,
+    NO_IMPLEMENT, NO_PERMISSION, TRANSIENT, residency_from_ordinal,
 };
 use orbweaver_object::get_reference;
 use orbweaver_object::residency::Applied;
 use orbweaver_trading::policy::{Decision, LoadingPolicy};
+use orbweaver_trading::query::Query;
 use orbweaver_trading::{FREQ_SCALE, Residency};
 
 const T: Duration = Duration::from_secs(5);
@@ -564,6 +578,128 @@ fn run(out: &[&str; 3], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
         }
     });
 
+    // ── the latency-ordered router, before anything is measured ─────────────
+    // D010 A2's sentence: "a latency-ordered router prefers the experts nobody
+    // has measured". Every offer so far arrived through v1.0, so none has a
+    // p50; the engine must set them aside as unranked, and a router that reads
+    // `is_complete()` refuses — it does not name expert-math "the fastest"
+    // because it was the only maths expert on the list.
+    println!("\nbefore any measurement — ORDER BY latency_p50 over v1.0 offers");
+    let fastest_maths =
+        Query::parse("specialization == 'math' ORDER BY latency_p50 ASC").expect("parses");
+    let picked = pick_fastest(&svc, &fastest_maths);
+    r.eq(
+        picked,
+        Err(vec!["expert-math".to_owned()]),
+        "only unmeasured candidates: the router refuses rather than picking one",
+    );
+
+    // ── window 4: the v1.1 path, over the wire ──────────────────────────────
+    // `register_measured` carries a MeasuredCapability — the released
+    // Capability plus the two members idl-diff refused to let anyone add in
+    // place. A second maths expert arrives measured; the first is still not.
+    println!("\nwindow 4 — the wire is open; register_measured (moe v1.1)");
+    let registry_ior4 = registry_ior.clone();
+    serve_window(&server, &svc, &registry_ior, &mut r, |r| {
+        let mut reg = match Connection::connect(&registry_ior4, T) {
+            Ok(c) => c,
+            Err(e) => {
+                r.check(false, &format!("connect to the registry: {e}"));
+                return;
+            }
+        };
+        let reference = expert_ref("expert-math-b");
+        let m = MeasuredCapability {
+            base: capability("expert-math-b", 120, 0.3),
+            specialization: "math".into(),
+            latency_p50_ms: 8.0,
+        };
+        let ok = reg
+            .invoke("register_measured", |e| {
+                reference.write_to(e).expect("an IOR always encodes");
+                m.write_to(e);
+            })
+            .is_ok();
+        r.check(ok, "register_measured(expert-math-b, math, p50 8.0 ms)");
+    });
+    r.eq(
+        svc.with_store(|s| {
+            s.get("expert-math-b").map(|o| (o.specialization.clone(), o.latency_p50))
+        }),
+        Some((Some("math".to_owned()), Some(8.0))),
+        "the two members reached the offer store as values, not placeholders",
+    );
+    // One measured, one not: the measured one would win — and the router
+    // still refuses, because expert-math might outrank it and nobody knows.
+    // A partial measurement is not a ranking.
+    let picked = pick_fastest(&svc, &fastest_maths);
+    r.eq(
+        picked,
+        Err(vec!["expert-math".to_owned()]),
+        "one measured beside one unmeasured: still refused, the unmeasured one is named",
+    );
+
+    // ── window 5: the measurement for expert-math arrives by heartbeat ──────
+    println!("\nwindow 5 — the wire is open; heartbeat_measured, then a v1.0 heartbeat");
+    let registry_ior5 = registry_ior.clone();
+    serve_window(&server, &svc, &registry_ior, &mut r, |r| {
+        let mut reg = match Connection::connect(&registry_ior5, T) {
+            Ok(c) => c,
+            Err(e) => {
+                r.check(false, &format!("connect to the registry: {e}"));
+                return;
+            }
+        };
+        let reference = expert_ref("expert-math");
+        let m = MeasuredCapability {
+            base: capability("expert-math", 200, 0.25),
+            specialization: "math".into(),
+            latency_p50_ms: 12.0,
+        };
+        let ok = reg
+            .invoke("heartbeat_measured", |e| {
+                reference.write_to(e).expect("an IOR always encodes");
+                m.write_to(e);
+            })
+            .is_ok();
+        r.check(ok, "heartbeat_measured(expert-math, math, p50 12.0 ms)");
+        // Then the old shape again. It has no member for either fact, so it
+        // cannot withdraw them — the measurement must survive this call.
+        let reference = expert_ref("expert-math");
+        let cap = capability("expert-math", 200, 0.5);
+        let ok = reg
+            .invoke("heartbeat", |e| {
+                reference.write_to(e).expect("an IOR always encodes");
+                cap.write_to(e);
+            })
+            .is_ok();
+        r.check(ok, "heartbeat(expert-math) — the v1.0 shape, after the measurement");
+    });
+    r.eq(
+        svc.with_store(|s| s.get("expert-math").map(|o| (o.load, o.latency_p50))),
+        Some((0.5, Some(12.0))),
+        "the v1.0 heartbeat updated what it carries and kept what it cannot mention",
+    );
+    // Both measured: the answer is complete, and the fastest is the one that
+    // was measured fastest — not the one that registered first.
+    let picked = pick_fastest(&svc, &fastest_maths);
+    r.eq(
+        picked,
+        Ok("expert-math-b".to_owned()),
+        "both measured: the router picks the faster (8.0 < 12.0), by measurement",
+    );
+    // The negative control the other way round: a bound the measurements
+    // fail is an honest nothing, not a refusal — the answer is complete and
+    // empty, and a router may say "no maths expert under 5 ms".
+    let too_fast =
+        Query::parse("specialization == 'math' AND latency_p50 < 5 ORDER BY latency_p50 ASC")
+            .expect("parses");
+    r.eq(
+        pick_fastest(&svc, &too_fast),
+        Ok(String::new()),
+        "no maths expert under 5 ms — answered (empty), not refused",
+    );
+
     if hold {
         println!(
             "\nHOLDING — registry/loader/router stay served; point an external client at {}",
@@ -573,4 +709,27 @@ fn run(out: &[&str; 3], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
     }
 
     Ok(r.failures)
+}
+
+/// A latency-ordered router in five lines: the head of the ordered answer,
+/// **when the answer is complete**. `Err` carries the ids the engine could not
+/// judge or place — the experts a lesser router would have ranked by fiat.
+/// `Ok("")` is an honest empty answer: everything was judged, nothing
+/// qualified.
+fn pick_fastest(svc: &ExpertService, q: &Query) -> Result<String, Vec<String>> {
+    svc.with_store(|s| {
+        let sel = q.select_reporting(s);
+        let ranked: Vec<&str> = sel.matched.iter().map(|o| o.id.as_str()).collect();
+        let set_aside: Vec<String> =
+            sel.unanswerable.iter().chain(sel.unranked.iter()).map(|o| o.id.clone()).collect();
+        println!(
+            "        ranked {ranked:?}, set aside {set_aside:?}{}",
+            sel.gap_note().map(|n| format!(" — {n}")).unwrap_or_default()
+        );
+        if sel.is_complete() {
+            Ok(sel.matched.first().map(|o| o.id.clone()).unwrap_or_default())
+        } else {
+            Err(set_aside)
+        }
+    })
 }

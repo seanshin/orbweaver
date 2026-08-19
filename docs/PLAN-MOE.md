@@ -177,15 +177,93 @@ refused: 2 change(s) break deployed peers        (exit 1)
 
 So the two members cannot be added in place: §5.3 requires a new version of the
 type or an explicit `--approve` with a recorded reason. That is the right price
-and it is not yet worth paying — nothing outside this repository serves
-`moe::Capability`, but the same is true of every contract on the day before
-someone deploys it, and a project that edits released types when it is
-convenient has no §5.3 at all. **The unknown-aware query is the answer until a
-version bump has a reason of its own.**
+and it was not, at the time, worth paying — nothing outside this repository
+serves `moe::Capability`, but the same is true of every contract on the day
+before someone deploys it, and a project that edits released types when it is
+convenient has no §5.3 at all. **The unknown-aware query was the answer until
+a version bump had a reason of its own.**
 
 `moe::Capability`에 두 멤버를 넣는 것은 우리 도구가 **BREAKING으로 거부**한다.
-지금 값을 치를 이유가 없으므로, 답은 계약 확장이 아니라 미지값을 아는 질의다.
-편할 때 released 타입을 고치는 프로젝트에는 §5.3이 아예 없는 것과 같다.
+당시에는 값을 치를 이유가 없었으므로, 답은 계약 확장이 아니라 미지값을 아는
+질의였다. 편할 때 released 타입을 고치는 프로젝트에는 §5.3이 아예 없는 것과
+같다.
+
+### 4.5.1 The version bump, paid the §5.3 way / 버전 인상 — §5.3의 방식으로
+
+**Closed 2026-08-19 (D010 A2).** The reason arrived: a latency-ordered router
+over v1.0 offers had *no* measured candidate, and "unknown sorts last" is the
+right answer to the wrong question — it keeps an unmeasured expert from being
+first, but when nothing is measured the fastest is still one of them. So the
+contract moved to **moe v1.1, additively**: `corpus/golden/22` gains
+
+```idl
+struct MeasuredCapability { Capability base; string specialization; float latency_p50_ms; };
+interface ExpertRegistry { /* v1.0 unchanged */
+  void register_measured(in Expert e, in MeasuredCapability measured);
+  void heartbeat_measured(in Expert e, in MeasuredCapability updated_measured);
+};
+```
+
+— a new struct that *composes* the released one, and two server-first
+operations a v1.0 client never calls. The pair the gate re-measures lives on
+disk: `corpus/evolution/moe/v1.0/moe.idl` is the frozen release, golden 22 is
+the proposed revision, and `corpus/evolution/moe/v1.1-in-place/moe.idl` is the
+edit above with the members added in place, kept as the negative control:
+
+```
+$ idl-diff corpus/evolution/moe/v1.0/moe.idl corpus/golden/22-moe-control-plane.idl
+[server-first] IDL:moe/ExpertRegistry:1.0: operation "heartbeat_measured" added — …
+[server-first] IDL:moe/ExpertRegistry:1.0: operation "register_measured" added — …
+[compatible] IDL:moe/MeasuredCapability:1.0: added — nothing deployed refers to it yet
+accepted: nothing here breaks a deployed peer            (exit 0)
+
+$ idl-diff corpus/evolution/moe/v1.0/moe.idl corpus/evolution/moe/v1.1-in-place/moe.idl
+[BREAKING] IDL:moe/Capability:1.0: member "latency_p50_ms" added — …
+[BREAKING] IDL:moe/Capability:1.0: member "specialization" added — …
+refused: 2 change(s) break deployed peers               (exit 1)
+```
+
+What the engine and the servant do with it, measured:
+
+- **The matcher.** `orbweaver_trading::query::Selection` gains `unranked` —
+  offers that satisfy every conjunct and carry no value for the `ORDER BY`
+  field — and `is_complete()`, the router rule as a predicate: a sequence is a
+  complete answer or it is a refusal. An unmeasured offer is no longer sorted
+  last; it is set aside and named. Before the change the same tests were red
+  (`a_router_ordering_by_latency_cannot_prefer_an_unmeasured_expert`,
+  `an_unknown_ordering_key_is_unranked_not_last`).
+- **The servant.** `register_measured`/`heartbeat_measured` are served on
+  `moe::ExpertRegistry`; the offer arrives with both members `Some`, and a
+  query on them is answerable and rankable in both byte orders
+  (`a_v1_1_registration_is_answerable_and_rankable_on_both_byte_orders`). A
+  v1.0 `heartbeat` on a measured offer **keeps** the two members — a message
+  with no room for a fact cannot withdraw it; before this it erased them,
+  and erased an out-of-band `declare_specialization` too.
+- **`spike-experts` windows 4–5.** Over v1.0 offers, "the fastest maths
+  expert" is refused (`ranked [], set aside ["expert-math"]`); after one
+  `register_measured` it is still refused, naming the unmeasured one; after
+  `heartbeat_measured` for the other, `ranked ["expert-math-b",
+  "expert-math"]` and the pick is the one measured faster. A bound nothing
+  meets is an honest empty answer, not a refusal.
+
+Still true and unchanged: `Router::select` orders by `route_freq`, which every
+offer carries, so the wire operation never sets anything aside for ranking;
+`Constraints` is released and still binds `max_latency_ms` to p99. Ordering by
+p50 over the wire would be a `select_measured` with its own reason, and no
+consumer has named one.
+
+**2026-08-19 종결 (D010 A2).** 이유가 생겼다: 지연시간 순 라우터가 v1.0 오퍼만
+가진 상태에서 "미지값은 마지막에 정렬"은 옳은 답이지만 질문이 틀렸다 — 아무도
+측정하지 않았을 때 가장 빠른 것은 여전히 그중 하나다. 그래서 계약은 **v1.1로,
+추가만으로** 올라갔다: released `Capability`를 *합성하는* 새 구조체
+`MeasuredCapability`와, v1.0 클라이언트는 호출하지 않는 server-first 오퍼레이션
+둘. 게이트가 재측정하는 쌍은 디스크에 있다 — `corpus/evolution/moe/v1.0`이 동결된
+릴리스, golden 22가 제안, `v1.1-in-place`가 제자리 수정 음성 대조군(exit 1).
+매처는 `Selection::unranked`와 `is_complete()`를 얻었고(순위를 매길 수 없는
+오퍼는 마지막이 아니라 따로 명명된다), 서번트는 두 오퍼레이션을 양쪽 바이트
+순서로 서비스하며, v1.0 `heartbeat`는 자기가 언급할 수 없는 두 멤버를 지우지
+않는다. `spike-experts` 4·5번 창이 거부→부분 측정 거부→완전한 답을 순서대로
+보인다. `Router::select`는 `route_freq`로 정렬하므로 와이어 동작은 변하지 않았다.
 
 ## 4.6 Why `Router` is in no plan — the plane rule and its escape hatch
 

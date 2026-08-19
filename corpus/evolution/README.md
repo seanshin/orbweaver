@@ -69,3 +69,18 @@ different question and the one the release gate asks.
 없었다. `corpus/include/` 는 *해석* 자체를 다룬다. 이 디렉터리는 **해석된
 번역 단위의 소비자**가 그것으로 무엇을 하는가를 다루며, 릴리스 게이트가 묻는
 질문이 바로 그것이다.
+
+---
+
+## `moe/` — the §5.3 pair for corpus/golden/22 (moe v1.0 → v1.1)
+
+`moe/v1.0/moe.idl` is the **frozen** release of the control-plane contract;
+`corpus/golden/22-moe-control-plane.idl` is the additive v1.1 revision
+(`idl-diff` exit 0); `moe/v1.1-in-place/moe.idl` is the same two members added
+to the released `Capability` in place, kept as the negative control (exit 1).
+Neither file under `moe/` is served by anything and neither is edited — the
+measurement, and why the version bump was paid, is PLAN-MOE §4.5.1.
+
+`moe/v1.0/moe.idl`은 **동결된** 릴리스, golden 22가 추가만 한 v1.1 (exit 0),
+`moe/v1.1-in-place`는 제자리 수정 음성 대조군 (exit 1). 둘 다 서비스되지 않고
+수정되지 않는다. 측정과 이유는 PLAN-MOE §4.5.1.

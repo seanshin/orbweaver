@@ -259,25 +259,39 @@ fn counter_value(offer: &Offer, field: Field) -> u64 {
     }
 }
 
+/// Whether `offer` carries a value for `field` at all — the question `ORDER
+/// BY` has to ask before it can place an offer. Counters and residency are
+/// always known; the two text/float fields a v1.0 wire registration cannot
+/// carry are the ones that can answer `false`.
+fn has_value(offer: &Offer, field: Field) -> bool {
+    match field.kind() {
+        Kind::Text => text_value(offer, field).is_some(),
+        Kind::Float => float_value(offer, field).is_some(),
+        Kind::Counter | Kind::State => true,
+    }
+}
+
 /// Compares two offers on `field`, for `ORDER BY`. Floats compare by IEEE
 /// total order — deterministic even for the values nobody should register.
-/// An unknown value sorts **after** every known one, in either direction, so
-/// an offer nobody measured is never the answer to "the fastest". That is the
-/// ordering counterpart of the matching rule: unknown must not win by being
-/// zero.
+///
+/// Both offers are known to carry the field: [`Query::select_reporting`]
+/// puts an offer with no value for the ordering key into
+/// [`Selection::unranked`] before anything is sorted, so this never has to
+/// decide where an unknown goes. It used to — unknown sorted *after* every
+/// known value — and that was the right answer to the wrong question: it kept
+/// an unmeasured offer from being *first*, but when every candidate was
+/// unmeasured the "fastest" was still one of them, and a router taking the
+/// head of the list preferred an expert nobody had timed. An offer that
+/// cannot be placed is not in the ordered answer at all.
 fn offer_cmp(a: &Offer, b: &Offer, field: Field) -> Ordering {
     match field.kind() {
         Kind::Text => match (text_value(a, field), text_value(b, field)) {
             (Some(x), Some(y)) => x.cmp(y),
-            (None, None) => Ordering::Equal,
-            (None, Some(_)) => Ordering::Greater,
-            (Some(_), None) => Ordering::Less,
+            _ => unreachable!("unranked offers are set aside before sorting"),
         },
         Kind::Float => match (float_value(a, field), float_value(b, field)) {
             (Some(x), Some(y)) => x.total_cmp(&y),
-            (None, None) => Ordering::Equal,
-            (None, Some(_)) => Ordering::Greater,
-            (Some(_), None) => Ordering::Less,
+            _ => unreachable!("unranked offers are set aside before sorting"),
         },
         Kind::Counter => counter_value(a, field).cmp(&counter_value(b, field)),
         Kind::State => a.residency.cmp(&b.residency),
@@ -626,23 +640,37 @@ impl Query {
     /// direction with ties broken by ascending id, or plain ascending id
     /// when no ordering was asked for. The same store and query always
     /// return the same list in the same order.
+    ///
+    /// Lossy by construction: the offers the query could not judge, and the
+    /// ones it could not place in the requested order, are not in this list
+    /// and nothing here says so. A caller that must tell "no" from "cannot
+    /// tell" — every router — uses [`Query::select_reporting`].
     pub fn select<'a>(&self, store: &'a OfferStore) -> Vec<&'a Offer> {
         self.select_reporting(store).matched
     }
 
-    /// [`Query::select`], plus the offers the query could not answer for.
+    /// [`Query::select`], plus the offers the query could not answer for and
+    /// the ones it could not rank.
     ///
     /// The reason this exists rather than a plain `Vec`: an offer registered
-    /// over the wire carries no `specialization` and no `latency_p50`, because
-    /// `moe::Capability` has no member for either. Folding those into "did not
-    /// match" made the two indistinguishable, and one of them is a question
-    /// for whoever registered the expert rather than an answer about maths.
+    /// over the wire's v1.0 path carries no `specialization` and no
+    /// `latency_p50`, because `moe::Capability` has no member for either.
+    /// Folding those into "did not match" made the two indistinguishable, and
+    /// one of them is a question for whoever registered the expert rather
+    /// than an answer about maths. Ordering has the same shape of gap: an
+    /// `ORDER BY latency_p50` cannot place an offer that has none, and a list
+    /// that quietly put it last — or first, when nothing else was measured —
+    /// was a ranking that had not been earned.
     pub fn select_reporting<'a>(&self, store: &'a OfferStore) -> Selection<'a> {
         let mut matched: Vec<&Offer> = Vec::new();
         let mut unanswerable: Vec<&Offer> = Vec::new();
+        let mut unranked: Vec<&Offer> = Vec::new();
         for offer in store.iter() {
             match self.evaluate(offer) {
-                Truth::Yes => matched.push(offer),
+                Truth::Yes => match self.order {
+                    Some((field, _)) if !has_value(offer, field) => unranked.push(offer),
+                    _ => matched.push(offer),
+                },
                 Truth::Unknown => unanswerable.push(offer),
                 Truth::No => {}
             }
@@ -659,34 +687,78 @@ impl Query {
             });
         }
         unanswerable.sort_by(|a, b| a.id.cmp(&b.id));
-        Selection { matched: out, unanswerable }
+        unranked.sort_by(|a, b| a.id.cmp(&b.id));
+        Selection { matched: out, unanswerable, unranked }
     }
 }
 
-/// What a query could answer, and what it could not.
+/// What a query could answer, what it could not, and what it could not
+/// place.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Selection<'a> {
-    /// Offers that definitely satisfy every conjunct, in the pinned order.
+    /// Offers that definitely satisfy every conjunct **and** carry the
+    /// `ORDER BY` field, in the pinned order.
     pub matched: Vec<&'a Offer>,
     /// Offers with a field the query names and the offer does not carry, in
     /// ascending id. Never silently dropped: an empty `matched` beside a
     /// non-empty `unanswerable` is a different situation from an empty
     /// `matched` alone, and only the second one means "nothing qualifies".
     pub unanswerable: Vec<&'a Offer>,
+    /// Offers that satisfy every conjunct but carry no value for the `ORDER
+    /// BY` field, in ascending id — they qualify, and nobody can say where
+    /// they rank. Empty whenever the query has no ordering, or orders by a
+    /// field every offer carries (`route_freq`, `residency`, …). A router
+    /// that takes the head of `matched` as "the fastest" while this is
+    /// non-empty is preferring the measured over the unmeasured by fiat, and
+    /// [`Selection::is_complete`] is how it declines to.
+    pub unranked: Vec<&'a Offer>,
 }
 
 impl Selection<'_> {
+    /// Whether every offer was judged and placed: `matched` is the whole
+    /// answer, and nothing was set aside as unanswerable or unranked.
+    ///
+    /// The router rule in one predicate — *a sequence of references is a
+    /// complete answer or it is a refusal.* An offer nobody could judge, or
+    /// nobody could rank, might have outranked the ones that came back, so a
+    /// consumer that hands `matched` on as "the experts that qualify, best
+    /// first" checks this and refuses when it is false. An empty `matched`
+    /// with this `true` is an honest nothing.
+    pub fn is_complete(&self) -> bool {
+        self.unanswerable.is_empty() && self.unranked.is_empty()
+    }
+
     /// One line an operator can act on, or `None` when everything was
-    /// answerable.
+    /// answerable and rankable.
     pub fn gap_note(&self) -> Option<String> {
-        if self.unanswerable.is_empty() {
+        if self.is_complete() {
             return None;
         }
-        let ids: Vec<&str> = self.unanswerable.iter().map(|o| o.id.as_str()).collect();
+        let list =
+            |offers: &[&Offer]| offers.iter().map(|o| o.id.as_str()).collect::<Vec<_>>().join(", ");
+        let mut parts = Vec::new();
+        if !self.unanswerable.is_empty() {
+            parts.push(format!(
+                "{} offer(s) could not be judged because they do not carry a field the \
+                 query names: {}",
+                self.unanswerable.len(),
+                list(&self.unanswerable)
+            ));
+        }
+        if !self.unranked.is_empty() {
+            parts.push(format!(
+                "{} offer(s) qualify but carry no value for the ORDER BY field, so they \
+                 cannot be placed: {}",
+                self.unranked.len(),
+                list(&self.unranked)
+            ));
+        }
         Some(format!(
-            "{} offer(s) could not be judged because they do not carry a field the query              names: {}. An expert registered over the wire has no specialization and no              latency_p50, because moe::Capability declares neither.",
-            ids.len(),
-            ids.join(", ")
+            "{}. An expert registered through moe::ExpertRegistry::register_expert (v1.0) \
+             has no specialization and no latency_p50, because moe::Capability declares \
+             neither; register_measured / heartbeat_measured (v1.1, MeasuredCapability) \
+             carry both.",
+            parts.join("; ")
         ))
     }
 }
@@ -740,31 +812,82 @@ mod tests {
         assert!(sel.unanswerable.is_empty(), "No beats Unknown");
     }
 
-    /// Ordering must not let an unknown win either: `ORDER BY latency_p50`
-    /// puts the unmeasured offer last, not first.
+    fn maths_offer(id: &str, p50: Option<f64>) -> Offer {
+        Offer {
+            id: id.to_owned(),
+            specialization: Some("math".to_owned()),
+            cost: 1.0,
+            latency_p50: p50,
+            latency_p99: 100.0,
+            load: 0.1,
+            residency: Residency::Resident,
+            mem_footprint: 100,
+            placement_node: "n1".to_owned(),
+            route_freq: 0,
+        }
+    }
+
+    /// Ordering must not let an unknown win either. `ORDER BY latency_p50`
+    /// used to put the unmeasured offer last; now it does not place it at
+    /// all — it qualifies, it is reported as unranked, and the ordered
+    /// answer is incomplete until it is measured.
     #[test]
-    fn an_unknown_sorts_after_every_known_value() {
+    fn an_unknown_ordering_key_is_unranked_not_last() {
         let mut store = OfferStore::new();
         for (id, p50) in [("known-slow", Some(90.0)), ("unknown", None), ("known-fast", Some(5.0))]
         {
-            store
-                .register(Offer {
-                    id: id.to_owned(),
-                    specialization: Some("math".to_owned()),
-                    cost: 1.0,
-                    latency_p50: p50,
-                    latency_p99: 100.0,
-                    load: 0.1,
-                    residency: Residency::Resident,
-                    mem_footprint: 100,
-                    placement_node: "n1".to_owned(),
-                    route_freq: 0,
-                })
-                .expect("registers");
+            store.register(maths_offer(id, p50)).expect("registers");
         }
         let q = Query::parse("specialization == 'math' ORDER BY latency_p50 ASC").expect("parses");
-        let ids: Vec<&str> = q.select(&store).iter().map(|o| o.id.as_str()).collect();
-        assert_eq!(ids, ["known-fast", "known-slow", "unknown"]);
+        let sel = q.select_reporting(&store);
+        assert_eq!(ids(&sel.matched), ["known-fast", "known-slow"]);
+        assert_eq!(ids(&sel.unranked), ["unknown"], "it qualifies; nobody can say where");
+        assert!(sel.unanswerable.is_empty(), "no conjunct named the missing field");
+        assert!(!sel.is_complete(), "a ranking with a hole in it is not a ranking");
+        assert!(sel.gap_note().expect("a note").contains("cannot be placed: unknown"));
+        // The lossy form drops it, as documented.
+        assert_eq!(ids(&q.select(&store)), ["known-fast", "known-slow"]);
+        // Descending too: the unmeasured offer is not "the slowest" either.
+        let q = Query::parse("specialization == 'math' ORDER BY latency_p50 DESC").expect("parses");
+        let sel = q.select_reporting(&store);
+        assert_eq!(ids(&sel.matched), ["known-slow", "known-fast"]);
+        assert_eq!(ids(&sel.unranked), ["unknown"]);
+    }
+
+    /// The case D010 A2 named: when *nothing* is measured, "the fastest" has
+    /// no answer, and the engine says so instead of naming whichever offer
+    /// sorted first. Then one measurement arrives (the v1.1 path) and the
+    /// answer is complete, and it is the measured one — not the one that
+    /// registered first.
+    #[test]
+    fn a_router_ordering_by_latency_cannot_prefer_an_unmeasured_expert() {
+        let mut store = OfferStore::new();
+        store.register(maths_offer("expert-math", None)).expect("registers");
+        let q = Query::parse("specialization == 'math' ORDER BY latency_p50 ASC").expect("parses");
+        let sel = q.select_reporting(&store);
+        assert!(sel.matched.is_empty(), "nothing is placed");
+        assert_eq!(ids(&sel.unranked), ["expert-math"]);
+        assert!(!sel.is_complete(), "one unmeasured candidate is a refusal, not a pick");
+        // A second maths expert, measured: still incomplete, because the
+        // first one might outrank it — nobody knows.
+        store.register(maths_offer("expert-math-b", Some(8.0))).expect("registers");
+        let sel = q.select_reporting(&store);
+        assert_eq!(ids(&sel.matched), ["expert-math-b"]);
+        assert_eq!(ids(&sel.unranked), ["expert-math"]);
+        assert!(!sel.is_complete());
+        // The measurement arrives, as a heartbeat would carry it.
+        store.heartbeat(maths_offer("expert-math", Some(12.0))).expect("updates");
+        let sel = q.select_reporting(&store);
+        assert_eq!(ids(&sel.matched), ["expert-math-b", "expert-math"]);
+        assert!(sel.is_complete());
+        assert_eq!(sel.gap_note(), None);
+        // And an ordering by a field every offer carries never sets anything
+        // aside — the wire `Router::select` orders by `route_freq`.
+        let q = Query::parse("specialization == 'math' ORDER BY route_freq DESC").expect("parses");
+        store.heartbeat(maths_offer("expert-math", None)).expect("updates");
+        let sel = q.select_reporting(&store);
+        assert_eq!(sel.matched.len(), 2);
+        assert!(sel.is_complete());
     }
 
     fn store() -> OfferStore {
