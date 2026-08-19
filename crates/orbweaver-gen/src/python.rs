@@ -532,21 +532,34 @@ fn emit_type(id: &str, tc: &TypeCode) -> Result<String, String> {
 
         TypeCode::Union { name, discriminator, cases, default_index, .. } => {
             let mut s = String::new();
+            // One branch per member, its labels gathered: the registry expands
+            // `case 2: case 3:` into two cases sharing a member, and a class
+            // holds the member once. Member names are unique within a union,
+            // so the name is the branch.
+            //
+            // A branch that is both labelled and `default:` (`case 2: default:
+            // string rest;`) is one case in the registry, at `default_index`,
+            // whose label is 2 — and it keeps that label here. Until
+            // `corpus/golden/29` the default branch was written with no labels
+            // regardless, so the TypeCode the runtime rebuilt for an `any` had a
+            // labelless default where the registry's had 2, and came back as
+            // different bytes. Only a bare `default:` has no label of its own;
+            // the registry gives that one an empty label, and `json_label` has
+            // no value to render for it.
             let mut branches: Vec<(Vec<String>, &str, &TypeCode, bool)> = Vec::new();
             for (i, c) in cases.iter().enumerate() {
                 let is_default = *default_index >= 0 && i == *default_index as usize;
-                let label = json_label(&c.label, discriminator)?;
-                if let Some(b) = branches.iter_mut().find(|b| b.1 == c.name && !b.3 && !is_default)
-                {
-                    b.0.push(label);
+                let label = if c.label.is_empty() {
+                    None
+                } else {
+                    Some(json_label(&c.label, discriminator)?)
+                };
+                if let Some(b) = branches.iter_mut().find(|b| b.1 == c.name) {
+                    b.0.extend(label);
+                    b.3 |= is_default;
                     continue;
                 }
-                branches.push((
-                    if is_default { Vec::new() } else { vec![label] },
-                    &c.name,
-                    &c.tc,
-                    is_default,
-                ));
+                branches.push((label.into_iter().collect(), &c.name, &c.tc, is_default));
             }
             let _ = writeln!(s, "class {}(_rt.Union):", py_ident(name));
             docstring(
