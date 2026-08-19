@@ -572,6 +572,33 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **AnyJSON: a value beneath a `TypeCode::Recursive` marker now crosses in
+  both directions** (found by D010 A4; `to_json`/`from_json` resolved aliases
+  only, so `Reading { kids: sequence<Reading> }` with a child failed "is not a
+  value of"). The mapping walks on the marshaller's own `Path`, so recursion
+  and the 64-level nesting bound are one mechanism for CDR and JSON; a
+  document nesting past the bound is refused, not followed. **Why nothing was
+  red:** every recursive witness was the empty list — the property sweep's
+  `TreeSeq` was `[]` on every valued case and `None` on 22 of 32 (skipped
+  through a bare `continue` while the summary line said 32), and the Python
+  sweep terminated at the first re-entry. The sampler's depth predicate now
+  mirrors the sampler, a valueless case is a `prop/unmeasured` finding the
+  harness fails on, and the Python witness follows a marker one level (all
+  five Python tests pass; `_rt.py` needed nothing). Found and not fixed: the
+  property sweep never calls `anyjson`, so it could not have caught this
+  regardless of witness; a third empty recursive witness lives in
+  `orbweaver-mcp/tests/ifr_reaches_the_agent.rs`.
+
+  **AnyJSON: `Recursive` 마커 아래의 값이 양방향으로 건너간다**(D010 A4 발견;
+  `to_json`/`from_json`은 별칭만 풀었다). 매핑이 마샬러의 `Path` 위를 걷게 되어
+  재귀와 64단계 중첩 한도가 CDR·JSON 하나의 메커니즘이 되었다. **왜 아무것도
+  빨갛지 않았나:** 모든 재귀 증인이 빈 목록이었다 — 속성 스윕의 `TreeSeq`는
+  값 있는 모든 케이스에서 `[]`, 32건 중 22건은 `None`(요약 줄은 32라 말하며
+  조용히 건너뜀). 샘플러의 깊이 술어를 샘플러와 일치시키고, 값 없는 케이스는
+  하네스가 실패시키는 `prop/unmeasured` 소견으로 남기며, Python 스윕 증인은
+  마커를 한 단계 따라간다. 보고만: 속성 스윕은 `anyjson`을 호출하지 않는다;
+  세 번째 빈 재귀 증인이 `ifr_reaches_the_agent.rs`에 있다.
+
 - **README — the sixth class-D row the PLAN batch named.** The S1–S7 stage
   table lost its *Target* column (95/90/80/100/100/85/90 — now only PLAN §11
   A9); *Targets / 목표 지표* no longer copies PLAN §11 without its instrument

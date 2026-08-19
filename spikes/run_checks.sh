@@ -1193,6 +1193,17 @@ if [ "$cc_rc" -ne 0 ]; then
 else
   echo "  ok   $(printf '%s\n' "$cc_out" | tail -2 | head -1)"
 fi
+# A property case that produced no value ran nothing, and until 2026-08-19 it
+# fell through a bare `continue`: golden 15's TreeSeq was `[]` on every valued
+# case and None on 22 of 32, while the summary line still said "32 cases".
+# It is a `prop/unmeasured` finding now (1b6b4c8). Captured then matched.
+if printf '%s\n' "$cc_out" | grep -q "prop/unmeasured"; then
+  echo "  FAIL a property case produced no value and therefore ran nothing"
+  printf '%s\n' "$cc_out" | grep "prop/unmeasured" | head -3 | sed 's/^/       /'
+  fail_total=$((fail_total+1))
+else
+  echo "  ok   every property case produced a value (no prop/unmeasured)"
+fi
 # Panic freedom. Rust rules out the memory-corruption half of "wire parsing is
 # the classic memory-safety hazard" at compile time and rules out nothing about
 # panics — a slice index or an unwrap reachable from a peer's bytes ends the
