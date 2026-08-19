@@ -27,19 +27,41 @@
 #      is measured in arm C and its octets checked against OUR_REPLY_HAN_LE,
 #      and JacORB's reading of that form is what jacorb_wchar11.sh step 2
 #      measured with the hand-built peer.
+#   A2. the same JacORB client -> our Rust server, profile republished at
+#      1.2: JacORB writes U+FEFF as `02 fe ff` and U+FFFE as `02 ff fe` —
+#      bare, the very octets §9.3.1.6 makes a reader remove as a mark — and
+#      our reader now reads them as the units they are; our server replies
+#      marked (`04 fe ff fe ff`, `04 fe ff ff fe`) and JacORB's user gets
+#      both back. Before the codeset.rs change of this commit both were
+#      MARSHAL at JacORB's user (recorded, then revised, in
+#      tests/wide_1_1_from_a_peer.rs fact 6).
 #   B. our Rust client -> a JacORB server advertising IIOP 1.1: our 1.1
 #      requests in both byte orders, unit in the message's order, every unit
 #      and both 2a052cb texts echoed as sent; JacORB's replies at 1.1 BE.
+#   B2. our Rust client -> a JacORB server advertising IIOP 1.2, both
+#      orders: 'w', '한', U+FEFF and U+FFFE and both texts as sent — our
+#      marked U+FEFF/U+FFFE reach JacORB's user, and its bare echoes reach
+#      ours.
+#   D. JacORB's 1.2 wchar reader, asked directly: the hand-built client of
+#      spikes/jacorb_wchar11.py, following the 1.2 profile, sends each form
+#      recorded in tests/wide_1_2_from_a_peer.rs (JACORB_READER_1_2 — a mark
+#      in either order before a unit, and unmarked units) verbatim in a
+#      big-endian and a little-endian message, and JacORB's echo of each is
+#      compared with the recorded echo. Gated, so a change in the peer's
+#      reader is visible. Its reading of its own bare `02 fe ff` (U+0000)
+#      is printed, not gated.
 #   C. our Rust client -> our Rust server at 1.0, 1.1 and 1.2, both orders:
 #      1.0 refuses wchar on both sides (our codec before the wire, our server
 #      with MARSHAL OMG minor 6 for two raw octets); 1.1 and 1.2 round-trip
-#      the units and the texts, replies in the request's order. U+FEFF as a
-#      1.2 wchar is measured separately and recorded, not gated: it does not
-#      cross (see the DEFECT line).
-#   R. the live octets against crates/orbweaver-giop/tests/wide_1_1_from_a_peer.rs:
-#      JacORB's whole echo_wchar(U+D55C) request as our real server received
-#      it, our real server's replies to it in both orders, our own 1.1 request
-#      (octet for octet JacORB's), and JacORB's reply to our request.
+#      the units and the texts, replies in the request's order — at 1.2 the
+#      units include U+FEFF and U+FFFE, marked on the wire both ways.
+#   R. the live octets against crates/orbweaver-giop/tests/wide_1_1_from_a_peer.rs
+#      and wide_1_2_from_a_peer.rs: JacORB's whole echo_wchar(U+D55C) request
+#      as our real server received it, our real server's replies to it in
+#      both orders, our own 1.1 request (octet for octet JacORB's), JacORB's
+#      reply to our request; and at 1.2 JacORB's whole U+FEFF request, our
+#      real server's marked reply to it, and JacORB's bare reply to our
+#      marked request.
 #
 # Versions and byte orders are asserted from the tap's parsed headers and from
 # our server's own log, never from what a fixture was told. Values are compared
@@ -76,12 +98,17 @@ JDIR="$ROOT/spikes/jacorb"
 TAP="$ROOT/spikes/jacorb_giop11_tap.py"
 PY="$ROOT/spikes/jacorb_wchar11.py"
 RS="$ROOT/crates/orbweaver-giop/tests/wide_1_1_from_a_peer.rs"
+RS12="$ROOT/crates/orbweaver-giop/tests/wide_1_2_from_a_peer.rs"
 BIN="$ROOT/target/debug/spike-wide"
 
 # The units of jacorb_wchar11.sh, as hex so no file's encoding takes part:
 # 'w' (its swap U+7700 is another valid character), '한', U+FEFF as DATA, and
 # a lone surrogate — which JacORB's char can carry and our `char` cannot.
 UNITS="0077 D55C FEFF D83D"
+# At 1.2 the two units whose bare big-endian octets are a mark, U+FEFF and
+# U+FFFE, are the case; the lone surrogate stays last so that JacORB's
+# reconnect after its MARSHAL disturbs nothing before it.
+UNITS12="0077 D55C FEFF FFFE D83D"
 # The two texts 2a052cb measured: twelve BMP units, and one that needs a
 # surrogate pair — two UTF-16 units, therefore two 1.1 "wide characters".
 TEXT_BMP="wide 함정 전투체계"
@@ -187,14 +214,15 @@ whole_ending() { # <log> <header substring> <hex suffix>
 # client's numbering can be compared to another client's.
 sans_id_11_reply() { printf '%s' "${1:0:32}........${1:40}"; }
 
-rec_check() { # <const name> <live hex> [what]
-  local want; want=$(python3 "$PY" recorded --rs "$RS" --name "$1")
-  if [ "$want" = "$2" ] && [ -n "$2" ]; then
-    ok "$1${3:+ ($3)} = $2, as recorded"
+rec_check_in() { # <rs file> <const name> <live hex> [what]
+  local want; want=$(python3 "$PY" recorded --rs "$1" --name "$2")
+  if [ "$want" = "$3" ] && [ -n "$3" ]; then
+    ok "$2${4:+ ($4)} = $3, as recorded"
   else
-    fail "$1${3:+ ($3)}: live '$2', recorded '$want' — the recording no longer describes the wire, or the wire changed"
+    fail "$2${4:+ ($4)}: live '$3', recorded '$want' — the recording no longer describes the wire, or the wire changed"
   fi
 }
+rec_check() { rec_check_in "$RS" "$@"; }
 rec_check_sans_id() { # <const name> <live hex> <what>
   local want; want=$(python3 "$PY" recorded --rs "$RS" --name "$1")
   if [ -n "$2" ] && [ "$(sans_id_11_reply "$want")" = "$(sans_id_11_reply "$2")" ]; then
@@ -247,6 +275,43 @@ info "little-endian replies from our real server to JacORB are unmeasurable: it 
 a_ctx=$(grep -o 'codesets([^)]*)' "$D/a.tap.log" | head -1)
 [ -n "$a_ctx" ] && echo "       negotiated: $a_ctx"
 
+# ── A2. the same JacORB client -> our Rust server, republished at 1.2 ───────
+echo "JacORB client -> our Rust server (GIOP 1.2)"
+start_rust_server a2 && start_tap a2 "$D/a2.server.ior" --minor 2 || exit 1
+# shellcheck disable=SC2086
+( cd "$JDIR" && "$JH/bin/java" -cp "$JCP" WideClient "$D/a2.tapped.ior" $UNITS12 ) >"$D/a2.client.log" 2>&1; a2_rc=$?
+stop "$TAP_PID"; stop "$RUST_PID"
+a2_seen=$(requests_seen "$D/a2.tap.log")
+a2_dec_han=$(grep -c "^served echo_wchar #[0-9]* at GIOP 1.2 (Big) UTF-16 (0x00010109): decoded U+$EXPECT_HAN$" "$D/a2.rust.log")
+a2_dec_feff=$(grep -c "^served echo_wchar #[0-9]* at GIOP 1.2 (Big) UTF-16 (0x00010109): decoded U+FEFF$" "$D/a2.rust.log")
+a2_dec_fffe=$(grep -c "^served echo_wchar #[0-9]* at GIOP 1.2 (Big) UTF-16 (0x00010109): decoded U+FFFE$" "$D/a2.rust.log")
+a2_ok=$(grep -c "^  ok   echo_wchar" "$D/a2.client.log")
+a2_han=$(grep -c "echo_wchar\[U+D55C\] -> U+$EXPECT_HAN\$" "$D/a2.client.log")
+a2_feff=$(grep -c "echo_wchar\[U+FEFF\] -> U+FEFF\$" "$D/a2.client.log")
+a2_fffe=$(grep -c "echo_wchar\[U+FFFE\] -> U+FFFE\$" "$D/a2.client.log")
+a2_req_feff=$(whole_ending "$D/a2.tap.log" "C->S GIOP 1.2 Request" "02feff" | cut -d' ' -f2)
+a2_req_fffe=$(whole_ending "$D/a2.tap.log" "C->S GIOP 1.2 Request" "02fffe" | cut -d' ' -f2)
+if [ "$a2_seen" = "1.2 BE" ] && [ "$a2_dec_han" -eq 1 ] && [ "$a2_dec_feff" -eq 1 ] && [ "$a2_dec_fffe" -eq 1 ] \
+   && [ -n "$a2_req_feff" ] && [ -n "$a2_req_fffe" ]; then
+  ok "JacORB dials our IOR republished at IIOP 1.2 and speaks GIOP $a2_seen; it writes U+FEFF as ${a2_req_feff: -6} and U+FFFE as ${a2_req_fffe: -6} (bare), and our reader decoded U+$EXPECT_HAN, U+FEFF, U+FFFE from its octets"
+else
+  fail "JacORB -> our server at 1.2: tap saw '${a2_seen:-nothing}', decoded han/feff/fffe = $a2_dec_han/$a2_dec_feff/$a2_dec_fffe, JacORB's FEFF request '${a2_req_feff: -6}', FFFE '${a2_req_fffe: -6}'"
+  grep -E "^served|^refused|^first" "$D/a2.rust.log" | head -6 | sed 's/^/       /'
+fi
+if [ "$a2_ok" -eq 4 ] && [ "$a2_han" -eq 1 ] && [ "$a2_feff" -eq 1 ] && [ "$a2_fffe" -eq 1 ]; then
+  ok "JacORB's user gets 'w', '한', U+FEFF and U+FFFE back from our real server's 1.2 replies — the last two marked, 04 fe ff fe ff / 04 fe ff ff fe (U+D55C -> U+$EXPECT_HAN)"
+else
+  fail "JacORB's user at 1.2: $a2_ok/4 units back as sent, han/feff/fffe = $a2_han/$a2_feff/$a2_fffe (client rc=$a2_rc)"
+  grep -E "FAIL|ok" "$D/a2.client.log" | head -5 | sed 's/^/       /'
+fi
+a2_lone_java=$(grep -c "^  FAIL echo_wchar\[U+D83D\] raised org.omg.CORBA.MARSHAL" "$D/a2.client.log")
+a2_lone_rust=$(grep -c "^refused echo_wchar #[0-9]* at GIOP 1.2 (Big): received bytes are not valid UTF-16" "$D/a2.rust.log")
+if [ "$a2_rc" -eq 1 ] && [ "$a2_lone_java" -eq 1 ] && [ "$a2_lone_rust" -eq 1 ]; then
+  ok "recorded: JacORB's lone surrogate d8 3d is refused by our real reader at 1.2 as at 1.1 — MARSHAL to JacORB's user"
+else
+  fail "lone surrogate at 1.2: expected our reader to refuse it with MARSHAL (java rc 1); got rc=$a2_rc, java MARSHAL line x$a2_lone_java, server refusal x$a2_lone_rust"
+fi
+
 # ── B. our Rust client -> a JacORB server advertising IIOP 1.1 ──────────────
 echo "our Rust client -> JacORB server (GIOP 1.1)"
 ( cd "$JDIR" && exec "$JH/bin/java" -cp "$JCP" -Djacorb.giop_minor_version=1 -DOAIAddr=127.0.0.1 \
@@ -281,6 +346,76 @@ for order in be le; do
 done
 info "our client cannot ask for a lone surrogate (not a char) or send U+1F600 as one wchar (two units): both refusals are ours, before the wire — jacorb_wchar11.sh's hand-built client is what carries those to JacORB"
 
+# ── B2. our Rust client -> a JacORB server advertising IIOP 1.2 ─────────────
+echo "our Rust client -> JacORB server (GIOP 1.2)"
+( cd "$JDIR" && exec "$JH/bin/java" -cp "$JCP" -DOAIAddr=127.0.0.1 WideServer "$D/j2.ior" ) >"$D/j2.log" 2>&1 &
+JSRV2_PID=$!; PIDS+=("$JSRV2_PID")
+if ! wait_for_file "$D/j2.ior" 30; then
+  fail "JacORB WideServer (1.2) did not publish an IOR"; sed 's/^/       /' "$D/j2.log" | tail -5
+  exit 1
+fi
+sleep 0.5
+start_tap b2 "$D/j2.ior" || exit 1
+run_our_client b2.be "$D/b2.tapped.ior" be 0077 D55C FEFF FFFE; b2_be_rc=$?
+run_our_client b2.le "$D/b2.tapped.ior" le 0077 D55C FEFF FFFE; b2_le_rc=$?
+stop "$TAP_PID"
+b2_prof=$(sed -n 's/^  endpoint .*(IIOP \([0-9]\.[0-9]\)).*/\1/p' "$D/b2.be.out" | head -1)
+for order in be le; do
+  eval "rc=\$b2_${order}_rc"
+  ORD=$(echo "$order" | tr a-z A-Z)
+  n_ok=$(grep -c "^  ok   " "$D/b2.$order.out")
+  n_han=$(grep -c "^  ok   echo_wchar\[U+D55C\] -> U+$EXPECT_HAN " "$D/b2.$order.out")
+  n_feff=$(grep -c "^  ok   echo_wchar\[U+FEFF\] -> U+FEFF " "$D/b2.$order.out")
+  n_fffe=$(grep -c "^  ok   echo_wchar\[U+FFFE\] -> U+FFFE " "$D/b2.$order.out")
+  n_txt=$(grep -c "^  ok   echo_wstring\[.*\] -> the same" "$D/b2.$order.out")
+  n_req=$(grep -c "C->S GIOP 1.2 Request size=[0-9]* $ORD" "$D/b2.tap.log")
+  n_rep=$(grep -c "S->C GIOP 1.2 Reply size=[0-9]* BE" "$D/b2.tap.log")
+  sent_feff=$(whole_ending "$D/b2.tap.log" "C->S GIOP 1.2 Request size=[0-9]* $ORD" "04fefffeff" | cut -d' ' -f2)
+  sent_fffe=$(whole_ending "$D/b2.tap.log" "C->S GIOP 1.2 Request size=[0-9]* $ORD" "04fefffffe" | cut -d' ' -f2)
+  if [ "$rc" -eq 0 ] && [ "$n_ok" -eq 6 ] && [ "$n_han" -eq 1 ] && [ "$n_feff" -eq 1 ] && [ "$n_fffe" -eq 1 ] && [ "$n_txt" -eq 2 ] \
+     && [ "$n_req" -ge 6 ] && [ "$b2_prof" = "1.2" ] && [ -n "$sent_feff" ] && [ -n "$sent_fffe" ]; then
+    ok "our $ORD 1.2 requests to a JacORB server (profile IIOP $b2_prof): 'w', '한', U+FEFF, U+FFFE and both texts echoed as sent (U+D55C -> U+$EXPECT_HAN); we sent U+FEFF as ${sent_feff: -10} and U+FFFE as ${sent_fffe: -10}, JacORB echoed them bare and our reader read them; $n_req $ORD requests at 1.2, JacORB replied BE"
+  else
+    fail "our $ORD 1.2 requests: rc=$rc, $n_ok/6 ok, han/feff/fffe = $n_han/$n_feff/$n_fffe, texts $n_txt/2, $n_req $ORD requests at 1.2 (profile '${b2_prof:-?}'), $n_rep BE replies, FEFF sent '${sent_feff: -10}', FFFE sent '${sent_fffe: -10}'"
+    grep -E "FAIL|ok" "$D/b2.$order.out" | head -6 | sed 's/^/       /'
+  fi
+done
+
+# ── D. JacORB's 1.2 wchar reader, asked directly with the recorded forms ────
+echo "JacORB's 1.2 wchar reader (hand-built client, forms from ${RS12#"$ROOT"/})"
+d_pairs=$(python3 "$PY" recorded-pairs --rs "$RS12" --name JACORB_READER_1_2)
+d_n=$(printf '%s\n' "$d_pairs" | grep -c .)
+d_cases=$(printf '%s\n' "$d_pairs" | awk '{printf "raw:%s ", $1}')
+if [ "$d_n" -lt 1 ]; then
+  fail "no JACORB_READER_1_2 table in $RS12 — nothing to ask JacORB's reader"
+fi
+for order in be le; do
+  ORD=$(echo "$order" | tr a-z A-Z)
+  # shellcheck disable=SC2086
+  python3 "$PY" client --ior "$D/j2.ior" --log "$D/d12.$order.log" --order "$order" --expect-minor 2 \
+    $d_cases raw:02feff raw:02fffe >"$D/d12.$order.out" 2>&1
+  d_rc=$?
+  d_hit=0
+  while read -r sent echoed; do
+    [ -n "$sent" ] || continue
+    body="${echoed:2}"
+    n=$(grep -c "^  info raw:$sent: sent $sent (octets $sent) in a $ORD message; reply GIOP 1.2 BE body=$body (count 2)" "$D/d12.$order.out")
+    [ "$n" -eq 1 ] && d_hit=$((d_hit+1))
+  done <<EOF_PAIRS
+$d_pairs
+EOF_PAIRS
+  if [ "$d_rc" -eq 0 ] && [ "$d_n" -ge 1 ] && [ "$d_hit" -eq "$d_n" ]; then
+    ok "JacORB's 1.2 reader, $ORD message: $d_hit/$d_n recorded forms echoed as recorded — a mark in either order is honoured and removed, the unit read in the mark's order; unmarked is big-endian whatever the message's order"
+  else
+    fail "JacORB's 1.2 reader, $ORD message: $d_hit/$d_n forms echoed as recorded (client rc=$d_rc)"
+    grep -E "info|FAIL" "$D/d12.$order.out" | head -12 | sed 's/^/       /'
+  fi
+  d_bare=$(grep "^  info raw:02feff: " "$D/d12.$order.out" | sed 's/.*reply GIOP/reply GIOP/')
+  d_rev=$(grep "^  info raw:02fffe: " "$D/d12.$order.out" | sed 's/.*reply GIOP/reply GIOP/')
+  info "JacORB's own bare 02 fe ff (its writer's U+FEFF), $ORD message: ${d_bare:-no line} — the mark removed and nothing left, its user gets U+0000; bare 02 ff fe: ${d_rev:-no line} (not a value: it read past the wchar)"
+done
+stop "$JSRV2_PID"
+
 # ── C. our Rust client -> our Rust server at 1.0 / 1.1 / 1.2, both orders ───
 echo "our Rust client -> our Rust server (GIOP 1.0, 1.1, 1.2)"
 start_rust_server c || exit 1
@@ -289,9 +424,8 @@ for minor in 0 1 2; do
   for order in be le; do
     ORD=$(echo "$order" | tr a-z A-Z)
     case $minor in
-      2) run_our_client "c$minor.$order" "$D/c$minor.tapped.ior" "$order" 0077 D55C D83D; rc=$?
-         # U+FEFF at 1.2, on its own so its outcome is recorded and not counted.
-         "$BIN" call "$D/c$minor.tapped.ior" "$order" FEFF >"$D/c$minor.$order.feff.out" 2>&1 ;;
+      # shellcheck disable=SC2086
+      2) run_our_client "c$minor.$order" "$D/c$minor.tapped.ior" "$order" $UNITS12; rc=$? ;;
       # shellcheck disable=SC2086
       *) run_our_client "c$minor.$order" "$D/c$minor.tapped.ior" "$order" $UNITS; rc=$? ;;
     esac
@@ -309,7 +443,7 @@ for minor in 0 1 2; do
           grep -E "FAIL|ok|info" "$D/c0.$order.out" | head -4 | sed 's/^/       /'
         fi ;;
       1|2)
-        want_units=$([ "$minor" -eq 1 ] && echo 3 || echo 2)
+        want_units=$([ "$minor" -eq 1 ] && echo 3 || echo 4)
         n_units=$(grep -c "^  ok   echo_wchar\[U+[0-9A-F]*\] -> U+[0-9A-F]*  (reply id=[0-9]* GIOP 1.$minor" "$D/c$minor.$order.out")
         n_han=$(grep -c "^  ok   echo_wchar\[U+D55C\] -> U+$EXPECT_HAN  (reply id=[0-9]* GIOP 1.$minor" "$D/c$minor.$order.out")
         n_txt=$(grep -c "^  ok   echo_wstring\[.*\] -> the same .*GIOP 1.$minor" "$D/c$minor.$order.out")
@@ -324,17 +458,23 @@ for minor in 0 1 2; do
   done
   stop "$TAP_PID"
 done
-# What the 1.2 arm cannot carry, recorded and not gated. Both writers here
-# (ours and JacORB 3.9's, measured 2026-08-19 with the same binary) write
-# U+FEFF as `02 fe ff`, and both readers take a leading fe ff for the mark
-# §9.3.1.6 says to remove — JacORB hands its user U+0000, our reader refuses
-# the empty remainder with MARSHAL. codeset.rs is outside this batch; the
-# defect is named in tests/wide_1_1_from_a_peer.rs so a fix must revise it.
+# The two 1.2 units that used to cross nowhere — U+FEFF and U+FFFE, whose
+# bare octets are a mark — go out marked from our writer in both orders and
+# come back marked from our server; the round trip above already decoded them,
+# this pins the form on the wire so a writer that goes bare again is visible.
 for order in be le; do
   ORD=$(echo "$order" | tr a-z A-Z)
-  feff_line=$(grep -E "^  (ok|FAIL) +echo_wchar\[U\+FEFF\]" "$D/c2.$order.feff.out" | head -1 | sed 's/^  //')
-  feff_octets=$(whole_ending "$D/c2.tap.log" "C->S GIOP 1.2 Request size=[0-9]* $ORD" "02feff" | cut -d' ' -f2)
-  info "DEFECT recorded, not gated — U+FEFF as a 1.2 wchar, $ORD: we wrote ${feff_octets: -6}, and ${feff_line:-no line}"
+  set -- $(whole_ending "$D/c2.tap.log" "C->S GIOP 1.2 Request size=[0-9]* $ORD" "04fefffeff")
+  feff_id="${1:-}"; feff_req="${2:-}"
+  feff_rep=$(whole_ending "$D/c2.tap.log" "S->C GIOP 1.2 Reply size=[0-9]* $ORD id=${feff_id:-?} " "04fefffeff" | cut -d' ' -f2)
+  set -- $(whole_ending "$D/c2.tap.log" "C->S GIOP 1.2 Request size=[0-9]* $ORD" "04fefffffe")
+  fffe_id="${1:-}"; fffe_req="${2:-}"
+  fffe_rep=$(whole_ending "$D/c2.tap.log" "S->C GIOP 1.2 Reply size=[0-9]* $ORD id=${fffe_id:-?} " "04fefffffe" | cut -d' ' -f2)
+  if [ -n "$feff_req" ] && [ -n "$feff_rep" ] && [ -n "$fffe_req" ] && [ -n "$fffe_rep" ]; then
+    ok "1.2 $ORD: U+FEFF and U+FFFE are marked on the wire in both directions — request …${feff_req: -10} / …${fffe_req: -10}, reply …${feff_rep: -10} / …${fffe_rep: -10} (before this commit both went out as 02 fe ff / 02 ff fe and came back MARSHAL)"
+  else
+    fail "1.2 $ORD: marked FEFF request '${feff_req: -10}' reply '${feff_rep: -10}', marked FFFE request '${fffe_req: -10}' reply '${fffe_rep: -10}' — a writer went bare, or a reply did"
+  fi
 done
 stop "$RUST_PID"
 
@@ -363,6 +503,19 @@ rec_check_sans_id JACORB_REPLY_HAN "$(whole "$D/b.tap.log" "[1] S->C GIOP 1.1 Re
 set -- $(whole_ending "$D/b.tap.log" "C->S GIOP 1.1 Request size=[0-9]* LE" "5cd5")
 b_lid="${1:-}"
 rec_check_sans_id JACORB_REPLY_HAN "$(whole "$D/b.tap.log" "[2] S->C GIOP 1.1 Reply size=14 BE id=${b_lid:-?} ")" "to our real LE request"
+# At 1.2: JacORB's whole bare U+FEFF request as our real server received it,
+# our real server's marked reply to it, and JacORB's bare reply to our marked
+# request in each order (id 3 is Connection's numbering, as recorded).
+set -- $(whole_ending "$D/a2.tap.log" "C->S GIOP 1.2 Request" "02feff")
+a2_id="${1:-}"; a2_req="${2:-}"
+rec_check_in "$RS12" JACORB_REQUEST_FEFF_1_2 "$a2_req" "JacORB's bare U+FEFF request at 1.2, received by our real server"
+rec_check_in "$RS12" OUR_REPLY_FEFF_1_2_BE "$(whole "$D/a2.tap.log" "[1] S->C GIOP 1.2 Reply size=17 BE id=${a2_id:-?} ")" "our real server's marked reply to it"
+set -- $(whole_ending "$D/b2.tap.log" "C->S GIOP 1.2 Request size=[0-9]* BE" "04fefffeff")
+b2_id="${1:-}"
+rec_check_in "$RS12" JACORB_REPLY_FEFF_1_2 "$(whole "$D/b2.tap.log" "[1] S->C GIOP 1.2 Reply size=15 BE id=${b2_id:-?} ")" "JacORB's bare reply to our marked BE request"
+set -- $(whole_ending "$D/b2.tap.log" "C->S GIOP 1.2 Request size=[0-9]* LE" "04fefffeff")
+b2_lid="${1:-}"
+rec_check_in "$RS12" JACORB_REPLY_FEFF_1_2 "$(whole "$D/b2.tap.log" "[2] S->C GIOP 1.2 Reply size=15 BE id=${b2_lid:-?} ")" "JacORB's bare reply to our marked LE request"
 
 echo
 echo "logs: $D"
