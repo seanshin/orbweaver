@@ -621,6 +621,34 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **The live dynamic call's marshalling error names the argument and the path
+  inside it** (`at key.tag[2]: string is bounded at 8 but 9 were given`), on
+  the marshaller's own `Path`; `encode_named`/`decode_named` (+`_with`) added
+  to `orbweaver-dynamic`, and the mcp dry run uses the same call so a
+  prediction and a refusal read alike (it used to prepend the name itself,
+  joined with a dot the live path never wrote). Reported by f47ddcd.
+- **A union branch that is both labelled and `default:` keeps its labels** —
+  in the Python emitter, the Python runtime (form reader and writer) **and the
+  Rust emitter, which had emitted the variant twice and did not compile**;
+  `corpus/golden/29-labelled-default.idl`; Python sweep 158/132 → **170/137**,
+  0 divergences, pins moved. Reported by 50a4d12. **Found on the way, not
+  fixed here (a fix batch is in flight):** a union TypeCode with a bare
+  `default:` encodes zero label bytes while the decoder reads discriminator
+  width — our own encode→decode of golden 06's `WithDefault` TypeCode fails,
+  never red because every comparison ran both sides through the same encoder;
+  and the registry collapses `case 1: default:` to one member where omniidl
+  produces two.
+
+  **동적 호출의 마샬링 오류가 인자 이름과 내부 경로를 명시한다**(`at
+  key.tag[2]: …`), 마샬러의 `Path` 그대로; `encode_named`/`decode_named` 추가,
+  mcp 드라이런도 같은 호출을 써서 예측과 거절이 같은 문장을 쓴다. **라벨과
+  `default:`를 동시에 가진 유니온 분기가 라벨을 유지한다** — Python 이미터·
+  런타임·**Rust 이미터**(변형을 두 번 내보내 컴파일되지 않았다) 모두;
+  `corpus/golden/29`; Python 스윕 158/132 → **170/137**. 도중 발견(수정 배치
+  진행 중): 맨 `default:` 케이스의 유니온 TypeCode가 라벨 바이트를 0개
+  쓴다 — 우리 자신의 encode→decode가 실패하는데 양쪽이 같은 인코더를 지나므로
+  한 번도 빨갛지 않았다.
+
 - **Two class-B rows were `note` lines the verdict did not count.** D010 §2
   says every B row lands as a `SKIPPED — unmeasured, not passing` group; B2
   (identity through a real provider) and B3 (SSLIOP against a peer) were

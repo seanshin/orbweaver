@@ -548,19 +548,13 @@ fn predict_marshalling(
         let mut e = Encoder::new(endian);
         for p in params.iter().filter(|p| crate::carried_in(p)) {
             let v = values.get(&p.name).expect("map_arguments supplies every in parameter");
-            // The encoder's path starts inside the value; the parameter's name
-            // is prepended here so the sentence names what to fix. (The live
-            // dynamic call's own sentence does not — `invoke::write_args`
-            // encodes without a parameter path — which is reported in the
-            // batch that added this and not fixed here.)
-            orbweaver_dynamic::encode(&mut e, &p.tc, v).map_err(|err| {
-                let path = if err.path.is_empty() {
-                    p.name.clone()
-                } else {
-                    format!("{}.{}", p.name, err.path)
-                };
-                orbweaver_dynamic::Error { path, message: err.message }.to_string()
-            })?;
+            // The sentence names the parameter and the path inside it the
+            // way the live dynamic call's does since a125092 — one mechanism
+            // (`encode_named`), so `at key[2]:` reads the same in a prediction
+            // and in a refusal. This site used to prepend the name itself and
+            // joined with a dot (`key.[2]`), which the live path never wrote.
+            orbweaver_dynamic::encode_named(&mut e, &p.tc, v, &p.name)
+                .map_err(|err| err.to_string())?;
         }
         e.finish().map_err(|e| e.to_string())?;
     }
