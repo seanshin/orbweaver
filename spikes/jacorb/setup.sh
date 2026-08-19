@@ -40,5 +40,5 @@ fetch org/jboss/spec/javax/rmi/jboss-rmi-api_1.0_spec/1.0.6.Final/jboss-rmi-api_
 
 CP="lib/jacorb.jar:lib/jacorb-omgapi.jar:lib/jacorb-idl-compiler.jar:lib/jboss-rmi-api.jar:lib/slf4j-api-1.7.36.jar"
 java -cp "$CP" org.jacorb.idl.parser -d gen ../echo.idl
-javac -nowarn -cp "$CP" -d classes $(find gen -name '*.java') Client.java Server.java
+javac -nowarn -cp "$CP" -d classes $(find gen -name '*.java') Client.java Client11.java Server.java
 echo "jacorb fixture ready"
