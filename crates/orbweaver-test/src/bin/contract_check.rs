@@ -21,9 +21,10 @@
 use std::collections::BTreeMap;
 
 use orbweaver_dynamic::json::Json;
-use orbweaver_forge::{Finding, Report, Severity};
+use orbweaver_forge::{Report, Severity};
 use orbweaver_registry::Registry;
-use orbweaver_test::{check, has_defect};
+use orbweaver_test::prop::{DEFAULT_SEED, Measured};
+use orbweaver_test::{check_measured, has_defect};
 
 const DEFAULT_CASES: usize = 32;
 
@@ -70,6 +71,7 @@ fn main() -> std::process::ExitCode {
     }
 
     let mut reports: Vec<(String, Report, usize)> = Vec::new();
+    let mut measured = Measured::default();
     for path in &files {
         let src = match std::fs::read_to_string(path) {
             Ok(s) => s,
@@ -99,10 +101,8 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
         let types = registry.ids().filter(|id| registry.typecode(id).is_some()).count();
-        let report = match seed {
-            None => check(&registry, cases),
-            Some(s) => seeded_check(&registry, cases, s),
-        };
+        let (report, m) = check_measured(&registry, cases, seed.unwrap_or(DEFAULT_SEED));
+        measured.add(m);
         reports.push((path.clone(), report, types));
     }
 
@@ -129,6 +129,10 @@ fn main() -> std::process::ExitCode {
                 ("ok".to_owned(), Json::Bool(defects == 0)),
                 ("defects".to_owned(), Json::Number(defects.to_string())),
                 ("cases".to_owned(), Json::Number(cases.to_string())),
+                // How much ran, not only what was found: a leg that silently
+                // stopped running would otherwise print the same document.
+                ("cdr_roundtrips".to_owned(), Json::Number(measured.cdr.to_string())),
+                ("anyjson_crossings".to_owned(), Json::Number(measured.json.to_string())),
                 ("files".to_owned(), Json::Array(files)),
             ]))
         );
@@ -144,10 +148,18 @@ fn main() -> std::process::ExitCode {
             .flat_map(|(_, r, _)| &r.findings)
             .filter(|f| f.severity != Severity::Error)
             .count();
+        // The two counts are what ran, printed beside what was found. Until
+        // 2026-08-19 the line said "× 2 byte orders" over a sweep that never
+        // touched AnyJSON, and read exactly the same as one that did; the
+        // ratio is here so that a JSON leg that stops running is a number
+        // dropping to zero on the line the harness already reads.
         println!(
             "\n{} file(s), {types} type(s) × {cases} case(s) × 2 byte orders: {defects} \
-             property defect(s), {advice} contract finding(s)",
-            reports.len()
+             property defect(s), {} of {} CDR round trip(s) also taken across AnyJSON, {advice} \
+             contract finding(s)",
+            reports.len(),
+            measured.json,
+            measured.cdr
         );
         if defects == 0 && advice > 0 {
             println!(
@@ -157,18 +169,6 @@ fn main() -> std::process::ExitCode {
     }
 
     if defects == 0 { std::process::ExitCode::SUCCESS } else { std::process::ExitCode::FAILURE }
-}
-
-/// `check` with an explicit seed, for reproducing a reported failure.
-fn seeded_check(registry: &Registry, cases: usize, seed: u64) -> Report {
-    let mut findings: Vec<Finding> = orbweaver_test::contract::contract_findings(registry);
-    for id in registry.ids().cloned().collect::<Vec<_>>() {
-        if let Some(tc) = registry.typecode(&id) {
-            findings.extend(orbweaver_test::prop::roundtrip_property_seeded(tc, cases, seed));
-        }
-    }
-    findings.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.rule.cmp(&b.rule)));
-    Report { findings }
 }
 
 fn parse_seed(s: &str) -> Option<u64> {
