@@ -38,9 +38,13 @@
 # `--expect-permanent stay` and have a server that downgrades status 4 to 3
 # go red through the peer's behaviour (that control was run: it does).
 #
-# The expectations are the peer's. Our own cells (from the Rust test): a bare
-# Connection is printed as measured and not judged; Reference's temporary
-# cell is judged like the peer's, its permanent cell is always reported.
+# The expectations apply to every client, ours included: our cells (from the
+# Rust test, both byte orders) are judged with the same --expect-temporary and
+# --expect-permanent as the peer's. Measured 2026-08-19, after Connection
+# learned to keep its origin and Reference to cache a forward: both re-ask
+# under temporary and stay under permanent — the same cells as omniORB's.
+# Before that, Connection was Err under both and Reference re-asked under
+# both, and those cells were printed as measured and not judged.
 #
 # What it does, per status:
 #   1. Starts two spike-servers at two ephemeral ports: the target (ping
@@ -55,7 +59,7 @@
 #      reached it after the death; the client's output says what it got.
 #   Then runs crates/orbweaver-gen/tests/forward_fallback.rs — our two clients
 #   (Connection, Reference/pool) in the same shape, both byte orders — and
-#   prints its `cell` lines.
+#   judges its `cell` lines against the same expectations.
 #
 # Exit: 0 every cell as expected; 1 any cell failed or unmeasurable; 2 no
 # failure but a fixture was absent (omniORB half SKIPPED, never ok).
@@ -269,11 +273,10 @@ run_ours() {
         fail "forward_fallback passed but printed no cells — nothing measured"
         return
       fi
-      # Connection cells are printed as measured, not judged: a bare
-      # Connection holds no original address (the caller that holds the
-      # initial reference redials it), which is a decision recorded in the
-      # test — see the "found and not fixed" of the commit that added this.
-      # Reference cells are judged against the same expectations as the peer.
+      # Every cell of ours is judged against the same expectations as the
+      # peer's: §9.6's shall applies to us too, and the permanent arm is
+      # whatever the caller asked of the peer (report by default, stay for
+      # a harness that has measured its peer to stay — ours stays).
       # A here-string, not a pipe: the counters judge() bumps must survive
       # the loop, and a pipe would put it in a subshell.
       while IFS= read -r line; do
@@ -284,20 +287,8 @@ run_ours() {
         reasked=$(printf '%s' "$line" | sed -n 's/.*reasked=\([^ ]*\).*/\1/p')
         after=$(printf '%s' "$line" | sed -n 's/.*requests_at_original_after_death=\([^ ]*\).*/\1/p')
         second=$(printf '%s' "$line" | sed -n 's/.*second_call=\(.*\)$/\1/p')
-        if [ "$client" = Connection ]; then
-          printf '  ..   ours Connection  %s %s: re-asked=%s, requests at original after death=%s, next call=%s — holds no original address; the caller redials (recorded, not judged)\n' \
-            "$st" "$endian" "$reasked" "$after" "$second"
-        else
-          # Temporary is judged as the peer's is (§9.6's shall applies to us
-          # too). Permanent is reported, never asserted here: what the pool
-          # does with a permanent forward is pinned by the Rust test's own
-          # assertions and is a decision, so `--expect-permanent stay` — the
-          # right setting for a peer measured to stay — does not make our
-          # pool's re-ask a failure. It is printed as what it is: not
-          # distinguished.
-          judge "ours Reference ($endian)" "$st" "$reasked" "requests at original after death=$after, next call=$second" \
-            "$( [ "$st" = temporary ] && echo "$expect_temporary" || echo report )"
-        fi
+        judge "ours $client ($endian)" "$st" "$reasked" "requests at original after death=$after, next call=$second" \
+          "$( [ "$st" = temporary ] && echo "$expect_temporary" || echo "$expect_permanent" )"
       done <<< "$cells"
       ;;
     *)

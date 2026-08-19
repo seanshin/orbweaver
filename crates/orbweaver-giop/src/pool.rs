@@ -532,12 +532,35 @@ impl Pool {
     where
         F: Fn(&mut Encoder),
     {
+        self.attempt(ior, operation, &write_args, timeout).map_err(|f| f.error)
+    }
+
+    /// [`Pool::invoke_tracking`], keeping the one fact a caller that holds
+    /// the *original* reference needs when the call fails: whether the
+    /// request provably did not run ([`Failed::unsent`]), so it may be
+    /// issued again somewhere else — which is what [`Reference`] does under
+    /// §9.6 when a temporarily forwarded-to endpoint has gone.
+    ///
+    /// A dial that fails is `unsent` too: nothing was written. The retry
+    /// this pool spends on §13.5.1's promise is spent in here, so a failure
+    /// that comes out `unsent` has already been tried twice on this target.
+    fn attempt<F>(
+        &self,
+        ior: &Ior,
+        operation: &str,
+        write_args: &F,
+        timeout: Duration,
+    ) -> std::result::Result<(Reply, Option<Forward>), Failed>
+    where
+        F: Fn(&mut Encoder),
+    {
         let mut target = ior.clone();
         let mut followed: Option<Forward> = None;
         let mut retried = false;
         for _ in 0..MAX_FORWARD_HOPS {
-            let (mux, key) = self.acquire(&target)?;
-            match mux.call_on(&key, operation, &write_args, timeout) {
+            let (mux, key) =
+                self.acquire(&target).map_err(|error| Failed { error, unsent: true })?;
+            match mux.call_on(&key, operation, write_args, timeout) {
                 Ok(Sent::Reply(reply)) => return Ok((*reply, followed)),
                 Ok(Sent::Forward(next)) => {
                     target = next.ior().clone();
@@ -557,11 +580,11 @@ impl Pool {
                         self.inner.state.write(|s| s.stats.retried += 1);
                         continue;
                     }
-                    return Err(error);
+                    return Err(Failed { error, unsent });
                 }
             }
         }
-        Err(Error::TooManyForwards)
+        Err(Failed { error: Error::TooManyForwards, unsent: false })
     }
 
     /// Invokes a `oneway` over a pooled connection.
@@ -596,7 +619,7 @@ impl Pool {
 
     /// A reference bound to this pool, for code that wants an [`Invoker`].
     pub fn reference(&self, ior: Ior) -> Reference {
-        Reference { pool: self.clone(), ior, endian: Endian::native(), forwarded: None }
+        Reference { pool: self.clone(), ior, endian: Endian::native(), via: None, forwarded: None }
     }
 }
 
@@ -681,18 +704,53 @@ fn pick(s: &State, key: &Key, limits: Limits) -> Option<Mux> {
 /// A reference plus the pool that will carry its calls, so generated stubs —
 /// which are generic over [`Invoker`] — run over pooled, multiplexed
 /// connections without knowing it.
+///
+/// # Forwards, and §9.6
+///
+/// The pool holds connections, not references, so what a redirect means for
+/// *the reference* is decided here. Before this was decided, every call went
+/// to [`Reference::ior`] and was forwarded afresh — two round trips per call
+/// for as long as the forward stood, measured at two requests at the
+/// original for two calls (`crates/orbweaver-gen/tests/forward_fallback.rs`,
+/// before). Now the reference does what CORBA 3.4 Part 2 §9.6 describes,
+/// and what [`Connection`] does one layer down:
+///
+/// - a **temporary** forward is cached as forwarding information: the next
+///   call goes straight to where the forward pointed. When that fails and
+///   the request provably did not run — the dial failed, or the peer said
+///   `CloseConnection` on both the pool's tries (see [`Failed::unsent`]) —
+///   the cache is dropped and the call is issued again at `ior`: *"if that
+///   fails, it shall restart the location process using the original
+///   address specified in the initial object reference"*. A failure whose
+///   completion is unknown is returned as it is and drops nothing; the
+///   caller decides.
+/// - a **permanent** forward re-points the reference: `ior` becomes the
+///   forwarded-to IOR — the *may* of §9.6, taken up as
+///   [`Connection::origin`] takes it up. A `Reference` is `Clone` and a
+///   clone re-points only itself; a caller that hands copies around and
+///   wants them to agree keeps one and clones after the call, as it would
+///   with any cached fact.
+///
+/// Only the last hop of a chain reaches here (as [`Pool::invoke_tracking`]
+/// reports it), so a chain that goes permanent-then-temporary caches the
+/// temporary hop and keeps `ior` as it was; a restart from there goes back
+/// through the permanent hop, which is more than §9.6 asks and within it.
 #[derive(Debug, Clone)]
 pub struct Reference {
     pool: Pool,
     ior: Ior,
     endian: Endian,
-    /// The redirect the most recent two-way call followed, if any. See
-    /// [`Reference::forwarded`].
+    /// The forwarding information a temporary forward left: where the next
+    /// call goes instead of `ior`, until it fails unsent. See the type's
+    /// docs.
+    via: Option<Ior>,
+    /// The redirect in force. See [`Reference::forwarded`].
     forwarded: Option<Forward>,
 }
 
 impl Reference {
-    /// The reference being called.
+    /// The reference being called: what it was created with, or the last
+    /// permanent forward.
     pub fn ior(&self) -> &Ior {
         &self.ior
     }
@@ -704,25 +762,37 @@ impl Reference {
         self.endian = endian;
     }
 
-    /// The redirect the most recent invocation followed, and whether the
-    /// servant said it was for good.
+    /// The redirect in force, and whether the servant said it was for good.
     ///
-    /// The pooled counterpart of [`Connection::forwarded`], with one
-    /// difference a caller should know: a `Connection` moves to the forwarded
-    /// endpoint and stays there, so its answer describes where it *is*; a
-    /// `Reference` sends every call to [`Reference::ior`] and lets the pool
-    /// follow, so this describes what the *last two-way call* did — `None`
-    /// when it was answered where it was sent, whether or not an earlier one
-    /// was redirected. A oneway carries no reply and cannot be forwarded, and
-    /// a call that fails has its error to report instead; both leave this as
-    /// it was.
-    ///
-    /// The reference is not replaced on a permanent forward. That is the
-    /// caller's decision to make with what this reports: a `Reference` is
-    /// `Clone`, and a clone that silently re-pointed itself would disagree
-    /// with its siblings about which object it names.
+    /// The pooled counterpart of [`Connection::forwarded`], and it now reads
+    /// the same way: where the reference's calls *are* going. `None` until a
+    /// call is redirected; [`Forward::Temporary`] while that forwarding
+    /// information is cached — the calls it carries are answered where they
+    /// are sent and it stays — and back to `None` when a §9.6 restart lands
+    /// a call at [`Reference::ior`] again; [`Forward::Permanent`] once the
+    /// reference has been re-pointed, until the next redirect. A oneway
+    /// carries no reply and cannot be forwarded, and a call whose failure
+    /// drops nothing leaves this as it was.
     pub fn forwarded(&self) -> Option<&Forward> {
         self.forwarded.as_ref()
+    }
+
+    /// Records what a two-way call followed. `None` means answered where it
+    /// was sent, which changes nothing: a cached temporary forward stays
+    /// cached, a re-pointed reference stays re-pointed.
+    fn note(&mut self, followed: Option<Forward>) {
+        match followed {
+            Some(Forward::Temporary(to)) => {
+                self.via = Some(to.clone());
+                self.forwarded = Some(Forward::Temporary(to));
+            }
+            Some(Forward::Permanent(to)) => {
+                self.ior = to.clone();
+                self.via = None;
+                self.forwarded = Some(Forward::Permanent(to));
+            }
+            None => {}
+        }
     }
 }
 
@@ -732,17 +802,34 @@ impl Invoker for Reference {
     }
 
     fn invoke<F: Fn(&mut Encoder)>(&mut self, operation: &str, write_args: F) -> Result<Reply> {
-        let (reply, forwarded) = self.pool.invoke_tracking(
-            &self.ior,
-            operation,
-            write_args,
-            crate::mux::DEFAULT_CALL_TIMEOUT,
-        )?;
-        self.forwarded = forwarded;
+        let timeout = crate::mux::DEFAULT_CALL_TIMEOUT;
+        if let Some(via) = self.via.clone() {
+            match self.pool.attempt(&via, operation, &write_args, timeout) {
+                Ok((reply, followed)) => {
+                    self.note(followed);
+                    return Ok(reply);
+                }
+                Err(Failed { error, unsent: false }) => return Err(error),
+                Err(Failed { unsent: true, .. }) => {
+                    // The forwarding information failed and the request did
+                    // not run: §9.6's restart, at the original address, in
+                    // this same call. The dropped error is the target's
+                    // refusal; whatever the original says next is the answer.
+                    self.via = None;
+                    self.forwarded = None;
+                }
+            }
+        }
+        let (reply, followed) =
+            self.pool.invoke_tracking(&self.ior, operation, write_args, timeout)?;
+        self.note(followed);
         Ok(reply)
     }
 
     fn invoke_oneway<F: Fn(&mut Encoder)>(&mut self, operation: &str, write_args: F) -> Result<()> {
+        // To the reference itself, never the cache: a oneway cannot be
+        // forwarded, so a oneway sent to a temporary target would be a
+        // request the servant never redirected there.
         self.pool.invoke_oneway(&self.ior, operation, write_args)
     }
 }

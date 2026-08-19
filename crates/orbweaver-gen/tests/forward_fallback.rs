@@ -34,28 +34,30 @@
 //!
 //! This file measures our two clients in that shape — two live servers at
 //! two addresses, the first forwarding to the second, the second then
-//! stopped — and pins what each does. Neither assertion below is the spec's
-//! *shall*: they are what the code does today, written down so that a change
-//! goes red and is made on purpose (see each test's doc comment for how the
-//! measurement reads against §9.6). The peer half — omniORB 4.3.4's client in
-//! the same shape, against two `spike-server` processes — is
-//! `spikes/perm_fallback.sh`, which also runs this file and reads its `cell`
-//! lines.
+//! stopped — and asserts what each does. Both now distinguish the two
+//! statuses: they restart at the original under temporary and stay under
+//! permanent, which is what omniORB 4.3.4 was measured to do (the peer half —
+//! omniORB's client in the same shape, against two `spike-server` processes —
+//! is `spikes/perm_fallback.sh`, which also runs this file and reads its
+//! `cell` lines and judges them the same way). Before this landed, neither
+//! did: `Connection` held no original address and was `Err` under both;
+//! `Reference` re-asked the original on every call under both.
 //!
 //! What each test is for:
 //!
-//! * [`connection_does_not_fall_back_under_either_status`] — a bare
-//!   [`Connection`] moves to the forwarded endpoint and *is* that socket: it
-//!   holds no original address, so when the endpoint dies the next call is an
-//!   error under temporary and under permanent alike, and the original sees
-//!   nothing;
-//! * [`reference_re_asks_the_original_under_either_status`] — a pooled
-//!   [`Reference`] sends every call to the reference it holds and follows the
-//!   forward each time, so it re-asks the original on every call while the
-//!   target is alive and again after it dies — under both statuses. It never
-//!   replaces its reference on a permanent forward (spec-permitted; the
-//!   caller decides, with `Reference::forwarded`), which is why the pool
-//!   cannot distinguish the two either.
+//! * [`connection_restarts_at_the_origin_after_a_temporary_forward_only`] —
+//!   a bare [`Connection`] moves to the forwarded endpoint and keeps
+//!   [`Connection::origin`]. When the endpoint dies, the next call — whose
+//!   `CloseConnection` says it was not processed — is redialled at the
+//!   origin and answered there under temporary; under permanent the origin
+//!   *is* the forwarded-to address, so the call is an error and the old
+//!   address sees nothing;
+//! * [`reference_caches_a_forward_and_restarts_at_the_original_after_a_temporary_one`]
+//!   — a pooled [`Reference`] caches a temporary forward's target and sends
+//!   the next call straight there (one request at the original for two
+//!   calls, not two); when the target dies it drops the cache and restarts
+//!   at the original. A permanent forward re-points the reference, so the
+//!   death is an error and the old address sees nothing.
 
 mod emitted;
 
@@ -257,26 +259,28 @@ fn cell(client: &str, for_good: bool, endian: Endian, reasked: bool, after: u32,
 // ── Connection ───────────────────────────────────────────────────────────────
 
 /// A `Connection` that followed a forward *is* the socket to the forwarded-to
-/// endpoint (`Connection::invoke` replaces itself with the new connection),
-/// and it holds no original address to go back to. When that endpoint dies,
-/// the next call is an error under both statuses, and the original address
-/// sees no second request. Against §9.6: the "shall restart the location
-/// process using the original address" is not something a bare `Connection`
-/// does — the caller that holds the initial reference redials it. That is
-/// what this pins; whether `Connection` should keep the initial IOR and
-/// redial it itself after a *temporary* forward's target dies is a change to
-/// `lib.rs`, reported with this measurement and not made here.
+/// endpoint and keeps the reference it was dialled from as its origin. When
+/// the endpoint dies, the next call meets the `CloseConnection` the stopping
+/// server sent — §13.5.1: not processed, safe to re-send — and under a
+/// *temporary* forward `Connection::invoke` reuses the forwarding information
+/// (a redial, refused: the port is closed) and then restarts at the origin,
+/// where the request is answered; `forwarded()` is `None` again. Under a
+/// *permanent* forward the origin was replaced by the forwarded-to IOR, so
+/// there is nowhere to fall back to: the call is an error, the old address
+/// sees no second request, and a third call is no different.
 #[test]
-fn connection_does_not_fall_back_under_either_status() {
+fn connection_restarts_at_the_origin_after_a_temporary_forward_only() {
     for for_good in [false, true] {
         for endian in [Endian::Big, Endian::Little] {
             let what = format!("{} {endian:?}", status(for_good));
             let (mut original, mut landing, forwarding, asked) = two_servers(for_good);
             let old = original.reference("old");
+            let new = landing.reference("new");
 
             let mut conn = Connection::connect(&old, Duration::from_secs(5)).expect("connect");
             conn.cap_version(Version::V1_2);
             conn.set_endian(endian);
+            assert_eq!(conn.origin(), &old, "{what}: dialled from the old reference");
             let mut client = DirectoryClient::new(conn);
 
             // Followed, answered by the new object, and the status reported.
@@ -284,6 +288,10 @@ fn connection_does_not_fall_back_under_either_status() {
             let followed = client.conn.forwarded().expect("a forward was followed");
             assert_eq!(followed.is_permanent(), for_good, "{what}");
             assert_eq!(asked.load(Ordering::SeqCst), 1, "{what}: one request at the original");
+            // A temporary forward leaves the origin alone; a permanent one
+            // is the servant's leave to replace it, taken.
+            assert_eq!(client.conn.origin(), if for_good { &new } else { &old }, "{what}");
+            assert_eq!(client.conn.endian(), endian, "{what}: byte order survives the hop");
 
             // The forwarded-to server dies; the original would now answer.
             landing.stop();
@@ -296,12 +304,22 @@ fn connection_does_not_fall_back_under_either_status() {
                 Err(e) => format!("Err({e})"),
             };
             cell("Connection", for_good, endian, after > 0, after, &second_text);
-            assert!(second.is_err(), "{what}: the socket it holds is to the dead endpoint");
-            assert_eq!(after, 0, "{what}: the original was not re-asked");
-            // And it stays down: a third call is no different, because a
-            // Connection with a broken stream has nowhere else to go.
-            assert!(client.label().is_err(), "{what}");
-            assert_eq!(asked.load(Ordering::SeqCst), 1, "{what}");
+            if for_good {
+                assert!(second.is_err(), "{what}: the origin is the dead address now");
+                assert_eq!(after, 0, "{what}: the old address was not re-asked");
+                assert!(client.conn.forwarded().is_some_and(Forward::is_permanent), "{what}");
+                // And it stays down: nothing to restart from.
+                assert!(client.label().is_err(), "{what}");
+                assert_eq!(asked.load(Ordering::SeqCst), 1, "{what}");
+            } else {
+                assert_eq!(second.expect("restarted at the origin"), "original", "{what}");
+                assert_eq!(after, 1, "{what}: one request at the original after the death");
+                assert!(client.conn.forwarded().is_none(), "{what}: at the origin again");
+                assert_eq!(client.conn.endian(), endian, "{what}: byte order survives the restart");
+                // Now *at* the origin: the next call goes there directly.
+                assert_eq!(client.label().expect("served at the origin"), "original", "{what}");
+                assert_eq!(asked.load(Ordering::SeqCst), 3, "{what}");
+            }
             original.stop();
         }
     }
@@ -309,24 +327,23 @@ fn connection_does_not_fall_back_under_either_status() {
 
 // ── Reference (the pool) ─────────────────────────────────────────────────────
 
-/// A pooled `Reference` sends every call to the reference it holds and lets
-/// the pool follow the forward each time — so the original is asked on every
-/// call, alive or dead, under both statuses: the count at the original is
-/// the number of calls made. After the target dies the next call reaches the
-/// original and is answered there. Against §9.6: the temporary "shall
-/// restart at the original address" holds, in the strong form of never having
-/// left it; the permanent "may replace the old IOR" is not taken up (the
-/// reference is not replaced — `Reference::forwarded` reports the leave and
-/// the caller decides). So this client cannot distinguish the two statuses
-/// either, and pays a round trip to the original on every call while the
-/// forward stands.
+/// A pooled `Reference` caches a temporary forward's target: the second call
+/// goes straight there and the original is not asked again (it was, before
+/// this landed — two round trips per call for as long as the forward stood).
+/// When the target dies, the call fails unsent — the pool's own retry finds
+/// the port refusing — so the cache is dropped and the call restarts at the
+/// original, which answers it: `forwarded()` is `None` again. A permanent
+/// forward re-points the reference — `ior()` is the new address — so after
+/// the death there is nowhere to go back to and the call is an error; the old
+/// address sees nothing.
 #[test]
-fn reference_re_asks_the_original_under_either_status() {
+fn reference_caches_a_forward_and_restarts_at_the_original_after_a_temporary_one() {
     for for_good in [false, true] {
         for endian in [Endian::Big, Endian::Little] {
             let what = format!("{} {endian:?}", status(for_good));
             let (mut original, mut landing, forwarding, asked) = two_servers(for_good);
             let old = original.reference("old");
+            let new = landing.reference("new");
 
             let pool = Pool::new();
             let mut r = pool.reference(old.clone());
@@ -337,26 +354,43 @@ fn reference_re_asks_the_original_under_either_status() {
             let followed = client.conn.forwarded().expect("a forward was followed");
             assert_eq!(followed.is_permanent(), for_good, "{what}");
             assert_eq!(asked.load(Ordering::SeqCst), 1, "{what}");
+            assert_eq!(client.conn.ior(), if for_good { &new } else { &old }, "{what}");
 
-            // Target still alive: the second call goes to the original again
-            // and is forwarded again — the pool cached nothing.
-            assert_eq!(client.label().expect("followed again"), "relocated", "{what}");
-            assert_eq!(asked.load(Ordering::SeqCst), 2, "{what}: re-asked while alive");
-            assert!(client.conn.forwarded().is_some(), "{what}");
+            // Target still alive: the second call goes straight to it — the
+            // forward is cached (temporary) or the reference re-pointed
+            // (permanent) — and the original is not asked again.
+            assert_eq!(client.label().expect("answered at the target"), "relocated", "{what}");
+            assert_eq!(asked.load(Ordering::SeqCst), 1, "{what}: not re-asked while alive");
+            assert_eq!(
+                client.conn.forwarded().map(Forward::is_permanent),
+                Some(for_good),
+                "{what}: the redirect in force is still reported"
+            );
 
             landing.stop();
             forwarding.store(false, Ordering::SeqCst);
 
             let third = client.label();
-            let after = asked.load(Ordering::SeqCst) - 2;
+            let after = asked.load(Ordering::SeqCst) - 1;
             let third_text = match &third {
                 Ok(label) => format!("Ok({label})"),
                 Err(e) => format!("Err({e})"),
             };
             cell("Reference", for_good, endian, after > 0, after, &third_text);
-            assert_eq!(third.expect("answered at the original"), "original", "{what}");
-            assert_eq!(after, 1, "{what}: one request at the original after the death");
-            assert!(client.conn.forwarded().is_none(), "{what}: answered where it was sent");
+            if for_good {
+                assert!(third.is_err(), "{what}: the reference is the dead address now");
+                assert_eq!(after, 0, "{what}: the old address was not re-asked");
+                assert_eq!(client.conn.ior(), &new, "{what}: still re-pointed");
+                assert!(client.label().is_err(), "{what}");
+                assert_eq!(asked.load(Ordering::SeqCst), 1, "{what}");
+            } else {
+                assert_eq!(third.expect("restarted at the original"), "original", "{what}");
+                assert_eq!(after, 1, "{what}: one request at the original after the death");
+                assert!(client.conn.forwarded().is_none(), "{what}: the cache is dropped");
+                assert_eq!(client.conn.ior(), &old, "{what}");
+                assert_eq!(client.label().expect("served at the original"), "original", "{what}");
+                assert_eq!(asked.load(Ordering::SeqCst), 3, "{what}");
+            }
             original.stop();
         }
     }
