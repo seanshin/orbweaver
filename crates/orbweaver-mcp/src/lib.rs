@@ -61,7 +61,7 @@ use orbweaver_giop::Connection;
 use orbweaver_registry::{AttributeSig, Entry, OperationSig, ParamDirection, Registry};
 
 use embed::{VectorIndex, Via};
-use handles::CapabilityTable;
+use handles::{CapabilityTable, SharedTable};
 use identity::Caller;
 use policy::{Approval, Denied, Exposure};
 
@@ -246,7 +246,11 @@ pub struct Bridge<'a> {
     /// Both are snapshots taken in [`Bridge::new`] and neither is mutable
     /// afterwards, so they cannot drift apart.
     exposure: Exposure,
-    handles: CapabilityTable,
+    /// This session's capability table — shared with every
+    /// [`guard::Guarded`] this bridge issues, so the static path's dry run
+    /// resolves a declared handle against the same table the dynamic path
+    /// does. See [`handles::SharedTable`].
+    handles: SharedTable,
     /// §4.5's interceptor stack: the gates that decide a call, the telemetry
     /// stage that counts it (§7.3 stream B's promotion statistics — a hot,
     /// stable dynamic path is a candidate for a static stub, and the counts
@@ -276,7 +280,7 @@ impl<'a> Bridge<'a> {
             registry,
             chain: interceptor::Chain::standard(exposure.clone()),
             exposure,
-            handles: CapabilityTable::new(session),
+            handles: handles::shared(session),
             caller: None,
             vectors: None,
         }
@@ -302,7 +306,7 @@ impl<'a> Bridge<'a> {
     /// Uses a capability table the caller already has, for a bridge that keeps
     /// session state elsewhere.
     pub fn with_handles(mut self, handles: CapabilityTable) -> Self {
-        self.handles = handles;
+        self.handles = std::rc::Rc::new(std::cell::RefCell::new(handles));
         self
     }
 
@@ -328,8 +332,20 @@ impl<'a> Bridge<'a> {
     }
 
     /// The session's capability table.
-    pub fn handles(&mut self) -> &mut CapabilityTable {
-        &mut self.handles
+    ///
+    /// A guard borrowed from a shared cell rather than a plain `&mut`, because
+    /// the table is one the session's static guards hold too
+    /// ([`Bridge::connect_static`]); it derefs to the table, so
+    /// `bridge.handles().issue_checked(&ior)` reads as it always did. Hold it
+    /// no longer than the call — a guard alive across a bridge method would
+    /// contend with the bridge's own borrow.
+    pub fn handles(&mut self) -> std::cell::RefMut<'_, CapabilityTable> {
+        self.handles.borrow_mut()
+    }
+
+    /// The same table, for a [`guard::Guarded`] this session issues.
+    pub(crate) fn shared_handles(&self) -> SharedTable {
+        std::rc::Rc::clone(&self.handles)
     }
 
     /// What this session may reach.
@@ -349,7 +365,7 @@ impl<'a> Bridge<'a> {
         search_interfaces(
             self.registry,
             &self.exposure,
-            &self.handles,
+            &self.handles.borrow(),
             query,
             limit,
             self.vectors.as_ref(),
@@ -373,7 +389,7 @@ impl<'a> Bridge<'a> {
         check_handle(
             self.registry,
             &self.exposure,
-            &self.handles,
+            &self.handles.borrow(),
             handle,
             operation,
             approval,
@@ -443,7 +459,7 @@ impl<'a> Bridge<'a> {
             approval,
             arguments: Some(args),
         };
-        dryrun::predict_with(&mut self.chain, &ctx, &self.handles).to_json()
+        dryrun::predict_with(&mut self.chain, &ctx, &*self.handles.borrow()).to_json()
     }
 
     /// The same question for every operation of one interface.
@@ -495,16 +511,22 @@ impl<'a> Bridge<'a> {
         approval: Approval,
         timeout: std::time::Duration,
     ) -> Result<guard::Guarded<'a, Connection>, ToolError> {
-        let Some(id) = self.handles.type_of(handle).map(str::to_owned) else {
-            return Err(ToolError::UnknownHandle(handle.to_owned()));
-        };
-        let Some(ior) = orbweaver_dynamic::anyjson::References::resolve(&self.handles, handle)
-        else {
-            return Err(ToolError::UnknownHandle(handle.to_owned()));
+        let (id, ior) = {
+            let table = self.handles.borrow();
+            let Some(id) = table.type_of(handle).map(str::to_owned) else {
+                return Err(ToolError::UnknownHandle(handle.to_owned()));
+            };
+            let Some(ior) = orbweaver_dynamic::anyjson::References::resolve(&*table, handle) else {
+                return Err(ToolError::UnknownHandle(handle.to_owned()));
+            };
+            (id, ior)
         };
         let conn = Connection::connect(&ior, timeout)
             .map_err(invoke::InvokeError::Transport)
             .map_err(ToolError::Invoke)?;
+        // The guard shares this session's table rather than holding a copy of
+        // it: a handle its dry run is asked about is one this session issued,
+        // and it resolves — or has been revoked — as of the moment of asking.
         Ok(guard::Guarded::assemble(
             conn,
             self.registry,
@@ -512,6 +534,7 @@ impl<'a> Bridge<'a> {
             self.caller.clone(),
             id,
             approval,
+            self.shared_handles(),
         ))
     }
 
@@ -549,7 +572,7 @@ impl<'a> Bridge<'a> {
         // decision is recorded by the same audit stage as every other one —
         // named by the handle, since it never resolved to a target, and
         // counted by nobody, since there is no path to count it against.
-        let Some(id) = self.handles.type_of(handle).map(str::to_owned) else {
+        let Some(id) = self.handles.borrow().type_of(handle).map(str::to_owned) else {
             let refused = ToolError::UnknownHandle(handle.to_owned());
             let ctx = interceptor::CallContext {
                 registry: self.registry,
@@ -588,7 +611,7 @@ impl<'a> Bridge<'a> {
             conn,
             self.registry,
             &self.exposure,
-            &mut self.handles,
+            &mut self.handles.borrow_mut(),
             handle,
             operation,
             args,
@@ -705,6 +728,15 @@ pub(crate) fn carried_in(p: &orbweaver_registry::ParamSig) -> bool {
 /// which arguments are missing, extra or malformed. `params` may name `out`
 /// parameters; they are neither required nor reported as extra, which is what
 /// this did before it was shared.
+///
+/// A mapping error inside a value is reported **under the parameter's name**:
+/// `at acct: no reference is held under handle "cap_…"`, `at entry.kids[0].label:
+/// …`. The mapper is asked at each value's root, so its own path starts inside
+/// the value; without the prefix a caller with two `Account` parameters could
+/// not tell which handle was refused, and the dry run's static test for a
+/// declared handle asked exactly that and could not be answered. The
+/// missing-argument sentence already named the parameter; this is the same
+/// rule for the errors beneath it.
 pub(crate) fn map_arguments(
     operation: &str,
     params: &[orbweaver_registry::ParamSig],
@@ -728,7 +760,11 @@ pub(crate) fn map_arguments(
                 message: format!("{operation} needs an argument {:?}", p.name),
             });
         };
-        values.insert(p.name.clone(), anyjson::from_json(&p.tc, j, refs)?);
+        let value = anyjson::from_json(&p.tc, j, refs).map_err(|e| orbweaver_dynamic::Error {
+            path: if e.path.is_empty() { p.name.clone() } else { format!("{}.{}", p.name, e.path) },
+            message: e.message,
+        })?;
+        values.insert(p.name.clone(), value);
     }
     let extra: Vec<&str> =
         given.keys().map(String::as_str).filter(|k| !params.iter().any(|p| p.name == *k)).collect();
@@ -2113,6 +2149,7 @@ mod tests {
             Some(Caller::new("alice")),
             "IDL:bank/Account:1.0".to_owned(),
             Approval::default(),
+            b.shared_handles(),
         );
         let _ = g.invoke("deposit", |_| {});
 

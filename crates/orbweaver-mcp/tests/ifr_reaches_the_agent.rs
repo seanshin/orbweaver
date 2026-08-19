@@ -25,9 +25,29 @@ fn ir_subset() -> Registry {
     reg
 }
 
-/// A value for `tc`, minimal but complete — every member present.
+/// How deep a witness nests before a sequence is allowed to be empty.
+///
+/// The IFR subset has no recursive type, so no description here reaches it;
+/// it is the same ceiling `prop.rs`'s sampler keeps, and it exists so that the
+/// one shape which *would* need it — a description that one day names itself
+/// through a sequence — terminates as an empty list at the ceiling instead of
+/// never, rather than so that anything below the ceiling may be empty.
+const MAX_DEPTH: usize = 8;
+
+/// A value for `tc`, minimal but complete — every member present, and **every
+/// sequence carrying one element** below [`MAX_DEPTH`].
+///
+/// It used to give `Sequence => []` unconditionally, which made this the third
+/// witness (after `prop.rs`'s and `python_target.rs`'s, 1b6b4c8) whose green
+/// proved nothing about a sequence's *contents*: `OperationDescription`'s
+/// parameters, exceptions and contexts, and `FullInterfaceDescription`'s
+/// operations and attributes — the parts of an IFR answer an agent actually
+/// reads — crossed as `[]` every time, so a mapping that mangled a
+/// `ParameterDescription` inside `ParDescriptionSeq` would have passed here.
+/// Now the element is produced one level down and a member without a value
+/// shape fails the test loudly through `?` instead of hiding as an empty list.
 fn witness(tc: &TypeCode, depth: usize) -> Option<Value> {
-    if depth > 8 {
+    if depth > MAX_DEPTH {
         return None;
     }
     Some(match tc {
@@ -46,7 +66,16 @@ fn witness(tc: &TypeCode, depth: usize) -> Option<Value> {
         TypeCode::String(_) => Value::String("x".into()),
         TypeCode::WString(_) => Value::WString("한".into()),
         TypeCode::Enum { members, .. } => Value::Enum(members.first()?.clone()),
-        TypeCode::Sequence { .. } => Value::List(Vec::new()),
+        // One element, at the elements' depth. The empty list is the honest
+        // value only at the ceiling; anywhere else it is a witness that
+        // measures nothing about what the sequence carries.
+        TypeCode::Sequence { element, .. } => {
+            if depth >= MAX_DEPTH {
+                Value::List(Vec::new())
+            } else {
+                Value::List(vec![witness(element, depth + 1)?])
+            }
+        }
         TypeCode::Array { element, length } => {
             Value::List((0..*length).map(|_| witness(element, depth + 1)).collect::<Option<_>>()?)
         }
@@ -67,6 +96,26 @@ fn witness(tc: &TypeCode, depth: usize) -> Option<Value> {
     })
 }
 
+/// How many lists in `v` carry at least one element, and how many carry none.
+fn lists(v: &Value) -> (usize, usize) {
+    match v {
+        Value::List(items) => {
+            let (mut full, mut empty) = if items.is_empty() { (0, 1) } else { (1, 0) };
+            for item in items {
+                let (f, e) = lists(item);
+                full += f;
+                empty += e;
+            }
+            (full, empty)
+        }
+        Value::Struct(members) => members.iter().fold((0, 0), |(f, e), (_, m)| {
+            let (mf, me) = lists(m);
+            (f + mf, e + me)
+        }),
+        _ => (0, 0),
+    }
+}
+
 /// Every description the IFR facade hands back must survive the agent's
 /// mapping and reproduce the same CDR. Named by repository id, so a contract
 /// that drops one fails here rather than quietly shrinking the claim.
@@ -80,6 +129,13 @@ fn every_ifr_description_crosses_to_the_agent_and_back() {
         "IDL:omg.org/CORBA/OperationDescription:1.0",
         "IDL:omg.org/CORBA/InterfaceDef/FullInterfaceDescription:1.0",
     ];
+    // The two descriptions made of sequences of the others, and what an agent
+    // reads out of an IFR answer. Named, so that a description losing its
+    // sequence members fails here rather than quietly shrinking the claim.
+    let carries_sequences = [
+        "IDL:omg.org/CORBA/OperationDescription:1.0",
+        "IDL:omg.org/CORBA/InterfaceDef/FullInterfaceDescription:1.0",
+    ];
     for id in wanted {
         let tc = reg
             .typecode(id)
@@ -87,6 +143,14 @@ fn every_ifr_description_crosses_to_the_agent_and_back() {
             .clone();
         let v = witness(&tc, 0)
             .unwrap_or_else(|| panic!("{id} has a member with no value shape at all"));
+        // The witness is worth the assertions below only if its sequences
+        // hold something. This is the check that was missing while the
+        // witness gave `[]` for every sequence and the test stayed green.
+        let (full, empty) = lists(&v);
+        if carries_sequences.contains(&id) {
+            assert!(full >= 1, "{id}: every sequence in the witness is empty ({empty} of them)");
+            assert_eq!(empty, 0, "{id}: {empty} sequence(s) crossed empty and proved nothing");
+        }
 
         let mut h = LocalReferences::new();
         let j = to_json(&tc, &v, &mut h)

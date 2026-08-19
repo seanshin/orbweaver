@@ -780,6 +780,7 @@ mod tests {
             Some(Caller::new("alice")),
             ACCOUNT.to_owned(),
             Approval::default(),
+            crate::handles::shared("s-test"),
         );
         assert!(guarded.chain_mut().trace(Trace::new(
             "s-static",
@@ -862,6 +863,7 @@ mod tests {
             Some(Caller::new("alice")),
             ACCOUNT.to_owned(),
             Approval::default(),
+            crate::handles::shared("s-test"),
         );
         assert!(guarded.chain_mut().trace(Trace::new(
             "s-raised",

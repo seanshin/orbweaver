@@ -36,14 +36,25 @@
 //!
 //! # Nothing reaches the wire
 //!
-//! No [`orbweaver_giop::Invoker`], no `Connection`, no capability handle
-//! resolved, no argument marshalled. Two of those are structural rather than
-//! careful: [`crate::Bridge::dry_run`] takes no connection parameter to be
-//! passed one, and it is keyed by **repository id rather than by handle** —
-//! before a deployment there is no handle to hold, and resolving one is the
-//! step that produces an address. `a_dry_run_never_touches_the_invoker` makes
-//! the remaining half a test: a [`crate::guard::Guarded`] whose invoker panics
-//! on contact dry-runs its whole interface and completes.
+//! No [`orbweaver_giop::Invoker`], no `Connection`, and — asked without values
+//! — no capability handle resolved and no argument marshalled. Two of those
+//! are structural rather than careful: [`crate::Bridge::dry_run`] takes no
+//! connection parameter to be passed one, and it is keyed by **repository id
+//! rather than by handle** — before a deployment there is no handle to hold,
+//! and resolving one is the step that produces an address.
+//! `a_dry_run_never_touches_the_invoker` makes the remaining half a test: a
+//! [`crate::guard::Guarded`] whose invoker panics on contact dry-runs its
+//! whole interface and completes.
+//!
+//! Asked *with* values, a declared object reference in them **is** resolved —
+//! against the session's own table, on both paths ([`crate::Bridge::dry_run_with`]
+//! and [`crate::guard::Guarded::dry_run_with`] share it) — because the mapper
+//! cannot say whether `{"_ref": h}` fits an `Account` parameter without
+//! knowing whether `h` names one. Resolving is not dialing: the address goes
+//! into the prediction's dropped buffer and into no report, and the invoker
+//! is still not in reach; the guard's
+//! `a_declared_handle_resolves_in_the_static_dry_run_and_dials_nothing` holds
+//! that with the same detonating transport.
 //!
 //! Telemetry is untouched for a reason of its own. [`crate::promote::CallStats`]
 //! drives promotion (§7.3 stream B); a hypothetical counted as a call would
@@ -1114,6 +1125,7 @@ mod tests {
             Some(Caller::new("alice").with_scope("accounts:write")),
             ACCOUNT.to_owned(),
             Approval::default(),
+            crate::handles::shared("s-test"),
         );
         let mut allowed = 0;
         for operation in ["balance", "deposit", "close", "touch", "no_such_op"] {
@@ -1262,6 +1274,7 @@ mod tests {
             Some(Caller::new("alice").with_scope("accounts:write")),
             ACCOUNT.to_owned(),
             Approval::default(),
+            crate::handles::shared("s-test"),
         );
         assert!(g.chain_mut().trace(Trace::new(
             "s-dry-values",
