@@ -23,22 +23,30 @@
 //! * [`an_unknown_object_is_refused_before_the_operation_is_looked_at`];
 //! * [`a_moved_object_answers_with_a_location_forward`] — the seam that used
 //!   to be a silent `None`;
+//! * [`an_object_moved_for_good_answers_with_location_forward_perm`] — the
+//!   status the encoder could always write and no skeleton could ever ask
+//!   for, read raw off the wire under every version and both byte orders,
+//!   with the temporary servant beside it as the control;
+//! * [`omniorb_follows_a_permanent_forward_from_a_generated_skeleton`] — the
+//!   same, with a client we did not write, and the count of requests that
+//!   reached the old reference under each status;
 //! * [`the_generated_map_adapter_serves_a_value_per_object`];
 //! * [`servants_routes_between_two_generated_skeletons_by_key`].
 
 mod emitted;
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use orbweaver_cdr::{Encoder, Endian};
-use orbweaver_gen::rt::{self, Dispatch, ObjRef, ObjectHome, Servants, Server};
+use orbweaver_gen::rt::{self, Dispatch, Forward, ObjRef, ObjectHome, Servants, Server};
 use orbweaver_giop::server::{Request, decode_request};
 use orbweaver_giop::{
-    Connection, DEFAULT_MAX_MESSAGE_SIZE, Error as GiopError, Ior, Version, encode_request,
-    read_message,
+    Connection, DEFAULT_MAX_MESSAGE_SIZE, Error as GiopError, Ior, ReplyStatus, Version,
+    decode_reply, encode_request, read_message,
 };
 
 use emitted::f_24_skeleton_surface::gc24::{GaugeRefs, GaugeSkeleton};
@@ -71,6 +79,15 @@ struct Tree {
     minted: u64,
     /// oid → the oid it moved to. See the forward test.
     moved: BTreeMap<String, String>,
+    /// Whether a move is announced as `LOCATION_FORWARD_PERM` rather than
+    /// `LOCATION_FORWARD`. See the permanent-forward test.
+    for_good: bool,
+    /// oid → how many requests were addressed to it. Shared, so a test can
+    /// read it after the server has taken the tree; counted in `redirect`
+    /// because that is asked once per request that passed `knows`, before
+    /// anything else — which is what makes it the count of requests that
+    /// *reached the old reference*, whatever the client did with the answer.
+    asked: Arc<Mutex<BTreeMap<String, u32>>>,
 }
 
 impl Tree {
@@ -79,6 +96,17 @@ impl Tree {
         let mut t = Self::default();
         t.nodes.insert(String::new(), Node { label: "root".into(), ..Node::default() });
         t
+    }
+
+    /// A tree in which `old` has moved to `new`, announced temporarily or for
+    /// good, plus the request counter it will fill in.
+    fn moved(for_good: bool) -> (Self, Arc<Mutex<BTreeMap<String, u32>>>) {
+        let mut t = Self::new();
+        t.nodes.insert("new".into(), Node { label: "relocated".into(), ..Node::default() });
+        t.moved.insert("old".into(), "new".into());
+        t.for_good = for_good;
+        let asked = t.asked.clone();
+        (t, asked)
     }
 
     fn node(&self, at: &DirectoryTarget<'_>) -> Result<&Node, DirectoryFault> {
@@ -106,6 +134,14 @@ impl DirectoryServant for Tree {
     fn forward(&mut self, at: &DirectoryTarget<'_>) -> Option<Ior> {
         let to = self.moved.get(at.oid())?;
         Some(at.refs().ior(to))
+    }
+
+    /// The temporary case goes through `forward` above, exactly as a servant
+    /// written before `redirect` existed would; only *permanent* needs this.
+    fn redirect(&mut self, at: &DirectoryTarget<'_>) -> Option<Forward> {
+        *self.asked.lock().expect("counter").entry(at.oid().to_owned()).or_default() += 1;
+        let to = self.forward(at)?;
+        Some(if self.for_good { Forward::Permanent(to) } else { Forward::Temporary(to) })
     }
 
     fn label(&mut self, at: &DirectoryTarget<'_>) -> Result<String, DirectoryFault> {
@@ -395,6 +431,304 @@ fn a_moved_object_answers_with_a_location_forward() {
         );
     });
 }
+
+/// One request on the wire, addressed to `key`, and the reply it got — read
+/// off the socket by hand so the assertion is on the reply status the peer
+/// would see, not on what our client made of it.
+fn raw_call(
+    ior: &Ior,
+    key: &[u8],
+    version: Version,
+    endian: Endian,
+    operation: &str,
+) -> (Vec<u8>, orbweaver_giop::Reply) {
+    let p = &ior.profiles[0];
+    let mut s = std::net::TcpStream::connect((p.host.as_str(), p.port)).expect("connect");
+    let wire = encode_request(version, endian, 7, key, operation, true, |_| {}).expect("encode");
+    s.write_all(&wire).expect("send");
+    let msg = read_message(&mut s, DEFAULT_MAX_MESSAGE_SIZE).expect("a reply");
+    // The status is a u32 after the header and, in 1.2, the request id; in
+    // 1.0/1.1 the (empty) service-context list and the request id come first.
+    // Kept raw here because `decode_reply` maps the number to a name, and the
+    // claim under test is about the number.
+    let raw = msg.bytes.clone();
+    (raw, decode_reply(msg).expect("decode reply"))
+}
+
+/// The status number at its offset in a raw reply, per the version's layout.
+fn raw_status(reply: &[u8], version: Version, endian: Endian) -> u32 {
+    let at = if version.is_1_2_layout() { 16 } else { 20 };
+    let word: [u8; 4] = reply[at..at + 4].try_into().expect("four bytes");
+    match endian {
+        Endian::Big => u32::from_be_bytes(word),
+        Endian::Little => u32::from_le_bytes(word),
+    }
+}
+
+/// `LOCATION_FORWARD_PERM`, from a generated skeleton, on the wire.
+///
+/// The encoder could always write status 4 and had tests saying so; what no
+/// skeleton could do was *ask* for it — `rt::Dispatch::forward` returned an
+/// `Ior`, and the server mapped every `Some` to status 3. `redirect` is the
+/// hook that can say permanent, and this reads what the server put on the
+/// wire for it: 4 to a 1.2 peer, 3 to a 1.0/1.1 peer (whose
+/// `ReplyStatusType_1_0` has no 4 — a downgrade, not a refusal), and 3 from
+/// the servant beside it that only ever said temporary. Then through our own
+/// client, which follows both and can now report which it followed.
+#[test]
+fn an_object_moved_for_good_answers_with_location_forward_perm() {
+    // At the dispatcher, first: the generated `redirect` decodes the key and
+    // hands back the servant's decision intact, and `forward` — the temporary
+    // hook — still answers as it did, for a caller driving the skeleton
+    // directly.
+    let refs = refs_at(4321);
+    let (tree, _) = Tree::moved(true);
+    let mut skeleton = DirectorySkeleton::new(refs.clone(), tree);
+    match skeleton.redirect(&request(&refs.key_of("old"), "count", |_| {})) {
+        Some(Forward::Permanent(to)) => assert_eq!(to.profiles[0].object_key, refs.key_of("new")),
+        other => panic!("expected a permanent forward, got {other:?}"),
+    }
+    assert!(skeleton.redirect(&request(ROOT, "count", |_| {})).is_none());
+    // And through the multiplexer, which must delegate `redirect` itself:
+    // the trait default would ask its `forward`, the temporary hook, and hear
+    // nothing from a servant that only answers `redirect`.
+    let mut many = Servants::new().with(skeleton);
+    assert!(matches!(
+        many.redirect(&request(&refs.key_of("old"), "count", |_| {})),
+        Some(Forward::Permanent(_))
+    ));
+    let (tree, _) = Tree::moved(false);
+    let mut skeleton = DirectorySkeleton::new(refs.clone(), tree);
+    assert!(matches!(
+        skeleton.redirect(&request(&refs.key_of("old"), "count", |_| {})),
+        Some(Forward::Temporary(_))
+    ));
+
+    // Then on the wire, both servants, every version, both byte orders.
+    for (for_good, want_at_1_2) in [(true, 4u32), (false, 3u32)] {
+        let (tree, asked) = Tree::moved(for_good);
+        with_server(tree, |ior| {
+            let refs = DirectoryRefs::new(ObjectHome::new(
+                "127.0.0.1",
+                ior.profiles[0].port,
+                ROOT.to_vec(),
+            ));
+            let old_key = refs.key_of("old");
+            for version in VERSIONS {
+                for endian in [Endian::Big, Endian::Little] {
+                    let what = format!("for_good={for_good} {version} {endian:?}");
+                    let (raw, reply) = raw_call(ior, &old_key, version, endian, "_get_label");
+                    // Below 1.2 there is no status 4 to send.
+                    let want = if version.is_1_2_layout() { want_at_1_2 } else { 3 };
+                    assert_eq!(raw_status(&raw, version, endian), want, "{what}");
+                    let want_status = ReplyStatus::from_u32(want, version).expect("a status");
+                    assert_eq!(reply.status, want_status, "{what}");
+                    let mut b = reply.body().expect("body");
+                    let to = Ior::read_from(&mut b).expect("the new reference");
+                    assert_eq!(to.profiles[0].object_key, refs.key_of("new"), "{what}");
+                }
+            }
+            let raw_calls = asked.lock().expect("counter").get("old").copied().unwrap_or(0);
+            assert_eq!(raw_calls, 6, "one raw request per version and byte order");
+
+            // Through our client: followed either way, answered by the new
+            // object, and the client can now say which status it followed.
+            let mut old = ior.clone();
+            old.profiles[0].object_key = old_key.clone();
+            for version in VERSIONS {
+                for endian in [Endian::Big, Endian::Little] {
+                    let what = format!("for_good={for_good} {version} {endian:?}");
+                    let mut client = DirectoryClient::new(connect(&old, version, endian));
+                    assert!(client.conn.forwarded().is_none(), "{what}: nothing followed yet");
+                    for _ in 0..5 {
+                        assert_eq!(client.label().expect("the forward is followed"), "relocated");
+                    }
+                    let followed = client.conn.forwarded().expect("a forward was followed");
+                    assert_eq!(followed.ior().profiles[0].object_key, refs.key_of("new"));
+                    // A 1.0/1.1 client was told status 3 and reports what it
+                    // was told; only a 1.2 client can be told permanent.
+                    let permanent_expected = for_good && version.is_1_2_layout();
+                    assert_eq!(followed.is_permanent(), permanent_expected, "{what}");
+                }
+            }
+            // Six clients, five calls each, and the old reference saw each
+            // client exactly once: `Connection::invoke` moves to the forwarded
+            // endpoint and stays there, for a temporary forward as much as for
+            // a permanent one (§9.4.3.2 permits it). So through *this* client
+            // the two statuses are indistinguishable by request count — a
+            // fact, recorded here so nobody expects the count to be the
+            // oracle. The status byte above is.
+            let after = asked.lock().expect("counter").get("old").copied().unwrap_or(0);
+            assert_eq!(after - raw_calls, 6, "for_good={for_good}: one request per client");
+            eprintln!(
+                "for_good={for_good}: requests at the old reference from our client: {} \
+                 (six clients × five calls); at the new: {}",
+                after - raw_calls,
+                asked.lock().expect("counter").get("new").copied().unwrap_or(0)
+            );
+        });
+    }
+}
+
+// ── LOCATION_FORWARD_PERM, with a client we did not write ────────────────────
+
+/// omniORB's Python client against the same generated skeleton: does it
+/// follow status 4 from us, and how many requests reach the old reference
+/// under each status?
+///
+/// omniORB is a fixture, never a dependency (`CLAUDE.md`): a separate process
+/// over TCP, nothing linked. What is *asserted* is that omniORB followed our
+/// `LOCATION_FORWARD_PERM` and was answered by the new object, five calls
+/// running. What is *reported* is the request count at the old reference under
+/// each status — reported, not asserted, because whether omniORB re-asks a
+/// temporarily-forwarded reference is its policy, and the two counts are what
+/// the number is, not what anyone hoped it would be.
+///
+/// When the fixture is absent the test reports what it did not measure and
+/// passes; `run_checks.sh` is where an absent fixture is a counted skip.
+#[test]
+fn omniorb_follows_a_permanent_forward_from_a_generated_skeleton() {
+    let Some(dir) = omniidl_python_stubs() else {
+        eprintln!(
+            "UNMEASURED: omniORB's Python client is absent (omniidl or the omniORB \
+             module); the interop half of this test did not run"
+        );
+        return;
+    };
+    let script = dir.path().join("drive.py");
+    std::fs::write(&script, PYTHON_FOLLOWER).expect("write the driver");
+
+    let mut counts = BTreeMap::new();
+    for for_good in [false, true] {
+        let (tree, asked) = Tree::moved(for_good);
+        let mut output = String::new();
+        with_server(tree, |ior| {
+            let refs = DirectoryRefs::new(ObjectHome::new(
+                "127.0.0.1",
+                ior.profiles[0].port,
+                ROOT.to_vec(),
+            ));
+            let mut old = ior.clone();
+            old.profiles[0].object_key = refs.key_of("old");
+            let ior_path = dir.path().join(format!("old-{for_good}.ior"));
+            std::fs::write(&ior_path, old.to_stringified().expect("stringify")).expect("ior");
+            let out = std::process::Command::new("python3")
+                .arg(&script)
+                .arg(&ior_path)
+                .current_dir(dir.path())
+                .output()
+                .expect("run python3");
+            output = String::from_utf8_lossy(&out.stdout).into_owned();
+            if !out.status.success() {
+                panic!(
+                    "omniORB's client failed (for_good={for_good}):\nstdout:\n{output}\nstderr:\n{}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+        });
+        eprintln!("omniORB python client (for_good={for_good}) said:\n{output}");
+        assert_eq!(
+            output.matches("label -> relocated").count(),
+            5,
+            "for_good={for_good}: five calls on the old reference, each answered by the new \
+             object:\n{output}"
+        );
+        assert!(output.contains("OK"), "{output}");
+        let asked = asked.lock().expect("counter").clone();
+        counts.insert(for_good, asked);
+    }
+    let at = |for_good: bool, oid: &str| counts[&for_good].get(oid).copied().unwrap_or(0);
+    // Reported, never asserted: see the doc comment.
+    eprintln!(
+        "omniORB 4.3.x, five calls on a moved reference: requests at the OLD reference — \
+         temporary {}, permanent {}; at the NEW — temporary {}, permanent {}",
+        at(false, "old"),
+        at(true, "old"),
+        at(false, "new"),
+        at(true, "new"),
+    );
+}
+
+/// Runs `omniidl -bpython` over the corpus file, into a temporary directory.
+fn omniidl_python_stubs() -> Option<TempDir> {
+    let importable = std::process::Command::new("python3")
+        .args(["-c", "import omniORB"])
+        .output()
+        .ok()
+        .is_some_and(|o| o.status.success());
+    if !importable {
+        return None;
+    }
+    let dir = TempDir::new("orbweaver-forward")?;
+    let idl = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../corpus/golden/26-object-identity.idl");
+    // `omniidl -bpython` names the module after the file, and
+    // `26-object-identity_idl` is not a Python identifier.
+    let copied = dir.path().join("identity26.idl");
+    std::fs::copy(&idl, &copied).ok()?;
+    let out = std::process::Command::new("omniidl")
+        .args(["-bpython", "-C"])
+        .arg(dir.path())
+        .arg(&copied)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        eprintln!("omniidl -bpython failed: {}", String::from_utf8_lossy(&out.stderr));
+        return None;
+    }
+    Some(dir)
+}
+
+/// A temporary directory that removes itself. Same shape as the one in
+/// `servant_faults.rs`, and unique the same way, for the same reason.
+struct TempDir(std::path::PathBuf);
+
+impl TempDir {
+    fn new(prefix: &str) -> Option<Self> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nanos =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.subsec_nanos();
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("{prefix}-{}-{nanos}-{n}", std::process::id()));
+        std::fs::create_dir_all(&path).ok()?;
+        Some(Self(path))
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Fixed text, never generated. Five reads of the label through the *old*
+/// reference; every one must be answered by the object it moved to.
+const PYTHON_FOLLOWER: &str = r#"import sys, os
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from omniORB import CORBA
+import identity26_idl  # noqa: F401  -- registers the gc26 module
+import gc26
+
+orb = CORBA.ORB_init(sys.argv, CORBA.ORB_ID)
+with open(sys.argv[1]) as f:
+    ior = f.read().strip()
+
+obj = orb.string_to_object(ior)
+node = obj._narrow(gc26.Directory)
+if node is None:
+    print("NARROW FAILED")
+    sys.exit(1)
+for _ in range(5):
+    print("label ->", node._get_label())
+print("OK")
+"#;
 
 // ── The other shape ──────────────────────────────────────────────────────────
 
