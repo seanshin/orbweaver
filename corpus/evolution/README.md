@@ -119,3 +119,58 @@ directory holds the half a person can produce from IDL. Nothing under
 default의 타입을 바꾼 음성 대조군 (exit 1, 두 변경 모두 이름으로). 위치로
 비교하던 차분기는 끼워 넣은 case만 보고했다. 이제 라벨 있는 case는 라벨로,
 default는 `default_index`로 — 역할로 비교한다. 서비스되지 않고 수정되지 않는다.
+
+---
+
+## Approvals — what `idl-diff --approve` writes beside a proposed contract
+
+Every pair here is a negative control: the in-place edit must exit 1. Since
+2026-08-19 there is a way to make it exit 0 that is not editing the code, and
+this section is about why none of it lives in this directory.
+
+`idl-diff <released> <proposed> --approve <reason> --approver <name>` appends
+one row per blocking finding to an **approval store** — `--approvals <file>`,
+or by default `<proposed>.approvals.tsv` beside the proposed file — with these
+columns:
+
+```text
+released  proposed  released_sha256  proposed_sha256  id  verdict  what  reason  approver  approved_at
+```
+
+- **`approver` is required** (`--approver`, or `ORBWEAVER_APPROVER`); without
+  it the run exits 2 before reading a file. A store with a blank approver or a
+  blank reason in any row is refused whole, exit 2. Nothing is signed: this is
+  the name that used to be in a chat log, put where `git blame` and the console
+  can see it.
+- **A row binds to bytes.** The two digests are SHA-256 over every file in each
+  translation unit, root first — for a single file, what `shasum -a 256` prints;
+  for `v1/ledger.idl`, `cat v1/ledger.idl v1/common.idl | shasum -a 256`. Edit
+  either side, including a shared header, and the row is reported as *given for
+  a different revision* and the gate refuses again.
+- **A re-run reads the store** when it exists: covered findings print
+  `[approved by <who>: <reason>] <when>` and do not fail the exit code; a
+  finding with no row, or only a stale one, still exits 1. Without `--approve`
+  nothing is written.
+- **Replay is byte-identical apart from `approved_at`**, because findings come
+  out of the differ in a stable order and a finding already covered is not
+  written twice; `SOURCE_DATE_EPOCH` pins the timestamp for a harness that
+  wants the whole file identical.
+
+The console's `diff` page reads the same store (`--approvals`, or the default)
+and renders who, why, when and whether it still applies — as words. It writes
+nothing and refuses nothing.
+
+**No store is committed under `corpus/evolution/`**, and
+`crates/orbweaver-registry/tests/approval_replay.rs` fails if one appears: a
+`moe.idl.approvals.tsv` beside `moe/v1.1-in-place/moe.idl` would turn the
+harness's negative control green with no code changed. Approvals for corpus
+pairs are written to a scratch directory and thrown away.
+
+`idl-diff --approve <이유> --approver <이름>` 은 이제 출력 한 줄이 아니라
+`<proposed>.approvals.tsv` 에 파괴적 판정 하나당 한 행을 기록한다. 승인자는
+필수이며(없으면 exit 2), 이름이 빈 행이 하나라도 있으면 저장소 전체를 거부한다.
+행은 경로가 아니라 두 번역 단위의 바이트(SHA-256, 포함 헤더까지)에 묶이므로
+한 바이트만 고쳐도 다시 거부된다. 재실행은 시각 열을 빼면 바이트까지 같다.
+콘솔 `diff` 페이지는 같은 저장소를 읽어 누가·왜·언제를 글로 그리고, 쓰지도
+결정하지도 않는다. **이 디렉터리에는 저장소를 커밋하지 않는다** — 음성
+대조군 옆의 저장소는 코드 변경 없이 하네스를 초록으로 만든다.
