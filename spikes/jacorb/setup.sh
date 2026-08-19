@@ -40,5 +40,9 @@ fetch org/jboss/spec/javax/rmi/jboss-rmi-api_1.0_spec/1.0.6.Final/jboss-rmi-api_
 
 CP="lib/jacorb.jar:lib/jacorb-omgapi.jar:lib/jacorb-idl-compiler.jar:lib/jboss-rmi-api.jar:lib/slf4j-api-1.7.36.jar"
 java -cp "$CP" org.jacorb.idl.parser -d gen ../echo.idl
-javac -nowarn -cp "$CP" -d classes $(find gen -name '*.java') Client.java Client11.java Server.java
+# wide.idl is the wchar contract (D010 B5): echo.idl has no wchar operation and
+# every fixture implements echo.idl, so the single wide character got its own.
+java -cp "$CP" org.jacorb.idl.parser -d gen ../wide.idl
+javac -nowarn -cp "$CP" -d classes $(find gen -name '*.java') Client.java Client11.java Server.java \
+      WideServer.java WideClient.java
 echo "jacorb fixture ready"
