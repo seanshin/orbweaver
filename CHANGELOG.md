@@ -454,6 +454,29 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **PLAN §5, §8, §11, §12 — the five class-D rows D010 §6 named.** The §5
+  *Automation target* column (seven percentages, no instrument) moved to §11
+  as aspiration A9; *contract tests auto-generated* audited (nothing generates
+  a test) and kept at **none** with A8; the first-pass / three-rounds rows
+  restated against `forge-pipeline`'s actual per-stage `first-pass:` /
+  `rounds:` / `result:` lines; the §8 CDR row no longer asks for byte-identity
+  against a reference ORB — it names the decoded-value, re-encoded-outside-
+  padding and derived-TypeCode comparisons that exist; §12 action 3 annotated
+  as historical with A6 / D010 B6 as the trigger's home. Found and not fixed:
+  `README.md` restates both target tables without instruments, and its
+  assumption-B targets (≥ 60 % / ≥ 95 %) differ from PLAN's — a sixth row of
+  the class, outside this batch.
+
+  **PLAN §5·§8·§11·§12 — D010 §6이 지목한 클래스 D 다섯 행.** §5의 *자동화
+  목표* 열은 §11의 지향 A9로 이동; *계약 테스트 자동 생성률*은 감사 후(테스트를
+  생성하는 것이 없음) **없음**으로 유지하고 A8; 1차 통과율·3회 내 통과율 행은
+  `forge-pipeline`이 실제로 찍는 단계별 줄에 맞춰 재기술; §8 CDR 행은 더 이상
+  참조 ORB 대상 바이트 동일을 요구하지 않고 실재하는 비교 셋을 명시; §12
+  액션 3은 역사적 기록으로 주석. `README.md`가 같은 표를 계측기 없이 다시
+  적고 있음 — 같은 클래스의 여섯째 행, 이 배치 밖.
+
+### Fixed / 수정
+
 - **CI had been red for ten consecutive runs while the local harness was
   green, on three causes, none of them in the code.** Found by reading the
   runs before planning the next batch rather than after landing it.
