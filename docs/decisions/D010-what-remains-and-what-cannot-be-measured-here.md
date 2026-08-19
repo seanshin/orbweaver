@@ -64,8 +64,9 @@ split the organising principle rather than a caveat.
 
 A batch that lands a class-B item and reports green has committed the error
 this project's honesty rules exist for. The harness already models this
-(`SKIPPED — unmeasured, not passing`, currently 3 groups); every B row below
-must land as a fourth, fifth, sixth such group, not as an `ok`.
+(`SKIPPED — unmeasured, not passing`, 3 groups when this was written, 5 since
+2026-08-19 — B2 and B3 were `note` lines the verdict did not count); every B
+row below must land as such a group, not as an `ok`.
 
 B류를 초록으로 보고하는 배치는 이 프로젝트의 정직성 규칙이 막으려는 바로 그
 실수를 저지른 것이다. 하네스는 이미 이것을 모델링한다(`SKIPPED — unmeasured,
@@ -236,6 +237,7 @@ docker already follow. None may report `ok`.
   predicted here.**
 
 ### B2. Identity through a real provider — *stream C, `orbweaver-identity`*
+> *SKIPPED group landed 2026-08-19: it names the two missing things — a peer advertising a CSIv2 mechanism list and an issuer (`ORBWEAVER_IDP_URL`) — and goes FAIL, not ok, on the day both are present and nothing measures them.*
 - **State.** CSIv2 wire, GSSUP, mech lists, delegation policy, the `Caller`
   seam, the token→`Caller` exchange as a *trait this project does not
   implement*, and a scope audit. **Nothing has been through a real identity
@@ -248,6 +250,7 @@ docker already follow. None may report `ok`.
   wrong in the accepting direction interoperates perfectly.
 
 ### B3. SSLIOP against a peer — *stream C*
+> *SKIPPED group landed 2026-08-19: the probe is `from omniORB import sslTP` itself; a present module prints a distinct line ("IS present here and the peer proof is not built yet") so an available fixture nobody measures is visible.*
 - **State.** Built behind an off-by-default feature; in-process rustls tests
   green; **peer proof BLOCKED** because brew's omniORBpy ships no `sslTP`.
 - **Missing.** An omniORB build with SSL, or JacORB's SSL transport configured.

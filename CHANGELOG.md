@@ -599,6 +599,26 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **Two class-B rows were `note` lines the verdict did not count.** D010 §2
+  says every B row lands as a `SKIPPED — unmeasured, not passing` group; B2
+  (identity through a real provider) and B3 (SSLIOP against a peer) were
+  prose after an `ok`. Both are counted SKIPPED groups now, each naming its
+  fixture: a peer advertising a CSIv2 mechanism list plus an issuer
+  (`ORBWEAVER_IDP_URL`) — and FAIL, not ok, on the day both exist and nothing
+  measures them; `from omniORB import sslTP` as the probe, with a distinct
+  line if the module is present somewhere and the peer proof still is not
+  built. Harness SKIPPED count 3 → 5. **The first version of that probe was
+  itself the gate-green-measuring-nothing class:** it grepped its own marker
+  out of an `ImportError` traceback that echoes the source line, and reported
+  `sslTP` present where it is not — caught on the first run by reading the
+  harness's line against the shell's; the probe is the interpreter's exit code
+  now.
+
+  **B류 두 행이 판정이 세지 않는 `note`였다.** B2(실제 제공자 통한 신원)와
+  B3(피어 대상 SSLIOP)는 `ok` 뒤의 문장이었다. 이제 둘 다 픽스처를 이름 붙인
+  SKIPPED 그룹이며, 픽스처가 있는데 재지 않는 날에는 ok가 아니라 FAIL이다.
+  하네스 SKIPPED 3 → 5.
+
 - **AnyJSON: a value beneath a `TypeCode::Recursive` marker now crosses in
   both directions** (found by D010 A4; `to_json`/`from_json` resolved aliases
   only, so `Reading { kids: sequence<Reading> }` with a child failed "is not a

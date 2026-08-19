@@ -664,6 +664,26 @@ if RUSTFLAGS="-D warnings" cargo test -p orbweaver-giop --features ssliop --quie
 else
   echo "  FAIL the ssliop build does not build cleanly or does not test"; ssl_fail=1
 fi
+# D010 B3: SSLIOP against a peer. A class-B row lands as a SKIPPED group
+# naming its fixture. The fixture is omniORBpy's `sslTP` (brew's build ships
+# none — spikes/tls/PEER-STATUS.md) or JacORB's SSL transport configured; the
+# probe is the import itself, captured then matched. If the module IS present
+# somewhere (CI builds omniORBpy from source), the line says so distinctly —
+# an available fixture nobody measures is the thing to notice, not a pass.
+# The probe is the interpreter's exit code, NOT a marker grepped from its
+# output: the first version printed 'sslTP present' and grepped for it, and
+# the ImportError traceback echoes the source line — so the gate matched its
+# own probe text and reported the module present where it is not. The class
+# the session record calls "a grep that caught its own comment", caught by
+# reading the line the harness printed against what the shell said.
+if python3 -c "import omniORB.sslTP" >/dev/null 2>&1; then
+  echo "  SKIPPED  omniORBpy sslTP IS present here and the peer proof is not built yet — build it"
+  echo "           (spikes/tls/PEER-STATUS.md names the shape); unmeasured, not passing (D010 B3)"
+else
+  echo "  SKIPPED  no SSL peer — omniORBpy has no sslTP here and JacORB SSL is not configured;"
+  echo "           SSLIOP against a peer is unmeasured, not passing (D010 B3, spikes/tls/PEER-STATUS.md)"
+fi
+skipped=$((skipped+1))
 [ "$ssl_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
 hr "orbweaver-idl — our parser against the oracle"
@@ -2293,8 +2313,23 @@ else
   echo "  SKIPPED  JacORB half — fixture absent"
   skipped=$((skipped+1))
 fi
-echo "  note CSIv2 encoding is unit-tested in both byte orders; no peer here enforces it,"
-echo "       so interop remains a per-peer claim and is unmeasured (docs/PLAN.md §4.8)"
+# D010 B2: identity through a real provider. Until 2026-08-19 this was a
+# `note`, which the verdict line does not count; a class-B row lands as a
+# SKIPPED group naming its fixture, never as prose. The fixture is two things:
+# a peer that advertises a CSIv2 mechanism list (neither installed ORB does —
+# measured just above) and an OIDC/JWT issuer to exchange a token against
+# (`ORBWEAVER_IDP_URL`). When both are present this line becomes the
+# measurement; until then the deliberately-empty verifier stays empty, and a
+# verifier wrong in the accepting direction would interoperate perfectly.
+if [ -n "${ORBWEAVER_IDP_URL:-}" ] && ! printf '%s' "$csi" | grep -q "advertises no mechanism list"; then
+  echo "  FAIL an identity provider and a CSIv2 peer are configured and nothing here measures them yet (D010 B2)"
+  fail_total=$((fail_total+1))
+else
+  echo "  SKIPPED  no peer advertises CSIv2 and no issuer is configured (ORBWEAVER_IDP_URL) — identity"
+  echo "           through a real provider is unmeasured, not passing (D010 B2; CSIv2 encoding is"
+  echo "           unit-tested in both byte orders, PLAN §4.8)"
+  skipped=$((skipped+1))
+fi
 [ "$id_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
 # ── Static generation: stream B ──────────────────────────────────────────────
