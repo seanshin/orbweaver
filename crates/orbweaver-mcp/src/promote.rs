@@ -581,6 +581,7 @@ mod tests {
             Some(Caller::new("alice")),
             "IDL:bank/Account:1.0".to_owned(),
             Approval::default(),
+            crate::handles::shared("s-test"),
         );
         g.dry_run("balance");
         let hypothetical = g.audit().last().expect("the dry run was recorded").clone();
@@ -618,6 +619,7 @@ mod tests {
             Some(Caller::new("alice")),
             "IDL:bank/Account:1.0".to_owned(),
             Approval::default(),
+            crate::handles::shared("s-test"),
         );
         // A ledger with room for the marker and two lines, overflowed.
         assert!(g.chain_mut().audit_capacity(3));
@@ -706,6 +708,7 @@ mod tests {
             caller,
             "IDL:bank/Account:1.0".to_owned(),
             Approval::default(),
+            crate::handles::shared("s-test"),
         );
         let _ = g.invoke("balance", |_| {});
         g.audit().last().expect("the guard recorded the decision").clone()

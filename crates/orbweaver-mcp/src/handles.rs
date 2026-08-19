@@ -30,12 +30,35 @@
 //! directly, so the source is `/dev/urandom`; this is a Unix-only assumption
 //! and it is stated rather than discovered.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::Read;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use orbweaver_dynamic::anyjson::References;
 use orbweaver_giop::Ior;
+
+/// One session's table, held by everything that answers for that session.
+///
+/// A [`crate::Bridge`] owns its session's table, and a
+/// [`crate::guard::Guarded`] it issues through `connect_static` needs the same
+/// one — not a copy — so that a handle declared to the static path's dry run
+/// resolves the way the dynamic path would resolve it, and a handle issued or
+/// revoked after the guard was assembled is seen by both. A snapshot would
+/// have been a second table to drift from the first, which is the shape
+/// [`crate::dryrun`] refuses for the policy and refuses here for the same
+/// reason. Shared the way [`crate::quota::Quota`] shares its ledger, and
+/// crate-private: nothing outside hands a table to a guard, so the confused
+/// deputy — one session's connection over another session's handles — stays
+/// inexpressible.
+pub(crate) type SharedTable = Rc<RefCell<CapabilityTable>>;
+
+/// A [`SharedTable`] for a fresh session — the tests' and the bridge's one
+/// constructor for one.
+pub(crate) fn shared(session: impl Into<String>) -> SharedTable {
+    Rc::new(RefCell::new(CapabilityTable::new(session)))
+}
 
 /// How long a handle stays usable.
 ///

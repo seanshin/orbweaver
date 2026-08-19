@@ -6,7 +6,7 @@
 //!                      [--assume-effect <ai_effect value>] \
 //!                      [--as <principal>] [--scope <scope>]... \
 //!                      [--map-scope <token-scope>=<contract-scope>]... [--token-scope <s>]... \
-//!                      [--dry-run [<IDL:module/Iface:1.0>]] \
+//!                      [--dry-run[=<IDL:module/Iface:1.0[.operation]>]] [--dry-run-args <json>] \
 //!                      [--trace <path>|-] [--trace-ts <rfc3339>] \
 //!                      [--quota <calls>] [--quota-scope <everything|caller|interface|operation>] \
 //!                      [--audit-capacity <lines>]
@@ -80,6 +80,37 @@
 //! without serving anything. No target is dialled and `--ior` is not required,
 //! because the question is asked before there is a deployment to point at. It
 //! is the instrument for signing an exposure off; see `orbweaver_mcp::dryrun`.
+//!
+//! Three grains, one grammar. `--dry-run` surveys everything `--expose` names;
+//! `--dry-run=<id>` surveys one interface, exposed or not; and
+//! `--dry-run=<id>.<operation>` — the operation split off exactly as `--expose`
+//! splits it — asks about **one operation** and prints that operation's own
+//! document (`orbweaver_mcp::dryrun::Prediction::to_json`: `would`, `declared`,
+//! the refusing `stage` and `why`, every stage's part) instead of a survey.
+//! That is the grain at which values can be declared:
+//!
+//! ```text
+//! --dry-run=IDL:gc27/Ledger:1.0.keep --dry-run-args '{"key":"123456789","entry":{…}}'
+//! ```
+//!
+//! `--dry-run-args <json>` is the AnyJSON object an agent would send as the
+//! call's arguments. With it the prediction also says whether the payload would
+//! **marshal** against the contract's `TypeCode`s — the library maps and encodes
+//! it in both byte orders into a buffer that is dropped — and the row carries
+//! `payload: marshals` or `payload: would_not_marshal` with `payload_why`; a
+//! payload that would not fit an operation the gate would otherwise allow turns
+//! `would` to `marshal` and names `raises` (`MARSHAL`). A `string<8>` given
+//! nine characters predicts `allow` without values and `marshal` with them: the
+//! value-less question is a policy verdict and says so by saying nothing about
+//! a payload. Handles in the arguments resolve against this run's own table,
+//! which holds nothing — a `--dry-run` issues no handle — so a declared
+//! reference predicts `would_not_marshal` here, and the sentence names the
+//! handle. Still no target: nothing is dialed with values any more than
+//! without them (`orbweaver_mcp::dryrun`, "Nothing reaches the wire").
+//!
+//! 값과 함께 물으면 예측은 페이로드가 계약의 `TypeCode`에 맞는지도 답한다 —
+//! 양쪽 바이트 순서로, 버려지는 버퍼에 인코딩해서. 값 없이 물은 예측은 정책의
+//! 답일 뿐이며, 페이로드에 대해 아무 말도 하지 않는 것으로 그렇다고 말한다.
 //!
 //! # `--map-scope`: the vocabulary gap, made loud before a call
 //!
@@ -241,6 +272,26 @@ fn quota_for(limit: Option<u64>, scope: &str) -> Result<Option<Quota>, String> {
     Ok(Some(Quota::new(limit, scope, Renewal::Never)))
 }
 
+/// `IDL:m/I:1.0[.operation]` — the interface, and the operation if one is
+/// named. The **one** reading of that grammar, for `--expose` and `--dry-run=`
+/// alike.
+///
+/// The operation is split at the last dot. A repository id ends in its
+/// *version*, `:1.0`, which has a dot in it, so the trailing part is only an
+/// operation when it looks like an IDL identifier: a bare `IDL:spike/Echo:1.0`
+/// used to be read as the interface `IDL:spike/Echo:1` with an operation named
+/// `0`, which allowlisted an interface nobody had and exposed nothing. The
+/// first `--dry-run` report run against a real IDL file said
+/// `id: IDL:spike/Echo:1, operation: 0, declared: false`, which is how this
+/// was found.
+fn split_operation(spec: &str) -> (&str, Option<&str>) {
+    let identifier = |op: &str| op.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_');
+    match spec.rsplit_once('.') {
+        Some((id, op)) if identifier(op) && !op.contains(':') => (id, Some(op)),
+        _ => (spec, None),
+    }
+}
+
 /// Emits every audit line written since `from` to stderr, and returns the new
 /// watermark.
 ///
@@ -296,6 +347,7 @@ fn main() -> std::process::ExitCode {
     let mut mapping_given = false;
     let mut dry_run = false;
     let mut dry_run_only: Option<String> = None;
+    let mut dry_run_args: Option<Json> = None;
     let mut trace_to: Option<String> = None;
     let mut trace_ts: Option<String> = None;
     let mut quota_limit: Option<u64> = None;
@@ -353,6 +405,20 @@ fn main() -> std::process::ExitCode {
                 dry_run = true;
                 Ok(())
             }
+            // The arguments a call would carry, as the AnyJSON object an agent
+            // would send. Parsed here so a malformed document is a usage error
+            // and not a prediction about a payload nobody described.
+            "--dry-run-args" => next("--dry-run-args").and_then(|v| match Json::parse(&v) {
+                Ok(Json::Object(fields)) => {
+                    dry_run_args = Some(Json::Object(fields));
+                    Ok(())
+                }
+                Ok(other) => Err(format!(
+                    "--dry-run-args: the arguments are a JSON object, got {}",
+                    other.kind()
+                )),
+                Err(e) => Err(format!("--dry-run-args: {e}")),
+            }),
             "--trace" => next("--trace").map(|v| trace_to = Some(v)),
             "--trace-ts" => next("--trace-ts").map(|v| trace_ts = Some(v)),
             "--quota" => next("--quota").and_then(|v| match v.parse::<u64>() {
@@ -380,14 +446,17 @@ fn main() -> std::process::ExitCode {
                      [-I <dir>]... [--expose <id[.operation]>]... [--assume-effect <value>] \
                      [--as <principal>] [--scope <scope>]... \
                      [--map-scope <token>=<contract>]... [--token-scope <scope>]... \
-                     [--dry-run[=<id>]] [--trace <path>|-] [--trace-ts <rfc3339>] \
+                     [--dry-run[=<id[.operation]>]] [--dry-run-args <json>] \
+                     [--trace <path>|-] [--trace-ts <rfc3339>] \
                      [--quota <calls>] [--quota-scope <everything|caller|interface|operation>] \
                      [--audit-capacity <lines>]"
                 );
                 return std::process::ExitCode::SUCCESS;
             }
             // `--dry-run=<id>` asks about one interface, exposed or not, which
-            // is the "what if I allowlisted this?" question.
+            // is the "what if I allowlisted this?" question; `<id>.<operation>`
+            // asks about one operation, which is the grain values are declared
+            // at. Which it is is decided below by `split_operation`.
             other => match other.strip_prefix("--dry-run=") {
                 Some(id) => {
                     dry_run = true;
@@ -411,6 +480,20 @@ fn main() -> std::process::ExitCode {
             "usage: orbweaver-mcp-server --idl <file.idl>... --ior <file> [-I <dir>]...   \
              (--ior is not needed with --dry-run; -I resolves #include, as sidl-validate \
              spells it)"
+        );
+        return std::process::ExitCode::from(2);
+    }
+    // Three grains, one grammar (`split_operation`): everything, one
+    // interface, or one operation — and only the last can take values,
+    // because values are an answer about one call. Values with nothing to
+    // apply them to are a usage error, refused before anything is read
+    // rather than silently surveyed without them: a report that dropped the
+    // payload would read as a report about it.
+    let one = dry_run_only.as_deref().map(split_operation);
+    if dry_run_args.is_some() && !matches!(one, Some((_, Some(_)))) {
+        eprintln!(
+            "--dry-run-args needs one operation to apply the values to: \
+             --dry-run=<IDL:module/Iface:1.0>.<operation>"
         );
         return std::process::ExitCode::from(2);
     }
@@ -440,22 +523,10 @@ fn main() -> std::process::ExitCode {
 
     let mut exposure = Exposure::nothing();
     for spec in &expose {
-        // `IDL:m/I:1.0.operation` — the operation is split at the last dot.
-        // A repository id ends in its *version*, `:1.0`, which has a dot in
-        // it, so the trailing part is only an operation when it looks like an
-        // IDL identifier: a bare `IDL:spike/Echo:1.0` used to be read as the
-        // interface `IDL:spike/Echo:1` with an operation named `0`, which
-        // allowlisted an interface nobody had and exposed nothing. The first
-        // `--dry-run` report run against a real IDL file said
-        // `id: IDL:spike/Echo:1, operation: 0, declared: false`, which is how
-        // this was found.
-        let identifier = |op: &str| op.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_');
-        match spec.rsplit_once('.') {
-            Some((id, op)) if identifier(op) && !op.contains(':') => {
-                exposure = exposure.allow_operation(id, op);
-            }
-            _ => exposure = exposure.allow_interface(spec.clone()),
-        }
+        exposure = match split_operation(spec) {
+            (id, Some(op)) => exposure.allow_operation(id, op),
+            (id, None) => exposure.allow_interface(id),
+        };
     }
     if let Some(effect) = &assume_effect {
         exposure = exposure.assuming_unannotated(Unannotated::Assume(effect.clone()));
@@ -570,9 +641,17 @@ fn main() -> std::process::ExitCode {
                 }
             }
         }
-        let mut report = match &dry_run_only {
-            Some(id) => bridge.dry_run_interface(id, Approval::default()),
-            None => bridge.dry_run_all(Approval::default()),
+        // One operation prints that operation's own document; with values,
+        // the same document with the payload's verdict in it. The other two
+        // grains are surveys, as they were. (`--dry-run-args` without an
+        // operation was refused above.)
+        let mut report = match (one, &dry_run_args) {
+            (Some((id, Some(op))), Some(args)) => {
+                bridge.dry_run_with(id, op, args, Approval::default())
+            }
+            (Some((id, Some(op))), None) => bridge.dry_run(id, op, Approval::default()),
+            (Some((id, None)), _) => bridge.dry_run_interface(id, Approval::default()),
+            (None, _) => bridge.dry_run_all(Approval::default()),
         };
         // Folded into the one document rather than printed beside it: stdout is
         // one JSON object, and a second one would break every pipeline that

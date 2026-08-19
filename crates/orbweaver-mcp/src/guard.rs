@@ -45,6 +45,7 @@ use orbweaver_giop::server::{BAD_OPERATION, MARSHAL};
 use orbweaver_giop::{Connection, Error as GiopError, Invoker, Reply};
 use orbweaver_registry::Registry;
 
+use crate::handles::SharedTable;
 use crate::identity::Caller;
 use crate::interceptor::{CallContext, Chain};
 use crate::policy::{Approval, Denied, Exposure};
@@ -269,6 +270,14 @@ pub struct Guarded<'r, C: Invoker = Connection> {
     approval: Approval,
     /// §4.5's stack, holding the exposure, the audit lines and the counters.
     chain: Chain,
+    /// The issuing session's capability table, shared with the
+    /// [`crate::Bridge`] that assembled this guard. Read by
+    /// [`Guarded::dry_run_with`] only — a live static call carries its
+    /// references as the bytes the stub wrote, and resolves nothing — so that
+    /// a handle declared to the static path's dry run resolves as the dynamic
+    /// path would resolve it, and never to a call: the prediction encodes the
+    /// reference into a buffer that is dropped, and `self.conn` is not read.
+    handles: SharedTable,
 }
 
 /// The refusal a stub sees. The reason is not in it, deliberately: it is in the
@@ -306,8 +315,9 @@ impl<'r, C: Invoker> Guarded<'r, C> {
         caller: Option<Caller>,
         id: String,
         approval: Approval,
+        handles: SharedTable,
     ) -> Self {
-        Self { conn, registry, caller, id, approval, chain: Chain::standard(exposure) }
+        Self { conn, registry, caller, id, approval, chain: Chain::standard(exposure), handles }
     }
 
     /// Every decision this guard has made, oldest first.
@@ -386,8 +396,18 @@ impl<'r, C: Invoker> Guarded<'r, C> {
     /// mapped and encoded against the contract's `TypeCode`s — both byte
     /// orders, into a buffer that goes nowhere — so the report can say
     /// [`crate::dryrun::Would::Marshal`] for a `string<8>` given nine
-    /// characters. `self.conn` is not read; there is no table, so a declared
-    /// object reference resolves to nothing and is predicted as such.
+    /// characters.
+    ///
+    /// A declared object reference (`{"_ref": "cap_…"}`) resolves against the
+    /// **issuing session's own table** — the one [`crate::Bridge::handles`]
+    /// hands out, shared with this guard by `connect_static` rather than
+    /// copied — so a handle the session holds predicts `marshals` and a handle
+    /// it does not (forged, expired, revoked, another session's) predicts
+    /// `would_not_marshal` with the mapper's sentence naming it. Resolving is
+    /// not dialing: the reference is encoded into the prediction's dropped
+    /// buffer, `self.conn` is not read, and
+    /// `a_declared_handle_resolves_in_the_static_dry_run_and_dials_nothing`
+    /// holds that with a transport that detonates on contact.
     pub fn dry_run_with(&mut self, operation: &str, args: &Json) -> crate::dryrun::Prediction {
         let ctx = CallContext {
             registry: self.registry,
@@ -397,7 +417,7 @@ impl<'r, C: Invoker> Guarded<'r, C> {
             approval: self.approval,
             arguments: Some(args),
         };
-        crate::dryrun::predict_with(&mut self.chain, &ctx, &LocalReferences::new())
+        crate::dryrun::predict_with(&mut self.chain, &ctx, &*self.handles.borrow())
     }
 
     /// What the stub wrote, read back as the document a content stage sees.
@@ -623,6 +643,13 @@ mod tests {
                  //@ ai_effect: idempotent
                  void memo(in string text);
                };
+               // An operation taking an object reference, so a dry run with
+               // values has a handle to resolve — against the session's table,
+               // and never to a call.
+               interface Branch {
+                 //@ ai_effect: idempotent
+                 void adopt(in Account acct);
+               };
              };",
         )
         .expect("parses");
@@ -644,6 +671,7 @@ mod tests {
             caller,
             "IDL:bank/Account:1.0".to_owned(),
             approval,
+            crate::handles::shared("s-guard-test"),
         )
     }
 
@@ -949,27 +977,25 @@ mod tests {
     /// The `TypeCode`s are the bounds fixture's, `corpus/golden/27-bounds.idl`,
     /// through an attribute setter, so the accessor arm of
     /// [`crate::parameters`] is what is exercised.
+    /// An invoker that fails the test by being used at all: the proof that a
+    /// prediction is synthesised and not a call with the wire unplugged.
+    struct Detonator;
+    impl Invoker for Detonator {
+        fn endian(&self) -> Endian {
+            Endian::Little
+        }
+        fn invoke<F: Fn(&mut Encoder)>(&mut self, op: &str, _: F) -> Result<Reply, GiopError> {
+            panic!("a dry run reached the invoker: {op}");
+        }
+        fn invoke_oneway<F: Fn(&mut Encoder)>(&mut self, op: &str, _: F) -> Result<(), GiopError> {
+            panic!("a dry run reached the invoker: {op}");
+        }
+    }
+
     #[test]
     fn a_static_dry_run_with_values_predicts_marshalling_and_touches_no_wire() {
         use crate::dryrun::{Marshalling, Would};
         use crate::policy::Unannotated;
-
-        struct Detonator;
-        impl Invoker for Detonator {
-            fn endian(&self) -> Endian {
-                Endian::Little
-            }
-            fn invoke<F: Fn(&mut Encoder)>(&mut self, op: &str, _: F) -> Result<Reply, GiopError> {
-                panic!("a dry run reached the invoker: {op}");
-            }
-            fn invoke_oneway<F: Fn(&mut Encoder)>(
-                &mut self,
-                op: &str,
-                _: F,
-            ) -> Result<(), GiopError> {
-                panic!("a dry run reached the invoker: {op}");
-            }
-        }
 
         let src = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -993,6 +1019,7 @@ mod tests {
             Some(Caller::new("alice")),
             LEDGER.to_owned(),
             Approval::default(),
+            crate::handles::shared("s-bounds"),
         );
 
         let nine = Json::parse(r#"{"value":"123456789"}"#).expect("json");
@@ -1017,6 +1044,161 @@ mod tests {
         assert_eq!(within.marshalling(), Some(&Marshalling::Marshals));
         // Every prediction was audited as the question it was.
         assert!(g.audit().iter().all(|l| l.starts_with("DRYRUN-")), "{:?}", g.audit());
+    }
+
+    /// An `Account` somewhere an agent must never learn the address of.
+    fn account_ior() -> orbweaver_giop::Ior {
+        orbweaver_giop::Ior {
+            type_id: "IDL:bank/Account:1.0".into(),
+            profiles: vec![orbweaver_giop::IiopProfile {
+                version: orbweaver_giop::Version::V1_2,
+                host: "10.9.8.7".into(),
+                port: 4242,
+                object_key: b"acct-very-distinctive".to_vec(),
+                components: Vec::new(),
+            }],
+        }
+    }
+
+    /// **A declared handle resolves in the static dry run, and nothing is
+    /// dialed.** `Branch::adopt(in Account acct)` asked with `{"_ref": h}`:
+    /// a handle the session holds predicts `marshals` — the reference was
+    /// resolved to its IOR and encoded into the prediction's dropped buffer —
+    /// and a handle it does not hold predicts `would_not_marshal` with the
+    /// mapper's own sentence naming the handle. Both over a transport that
+    /// detonates on contact, so resolving is provably not dialing; and the
+    /// report carries the verdict and never the address the handle stood for.
+    ///
+    /// Red before the guard held a table: `dry_run_with` resolved against an
+    /// empty `LocalReferences`, so the first assertion below read
+    /// `WouldNot("acct: no reference is held under handle …")` for a handle
+    /// the session had issued a line earlier.
+    #[test]
+    fn a_declared_handle_resolves_in_the_static_dry_run_and_dials_nothing() {
+        use crate::dryrun::{Marshalling, Would};
+
+        const BRANCH: &str = "IDL:bank/Branch:1.0";
+        let reg = registry();
+        let table = crate::handles::shared("s-branch");
+        let held = table.borrow_mut().issue_checked(&account_ior()).expect("issued");
+
+        let mut g: Guarded<'_, Detonator> = Guarded::assemble(
+            Detonator,
+            &reg,
+            Exposure::nothing().allow_interface(BRANCH),
+            Some(Caller::new("alice")),
+            BRANCH.to_owned(),
+            Approval::default(),
+            Rc::clone(&table),
+        );
+
+        let ask = |h: &str| Json::parse(&format!(r#"{{"acct":{{"_ref":"{h}"}}}}"#)).expect("json");
+
+        let resolved = g.dry_run_with("adopt", &ask(held.as_str()));
+        assert_eq!(
+            resolved.marshalling(),
+            Some(&Marshalling::Marshals),
+            "a handle this session holds must resolve: {}",
+            resolved.to_json()
+        );
+        assert_eq!(resolved.would(), Would::Allow, "{}", resolved.to_json());
+
+        let forged = "cap_00000000000000000000000000000000";
+        let unknown = g.dry_run_with("adopt", &ask(forged));
+        assert_eq!(unknown.would(), Would::Marshal, "{}", unknown.to_json());
+        assert!(
+            matches!(unknown.marshalling(), Some(Marshalling::WouldNot(why))
+                if why.contains(forged) && why.contains("acct")),
+            "the sentence names the handle and the parameter: {}",
+            unknown.to_json()
+        );
+        assert_eq!(
+            unknown.to_json().get("payload").and_then(Json::as_str),
+            Some("would_not_marshal")
+        );
+
+        // Session-scoped, as the live path is: the same handle asked of a
+        // guard over another session's table is a handle that session never
+        // issued.
+        let mut other: Guarded<'_, Detonator> = Guarded::assemble(
+            Detonator,
+            &reg,
+            Exposure::nothing().allow_interface(BRANCH),
+            Some(Caller::new("alice")),
+            BRANCH.to_owned(),
+            Approval::default(),
+            crate::handles::shared("s-other"),
+        );
+        let elsewhere = other.dry_run_with("adopt", &ask(held.as_str()));
+        assert_eq!(elsewhere.would(), Would::Marshal, "{}", elsewhere.to_json());
+
+        // Nothing about the target reached any report, and every question was
+        // audited as one. The Detonator has already said nothing was dialed.
+        for p in [&resolved, &unknown, &elsewhere] {
+            let text = p.to_json().to_string();
+            for leak in ["10.9.8.7", "4242", "very-distinctive"] {
+                assert!(!text.contains(leak), "{leak:?} reached a report: {text}");
+            }
+        }
+        assert!(g.audit().iter().all(|l| l.starts_with("DRYRUN-")), "{:?}", g.audit());
+        assert_eq!(g.audit().len(), 2);
+    }
+
+    /// The table a guard from `connect_static` reads is the session's own —
+    /// **shared, not copied**: a handle issued on the bridge after the guard
+    /// was assembled resolves in the guard's prediction, and one revoked on the
+    /// bridge afterwards stops resolving. A snapshot would have passed the
+    /// first half of the previous test and failed both halves of this one.
+    ///
+    /// The transport is a real `Connection` to a listener nobody accepts on
+    /// (`connect` completes; nothing here needs a byte back), because this is
+    /// the constructor the finding named. Nothing is invoked on it.
+    #[test]
+    fn a_guard_from_connect_static_shares_the_sessions_table_rather_than_a_copy() {
+        use std::time::Duration;
+
+        use crate::dryrun::Marshalling;
+
+        const BRANCH: &str = "IDL:bank/Branch:1.0";
+        let reg = registry();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binds");
+        let branch = orbweaver_giop::Ior {
+            type_id: BRANCH.into(),
+            profiles: vec![orbweaver_giop::IiopProfile {
+                version: orbweaver_giop::Version::V1_2,
+                host: "127.0.0.1".into(),
+                port: listener.local_addr().expect("bound").port(),
+                object_key: b"branch-1".to_vec(),
+                components: Vec::new(),
+            }],
+        };
+        let mut bridge =
+            crate::Bridge::new(&reg, Exposure::nothing().allow_interface(BRANCH), "s-shared")
+                .on_behalf_of(Caller::new("alice"));
+        let root = bridge.handles().issue_checked(&branch).expect("issued");
+        let mut g = bridge
+            .connect_static(root.as_str(), Approval::default(), Duration::from_secs(5))
+            .expect("dials the listener");
+
+        // Issued *after* the guard exists.
+        let later = bridge.handles().issue_checked(&account_ior()).expect("issued");
+        let ask = Json::parse(&format!(r#"{{"acct":{{"_ref":"{later}"}}}}"#)).expect("json");
+        assert_eq!(
+            g.dry_run_with("adopt", &ask).marshalling(),
+            Some(&Marshalling::Marshals),
+            "a handle issued after connect_static must resolve in the guard"
+        );
+
+        // Revoked on the bridge; gone from the guard's prediction too.
+        assert!(bridge.handles().revoke(later.as_str()));
+        assert!(
+            matches!(g.dry_run_with("adopt", &ask).marshalling(),
+                Some(Marshalling::WouldNot(why)) if why.contains(later.as_str())),
+            "a revoked handle must stop resolving in the guard"
+        );
+        // And the dynamic path's own dry run agrees, over the same table.
+        let dynamic = bridge.dry_run_with(BRANCH, "adopt", &ask, Approval::default());
+        assert_eq!(dynamic.get("payload").and_then(Json::as_str), Some("would_not_marshal"));
     }
 
     /// A content filter that **tries** to write down what it saw — the same
