@@ -24,8 +24,24 @@
 //! four things it used to do inline are §4.5's stack, in order, extensible by a
 //! deployment. What `check` does now is build a [`CallContext`] and run the
 //! chain.
+//!
+//! Since D010 A3 the context carries the **payload** too. A stub hands its
+//! arguments over as a closure that writes bytes; the guard runs that closure
+//! into a buffer of its own, reads the bytes back through the contract, and
+//! hands the chain the same AnyJSON document the dynamic path hands it — so a
+//! stage at the content seat sees a static call as it sees a dynamic one, and
+//! a stub compiled before this existed is covered by it. Two rules come with
+//! that and `Guarded::view` states both: nothing is sent before the chain has
+//! answered (the buffer is local, and the stub already probes into one of its
+//! own), and a payload the guard cannot read against the contract is refused
+//! — `MARSHAL`, or `BAD_OPERATION` for a name the contract lacks — after the
+//! gate and before the wire, rather than forwarded past a seat that saw
+//! nothing.
 
-use orbweaver_cdr::{Encoder, Endian};
+use orbweaver_cdr::{Decoder, Encoder, Endian};
+use orbweaver_dynamic::anyjson::{self, LocalReferences};
+use orbweaver_dynamic::json::Json;
+use orbweaver_giop::server::{BAD_OPERATION, MARSHAL};
 use orbweaver_giop::{Connection, Error as GiopError, Invoker, Reply};
 use orbweaver_registry::Registry;
 
@@ -274,6 +290,14 @@ fn refusal(why: &Denied) -> GiopError {
     GiopError::SystemException { id: refusal_id(why).to_owned(), minor: 0, completed: 1 }
 }
 
+/// A payload the guard could not read back against the contract, refused
+/// before the wire: `MARSHAL` when the bytes do not fit the declared
+/// parameters, `BAD_OPERATION` when the contract declares no such operation.
+/// `COMPLETED_NO` for the same reason [`refusal`] says it: nothing was sent.
+fn unreadable(id: &'static str) -> GiopError {
+    GiopError::SystemException { id: id.to_owned(), minor: 0, completed: 1 }
+}
+
 impl<'r, C: Invoker> Guarded<'r, C> {
     pub(crate) fn assemble(
         conn: C,
@@ -353,6 +377,109 @@ impl<'r, C: Invoker> Guarded<'r, C> {
         };
         crate::dryrun::predict(&mut self.chain, &ctx)
     }
+
+    /// [`Guarded::dry_run`] with the values the stub's caller *would* pass,
+    /// as the AnyJSON document a content stage would see.
+    ///
+    /// The static twin of [`crate::Bridge::dry_run_with`]: the chain is
+    /// walked with the declared values in the context, and the payload is
+    /// mapped and encoded against the contract's `TypeCode`s — both byte
+    /// orders, into a buffer that goes nowhere — so the report can say
+    /// [`crate::dryrun::Would::Marshal`] for a `string<8>` given nine
+    /// characters. `self.conn` is not read; there is no table, so a declared
+    /// object reference resolves to nothing and is predicted as such.
+    pub fn dry_run_with(&mut self, operation: &str, args: &Json) -> crate::dryrun::Prediction {
+        let ctx = CallContext {
+            registry: self.registry,
+            caller: self.caller.as_ref(),
+            target: self.id.as_str(),
+            operation,
+            approval: self.approval,
+            arguments: Some(args),
+        };
+        crate::dryrun::predict_with(&mut self.chain, &ctx, &LocalReferences::new())
+    }
+
+    /// What the stub wrote, read back as the document a content stage sees.
+    ///
+    /// # How a closure becomes data
+    ///
+    /// A generated stub hands the wire a closure that *writes* its arguments;
+    /// there is no value to pass a stage. So the guard runs the closure once
+    /// itself, into a local encoder, and decodes the bytes back through the
+    /// contract — [`crate::parameters`], the same list the dynamic path
+    /// maps onto — into the same AnyJSON shape the dynamic path hands the
+    /// seat: `{"cents": 4242}`. A stage cannot tell which path a payload
+    /// came down, which is the property. Every stub compiled before this
+    /// existed gains it, because nothing about the stub changed: *which side
+    /// of the trust boundary a stub runs on is decided by what it is handed*,
+    /// and this is part of what it is handed.
+    ///
+    /// # This is not sending
+    ///
+    /// The encoder here is a `Vec` the guard owns and drops. Nothing reaches
+    /// `self.conn` until the chain has answered — the same rule the stub
+    /// itself already keeps, marshalling into a probe before it calls
+    /// `invoke` so a bad argument is a local error and not a half-written
+    /// message. So a static call is now encoded **twice before the gate**,
+    /// both times into buffers nobody sends, and **zero times to the wire**
+    /// before the gate. Stated because D010 A3's second constraint asks for it
+    /// to be: refusal still precedes anything sent.
+    ///
+    /// # A payload the guard cannot read is a payload it does not forward
+    ///
+    /// The bytes fit the contract or they do not. If they do not — the name
+    /// is not declared, the bytes stop short, the bytes run long — the guard
+    /// answers `MARSHAL` (or `BAD_OPERATION` for an undeclared name) **after
+    /// the chain has run and allowed**, and sends nothing. After, because the
+    /// gate answers first for the same reason it always did: a mapping error
+    /// answered ahead of a policy refusal is an oracle for the shape of
+    /// operations the caller may not call. Sends nothing, because the
+    /// alternative is a content stage handed `None` while bytes go out, which
+    /// is the blindness this exists to end, reachable by any stub whose
+    /// contract has drifted from the guard's catalog. The dynamic path already
+    /// refuses an undeclared operation before the wire; this is the same rule
+    /// on the other path.
+    ///
+    /// The wide-character form: the closure writes into a codec-less encoder,
+    /// so `wstring` takes the runtime's default (GIOP 1.2, UTF-16) and is
+    /// decoded with the same default. The *sent* bytes are still whatever
+    /// `self.conn` negotiates — this is a view of the values, not of the
+    /// message.
+    ///
+    /// 게이트가 값을 보려면 스텁이 쓴 바이트를 읽어야 한다. 읽은 것은 로컬
+    /// 버퍼이고, 체인이 답하기 전에는 아무것도 보내지 않는다. 읽을 수 없는
+    /// 페이로드는 보내지 않는다.
+    fn view<F: Fn(&mut Encoder)>(
+        &self,
+        operation: &str,
+        write_args: &F,
+    ) -> Result<Json, &'static str> {
+        let Some(params) = crate::parameters(self.registry, &self.id, operation) else {
+            return Err(BAD_OPERATION);
+        };
+        let endian = self.conn.endian();
+        let mut e = Encoder::new(endian);
+        write_args(&mut e);
+        let bytes = e.finish().map_err(|_| MARSHAL)?;
+        let mut d = Decoder::new(&bytes, endian);
+        // Local and per-call: an object reference in the payload becomes a
+        // name the stage can see and nobody can dial, and the table it names
+        // it in dies with this call.
+        let mut refs = LocalReferences::new();
+        let mut fields = std::collections::BTreeMap::new();
+        for p in params.iter().filter(|p| crate::carried_in(p)) {
+            let value = orbweaver_dynamic::decode(&mut d, &p.tc).map_err(|_| MARSHAL)?;
+            let json = anyjson::to_json(&p.tc, &value, &mut refs).map_err(|_| MARSHAL)?;
+            fields.insert(p.name.clone(), json);
+        }
+        if d.remaining() != 0 {
+            // More than the contract declares: a stub built against another
+            // contract, or a hand-written closure. Either way not readable.
+            return Err(MARSHAL);
+        }
+        Ok(Json::Object(fields))
+    }
 }
 
 impl<'r, C: Invoker> Invoker for Guarded<'r, C> {
@@ -365,6 +492,10 @@ impl<'r, C: Invoker> Invoker for Guarded<'r, C> {
         operation: &str,
         write_args: F,
     ) -> Result<Reply, GiopError> {
+        // The payload as data, before the chain and off the wire. `Err` here
+        // is not yet an answer: the gate speaks first, and a caller the gate
+        // refuses hears the refusal whatever the payload looked like.
+        let view = self.view(operation, &write_args);
         // Built by hand rather than by a helper method: the context borrows
         // three fields of `self` while the chain borrows a fourth mutably, and
         // a method returning the context would borrow all of `self`.
@@ -374,12 +505,15 @@ impl<'r, C: Invoker> Invoker for Guarded<'r, C> {
             target: self.id.as_str(),
             operation,
             approval: self.approval,
-            arguments: None,
+            arguments: view.as_ref().ok(),
         };
         if let Err(why) = self.chain.run(&ctx) {
             return Err(refusal(&why));
         }
-        let reply = self.conn.invoke(operation, write_args);
+        let reply = match &view {
+            Ok(_) => self.conn.invoke(operation, write_args),
+            Err(id) => Err(unreadable(id)),
+        };
         // The whole result, not `is_ok()`: a system or user exception names
         // itself in the trace's `outcome` column, and anything else is a
         // failure the chain was genuinely not told the name of. See
@@ -394,19 +528,24 @@ impl<'r, C: Invoker> Invoker for Guarded<'r, C> {
         write_args: F,
     ) -> Result<(), GiopError> {
         // Gated like a twoway: a oneway that skipped the chain would make
-        // "fire and forget" the way around the guard.
+        // "fire and forget" the way around the guard — and read like one, so
+        // "fire and forget" is not the way around the content seat either.
+        let view = self.view(operation, &write_args);
         let ctx = CallContext {
             registry: self.registry,
             caller: self.caller.as_ref(),
             target: self.id.as_str(),
             operation,
             approval: self.approval,
-            arguments: None,
+            arguments: view.as_ref().ok(),
         };
         if let Err(why) = self.chain.run(&ctx) {
             return Err(refusal(&why));
         }
-        let sent = self.conn.invoke_oneway(operation, write_args);
+        let sent = match &view {
+            Ok(_) => self.conn.invoke_oneway(operation, write_args),
+            Err(id) => Err(unreadable(id)),
+        };
         self.chain.completed(&ctx, &sent);
         sent
     }
@@ -414,6 +553,9 @@ impl<'r, C: Invoker> Invoker for Guarded<'r, C> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     use super::*;
     use crate::interceptor::{Interceptor, Outcome};
     use crate::policy::Denied;
@@ -421,6 +563,22 @@ mod tests {
     /// An invoker that records what reached it, for proving what did not.
     struct Recorder {
         reached: Vec<String>,
+        /// What the closure wrote when the transport ran it — the bytes the
+        /// wire would have carried, for proving the guard forwards the
+        /// stub's own closure and not a re-encoding of its reading of it.
+        bytes: Vec<Vec<u8>>,
+    }
+
+    impl Recorder {
+        fn new() -> Self {
+            Recorder { reached: Vec::new(), bytes: Vec::new() }
+        }
+        fn record<F: Fn(&mut Encoder)>(&mut self, operation: &str, write_args: &F) {
+            self.reached.push(operation.to_owned());
+            let mut e = Encoder::new(Endian::Big);
+            write_args(&mut e);
+            self.bytes.push(e.finish().unwrap_or_default());
+        }
     }
 
     impl Invoker for Recorder {
@@ -430,9 +588,9 @@ mod tests {
         fn invoke<F: Fn(&mut Encoder)>(
             &mut self,
             operation: &str,
-            _write_args: F,
+            write_args: F,
         ) -> Result<Reply, GiopError> {
-            self.reached.push(operation.to_owned());
+            self.record(operation, &write_args);
             // No Reply can be built outside the wire, so the fake fails after
             // recording; the tests only care what got this far.
             Err(GiopError::ConnectionClosed)
@@ -440,9 +598,9 @@ mod tests {
         fn invoke_oneway<F: Fn(&mut Encoder)>(
             &mut self,
             operation: &str,
-            _write_args: F,
+            write_args: F,
         ) -> Result<(), GiopError> {
-            self.reached.push(operation.to_owned());
+            self.record(operation, &write_args);
             Ok(())
         }
     }
@@ -458,6 +616,12 @@ mod tests {
                  void deposit(in long cents);
                  //@ ai_effect: destructive
                  void close();
+                 // A string parameter, so a static call can carry the exact
+                 // text a content filter exists to catch — the static twin
+                 // of the dynamic leak test's `cents` marker.
+                 //@ ai_authz: accounts:write
+                 //@ ai_effect: idempotent
+                 void memo(in string text);
                };
              };",
         )
@@ -474,7 +638,7 @@ mod tests {
         approval: Approval,
     ) -> Guarded<'r, Recorder> {
         Guarded::assemble(
-            Recorder { reached: Vec::new() },
+            Recorder::new(),
             reg,
             exposure,
             caller,
@@ -517,13 +681,13 @@ mod tests {
 
         let mut without =
             guarded(&reg, exposure.clone(), Some(Caller::new("bob")), Approval::default());
-        assert!(without.invoke("deposit", |_| {}).is_err());
+        assert!(without.invoke("deposit", |e| e.put_i32(1)).is_err());
         assert!(without.conn.reached.is_empty());
         assert!(without.audit()[0].contains("accounts:write"), "{}", without.audit()[0]);
 
         let alice = Caller::new("alice").with_scope("accounts:write");
         let mut with = guarded(&reg, exposure, Some(alice), Approval::default());
-        let _ = with.invoke("deposit", |_| {});
+        let _ = with.invoke("deposit", |e| e.put_i32(1));
         assert_eq!(with.conn.reached, vec!["deposit"]);
     }
 
@@ -655,5 +819,301 @@ mod tests {
         assert!(g.audit()[0].starts_with("ALLOW"));
         assert!(g.audit()[1].starts_with("REFUSE"));
         assert!(g.audit()[1].contains("operation=close"));
+    }
+
+    /// A stage at the content seat that keeps what it was handed and lets
+    /// the call through — for asking what the seat sees, not what it does.
+    struct Sees(Rc<RefCell<Vec<Option<String>>>>);
+
+    impl Interceptor for Sees {
+        fn before(&mut self, ctx: &CallContext<'_>) -> Outcome {
+            self.0.borrow_mut().push(ctx.arguments.map(ToString::to_string));
+            Outcome::Proceed
+        }
+    }
+
+    type Seen = Rc<RefCell<Vec<Option<String>>>>;
+
+    fn seeing<'r>(reg: &'r Registry, exposure: Exposure) -> (Guarded<'r, Recorder>, Seen) {
+        let seen: Seen = Rc::new(RefCell::new(Vec::new()));
+        let alice = Caller::new("alice").with_scope("accounts:write");
+        let mut g = guarded(reg, exposure, Some(alice), Approval::default());
+        assert!(g.chain_mut().insert_after(
+            crate::interceptor::STAGE_APPROVAL,
+            crate::interceptor::SEAT_SAFETY_CONTENT,
+            Sees(Rc::clone(&seen))
+        ));
+        (g, seen)
+    }
+
+    /// **The static path's payload reaches the content seat, in the dynamic
+    /// path's shape.** A stub-shaped closure writes a `long`; the stage sees
+    /// `{"cents":4242}` — the AnyJSON document a dynamic call for the same
+    /// operation carries — and the transport then receives the stub's own
+    /// closure, byte for byte, not a re-encoding of the guard's reading.
+    /// Twoway and oneway alike, and an argument-less operation as `{}`.
+    #[test]
+    fn a_static_calls_payload_reaches_the_content_seat_as_the_dynamic_paths_document() {
+        let reg = registry();
+        let (mut g, seen) =
+            seeing(&reg, Exposure::nothing().allow_interface("IDL:bank/Account:1.0"));
+
+        let _ = g.invoke("deposit", |e| e.put_i32(4242));
+        let _ = g.invoke_oneway("memo", |e| e.put_str("hello"));
+        let _ = g.invoke("balance", |_| {});
+
+        assert_eq!(
+            *seen.borrow(),
+            vec![
+                Some(r#"{"cents":4242}"#.to_owned()),
+                Some(r#"{"text":"hello"}"#.to_owned()),
+                Some("{}".to_owned()),
+            ],
+            "the seat sees a static call as it sees a dynamic one"
+        );
+        // And what went to the transport is what the stub wrote.
+        assert_eq!(g.conn.reached, vec!["deposit", "memo", "balance"]);
+        assert_eq!(g.conn.bytes[0], 4242i32.to_be_bytes().to_vec());
+        let mut e = Encoder::new(Endian::Big);
+        e.put_str("hello");
+        assert_eq!(g.conn.bytes[1], e.finish().expect("encodes"));
+        assert!(g.conn.bytes[2].is_empty());
+    }
+
+    /// A payload the guard cannot read is a payload it does not forward —
+    /// and the gate still answers first.
+    ///
+    /// Three unreadable payloads on an allowed operation: bytes that stop
+    /// short of the contract, bytes that run past it, and a name the contract
+    /// does not declare. Each is refused as a system exception with
+    /// `COMPLETED_NO`, none reaches the transport, and each was audited as
+    /// the `ALLOW` it was — the gate had no objection; the guard did. Then
+    /// the same short payload on an operation the caller may *not* call: the
+    /// answer is the policy's `NO_PERMISSION`, so a caller cannot learn an
+    /// operation's shape from the difference.
+    #[test]
+    fn an_unreadable_payload_is_refused_after_the_gate_and_reaches_no_wire() {
+        let reg = registry();
+        // The undeclared name has no `ai_effect` to read, so without an
+        // assumption the *policy* refuses it first — correctly, and as
+        // `NO_PERMISSION`. The assumption is what lets the guard's own
+        // answer be observed.
+        let exposure = Exposure::nothing()
+            .allow_interface("IDL:bank/Account:1.0")
+            .assuming_unannotated(crate::policy::Unannotated::Assume("read_only".into()));
+        let (mut g, seen) = seeing(&reg, exposure);
+
+        let short = g.invoke("deposit", |_| {}).unwrap_err();
+        let long = g
+            .invoke("deposit", |e| {
+                e.put_i32(1);
+                e.put_i32(2);
+            })
+            .unwrap_err();
+        let undeclared = g.invoke("no_such_op", |_| {}).unwrap_err();
+        for (what, err, id) in [
+            ("short", &short, MARSHAL),
+            ("long", &long, MARSHAL),
+            ("undeclared", &undeclared, BAD_OPERATION),
+        ] {
+            assert!(
+                matches!(err, GiopError::SystemException { id: got, completed: 1, .. } if got == id),
+                "{what}: {err}"
+            );
+        }
+        assert!(g.conn.reached.is_empty(), "the transport saw: {:?}", g.conn.reached);
+        // The seat was reached each time and handed nothing — which is
+        // harmless only because nothing was sent.
+        assert_eq!(*seen.borrow(), vec![None, None, None]);
+        assert_eq!(g.audit().len(), 3);
+        assert!(g.audit().iter().all(|l| l.starts_with("ALLOW caller=alice")), "{:?}", g.audit());
+
+        // Policy first: the same short payload where the policy says no.
+        let mut bob = guarded(
+            &reg,
+            Exposure::nothing().allow_interface("IDL:bank/Account:1.0"),
+            Some(Caller::new("bob")),
+            Approval::default(),
+        );
+        let err = bob.invoke("deposit", |_| {}).unwrap_err();
+        assert!(
+            matches!(&err, GiopError::SystemException { id, .. } if id == NO_PERMISSION),
+            "a caller the gate refuses hears the refusal, not the shape: {err}"
+        );
+    }
+
+    /// The dry run's static twin, with values: a `string<8>` given nine
+    /// characters predicts `marshal` where the argument-less question
+    /// predicts `allow` — and the invoker is never touched, because a
+    /// prediction is synthesised and not a call with the wire unplugged.
+    /// The `TypeCode`s are the bounds fixture's, `corpus/golden/27-bounds.idl`,
+    /// through an attribute setter, so the accessor arm of
+    /// [`crate::parameters`] is what is exercised.
+    #[test]
+    fn a_static_dry_run_with_values_predicts_marshalling_and_touches_no_wire() {
+        use crate::dryrun::{Marshalling, Would};
+        use crate::policy::Unannotated;
+
+        struct Detonator;
+        impl Invoker for Detonator {
+            fn endian(&self) -> Endian {
+                Endian::Little
+            }
+            fn invoke<F: Fn(&mut Encoder)>(&mut self, op: &str, _: F) -> Result<Reply, GiopError> {
+                panic!("a dry run reached the invoker: {op}");
+            }
+            fn invoke_oneway<F: Fn(&mut Encoder)>(
+                &mut self,
+                op: &str,
+                _: F,
+            ) -> Result<(), GiopError> {
+                panic!("a dry run reached the invoker: {op}");
+            }
+        }
+
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../corpus/golden/27-bounds.idl"
+        ))
+        .expect("the bounds fixture");
+        let spec = orbweaver_idl::parse(&src).expect("parses");
+        let mut reg = Registry::new();
+        reg.load(&spec).expect("loads");
+        const LEDGER: &str = "IDL:gc27/Ledger:1.0";
+
+        // The fixture is unannotated, so the exposure has to say what a
+        // silence means before the built-in stack will allow anything.
+        let exposure = Exposure::nothing()
+            .allow_interface(LEDGER)
+            .assuming_unannotated(Unannotated::Assume("read_only".into()));
+        let mut g: Guarded<'_, Detonator> = Guarded::assemble(
+            Detonator,
+            &reg,
+            exposure,
+            Some(Caller::new("alice")),
+            LEDGER.to_owned(),
+            Approval::default(),
+        );
+
+        let nine = Json::parse(r#"{"value":"123456789"}"#).expect("json");
+        let eight = Json::parse(r#"{"value":"12345678"}"#).expect("json");
+
+        let before = g.dry_run("_set_title");
+        assert_eq!(before.would(), Would::Allow, "{}", before.to_json());
+        assert_eq!(before.marshalling(), None, "no values, no payload verdict");
+
+        let over = g.dry_run_with("_set_title", &nine);
+        assert_eq!(over.would(), Would::Marshal, "{}", over.to_json());
+        assert!(
+            matches!(over.marshalling(), Some(Marshalling::WouldNot(why)) if why.contains("bounded at 8")),
+            "{}",
+            over.to_json()
+        );
+        assert!(over.verdict().is_ok(), "the gate allowed; the payload did not fit");
+        assert!(over.to_json().to_string().contains(MARSHAL), "{}", over.to_json());
+
+        let within = g.dry_run_with("_set_title", &eight);
+        assert_eq!(within.would(), Would::Allow, "{}", within.to_json());
+        assert_eq!(within.marshalling(), Some(&Marshalling::Marshals));
+        // Every prediction was audited as the question it was.
+        assert!(g.audit().iter().all(|l| l.starts_with("DRYRUN-")), "{:?}", g.audit());
+    }
+
+    /// A content filter that **tries** to write down what it saw — the same
+    /// stage `interceptor::an_argument_a_content_stage_saw_cannot_reach_the_ledger`
+    /// installs on the dynamic path, installed here on the static one. It
+    /// also keeps what it saw, so the test can ask the seat rather than infer.
+    struct WouldLeak(Rc<RefCell<Option<String>>>);
+
+    impl Interceptor for WouldLeak {
+        fn before(&mut self, ctx: &CallContext<'_>) -> Outcome {
+            let seen = ctx.arguments.map_or_else(|| "<none>".to_owned(), ToString::to_string);
+            *self.0.borrow_mut() = Some(seen.clone());
+            Outcome::Refuse(Denied::Intercepted {
+                stage: crate::interceptor::SEAT_SAFETY_CONTENT.to_owned(),
+                reason: format!("this looked like a credential: {seen}"),
+            })
+        }
+    }
+
+    /// **The leak test, on the static path** — D010 A3's first constraint.
+    ///
+    /// The dynamic path's test drives a real session whose argument carries a
+    /// marker and proves the marker reaches the content stage and reaches
+    /// neither the ledger nor the trace. This is the same test over a
+    /// generated-stub-shaped call: a closure that writes the marker as the
+    /// `string` argument of `memo`, through a [`Guarded`] with the same
+    /// stage at the same seat and a trace attached.
+    ///
+    /// The three positive controls are the same three, and the first is the
+    /// one that was red before the guard could see a static call's payload:
+    /// the stage must have seen the marker. A stage handed `arguments: None`
+    /// refuses with `<none>`, leaks nothing, and *proves* nothing — the seat
+    /// was blind, not safe.
+    #[test]
+    fn an_argument_a_content_stage_saw_on_the_static_path_cannot_reach_the_ledger() {
+        use crate::interceptor::{SEAT_SAFETY_CONTENT, STAGE_APPROVAL};
+        use crate::telemetry::{CallPath, SpanRecord, TelemetrySink, Timestamp, Trace};
+
+        struct Captured(Rc<RefCell<Vec<String>>>);
+        impl TelemetrySink for Captured {
+            fn emit(&mut self, record: &SpanRecord<'_>) {
+                self.0.borrow_mut().push(record.to_line());
+            }
+        }
+
+        const MARKER: &str = "pin-s3cret-4242";
+
+        let reg = registry();
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::new(RefCell::new(None));
+        let exposure = Exposure::nothing().allow_operation("IDL:bank/Account:1.0", "memo");
+        let alice = Caller::new("alice").with_scope("accounts:write");
+        let mut g = guarded(&reg, exposure, Some(alice), Approval::default());
+        assert!(g.chain_mut().trace(Trace::new(
+            "s-static-ledger",
+            CallPath::Static,
+            Timestamp::new("2026-08-19T09:00:00Z"),
+            Captured(Rc::clone(&lines)),
+        )));
+        assert!(g.chain_mut().insert_after(
+            STAGE_APPROVAL,
+            SEAT_SAFETY_CONTENT,
+            WouldLeak(Rc::clone(&seen))
+        ));
+
+        // The call a generated stub makes: the argument is *written*, as
+        // bytes, by a closure. Nothing hands the guard a value.
+        let refused = g.invoke("memo", |e| e.put_str(MARKER)).unwrap_err();
+
+        // The stub's caller hears a system exception and not the sentence:
+        // that is I1's contract, and the sentence goes to the observers.
+        assert!(
+            matches!(&refused, GiopError::SystemException { id, .. } if id == NO_PERMISSION),
+            "{refused}"
+        );
+        assert!(g.conn.reached.is_empty(), "the transport saw: {:?}", g.conn.reached);
+
+        // The stage did see it. This is the assertion that was red while the
+        // static path handed the seat `arguments: None`: a stage that saw
+        // `<none>` leaked nothing because it had nothing, which is blindness
+        // and not safety.
+        let seen = seen.borrow().clone().expect("the content stage ran");
+        assert!(seen.contains(MARKER), "the stage must have seen the marker; it saw: {seen}");
+        assert!(seen.contains("\"text\""), "the value arrives under its parameter name: {seen}");
+
+        let audit = g.audit().join("\n");
+        let emitted = lines.borrow().join("\n");
+        assert!(!audit.is_empty(), "a ledger that wrote nothing proves nothing");
+        assert!(!emitted.is_empty(), "a trace that emitted nothing proves nothing");
+        // The decision is on the record and attributed…
+        assert!(audit.contains("REFUSE caller=alice"), "{audit}");
+        assert!(audit.contains(SEAT_SAFETY_CONTENT), "the ledger must name the stage: {audit}");
+        assert!(emitted.contains(SEAT_SAFETY_CONTENT), "the trace must name the stage: {emitted}");
+        // …and the payload is not.
+        for line in [&audit, &emitted] {
+            assert!(!line.contains(MARKER), "an argument value reached a record:\n{line}");
+            assert!(!line.contains("looked like a credential"), "stage prose was copied:\n{line}");
+        }
     }
 }

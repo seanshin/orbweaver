@@ -172,6 +172,7 @@ dependencies = [
  "orbweaver-dynamic",
  "orbweaver-giop",
  "orbweaver-idl",
+ "orbweaver-mcp",
  "orbweaver-registry",
 ]
 

@@ -59,12 +59,14 @@
 //!   safety seat that reads the *contract* (`ai_effect: destructive` needs a
 //!   human). The half that reads the *arguments* — prompt-injection screening,
 //!   PII in an `in` parameter, a payload that is fine to send to one target and
-//!   not another — can now be written: [`CallContext::arguments`] carries what
-//!   the agent sent, unmapped, on the dynamic path. What the crate does not
-//!   ship is the *rule*, for the same reason it does not ship the quota's
-//!   number. What it does ship, and must, is the boundary that comes with the
-//!   capability: see *What the content seat sees, and what the ledger does
-//!   not*, below.
+//!   not another — can now be written: [`CallContext::arguments`] carries the
+//!   call's payload as an AnyJSON document on **both** paths — what the agent
+//!   sent, unmapped, on the dynamic path, and what the stub wrote, read back
+//!   through the contract, on the static one ([`crate::guard::Guarded`]).
+//!   What the crate does not ship is the *rule*, for the same reason it does
+//!   not ship the quota's number. What it does ship, and must, is the boundary
+//!   that comes with the capability: see *What the content seat sees, and
+//!   what the ledger does not*, below.
 //! - **Telemetry is half-occupied.** §4.5 asks for 지연·토큰·비용 — latency,
 //!   tokens, cost. [`TelemetryInterceptor`] records counts and, since D004 tier
 //!   1, one [`crate::telemetry`] span record per decision. Neither is a
@@ -125,34 +127,44 @@
 //! call — but to hand a stage the arguments **unmapped**, exactly as the agent
 //! sent them ([`CallContext::arguments`]).
 //!
-//! **On the dynamic path only.** A generated stub gives the wire a closure that
-//! writes bytes, so the static path supplies `None` and a content rule is
-//! enforced on one path and absent on the other. That is §4.7's bypass wearing
-//! a safety label, and it is written here rather than left for somebody to
-//! discover: closing it means `Invoker::invoke` carrying arguments as data,
-//! across three crates.
+//! **On both paths, since D010 A3.** A generated stub gives the wire a closure
+//! that writes bytes, and for a while the static path supplied `None` — a
+//! content rule enforced on one path and absent on the other, §4.7's bypass
+//! wearing a safety label. It was written here rather than left for somebody
+//! to discover, and the closing was not the three-crate `Invoker::invoke`
+//! change it was named as: [`crate::guard::Guarded`] runs the stub's closure
+//! into a local buffer and reads the bytes back through the contract, so the
+//! seat sees `{"cents": 4242}` whichever path wrote it, and a stub compiled
+//! before the change is covered by it. See `Guarded::view` for the two
+//! properties that come with that — the encoding is never sent before the
+//! gate, and a payload the guard cannot read is not forwarded.
 //!
 //! # What the content seat sees, and what the ledger does not
 //!
 //! A stage at [`SEAT_SAFETY_CONTENT`] gets a [`CallContext`]: the catalog, the
 //! principal and its scopes, the repository id the capability table resolved,
-//! the operation name, the host's approval — and, on the dynamic path,
-//! [`CallContext::arguments`], the JSON the agent sent, before it is mapped
-//! onto the contract's types. It can read the whole contract of the call *and*
-//! the values, which is what a content filter needs and could not have.
+//! the operation name, the host's approval — and [`CallContext::arguments`]:
+//! on the dynamic path the JSON the agent sent, before it is mapped onto the
+//! contract's types; on the static path the stub's bytes read back through
+//! the contract into the same document. It can read the whole contract of
+//! the call *and* the values, which is what a content filter needs and could
+//! not have.
 //!
 //! Three things follow, and the third is the one a security review asks about.
 //!
-//! 1. **The static path is still blind, and that is a real gap.**
-//!    [`orbweaver_giop::Invoker::invoke`] takes arguments as
-//!    `F: Fn(&mut Encoder)` — a closure that *writes* them — so on that path
-//!    there is no data to hand a stage, and [`crate::guard::Guarded`] supplies
-//!    `None`. A content rule is therefore enforced on the dynamic path and
-//!    absent on the compiled one, which is §4.7's bypass wearing a safety
-//!    label. Closing it means `Invoker::invoke` carrying arguments as data,
-//!    across three crates. **It is reported here, not made here**, and a
-//!    deployment that installs a content stage must read this paragraph before
-//!    it reports coverage.
+//! 1. **The static path sees the same document, and one static case sees
+//!    nothing — by refusing to send.** [`orbweaver_giop::Invoker::invoke`]
+//!    takes arguments as `F: Fn(&mut Encoder)`, a closure that *writes* them,
+//!    so [`crate::guard::Guarded`] runs it into a buffer of its own and
+//!    decodes the bytes against [`crate::parameters`] — the list the
+//!    dynamic path maps onto. Bytes that do not fit the contract (a drifted
+//!    stub, an undeclared name) hand the seat `None`, and the guard then
+//!    refuses `MARSHAL`/`BAD_OPERATION` after the chain has allowed, sending
+//!    nothing: `an_unreadable_payload_is_refused_after_the_gate_and_reaches_no_wire`.
+//!    A deployment that installs a content stage may report coverage of the
+//!    static path; what it may not assume is that a stub's over-bound argument
+//!    reaches the seat at all — the stub's own probe refuses it first, before
+//!    the guard, and that call is neither seen nor audited (nothing is sent).
 //! 2. **The chain still runs before the arguments are decoded, and stays
 //!    there.** The tempting fix — run the chain after argument mapping — is the
 //!    wrong one: a chain there answers a *mapping* error before a *policy*
@@ -193,11 +205,19 @@
 //! the same line [`SEAT_QUOTA`] draws about its number.
 //!
 //! One limit of the mechanism, stated because a reader will otherwise assume
-//! the opposite: [`Chain::dry_run`] synthesizes a context with no arguments, so
-//! **a dry run cannot predict a content stage's answer** — it can only report
-//! that the stage was reached. A prediction about a payload nobody has sent is
-//! not one this crate will fabricate;
-//! `a_dry_run_offers_a_content_stage_no_arguments_to_judge` pins it.
+//! the opposite: a dry run asked without values ([`crate::Bridge::dry_run`],
+//! [`crate::guard::Guarded::dry_run`]) synthesizes a context with no
+//! arguments, so **it cannot predict a content stage's answer** — it can only
+//! report that the stage was reached. A prediction about a payload nobody has
+//! described is not one this crate will fabricate;
+//! `a_dry_run_offers_a_content_stage_no_arguments_to_judge` pins it. Asked
+//! *with* the values the caller would send ([`crate::Bridge::dry_run_with`],
+//! [`crate::guard::Guarded::dry_run_with`]) the seat is handed them and its
+//! verdict is real, the payload is mapped and encoded against the contract's
+//! `TypeCode`s into a buffer that is dropped ([`crate::dryrun::Would::Marshal`]),
+//! and no invoker is in reach — a prediction is synthesised, never a call
+//! with the wire unplugged, because a call reaches the seat and the ledger as
+//! a call.
 //!
 //! # Asking the chain without calling anything
 //!
@@ -250,8 +270,10 @@ pub const SEAT_QUOTA: &str = "quota";
 /// §4.5 #3, the contract half of the safety seat: `ai_effect: destructive`
 /// needs a human's approval.
 pub const STAGE_APPROVAL: &str = "safety.approval";
-/// §4.5 #3, unoccupied. The argument-reading half of the safety seat; see the
-/// module docs for why it cannot simply be written today.
+/// §4.5 #3, unoccupied. The argument-reading half of the safety seat: a
+/// stage here reads [`CallContext::arguments`], on both paths. The crate ships
+/// no occupant because the rule is a deployment's; see the module docs for
+/// what the seat sees and what the ledger must not.
 pub const SEAT_SAFETY_CONTENT: &str = "safety.content";
 /// §4.5 #4: counts into [`CallStats`], the first half of §6's feedback loop.
 pub const STAGE_TELEMETRY: &str = "telemetry";
@@ -297,8 +319,13 @@ pub struct CallContext<'a> {
     pub operation: &'a str,
     /// What the *host* has approved, never what the agent claims.
     pub approval: Approval,
-    /// The arguments the agent sent, **before** they are mapped onto the
-    /// contract's types — `None` on any path that has none to offer.
+    /// The call's payload as an AnyJSON document, keyed by parameter name —
+    /// on the dynamic path the arguments the agent sent, **before** they are
+    /// mapped onto the contract's types; on the static path the bytes the stub
+    /// wrote, read back through the contract ([`crate::guard::Guarded`]).
+    /// `None` on a path that has nothing to offer: a dry run asked without
+    /// values, an unresolved handle, a static payload the guard could not
+    /// read (which it then does not send).
     ///
     /// This is what fills [`SEAT_SAFETY_CONTENT`], and the shape matters. The
     /// seat was empty because the chain runs before arguments are decoded, and
@@ -308,18 +335,17 @@ pub struct CallContext<'a> {
     /// caller may not call. Passing the unmapped JSON keeps the chain where it
     /// is and still gives a stage the values.
     ///
-    /// **The static path supplies `None`, and that is a real gap rather than a
-    /// detail.** A generated stub hands its arguments to the wire as a closure
-    /// that writes bytes; there is no data for a stage to read. So a content
-    /// rule is enforced on the dynamic path and absent on the compiled one,
-    /// which is §4.7's bypass wearing a safety label — stated here because a
-    /// half-enforced gate that nobody documents is worse than an empty seat.
-    /// Closing it means `Invoker::invoke` carrying arguments as data, which is
-    /// a three-crate change.
+    /// **The static path used to supply `None`**, and that was a real gap: a
+    /// content rule enforced on the dynamic path and absent on the compiled
+    /// one, §4.7's bypass wearing a safety label. It is closed by the guard
+    /// reading the stub's own bytes back, into this same shape, so a stage
+    /// cannot tell which path a payload came down — and a stub compiled before
+    /// the change is covered, because nothing about the stub changed.
     ///
-    /// **정적 경로는 `None`을 준다.** 생성 스텁은 인자를 바이트로 쓰는 클로저로
-    /// 넘기므로 스테이지가 읽을 데이터가 없다. 내용 규칙이 동적 경로에서만
-    /// 강제된다는 뜻이며, 문서화되지 않은 반쪽 게이트는 빈 좌석보다 나쁘다.
+    /// **정적 경로도 같은 문서를 준다.** 가드가 스텁이 쓴 바이트를 계약에
+    /// 따라 되읽어 같은 모양으로 넘기므로, 스테이지는 어느 경로로 온
+    /// 페이로드인지 구별할 수 없다. 읽을 수 없는 페이로드는 `None`이고, 그
+    /// 호출은 보내지 않는다.
     pub arguments: Option<&'a Json>,
 }
 
@@ -1966,10 +1992,12 @@ mod tests {
         assert!(stage.to_string().contains("pin-s3cret-4242"), "{stage}");
     }
 
-    /// A dry run is asked before a call exists, so it has no arguments to offer
-    /// and a content stage has nothing to judge. Stated as a test because the
-    /// opposite is what a reader assumes: a `Would::Allow` for an operation
-    /// behind a content filter is a policy verdict, not a safety one.
+    /// A dry run asked without values is asked before a call exists, so it
+    /// has no arguments to offer and a content stage has nothing to judge.
+    /// Stated as a test because the opposite is what a reader assumes: a
+    /// `Would::Allow` for an operation behind a content filter is a policy
+    /// verdict, not a safety one — unless the operator declared the values
+    /// (`Bridge::dry_run_with`), which is the other test in `crate::dryrun`.
     #[test]
     fn a_dry_run_offers_a_content_stage_no_arguments_to_judge() {
         struct Recording(Rc<RefCell<Vec<bool>>>);
