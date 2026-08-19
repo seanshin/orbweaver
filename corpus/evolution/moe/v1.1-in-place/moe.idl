@@ -1,3 +1,17 @@
+// ---------------------------------------------------------------------------
+// NEGATIVE CONTROL: moe v1.0 with `specialization` and `latency_p50_ms` added
+// to the released `Capability` IN PLACE — the edit PLAN-MOE §4.5 measured and
+// §5.3 forbids. Diffed against ../v1.0/moe.idl it must exit 1 with two
+// BREAKING lines; if it ever exits 0 the release gate has stopped checking.
+// This is not a contract anything serves; the served revision is
+// corpus/golden/22-moe-control-plane.idl, which adds the two properties in a
+// new struct instead.
+//
+// 음성 대조군: released `Capability`에 두 멤버를 제자리에 추가한 판. v1.0과
+// 비교하면 반드시 exit 1 (BREAKING 두 건). 어떤 서번트도 이 계약을 서비스하지
+// 않는다.
+// ---------------------------------------------------------------------------
+
 // 22 — operations returning interfaces (Expert delegate), oneway, and a
 // sequence of object references (ExpertSeq) as a return type — none of which
 // 01–21 combine. Adopted from a real external design, docs/CORBAMoEArchitecture.md
@@ -20,7 +34,9 @@ module moe {
 
   struct Capability {
     CapabilityId id;
+    string       specialization;   // ADDED IN PLACE — the edit idl-diff refuses
     float        cost;
+    float        latency_p50_ms;   // ADDED IN PLACE — the edit idl-diff refuses
     float        latency_p99_ms;
     float        load;
     Residency    state;
@@ -32,21 +48,6 @@ module moe {
 
   struct GateSignal  { Tensor affinity; unsigned short top_k; };
   struct Constraints { CapabilityId required; float max_latency_ms; float max_cost; };
-
-  // v1.1 — ADDITIVE. `Capability` is released and is not edited in place:
-  // adding `specialization` and `latency_p50_ms` to it is BREAKING by our own
-  // idl-diff (a CDR member has no tag and no length, so an added one is read
-  // as part of whatever followed it — PLAN-MOE §4.5, measured). The two
-  // properties the trading matcher could not answer for a wire-registered
-  // offer travel in a new struct that *composes* the released one, through
-  // new operations below. corpus/evolution/moe/v1.0 is the frozen release
-  // this file is diffed against; corpus/evolution/moe/v1.1-in-place is the
-  // edit that was refused.
-  struct MeasuredCapability {
-    Capability base;
-    string     specialization;     // what the expert is for: math, code, vision, …
-    float      latency_p50_ms;     // measured, never a placeholder — an unmeasured
-  };                               // expert registers through v1.0 and stays unranked
 
   //@ ai_desc: An expert weight block or submodel, addressable and loadable
   interface Expert {
@@ -82,17 +83,6 @@ module moe {
     //@ ai_effect: idempotent
     //@ ai_authz: moe.registry.write
     void heartbeat(in Expert e, in Capability updated_cap);
-    // v1.1 (server-first, not breaking): the same two operations over the
-    // measured shape. A v1.0 client keeps calling the two above and its
-    // offers stay unanswerable on the two new properties, which is the truth.
-    //@ ai_desc: Register an expert whose specialization and median latency were measured
-    //@ ai_effect: destructive
-    //@ ai_authz: moe.registry.write
-    void register_measured(in Expert e, in MeasuredCapability measured);
-    //@ ai_desc: Re-announce an expert with a fresh measurement
-    //@ ai_effect: idempotent
-    //@ ai_authz: moe.registry.write
-    void heartbeat_measured(in Expert e, in MeasuredCapability updated_measured);
   };
 
   //@ ai_desc: POA-backed loader: residency transitions, never per token

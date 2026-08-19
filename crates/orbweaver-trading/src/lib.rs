@@ -6,8 +6,9 @@
 //!
 //! This crate is the **decision engine only**. There is no wire surface yet:
 //! binding the IDL `ExpertRegistry`/`ExpertLoader` contracts
-//! (`corpus/moe/moe.idl`) to our server is a later batch, as is the residency
-//! state machine on the POA (F3) — [`policy::Decision`]s are commands *for*
+//! (`corpus/golden/22-moe-control-plane.idl`) to our server is a later batch,
+//! as is the residency state machine on the POA (F3) — [`policy::Decision`]s
+//! are commands *for*
 //! that machine, not the machine. Selection results cross the MCP face as
 //! capability handles, never IORs (integration point IF1) — also later. No
 //! accelerator, kernel or RDMA path exists in this repository; residency and
@@ -38,8 +39,9 @@ pub mod replay;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Where an expert's weights currently live, mirroring `moe::Residency`
-/// (`corpus/moe/moe.idl`). The declaration order is the loading progression,
-/// and it is also the order the derived `Ord` (and therefore every query
+/// (`corpus/golden/22-moe-control-plane.idl`). The declaration order is the
+/// loading progression, and it is also the order the derived `Ord` (and
+/// therefore every query
 /// comparison on `residency`) uses: `OFFLOADED < PREFETCHING < RESIDENT <
 /// ACTIVE`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -79,13 +81,16 @@ pub struct Offer {
     /// What the expert is for: `math`, `code`, `retrieval`, `vision`, … or
     /// `None` when the source could not say.
     ///
-    /// Optional because `moe::Capability` — the contract an expert registers
-    /// over the wire — has no member for it, so an offer built from a wire
-    /// registration genuinely does not know. It used to be an empty string,
-    /// and that was not a smaller lie than it looks: a query for
-    /// `specialization == 'math'` matched nothing and read as "no expert is
-    /// available for maths", which is a different sentence from "nobody told
-    /// us what these experts do".
+    /// Optional because `moe::Capability` — the v1.0 contract an expert
+    /// registers over the wire — has no member for it, so an offer built
+    /// from a `register_expert` genuinely does not know. It used to be an
+    /// empty string, and that was not a smaller lie than it looks: a query
+    /// for `specialization == 'math'` matched nothing and read as "no expert
+    /// is available for maths", which is a different sentence from "nobody
+    /// told us what these experts do". Since v1.1 of the contract
+    /// (`moe::MeasuredCapability`, `register_measured` / `heartbeat_measured`
+    /// — corpus/golden/22) an expert can carry it over the wire, and the
+    /// three-valued matching stays for the ones that register the old way.
     pub specialization: Option<String>,
     /// Relative invocation cost.
     pub cost: f64,
@@ -96,7 +101,10 @@ pub struct Offer {
     /// optional in one change: as a placeholder `0.0` it did not merely fail
     /// to match, it **matched every upper bound**. A router selecting on
     /// `latency_p50 < 20` preferred exactly the offers nobody had measured,
-    /// because an unknown latency looked faster than any known one.
+    /// because an unknown latency looked faster than any known one. The
+    /// v1.1 registration path carries a measured value; an offer that
+    /// arrived without one is *unranked* under `ORDER BY latency_p50`, never
+    /// last and never first — see [`query::Selection::unranked`].
     pub latency_p50: Option<f64>,
     /// 99th-percentile latency, in milliseconds.
     pub latency_p99: f64,

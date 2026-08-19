@@ -63,12 +63,17 @@
 //!
 //! # What the contract does not carry
 //!
-//! - **No `specialization`, no `latency_p50`.** [`Offer`] has both and
-//!   `moe::Capability` has neither, so a wire-registered offer carries an
-//!   empty specialization and a zero p50. A `specialization == 'math'`
-//!   constraint query therefore cannot be satisfied by an offer that arrived
-//!   over this contract. Stated rather than papered over with a guess: the
-//!   fix is a contract change, which is F1's territory, not a default here.
+//! - **`specialization` and `latency_p50` — on the v1.0 path only.**
+//!   [`Offer`] has both and `moe::Capability` has neither, so an offer that
+//!   arrived through `register_expert`/`heartbeat` carries `None` for each: a
+//!   `specialization == 'math'` constraint is *unanswerable* for it and an
+//!   `ORDER BY latency_p50` cannot place it. The contract change PLAN-MOE
+//!   §4.5 priced is now paid the §5.3 way — v1.1 adds
+//!   [`MeasuredCapability`] and `register_measured`/`heartbeat_measured`
+//!   *beside* the released type, never inside it — and an offer registered
+//!   through those answers both. A v1.0 heartbeat on a measured offer leaves
+//!   the two members alone: a message with no room for a fact cannot retract
+//!   it.
 //! - **No exceptions.** Not one operation declares `raises`, so every refusal
 //!   is a *system* exception. Inventing a user exception would produce bytes
 //!   the generated client for corpus/golden/22 has no branch for — worse than
@@ -297,9 +302,10 @@ impl Capability {
     /// the loader (passed in by the caller, which is the only thing that knows
     /// it) and `route_freq` seeded at zero.
     ///
-    /// `specialization` and `latency_p50` have no member in this contract —
-    /// see the module docs — so they are `None`, which is the sentence the
-    /// wire actually supports: *nobody told us*.
+    /// `specialization` and `latency_p50` have no member in this (v1.0)
+    /// shape — see the module docs — so they are `None`, which is the
+    /// sentence the wire actually supports: *nobody told us*. The v1.1 shape,
+    /// [`MeasuredCapability::to_offer`], fills them in.
     ///
     /// They used to be an empty string and `0.0`, and the zero was the worse
     /// of the two. It did not merely fail to match a query; it satisfied
@@ -341,6 +347,88 @@ impl Capability {
             placement_node: offer.placement_node.clone(),
             contract_version: contract_version.to_owned(),
         }
+    }
+}
+
+/// `moe::MeasuredCapability` — the v1.1 registration shape, corpus/golden/22:
+///
+/// ```idl
+/// struct MeasuredCapability {
+///   Capability base;
+///   string     specialization;
+///   float      latency_p50_ms;
+/// };
+/// ```
+///
+/// # Why a new struct and not two more members
+///
+/// `Capability` is released, and adding the two members to it in place is
+/// **BREAKING** by our own `idl-diff` — a CDR member has no tag and no
+/// length, so a v1.0 peer would read `specialization`'s bytes as `cost`.
+/// PLAN-MOE §4.5 measured that and declined to pay it; D010 A2 gave the
+/// version bump its reason. §5.3's answer is a new type that *composes* the
+/// released one, reached through new operations (`register_measured`,
+/// `heartbeat_measured`) that a v1.0 client never calls. The frozen release
+/// this is diffed against is `corpus/evolution/moe/v1.0/moe.idl`; the
+/// in-place edit that was refused is `corpus/evolution/moe/v1.1-in-place/`.
+///
+/// # What the two members mean to the store
+///
+/// Both go straight into the offer as `Some(..)`, which is the whole point:
+/// an offer that arrived this way is *answerable* on `specialization ==` and
+/// `latency_p50 <`, and *rankable* under `ORDER BY latency_p50`. Nothing
+/// here validates the measurement — a peer that reports `0.0` reports a
+/// measured zero, exactly as it would report any other number, and the
+/// difference between that and the old placeholder zero is that this one was
+/// *said* rather than assumed. The struct has no way to say "unmeasured";
+/// that is what registering through v1.0 means.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeasuredCapability {
+    /// `Capability base` — the released nine members, unchanged.
+    pub base: Capability,
+    /// `string specialization` — what the expert is for.
+    pub specialization: String,
+    /// `float latency_p50_ms` — the median latency somebody measured.
+    pub latency_p50_ms: f32,
+}
+
+impl MeasuredCapability {
+    /// Marshals the struct in declaration order: the nested struct's members
+    /// inline (§9.3.2.5 — a struct member is its members, no header), then
+    /// the string, then the float.
+    pub fn write_to(&self, out: &mut Encoder) {
+        self.base.write_to(out);
+        out.put_str(&self.specialization);
+        out.put_f32(self.latency_p50_ms);
+    }
+
+    /// Demarshals what [`MeasuredCapability::write_to`] wrote.
+    pub fn read_from(d: &mut Decoder<'_>) -> orbweaver_cdr::Result<Self> {
+        let base = Capability::read_from(d)?;
+        let specialization = d.get_string()?;
+        let latency_p50_ms = d.get_f32()?;
+        Ok(MeasuredCapability { base, specialization, latency_p50_ms })
+    }
+
+    /// The offer this registers: [`Capability::to_offer`] with the two
+    /// members the v1.0 shape had no room for filled in.
+    pub fn to_offer(&self, residency: Residency) -> Offer {
+        let mut offer = self.base.to_offer(residency);
+        offer.specialization = Some(self.specialization.clone());
+        offer.latency_p50 = Some(f64::from(self.latency_p50_ms));
+        offer
+    }
+
+    /// The measured shape an offer would be reported as, or `None` when the
+    /// offer does not carry both members — an offer that registered through
+    /// v1.0 has no measured shape, and inventing one would put the
+    /// placeholder back on the wire.
+    pub fn from_offer(offer: &Offer, state: Residency, contract_version: &str) -> Option<Self> {
+        Some(MeasuredCapability {
+            base: Capability::from_offer(offer, state, contract_version),
+            specialization: offer.specialization.clone()?,
+            latency_p50_ms: offer.latency_p50? as f32,
+        })
     }
 }
 
@@ -710,17 +798,17 @@ impl ExpertService {
         self.state.write(|s| s.free_memory = bytes);
     }
 
-    /// Records what `id` specializes in — the offer property `moe::Capability`
-    /// declares no member for.
+    /// Records what `id` specializes in — the offer property the v1.0
+    /// `moe::Capability` declares no member for.
     ///
     /// Out of band for the same reason as [`ExpertService::observe_free_memory`]
-    /// and [`ExpertService::record_hit`]: it is a control-plane fact the
-    /// contract carries no room for, so it arrives in-process rather than
-    /// through an operation this contract does not declare. PLAN-MOE §4.5
-    /// measured what putting it *in* the contract costs — `idl-diff` refuses
-    /// the added member as BREAKING — so this is deliberately not a step
-    /// towards a wire member; it is what makes [`ExpertService::select`]
-    /// answerable at all for a deployment that knows its own experts.
+    /// and [`ExpertService::record_hit`]: it is a control-plane fact the v1.0
+    /// shape carries no room for, so it arrives in-process for an expert that
+    /// registered that way. Since v1.1 the wire has a place for it —
+    /// `register_measured`/`heartbeat_measured` carry a
+    /// [`MeasuredCapability`] — so this is the deployment's fallback for
+    /// experts still announcing through `register_expert`, and it is what
+    /// makes [`ExpertService::select`] answerable for those.
     ///
     /// Returns whether `id` was registered. Nothing else about the offer
     /// changes — the residency mirror included, since the offer is read,
@@ -810,7 +898,10 @@ impl ExpertService {
         let query = Query::parse(&text).map_err(|_| SystemException::internal())?;
         self.state.read(|s| {
             let selection = query.select_reporting(&s.store);
-            if !selection.unanswerable.is_empty() {
+            // Unanswerable *or* unranked — the ordering here is `route_freq`,
+            // which every offer carries, so today only the first can happen;
+            // the predicate is the rule, not the case.
+            if !selection.is_complete() {
                 return Err(system(NO_IMPLEMENT, Completion::No));
             }
             let mut chosen = Vec::with_capacity(selection.matched.len().min(gate.top_k.into()));
@@ -940,11 +1031,37 @@ impl ExpertState {
 
     // ── the ExpertRegistry operations ───────────────────────────────────────
 
+    /// `register_expert` (v1.0): the offer carries no specialization and no
+    /// median latency, and the store says so with `None`.
     fn register_expert(&mut self, reference: Ior, cap: &Capability) -> Result<(), SystemException> {
+        self.register_offer(reference, cap.to_offer(Residency::Offloaded), &cap.contract_version)
+    }
+
+    /// `register_measured` (v1.1): the same registration with both members
+    /// filled in. One code path underneath, so the two operations cannot
+    /// drift on anything but the offer they build.
+    fn register_measured(
+        &mut self,
+        reference: Ior,
+        measured: &MeasuredCapability,
+    ) -> Result<(), SystemException> {
+        self.register_offer(
+            reference,
+            measured.to_offer(Residency::Offloaded),
+            &measured.base.contract_version,
+        )
+    }
+
+    fn register_offer(
+        &mut self,
+        reference: Ior,
+        offer: Offer,
+        contract_version: &str,
+    ) -> Result<(), SystemException> {
         // Checked against both halves before either is touched: a partial
         // registration would leave an offer the loader has never heard of,
         // and `deregister` keys off the reference table that comes last.
-        if self.store.get(&cap.id).is_some() || self.loader.status(&cap.id).is_some() {
+        if self.store.get(&offer.id).is_some() || self.loader.status(&offer.id).is_some() {
             return Err(system(BAD_PARAM, Completion::No));
         }
         // PERSISTENT, and not selectable: §4.2's TRANSIENT drops the
@@ -952,13 +1069,11 @@ impl ExpertState {
         // for that, and defaulting to the lossy one would make eviction quietly
         // destructive. Adding a member is a contract change (F1), not a
         // default chosen here.
-        self.loader.register(&cap.id, Lifespan::Persistent).map_err(|e| refuse(&e))?;
-        let offer = cap.to_offer(Residency::Offloaded);
+        self.loader.register(&offer.id, Lifespan::Persistent).map_err(|e| refuse(&e))?;
+        let id = offer.id.clone();
         self.store.register(offer).map_err(|e| refuse_store(&e))?;
-        self.refs.insert(
-            cap.id.clone(),
-            Registered { reference, contract_version: cap.contract_version.clone() },
-        );
+        self.refs
+            .insert(id, Registered { reference, contract_version: contract_version.to_owned() });
         Ok(())
     }
 
@@ -987,19 +1102,58 @@ impl ExpertState {
         Ok(())
     }
 
+    /// `heartbeat` (v1.0). The two members this shape cannot mention are
+    /// **kept from the offer on file**, not reset to `None`: a v1.0 heartbeat
+    /// after a v1.1 registration (or after `declare_specialization`) is a
+    /// message with no room for the fact, which is not the same message as
+    /// "the fact is withdrawn". The first version of this rebuilt the offer
+    /// from the capability alone and would have erased a measurement the
+    /// moment the expert heartbeated the old way — silently, and only
+    /// visible as a router that stopped ranking it.
     fn heartbeat(&mut self, reference: Ior, cap: &Capability) -> Result<(), SystemException> {
-        let Some(registered) = self.refs.get_mut(&cap.id) else {
+        let (specialization, latency_p50) = match self.store.get(&cap.id) {
+            Some(on_file) => (on_file.specialization.clone(), on_file.latency_p50),
+            None => (None, None),
+        };
+        let mut offer = cap.to_offer(Residency::Offloaded);
+        offer.specialization = specialization;
+        offer.latency_p50 = latency_p50;
+        self.heartbeat_offer(reference, offer, &cap.contract_version)
+    }
+
+    /// `heartbeat_measured` (v1.1): a fresh measurement replaces the one on
+    /// file, and this is the operation a measurement *arrives* by for an
+    /// expert already registered.
+    fn heartbeat_measured(
+        &mut self,
+        reference: Ior,
+        measured: &MeasuredCapability,
+    ) -> Result<(), SystemException> {
+        self.heartbeat_offer(
+            reference,
+            measured.to_offer(Residency::Offloaded),
+            &measured.base.contract_version,
+        )
+    }
+
+    fn heartbeat_offer(
+        &mut self,
+        reference: Ior,
+        mut offer: Offer,
+        contract_version: &str,
+    ) -> Result<(), SystemException> {
+        let Some(registered) = self.refs.get_mut(&offer.id) else {
             return Err(system(BAD_PARAM, Completion::No));
         };
         // A heartbeat re-announces the expert, address included: an expert
         // that moved says so here, and this is what keeps `deregister`'s
         // reference lookup able to find it afterwards.
         registered.reference = reference;
-        registered.contract_version = cap.contract_version.clone();
-        let state = self.loader.status(&cap.id).unwrap_or(Residency::Offloaded);
+        registered.contract_version = contract_version.to_owned();
         // route_freq is dropped by OfferStore::heartbeat; state comes from the
         // loader. Both are in the table in the module docs.
-        self.store.heartbeat(cap.to_offer(state)).map_err(|e| refuse_store(&e))
+        offer.residency = self.loader.status(&offer.id).unwrap_or(Residency::Offloaded);
+        self.store.heartbeat(offer).map_err(|e| refuse_store(&e))
     }
 
     // ── the ExpertLoader operations ─────────────────────────────────────────
@@ -1075,6 +1229,22 @@ impl ExpertService {
 
     fn heartbeat(&self, reference: Ior, cap: &Capability) -> Result<(), SystemException> {
         self.state.write(|s| s.heartbeat(reference, cap))
+    }
+
+    fn register_measured(
+        &self,
+        reference: Ior,
+        measured: &MeasuredCapability,
+    ) -> Result<(), SystemException> {
+        self.state.write(|s| s.register_measured(reference, measured))
+    }
+
+    fn heartbeat_measured(
+        &self,
+        reference: Ior,
+        measured: &MeasuredCapability,
+    ) -> Result<(), SystemException> {
+        self.state.write(|s| s.heartbeat_measured(reference, measured))
     }
 
     fn prefetch(&self, id: &str) -> Result<(), SystemException> {
@@ -1186,6 +1356,23 @@ impl ExpertService {
                     let cap =
                         Capability::read_from(&mut args).map_err(|_| SystemException::marshal())?;
                     self.heartbeat(reference, &cap)
+                }
+                // v1.1 — the same two operations over the measured shape.
+                "register_measured" => {
+                    let reference = get_reference(&mut args)
+                        .map_err(|_| SystemException::marshal())?
+                        .ok_or_else(|| system(BAD_PARAM, Completion::No))?;
+                    let measured = MeasuredCapability::read_from(&mut args)
+                        .map_err(|_| SystemException::marshal())?;
+                    self.register_measured(reference, &measured)
+                }
+                "heartbeat_measured" => {
+                    let reference = get_reference(&mut args)
+                        .map_err(|_| SystemException::marshal())?
+                        .ok_or_else(|| system(BAD_PARAM, Completion::No))?;
+                    let measured = MeasuredCapability::read_from(&mut args)
+                        .map_err(|_| SystemException::marshal())?;
+                    self.heartbeat_measured(reference, &measured)
                 }
                 _ => Err(SystemException::bad_operation()),
             }
@@ -1436,6 +1623,189 @@ mod tests {
         // `latency_p50 <` bound a query could ask on the wire path.
         assert_eq!(offer.specialization, None, "moe::Capability declares no specialization");
         assert_eq!(offer.latency_p50, None, "…and no p50, which is not the same as fast");
+    }
+
+    // ── the v1.1 path: MeasuredCapability ───────────────────────────────────
+
+    fn measured(id: &str, specialization: &str, p50: f32) -> MeasuredCapability {
+        MeasuredCapability {
+            base: cap(id, 64),
+            specialization: specialization.to_owned(),
+            latency_p50_ms: p50,
+        }
+    }
+
+    /// `struct MeasuredCapability { Capability base; string specialization;
+    /// float latency_p50_ms; }` — the nested struct is its nine members
+    /// inline, then the two new ones, both byte orders. Pinned member by
+    /// member with the primitive getters, independently of `read_from`.
+    #[test]
+    fn measured_capability_members_are_in_the_idls_declaration_order() {
+        let m = measured("expert-math", "math", 12.5);
+        for endian in [Endian::Big, Endian::Little] {
+            let mut e = Encoder::new(endian);
+            m.write_to(&mut e);
+            let bytes = e.finish().unwrap();
+            let mut d = Decoder::new(&bytes, endian);
+            assert_eq!(Capability::read_from(&mut d).unwrap(), m.base, "1 base {endian:?}");
+            assert_eq!(d.get_string().unwrap(), "math", "2 specialization {endian:?}");
+            assert_eq!(d.get_f32().unwrap(), 12.5, "3 latency_p50_ms {endian:?}");
+            assert!(d.get_u8().is_err(), "nothing follows the third member {endian:?}");
+
+            let mut d = Decoder::new(&bytes, endian);
+            assert_eq!(MeasuredCapability::read_from(&mut d).unwrap(), m, "round trip {endian:?}");
+        }
+    }
+
+    /// The registration the contract change exists for, over the wire in
+    /// both byte orders: `register_measured` and `heartbeat_measured` reach
+    /// the store with both members `Some`, and the matcher can then answer
+    /// — and rank — a query on them. Beside it, an expert registered through
+    /// v1.0 stays unanswerable on the same query, so the two paths are told
+    /// apart by the engine and not by this test's knowledge of which was
+    /// which.
+    #[test]
+    fn a_v1_1_registration_is_answerable_and_rankable_on_both_byte_orders() {
+        for endian in [Endian::Big, Endian::Little] {
+            let svc = service();
+            svc.register_expert(expert_ref("expert-old"), &cap("expert-old", 10)).unwrap();
+            let served = Served::start(svc);
+            let addr = served.registry.primary().unwrap();
+            let key = addr.object_key.clone();
+            let mut s = TcpStream::connect((addr.host.as_str(), addr.port)).expect("connects");
+
+            let mut request_id = 0u32;
+            let mut call = |op: &str, m: &MeasuredCapability| {
+                request_id += 1;
+                let reference = expert_ref(&m.base.id);
+                let msg = orbweaver_giop::encode_request(
+                    Version::V1_2,
+                    endian,
+                    request_id,
+                    &key,
+                    op,
+                    true,
+                    |e| {
+                        reference.write_to(e).unwrap();
+                        m.write_to(e);
+                    },
+                )
+                .unwrap();
+                s.write_all(&msg).unwrap();
+                let msg = orbweaver_giop::read_message(&mut s, DEFAULT_MAX_MESSAGE_SIZE).unwrap();
+                let reply = orbweaver_giop::decode_reply(msg).unwrap();
+                assert_eq!(reply.request_id, request_id, "{endian:?} {op}");
+                reply.status
+            };
+            assert_eq!(
+                call("register_measured", &measured("expert-math", "math", 12.0)),
+                ReplyStatus::NoException,
+                "{endian:?}"
+            );
+            assert_eq!(
+                call("register_measured", &measured("expert-math-b", "math", 30.0)),
+                ReplyStatus::NoException,
+                "{endian:?}"
+            );
+            // A fresh measurement for expert-math-b arrives by heartbeat: it
+            // is now the faster of the two.
+            assert_eq!(
+                call("heartbeat_measured", &measured("expert-math-b", "math", 8.0)),
+                ReplyStatus::NoException,
+                "{endian:?}"
+            );
+            // A duplicate registration is refused on this path exactly as on
+            // the v1.0 one — same code underneath.
+            assert_eq!(
+                call("register_measured", &measured("expert-math", "math", 1.0)),
+                ReplyStatus::SystemException,
+                "{endian:?}: a second register_measured is BAD_PARAM"
+            );
+            drop(s);
+            let last = served.registry();
+            let svc = served.shutdown(last);
+
+            // Read back *through the matcher*, not by inspecting the offer.
+            let q = Query::parse(
+                "specialization == 'math' AND latency_p50 <= 20 ORDER BY latency_p50 ASC",
+            )
+            .unwrap();
+            svc.with_store(|store| {
+                let sel = q.select_reporting(store);
+                let ids: Vec<&str> = sel.matched.iter().map(|o| o.id.as_str()).collect();
+                assert_eq!(
+                    ids,
+                    ["expert-math-b", "expert-math"],
+                    "{endian:?}: fastest measured first"
+                );
+                assert!(sel.unranked.is_empty(), "{endian:?}");
+                let unanswerable: Vec<&str> =
+                    sel.unanswerable.iter().map(|o| o.id.as_str()).collect();
+                assert_eq!(unanswerable, ["expert-old"], "{endian:?}: v1.0 cannot answer");
+                assert!(!sel.is_complete(), "{endian:?}: a router asked this refuses");
+                let old = store.get("expert-old").unwrap();
+                assert_eq!((old.specialization.as_deref(), old.latency_p50), (None, None));
+                let b = store.get("expert-math-b").unwrap();
+                assert_eq!(b.latency_p50, Some(8.0), "{endian:?}: the heartbeat's measurement");
+                assert_eq!(b.specialization.as_deref(), Some("math"));
+            });
+            // …and once the v1.0 expert is out of the candidate set (it is
+            // not maths, so `No` beats `Unknown`), the answer is complete.
+            assert!(svc.declare_specialization("expert-old", "code"));
+            svc.with_store(|store| {
+                let sel = q.select_reporting(store);
+                assert!(sel.is_complete(), "{endian:?}");
+                assert_eq!(sel.matched.len(), 2, "{endian:?}");
+            });
+        }
+    }
+
+    /// A v1.0 `heartbeat` on a measured offer keeps the measurement: the old
+    /// shape has no member for either fact and therefore cannot withdraw
+    /// them. Before this, the heartbeat rebuilt the offer from the capability
+    /// alone and both went back to `None`.
+    #[test]
+    fn a_v1_0_heartbeat_does_not_erase_what_it_cannot_mention() {
+        let svc = service();
+        svc.register_measured(expert_ref("expert-math"), &measured("expert-math", "math", 12.0))
+            .unwrap();
+        let mut old_shape = cap("expert-math", 99);
+        // 0.75, exactly representable: the wire member is `float`, the offer
+        // is f64, and 0.9 widens to 0.8999999761581421 — the first run of
+        // this test failed on that and not on the servant.
+        old_shape.load = 0.75;
+        svc.heartbeat(expert_ref("expert-math"), &old_shape).unwrap();
+        let offer = svc.with_store(|s| s.get("expert-math").cloned()).unwrap();
+        assert_eq!(offer.mem_footprint, 99, "the members the heartbeat carries are updated");
+        assert_eq!(offer.load, 0.75);
+        assert_eq!(
+            offer.specialization.as_deref(),
+            Some("math"),
+            "…and the ones it cannot are kept"
+        );
+        assert_eq!(offer.latency_p50, Some(12.0));
+        // The out-of-band declaration survives a v1.0 heartbeat by the same
+        // rule — it used not to.
+        svc.register_expert(expert_ref("expert-code"), &cap("expert-code", 10)).unwrap();
+        assert!(svc.declare_specialization("expert-code", "code"));
+        svc.heartbeat(expert_ref("expert-code"), &cap("expert-code", 11)).unwrap();
+        let offer = svc.with_store(|s| s.get("expert-code").cloned()).unwrap();
+        assert_eq!(offer.specialization.as_deref(), Some("code"));
+        // A v1.1 heartbeat, by contrast, is how a measurement is *replaced*.
+        svc.heartbeat_measured(expert_ref("expert-math"), &measured("expert-math", "math", 15.0))
+            .unwrap();
+        let offer = svc.with_store(|s| s.get("expert-math").cloned()).unwrap();
+        assert_eq!(offer.latency_p50, Some(15.0));
+        // And `from_offer` refuses to invent a measured shape for the v1.0 one.
+        let unmeasured = svc.with_store(|s| s.get("expert-code").cloned()).unwrap();
+        assert!(
+            MeasuredCapability::from_offer(&unmeasured, Residency::Offloaded, "moe/1.0").is_none()
+        );
+        let measured_back = svc.with_store(|s| s.get("expert-math").cloned()).unwrap();
+        let back = MeasuredCapability::from_offer(&measured_back, Residency::Offloaded, "moe/1.0")
+            .expect("both members on file");
+        assert_eq!(back.latency_p50_ms, 15.0);
+        assert_eq!(back.specialization, "math");
     }
 
     // ── Router::select ──────────────────────────────────────────────────────
