@@ -1745,6 +1745,24 @@ if [ "$mv_ctl_rc" -eq 1 ] && printf '%s' "$mv_ctl" | grep -q "latency_p50_ms" \
 else
   echo "  FAIL the negative control passed the gate (exit $mv_ctl_rc)"; mv_fail=1
 fi
+# corpus/evolution/union-default (a40317a): the same union with the default
+# written first must be "no change"; a case inserted ahead of the default with
+# the default retyped must name BOTH — the positional differ named one.
+ud_out=$(cargo run -q --bin idl-diff -- corpus/evolution/union-default/v1.0/payload.idl \
+         corpus/evolution/union-default/v1.0-default-first/payload.idl 2>&1); ud_rc=$?
+if [ "$ud_rc" -eq 0 ] && printf '%s' "$ud_out" | grep -q "no change"; then
+  echo "  ok   a union's default written first is the same release (exit 0)"
+else
+  echo "  FAIL member order of a union read as a change (exit $ud_rc)"; mv_fail=1
+fi
+ud_ctl=$(cargo run -q --bin idl-diff -- corpus/evolution/union-default/v1.0/payload.idl \
+         corpus/evolution/union-default/v1.1-retyped-default/payload.idl 2>&1); ud_ctl_rc=$?
+if [ "$ud_ctl_rc" -eq 1 ] && printf '%s' "$ud_ctl" | grep -q 'default member "text" changed type' \
+   && printf '%s' "$ud_ctl" | grep -q 'union case(s) added: \["extra"\]'; then
+  echo "  ok   the retyped default behind an inserted case is named, not only the case (exit 1)"
+else
+  echo "  FAIL the retyped default is not named (exit $ud_ctl_rc)"; mv_fail=1
+fi
 [ "$mv_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
 # ── The guard's dry-run: a policy preview that costs nothing ────────────────

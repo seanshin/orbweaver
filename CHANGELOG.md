@@ -60,7 +60,7 @@ records what changed and, where it matters, what it changes on the wire.
   encoding unchanged; Rust stubs unchanged (emitter output over all 31 golden
   files identical); Python classes gain `_idl_default_slot`; sweep 170/137 +
   70/46, 0 divergences. Found and not fixed: the §5.3 differ compares the
-  default member by label, not by role.
+  default member by label, not by role (fixed below, a40317a).
 
   **라벨과 `default:`를 함께 가진 union 분기는 이제 라벨마다 한 멤버에 더해
   `default:`가 쓰인 위치에 라벨 없는 default 멤버를 하나 더 만들고
@@ -69,7 +69,7 @@ records what changed and, where it matters, what it changes on the wire.
   `case 2: default: string rest;`가 두 멤버였고 양쪽 피어의 분기 선택은 같았지만
   와이어의 `member_count`/`default_index`가 달랐으며 재생성한 IDL은 `case 2:`를
   잃었다. 값 인코딩 불변, Rust 스텁 불변, Python 클래스에 `_idl_default_slot`
-  추가. 보고만: §5.3 differ가 default 멤버를 역할이 아닌 라벨로 비교한다.
+  추가. 보고만: §5.3 differ가 default 멤버를 역할이 아닌 라벨로 비교한다(아래에서 수정, a40317a).
 - **A union TypeCode's `default:` member is written with a label of the
   discriminator's width — zeros — and that slot is ignored on read** (was:
   zero bytes for a bare default, so any `any` carrying `corpus/golden/06`'s
@@ -806,6 +806,29 @@ records what changed and, where it matters, what it changes on the wire.
   숫자가 게이트에서 강등한 이유다.
 
 ### Fixed / 수정
+
+- **The §5.3 differ compares a union's members by role, not by position.**
+  Labelled cases by label, the default member by `default_index` — type, then
+  name — wherever it sits; a discriminator type change is one BREAKING
+  finding. Before: the default's empty label was compared as a discriminator
+  value and member types were zipped positionally, so a frozen TypeCode of the
+  pre-expansion folded shape against today's expanded one read "case
+  added"/"case removed" with nothing changed on the wire, and a default
+  retyped behind an inserted case was **missed** (`corpus/evolution/
+  union-default/`, exit 1 naming one of two edits). New verdicts, reasoned
+  from the generated stub (omniORB reads no member after an unlabelled
+  discriminator and raises nothing — the brief's "compatible" guess was
+  measured wrong): default added → conditionally breaking, default removed →
+  BREAKING, member renamed → compatible (the name does not travel).
+
+  **§5.3 differ가 union 멤버를 위치가 아니라 역할로 비교한다.** 라벨 있는
+  case는 라벨로, default 멤버는 `default_index`로 — 어디에 있든 타입, 그다음
+  이름 — 비교하고 판별자 타입 변경은 BREAKING 한 건이다. 이전에는 default의 빈
+  라벨을 판별자 값처럼 비교하고 타입은 위치로 zip해서, 접힌 모양의 동결
+  TypeCode와 확장된 모양이 "case 추가/제거"로 읽혔고, case를 앞에 끼워 넣고
+  default 타입을 바꾼 리비전에서 타입 변경을 **놓쳤다**. 새 판정 — 생성 스텁
+  기준(omniORB는 라벨 없는 판별자 뒤에서 멤버를 읽지 않고 아무것도 던지지
+  않는다): default 추가 → 조건부 파괴, 제거 → BREAKING, 이름 변경 → 호환.
 
 - **`spike-events` read a counter another thread was about to increment.**
   Its phase-2 "the dead consumer's backlog must be counted as dropped" check
