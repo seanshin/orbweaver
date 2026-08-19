@@ -1,0 +1,43 @@
+// DEFERRED at wire level (v1 support matrix, PLAN §4.4) — the *reach* cases.
+//
+// 20 and 21 carry the three constructs; this file carries every way a
+// declaration reaches one without naming it, and the two ways it does not.
+// Every declaration here is either servable on the v1 wire or not, and which
+// is pinned twice: by `wire/deferred-type` at S4 (`sidl-validate --wire v1`
+// refuses exactly the unservable ones) and by orbweaver-gen's skip list,
+// which `crates/orbweaver-gen/tests/deferred_wire_agreement.rs` holds to the
+// same set. Until this file existed the cascade had never been exercised by
+// a sweep: 21 reaches `fixed` through one typedef and one return type, and
+// nothing in the corpus reached it through `raises`, inheritance, a union
+// case, an attribute or an array element.
+//
+// Unnumbered on purpose: added by a repair rather than by the numbered
+// sweep, and a number would have collided with parallel work.
+module gcdr {
+  // ── unservable: reaches fixed ────────────────────────────────────────────
+  exception Overdrawn { fixed<9,2> shortfall; };
+  // through `raises` only — the skeleton marshals the exception
+  interface Teller { void withdraw(in long amount) raises (Overdrawn); };
+  // through inheritance only — the derived interface has the operation
+  interface Cashier : Teller { void ping(); };
+  union Payment switch (short) { case 1: fixed<9,2> cash; default: fixed<9,2> credit; };
+  typedef fixed<5,4> Rate;
+  interface Rates { readonly attribute Rate spot; };
+  typedef fixed<9,2> Column[3];
+  struct Ledger { Column lines; };
+
+  // ── unservable: reaches a valuetype or an abstract interface ─────────────
+  valuetype Note { public string text; };
+  struct Memo { Note body; };
+  abstract interface Describable { string describe(); };
+  interface Registrar { void enrol(in Describable item); };
+
+  // ── servable: a *reference* to an unservable interface is an IOR ─────────
+  // (A struct member `Teller window;` is the same shape and is deliberately
+  // not here: the Python emitter writes an empty name into the tk_objref
+  // TypeCode of an interface it skipped, so `struct Counter { Teller window; }`
+  // in an `any` diverges from the Rust bytes — found by adding it, recorded in
+  // the batch that added this file, and left for the emitter's own batch.)
+  interface Directory { Teller find(in string branch); Rates spot_rates(); };
+  struct Plain { long a; string b; };
+};

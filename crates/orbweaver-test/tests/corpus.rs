@@ -114,9 +114,27 @@ fn the_coverage_gaps_over_the_corpus_are_the_known_ones() {
     // deserves to be read rather than absorbed. `fixed` is on this list and on
     // `prop/unsupported-type` above because those are two facts about two
     // modules: the wire does not carry it (§4.4) and neither does the mapping.
+    //
+    // `corpus/golden/deferred-reach.idl` (2026-08-19) added five: every way a
+    // declaration reaches `fixed` without naming it — an exception, a union
+    // whose branches are all `fixed`, an array typedef and the struct holding
+    // it, an attribute's typedef. Acknowledged here, as this list asks; the
+    // same five are the `wire/deferred-type` findings S4 now reports for that
+    // file, minus the interfaces (no `TypeCode`) and the valuetype side (which
+    // the registry records as a reference and this leg therefore *does* run,
+    // as a reference — a measurement of the wrong wire form, recorded in the
+    // batch that added the file).
     assert_eq!(
         unmapped,
-        ["IDL:gc21/Amount:1.0", "IDL:gc21/Invoice:1.0"],
+        [
+            "IDL:gc21/Amount:1.0",
+            "IDL:gc21/Invoice:1.0",
+            "IDL:gcdr/Column:1.0",
+            "IDL:gcdr/Ledger:1.0",
+            "IDL:gcdr/Overdrawn:1.0",
+            "IDL:gcdr/Payment:1.0",
+            "IDL:gcdr/Rate:1.0",
+        ],
         "the set of types the JSON leg does not run for changed:\n  {}",
         gaps.iter()
             .filter(|g| g.contains("json/unmapped"))

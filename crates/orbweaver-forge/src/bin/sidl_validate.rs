@@ -5,6 +5,7 @@
 //! sidl-validate --json <file.idl>...          for tooling
 //! sidl-validate --repair-prompt <file.idl>    to hand back to a generator
 //! sidl-validate --against <released.idl> <proposed.idl>
+//! sidl-validate --wire v1 <file.idl>...        refuse what the v1 wire cannot carry
 //! ```
 //!
 //! `#include` is resolved before validation, which is what lets this be
@@ -17,15 +18,23 @@
 //! Exit status: 0 clean, 1 rejected, 2 could not run. Advice and warnings do
 //! not fail the run — a gate that blocks on advice is one people route around,
 //! and then it blocks nothing.
+//!
+//! `--wire v1` is the one flag that moves a finding between those classes:
+//! `valuetype`, abstract interfaces and `fixed` are warnings by default (the
+//! oracle accepts them and so must the default form over `corpus/golden/`) and
+//! refusals under it, with the §4.4 reason and the edit. `forge-pipeline`'s S4
+//! stage uses the refusing form; see `orbweaver_forge::WireGate` for why the
+//! two defaults differ.
 
 use orbweaver_dynamic::json::Json;
-use orbweaver_forge::{Report, Severity, validate_against, validate_unit};
+use orbweaver_forge::{Report, Severity, WireGate, validate_against_for, validate_unit_for};
 use orbweaver_idl::include::{SearchPath, Unit, preprocess_file};
 
 fn main() -> std::process::ExitCode {
     let mut json = false;
     let mut repair = false;
     let mut against: Option<String> = None;
+    let mut wire = WireGate::Deferred;
     let mut files: Vec<String> = Vec::new();
     let mut search = SearchPath::default();
 
@@ -38,6 +47,13 @@ fn main() -> std::process::ExitCode {
                 Some(f) => against = Some(f),
                 None => {
                     eprintln!("--against needs a released .idl file");
+                    return std::process::ExitCode::from(2);
+                }
+            },
+            "--wire" => match args.next().as_deref().and_then(WireGate::parse) {
+                Some(w) => wire = w,
+                None => {
+                    eprintln!("--wire needs `v1` or `deferred`");
                     return std::process::ExitCode::from(2);
                 }
             },
@@ -58,7 +74,10 @@ fn main() -> std::process::ExitCode {
             "-h" | "--help" => {
                 println!(
                     "usage: sidl-validate [--json | --repair-prompt] [-I <dir>]... \
-                     [--against <released.idl>] <file.idl>..."
+                     [--against <released.idl>] [--wire v1|deferred] <file.idl>...\n\
+                     \n\
+                     --wire v1 refuses a contract that reaches a valuetype, an abstract\n\
+                     interface or a fixed (docs/PLAN.md §4.4); by default those warn."
                 );
                 return std::process::ExitCode::SUCCESS;
             }
@@ -66,7 +85,10 @@ fn main() -> std::process::ExitCode {
         }
     }
     if files.is_empty() {
-        eprintln!("usage: sidl-validate [--json | --repair-prompt] [-I <dir>]... <file.idl>...");
+        eprintln!(
+            "usage: sidl-validate [--json | --repair-prompt] [-I <dir>]... [--wire v1|deferred] \
+             <file.idl>..."
+        );
         return std::process::ExitCode::from(2);
     }
 
@@ -122,8 +144,8 @@ fn main() -> std::process::ExitCode {
         // are still in there, and four `#ifndef` blocks in one string is
         // conditional compilation rather than an include guard.
         let report = match &baseline {
-            Some(b) => validate_against(&unit.text, b),
-            None => validate_unit(&unit),
+            Some(b) => validate_against_for(&unit.text, b, wire),
+            None => validate_unit_for(&unit, wire),
         };
         if !report.is_ok() {
             rejected += 1;

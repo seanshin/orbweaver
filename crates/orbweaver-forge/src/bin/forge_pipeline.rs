@@ -6,7 +6,7 @@
 //!                [--ingest <cmd>] [--synthesize <cmd>] [--annotate <cmd>]
 //!                [--from s1] [--to s4] [--only s3]
 //!                [--registered <dir>] [--supersede <reason>]
-//!                [--max-rounds N] [--register]
+//!                [--max-rounds N] [--register] [--wire v1|deferred]
 //!                [--print-prompt s1|s2|s3]
 //! ```
 //!
@@ -91,6 +91,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use orbweaver_forge::WireGate;
 use orbweaver_forge::pipeline::{
     CommandStage, EXPOSURE_TODO_FILE, Item, ItemStatus, Pipeline, Registered, StageId,
     ValidateStage, Workspace, record_supersede, register, run_pipeline,
@@ -103,14 +104,18 @@ fn usage() -> String {
          \x20   [--ingest <cmd>] [--synthesize <cmd>] [--annotate <cmd>]\n\
          \x20   [--from {stages}] [--to {stages}] [--only {stages}]\n\
          \x20   [--registered <dir>] [--supersede <reason>]\n\
-         \x20   [--max-rounds N] [--register] [--print-prompt s1|s2|s3]\n\
+         \x20   [--max-rounds N] [--register] [--wire v1|deferred]\n\
+         \x20   [--print-prompt s1|s2|s3]\n\
          \n\
          Every producer is invoked as `<cmd> <input-file> [<repair-file>]`, with\n\
          FORGE_STAGE and FORGE_PROMPT in the environment; stdout is the artifact.\n\
          --registered points S4 at the contracts a regeneration is compared with;\n\
          an id with nothing registered under it is a first generation and is not\n\
          refused for having no baseline. A quoted #include resolves against the\n\
-         directory the contract was read from; -I adds directories for <angled>.",
+         directory the contract was read from; -I adds directories for <angled>.\n\
+         S4 judges for the v1 wire: a contract reaching a valuetype, an abstract\n\
+         interface or a fixed is refused with the §4.4 reason (--wire deferred\n\
+         warns instead, for a contract kept for a wire that can carry them).",
         stages = "s1|s2|s3|s4"
     )
 }
@@ -129,6 +134,7 @@ struct Args {
     max_rounds: Option<usize>,
     do_register: bool,
     search: SearchPath,
+    wire: Option<WireGate>,
 }
 
 fn main() -> ExitCode {
@@ -172,6 +178,12 @@ fn run() -> Result<ExitCode, String> {
                 a.max_rounds = Some(v.parse().map_err(|_| format!("--max-rounds: {v:?}"))?);
             }
             "--register" => a.do_register = true,
+            "--wire" => {
+                let v = value("--wire")?;
+                a.wire = Some(WireGate::parse(&v).ok_or_else(|| {
+                    format!("--wire: {v:?} (expected `v1` or `deferred`)\n{}", usage())
+                })?);
+            }
             // The angled form only. The quoted form already resolves against
             // the file the item was read from, which is why an estate whose
             // headers sit beside it needs no -I at all.
@@ -251,6 +263,9 @@ fn run() -> Result<ExitCode, String> {
         gate = gate.superseding(reason.clone());
     }
     gate = gate.searching(a.search.clone());
+    if let Some(wire) = a.wire {
+        gate = gate.wire(wire);
+    }
 
     let mut pipeline = Pipeline {
         ingest: ingest.as_mut().map(|s| s as &mut dyn orbweaver_forge::pipeline::Stage),

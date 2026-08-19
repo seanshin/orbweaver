@@ -55,8 +55,8 @@ use orbweaver_registry::Registry;
 
 use crate::ingest::Brief;
 use crate::{
-    Finding, RELEASED_UNREADABLE, Report, Severity, Source, annotate, ingest, synthesize, validate,
-    validate_source, validate_source_against,
+    Finding, RELEASED_UNREADABLE, Report, Severity, Source, WireGate, annotate, ingest, synthesize,
+    validate, validate_source, validate_source_against_for, validate_source_for,
 };
 
 /// One stage of the §5 pipeline.
@@ -685,7 +685,16 @@ pub struct DiffOutcome {
 /// a stated reason and records **which changes** that reason covered
 /// ([`DiffOutcome::superseded`], written out by [`record_supersede`]), so a
 /// reflex approval is at least an auditable one.
-#[derive(Debug, Default)]
+///
+/// ## The wire it gates for
+///
+/// This stage judges for the **v1 wire** unless told otherwise
+/// ([`ValidateStage::wire`]): a contract reaching `valuetype`, an abstract
+/// interface or `fixed` is refused with the §4.4 reason and the edit, so the
+/// repair loop is told now rather than the generator skipping it later. The
+/// library's [`validate`] warns instead, and [`crate::WireGate`] says why the
+/// two callers differ.
+#[derive(Debug)]
 pub struct ValidateStage {
     registered: Option<Registered>,
     supersede: Option<String>,
@@ -693,16 +702,42 @@ pub struct ValidateStage {
     origin: Option<PathBuf>,
     search: SearchPath,
     baseline: Baseline,
+    wire: WireGate,
     // `Stage::gate` takes `&self` — every other stage's gate is a pure function
     // of its inputs and widening the trait for this one would be the tail
     // wagging the dog. The cell holds the ledger, nothing else.
     ledger: RefCell<Vec<DiffOutcome>>,
 }
 
+impl Default for ValidateStage {
+    fn default() -> ValidateStage {
+        ValidateStage {
+            registered: None,
+            supersede: None,
+            id: String::new(),
+            origin: None,
+            search: SearchPath::default(),
+            baseline: Baseline::default(),
+            wire: WireGate::V1,
+            ledger: RefCell::new(Vec::new()),
+        }
+    }
+}
+
 impl ValidateStage {
-    /// S4 with no baseline: [`validate`] alone, exactly as before D005 option B.
+    /// S4 with no baseline: [`validate`] alone, exactly as before D005 option B
+    /// — judged for the v1 wire, see [`ValidateStage::wire`].
     pub fn new() -> ValidateStage {
         ValidateStage::default()
+    }
+
+    /// Which wire to judge for. The stage's default is [`WireGate::V1`]; a run
+    /// that wants the deferred constructs to warn rather than refuse — a
+    /// contract kept for a v2 that can carry them — passes
+    /// [`WireGate::Deferred`], which is `forge-pipeline --wire deferred`.
+    pub fn wire(mut self, wire: WireGate) -> ValidateStage {
+        self.wire = wire;
+        self
     }
 
     /// S4 against a registry of record (D005 option B).
@@ -785,10 +820,10 @@ impl Stage for ValidateStage {
         // diagnostic.
         let source = Source::maybe_from_file(output, self.origin.as_deref());
         let mut report = match &self.baseline {
-            Baseline::None => validate_source(source, &self.search),
+            Baseline::None => validate_source_for(source, &self.search, self.wire),
             Baseline::Unreadable { path, message } => {
                 outcome.against = Some(path.clone());
-                let mut report = validate_source(source, &self.search);
+                let mut report = validate_source_for(source, &self.search, self.wire);
                 report.findings.push(Finding {
                     rule: "evolution/registered-unreadable".into(),
                     severity: Severity::Error,
@@ -815,8 +850,12 @@ impl Stage for ValidateStage {
                 // The baseline is a path too, and a released contract read as a
                 // string loses every name its headers declared — which would
                 // report the whole shared header as newly added.
-                let report =
-                    validate_source_against(source, Source::from_file(idl, path), &self.search);
+                let report = validate_source_against_for(
+                    source,
+                    Source::from_file(idl, path),
+                    &self.search,
+                    self.wire,
+                );
                 // The comparison ran exactly when nothing *else* rejected the
                 // file and the baseline itself held up. `RELEASED_UNREADABLE`
                 // is an `evolution/` rule that means the diff did **not** run,

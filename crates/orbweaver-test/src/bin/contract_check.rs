@@ -24,7 +24,7 @@ use orbweaver_dynamic::json::Json;
 use orbweaver_forge::{Report, Severity};
 use orbweaver_registry::Registry;
 use orbweaver_test::prop::{DEFAULT_SEED, Measured};
-use orbweaver_test::{check_source_measured, has_defect};
+use orbweaver_test::{check_source_measured, deferred_wire_gaps, has_defect};
 
 const DEFAULT_CASES: usize = 32;
 
@@ -72,6 +72,15 @@ fn main() -> std::process::ExitCode {
 
     let mut reports: Vec<(String, Report, usize)> = Vec::new();
     let mut measured = Measured::default();
+    // The v1 wire's refusals, S4's closure (docs/PLAN.md §4.4): every
+    // declaration that is or carries a valuetype, an abstract interface or a
+    // fixed. Counted here so the number of unservable declarations over a
+    // corpus is on the line the harness reads, beside how many of them the
+    // property half could not measure for that reason. The two differ, and
+    // the difference is a fact worth printing: an interface has no TypeCode
+    // to sample, and a valuetype the registry records as an object reference
+    // *is* sampled — as a reference, which is not its wire form.
+    let mut deferred_wire: usize = 0;
     for path in &files {
         let src = match std::fs::read_to_string(path) {
             Ok(s) => s,
@@ -101,6 +110,10 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
         let types = registry.ids().filter(|id| registry.typecode(id).is_some()).count();
+        // Both halves read the source: the SIDL version marker lands on a
+        // module the registry keeps nothing for, and §4.4's closure follows
+        // declarations the registry has already flattened into TypeCodes.
+        deferred_wire += orbweaver_idl::deferred_wire_types(&spec).len();
         let (report, m) =
             check_source_measured(&spec, &registry, cases, seed.unwrap_or(DEFAULT_SEED));
         measured.add(m);
@@ -112,6 +125,8 @@ fn main() -> std::process::ExitCode {
         .flat_map(|(_, r, _)| &r.findings)
         .filter(|f| f.severity == Severity::Error)
         .count();
+    let deferred_unmeasured: usize =
+        reports.iter().map(|(_, r, _)| deferred_wire_gaps(r).len()).sum();
 
     if json {
         let files: Vec<Json> = reports
@@ -134,6 +149,13 @@ fn main() -> std::process::ExitCode {
                 // stopped running would otherwise print the same document.
                 ("cdr_roundtrips".to_owned(), Json::Number(measured.cdr.to_string())),
                 ("anyjson_crossings".to_owned(), Json::Number(measured.json.to_string())),
+                // What the wire refuses (S4's §4.4 closure) and how many of
+                // those the property half could not measure for that reason.
+                ("deferred_wire".to_owned(), Json::Number(deferred_wire.to_string())),
+                (
+                    "deferred_wire_unmeasured".to_owned(),
+                    Json::Number(deferred_unmeasured.to_string()),
+                ),
                 ("files".to_owned(), Json::Array(files)),
             ]))
         );
@@ -157,7 +179,8 @@ fn main() -> std::process::ExitCode {
         println!(
             "\n{} file(s), {types} type(s) × {cases} case(s) × 2 byte orders: {defects} \
              property defect(s), {} of {} CDR round trip(s) also taken across AnyJSON, {advice} \
-             contract finding(s)",
+             contract finding(s), {deferred_wire} deferred-wire declaration(s) (§4.4) of which \
+             {deferred_unmeasured} unmeasured by the property",
             reports.len(),
             measured.json,
             measured.cdr

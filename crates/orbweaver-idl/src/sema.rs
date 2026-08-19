@@ -125,6 +125,12 @@ pub struct Analysis {
     scopes: Vec<Scope>,
     /// Everything wrong with the input, in source order.
     pub diagnostics: Vec<Diagnostic>,
+    /// Every declaration the v1 wire cannot carry (docs/PLAN.md §4.4), in
+    /// source order. **Not** part of [`Analysis::is_ok`]: these files are
+    /// valid IDL that the oracles accept, and this pass records what the wire
+    /// will do with them, not whether they mean anything. See
+    /// [`deferred_wire_types`].
+    pub deferred_wire: Vec<DeferredWireUse>,
 }
 
 impl Analysis {
@@ -147,7 +153,8 @@ pub fn analyse(spec: &Spec) -> Analysis {
     a.collect_definitions(0, &spec.definitions);
     a.resolve_deferred();
     a.diagnostics.sort_by_key(|d| (d.span.line, d.span.column));
-    Analysis { scopes: a.scopes, diagnostics: a.diagnostics }
+    let deferred_wire = a.deferred_wire_types(spec);
+    Analysis { scopes: a.scopes, diagnostics: a.diagnostics, deferred_wire }
 }
 
 /// A name reference held back until every declaration is known.
@@ -757,6 +764,507 @@ impl Analyser {
     }
 }
 
+// ── the v1 wire (docs/PLAN.md §4.4) ──────────────────────────────────────────
+//
+// The parser accepts `valuetype`, abstract interfaces and `fixed` because a
+// conformant front end has to, and `corpus/golden/20` and `21` pin that it
+// does. The wire does not carry them, by decision. Between those two facts
+// there was, until this pass, nothing: a contract using them checked out
+// here, passed S4, and was unservable — the refusal lived in the *generator*
+// (`orbweaver-gen` skips such items with the section named), which a caller
+// of S4 never sees. This pass is the same closure the generator computes,
+// computed at the front end so S4 can say it, and `orbweaver-gen`'s
+// `deferred_wire_agreement` test holds the two to the same set.
+//
+// **A separate list, not a diagnostic.** [`Analysis::is_ok`] is agreement
+// with the oracle, and the oracle accepts these files. Filing them under
+// `diagnostics` would make `idl-check` disagree with `omniidl` over golden
+// files, which is the one thing this crate's contract forbids. Whether a
+// consumer treats an entry as a warning or a refusal is that consumer's
+// decision (S4 has both forms); this crate only establishes the set.
+
+/// The rule name every consumer files these under.
+///
+/// `wire/`, not `sidl/`: S4's existing prefix for exactly this class was
+/// `wire/valuetype`, and the SIDL prefix names the annotation vocabulary,
+/// which this is not about.
+pub const DEFERRED_WIRE_RULE: &str = "wire/deferred-type";
+
+/// One declaration the v1 wire cannot carry, and why.
+///
+/// A declaration is here either because it *is* one of the deferred
+/// constructs, or because a value of it would carry one: a struct with a
+/// `fixed` member, an interface whose operation returns such a struct, an
+/// interface inheriting that operation. The closure follows values, not
+/// references — a member typed as a plain `interface` is an object reference
+/// on the wire whatever that interface's operations take, so it does not
+/// propagate. A `valuetype` or `abstract interface` is passed by value (or by
+/// a value/reference union), so those do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeferredWireUse {
+    /// The declaration's qualified IDL name, `gc21::Invoice` — the same
+    /// spelling the registry gives it, so a finding here can be matched to a
+    /// repository id without a second resolution.
+    pub declaration: String,
+    /// What kind of declaration it is: `struct`, `interface`, `typedef`, …
+    pub kind: &'static str,
+    /// The construct at the root of the reason, as written: `fixed<9,2>`,
+    /// `valuetype`, `abstract valuetype`, `abstract interface`, `ValueBase`.
+    pub construct: String,
+    /// The path from the declaration to the construct, in prose, starting
+    /// after the declaration's name: *"member "total" is "gc21::Amount", which
+    /// is fixed<9,2>"*. For a declaration that is the construct itself, *"it
+    /// is a valuetype"*.
+    pub reason: String,
+    /// Where the declaration's name is written.
+    pub span: Span,
+}
+
+impl DeferredWireUse {
+    /// The finding as prose, in the shape S4's other rules take.
+    pub fn message(&self) -> String {
+        format!(
+            "{} {:?} cannot go on the v1 wire: {} — docs/PLAN.md §4.4 defers {}; the \
+             generator skips it and the dynamic path cannot marshal it",
+            self.kind,
+            self.declaration,
+            self.reason,
+            self.family()
+        )
+    }
+
+    /// The concrete edit, per construct family.
+    pub fn fix(&self) -> String {
+        match self.family() {
+            "fixed" => "carry the amount as a string, or as scaled integers (`long long` \
+                        units plus a scale the contract documents), until §4.4 lands `fixed`; \
+                        AnyJSON already carries decimals as strings"
+                .into(),
+            "abstract interfaces" => "declare it a plain `interface` (a reference on the wire) \
+                                       or a `valuetype`, whichever the design meant; v1 \
+                                       cannot carry the value-or-reference union an abstract \
+                                       interface is"
+                .into(),
+            _ => "model the state as a struct and pass it by value, or keep the valuetype out \
+                  of every operation signature until §4.4 lands valuetypes"
+                .into(),
+        }
+    }
+
+    /// The §4.4 family the construct belongs to, for the message and the fix.
+    pub fn family(&self) -> &'static str {
+        if self.construct.starts_with("fixed") {
+            "fixed"
+        } else if self.construct == "abstract interface" {
+            "abstract interfaces"
+        } else {
+            "valuetypes"
+        }
+    }
+
+    /// The same, as a [`Diagnostic`] under [`DEFERRED_WIRE_RULE`].
+    pub fn diagnostic(&self) -> Diagnostic {
+        Diagnostic { message: self.message(), span: self.span, rule: DEFERRED_WIRE_RULE }
+    }
+}
+
+/// Every declaration in `spec` the v1 wire cannot carry (docs/PLAN.md §4.4).
+///
+/// The convenience form of [`Analysis::deferred_wire`] for a caller holding a
+/// checked [`Spec`]; the analysis is cheap enough to run twice.
+pub fn deferred_wire_types(spec: &Spec) -> Vec<DeferredWireUse> {
+    analyse(spec).deferred_wire
+}
+
+/// Why a declaration is deferred, before the prose is built.
+#[derive(Debug, Clone)]
+enum Cause {
+    /// The declaration carries the construct itself. `site` is where inside
+    /// it (`member "total"`), or `None` when the declaration *is* it.
+    Direct { site: Option<String>, construct: String },
+    /// The declaration carries `target`, which is deferred.
+    Through { site: String, target: String },
+}
+
+/// One declaration as this pass sees it: what it is, what it directly is,
+/// and what it refers to.
+#[derive(Debug)]
+struct WireDecl {
+    qualified: String,
+    kind: &'static str,
+    span: Span,
+    /// The construct this declaration is or contains, with the site.
+    direct: Option<(Option<String>, String)>,
+    /// `(site, qualified name of the type referred to, by value)`, in source
+    /// order. A reference to an interface is *not* by value — an object
+    /// reference is an IOR on the wire whatever the interface's operations
+    /// take — so it propagates only if that interface is a §4.4 construct
+    /// itself (abstract). Inheritance is by value: the derived interface has
+    /// the base's operations.
+    refs: Vec<(String, String, bool)>,
+}
+
+impl Analyser {
+    fn deferred_wire_types(&self, spec: &Spec) -> Vec<DeferredWireUse> {
+        let mut decls: Vec<WireDecl> = Vec::new();
+        self.wire_definitions(0, &[], &spec.definitions, &mut decls);
+
+        // The closure, to a fixpoint. Source order within a pass, so the
+        // reason a declaration is given is the first of its references that
+        // was already known to be deferred — deterministic, and usually the
+        // shortest chain.
+        let mut cause: HashMap<String, Cause> = HashMap::new();
+        for d in &decls {
+            if let Some((site, construct)) = &d.direct {
+                cause
+                    .entry(d.qualified.clone())
+                    .or_insert(Cause::Direct { site: site.clone(), construct: construct.clone() });
+            }
+        }
+        loop {
+            let mut changed = false;
+            for d in &decls {
+                if cause.contains_key(&d.qualified) {
+                    continue;
+                }
+                let reached = d.refs.iter().find(|(_, target, by_value)| match cause.get(target) {
+                    None => false,
+                    Some(_) if *by_value => true,
+                    // A reference: only an interface that *is* a §4.4
+                    // construct — abstract — travels as anything but an IOR.
+                    Some(Cause::Direct { site: None, construct }) => {
+                        construct == "abstract interface"
+                    }
+                    Some(_) => false,
+                });
+                if let Some((site, target, _)) = reached {
+                    cause.insert(
+                        d.qualified.clone(),
+                        Cause::Through { site: site.clone(), target: target.clone() },
+                    );
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        let mut out = Vec::new();
+        let mut seen: Vec<&str> = Vec::new();
+        for d in &decls {
+            let Some(c) = cause.get(&d.qualified) else { continue };
+            // A forward declaration and its definition are one declaration.
+            if seen.contains(&d.qualified.as_str()) {
+                continue;
+            }
+            seen.push(&d.qualified);
+            out.push(DeferredWireUse {
+                declaration: d.qualified.clone(),
+                kind: d.kind,
+                construct: root_construct(&cause, c),
+                reason: reason_prose(&cause, c, true),
+                span: d.span,
+            });
+        }
+        out
+    }
+
+    /// Mirrors [`Analyser::collect_definitions`] over the same scopes, so a
+    /// name written here resolves exactly as it did there.
+    fn wire_definitions(
+        &self,
+        scope: usize,
+        path: &[String],
+        defs: &[Definition],
+        out: &mut Vec<WireDecl>,
+    ) {
+        for d in defs {
+            self.wire_definition(scope, path, d, out);
+        }
+    }
+
+    fn wire_definition(
+        &self,
+        scope: usize,
+        path: &[String],
+        d: &Definition,
+        out: &mut Vec<WireDecl>,
+    ) {
+        let name = d.name();
+        let mut here = path.to_vec();
+        here.push(name.text.clone());
+        let qualified = here.join("::");
+        // The scope this declaration introduced during collection, if it
+        // introduced one; absent only when the file did not check out, in
+        // which case the caller has better things to report than this.
+        let inner = self.scopes[scope]
+            .symbols
+            .get(&name.text.to_lowercase())
+            .and_then(|s| s.scope)
+            .unwrap_or(scope);
+        let mut decl =
+            WireDecl { qualified, kind: "", span: name.span, direct: None, refs: Vec::new() };
+        match d {
+            Definition::Module(m) => {
+                self.wire_definitions(inner, &here, &m.definitions, out);
+                return;
+            }
+            Definition::Interface(i) => {
+                decl.kind = "interface";
+                if i.modifier == Some(InterfaceModifier::Abstract) {
+                    decl.direct = Some((None, "abstract interface".into()));
+                }
+                for b in &i.bases {
+                    if let Some((target, _)) = self.wire_target(scope, b) {
+                        decl.refs.push((format!("base {:?}", b.text()), target, true));
+                    }
+                }
+                let Some(body) = &i.body else {
+                    out.push(decl);
+                    return;
+                };
+                for m in body {
+                    match m {
+                        InterfaceMember::Operation(op) => {
+                            self.wire_type(
+                                inner,
+                                &format!("the return of operation {:?}", op.name.text),
+                                &op.returns,
+                                &mut decl,
+                            );
+                            for p in &op.params {
+                                self.wire_type(
+                                    inner,
+                                    &format!(
+                                        "parameter {:?} of operation {:?}",
+                                        p.name.text, op.name.text
+                                    ),
+                                    &p.ty,
+                                    &mut decl,
+                                );
+                            }
+                            for r in &op.raises {
+                                if let Some((target, by_value)) = self.wire_target(inner, r) {
+                                    decl.refs.push((
+                                        format!(
+                                            "the exception operation {:?} raises",
+                                            op.name.text
+                                        ),
+                                        target,
+                                        by_value,
+                                    ));
+                                }
+                            }
+                        }
+                        InterfaceMember::Attribute(a) => {
+                            for n in &a.names {
+                                self.wire_type(
+                                    inner,
+                                    &format!("attribute {:?}", n.text),
+                                    &a.ty,
+                                    &mut decl,
+                                );
+                            }
+                        }
+                        InterfaceMember::Nested(n) => self.wire_definition(inner, &here, n, out),
+                    }
+                }
+            }
+            Definition::Struct(s) | Definition::Exception(s) => {
+                decl.kind = if matches!(d, Definition::Struct(_)) { "struct" } else { "exception" };
+                for m in s.members.iter().flatten() {
+                    for n in &m.names {
+                        self.wire_type(inner, &format!("member {:?}", n.text), &m.ty, &mut decl);
+                    }
+                }
+            }
+            Definition::Union(u) => {
+                decl.kind = "union";
+                self.wire_type(scope, "the discriminator", &u.discriminator, &mut decl);
+                for c in &u.cases {
+                    for n in &c.member.names {
+                        self.wire_type(
+                            inner,
+                            &format!("case {:?}", n.text),
+                            &c.member.ty,
+                            &mut decl,
+                        );
+                    }
+                }
+            }
+            Definition::Typedef(t) => {
+                decl.kind = "typedef";
+                self.wire_type(scope, "", &t.ty, &mut decl);
+            }
+            Definition::Const(c) => {
+                decl.kind = "const";
+                self.wire_type(scope, "its type", &c.ty, &mut decl);
+            }
+            Definition::ValueType(v) => {
+                decl.kind = "valuetype";
+                let construct = if v.is_abstract { "abstract valuetype" } else { "valuetype" };
+                decl.direct = Some((None, construct.into()));
+                // Its members are not walked: the valuetype is the reason, and
+                // whatever it carries is carried by a construct v1 has not met.
+            }
+            Definition::Enum(_) | Definition::Native(_) => return,
+        }
+        out.push(decl);
+    }
+
+    /// Records what `t` is or refers to, at `site`, on `decl`.
+    fn wire_type(&self, scope: usize, site: &str, t: &TypeSpec, decl: &mut WireDecl) {
+        // An empty site means the declaration *is* the type: a typedef.
+        let at = || (!site.is_empty()).then(|| site.to_owned());
+        // The first direct construct is the one named; a second `fixed`
+        // member adds nothing a reader needs.
+        let first = decl.direct.is_none();
+        match t {
+            TypeSpec::Fixed { digits, scale } if first => {
+                let construct = format!("fixed<{},{}>", const_text(digits), const_text(scale));
+                decl.direct = Some((at(), construct));
+            }
+            TypeSpec::ValueBase if first => decl.direct = Some((at(), "ValueBase".into())),
+            TypeSpec::Sequence { element, .. } => self.wire_type(scope, site, element, decl),
+            TypeSpec::Named(n) => {
+                if let Some((target, by_value)) = self.wire_target(scope, n) {
+                    decl.refs.push((site.to_owned(), target, by_value));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The qualified name of what `n` refers to, if it is something a value
+    /// carries — a struct, union, exception, typedef, valuetype or interface
+    /// — and whether the reference is by value (everything but an interface).
+    ///
+    /// Enumerators, constants, natives and enums are not values that carry
+    /// anything and resolve to `None`. `::CORBA::ValueBase`, predeclared as a
+    /// valuetype, resolves like any other; a use of it is a §4.4 construct in
+    /// its own right (the keyword spelling is [`TypeSpec::ValueBase`]).
+    fn wire_target(&self, scope: usize, n: &ScopedName) -> Option<(String, bool)> {
+        let (container, sym) = self.find(scope, n)?;
+        let by_value = match sym.kind {
+            SymbolKind::Struct
+            | SymbolKind::Union
+            | SymbolKind::Exception
+            | SymbolKind::Typedef
+            | SymbolKind::ValueType => true,
+            SymbolKind::Interface => false,
+            _ => return None,
+        };
+        let path = self.scope_path(Some(container));
+        let qualified = if path.is_empty() { sym.name } else { format!("{path}::{}", sym.name) };
+        Some((qualified, by_value))
+    }
+
+    /// [`Analyser::lookup`], also returning the scope the symbol was found in
+    /// — which is what makes its qualified name computable.
+    fn find(&self, scope: usize, n: &ScopedName) -> Option<(usize, Symbol)> {
+        let first = n.parts.first()?;
+        let (mut container, mut sym) = if n.absolute {
+            self.find_in(0, first)?
+        } else {
+            let mut cur = Some(scope);
+            loop {
+                let id = cur?;
+                if let Some(found) = self.find_in(id, first) {
+                    break found;
+                }
+                cur = self.scopes[id].parent;
+            }
+        };
+        for part in &n.parts[1..] {
+            (container, sym) = self.find_in(sym.scope?, part)?;
+        }
+        Some((container, sym))
+    }
+
+    /// [`Analyser::lookup_in`], returning the scope that actually holds the
+    /// symbol — an inherited name's home is the base, and its qualified name
+    /// says so.
+    fn find_in(&self, scope: usize, name: &str) -> Option<(usize, Symbol)> {
+        let key = name.to_lowercase();
+        if let Some(s) = self.scopes[scope].symbols.get(&key) {
+            return Some((scope, s.clone()));
+        }
+        for &base in &self.scopes[scope].inherited {
+            if let Some(found) = self.find_in(base, name) {
+                return Some(found);
+            }
+        }
+        None
+    }
+}
+
+/// The construct at the end of a cause chain.
+fn root_construct(causes: &HashMap<String, Cause>, c: &Cause) -> String {
+    let mut c = c;
+    let mut hops = 0;
+    loop {
+        match c {
+            Cause::Direct { construct, .. } => return construct.clone(),
+            Cause::Through { target, .. } => {
+                hops += 1;
+                match causes.get(target) {
+                    // Every `Through` was created pointing at a key already
+                    // present, and a chain cannot be longer than the table.
+                    Some(next) if hops <= causes.len() => c = next,
+                    _ => return "a deferred type".to_owned(),
+                }
+            }
+        }
+    }
+}
+
+/// The chain as prose. `first` is the declaration's own clause; every later
+/// hop is a relative clause about the type the previous one named.
+fn reason_prose(causes: &HashMap<String, Cause>, c: &Cause, first: bool) -> String {
+    // "it is" / "member "x" is" for the declaration's own clause; "which is" /
+    // "whose member "x" is" for every hop after it.
+    let lead = |site: &str| match (first, site.is_empty()) {
+        (true, true) => "it is".to_owned(),
+        (true, false) => format!("{site} is"),
+        (false, true) => "which is".to_owned(),
+        (false, false) => format!("whose {} is", site.strip_prefix("the ").unwrap_or(site)),
+    };
+    match c {
+        Cause::Direct { site, construct } => {
+            let named = match construct.as_str() {
+                c if c.starts_with("fixed") || c == "ValueBase" => c.to_owned(),
+                c if c.starts_with('a') => format!("an {c}"),
+                c => format!("a {c}"),
+            };
+            format!("{} {named}", lead(site.as_deref().unwrap_or("")))
+        }
+        Cause::Through { site, target } => {
+            let rest = causes
+                .get(target)
+                .map(|next| reason_prose(causes, next, false))
+                .unwrap_or_else(|| "which is deferred".to_owned());
+            format!("{} {target:?}, {rest}", lead(site))
+        }
+    }
+}
+
+/// A constant expression as it was written, for `fixed<9,2>` in a message.
+fn const_text(e: &ConstExpr) -> String {
+    match e {
+        ConstExpr::Int(v) => v.to_string(),
+        ConstExpr::Float(v) => v.to_string(),
+        ConstExpr::Str(s) => format!("{s:?}"),
+        ConstExpr::Char(c) => format!("'{c}'"),
+        ConstExpr::Bool(b) => b.to_string(),
+        ConstExpr::Name(n) => n.text(),
+        ConstExpr::Unary { op, operand } => format!("{op}{}", const_text(operand)),
+        ConstExpr::Binary { op, left, right } => {
+            format!("{} {op} {}", const_text(left), const_text(right))
+        }
+    }
+}
+
 /// A comparable form of a case label, so `1` and `0x1` collide.
 fn label_key(e: &ConstExpr) -> String {
     match e {
@@ -959,5 +1467,204 @@ mod tests {
         assert!(d.len() >= 2);
         assert!(d[0].span.line <= d[1].span.line);
         assert!(d[0].span.column < d[1].span.column || d[0].span.line < d[1].span.line);
+    }
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+    use crate::parse;
+
+    fn deferred(src: &str) -> Vec<DeferredWireUse> {
+        deferred_wire_types(&parse(src).expect("should parse"))
+    }
+
+    fn names(src: &str) -> Vec<String> {
+        deferred(src).into_iter().map(|d| d.declaration).collect()
+    }
+
+    fn golden(file: &str) -> String {
+        let path = format!("{}/../../corpus/golden/{file}", env!("CARGO_MANIFEST_DIR"));
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
+    }
+
+    /// `corpus/golden/21`, the shape the whole rule exists for: the typedef,
+    /// the struct that carries it, the interface whose operation carries the
+    /// struct — the same three the generator skips.
+    #[test]
+    fn fixed_cascades_from_the_typedef_to_everything_that_carries_it_by_value() {
+        let d = deferred(&golden("21-deferred-fixed.idl"));
+        assert_eq!(
+            d.iter().map(|d| d.declaration.as_str()).collect::<Vec<_>>(),
+            ["gc21::Amount", "gc21::Invoice", "gc21::Billing"]
+        );
+        assert!(d.iter().all(|d| d.construct == "fixed<9,2>"), "{d:?}");
+        assert_eq!(d[0].reason, "it is fixed<9,2>");
+        assert_eq!(d[1].reason, "member \"total\" is \"gc21::Amount\", which is fixed<9,2>");
+        assert_eq!(
+            d[2].reason,
+            "the return of operation \"sum\" is \"gc21::Amount\", which is fixed<9,2>"
+        );
+        assert!(d[1].message().contains("§4.4"), "{}", d[1].message());
+        assert!(d[1].fix().contains("string"), "{}", d[1].fix());
+        assert_eq!(d[0].diagnostic().rule, DEFERRED_WIRE_RULE);
+    }
+
+    /// `corpus/golden/20`: two valuetypes, an abstract interface, and an
+    /// interface returning a valuetype. All four, and the reason names which.
+    #[test]
+    fn valuetypes_and_abstract_interfaces_are_the_construct_themselves() {
+        let d = deferred(&golden("20-deferred-valuetype.idl"));
+        assert_eq!(
+            d.iter().map(|d| (d.declaration.as_str(), d.reason.as_str())).collect::<Vec<_>>(),
+            [
+                ("gc20::Money", "it is a valuetype"),
+                ("gc20::Named", "it is a valuetype"),
+                ("gc20::Describable", "it is an abstract interface"),
+                (
+                    "gc20::Wallet",
+                    "the return of operation \"balance\" is \"gc20::Money\", which is a valuetype"
+                ),
+            ]
+        );
+        assert_eq!(d[2].family(), "abstract interfaces");
+        assert_eq!(d[3].family(), "valuetypes");
+    }
+
+    /// The closure follows values and stops at references. An interface that
+    /// *uses* `fixed` is deferred; a struct holding a reference to that
+    /// interface is not — the reference is an IOR whatever the interface takes
+    /// — and neither is an interface that returns such a reference. But an
+    /// interface *inheriting* the deferred one is: it has the operation.
+    #[test]
+    fn references_to_a_deferred_interface_do_not_propagate_but_inheritance_does() {
+        let src = "module m {
+            typedef fixed<9,2> Amount;
+            interface Billing { Amount sum(); };
+            struct Holder { Billing b; };
+            interface Lookup { Billing find(); };
+            interface Sub : Billing { void ping(); };
+            struct Abs { long a; };
+        };";
+        assert_eq!(names(src), ["m::Amount", "m::Billing", "m::Sub"]);
+        let d = deferred(src);
+        assert_eq!(
+            d[2].reason,
+            "base \"Billing\" is \"m::Billing\", whose return of operation \"sum\" is \
+             \"m::Amount\", which is fixed<9,2>"
+        );
+    }
+
+    /// An abstract interface *is* the construct, so a member typed as one
+    /// propagates — that is the value-or-reference union v1 cannot carry — and
+    /// so does the `ValueBase` keyword. `Object` is a reference and does not.
+    #[test]
+    fn abstract_interface_members_and_valuebase_propagate() {
+        let src = "module m {
+            abstract interface Describable { string describe(); };
+            struct Card { Describable d; };
+            struct Anything { ValueBase v; };
+            struct Plain { Object o; };
+        };";
+        assert_eq!(names(src), ["m::Describable", "m::Card", "m::Anything"]);
+        let d = deferred(src);
+        assert_eq!(
+            d[1].reason,
+            "member \"d\" is \"m::Describable\", which is an abstract interface"
+        );
+        assert_eq!(d[2].reason, "member \"v\" is ValueBase");
+    }
+
+    /// Every site a `fixed` can hide behind, each reported once per
+    /// declaration with the site named: a sequence element, a union case, an
+    /// attribute, a parameter carrying an exception, a constant, an array
+    /// typedef, and two hops of struct nesting.
+    #[test]
+    fn every_carrying_site_is_found_and_named() {
+        let src = "module m {
+            typedef sequence<fixed<5,1> > Seq;
+            union U switch (long) { case 1: fixed<3,0> f; default: long n; };
+            exception Bad { fixed<2,1> why; };
+            typedef fixed<4,2> Rate;
+            interface I {
+              attribute Rate spot;
+              void g(inout Rate x);
+            };
+            interface J { void h(in Bad b); };
+            const fixed<3,1> C = 12.5D;
+            typedef fixed<7,3> Arr[4];
+            struct Deep { Seq s; };
+            struct Deeper { Deep d; };
+        };";
+        let d = deferred(src);
+        let got: Vec<(&str, &str)> =
+            d.iter().map(|d| (d.declaration.as_str(), d.reason.as_str())).collect();
+        assert_eq!(
+            got,
+            [
+                ("m::Seq", "it is fixed<5,1>"),
+                ("m::U", "case \"f\" is fixed<3,0>"),
+                ("m::Bad", "member \"why\" is fixed<2,1>"),
+                ("m::Rate", "it is fixed<4,2>"),
+                ("m::I", "attribute \"spot\" is \"m::Rate\", which is fixed<4,2>"),
+                (
+                    "m::J",
+                    "parameter \"b\" of operation \"h\" is \"m::Bad\", whose member \"why\" is \
+                     fixed<2,1>"
+                ),
+                ("m::C", "its type is fixed<3,1>"),
+                ("m::Arr", "it is fixed<7,3>"),
+                ("m::Deep", "member \"s\" is \"m::Seq\", which is fixed<5,1>"),
+                (
+                    "m::Deeper",
+                    "member \"d\" is \"m::Deep\", whose member \"s\" is \"m::Seq\", which is \
+                     fixed<5,1>"
+                ),
+            ]
+        );
+    }
+
+    /// The exception reached only through `raises` cascades to the interface
+    /// (the skeleton marshals it), and a plain file reports nothing.
+    #[test]
+    fn raises_cascades_and_a_clean_file_is_empty() {
+        let src = "module m {
+            exception Bad { fixed<2,1> why; };
+            interface I { void f() raises (Bad); };
+        };";
+        let d = deferred(src);
+        assert_eq!(names(src), ["m::Bad", "m::I"]);
+        assert_eq!(
+            d[1].reason,
+            "the exception operation \"f\" raises is \"m::Bad\", whose member \"why\" is fixed<2,1>"
+        );
+        assert!(
+            names("module m { struct S { long a; string b; }; interface I { S get(); }; };")
+                .is_empty()
+        );
+    }
+
+    /// The pass is not a diagnostic: the file still checks out, because the
+    /// oracle accepts it and agreement with the oracle is what `is_ok` means.
+    #[test]
+    fn a_deferred_construct_does_not_make_the_analysis_fail() {
+        let a = analyse(&parse("module m { typedef fixed<9,2> Amount; };").unwrap());
+        assert!(a.is_ok(), "{:?}", a.diagnostics);
+        assert_eq!(a.deferred_wire.len(), 1);
+    }
+
+    /// A forward declaration and its definition are one declaration; a
+    /// recursive struct does not loop; a nested typedef inside an interface
+    /// carries the interface's name and does not by itself defer the interface.
+    #[test]
+    fn forward_declarations_are_reported_once_recursion_terminates_nesting_is_named() {
+        let src = "module m {
+            valuetype V;
+            valuetype V { public long a; };
+            struct Node { sequence<Node> kids; fixed<2,1> f; };
+            struct Tree { Node root; };
+            interface Holder { typedef fixed<4,0> Ticket; void ping(); };
+        };";
+        assert_eq!(names(src), ["m::V", "m::Node", "m::Tree", "m::Holder::Ticket"]);
     }
 }

@@ -399,6 +399,39 @@ fn s4_re_gates_existing_files_with_no_producers() {
     assert_eq!(s4.rounds_used, 1);
 }
 
+/// The pipeline's S4 judges for the v1 wire: a contract that reaches `fixed`
+/// is refused there, with the §4.4 rule, so the loop is told before generation
+/// would have skipped it. `--wire deferred` is the negative control — the same
+/// contract, the same findings as warnings, and the item passes.
+#[test]
+fn the_pipelines_s4_refuses_a_deferred_wire_type_unless_told_to_defer() {
+    const FIXED: &str = "module m {
+        typedef fixed<9,2> Amount;
+        struct Invoice { Amount total; };
+        interface Billing {
+          //@ ai_desc: sums two amounts
+          //@ ai_effect: read_only
+          Amount sum(in Amount a, in Amount b);
+        };
+    };";
+    let items = vec![("billing".to_owned(), FIXED.to_owned())];
+
+    let mut strict = ValidateStage::new();
+    let report = run_batch(&mut strict, &items, 1);
+    assert_eq!(report.first_pass_valid, 0, "{report:?}");
+    assert_eq!(report.affected(0, "wire/deferred-type"), ["billing"]);
+    assert!(matches!(report.items[0].status, ItemStatus::Invalid { .. }), "{report:?}");
+    // The gate itself, for the text the loop is fed: one cause, three sites.
+    let prompt = strict.gate(FIXED, FIXED).repair_prompt();
+    assert!(prompt.contains("§4.4"), "{prompt}");
+    assert!(prompt.contains("3 occurrence(s)"), "the typedef, the struct, the interface: {prompt}");
+
+    let mut deferred = ValidateStage::new().wire(orbweaver_forge::WireGate::Deferred);
+    let report = run_batch(&mut deferred, &items, 1);
+    assert_eq!(report.first_pass_valid, 1, "{report:?}");
+    assert!(report.affected(0, "wire/deferred-type").is_empty());
+}
+
 /// Running without an annotation pass is the pre-split pipeline and a
 /// legitimate thing to ask for. It must never be silent: "S4 passed" means
 /// something different about a file no annotation stage has seen.

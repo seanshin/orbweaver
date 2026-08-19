@@ -34,7 +34,9 @@ pub mod sema;
 
 pub use include::{SearchPath, Unit, preprocess, preprocess_file};
 pub use parse::{ParseError, parse};
-pub use sema::{Analysis, Diagnostic, analyse};
+pub use sema::{
+    Analysis, DEFERRED_WIRE_RULE, DeferredWireUse, Diagnostic, analyse, deferred_wire_types,
+};
 
 /// Parses and analyses `src`, returning either the checked spec or everything
 /// wrong with it.
