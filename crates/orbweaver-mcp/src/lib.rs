@@ -410,6 +410,42 @@ impl<'a> Bridge<'a> {
         dryrun::predict(&mut self.chain, &ctx).to_json()
     }
 
+    /// [`Bridge::dry_run`] with the arguments the caller *would* send.
+    ///
+    /// Two things become predictable that the argument-less question cannot
+    /// answer: a stage at [`interceptor::SEAT_SAFETY_CONTENT`] is handed the
+    /// declared values and its verdict is real, and the report says whether
+    /// the payload would **marshal** against the contract's `TypeCode`s
+    /// ([`dryrun::Would::Marshal`]) — in both byte orders, into a buffer that
+    /// goes nowhere. Handles in `args` resolve against this session's own
+    /// capability table, as a live call's would.
+    ///
+    /// The prediction is synthesised from the `TypeCode`s and the declared
+    /// values; it is never a call with the wire disconnected. There is no
+    /// connection to pass, and
+    /// `a_dry_run_with_values_offers_them_to_the_content_stage_and_touches_no_wire`
+    /// holds the static twin to the same. The chain still answers first: a
+    /// payload that would not marshal on an operation the caller may not call
+    /// is reported as the refusal, not the marshalling — see
+    /// [`dryrun::predict_with`].
+    pub fn dry_run_with(
+        &mut self,
+        id: &str,
+        operation: &str,
+        args: &Json,
+        approval: Approval,
+    ) -> Json {
+        let ctx = interceptor::CallContext {
+            registry: self.registry,
+            caller: self.caller.as_ref(),
+            target: id,
+            operation,
+            approval,
+            arguments: Some(args),
+        };
+        dryrun::predict_with(&mut self.chain, &ctx, &self.handles).to_json()
+    }
+
     /// The same question for every operation of one interface.
     ///
     /// An interface outside this session's exposure is still answerable: every
@@ -608,6 +644,101 @@ impl<'a> Bridge<'a> {
     pub fn stats(&self) -> &promote::CallStats {
         self.chain.stats()
     }
+}
+
+/// The parameters of `operation` on `id`, in declaration order and every
+/// direction — or `None` for a name the contract does not declare. What a
+/// call carries **in** is the `in`/`inout` subset, which [`carried_in`] picks.
+///
+/// One answer for both paths and for the dry run. The dynamic path maps the
+/// agent's JSON onto these; [`guard::Guarded`] reads a static call's bytes
+/// back through them so a content stage sees the same document either way;
+/// and [`dryrun`] encodes an operator's declared values against them to
+/// predict whether a call would marshal. Three readers of one list, because
+/// three lists is how the estate pilot's RC-8 happened.
+///
+/// Attribute accessors are answered too — `_get_x` carries nothing in and
+/// `_set_x` carries one `value` of the attribute's type, the name
+/// `orbweaver-gen`'s setter signature uses — because a generated stub calls
+/// them and the guard has to be able to read what it wrote. A `_set_` on a
+/// `readonly` attribute is `None`: no such call exists in the contract.
+pub(crate) fn parameters(
+    registry: &Registry,
+    id: &str,
+    operation: &str,
+) -> Option<Vec<orbweaver_registry::ParamSig>> {
+    if let Some((_, sig)) = registry.resolve_operation(id, operation) {
+        return Some(sig.params.clone());
+    }
+    let attribute = |name: &str| {
+        resolved_attributes(registry, id).into_iter().find(|(attr, _, _)| attr == name)
+    };
+    if let Some(name) = operation.strip_prefix("_get_")
+        && attribute(name).is_some()
+    {
+        return Some(Vec::new());
+    }
+    if let Some(name) = operation.strip_prefix("_set_")
+        && let Some((_, _, sig)) = attribute(name)
+        && !sig.readonly
+    {
+        return Some(vec![orbweaver_registry::ParamSig {
+            name: "value".to_owned(),
+            direction: ParamDirection::In,
+            tc: sig.tc.clone(),
+            annotations: BTreeMap::new(),
+        }]);
+    }
+    None
+}
+
+/// Whether a parameter travels **in** the request: `in` or `inout`.
+pub(crate) fn carried_in(p: &orbweaver_registry::ParamSig) -> bool {
+    matches!(p.direction, ParamDirection::In | ParamDirection::InOut)
+}
+
+/// The dynamic path's argument mapper: the agent's JSON object onto
+/// `params`, by name, into the values the invoker marshals.
+///
+/// Also the dry run's — [`dryrun`] predicts marshalling by running this and
+/// then the encoder, so a prediction cannot disagree with the call about
+/// which arguments are missing, extra or malformed. `params` may name `out`
+/// parameters; they are neither required nor reported as extra, which is what
+/// this did before it was shared.
+pub(crate) fn map_arguments(
+    operation: &str,
+    params: &[orbweaver_registry::ParamSig],
+    args: &Json,
+    refs: &dyn anyjson::References,
+) -> Result<BTreeMap<String, orbweaver_dynamic::Value>, orbweaver_dynamic::Error> {
+    let Json::Object(given) = args else {
+        return Err(orbweaver_dynamic::Error {
+            path: String::new(),
+            message: format!("arguments are a JSON object, got {}", args.kind()),
+        });
+    };
+
+    let mut values = BTreeMap::new();
+    for p in params.iter().filter(|p| carried_in(p)) {
+        let Some(j) = given.get(&p.name) else {
+            // The invoker would catch this too, but saying it here keeps the
+            // JSON-side names in the message rather than the CDR-side ones.
+            return Err(orbweaver_dynamic::Error {
+                path: p.name.clone(),
+                message: format!("{operation} needs an argument {:?}", p.name),
+            });
+        };
+        values.insert(p.name.clone(), anyjson::from_json(&p.tc, j, refs)?);
+    }
+    let extra: Vec<&str> =
+        given.keys().map(String::as_str).filter(|k| !params.iter().any(|p| p.name == *k)).collect();
+    if !extra.is_empty() {
+        return Err(orbweaver_dynamic::Error {
+            path: String::new(),
+            message: format!("{operation} has no parameter(s) {}", extra.join(", ")),
+        });
+    }
+    Ok(values)
 }
 
 pub(crate) fn obj(pairs: impl IntoIterator<Item = (&'static str, Json)>) -> Json {
@@ -1061,39 +1192,7 @@ fn invoke_operation(
         }));
     };
 
-    let Json::Object(given) = args else {
-        return Err(ToolError::Mapping(orbweaver_dynamic::Error {
-            path: String::new(),
-            message: format!("arguments are a JSON object, got {}", args.kind()),
-        }));
-    };
-
-    let mut values = BTreeMap::new();
-    for p in &sig.params {
-        if !matches!(p.direction, ParamDirection::In | ParamDirection::InOut) {
-            continue;
-        }
-        let Some(j) = given.get(&p.name) else {
-            // The invoker would catch this too, but saying it here keeps the
-            // JSON-side names in the message rather than the CDR-side ones.
-            return Err(ToolError::Mapping(orbweaver_dynamic::Error {
-                path: p.name.clone(),
-                message: format!("{operation} needs an argument {:?}", p.name),
-            }));
-        };
-        values.insert(p.name.clone(), anyjson::from_json(&p.tc, j, table)?);
-    }
-    let extra: Vec<&str> = given
-        .keys()
-        .map(String::as_str)
-        .filter(|k| !sig.params.iter().any(|p| p.name == *k))
-        .collect();
-    if !extra.is_empty() {
-        return Err(ToolError::Mapping(orbweaver_dynamic::Error {
-            path: String::new(),
-            message: format!("{operation} has no parameter(s) {}", extra.join(", ")),
-        }));
-    }
+    let values = map_arguments(operation, &sig.params, args, table)?;
 
     let outcome =
         invoke::invoke(conn, registry, &id, operation, &values).map_err(ToolError::Invoke)?;

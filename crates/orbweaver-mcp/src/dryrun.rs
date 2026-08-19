@@ -89,25 +89,38 @@
 //! marshals and shows what would be sent, without sending it. Documentation
 //! must not oversell this.*
 //!
-//! This does **less** than that clause allows, and the shortfall is structural
-//! rather than unfinished. It answers the *policy* question only: it does not
-//! marshal arguments and cannot show what bytes would go out, because the chain
-//! runs before the arguments are decoded and a dry run is asked *before a call
-//! exists*, so there is no payload to marshal. A dry run that reported the
-//! encoded request would have to run after argument mapping, which is a change
-//! to *where* the chain runs. Until then: this says who could call what and why
-//! not, and says nothing whatever about the payload.
+//! Asked without values — [`predict`], [`survey`], [`crate::Bridge::dry_run`]
+//! — this does **less** than that clause allows, and the shortfall is
+//! structural rather than unfinished. It answers the *policy* question only:
+//! there is no payload to marshal because none was described, and it says
+//! nothing whatever about one. Asked *with* the values the caller would send
+//! — [`predict_with`], [`crate::Bridge::dry_run_with`],
+//! [`crate::guard::Guarded::dry_run_with`] — it also **validates and
+//! marshals**: the declared values are mapped through the dynamic path's own
+//! mapper and encoded against the operation's `TypeCode`s, both byte orders,
+//! into a buffer that is dropped, and the row says [`Would::Marshal`] when the
+//! gate would allow and the payload would not fit (a `string<8>` given nine
+//! characters). It still does not *show what would be sent*: the buffer is a
+//! verdict, not a report, and the chain still runs before anything is mapped —
+//! the mapping half is computed after the walk and reported only past the
+//! gate, so a refusal is the same refusal whatever the payload looked like.
 //!
-//! The same fact bounds what a prediction is worth once a deployment fills
-//! [`crate::interceptor::SEAT_SAFETY_CONTENT`]. Every context synthesized here
-//! carries `arguments: None`, so a content stage is *reached* and has nothing
-//! to judge: a report can say the stage ran and had no objection, and that is
-//! not a promise about a payload nobody has sent yet. An operator reading
-//! `Would::Allow` for an operation behind a content filter is reading a policy
-//! verdict, not a safety one. Saying so is cheaper than a dry run that guesses.
+//! The values bound what a content stage's answer is worth. Without them the
+//! context carries `arguments: None`, so a stage at
+//! [`crate::interceptor::SEAT_SAFETY_CONTENT`] is *reached* and has nothing to
+//! judge: a report can say the stage ran and had no objection, and that is not
+//! a promise about a payload nobody has described. An operator reading
+//! `Would::Allow` for an operation behind a content filter, without values, is
+//! reading a policy verdict, not a safety one; with values, the stage was handed
+//! them and its verdict is the row's. Neither is a call: no invoker is in reach
+//! either way, which `a_dry_run_never_touches_the_invoker` and
+//! `a_dry_run_with_values_offers_them_to_the_content_stage_and_touches_no_wire`
+//! hold with a transport that detonates on contact.
 //!
-//! 예측은 **아직 보내지 않은 페이로드**에 대해 아무것도 약속하지 않는다.
-//! 내용 필터가 있는 운영에서 `Would::Allow`는 정책의 답이지 안전의 답이 아니다.
+//! 값 없이 물은 예측은 **기술되지 않은 페이로드**에 대해 아무것도 약속하지
+//! 않는다. 값과 함께 물으면 같은 `TypeCode`로 마샬링을 예측하고 내용
+//! 스테이지에 값을 건네지만, 어느 쪽도 호출은 아니다 — 선을 뽑은 호출이
+//! 아니라 합성된 예측이다.
 
 use orbweaver_registry::Registry;
 
@@ -175,12 +188,25 @@ pub enum Would {
     /// A stage outside the built-in gates refused — a deployment's own safety
     /// filter, router or rule.
     Refuse,
+    /// **Every gate proceeds, and the payload would not marshal.** The one row
+    /// that is not the chain's: it exists only when the caller declared the
+    /// arguments ([`predict_with`]), and it means the values do not fit the
+    /// contract's `TypeCode`s — a `string<8>` given nine characters, a
+    /// missing parameter, a number where a struct is due. Nothing would be
+    /// sent: the static path's guard raises `MARSHAL` and the dynamic path's
+    /// mapper refuses, before the wire either way. Its fix is a fourth place
+    /// again — the **values**, or the contract they were written against.
+    ///
+    /// Always downstream of the gate. A payload that would not marshal on an
+    /// operation the caller may not call is reported as the refusal, so that
+    /// the shape of an operation is not learnable through its refusals.
+    Marshal,
 }
 
 impl Would {
     /// Every variant, in the order a summary lists them. Fixed so that two
     /// surveys of the same exposure diff cleanly.
-    pub const ALL: [Would; 8] = [
+    pub const ALL: [Would; 9] = [
         Would::Allow,
         Would::NotExposed,
         Would::NeedAuthentication,
@@ -189,6 +215,7 @@ impl Would {
         Would::NeedEffect,
         Would::Exhausted,
         Would::Refuse,
+        Would::Marshal,
     ];
 
     /// The classification of a chain's answer. A `match` on the variant, so
@@ -222,8 +249,21 @@ impl Would {
             Would::NeedEffect => "need_effect",
             Would::Exhausted => "exhausted",
             Would::Refuse => "refuse",
+            Would::Marshal => "marshal",
         }
     }
+}
+
+/// Whether a declared payload would marshal against the contract — the
+/// dry run's *mapping* half, synthesised and never sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Marshalling {
+    /// Every `in`/`inout` argument mapped onto its `TypeCode` and encoded, in
+    /// both byte orders, into a buffer that went nowhere.
+    Marshals,
+    /// It would not, and this is the mapper's or the encoder's own sentence —
+    /// the one the caller would have been told by a live call.
+    WouldNot(String),
 }
 
 /// What one operation would do, and what an operator can do about it.
@@ -254,6 +294,10 @@ pub struct Prediction {
     approver: Option<String>,
     /// Whether the contract declares this operation at all.
     declared: bool,
+    /// The mapping half, when the caller declared values to map. `None` when
+    /// they did not — the report then says nothing about the payload, which
+    /// is what it always did.
+    marshalling: Option<Marshalling>,
 }
 
 impl Prediction {
@@ -286,6 +330,12 @@ impl Prediction {
     /// rather than resolving them into a verdict the gate did not give.
     pub fn declared(&self) -> bool {
         self.declared
+    }
+
+    /// Whether the declared payload would marshal — `None` when none was
+    /// declared. See [`Would::Marshal`] for what a `WouldNot` costs a caller.
+    pub fn marshalling(&self) -> Option<&Marshalling> {
+        self.marshalling.as_ref()
     }
 
     /// The full document, per-stage detail included.
@@ -329,6 +379,25 @@ impl Prediction {
             f.push(("stage", s(stage)));
             f.push(("why", s(why.to_string())));
         }
+        // The payload's half, only when there was a payload to judge. Absent
+        // otherwise, so a report about a call nobody described stays a report
+        // about policy and says so by saying nothing.
+        match &self.marshalling {
+            Some(Marshalling::Marshals) => f.push(("payload", s("marshals"))),
+            Some(Marshalling::WouldNot(why)) => {
+                f.push(("payload", s("would_not_marshal")));
+                f.push(("payload_why", s(why)));
+                // `why` explains `would`, so it is the mapper's sentence only
+                // when the mapper's answer *is* the verdict — past the gate.
+                // A refused row keeps the refusal's `why` and carries the
+                // payload's under its own name.
+                if self.would == Would::Marshal {
+                    f.push(("raises", s(orbweaver_giop::server::MARSHAL)));
+                    f.push(("why", s(why)));
+                }
+            }
+            None => {}
+        }
         if let Some(scope) = &self.scope {
             f.push(("scope", s(scope)));
         }
@@ -361,12 +430,56 @@ fn outcome_name(outcome: &StageOutcome) -> &'static str {
 /// included — so a deployment that has filled [`crate::interceptor::SEAT_QUOTA`]
 /// sees its own stage in the answer.
 pub fn predict(chain: &mut Chain, ctx: &CallContext<'_>) -> Prediction {
+    // No table: a handle in the declared values names nothing here, and the
+    // prediction says so rather than resolving one from nowhere.
+    predict_with(chain, ctx, &orbweaver_dynamic::anyjson::LocalReferences::new())
+}
+
+/// [`predict`], with the table that handles in `ctx.arguments` resolve
+/// against — a session's own, so a declared object reference is judged the
+/// way the live call would judge it.
+///
+/// When `ctx.arguments` is `Some`, two more things are answered. The chain is
+/// walked with the values in the context, so a stage at
+/// [`crate::interceptor::SEAT_SAFETY_CONTENT`] judges what it would judge —
+/// and the ledger it writes takes the stage's name and none of its prose, as
+/// for a live call. And the payload is **mapped and encoded** against the
+/// operation's `TypeCode`s, in both byte orders, into a buffer that is
+/// dropped: [`Marshalling`], folded into [`Would::Marshal`] when the gate
+/// allowed and the payload would not fit.
+///
+/// **What this never does**: make a call. No [`orbweaver_giop::Invoker`] is
+/// in reach; the encoder is a local buffer; a "real call with the wire
+/// disconnected" would reach the content seat and the ledger as a call, and
+/// this reaches them as a question. The gate answers first for the same
+/// reason a live call's does — the mapping half is computed after the walk
+/// and reported only on an `allow`, so a refusal is the same refusal whatever
+/// the payload looked like.
+pub fn predict_with(
+    chain: &mut Chain,
+    ctx: &CallContext<'_>,
+    refs: &dyn orbweaver_dynamic::anyjson::References,
+) -> Prediction {
     // Read off the chain's own approval stage rather than from a copy, so a
     // report cannot describe a posture the gate is not taking.
     let assumption = chain.unannotated().cloned();
     let dry = chain.dry_run(ctx);
     let refusal = dry.refusal().map(|(_, why)| why.clone());
-    let would = Would::of(refusal.as_ref());
+    let gate = Would::of(refusal.as_ref());
+    // The payload's half — after the walk, and folded into the verdict only
+    // when the gate had no objection. Computed for a refused call too (the
+    // caller asked about the payload; a stage's answer and the mapper's are
+    // independent facts), but *reported* under `would` only past the gate.
+    let marshalling = ctx.arguments.map(|args| {
+        match predict_marshalling(ctx.registry, ctx.target, ctx.operation, args, refs) {
+            Ok(()) => Marshalling::Marshals,
+            Err(why) => Marshalling::WouldNot(why),
+        }
+    });
+    let would = match (gate, &marshalling) {
+        (Would::Allow, Some(Marshalling::WouldNot(_))) => Would::Marshal,
+        (gate, _) => gate,
+    };
     let scope = match &refusal {
         Some(Denied::MissingScope { required, .. } | Denied::NotAuthenticated { required, .. }) => {
             Some(required.clone())
@@ -404,7 +517,54 @@ pub fn predict(chain: &mut Chain, ctx: &CallContext<'_>) -> Prediction {
         effect,
         effect_assumed,
         approver,
+        marshalling,
     }
+}
+
+/// Maps `args` onto `operation`'s `in`/`inout` parameters and encodes them,
+/// big-endian and little-endian, into buffers that are dropped.
+///
+/// The mapper is [`crate::map_arguments`] — the dynamic path's own — and the
+/// encoder is `orbweaver_dynamic::encode`, the one under the dynamic call, so
+/// this cannot disagree with a live call about whether a value fits. Both
+/// byte orders because an encoder that only works one way passes every local
+/// test; the bound checks are order-blind, but the rule is cheap to keep. An
+/// operation the contract does not declare predicts nothing — `declared:
+/// false` already says what there is to say — and maps to `Ok`.
+fn predict_marshalling(
+    registry: &Registry,
+    target: &str,
+    operation: &str,
+    args: &Json,
+    refs: &dyn orbweaver_dynamic::anyjson::References,
+) -> Result<(), String> {
+    use orbweaver_cdr::{Encoder, Endian};
+
+    let Some(params) = crate::parameters(registry, target, operation) else {
+        return Ok(());
+    };
+    let values = crate::map_arguments(operation, &params, args, refs).map_err(|e| e.to_string())?;
+    for endian in [Endian::Big, Endian::Little] {
+        let mut e = Encoder::new(endian);
+        for p in params.iter().filter(|p| crate::carried_in(p)) {
+            let v = values.get(&p.name).expect("map_arguments supplies every in parameter");
+            // The encoder's path starts inside the value; the parameter's name
+            // is prepended here so the sentence names what to fix. (The live
+            // dynamic call's own sentence does not — `invoke::write_args`
+            // encodes without a parameter path — which is reported in the
+            // batch that added this and not fixed here.)
+            orbweaver_dynamic::encode(&mut e, &p.tc, v).map_err(|err| {
+                let path = if err.path.is_empty() {
+                    p.name.clone()
+                } else {
+                    format!("{}.{}", p.name, err.path)
+                };
+                orbweaver_dynamic::Error { path, message: err.message }.to_string()
+            })?;
+        }
+        e.finish().map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// The question an operator actually asks: for this caller and this exposure,
@@ -973,6 +1133,175 @@ mod tests {
         assert_eq!(allowed, 2, "balance and deposit");
         assert_eq!(g.stats().calls(ACCOUNT, "balance"), 0);
         assert_eq!(g.audit().len(), 5, "five questions, five lines, no calls");
+    }
+
+    // --- with declared values --------------------------------------------------
+
+    /// The bounds fixture, loaded: `Ledger::keep(in Tag key, in Record entry)`
+    /// where `Tag` is `string<8>`.
+    fn bounds_registry() -> Registry {
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../corpus/golden/27-bounds.idl"
+        ))
+        .expect("the bounds fixture");
+        registry(&src)
+    }
+
+    const LEDGER: &str = "IDL:gc27/Ledger:1.0";
+
+    /// **The oracle D010 A3 names**: a dry run of an operation with a
+    /// `string<8>` argument given nine characters predicts `marshal` where
+    /// the argument-less question predicts `allow` — the same operation, the
+    /// same chain, the same `TypeCode`s the live call would encode with. Eight
+    /// characters predicts `allow` and says the payload marshals; a missing
+    /// parameter is the mapper's own sentence. Both byte orders are inside
+    /// `predict_marshalling`, and the report says which exception a live call
+    /// would raise.
+    #[test]
+    fn a_string_of_eight_given_nine_characters_predicts_marshal_where_it_predicted_allow() {
+        let reg = bounds_registry();
+        let exposure = Exposure::nothing()
+            .allow_interface(LEDGER)
+            .assuming_unannotated(Unannotated::Assume("read_only".into()));
+        let mut bridge = crate::Bridge::new(&reg, exposure, "s-bounds");
+
+        let entry = r#"{"label":"ok","payload":"AQID","wide":"ab"}"#;
+        let nine = Json::parse(&format!(r#"{{"key":"123456789","entry":{entry}}}"#)).unwrap();
+        let eight = Json::parse(&format!(r#"{{"key":"12345678","entry":{entry}}}"#)).unwrap();
+        let missing = Json::parse(r#"{"key":"12345678"}"#).unwrap();
+
+        let before = bridge.dry_run(LEDGER, "keep", Approval::default());
+        assert_eq!(before.get("would").and_then(Json::as_str), Some("allow"), "{before}");
+        assert!(before.get("payload").is_none(), "no values, no payload verdict: {before}");
+
+        let over = bridge.dry_run_with(LEDGER, "keep", &nine, Approval::default());
+        assert_eq!(over.get("would").and_then(Json::as_str), Some("marshal"), "{over}");
+        assert_eq!(over.get("payload").and_then(Json::as_str), Some("would_not_marshal"));
+        assert_eq!(
+            over.get("raises").and_then(Json::as_str),
+            Some(orbweaver_giop::server::MARSHAL),
+            "{over}"
+        );
+        let why = over.get("why").and_then(Json::as_str).unwrap_or_default();
+        assert!(why.contains("key") && why.contains("bounded at 8"), "{over}");
+        // No stage refused: the gate allowed, and the payload's half is what
+        // turned the row.
+        assert!(over.get("stage").is_none(), "{over}");
+
+        let within = bridge.dry_run_with(LEDGER, "keep", &eight, Approval::default());
+        assert_eq!(within.get("would").and_then(Json::as_str), Some("allow"), "{within}");
+        assert_eq!(within.get("payload").and_then(Json::as_str), Some("marshals"), "{within}");
+
+        let short = bridge.dry_run_with(LEDGER, "keep", &missing, Approval::default());
+        assert_eq!(short.get("would").and_then(Json::as_str), Some("marshal"), "{short}");
+        assert!(short.to_string().contains("needs an argument"), "{short}");
+
+        // Every question was audited as one, and none as a call.
+        assert_eq!(bridge.audit().len(), 4);
+        assert!(bridge.audit().iter().all(|l| l.starts_with("DRYRUN-")), "{:?}", bridge.audit());
+    }
+
+    /// The gate answers first, with values as without them. A payload that
+    /// would not marshal on an operation the caller may not call is reported
+    /// as the refusal — the same row, the same stage — and the payload's
+    /// half rides along under its own name and never becomes `would`. A
+    /// caller cannot learn an operation's shape from a dry run it may not
+    /// make either.
+    #[test]
+    fn a_refused_operation_is_refused_whatever_the_payload_looked_like() {
+        let reg = registry(IDL);
+        let mut bridge = crate::Bridge::new(&reg, Exposure::nothing(), "s-refused");
+        let bad = Json::parse(r#"{"cents":"not a long"}"#).unwrap();
+        let hidden = bridge.dry_run_with(ACCOUNT, "deposit", &bad, Approval::default());
+        assert_eq!(hidden.get("would").and_then(Json::as_str), Some("not_exposed"), "{hidden}");
+        assert_eq!(hidden.get("stage").and_then(Json::as_str), Some(STAGE_EXPOSURE), "{hidden}");
+        assert_eq!(hidden.get("payload").and_then(Json::as_str), Some("would_not_marshal"));
+        let why = hidden.get("why").and_then(Json::as_str).unwrap_or_default();
+        assert!(!why.contains("not a long"), "the refusal's why is the refusal's: {hidden}");
+        assert!(hidden.get("payload_why").is_some(), "{hidden}");
+    }
+
+    /// With declared values, the content seat is handed them and its verdict
+    /// is real; the ledger and the trace still take the stage's name and none
+    /// of its prose — the leak test, over a question instead of a call. And
+    /// the invoker is never touched: the prediction is synthesised, not a call
+    /// with the wire unplugged.
+    #[test]
+    fn a_dry_run_with_values_offers_them_to_the_content_stage_and_touches_no_wire() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::interceptor::SEAT_SAFETY_CONTENT;
+        use crate::telemetry::{CallPath, SpanRecord, TelemetrySink, Timestamp, Trace};
+
+        const MARKER: &str = "pin-s3cret-4242";
+
+        struct WouldLeak(Rc<RefCell<Option<String>>>);
+        impl Interceptor for WouldLeak {
+            fn before(&mut self, ctx: &CallContext<'_>) -> Outcome {
+                let seen = ctx.arguments.map_or_else(|| "<none>".to_owned(), ToString::to_string);
+                *self.0.borrow_mut() = Some(seen.clone());
+                Outcome::Refuse(crate::policy::Denied::Intercepted {
+                    stage: SEAT_SAFETY_CONTENT.to_owned(),
+                    reason: format!("this looked like a credential: {seen}"),
+                })
+            }
+        }
+        struct Captured(Rc<RefCell<Vec<String>>>);
+        impl TelemetrySink for Captured {
+            fn emit(&mut self, record: &SpanRecord<'_>) {
+                self.0.borrow_mut().push(record.to_line());
+            }
+        }
+
+        let reg = registry(IDL);
+        let seen = Rc::new(RefCell::new(None));
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        // The static guard, over a transport that detonates: the same
+        // question through the same seat, and `Detonator` is the proof that a
+        // prediction with values is still not a call.
+        let mut g: Guarded<'_, Detonator> = Guarded::assemble(
+            Detonator,
+            &reg,
+            Exposure::nothing().allow_interface(ACCOUNT),
+            Some(Caller::new("alice").with_scope("accounts:write")),
+            ACCOUNT.to_owned(),
+            Approval::default(),
+        );
+        assert!(g.chain_mut().trace(Trace::new(
+            "s-dry-values",
+            CallPath::Static,
+            Timestamp::new("2026-08-19T09:00:00Z"),
+            Captured(Rc::clone(&lines)),
+        )));
+        assert!(g.chain_mut().insert_after(
+            STAGE_APPROVAL,
+            SEAT_SAFETY_CONTENT,
+            WouldLeak(Rc::clone(&seen))
+        ));
+
+        let args = Json::parse(&format!(r#"{{"cents":"{MARKER}"}}"#)).unwrap();
+        let report = g.dry_run_with("deposit", &args);
+
+        // The stage saw the values and its verdict is the report's.
+        let seen = seen.borrow().clone().expect("the content stage was reached");
+        assert!(seen.contains(MARKER), "{seen}");
+        assert_eq!(report.would(), Would::Refuse, "{}", report.to_json());
+        assert_eq!(report.stage(), Some(SEAT_SAFETY_CONTENT));
+        // The operator reading the report gets the sentence: they declared the
+        // values, and a verdict they cannot act on teaches nothing.
+        assert!(report.to_json().to_string().contains(MARKER), "{}", report.to_json());
+        // The ledger and the trace do not.
+        let audit = g.audit().join("\n");
+        let emitted = lines.borrow().join("\n");
+        assert!(audit.starts_with(DECISION_DRY_RUN_REFUSE), "{audit}");
+        assert!(audit.contains(SEAT_SAFETY_CONTENT), "{audit}");
+        assert!(!emitted.is_empty(), "a trace that emitted nothing proves nothing");
+        for line in [&audit, &emitted] {
+            assert!(!line.contains(MARKER), "a declared value reached a record:\n{line}");
+            assert!(!line.contains("looked like a credential"), "stage prose was copied:\n{line}");
+        }
     }
 
     // --- the survey ----------------------------------------------------------

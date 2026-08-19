@@ -22,6 +22,10 @@ orbweaver-cdr = { path = "../orbweaver-cdr" }
 orbweaver-giop = { path = "../orbweaver-giop", default-features = false }
 orbweaver-idl = { path = "../orbweaver-idl" }
 orbweaver-registry = { path = "../orbweaver-registry" }
+# The guard a stub crosses the trust boundary through (PLAN §7.4 I1). A test
+# dependency only: the generated code stands on `rt` alone, and `guarded_stub.rs`
+# is what proves a *checked-in* stub's payload reaches the guard's content seat.
+orbweaver-mcp = { path = "../orbweaver-mcp" }
 
 [lints]
 workspace = true
