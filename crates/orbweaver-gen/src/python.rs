@@ -219,6 +219,12 @@ pub fn descriptor(tc: &TypeCode) -> Result<String, String> {
         TypeCode::Fixed { digits, scale } => {
             return Err(format!("fixed<{digits},{scale}> is deferred at wire level (§4.4)"));
         }
+        // No descriptor, deliberately. `("objref", id)` was available and
+        // wrong: the Python runtime would have marshalled an IOR where the
+        // peer sends a value, and the bridge would have agreed with it,
+        // because both halves were reading the same wrong registry.
+        TypeCode::Value { name, .. } => return Err(crate::deferred_value(name)),
+        TypeCode::AbstractInterface { name, .. } => return Err(crate::deferred_abstract(name)),
         // D008: a TypeCode is a value, and its AnyJSON form is the structural
         // one. Python holds it as `_rt.TypeCode` — the document, kept whole so
         // relaying it is exact — and `_rt._desc_of` reads that document as a
@@ -236,7 +242,9 @@ pub fn descriptor(tc: &TypeCode) -> Result<String, String> {
 /// Rust client cannot express, and merging the two checks would hide that.
 fn crossable(tc: &TypeCode, visiting: &mut Vec<String>) -> Result<(), String> {
     match tc {
-        TypeCode::Fixed { .. } => descriptor(tc).map(|_| ()),
+        TypeCode::Fixed { .. } | TypeCode::Value { .. } | TypeCode::AbstractInterface { .. } => {
+            descriptor(tc).map(|_| ())
+        }
         TypeCode::Sequence { element, .. } | TypeCode::Array { element, .. } => {
             crossable(element, visiting)
         }
@@ -278,8 +286,13 @@ fn crossable(tc: &TypeCode, visiting: &mut Vec<String>) -> Result<(), String> {
 }
 
 fn interface_crossable(registry: &Registry, id: &str) -> Result<(), String> {
-    if registry.interface(id).is_none() {
+    let Some(entry) = registry.interface(id) else {
         return Ok(());
+    };
+    // Same argument as `crate::interface_representable`: the declaration is
+    // refused before its members are looked at.
+    if entry.abstract_interface {
+        return Err(crate::deferred_abstract(registry.qualified_name(id).unwrap_or(id)));
     }
     let (operations, attributes) = resolved_members(registry, id);
     for (name, sig) in &operations {
@@ -348,7 +361,45 @@ pub fn emit_python(registry: &Registry, package: &str) -> PythonPackage {
                 out.emitted += 1;
                 by_module.entry(module.to_vec()).or_default().push((pass, id.clone(), code));
             }
-            Err(why) => out.skipped.push((id.clone(), why)),
+            Err(why) => {
+                // A skipped **interface** still owes its name to the runtime.
+                //
+                // Every reference to an interface is `("objref", id)` — a
+                // descriptor with no body, whose TypeCode name `_rt` looks up
+                // in `NAMES`. That table is filled by the emitted item, so an
+                // interface that was skipped left the name absent, and
+                // `_form_of` filled the slot with `""`: `struct Counter {
+                // Teller window; }` inside an `any` went out as
+                // `"IDL:gcdr/Teller:1.0" 00 00 00 01 00` where the Rust
+                // emitter wrote `… 00 00 00 07 "Teller\0"`. Two targets, one
+                // contract, different bytes — and the skip is the *reason* the
+                // reference is all there is, so this is exactly the case that
+                // must still name it.
+                //
+                // Not done for a skipped type: its descriptor is `("ref", id)`
+                // and the runtime refuses an id it holds no type for, which is
+                // a diagnosis rather than a wrong byte.
+                if let Some(Entry::Interface(entry)) = registry.get(id)
+                    && !entry.abstract_interface
+                {
+                    let name = path.last().cloned().unwrap_or_default();
+                    let code = format!(
+                        "#: IDL `{id}`, skipped here: {why}\n\
+                         #: The name is registered anyway — a reference to it is still an\n\
+                         #: `objref` whose TypeCode names it, and an unnamed TypeCode is a\n\
+                         #: byte the Rust target does not write.\n\
+                         _rt.register_name({}, {})\n",
+                        py_str(id),
+                        py_str(&name)
+                    );
+                    by_module.entry(module.to_vec()).or_default().push((
+                        Pass::Interfaces,
+                        id.clone(),
+                        code,
+                    ));
+                }
+                out.skipped.push((id.clone(), why));
+            }
         }
     }
 

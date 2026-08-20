@@ -597,6 +597,16 @@ fn json_unmapped(tc: &TypeCode) -> Option<String> {
              not carry it either, docs/PLAN.md §4.4)"
                 .into(),
         ),
+        TypeCode::Value { .. } => Some(
+            "a `valuetype` has no AnyJSON form: its state is marshalled inline behind a value \
+             tag, which v1 does not do (docs/PLAN.md §4.4)"
+                .into(),
+        ),
+        TypeCode::AbstractInterface { .. } => Some(
+            "an abstract interface has no AnyJSON form: on the wire it is the union of a value \
+             and a reference, and v1 carries neither form of it (docs/PLAN.md §4.4)"
+                .into(),
+        ),
         TypeCode::Principal => {
             Some("`Principal` has no AnyJSON form (withdrawn from CORBA)".into())
         }
@@ -852,7 +862,14 @@ impl Sampler {
                 self.sample(&open)?
             }
 
-            TypeCode::Fixed { .. } | TypeCode::Principal => return None,
+            // §4.4's other two, no longer recorded as object references and so
+            // no longer sampled *as* object references — which is what the
+            // property used to do, silently, and is why the §4.4 count and the
+            // count the property measured differed by more than interfaces.
+            TypeCode::Fixed { .. }
+            | TypeCode::Value { .. }
+            | TypeCode::AbstractInterface { .. }
+            | TypeCode::Principal => return None,
         })
     }
 
@@ -882,7 +899,10 @@ impl Sampler {
     fn can_sample_at(&self, tc: &TypeCode, depth: u32) -> bool {
         match tc {
             TypeCode::Alias { aliased, .. } => self.can_sample_at(aliased, depth),
-            TypeCode::Fixed { .. } | TypeCode::Principal => false,
+            TypeCode::Fixed { .. }
+            | TypeCode::Value { .. }
+            | TypeCode::AbstractInterface { .. }
+            | TypeCode::Principal => false,
             // Samplable exactly when the type it names is under way, there is
             // depth left to expand it into, and the type it names is itself
             // samplable from here — a cycle with no sequence in it (`struct
@@ -1144,6 +1164,12 @@ fn why_unsupported(tc: &TypeCode) -> &'static str {
     match tc {
         TypeCode::Alias { aliased, .. } => why_unsupported(aliased),
         TypeCode::Fixed { .. } => "`fixed` parses but v1 does not marshal it (docs/PLAN.md §4.4)",
+        TypeCode::Value { .. } => {
+            "a `valuetype` parses but v1 does not marshal it (docs/PLAN.md §4.4)"
+        }
+        TypeCode::AbstractInterface { .. } => {
+            "an abstract interface parses but v1 does not marshal it (docs/PLAN.md §4.4)"
+        }
         TypeCode::TypeCode => "a bare `TypeCode` has no `Value` representation in the dynamic path",
         TypeCode::Principal => "`Principal` is withdrawn from CORBA and is not marshalled",
         TypeCode::Recursive(_) => "the type is recursive and has no finite expansion",
@@ -1169,7 +1195,9 @@ fn describe(tc: &TypeCode) -> String {
         | TypeCode::Enum { name, .. }
         | TypeCode::Except { name, .. }
         | TypeCode::Alias { name, .. }
-        | TypeCode::ObjRef { name, .. } => name.clone(),
+        | TypeCode::ObjRef { name, .. }
+        | TypeCode::Value { name, .. }
+        | TypeCode::AbstractInterface { name, .. } => name.clone(),
         TypeCode::Sequence { element, .. } => format!("sequence<{}>", describe(element)),
         TypeCode::Array { element, length } => format!("{}[{length}]", describe(element)),
         other => format!("{other:?}").split(' ').next().unwrap_or("a type").to_lowercase(),
@@ -1185,7 +1213,9 @@ fn type_id(tc: &TypeCode) -> String {
         | TypeCode::Enum { id, .. }
         | TypeCode::Except { id, .. }
         | TypeCode::Alias { id, .. }
-        | TypeCode::ObjRef { id, .. } => id.clone(),
+        | TypeCode::ObjRef { id, .. }
+        | TypeCode::Value { id, .. }
+        | TypeCode::AbstractInterface { id, .. } => id.clone(),
         TypeCode::Recursive(id) => id.clone(),
         other => describe(other),
     }

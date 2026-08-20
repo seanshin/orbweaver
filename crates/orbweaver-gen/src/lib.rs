@@ -240,8 +240,31 @@ pub(crate) fn rust_type(tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
         TypeCode::Fixed { digits, scale } => {
             return Err(format!("fixed<{digits},{scale}> is deferred at wire level (§4.4)"));
         }
+        TypeCode::Value { name, .. } => return Err(deferred_value(name)),
+        TypeCode::AbstractInterface { name, .. } => return Err(deferred_abstract(name)),
         other => return Err(format!("no static mapping for {other:?}")),
     })
+}
+
+/// The reason a `valuetype` is skipped, in one place so both the type mapper
+/// and the cascade give the same sentence.
+///
+/// It names the wire form and not just the section, because the mistake this
+/// replaced was silent: an object reference *is* a legal thing to emit, so a
+/// reader of the generated code had nothing to be suspicious of.
+pub(crate) fn deferred_value(name: &str) -> String {
+    format!(
+        "valuetype {name} is deferred at wire level (§4.4): its state is marshalled inline \
+         behind a value tag, not as an object reference"
+    )
+}
+
+/// The same, for an abstract interface.
+pub(crate) fn deferred_abstract(name: &str) -> String {
+    format!(
+        "abstract interface {name} is deferred at wire level (§4.4): on the wire it is the \
+         union of a value and a reference, not an object reference"
+    )
 }
 
 /// `first`, `second`, … — the wire position of a member, for its doc comment.
@@ -457,6 +480,12 @@ fn representable(tc: &TypeCode, visiting: &mut Vec<String>) -> Result<(), String
         TypeCode::Fixed { digits, scale } => {
             Err(format!("fixed<{digits},{scale}> is deferred at wire level (§4.4)"))
         }
+        // The other two of §4.4's three, cascading exactly as `fixed` does.
+        // They did not, for six phases, because the registry handed this
+        // function a `TypeCode::ObjRef` for both and an object reference is
+        // representable — the cascade was correct and its input was not.
+        TypeCode::Value { name, .. } => Err(deferred_value(name)),
+        TypeCode::AbstractInterface { name, .. } => Err(deferred_abstract(name)),
         TypeCode::Sequence { element, .. } | TypeCode::Array { element, .. } => {
             representable(element, visiting)
         }
@@ -496,8 +525,15 @@ fn representable(tc: &TypeCode, visiting: &mut Vec<String>) -> Result<(), String
 }
 
 fn interface_representable(registry: &Registry, id: &str) -> Result<(), String> {
-    if registry.interface(id).is_none() {
+    let Some(entry) = registry.interface(id) else {
         return Ok(());
+    };
+    // The declaration itself, before its members. An abstract interface has no
+    // reference form for a stub to hold and no servant a skeleton could
+    // dispatch to; every operation it declares may be perfectly representable,
+    // which is why checking only the members cleared it.
+    if entry.abstract_interface {
+        return Err(deferred_abstract(registry.qualified_name(id).unwrap_or(id)));
     }
     // Inherited members too: both halves generate the resolved set, so the
     // representability check has to cover the resolved set or it would clear an
