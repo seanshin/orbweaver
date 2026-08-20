@@ -17,13 +17,16 @@
 //!
 //! *항목이 출처를 들고 다닌다. 출처가 없으면 없다고 말하고, 그래도 실패한다.*
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use orbweaver_forge::pipeline::{
     Item, ItemStatus, Pipeline, StageId, ValidateStage, Workspace, run_batch, run_pipeline,
 };
-use orbweaver_forge::{RELEASED_UNREADABLE, Severity, Source, validate_source};
-use orbweaver_idl::SearchPath;
+use orbweaver_forge::{
+    RELEASED_UNREADABLE, Severity, Source, validate_against, validate_source, validate_unit_against,
+};
+use orbweaver_idl::{SearchPath, preprocess_file};
 
 const HEADER: &str = "\
 #ifndef ESTATE_COMMON_IDL
@@ -44,6 +47,11 @@ module Booking {
   };
 };
 ";
+
+/// `corpus/include/`, which is where the multi-file cases live.
+fn corpus_include() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join("corpus").join("include")
+}
 
 /// A directory nobody's pipeline produced — the way an estate arrives.
 fn estate(name: &str, files: &[(&str, &str)]) -> PathBuf {
@@ -249,4 +257,155 @@ fn the_search_path_serves_the_angled_form() {
     let search: SearchPath = [headers.as_path()].into_iter().collect();
     let mut gate = ValidateStage::new().searching(search);
     assert!(run_batch(&mut gate, &items, 1).all_valid());
+}
+
+// ─── `--against` over a multi-file contract ──────────────────────────────────
+//
+// The library above was already right: `validate_source_against` resolves both
+// sides from their paths and `a_released_contract_resolves_its_own_includes`
+// pins it. The COMMAND was not. `sidl-validate --against` resolved both files
+// itself — it has to, to report an unresolvable include as one cause rather
+// than as ninety — and then handed the two resolved units' `.text` back to the
+// STRING entry point, which preprocessed each splice a second time.
+//
+// A splice is not a file. It carries the `#ifndef` of every header it
+// contains, and a guard that is not the first directive of the text it sits in
+// is conditional compilation, which this front end refuses on purpose. So the
+// §5.3 comparison over a guarded multi-file contract — the ordinary shape of a
+// released contract — never ran at all: it was refused with two
+// `unsupported-directive` errors pointing at line 1 of a header.
+//
+// *라이브러리는 이미 옳았고 커맨드가 틀렸다. 해석된 유닛의 텍스트를 문자열
+// 진입점에 되돌려 주면 스플라이스가 두 번 전처리된다.*
+
+fn sidl_validate(args: &[&Path]) -> (bool, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_sidl-validate"))
+        .args(args)
+        .output()
+        .expect("sidl-validate runs");
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    (out.status.success(), text)
+}
+
+/// The defect, at the size it was found: the corpus pair, through the binary.
+///
+/// `corpus/include/evo-proposed.idl` is `evo-released.idl` with its `#include`
+/// pointed one file sideways and nothing else changed, so the breaking change —
+/// a removed struct member — is in a file neither root names. This is the case
+/// the manifest cannot express (`corpus/include/cases.tsv` says why) and it is
+/// gated here instead.
+#[test]
+fn the_command_compares_a_guarded_multi_file_contract_and_finds_the_header_change() {
+    let dir = corpus_include();
+    let (ok, out) = sidl_validate(&[
+        Path::new("--against"),
+        &dir.join("evo-released.idl"),
+        &dir.join("evo-proposed.idl"),
+    ]);
+
+    assert!(
+        !out.contains("unsupported-directive"),
+        "the guards of the spliced headers are guards, not conditional compilation:\n{out}"
+    );
+    assert!(
+        out.contains("[evolution/BREAKING]")
+            && out.contains("IDL:depot.example/Depot/OrderLine:1.0")
+            && out.contains("member \"bay\" removed"),
+        "the comparison runs, and reports the change made in the included header:\n{out}"
+    );
+    assert!(!ok, "and a breaking change exits 1:\n{out}");
+}
+
+/// The control the case is worth nothing without: the same two files with the
+/// baseline and the proposal being the same contract.
+///
+/// Without it, a `--against` that reported `evolution/BREAKING` on everything
+/// would pass the test above.
+#[test]
+fn the_command_compares_that_contract_with_itself_and_reports_nothing() {
+    let dir = corpus_include();
+    let released = dir.join("evo-released.idl");
+    let (ok, out) = sidl_validate(&[Path::new("--against"), &released, &released]);
+    assert!(ok, "a contract compared with itself changes nothing:\n{out}");
+    assert!(!out.contains("evolution/"), "{out}");
+    assert!(out.contains("0 rejected"), "{out}");
+}
+
+/// One convention for who owns a position, not two.
+///
+/// `validate_unit_for` does not map positions and `validate_unit_against_for`
+/// does not either; the binary's one printer maps both with the unit it
+/// resolved. So a finding written in an included header prints identically
+/// whether or not a baseline was given — and if the two forms ever start
+/// disagreeing about where a line was written, this is what says so.
+#[test]
+fn the_against_form_places_a_header_finding_exactly_where_the_plain_form_does() {
+    let header = "\
+#ifndef ESTATE_AUDIT_IDL
+#define ESTATE_AUDIT_IDL
+module Common {
+  interface Audit {
+    void note(in string what);
+  };
+};
+#endif
+";
+    let dir = estate(
+        "against-positions",
+        &[("00-audit.idl", header), ("01-desk.idl", "#include \"00-audit.idl\"\n")],
+    );
+    let root = dir.join("01-desk.idl");
+
+    let (plain_ok, plain) = sidl_validate(&[&root]);
+    let (against_ok, against) = sidl_validate(&[Path::new("--against"), &root, &root]);
+
+    assert!(plain_ok && against_ok, "advice does not fail a run:\n{plain}\n{against}");
+    assert!(
+        plain.contains(&format!("{}:5:", dir.join("00-audit.idl").display())),
+        "the plain form names the header and the header's own line:\n{plain}"
+    );
+    assert_eq!(against, plain, "and the `--against` form says exactly the same thing");
+}
+
+/// Why the unit entry point exists, pinned as the thing that goes wrong
+/// without it.
+///
+/// Not a hypothetical: this is the call the binary used to make. Handing a
+/// resolved unit's text back to the string form re-preprocesses the splice, and
+/// the splice's second `#ifndef` is refused — so the comparison is replaced by
+/// a diagnostic about a file that is perfectly well-formed.
+#[test]
+fn a_splice_handed_back_to_the_string_form_is_refused_and_the_unit_form_is_not() {
+    let dir = corpus_include();
+    let search = SearchPath::new();
+    let released = preprocess_file(&dir.join("evo-released.idl"), &search).expect("reads");
+    let proposed = preprocess_file(&dir.join("evo-proposed.idl"), &search).expect("reads");
+    assert!(released.is_ok() && proposed.is_ok(), "both roots resolve");
+
+    let by_text = validate_against(&proposed.text, &released.text);
+    let refusals: Vec<&str> = by_text
+        .findings
+        .iter()
+        .filter(|f| f.severity == Severity::Error)
+        .map(|f| &*f.rule)
+        .collect();
+    assert_eq!(
+        refusals,
+        vec!["unsupported-directive", "unsupported-directive"],
+        "the old call: the splice's guards read as conditional compilation, and no diff runs"
+    );
+    assert!(
+        !by_text.findings.iter().any(|f| f.rule.starts_with("evolution/")),
+        "which is the part that matters — an unmeasured comparison, reported as a refusal"
+    );
+
+    let by_unit = validate_unit_against(&proposed, &released);
+    let evolution: Vec<&str> = by_unit
+        .findings
+        .iter()
+        .filter(|f| f.rule.starts_with("evolution/"))
+        .map(|f| &*f.rule)
+        .collect();
+    assert_eq!(evolution, vec!["evolution/BREAKING"], "the unit form compares the contracts");
 }

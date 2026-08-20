@@ -66,3 +66,29 @@ inc-scope-bare.idl	none	accept	-	accept	An includer with no prefix anywhere. Not
 inc-scope-control.idl	none	accept	-	accept	The control: no prefix in either file, #include still inside a module. THE ORACLES DISAGREE HERE. omniidl gives the leaf IDL:Parcel/TagNumber:1.0 — it resets the id path at a file boundary whether or not a prefix is in play — and JacORB 3.9 gives IDL:Ledger/Parcel/TagNumber:1.0, resetting nothing. We follow omniidl: under JacORB's reading a leaf's identity depends on which root reached it, which is exactly what the test `a_shared_file_keeps_its_identity_whichever_root_reaches_it` exists to forbid, and a repository id that changes with the includer is an IOR no peer agrees with.
 inc-two-scopes.idl	none	accept	-	accept	The same guarded leaf reached from two in-module prefix scopes. It is spliced once — for us by canonical path, for omniidl by the guard — so it lands in whichever scope reached it first and the second does not contain it. 5 of 5 ids agree with omniidl. JacORB agrees on the exit ids and diverges on the leaf's, the same entry-side disagreement as the control row.
 inc-nested-scope.idl	none	accept	-	accept	The include two modules deep, so the restore is measured at a depth greater than one: Ticket is IDL:hub.example/Outer/Inner/Ticket:1.0. A restore that resets to the empty path is indistinguishable from a correct one at depth zero, which is why every previous case missed it.
+#
+# The `evo-*` rows are the §5.3 pair, added 2026-08-20 and measured then with
+# omniidl 4.3.4 (`omniidl -b dump`, all four exit 0). A row of this manifest
+# says what ONE root is filed under; the case these four files exist for is a
+# PAIR — `sidl-validate --against evo-released.idl evo-proposed.idl` — and this
+# manifest cannot express it, for two reasons that are both worth writing down.
+# The row shape carries one root and one verdict, with no column for a baseline;
+# and the gate that reads it (`crates/orbweaver-idl/tests/include_corpus.rs`)
+# lives in orbweaver-idl, while the comparison lives in orbweaver-forge, which
+# depends on orbweaver-idl — the row could not call it without a dependency
+# cycle. So the four rows below pin what the manifest CAN say (each file is a
+# valid root standing alone, which is what makes the pair a comparison of two
+# contracts rather than of two errors) and the comparison itself is gated by
+# `crates/orbweaver-forge/tests/include_origin.rs`, which runs the real
+# `sidl-validate` binary over these paths.
+#
+# `evo-*` 행은 §5.3 쌍이다. 이 매니페스트의 한 행은 루트 **하나**의 판정만
+# 표현하므로 기준본이 필요한 비교는 담을 수 없고, 이 매니페스트를 읽는 게이트는
+# orbweaver-idl에 있는데 비교는 orbweaver-forge에 있어 의존 순환이 된다. 따라서
+# 표현 가능한 부분(각 파일이 단독 루트로 유효하다)만 여기에 두고, 비교 자체는
+# forge 쪽 테스트가 실제 바이너리로 게이트한다.
+#
+evo-shared.idl	none	accept	-	accept	The released header of the §5.3 pair, standing alone. Guarded and prefixed, which is the ordinary shape of a header in the field and the shape `--against` used to refuse: it handed the resolved unit's SPLICED TEXT back to a string entry point, the second preprocess saw this guard in the middle of the splice, and `#ifndef` that is not the first directive of its text is conditional compilation. Two `unsupported-directive` errors and no comparison at all.
+evo-shared-narrowed.idl	none	accept	-	accept	The same header with `bay` removed — `Verdict::Breaking` by §5.3, since CDR is positional. Carries the SAME guard macro as evo-shared.idl on purpose: a released and a proposed revision of one header are one file at two revisions. No root here reaches both, which is the only thing that would make sharing the macro matter.
+evo-released.idl	none	accept	-	accept	The released root: includes evo-shared.idl and declares the interface. Valid alone, so a comparison against it is a comparison of a contract and not of an error.
+evo-proposed.idl	none	accept	-	accept	The proposed root: evo-released.idl with its #include pointed at the narrowed header and NOT ONE other character changed. That is the whole point of the pair — diff the two roots and only the #include moves, so a comparison that resolved neither side, or only one, calls this compatible while a peer decodes garbage. Expected: `sidl-validate --against evo-released.idl evo-proposed.idl` reports evolution/BREAKING on IDL:depot.example/Depot/OrderLine:1.0 and exits 1.
