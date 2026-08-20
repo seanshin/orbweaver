@@ -191,6 +191,29 @@ fn derived_id(path: &[String]) -> String {
     format!("IDL:{}:1.0", path.join("/"))
 }
 
+/// Which of the three signature positions a type is being written in.
+///
+/// All three take `param_type_spec`; a return takes `op_type_spec`, which is
+/// `param_type_spec` plus `void`. The variant is carried only so the
+/// diagnostic can name the position and so `void` stays legal in the one place
+/// the grammar allows it. See `Parser::signature_type_spec`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Signature {
+    Attribute,
+    Parameter,
+    Return,
+}
+
+impl Signature {
+    fn what(self) -> &'static str {
+        match self {
+            Signature::Attribute => "an attribute",
+            Signature::Parameter => "a parameter",
+            Signature::Return => "a return",
+        }
+    }
+}
+
 impl Parser {
     fn peek(&self) -> &Token {
         &self.toks[self.i.min(self.toks.len() - 1)]
@@ -580,7 +603,7 @@ impl Parser {
         if !self.eat_kw("attribute") {
             return self.err("expected 'attribute' after 'readonly'");
         }
-        let ty = self.type_spec()?;
+        let ty = self.signature_type_spec(Signature::Attribute)?;
         let mut names = vec![self.expect_ident()?];
         while self.eat_punct(",") {
             names.push(self.expect_ident()?);
@@ -590,7 +613,7 @@ impl Parser {
 
     fn operation(&mut self, annotations: Vec<Annotation>) -> Result<Operation> {
         let oneway = self.eat_kw("oneway");
-        let returns = self.type_spec()?;
+        let returns = self.signature_type_spec(Signature::Return)?;
         let name = self.expect_ident()?;
         self.expect_punct("(")?;
         let mut params = Vec::new();
@@ -641,7 +664,7 @@ impl Parser {
                 self.peek_tok()
             ));
         };
-        let ty = self.type_spec()?;
+        let ty = self.signature_type_spec(Signature::Parameter)?;
         let name = self.expect_ident()?;
         Ok(Param { direction, ty, name, annotations })
     }
@@ -856,6 +879,97 @@ impl Parser {
             parts.push(t.text);
         }
         Ok(ScopedName { absolute, parts, span: span_over(start, end) })
+    }
+
+    /// The type a **signature** names, which is a narrower grammar than the one
+    /// a declaration names.
+    ///
+    /// The productions followed, CORBA 3.4 §7.4 (the same numbering IDL 4.2
+    /// keeps for the classic core):
+    ///
+    /// ```text
+    /// param_type_spec   ::= base_type_spec | string_type | wide_string_type
+    ///                     | scoped_name
+    /// op_type_spec      ::= param_type_spec | "void"
+    /// attr_spec         ::= readonly_attr_spec | "attribute" param_type_spec
+    ///                       attr_declarator
+    /// param_dcl         ::= param_attribute param_type_spec simple_declarator
+    /// ```
+    ///
+    /// against the wider one every *declaration* uses:
+    ///
+    /// ```text
+    /// type_spec         ::= simple_type_spec | constr_type_spec
+    /// simple_type_spec  ::= base_type_spec | template_type_spec | scoped_name
+    /// template_type_spec::= sequence_type | string_type | wide_string_type
+    ///                     | fixed_pt_type
+    /// ```
+    ///
+    /// The two lists differ in exactly three constructs. `string_type` and
+    /// `wide_string_type` are named by `param_type_spec` itself, bound or not,
+    /// so `attribute string<10> label;` is legal. `sequence_type` and
+    /// `fixed_pt_type` are **not**: an anonymous sequence and a `fixed<d,s>`
+    /// reach a signature only by being given a name with a `typedef` first.
+    /// And `void` is in neither list — `op_type_spec` spells it out separately,
+    /// which is what makes it a return type and nothing else.
+    ///
+    /// The parser called `type_spec` at all three sites, so it accepted
+    /// `fixed<9,2>`, `sequence<long>` and `void` as attribute, parameter and
+    /// return types. Measured against the oracle 2026-08-20 — omniidl 4.3.4
+    /// refuses every one of them:
+    ///
+    /// ```text
+    /// attribute fixed<9,2> balance;   → 2: Syntax error in interface body
+    /// void deposit(in fixed<9,2> a);  → 2: Syntax error in operation parameters
+    /// fixed<9,2> total();             → 2: Syntax error in interface body
+    /// void f(in sequence<long> nums); → 2: Syntax error in operation parameters
+    /// attribute void nothing;         → 2: Syntax error in interface body
+    /// ```
+    ///
+    /// while the typedef'd neighbour of each is accepted. Being lax is the
+    /// direction a differential cannot catch on its own: the corpus had no file
+    /// for the shape, so nothing was ever asked. `corpus/negative/n13`–`n15`
+    /// are that file, one per position.
+    fn signature_type_spec(&mut self, pos: Signature) -> Result<TypeSpec> {
+        let start = self.peek().span;
+        let ty = self.type_spec()?;
+        // The span is the extent of the type, not of its first token: a
+        // consumer that slices the source by it (forge's fix hints) must get
+        // `fixed<9,2>` and not `fixed`.
+        let span = span_over(start, self.prev_span());
+        let what = pos.what();
+        let (message, rule) = match &ty {
+            TypeSpec::Fixed { .. } => (
+                format!(
+                    "'fixed' cannot be {what} type: IDL's param_type_spec has no fixed_pt_type, \
+                     so a fixed-point type reaches a signature only through a name. Declare \
+                     `typedef fixed<d,s> Amount;` outside the interface and write `Amount` here."
+                ),
+                "anonymous-type-in-signature",
+            ),
+            TypeSpec::Sequence { .. } => (
+                format!(
+                    "an anonymous 'sequence' cannot be {what} type: IDL's param_type_spec has no \
+                     sequence_type, so a sequence reaches a signature only through a name. \
+                     Declare `typedef sequence<T> Ts;` outside the interface and write `Ts` here."
+                ),
+                "anonymous-type-in-signature",
+            ),
+            TypeSpec::Void if pos != Signature::Return => (
+                format!(
+                    "'void' cannot be {what} type: only an operation's return may be void. \
+                     Name the type the value actually has."
+                ),
+                "void-in-signature",
+            ),
+            _ => return Ok(ty),
+        };
+        Err(ParseError { message, span, rule })
+    }
+
+    /// The span of the token last consumed.
+    fn prev_span(&self) -> Span {
+        self.toks[self.i.saturating_sub(1).min(self.toks.len() - 1)].span
     }
 
     fn type_spec(&mut self) -> Result<TypeSpec> {
@@ -1328,6 +1442,117 @@ mod tests {
             .unwrap_err();
         assert_eq!(e.rule, "pragma-unknown-name");
         assert!(e.message.contains("after the declaration"), "{}", e.message);
+    }
+
+    // ── param_type_spec vs type_spec ────────────────────────────────────────
+
+    /// The three positions the reported divergence covered.
+    ///
+    /// omniidl 4.3.4 refuses all three (measured 2026-08-20: "Syntax error in
+    /// interface body" for the attribute and the return, "Syntax error in
+    /// operation parameters" for the parameter) and we accepted all three. The
+    /// corpus files are `corpus/negative/n13`–`n15`; these pin the *message*,
+    /// which the corpus cannot.
+    #[test]
+    fn a_bare_fixed_cannot_be_an_attribute_a_parameter_or_a_return() {
+        for src in [
+            "interface Acct { attribute fixed<9,2> balance; };",
+            "interface Acct { void deposit(in fixed<9,2> credited); };",
+            "interface Acct { fixed<9,2> total(); };",
+            // A valuetype's operations take `op_type_spec` too — they reach the
+            // same parser path, and omniidl refuses this one as well.
+            "valuetype Money { fixed<9,2> scaled(); };",
+        ] {
+            let e = parse(src).expect_err("the oracle refuses this");
+            assert_eq!(e.rule, "anonymous-type-in-signature", "{src}: {}", e.message);
+            assert!(e.message.contains("typedef fixed<d,s>"), "{src}: {}", e.message);
+        }
+    }
+
+    /// The position is named, because "cannot be a type here" is not actionable
+    /// and the three sites are edited differently.
+    #[test]
+    fn the_signature_diagnostic_names_the_position() {
+        let wording = |src: &str| parse(src).expect_err("refused").message;
+        assert!(wording("interface I { attribute fixed<9,2> a; };").contains("an attribute type"));
+        assert!(wording("interface I { void f(in fixed<9,2> a); };").contains("a parameter type"));
+        assert!(wording("interface I { fixed<9,2> f(); };").contains("a return type"));
+    }
+
+    /// The same production excludes `sequence_type`, so the fix is one rule and
+    /// not a test for the `fixed` keyword. `corpus/negative/n16`.
+    #[test]
+    fn an_anonymous_sequence_cannot_be_a_signature_type_either() {
+        for src in [
+            "interface I { attribute sequence<long> cache; };",
+            "interface I { void f(in sequence<long> nums); };",
+            "interface I { sequence<long> nums(); };",
+        ] {
+            let e = parse(src).expect_err("the oracle refuses this");
+            assert_eq!(e.rule, "anonymous-type-in-signature", "{src}: {}", e.message);
+            assert!(e.message.contains("typedef sequence<T>"), "{src}: {}", e.message);
+        }
+    }
+
+    /// `void` is in `op_type_spec` and in nothing else. `corpus/negative/n17`.
+    #[test]
+    fn void_is_a_return_type_and_nothing_else() {
+        for src in
+            ["interface I { attribute void nothing; };", "interface I { void f(in void x); };"]
+        {
+            let e = parse(src).expect_err("the oracle refuses this");
+            assert_eq!(e.rule, "void-in-signature", "{src}: {}", e.message);
+        }
+        parse("interface I { void f(); };").expect("a void return is the whole point of the form");
+    }
+
+    /// The legal neighbour of each refusal, which is the half a strictness fix
+    /// breaks silently. omniidl accepts every line here.
+    #[test]
+    fn the_typedef_and_string_forms_stay_legal() {
+        parse(
+            "typedef fixed<9,2> Amount;\n\
+             typedef sequence<long> Items;\n\
+             interface Acct {\n\
+               attribute Amount balance;\n\
+               Amount total();\n\
+               void deposit(in Amount credited);\n\
+               Items chosen();\n\
+               attribute string<10> label;\n\
+               wstring<5> tag();\n\
+               void note(in string text);\n\
+             };",
+        )
+        .expect("every one of these is param_type_spec or op_type_spec");
+    }
+
+    /// And every place the *wider* `type_spec` still applies, which is where
+    /// `fixed` and an anonymous `sequence` remain legal. omniidl accepts all of
+    /// it; `corpus/golden/21-deferred-fixed.idl` is the same shape.
+    #[test]
+    fn fixed_and_anonymous_sequences_stay_legal_wherever_type_spec_applies() {
+        parse(
+            "typedef fixed<9,2> Amount;\n\
+             typedef Amount Amounts[3];\n\
+             typedef sequence<fixed<9,2> > Direct;\n\
+             struct Row { fixed<7,3> weight; Amount owed; };\n\
+             exception Overdrawn { fixed<9,2> shortfall; };\n\
+             union Cell switch (long) { case 1: fixed<9,2> money; default: long other; };\n\
+             valuetype Money { public fixed<9,2> owed; };",
+        )
+        .expect("a declaration takes type_spec, which does include fixed and sequence");
+    }
+
+    /// The span is the whole type, not its first token — the RC-2 property, for
+    /// the new diagnostic. `orbweaver-forge` slices the source with it.
+    #[test]
+    fn a_signature_type_error_spans_the_whole_type() {
+        let src = "interface I { attribute fixed<9,2> balance; };";
+        let e = parse(src).expect_err("refused");
+        assert_eq!(&src[e.span.start..e.span.end], "fixed<9,2>");
+        let src = "interface I { void f(in sequence<long> nums); };";
+        let e = parse(src).expect_err("refused");
+        assert_eq!(&src[e.span.start..e.span.end], "sequence<long>");
     }
 
     /// The invariant the whole change rests on: a file with no identity pragma

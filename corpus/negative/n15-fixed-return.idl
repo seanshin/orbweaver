@@ -1,0 +1,6 @@
+// And in return position: `op_type_spec` is `param_type_spec | "void"`, so it
+// inherits the exclusion. omniidl 4.3.4:
+//   Syntax error in interface body
+//   Error in look-up of 'total': 'total' not found
+// Legal: `typedef fixed<9,2> Amount; Amount total();`
+module n15 { interface Account { fixed<9,2> total(); }; };

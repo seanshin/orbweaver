@@ -1040,10 +1040,19 @@ mod tests {
     #[test]
     fn editing_a_type_does_not_resurface_on_everything_that_mentions_it() {
         let c = diff(
+            // The second parameter used to read `in sequence<S> many`, which is
+            // not legal IDL: a signature takes `param_type_spec`, which has no
+            // `sequence_type`, so a sequence reaches a parameter only through a
+            // typedef (omniidl: "Syntax error in operation parameters";
+            // `corpus/negative/n16`). It is a second plain `S` here rather than
+            // `typedef sequence<S> Many;` because the typedef is a *second
+            // changed declaration* — the differ reports it in its own right,
+            // which is a separate question from this one and is recorded rather
+            // than absorbed by loosening the count.
             &reg("module m { struct S { long a; string b; }; \
-                  interface I { S f(in S s, in sequence<S> many); attribute S at; }; };"),
+                  interface I { S f(in S s, in S other); attribute S at; }; };"),
             &reg("module m { struct S { string b; long a; }; \
-                  interface I { S f(in S s, in sequence<S> many); attribute S at; }; };"),
+                  interface I { S f(in S s, in S other); attribute S at; }; };"),
         );
         assert_eq!(c.len(), 1, "one edit should be one finding, got {c:?}");
         assert!(c[0].id.contains("/S:"), "reported against the type, not its users");
