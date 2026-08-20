@@ -622,10 +622,28 @@ impl Pool {
     }
 
     /// A reference bound to this pool, for code that wants an [`Invoker`].
+    ///
+    /// Each call makes a **new** object reference: two of them for the same
+    /// IOR are two references that happen to name one object, and a permanent
+    /// forward taken by one says nothing about the other. Cloning is the
+    /// other operation — a clone is another handle on the *same* reference
+    /// and shares where the object is. See [`Reference`].
     pub fn reference(&self, ior: Ior) -> Reference {
-        Reference { pool: self.clone(), ior, endian: Endian::native(), via: None, forwarded: None }
+        Reference {
+            pool: self.clone(),
+            moved: Arc::new(Guarded::new(ADDRESS, ior.clone())),
+            ior,
+            endian: Endian::native(),
+            via: None,
+            forwarded: None,
+        }
     }
 }
+
+/// What the lock discipline calls a reference's shared address, when it has
+/// something to say about it. Named for the fact, not the type: a complaint
+/// that says "Guarded" names nothing a reader can act on.
+const ADDRESS: &str = "an object reference's address";
 
 /// Drops faulted and idle connections. Returns them for the caller to drop
 /// outside the lock.
@@ -778,10 +796,7 @@ impl Chain {
 ///   caller decides.
 /// - a **permanent** forward re-points the reference: `ior` becomes the
 ///   forwarded-to IOR — the *may* of §9.6, taken up as
-///   [`Connection::origin`] takes it up. A `Reference` is `Clone` and a
-///   clone re-points only itself; a caller that hands copies around and
-///   wants them to agree keeps one and clones after the call, as it would
-///   with any cached fact.
+///   [`Connection::origin`] takes it up.
 ///
 /// Both rules are applied **per hop**, over the whole chain one call
 /// followed, and not to the last hop alone: a chain that goes
@@ -792,9 +807,58 @@ impl Chain {
 /// between the two orderings: temporary-then-permanent ends re-pointed with
 /// nothing cached, because a permanent hop clears the forwarding
 /// information it replaces.
-#[derive(Debug, Clone)]
+///
+/// # A clone is another handle, not another reference
+///
+/// **Where the object is, is shared by every clone**; the routing state a
+/// handle built up on the way there is not.
+///
+/// A permanent forward is the servant saying *the object moved*, and that is
+/// a fact about the object rather than about whichever handle happened to
+/// make the call that heard it. Every language mapping already reads it that
+/// way — C++'s `_duplicate` refcounts one proxy and Java's `_duplicate`
+/// shares one `Delegate`, so a permanent forward taken through a duplicate
+/// is seen by all of them — and `Clone` is this crate's `_duplicate`. Two
+/// [`Pool::reference`] calls, on the other hand, are two references.
+///
+/// Before this was shared, a clone re-pointed only itself, and §9.6 made the
+/// disagreement silent: the old address stays valid, so a stale clone's
+/// calls are answered — one forward per call, forever, with nothing to go
+/// red. The pattern that pays it is the one this API asks for, not an
+/// exotic one: [`Invoker::invoke`] takes `&mut self`, so a reference used
+/// from more than one caller has to be cloned, and a template that is cloned
+/// per call never makes a call itself and so never re-points. Measured at
+/// three calls off one template: three requests at the original before, one
+/// after (`tests/forward_clone.rs`).
+///
+/// What stays per handle, and why:
+///
+/// - **the temporary forwarding cache** (`via`). §9.6 keeps the original
+///   address authoritative for a temporary hop, so the cache is routing
+///   state and not the object's address; a handle that lacks it pays one
+///   forward and then has it, which is self-correcting in a way a stale
+///   permanent address is not.
+/// - **[`Reference::forwarded`]**, which answers "what did *my* last call
+///   follow". Sharing it would let one thread's call rewrite another
+///   thread's answer to a question about its own call.
+/// - **the byte order** ([`Reference::set_endian`]), which is advisory and
+///   about how this handle encodes.
+///
+/// The cost is one shared-mode `Guarded` read per two-way call and per
+/// [`Reference::ior`], and an exclusive one only when a call's chain
+/// actually contained a permanent hop. It is never held across the wire —
+/// [`crate::guarded`]'s tripwire fires if it is, which is how that sentence
+/// is checked rather than asserted.
+#[derive(Debug)]
 pub struct Reference {
     pool: Pool,
+    /// Where the object is: shared by every clone of this reference, written
+    /// only by a permanent hop. See the type's docs.
+    moved: Arc<Guarded<Ior>>,
+    /// `moved` as this handle last read it, refreshed at every point it is
+    /// used or shown — [`Reference::refresh`]. A copy and not the cell
+    /// itself because [`Reference::ior`] lends it out, and a borrow may not
+    /// escape a lock section.
     ior: Ior,
     endian: Endian,
     /// The forwarding information a temporary forward left: where the next
@@ -805,11 +869,56 @@ pub struct Reference {
     forwarded: Option<Forward>,
 }
 
+/// A clone is another handle on the same reference: it shares where the
+/// object is, and starts from this handle's routing state — read as of now,
+/// so a clone taken off a handle that has not called since the object moved
+/// is not born stale.
+impl Clone for Reference {
+    fn clone(&self) -> Reference {
+        let mut copy = Reference {
+            pool: self.pool.clone(),
+            moved: Arc::clone(&self.moved),
+            ior: self.ior.clone(),
+            endian: self.endian,
+            via: self.via.clone(),
+            forwarded: self.forwarded.clone(),
+        };
+        copy.refresh();
+        copy
+    }
+}
+
 impl Reference {
     /// The reference being called: what it was created with, or the last
-    /// permanent forward.
-    pub fn ior(&self) -> &Ior {
+    /// permanent forward — including one taken by a clone.
+    ///
+    /// `&mut self` because the answer is read out of state shared with every
+    /// clone and this handle's copy of it is refreshed here. An accessor that
+    /// took `&self` could only answer with what this handle last saw, and a
+    /// handle that has not called since another clone was re-pointed would
+    /// then name an address its own next call is not going to use.
+    pub fn ior(&mut self) -> &Ior {
+        self.refresh();
         &self.ior
+    }
+
+    /// Takes up a re-pointing another clone made.
+    ///
+    /// The shared read is the whole of the lock cost on the call path, and it
+    /// closes before anything blocks: `Guarded::read` returns the value out of
+    /// the closure rather than lending a guard, so there is no shape in which
+    /// this is held across a dial.
+    fn refresh(&mut self) {
+        let at = self.moved.read(Ior::clone);
+        if at != self.ior {
+            self.ior = at;
+            // Forwarding information cached against the address the object
+            // has just left is information about a superseded address — the
+            // rule `Chain::hop` applies within one call, applied across
+            // handles.
+            self.via = None;
+            self.forwarded = None;
+        }
     }
 
     /// Sets the byte order requests are encoded in. Advisory: the connection
@@ -844,6 +953,8 @@ impl Reference {
     /// reference*.
     fn note(&mut self, chain: Chain) {
         if let Some(to) = chain.repoint {
+            // The object moved, so every clone is told, not only this handle.
+            self.moved.write(|at| *at = to.clone());
             self.ior = to;
             self.via = None;
         }
@@ -863,6 +974,10 @@ impl Invoker for Reference {
 
     fn invoke<F: Fn(&mut Encoder)>(&mut self, operation: &str, write_args: F) -> Result<Reply> {
         let timeout = crate::mux::DEFAULT_CALL_TIMEOUT;
+        // Before anything is addressed: another clone may have been told the
+        // object moved, and a call sent to the address it left is the forward
+        // this reference exists to stop paying.
+        self.refresh();
         if let Some(via) = self.via.clone() {
             match self.pool.attempt(&via, operation, &write_args, timeout) {
                 Ok((reply, chain)) => {
@@ -892,7 +1007,10 @@ impl Invoker for Reference {
     fn invoke_oneway<F: Fn(&mut Encoder)>(&mut self, operation: &str, write_args: F) -> Result<()> {
         // To the reference itself, never the cache: a oneway cannot be
         // forwarded, so a oneway sent to a temporary target would be a
-        // request the servant never redirected there.
+        // request the servant never redirected there. "The reference itself"
+        // is the shared address, which is why this refreshes too — a oneway
+        // is the one call that gets no chance to be redirected.
+        self.refresh();
         self.pool.invoke_oneway(&self.ior, operation, write_args)
     }
 }
