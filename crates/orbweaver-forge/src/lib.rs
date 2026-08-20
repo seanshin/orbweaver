@@ -172,21 +172,35 @@ pub struct Finding {
     pub fix: Option<String>,
 }
 
+impl Finding {
+    /// The finding rendered with `place` in front of it — and **no second
+    /// position**.
+    ///
+    /// A caller holding nothing but the [`Report`] has only `line:column`, and
+    /// that is what [`Display`](std::fmt::Display) writes. A caller that
+    /// resolved the includes holds the *file* as well, and its prefix has to
+    /// replace this one rather than sit in front of it: `sidl-validate` printed
+    /// `{located}: {finding}` and every diagnostic it ever emitted carried its
+    /// position twice — `evo-proposed.idl:1:0: 0:0: error: …`, where the second
+    /// pair is a line in a splice nobody has. One renderer, one position.
+    ///
+    /// `place` is whatever the caller can point at: `file:line:column`, or just
+    /// the file when the finding is about the file as a whole (`line == 0`) and
+    /// there is no line to name.
+    ///
+    /// *위치는 한 번만 찍는다. 렌더러가 하나이기 때문이다.*
+    pub fn rendered_at(&self, place: &str) -> String {
+        let mut s = format!("{place}: {}: {} [{}]", self.severity.label(), self.message, self.rule);
+        if let Some(fix) = &self.fix {
+            s.push_str(&format!("\n    fix: {fix}"));
+        }
+        s
+    }
+}
+
 impl std::fmt::Display for Finding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}:{}: {}: {} [{}]",
-            self.line,
-            self.column,
-            self.severity.label(),
-            self.message,
-            self.rule
-        )?;
-        if let Some(fix) = &self.fix {
-            write!(f, "\n    fix: {fix}")?;
-        }
-        Ok(())
+        write!(f, "{}", self.rendered_at(&format!("{}:{}", self.line, self.column)))
     }
 }
 
@@ -355,6 +369,35 @@ pub fn validate_source_for(src: Source<'_>, search: &SearchPath, wire: WireGate)
     report
 }
 
+/// Where one finding was written, or `None` when it is about the file as a
+/// whole.
+///
+/// The `None` is the whole point of this function existing rather than each
+/// caller reaching for [`Unit::locate`](orbweaver_idl::include::Unit::locate)
+/// directly. `locate` maps a **span**, and a span's line is 1-based, so it
+/// clamps with `.max(1)`; a [`Finding`] is not a span, and `line == 0` is its
+/// documented "about the file as a whole" — every `evolution/*` finding is one.
+/// Fed to `locate`, that 0 became line 1 of the root, a position nothing was
+/// written at. [`locate_findings`] had always skipped line 0 for exactly this
+/// reason and `sidl-validate`'s printer, written earlier, had not; two callers
+/// of one rule is how they drift, so there is now one.
+///
+/// *0번 줄은 위치가 아니라 "파일 전체"라는 뜻이다. 스팬으로 넘기면 1번 줄이 된다.*
+pub fn written_in<'a>(
+    finding: &Finding,
+    unit: &'a orbweaver_idl::include::Unit,
+) -> Option<orbweaver_idl::include::Location<'a>> {
+    if finding.line == 0 {
+        return None;
+    }
+    Some(unit.locate(orbweaver_idl::lex::Span {
+        start: 0,
+        end: 0,
+        line: finding.line,
+        column: finding.column,
+    }))
+}
+
 /// Maps every finding's position back to the file its line was written in.
 ///
 /// A resolved unit is several files spliced together, so an unmapped line
@@ -364,19 +407,19 @@ pub fn validate_source_for(src: Source<'_>, search: &SearchPath, wire: WireGate)
 /// file, with the include chain that reached it.
 ///
 /// A no-include unit is byte-identical to its input and this is the identity.
-fn locate_findings(report: &mut Report, unit: &orbweaver_idl::include::Unit) {
+///
+/// Public because the *binary* has to do exactly this and used not to. Only the
+/// human printer of `sidl-validate` mapped anything; `--json` and
+/// `--repair-prompt` served the splice's line under the root file's name, so a
+/// machine reader — and S4's self-repair loop is one — was told to edit line 8
+/// of a file whose line 8 is somebody else's declaration. A caller that
+/// resolved the unit itself calls this; the [`validate_source`] family calls it
+/// for callers that did not.
+pub fn locate_findings(report: &mut Report, unit: &orbweaver_idl::include::Unit) {
     let Some(root) = unit.files.first() else { return };
     for finding in &mut report.findings {
         // Line 0 means "about the file as a whole"; there is no position to map.
-        if finding.line == 0 {
-            continue;
-        }
-        let at = unit.locate(orbweaver_idl::lex::Span {
-            start: 0,
-            end: 0,
-            line: finding.line,
-            column: finding.column,
-        });
+        let Some(at) = written_in(finding, unit) else { continue };
         if at.file != root.as_path() {
             let mut chain = String::new();
             for (file, line) in at.chain.iter().rev() {

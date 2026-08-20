@@ -232,6 +232,17 @@ impl Unit {
     }
 
     /// Maps a span in [`Unit::text`] back to where it was written.
+    ///
+    /// **A span, not a position anybody made up.** A lexed span's line is
+    /// 1-based, so `line: 0` cannot come from this front end and the clamp
+    /// below treats it as line 1. A caller holding something that is *not* a
+    /// span — `orbweaver_forge::Finding` uses `line == 0` for "about the file
+    /// as a whole", which every §5.3 evolution finding is — must not hand that
+    /// 0 in here: it comes back as line 1 of the root, a position nothing was
+    /// written at. `orbweaver_forge::written_in` is the wrapper that knows the
+    /// difference, and it exists because `sidl-validate`'s printer did not.
+    ///
+    /// *0은 스팬이 될 수 없다. 스팬이 아닌 것을 여기에 넣으면 1번 줄이 된다.*
     pub fn locate(&self, span: Span) -> Location<'_> {
         let line = span.line.max(1);
         let i = match self.map.binary_search_by_key(&line, |s| s.out_line) {
