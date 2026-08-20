@@ -224,6 +224,72 @@ records what changed and, where it matters, what it changes on the wire.
   않았고 풀 경로는 두 번 셌다. 그리고 방아쇠 문장 자체가 **순환**이었다 — §1에서
   양쪽 관찰 둘로 다시 썼다.
 
+- **A permanent forward moves the object, so every clone of a `Reference` is
+  told.** `LOCATION_FORWARD_PERM` re-pointed the handle that heard it and not
+  its clones, and §9.6 made the disagreement silent — the old address stays
+  valid, so a stale clone is *served*, one forward per call, forever. Measured
+  at a template cloned per call, the shape `Invoker::invoke`'s `&mut self` asks
+  for: **3 requests at the address the object left, now 1**, both reply byte
+  orders, and it did not converge before. The address now lives behind
+  `Arc<Guarded<Ior>>`: a shared-mode read per call, an exclusive one only on a
+  permanent hop, never held across the wire. The **temporary** cache stays per
+  handle by decision (§9.6 keeps the original authoritative, so it is routing
+  state and self-corrects), pinned by a test that stays green under the control.
+- **`sidl-validate --against` compares two resolved units, not two splices.**
+  The command resolves both contracts and then handed both `Unit::text`s back
+  to the string entry point, which preprocessed each splice a *second* time. A
+  splice carries the `#ifndef` of every header inside it, and a guard that is
+  not the first directive of its text is conditional compilation, which this
+  front end refuses on purpose — so over a **guarded** multi-file contract, the
+  ordinary shape of a released one, **the §5.3 comparison never ran**. It
+  exited 1 either way, which is why nothing looked wrong: an unmeasured check
+  reported as a refusal. `validate_unit_against{,_for}` take resolved units and
+  leave positions to the caller's unit. Corpus: `corpus/include/evo-*`.
+- **A peer's `valuetype` and abstract-interface *description* now reads in the
+  Python target.** `_rt.py` had no `_desc_of` arm for AnyJSON v1.1's `value`
+  and `abstract_interface` forms, so a peer-fed document carrying one was
+  refused — and with it every type the form was nested inside. Both now read
+  (a valuetype as a synthesised `_rt.ValueType` carrying modifier, concrete
+  base and per-member visibility, registered before its body so recursion
+  resolves); marshalling a *value* of either is still refused in both
+  directions through one format string identical to
+  `orbweaver_dynamic::decode`'s sentence. Sweep unmoved at 172/137 and 70/46.
+- **A diagnostic's position names a file somebody can open, in all three of
+  `sidl-validate`'s output forms.** `--json` and `--repair-prompt` served the
+  *splice's* line under the *root* file's name — and `--repair-prompt` is read
+  by a **model**, so a wrong line sent a repair to the wrong file with nothing
+  going red. `line`/`column` now mean the position in the file the text was
+  written in, and a finding written elsewhere names its own file in a
+  per-finding `"file"` emitted only when it differs (single-file documents
+  byte-identical, `cmp` over five corpus pairs). Two bugs went with it: a
+  line-0 finding printed as line 1 of the root, and every finding printed its
+  position twice. Four negative controls.
+- **A constant takes `const_type`, not `type_spec`.** §7.4.1.4.2's `const_type`
+  is the **third** production narrower than a declaration's, and we diverged
+  from omniidl in **both** directions: `const fixed LIMIT = 9.9d;` is legal
+  (digits and scale come from the value) and we rejected it, while
+  `const fixed<3,1>`, `const any`, `const sequence<T>`, `const void`,
+  `const Object` and `const ValueBase` are syntax errors and we accepted them.
+  **Seven shapes, one cause** — `const_def` called `type_spec` — and fixing
+  only `fixed` would have closed two of seven. A `const fixed` is deliberately
+  outside `wire/deferred-type`'s closure: nothing about a constant reaches a
+  peer, so refusing a whole file for one was a false refusal. New
+  `corpus/golden/30-const-type.idl` and `corpus/negative/n18`; **JacORB 3.9
+  refuses the bare keyword**, measured on landing and recorded with its reason
+  in `corpus/divergences.tsv` (five now). Found and not fixed: a fixed
+  constant has no *value* in the registry (the lexer folds `9.9d` to a float),
+  `const wchar`/`const wstring` cannot be written at all, and
+  `const long double` is legal by the grammar while omniidl refuses it.
+
+  **영속 포워드는 객체의 이동이므로 모든 클론이 듣는다**(옛 주소 요청 3→1).
+  **`--against`는 스플라이스가 아니라 해석된 유닛을 비교한다** — 가드가 있는
+  다중 파일 계약에서 §5.3 비교가 **아예 실행되지 않았고**, 종료 코드가 1이라
+  아무도 몰랐다. **피어의 valuetype·추상 인터페이스 기술을 Python이 읽는다**(값은
+  여전히 양방향 거부). **진단의 위치가 열어 볼 수 있는 파일을 가리킨다** —
+  `--repair-prompt`는 모델이 읽으므로 수리가 엉뚱한 파일로 갔다. **상수는
+  `const_type`을 받는다** — 일곱 형태가 어긋나 있었고 원인은 하나였다; JacORB는
+  맨 `fixed` 키워드를 거부하므로 그 불일치를 이유와 함께 기록했다.
+
 - **A forward *chain* re-points the reference at the hop that asked for it.**
   `Pool::attempt` reported only the last hop, so a `permanent → temporary`
   chain cached the temporary target against the address the caller started
