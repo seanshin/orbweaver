@@ -167,6 +167,36 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **A signature takes `param_type_spec`, not `type_spec`.** A bare
+  `fixed<d,s>`, an anonymous `sequence<T>` and `void` were accepted as
+  attribute, parameter and return types; omniidl refuses all of them
+  (`Syntax error in interface body` / `in operation parameters`) because
+  `param_type_spec` is `base_type_spec | string_type | wide_string_type |
+  scoped_name` — a template type reaches a signature only through a `typedef`.
+  The batch was scoped to `fixed` and the root cause was one production wider:
+  the parser called `type_spec` where the grammar says `param_type_spec` /
+  `op_type_spec`, which differ in exactly three constructs, and **ten
+  divergences were measured, eight closed by one function**
+  (`Parser::signature_type_spec`) — a `fixed`-keyword fix would have closed
+  three. New rules `anonymous-type-in-signature` and `void-in-signature`, each
+  with a `fix_for` edit naming the typedef, and `corpus/negative/n13`–`n17`,
+  rejected by omniidl and by us. Negative control: with the fix reverted,
+  `differential.sh` names all five as "we say accept, oracles reject".
+  Found on the way, not fixed: `const_type` is a third narrowed production and
+  diverges in **both** directions — `const fixed LIMIT = 9.9d;` is legal and we
+  reject it, `const fixed<3,1> LIMIT = 9.9d;` is illegal and we accept it.
+
+  **시그니처는 `type_spec`이 아니라 `param_type_spec`을 받는다.** 맨
+  `fixed<d,s>`, 익명 `sequence<T>`, `void`가 속성·파라미터·반환 타입으로
+  통과했다. omniidl은 전부 거부한다 — `param_type_spec`에는 템플릿 타입이 없어
+  `typedef`를 거쳐야만 시그니처에 도달한다. `fixed`로 좁혀 시작한 배치가 한
+  프로덕션 더 넓은 근본원인을 찾았고, **실측 불일치 10건 중 8건을 함수 하나로**
+  닫았다(키워드만 고쳤다면 3건). 규칙 `anonymous-type-in-signature`·
+  `void-in-signature`에 수정 힌트, `corpus/negative/n13`–`n17`. 음성 대조군:
+  수정을 되돌리면 `differential.sh`가 다섯 파일을 "우리는 수용, 오라클은 거부"로
+  이름 붙인다. 도중 발견(미수정): `const_type`은 세 번째로 좁혀진 프로덕션이며
+  **양방향으로** 어긋난다.
+
 - **The plan reviewed against the code, row by row — nineteen rows
   understated, six overstated, all restated where they live**
   (`docs/pipeline-runs/2026-08-19-plan-review.md`). PLAN §7.2 no longer says
