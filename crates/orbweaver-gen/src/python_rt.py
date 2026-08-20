@@ -55,6 +55,15 @@ document to be self-contained in, and this file converts each way:
 type this package never declared is **synthesised** — a class built from the
 document and registered under its id — because the point of a type that
 describes itself is that the reader needs no prior copy of it.
+
+That includes the two constructs §4.4 defers. A ``valuetype`` (``tk_value``)
+and an abstract interface (``tk_abstract_interface``) are read as descriptions
+and written back unchanged; a **value** of either is refused, by name, with the
+section quoted. The asymmetry is the specification, not a gap being papered
+over: the description is a TypeCode and a TypeCode is a value the v1 wire
+carries, while the state behind it goes inline behind a value tag that this
+wire has no encoding for. Refusing the description too would have made a peer's
+``any`` unreadable for carrying a type we merely cannot instantiate.
 """
 
 import base64
@@ -67,6 +76,7 @@ import subprocess
 __all__ = [
     "Error", "MarshalError", "TransportError", "SystemException", "UserException",
     "Struct", "Union", "Enum", "EnumItem", "ObjectRef", "LongDouble", "TypeCode",
+    "ValueType",
     "TYPES", "NAMES", "register", "register_alias", "register_name", "resolve",
     "to_json", "from_json", "call", "Bridge", "Loopback", "connect",
 ]
@@ -90,6 +100,17 @@ class MarshalError(Error):
         self.path = path
         self.message = message
         super().__init__("%s: %s" % (path, message) if path else message)
+
+
+#: The one sentence §4.4's two remaining deferrals are refused with — one
+#: format string, so the ``valuetype`` refusal and the ``abstract interface``
+#: refusal cannot drift apart, and so both read as the Rust mapping's do
+#: (`orbweaver_dynamic::decode`, verbatim). The asymmetry is the message: the
+#: description crosses, the value does not, and a reader that met only "no
+#: AnyJSON form for <class>" would read that as a hole in this runtime rather
+#: than as the wire boundary it is.
+_DEFERRED = ("%s %s is not marshalled by the v1 wire (docs/PLAN.md §4.4); the TypeCode "
+             "describing it reads, the value behind it does not")
 
 
 class TransportError(Error):
@@ -402,6 +423,38 @@ class ObjectRef(object):
         return None
 
 
+class ValueType(object):
+    """The **description** of an IDL ``valuetype`` — and deliberately nothing else.
+
+    §4.4 defers the value, not its description. A peer's ``any`` can carry the
+    TypeCode of a ``valuetype`` (``tk_value``, 29) and this runtime reads it,
+    synthesises this class from it and can write the same TypeCode back; what
+    it will not do is marshal an *instance*, because the v1 wire has no
+    encoding for one. So there is no constructor, no member attribute and no
+    ``to_json`` path — asking for a value of this type raises, by name.
+
+    It is pointedly **not** a :class:`Struct`. A valuetype's state does travel
+    member by member, so a struct base would have marshalled something
+    plausible and wrong, which is the same silent-wrong-answer shape the
+    deferral was hiding in until 2026-08-20 (a valuetype was recorded as an
+    object reference, and an IOR went out where a peer sends a value).
+
+    ``_idl_members`` is ``(name, descriptor, visibility)`` per member — no
+    Python attribute name, because nothing is ever constructed to hold one.
+    """
+
+    #: The repository id, the IDL name, the `ValueModifier`, the concrete base
+    #: (a descriptor, or ``None`` for ``tk_null``) and the members.
+    _idl_id = ""
+    _idl_name = ""
+    _idl_modifier = 0
+    _idl_base = None
+    _idl_members = ()
+
+    def __init__(self, *args, **kw):
+        raise MarshalError("", _DEFERRED % ("valuetype", self._idl_name or type(self).__name__))
+
+
 class LongDouble(object):
     """``long double``: 16 raw octets, with no portable Python equivalent.
 
@@ -521,7 +574,11 @@ _ANY_DESC = dict((v, k) for k, v in _ANY_NAME.items())
 
 #: The kinds whose structural form has a repository id and a body, and so map
 #: to a ``("ref", id)`` descriptor: a class, or a typedef's descriptor.
-_NAMED_KINDS = ("struct", "except", "enum", "union", "alias")
+#:
+#: ``value`` is here because a valuetype's *description* is read like any
+#: other — §4.4 defers the value, not the TypeCode — and the class it
+#: synthesises to, :class:`ValueType`, is the one that refuses to marshal.
+_NAMED_KINDS = ("struct", "except", "enum", "union", "alias", "value")
 
 
 def _member(path, name):
@@ -622,6 +679,9 @@ def to_json(desc, value, path=""):
             if not isinstance(value, ObjectRef):
                 raise MarshalError(path, "expected an ObjectRef or None, got %r" % (value,))
             return {"_ref": value.handle, "_type": value.type_id or d[1]}
+        if kind == "abstract_interface":
+            raise MarshalError(path, _DEFERRED % ("abstract interface",
+                                                  NAMES.get(d[1]) or d[1]))
         if kind in ("seq", "array"):
             # base64 is the **sequence<octet>** rule and not the array rule:
             # §4.5 gives it to a sequence because a megabyte of binary must not
@@ -664,6 +724,9 @@ def to_json(desc, value, path=""):
                 raise MarshalError(path, "a union with a value but no selected branch")
             out["_v"] = to_json(case[2], value._v, _member(path, "_v"))
         return out
+
+    if isinstance(d, type) and issubclass(d, ValueType):
+        raise MarshalError(path, _DEFERRED % ("valuetype", d._idl_name or d.__name__))
 
     raise MarshalError(path, "no AnyJSON form for %r" % (d,))
 
@@ -735,6 +798,9 @@ def from_json(desc, j, path=""):
             if j["_ref"] is None:
                 return None
             return ObjectRef(j["_ref"], j.get("_type", d[1]))
+        if kind == "abstract_interface":
+            raise MarshalError(path, _DEFERRED % ("abstract interface",
+                                                  NAMES.get(d[1]) or d[1]))
         if kind in ("seq", "array"):
             elem = resolve(d[1])
             if kind == "seq" and elem == "octet":
@@ -778,6 +844,9 @@ def from_json(desc, j, path=""):
         if "_v" not in j:
             raise MarshalError(path, "branch %r of %s needs a \"_v\"" % (case[1], d.__name__))
         return d(disc, from_json(case[2], j["_v"], _member(path, "_v")))
+
+    if isinstance(d, type) and issubclass(d, ValueType):
+        raise MarshalError(path, _DEFERRED % ("valuetype", d._idl_name or d.__name__))
 
     raise MarshalError(path, "no AnyJSON form for %r" % (d,))
 
@@ -839,6 +908,16 @@ def _desc_of(form, path):
         id = _form_field(form, "id", path, str)
         NAMES.setdefault(id, _form_field(form, "name", path, str))
         return ("objref", id)
+    if kind == "abstract_interface":
+        # An id and a name and nothing else, exactly like `objref` — which is
+        # why it needs no class and no synthesis. What it is *not* is an
+        # `objref`: on the wire an abstract interface is the union of a value
+        # and a reference, so a descriptor that spelled it as a reference
+        # would marshal an IOR where a peer may send a value. It is its own
+        # descriptor so that the refusal below can name it.
+        id = _form_field(form, "id", path, str)
+        NAMES.setdefault(id, _form_field(form, "name", path, str))
+        return ("abstract_interface", id)
     if kind == "recursive":
         # Resolved when the value is marshalled, like every other reference:
         # by then the type it re-enters has been registered, because the form
@@ -961,6 +1040,37 @@ def _synthesise(kind, id, form, path):
         register_alias(id, _desc_of(_form_field(form, "aliased", path, (str, dict)),
                                     _member(path, "aliased")), name)
         return
+    if kind == "value":
+        # Registered before its base and members are read, for the same reason
+        # a struct is: `valuetype Node { public Node next; };` describes itself
+        # through a `recursive` marker naming an id that must already be there.
+        cls = type(name, (ValueType,), {
+            "_idl_id": id, "_idl_name": name, "_idl_modifier": 0,
+            "_idl_base": None, "_idl_members": (),
+            "__doc__": "IDL valuetype `%s`, synthesised from the type an any described. "
+                       "Its TypeCode crosses; no value of it does (§4.4)." % (id,),
+        })
+        register(cls)
+        cls._idl_modifier = _form_field(form, "modifier", path, int)
+        # `base` is required and may be JSON null: null is this document's
+        # spelling for the `tk_null` the wire puts in that slot when there is
+        # no concrete base, and absent is a malformed form rather than none.
+        if "base" not in form:
+            raise MarshalError(path, "a 'value' type object needs a 'base' field")
+        base = form["base"]
+        cls._idl_base = (None if base is None
+                         else _desc_of(base, _member(path, "base")))
+        members = []
+        for i, m in enumerate(_form_field(form, "members", path, list)):
+            at = _index(_member(path, "members"), i)
+            if not isinstance(m, dict):
+                raise MarshalError(
+                    at, "a value member is {\"name\": .., \"type\": .., \"visibility\": ..}")
+            members.append((_form_field(m, "name", at, str),
+                            _desc_of(_form_field(m, "type", at, (str, dict)), at),
+                            _form_field(m, "visibility", at, int)))
+        cls._idl_members = tuple(members)
+        return
     raise MarshalError(path, "no synthesis for a %r type" % (kind,))
 
 
@@ -988,6 +1098,9 @@ def _form_of(desc, path, visiting=()):
                     "length": desc[2]}
         if kind == "objref":
             return {"kind": "objref", "id": desc[1], "name": NAMES.get(desc[1], "")}
+        if kind == "abstract_interface":
+            return {"kind": "abstract_interface", "id": desc[1],
+                    "name": NAMES.get(desc[1], "")}
         if kind == "ref":
             id = desc[1]
             if id in visiting:
@@ -1039,6 +1152,19 @@ def _class_form(cls, path, visiting):
                 cases.append({"label": {"_raw": ""}, "name": member, "type": t})
         named["cases"] = cases
         named["default"] = default
+        return named
+    if issubclass(cls, ValueType):
+        # The writing half of the deferral: the description goes back out
+        # whole — modifier, concrete base and every member's visibility —
+        # because a TypeCode a peer sent must survive being relayed through a
+        # reader that cannot marshal one instance of it.
+        named["kind"] = "value"
+        named["modifier"] = cls._idl_modifier
+        named["base"] = (None if cls._idl_base is None
+                         else _form_of(cls._idl_base, _member(path, "<base>"), visiting))
+        named["members"] = [
+            {"name": n, "type": _form_of(d, _member(path, n), visiting), "visibility": vis}
+            for n, d, vis in cls._idl_members]
         return named
     raise MarshalError(path, "%s is not a type a value can be described by" % (cls.__name__,))
 
