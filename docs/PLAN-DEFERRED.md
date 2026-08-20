@@ -42,7 +42,7 @@ is the adoption, not this file.
 
 | Chapter | Observable trigger |
 |---|---|
-| §1 CosNotification | filtering becomes an **isolation** requirement, not a bandwidth one — a consumer must not *receive* what it filters out (F5 tenancy); or F7 reports a measured drop rate caused by unwanted fan-out |
+| §1 CosNotification | filtering becomes an **isolation** requirement, not a bandwidth one — a consumer must not *receive* what it filters out (F5 tenancy); or F7's split drop counters and a named consumer's discard-on-receipt rate **together** (§1, restated 2026-08-20 when the instrument was built) |
 | §2 Transaction / OTS | a multi-object change must survive a **failure** all-or-nothing, and compensation is unacceptable because an observer could act irreversibly on the intermediate state |
 | §3 Time Service | a **peer** resolves `TimeService` from our Naming server and we must answer |
 | §4 PSS | a pilot peer that is **already a PSS client** and expects storage-homed objects |
@@ -84,8 +84,32 @@ adequate when receiving-then-discarding is merely wasteful, and inadequate the
 moment receiving *is* the leak. F5 tenancy makes that concrete — if tenant A's
 residency transitions travel to tenant B's consumer process and are discarded
 there, we have shipped tenant A's data to tenant B and called it filtering.
-Second, weaker trigger: F7's bounded buffer reports a **measured** drop rate
-attributable to fan-out of events no consumer wanted.
+Second, weaker trigger, **restated 2026-08-20 when its instrument was built**:
+the old wording — *"F7's bounded buffer reports a measured drop rate
+attributable to fan-out of events no consumer wanted"* — was **circular**, and
+building the instrument is what showed it. F7 now splits its drops by cause
+(`dropped_overflow`, `unrelayable`, `dropped_on_disconnect`,
+`dropped_on_failure_disconnect`, `dropped_at_stop`, summing to `dropped`, with
+`fanned_out` — per-proxy copies — as the denominator a *rate* needs). So it can
+report a **back-pressure** drop rate (`dropped_overflow / fanned_out`) and the
+fan-out multiplication (`fanned_out / accepted`). It cannot report that the
+fan-out was *unwanted*: `CosEventComm` has no subscription predicate, so
+nothing in the servant knows what a consumer wanted — and that knowledge is
+exactly what this chapter's filters would introduce.
+
+The trigger is therefore two observations, one from each side: **F7 reports a
+sustained non-zero `dropped_overflow / fanned_out`, and a named consumer
+reports discarding on receipt a material share of what it is delivered.** Only
+the second half is the thing server-side filtering fixes, and it can only be
+counted where the discarding happens.
+
+두 번째, 더 약한 방아쇠, **2026-08-20 계측기를 만들며 다시 씀**: 예전 문장은
+**순환**이었고, 계측기를 지어 보고서야 드러났다. F7은 이제 드롭을 원인별로
+나누므로 **배압** 드롭률과 팬아웃 배수는 보고할 수 있지만, 팬아웃이 *원치 않은*
+것이었는지는 보고할 수 없다 — `CosEventComm`에 구독 술어가 없어 소비자가 무엇을
+원했는지 아는 곳이 서번트에 없고, 그 지식이야말로 이 장의 필터가 도입할 것이다.
+따라서 방아쇠는 양쪽에서 하나씩 두 관찰이다: **F7이 0이 아닌 배압 드롭률을 지속
+보고하고, 동시에 이름 있는 소비자가 수신 후 폐기 비율을 보고할 것.**
 
 **Relation to F7 — superset, so F7's channel becomes its transport core.**
 This is the load-bearing sentence for a future batch: Notification is not a

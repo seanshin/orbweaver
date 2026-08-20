@@ -194,6 +194,36 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **`ChannelStats::dropped` split by cause — the trigger that had no
+  instrument.** One counter summed **five** different events (the design note
+  that found it said three; reading the code for the split found two more), so
+  a clean `stop()` moved the same number as an overloaded consumer and
+  `PLAN-DEFERRED` §1's un-defer trigger for CosNotification — *"a measured
+  drop rate caused by unwanted fan-out"* — could not be answered in either
+  direction. `dropped` stays the total; `dropped_overflow` (back-pressure),
+  `unrelayable` (our own relay limitation), `dropped_on_disconnect`,
+  `dropped_on_failure_disconnect` and `dropped_at_stop` say which.
+  `ChannelStats::discard` is the only discard path, so the total and the
+  causes cannot drift, and `split_adds_up()` is asserted by every test that
+  drives a drop. New `fanned_out` counts per-proxy copies — the denominator a
+  rate needs, since `accepted` is one per event whatever it fans out to. Found
+  on the way and fixed with it: a push-side `relay_check` refusal was
+  discarded **without being counted in `dropped` at all**, while the pull path
+  counted the same refusal twice. And the trigger itself was **circular** —
+  restated in PLAN-DEFERRED §1 as two observations, one from each side,
+  because CosEvent has no subscription predicate and cannot know what a
+  consumer wanted; that is what the deferred chapter's filters would add.
+
+  **`ChannelStats::dropped`를 원인별로 분리 — 계측기 없던 방아쇠.** 한 숫자가
+  서로 다른 **다섯** 사건을 합산했다(발견한 설계 노트는 셋이라 했고, 분리하려
+  코드를 읽자 둘이 더 나왔다). 깨끗한 `stop()`이 과부하 소비자와 같은 카운터를
+  올렸으므로 `PLAN-DEFERRED` §1의 방아쇠는 어느 방향으로도 답할 수 없었다. 이제
+  원인별 카운터가 총합을 이루고, 폐기 경로는 `discard` 하나뿐이며, 드롭을
+  유발하는 모든 테스트가 합산을 단언한다. 새 `fanned_out`이 비율의 분모다. 함께
+  발견해 고친 것: 푸시 경로의 `relay_check` 거부는 `dropped`에 아예 계상되지
+  않았고 풀 경로는 두 번 셌다. 그리고 방아쇠 문장 자체가 **순환**이었다 — §1에서
+  양쪽 관찰 둘로 다시 썼다.
+
 - **A forward *chain* re-points the reference at the hop that asked for it.**
   `Pool::attempt` reported only the last hop, so a `permanent → temporary`
   chain cached the temporary target against the address the caller started

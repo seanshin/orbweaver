@@ -2551,7 +2551,27 @@ EV_IOR=/tmp/orbweaver-events.ior
 ev=$(cargo run -q --bin spike-events -- "$EV_IOR" 2>&1)
 if printf '%s' "$ev" | grep -q "event-channel: PASS"; then
   echo "  ok   our client against our channel: connect both sides, 20 in order, dead consumer disconnected"
-  echo "  ok   $(printf '%s' "$ev" | grep 'drop report' | sed 's/^ *//')"
+  ev_drop=$(printf '%s' "$ev" | grep 'drop report' | sed 's/^ *//')
+  echo "  ok   $ev_drop"
+  # The split (fa8a4f5) is what makes PLAN-DEFERRED §1's trigger answerable at
+  # all: one counter summed five causes, so a clean stop() moved the same
+  # number as an overloaded consumer. Echoing the report as an ok and checking
+  # nothing is the "prose after an ok reads as coverage" class this file keeps
+  # finding. Phase 2 cuts a dead consumer and drives no overflow, so the split
+  # must attribute every drop to that cut and none to back-pressure —
+  # `on_failure_disconnect` is deliberately NOT pinned to a number: how many
+  # of phase 2's six events the dead proxy is still connected for is a
+  # scheduling race (3 in every run measured, which is not the same as
+  # guaranteed).
+  case "$ev_drop" in
+    *"overflow=0"*"on_disconnect=0"*"at_stop=0"*)
+      case "$ev_drop" in
+        *"on_failure_disconnect=0"*)
+          echo "  FAIL no drop was attributed to the cut consumer: $ev_drop"; ev_fail=1 ;;
+        *) echo "  ok   drops attributed to the cut consumer only — none to back-pressure, none to housekeeping" ;;
+      esac ;;
+    *) echo "  FAIL the drop split named a cause this phase did not drive: $ev_drop"; ev_fail=1 ;;
+  esac
 else
   echo "  FAIL event channel self-consistency"
   printf '%s' "$ev" | grep FAIL | head -3 | sed 's/^/       /'
