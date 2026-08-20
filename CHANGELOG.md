@@ -10,6 +10,44 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+### Decided / 결정
+
+- **D011 — control-plane events into the channel** (**PROPOSED**, not adopted).
+  PLAN-SERVICES §10's "the loop closes when both exist" precondition has been
+  met since 2026-08-18 and nothing publishes; the note asks what would be
+  published and finds two answers. **A control-plane event is not the D004
+  record**: `session` is the documented join key to the audit ledger (group by
+  it and you have one caller's whole profile), `caller` attributes a named
+  principal to whoever dialled the port, and on the *unresolved* arm `target`
+  and `operation` come straight from the caller unvalidated — the code already
+  calls them agent-influenced for escaping and nothing called them that for
+  publication. What may cross is the resolved repository id, the resolved
+  operation, the two non-hypothetical decision tokens and the outcome — and
+  an in-process reactor already gets exactly that from the sink. **And the
+  channel has nobody to redact for**: redaction is a judgement about an
+  audience, the channel cannot tell two subscribers apart, and a flag is
+  deployment-wide consent standing in for a per-connection decision.
+  Recommendation: publish nothing (A) plus an in-process `TelemetrySink` seam
+  (D), with PLAN-DEFERRED §11's trigger — a caller model in the event servant
+  — as the un-defer trigger, because subscription and `destroy` are one
+  authorization question. Found on the way: `ChannelStats::dropped` sums
+  overflow, disconnect-abandon and clean-shutdown drops into one number, so
+  PLAN-DEFERRED §1's "a measured drop rate caused by unwanted fan-out" trigger
+  has no instrument that can answer it in either direction.
+
+  **D011 — 제어면 이벤트를 채널에 발행할 것인가** (**제안됨**, 채택 아님).
+  PLAN-SERVICES §10의 전제(F4·F7 둘 다 존재)는 2026-08-18부터 충족되었고 아무것도
+  발행하지 않는다. **제어면 이벤트는 D004 레코드가 아니다**: `session`은 감사
+  원장과의 조인 키이고, `caller`는 포트를 다이얼한 자에게 명명된 주체를 귀속시키며,
+  *미해결* 갈래의 `target`/`operation`은 호출자가 준 값 그대로다. 건널 수 있는 것은
+  해결된 저장소 id·연산명·결정 토큰·결과뿐이고, 그것은 인프로세스 반응자가 이미
+  싱크에서 공짜로 받는다. **그리고 채널에는 가릴 대상이 없다** — 가림은 청중에 대한
+  판단인데 채널은 두 구독자를 구별하지 못한다. 권고: 발행하지 않음(A) + 인프로세스
+  `TelemetrySink` 씸(D), 방아쇠는 PLAN-DEFERRED §11의 것(이벤트 서번트의 호출자
+  모델) — 구독과 `destroy`는 하나의 인가 질문이므로. 도중 발견:
+  `ChannelStats::dropped`가 오버플로·연결 해제·정상 종료 폐기를 한 숫자로 합산해
+  PLAN-DEFERRED §1의 방아쇠에 답할 계측기가 없다.
+
 ### Added / 추가
 
 - **S4 names what the v1 wire cannot carry.** `wire/deferred-type` (replacing
