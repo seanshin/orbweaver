@@ -12,6 +12,33 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Decided / 결정
 
+- **D012 — a per-caller version cap on the pooled path** (**PROPOSED**, not
+  adopted). The forward-chain batch made `Connection` carry a caller's
+  `cap_version` across a forward and a §9.6 restart and reported that
+  `Pool`/`Reference` have none: `pool::Key` cannot hear a caller, so an
+  uncapped caller's 1.2 mux would be handed to a capped one and its `wstring`
+  would go out under the 1.2 codec — an octet count where its contract was a
+  character count, which the peer reads as the wrong string rather than
+  faulting. Four options; **D is measured and rejected** — the endpoint's
+  contribution is already `Version::negotiate(profile)` and already in the key,
+  so what remains after subtracting the profile is by construction the
+  caller's own limit, and all eleven in-tree cap sites set a constant the
+  caller chose. Recommendation: **C — build nothing, record the limit and the
+  trigger**, because nothing outside tests and spikes needs a cap on the
+  pooled path, while recording now that **A** (the cap enters `pool::Key`) is
+  the shape if the trigger fires. Trigger: the first caller outside
+  `crates/*/tests/` and `crates/*/src/bin/` that must speak below
+  `Version::max_supported()` to a peer it reaches through `Pool`.
+
+  **D012 — 풀 경로의 호출자별 버전 상한** (**제안됨**, 채택 아님). 포워드 체인
+  배치가 `Connection`에 상한을 실어 보냈고 `Pool`/`Reference`에는 없다고
+  보고했다: `pool::Key`는 호출자를 듣지 못하므로 상한 없는 호출자의 1.2 mux가
+  상한 있는 호출자에게 건네지고, 그 `wstring`은 1.2 코덱으로 나간다 — 피어는
+  오류를 내지 않고 잘못된 문자열을 읽는다. 네 안 중 **D는 측정으로 기각**(프로파일
+  몫은 이미 키에 있으므로 남는 것은 정의상 호출자 자신의 한계). 권고: **C —
+  짓지 않고 한계와 방아쇠를 기록**, 다만 방아쇠가 당겨지면 **A**(상한이
+  `pool::Key`에 들어감)가 형태임을 지금 적어 둔다.
+
 - **D011 — control-plane events into the channel** (**PROPOSED**, not adopted).
   PLAN-SERVICES §10's "the loop closes when both exist" precondition has been
   met since 2026-08-18 and nothing publishes; the note asks what would be
