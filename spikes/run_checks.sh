@@ -1392,6 +1392,27 @@ echo "  ok   $s4_cov of $s4_tot rejections carry an actionable fix (a missing se
 # *parse*; the pipeline's S4 gates for v1, because a contract a model just
 # wrote for this ORB is a different caller. Negative control (in that commit):
 # WireGate::V1's severity forced to Warning -> this prints "refused: ''".
+# --against over a multi-file contract (6c37e68): the command resolves both
+# sides — it must, or one missing #include is one diagnostic per name the
+# absent file declared — and then handed both `Unit::text` splices back to the
+# string entry point, which re-preprocessed each. A spliced header's `#ifndef`
+# is not the first directive of the text it sits in, so it read as conditional
+# compilation and the §5.3 comparison **never ran** over a guarded multi-file
+# contract — the ordinary shape of a released one — while still exiting 1, so
+# nothing looked wrong. Exit codes only, no marker greps: the pair is its own
+# control, since reverting the fix makes the first exit 1 for the wrong reason
+# AND the second exit 1 too.
+if cargo run -q --bin sidl-validate -- --against corpus/include/evo-released.idl \
+     corpus/include/evo-proposed.idl >/dev/null 2>&1; then
+  echo "  FAIL --against accepted a proposal that removes a member from an included header"
+  s4_fail=1
+elif cargo run -q --bin sidl-validate -- --against corpus/include/evo-released.idl \
+       corpus/include/evo-released.idl >/dev/null 2>&1; then
+  echo "  ok   --against compares two resolved units: a header's breaking change is refused, a contract against itself is not"
+else
+  echo "  FAIL --against refused a contract compared against itself"
+  s4_fail=1
+fi
 s4_wire_out=$(cargo run -q --bin sidl-validate -- --wire v1 corpus/golden/*.idl 2>/dev/null)
 s4_wire_files=$(printf '%s\n' "$s4_wire_out" | grep 'error: .*\[wire/deferred-type\]' \
   | cut -d: -f1 | sort -u | xargs -n1 basename | tr '\n' ' ')
