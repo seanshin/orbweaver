@@ -1020,6 +1020,36 @@ case "$poolout" in
      printf '%s' "$poolout" | grep -E "panicked|left:|right:" | head -4 | sed 's/^/       /'
      fail_total=$((fail_total+1)) ;;
 esac
+# The chain half (adf0867): Pool::attempt accumulates hops into a private
+# Chain; Reference::note applies it per hop, so permanent-then-temporary
+# re-points ior at the permanent hop and caches the temporary one relative to
+# it — the restart returns to the permanent hop instead of through it, and
+# reuses the pooled connection, so it costs no dial. Negative controls in that
+# commit: note() reverted to last-hop-only -> red at "the permanent hop
+# re-pointed the reference"; with the ior asserts muted -> "left: 99 right: 7",
+# the original having answered the restart.
+chainout=$(cargo test -q -p orbweaver-giop --test forward_chain 2>&1)
+case "$chainout" in
+  *"test result: ok. 3 passed"*)
+    echo "  ok   pool: a permanent->temporary chain restarts at the permanent hop, not the original — 3 shapes x both reply orders, 0 extra dials" ;;
+  *) echo "  FAIL forward chain"
+     printf '%s' "$chainout" | grep -E "panicked|left:|right:" | head -4 | sed 's/^/       /'
+     fail_total=$((fail_total+1)) ;;
+esac
+# A caller's version cap across a hop and a restart (adf0867): move_to
+# restored byte order, converter, TLS policy and origin but re-negotiated the
+# version from the forwarded-to profile, so a caller capped to 1.1 spoke 1.2
+# at a 1.2 target — a wire-format change under a caller who cannot see the hop.
+# Negative control: `let _ = version_cap;` in move_to -> the target sees 1.2.
+capout=$(cargo test -q -p orbweaver-giop --test forward_restart -- \
+           a_version_cap_survives_a_forward_and_a_restart 2>&1)
+case "$capout" in
+  *"test result: ok. 1 passed"*)
+    echo "  ok   cap_version survives a forward and a restart — 1.1 read off every request at both peers, both request orders" ;;
+  *) echo "  FAIL cap_version across a forward"
+     printf '%s' "$capout" | grep -E "panicked|left:|right:" | head -4 | sed 's/^/       /'
+     fail_total=$((fail_total+1)) ;;
+esac
 
 hr "LOCATION_FORWARD vs _PERM — fallback-on-failure: the forwarded-to server killed, does the client go back?"
 # 680aa41: a request count is 1 under both statuses. The oracle is §9.6:

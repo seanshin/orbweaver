@@ -167,6 +167,37 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **A forward *chain* re-points the reference at the hop that asked for it.**
+  `Pool::attempt` reported only the last hop, so a `permanent → temporary`
+  chain cached the temporary target against the address the caller started
+  from and §9.6's restart went back **through** the permanent hop — within the
+  spec, one hop more than the servant asked for. Hops are now accumulated
+  (`pool::Chain`) and applied per hop as `Connection::follow` already did: a
+  permanent hop re-points `Reference::ior` and clears the cached forwarding
+  information, a temporary hop after it is cached relative to the new
+  reference, and the restart returns there. Measured both reply byte orders,
+  3 shapes (`tests/forward_chain.rs`); the restart costs no dial (the pooled
+  permanent connection is reused, `dialed == 3`). Negative control: the
+  last-hop-only rule → the restart is answered by the original (99, not 7).
+- **A caller's `cap_version` survives a forward and a restart.**
+  `Connection::move_to` restored byte order, converter, TLS policy and origin
+  but re-negotiated the version from the forwarded-to profile, so a caller
+  capped to 1.1 spoke 1.2 at a 1.2 target — a wire-format change under a
+  caller who cannot see the hop. The cap is kept and the version spoken is the
+  lower of it and §9.4.1's own ceiling, so a profile can lower it further and
+  never contradict it; there was nothing to decide. Measured off the wire at
+  both peers, both request orders. `Pool`/`Reference` have no cap API at all —
+  that is D012's question, not this batch's.
+
+  **포워드 *체인*이 그것을 요구한 홉으로 레퍼런스를 다시 겨눈다.**
+  `Pool::attempt`는 마지막 홉만 보고했다 — `영구 → 임시` 체인이 임시 대상을
+  호출자가 출발한 주소에 캐시했고, §9.6의 재시작이 이미 대체된 영구 홉을 **거쳐**
+  돌아갔다. 이제 홉을 누적해 홉마다 적용한다; 재시작에 다이얼 비용 없음
+  (`dialed == 3`). 음성 대조: 마지막 홉만 보면 재시작을 원본이 응답(7이 아닌 99).
+  **호출자의 `cap_version`이 포워드와 재시작을 넘어 살아남는다.** 상한을 유지하고
+  §9.4.1의 천장과 **더 낮은 쪽**을 말한다 — 프로파일은 더 낮출 수는 있어도 상한과
+  모순될 수 없으므로 결정할 것이 없었다. 양 요청 바이트 순서로 와이어에서 실측.
+
 - **A signature takes `param_type_spec`, not `type_spec`.** A bare
   `fixed<d,s>`, an anonymous `sequence<T>` and `void` were accepted as
   attribute, parameter and return types; omniidl refuses all of them
