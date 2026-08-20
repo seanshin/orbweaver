@@ -1,0 +1,7 @@
+// The third construct the two productions differ over. `void` is in neither
+// `base_type_spec` nor `template_type_spec`; `op_type_spec` spells it out
+// separately, which is what makes it a return type and nothing else. An
+// attribute or a parameter typed `void` is a syntax error. omniidl 4.3.4:
+//   Syntax error in interface body
+//   Syntax error in operation declaration
+module n17 { interface Probe { attribute void reading; }; };

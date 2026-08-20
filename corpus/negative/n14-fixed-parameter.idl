@@ -1,0 +1,5 @@
+// The same rule in parameter position: `param_dcl` takes a `param_type_spec`
+// too. omniidl 4.3.4 names a different production and refuses just as flatly:
+//   Syntax error in operation parameters
+// Legal: `typedef fixed<9,2> Amount; void deposit(in Amount credited);`
+module n14 { interface Account { void deposit(in fixed<9,2> credited); }; };

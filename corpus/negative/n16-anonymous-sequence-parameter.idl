@@ -1,0 +1,9 @@
+// `fixed` is not alone: `sequence_type` sits beside `fixed_pt_type` in
+// `template_type_spec`, and `param_type_spec` names neither. An anonymous
+// sequence in a signature is refused for exactly the reason n13-n15 are, which
+// is why the fix was the production and not a test for the `fixed` keyword.
+// omniidl 4.3.4:
+//   Syntax error in operation parameters
+// Legal: `typedef sequence<long> Items; void add(in Items chosen);` — the form
+// corpus/golden/07-sequences.idl already uses.
+module n16 { interface Basket { void add(in sequence<long> chosen); }; };

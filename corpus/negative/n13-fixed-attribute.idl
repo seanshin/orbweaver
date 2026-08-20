@@ -1,0 +1,9 @@
+// A bare `fixed<d,s>` as an attribute type. `attr_spec` takes a
+// `param_type_spec`, which has no `fixed_pt_type`: a fixed-point type reaches
+// a signature only after a `typedef` gives it a name. omniidl 4.3.4 says
+//   Syntax error in interface body
+//   Error in look-up of 'balance': 'balance' not found
+// (no line number quoted: it moves whenever this comment does).
+// The legal neighbour is `typedef fixed<9,2> Amount; attribute Amount balance;`
+// — accepted by omniidl, and what corpus/golden/21-deferred-fixed.idl writes.
+module n13 { interface Account { attribute fixed<9,2> balance; }; };

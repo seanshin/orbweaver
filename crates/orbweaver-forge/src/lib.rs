@@ -544,6 +544,20 @@ fn fix_for(d: &Diagnostic, src: &str) -> Option<String> {
             Some("Each union case label may appear once; remove the repeat.".into())
         }
         "duplicate-union-default" => Some("A union has at most one `default:` branch.".into()),
+        // A signature's grammar (`param_type_spec`) is narrower than a
+        // declaration's (`type_spec`), and the edit is always the same shape:
+        // give the type a name first. `corpus/negative/n13`–`n16`.
+        "anonymous-type-in-signature" => Some(format!(
+            "`{text}` is a template type. IDL's param_type_spec admits base types, `string`, \
+             `wstring` and a scoped name — a `sequence` or a `fixed` reaches an attribute, a \
+             parameter or a return only through a name. Declare `typedef {text} <Name>;` \
+             outside the interface and write `<Name>` here."
+        )),
+        "void-in-signature" => Some(format!(
+            "`{text}` is a return type and nothing else: `op_type_spec` names it and \
+             `param_type_spec` does not. Give the attribute or parameter the type its value \
+             actually has."
+        )),
         // Escaping is the whole fix and IDL 4 §7.2.3.1 defines it precisely, so
         // this is one of the few parse failures worth a hint.
         "reserved-word" => Some(format!(
