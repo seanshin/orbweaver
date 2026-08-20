@@ -15,6 +15,18 @@
 //! reported against the file the line was written in, never against the
 //! spliced unit, because nobody has that file to open.
 //!
+//! **All three output forms, not one.** That sentence was true only of the
+//! human form: `--json` and `--repair-prompt` served the splice's line under
+//! the root file's name, and `--repair-prompt` is read by a model. See
+//! [`located_json`] for the JSON contract and what it means for a reader.
+//! A position is printed **once**, by [`Finding::rendered_at`] — this printer
+//! used to prefix the located position in front of `Display`'s own, so every
+//! diagnostic carried two, the second of them a line in the splice
+//! (`evo-proposed.idl:1:0: 0:0: error: …`). A finding about the file as a
+//! whole — every `evolution/*` finding is one, and it carries `line == 0` —
+//! prints as the file with **no** line, rather than as line 1, which is where
+//! feeding a 0 to a span-mapper puts it.
+//!
 //! `--against` resolves **both** contracts and compares the two resolved
 //! units. It used to resolve both and then hand the two splices back to a
 //! string entry point, which preprocessed each of them a second time — and a
@@ -36,8 +48,63 @@
 //! two defaults differ.
 
 use orbweaver_dynamic::json::Json;
-use orbweaver_forge::{Report, Severity, WireGate, validate_unit_against_for, validate_unit_for};
+use orbweaver_forge::{
+    Report, Severity, WireGate, locate_findings, validate_unit_against_for, validate_unit_for,
+    written_in,
+};
 use orbweaver_idl::include::{SearchPath, Unit, preprocess_file};
+
+/// The report as a machine reader gets it: every position mapped to the file it
+/// was written in, and the file named beside the line when that is not the root.
+///
+/// **The contract this settles.** `--json` used to emit the *splice's* line
+/// under the root file's name — `{"file": ".../root.idl", …, "line": 8}` for an
+/// operation written at `00-audit.idl:5`. Both halves were present and the pair
+/// was false, which is the worst of the three available answers.
+///
+/// `line` and `column` now mean what every other surface in this project
+/// already means by them: the position **in the file the text was written in**.
+/// That is not a new convention — [`orbweaver_forge::locate_findings`] has
+/// mapped the library's reports since `#include` landed, and the human printer
+/// of this binary has mapped its own since. The JSON path was the one place
+/// holding the third convention, and this removes it rather than documenting it.
+///
+/// Since one report can now carry lines from several files, and the
+/// report-level `file` can only name one, a finding written **elsewhere** names
+/// its own file in a per-finding `"file"`. It is emitted *only* when it differs
+/// from the report's — so a self-contained contract's document is byte-for-byte
+/// what it was, and absent means "the file this report is about". Every
+/// consumer of a single-file contract is untouched; a consumer of a multi-file
+/// one was reading a false position before and now reads a true one.
+///
+/// *줄 번호는 스플라이스가 아니라 작성된 파일의 줄이다. 그 파일이 루트와 다르면
+/// 소견마다 파일을 함께 적는다 — 같을 때는 적지 않으므로 단일 파일 출력은 그대로다.*
+fn located_json(path: &str, unit: &Unit, report: &Report) -> Json {
+    // Taken before the mapping, because mapping is what overwrites the line
+    // this reads.
+    let places: Vec<Option<String>> = report
+        .findings
+        .iter()
+        .map(|f| {
+            written_in(f, unit)
+                .filter(|at| Some(at.file) != unit.files.first().map(|r| r.as_path()))
+                .map(|at| at.file.display().to_string())
+        })
+        .collect();
+
+    let mut mapped = report.clone();
+    locate_findings(&mut mapped, unit);
+    let Json::Object(mut m) = mapped.to_json() else { unreachable!("to_json is an object") };
+    if let Some(Json::Array(findings)) = m.get_mut("findings") {
+        for (finding, place) in findings.iter_mut().zip(&places) {
+            if let (Json::Object(o), Some(file)) = (finding, place) {
+                o.insert("file".into(), Json::String(file.clone()));
+            }
+        }
+    }
+    m.insert("file".into(), Json::String(path.to_owned()));
+    Json::Object(m)
+}
 
 fn main() -> std::process::ExitCode {
     let mut json = false;
@@ -175,14 +242,8 @@ fn main() -> std::process::ExitCode {
         // One document for the whole batch. The pipeline validates a set at a
         // time (§5.1), and a caller that has to concatenate per-file documents
         // will eventually get the concatenation wrong.
-        let files: Vec<Json> = reports
-            .iter()
-            .map(|(path, _, r)| {
-                let Json::Object(mut m) = r.to_json() else { unreachable!("to_json is an object") };
-                m.insert("file".into(), Json::String(path.clone()));
-                Json::Object(m)
-            })
-            .collect();
+        let files: Vec<Json> =
+            reports.iter().map(|(path, unit, r)| located_json(path, unit, r)).collect();
         println!(
             "{}",
             Json::Object(std::collections::BTreeMap::from([
@@ -192,21 +253,33 @@ fn main() -> std::process::ExitCode {
             ]))
         );
     } else if repair {
-        for (path, _, r) in &reports {
+        // Mapped, for the same reason `--json` is, and with more at stake: this
+        // text is read by a *model*, and `forge-pipeline` hands its equivalent
+        // to the producer as argv[2] (`spikes/e2e/producer.sh`). A splice line
+        // under the root's name sends the repair to the wrong file with full
+        // confidence, and nothing goes red. The library path was already right
+        // (`validate_source_for` maps); this is the command catching up.
+        for (path, unit, r) in &reports {
             if !r.is_ok() {
-                println!("=== {path}\n{}", r.repair_prompt());
+                let mut mapped = r.clone();
+                locate_findings(&mut mapped, unit);
+                println!("=== {path}\n{}", mapped.repair_prompt());
             }
         }
     } else {
         for (_, unit, r) in &reports {
             for f in &r.findings {
-                let at = unit.locate(orbweaver_idl::lex::Span {
-                    start: 0,
-                    end: 0,
-                    line: f.line,
-                    column: f.column,
-                });
-                println!("{}:{}:{}: {f}", at.file.display(), at.line, at.column);
+                // `written_in` rather than `Unit::locate`, because a finding is
+                // not a span: `line == 0` is "about the file as a whole" and
+                // `locate` clamps it to 1, inventing a position in the root.
+                // And `rendered_at` rather than `{f}`, because `Display` writes
+                // its own `line:column` — prefixing the located one printed
+                // every position twice.
+                let place = match written_in(f, unit) {
+                    Some(at) => format!("{}:{}:{}", at.file.display(), at.line, at.column),
+                    None => unit.files[0].display().to_string(),
+                };
+                println!("{}", f.rendered_at(&place));
             }
         }
         let advice = reports

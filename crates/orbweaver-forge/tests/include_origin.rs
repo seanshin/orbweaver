@@ -20,6 +20,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use orbweaver_dynamic::json::Json;
 use orbweaver_forge::pipeline::{
     Item, ItemStatus, Pipeline, StageId, ValidateStage, Workspace, run_batch, run_pipeline,
 };
@@ -366,6 +367,192 @@ module Common {
         "the plain form names the header and the header's own line:\n{plain}"
     );
     assert_eq!(against, plain, "and the `--against` form says exactly the same thing");
+}
+
+// ─── the position a *machine* reader is handed ───────────────────────────────
+//
+// The three output forms of this one binary used to disagree about what a line
+// number means. The human printer mapped positions back to the file the line
+// was written in; `--json` and `--repair-prompt` did not, and served the
+// SPLICE's line under the ROOT file's name. Both halves present, the pair
+// false — a reader is told to look at line 8 of a file whose line 8 is
+// somebody else's declaration, and nothing anywhere goes red.
+//
+// `--repair-prompt` is the one that costs something: it is read by a model
+// (§3.3's self-repair loop, and `spikes/e2e/producer.sh` pastes it into the
+// prompt verbatim), so a wrong line sends the repair to the wrong file.
+//
+// The contract that settles it: `line`/`column` mean the position **in the
+// file the text was written in**, which is what the library and the human
+// printer have always meant by them; a finding written somewhere other than
+// the report's own file names that file in a per-finding `"file"`, emitted
+// only when it differs, so a self-contained contract's document is unchanged.
+//
+// *줄 번호는 스플라이스가 아니라 작성된 파일의 줄이다 — 사람용 출력만이 아니라
+// 세 형식 모두에서.*
+
+/// A header with an un-annotated operation, and a root that only includes it.
+///
+/// The operation is written at `00-audit.idl:5`; in the splice it lands at
+/// line 7, which is the number the machine forms used to print.
+fn audit_estate(name: &str) -> PathBuf {
+    let header = "\
+#ifndef ESTATE_AUDIT_IDL
+#define ESTATE_AUDIT_IDL
+module Common {
+  interface Audit {
+    void note(in string what);
+  };
+};
+#endif
+";
+    estate(name, &[("00-audit.idl", header), ("01-desk.idl", "#include \"00-audit.idl\"\n")])
+}
+
+fn findings_of(json: &Json) -> &[Json] {
+    let files = json.get("files").expect("a files array");
+    let Json::Array(files) = files else { panic!("files is an array, got {}", files.kind()) };
+    let Json::Array(findings) = files[0].get("findings").expect("findings") else {
+        panic!("findings is an array")
+    };
+    findings
+}
+
+/// `--json` names the file the line is a line of.
+///
+/// Measured before the fix, on exactly this estate:
+/// `{"file":"…/01-desk.idl", … "line":7 …}` — the root, and the splice's line.
+/// `01-desk.idl` is one line long.
+#[test]
+fn the_json_form_reports_the_line_in_the_file_it_was_written_in() {
+    let dir = audit_estate("json-positions");
+    let (_, out) = sidl_validate(&[Path::new("--json"), &dir.join("01-desk.idl")]);
+    let json = Json::parse(&out).unwrap_or_else(|e| panic!("`--json` emits JSON: {e:?}\n{out}"));
+
+    let header = dir.join("00-audit.idl").display().to_string();
+    let findings = findings_of(&json);
+    assert!(!findings.is_empty(), "the header's un-annotated operation is reported:\n{out}");
+    for f in findings {
+        assert_eq!(
+            f.get("line"),
+            Some(&Json::Number("5".into())),
+            "the header's own line, not the splice's 7:\n{out}"
+        );
+        assert_eq!(
+            f.get("file").and_then(|j| j.as_str()),
+            Some(header.as_str()),
+            "and the finding names the file that line is a line of:\n{out}"
+        );
+    }
+}
+
+/// The same fact for the form a *model* reads.
+///
+/// A generator handed `line 7` for a one-line root file either edits the wrong
+/// file or gives up, and the loop reports neither.
+#[test]
+fn the_repair_prompt_sends_a_generator_to_the_file_it_must_edit() {
+    let header = "\
+#ifndef ESTATE_VERSION_IDL
+#define ESTATE_VERSION_IDL
+module Common {
+  struct Version { unsigned long version; };
+};
+#endif
+";
+    let dir = estate(
+        "repair-positions",
+        &[("00-audit.idl", header), ("01-desk.idl", "#include \"00-audit.idl\"\n")],
+    );
+    let (ok, out) = sidl_validate(&[Path::new("--repair-prompt"), &dir.join("01-desk.idl")]);
+    assert!(!ok, "the clash is a refusal:\n{out}");
+
+    assert!(
+        out.contains("    line 4, column 34:"),
+        "the clash's own line in the header, not line 6 of the splice:\n{out}"
+    );
+    assert!(
+        out.contains(&format!("written in {}:4", dir.join("00-audit.idl").display())),
+        "and the prompt names the file to edit, with the include chain:\n{out}"
+    );
+}
+
+/// The half that must not move: a self-contained contract.
+///
+/// The whole corpus is this shape and so is every `--json` consumer today, so
+/// the new per-finding `file` is emitted **only** when it differs from the
+/// report's. Absent means "the file this report is about".
+#[test]
+fn a_self_contained_contract_carries_no_per_finding_file() {
+    let dir = estate(
+        "single-file",
+        &[("solo.idl", "module Common {\n  interface Audit {\n    void note();\n  };\n};\n")],
+    );
+    let root = dir.join("solo.idl");
+    let (_, out) = sidl_validate(&[Path::new("--json"), &root]);
+    let json = Json::parse(&out).unwrap_or_else(|e| panic!("`--json` emits JSON: {e:?}\n{out}"));
+
+    let findings = findings_of(&json);
+    assert!(!findings.is_empty(), "the un-annotated operation is reported:\n{out}");
+    for f in findings {
+        assert_eq!(f.get("file"), None, "no per-finding file when there is nowhere else:\n{out}");
+        assert_eq!(f.get("line"), Some(&Json::Number("3".into())), "{out}");
+    }
+}
+
+/// A finding about the file as a whole does not claim line 1.
+///
+/// `Finding::line == 0` is documented as "about the file as a whole" and every
+/// `evolution/*` finding is one. Fed to `Unit::locate` — which maps a *span*,
+/// and clamps with `.max(1)` because a span's line is 1-based — it came back as
+/// line 1 of the root, a position nothing was written at.
+/// `orbweaver_forge::written_in` is the one place that knows the difference.
+#[test]
+fn a_finding_about_the_whole_file_names_the_file_and_no_line() {
+    let dir = corpus_include();
+    let (ok, out) = sidl_validate(&[
+        Path::new("--against"),
+        &dir.join("evo-released.idl"),
+        &dir.join("evo-proposed.idl"),
+    ]);
+    assert!(!ok, "a breaking change exits 1:\n{out}");
+
+    let root = dir.join("evo-proposed.idl").display().to_string();
+    assert!(
+        out.contains(&format!("{root}: error: IDL:depot.example/Depot/OrderLine:1.0")),
+        "the file, and no line:\n{out}"
+    );
+    assert!(
+        !out.contains(&format!("{root}:1:0")),
+        "and not line 1, where nothing is written:\n{out}"
+    );
+}
+
+/// One position per finding, on every path.
+///
+/// The printer prefixed the located `file:line:column` in front of `Display`'s
+/// own `line:column`, so every diagnostic this binary ever emitted carried two
+/// positions — and over a multi-file contract the second one was a line in the
+/// splice. `Finding::rendered_at` is the one renderer; `Display` delegates to
+/// it, so the two cannot drift apart again.
+#[test]
+fn a_finding_prints_its_position_once() {
+    let dir = audit_estate("one-position");
+    let (_, out) = sidl_validate(&[&dir.join("01-desk.idl")]);
+
+    let header = dir.join("00-audit.idl").display().to_string();
+    let diagnostics: Vec<&str> = out.lines().filter(|l| l.starts_with(&header)).collect();
+    assert!(!diagnostics.is_empty(), "the header's findings are printed:\n{out}");
+    for line in &diagnostics {
+        let rest = line
+            .strip_prefix(&format!("{header}:5:10: "))
+            .unwrap_or_else(|| panic!("the located position, once and in front:\n{line}"));
+        assert!(
+            rest.starts_with("advice: ") || rest.starts_with("error: "),
+            "the severity follows the position directly — no second `line:column`:\n{line}"
+        );
+    }
+    assert!(!out.contains("7:10"), "and the splice's position appears nowhere:\n{out}");
 }
 
 /// Why the unit entry point exists, pinned as the thing that goes wrong
