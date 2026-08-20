@@ -46,7 +46,7 @@
 //!   described a design nobody had to choose: a `ProxyPullSupplier` holds
 //!   events in the same [`DEFAULT_QUEUE_LIMIT`] deque a `ProxyPushSupplier`
 //!   already holds them in, discards the same oldest event, and counts it in
-//!   the same [`ChannelStats::dropped`]. Only the second clause — *for no
+//!   the same [`ChannelStats::dropped_overflow`]. Only the second clause — *for no
 //!   named consumer* — was load-bearing, and it is false on the consumer side
 //!   and still true on the supplier side, which is why the two halves parted.
 //! - **`EventChannel::destroy`.** Still refused, and the reason has changed.
@@ -75,7 +75,8 @@
 //! 1. **At the bound it drops the oldest; it never blocks a supplier.** The
 //!    bound is [`DEFAULT_QUEUE_LIMIT`], shared with the push proxies and moved
 //!    by the same [`ChannelHandle::set_queue_limit`], and an overflow is
-//!    counted in the same [`ChannelStats::dropped`] and logged per event. The
+//!    counted in the same [`ChannelStats::dropped_overflow`] and logged per
+//!    event. The
 //!    specification's own answer to a full channel — block the supplier — was
 //!    considered and rejected here for the reason rule 2 of the fan-out
 //!    section already gives: a supplier blocked by one slow puller is one
@@ -90,8 +91,9 @@
 //!    byte order cannot be handed to a puller asking in the other, exactly as
 //!    it cannot be relayed to a landing offset of a different alignment. Both
 //!    are one predicate, [`relay_check`], used by the delivery thread and by
-//!    `pull` alike; a refusal counts in [`ChannelStats::unrelayable`], the
-//!    event is discarded and counted in [`ChannelStats::dropped`], and the
+//!    `pull` alike; the refused event is discarded and counted in
+//!    [`ChannelStats::unrelayable`], which is both the refusal counter and
+//!    this cause's share of [`ChannelStats::dropped`], and the
 //!    puller is handed the next event rather than an exception — the channel's
 //!    limitation is not the caller's fault, the same distinction
 //!    [`ChannelState::record`] already draws on the push side.
@@ -135,18 +137,80 @@
 //!    that did it.
 //! 2. **A dead or slow consumer must not wedge the channel.** Each proxy has
 //!    its own bounded queue ([`DEFAULT_QUEUE_LIMIT`]); on overflow the
-//!    **oldest** event is dropped, counted in [`ChannelStats::dropped`] and
-//!    logged. Never silently — the harness rule about unmeasured checks
-//!    applies to discarded data too. Slowness is bounded by the push timeout,
-//!    which is the socket read timeout on the outbound connection.
+//!    **oldest** event is dropped, counted in
+//!    [`ChannelStats::dropped_overflow`] and logged. Never silently — the
+//!    harness rule about unmeasured checks applies to discarded data too.
+//!    Slowness is bounded by the push timeout, which is the socket read
+//!    timeout on the outbound connection.
 //! 3. **Repeated failure disconnects.** After
 //!    [`MAX_CONSECUTIVE_FAILURES`] consecutive failed pushes the proxy is
 //!    disconnected as though `disconnect_push_supplier` had been called: its
-//!    consumer reference is released, its queued events are dropped (counted),
-//!    and a line is logged. Three, not one: a single failure is a transport
+//!    consumer reference is released, its queued events are dropped (counted
+//!    in [`ChannelStats::dropped_on_failure_disconnect`]), and a line is
+//!    logged. Three, not one: a single failure is a transport
 //!    hiccup, and a consumer that has restarted deserves the two retries a
 //!    fresh connect gets. The proxy object key stays alive and reconnectable,
 //!    the same choice F6 made for unbound contexts.
+//!
+//! # Counting a discard: five causes, and what a rate can be taken over
+//!
+//! Every discarded event is counted in [`ChannelStats::dropped`], and until
+//! this batch that was all anyone could learn about it. Five different things
+//! moved that one number:
+//!
+//! | Counter | Cause | Class |
+//! |---|---|---|
+//! | [`ChannelStats::dropped_overflow`] | a bounded queue was full | **back-pressure** |
+//! | [`ChannelStats::unrelayable`] | `relay_check` refused the `any` | our own limitation |
+//! | [`ChannelStats::dropped_on_disconnect`] | a consumer hung up | housekeeping |
+//! | [`ChannelStats::dropped_on_failure_disconnect`] | a failing proxy was cut | a dead consumer |
+//! | [`ChannelStats::dropped_at_stop`] | [`ChannelHandle::stop`] | housekeeping |
+//!
+//! Back-pressure means a producer faster than a consumer, or a bound sized for
+//! a slower one; a dead consumer is not the same thing as a slow one, and
+//! neither is a shutdown.
+//!
+//! So a tidy shutdown moved the same counter as an overloaded consumer, and
+//! `PLAN-DEFERRED.md` §1's un-defer trigger for CosNotification — *"F7 reports
+//! a measured drop rate caused by unwanted fan-out"* — had no instrument that
+//! could answer it in **either** direction. A trigger with no instrument is
+//! worse than an unmeasured one, because it reads as measured. Splitting the
+//! counter is D011 §6.1's finding, fixed.
+//!
+//! ## What a drop rate can be taken over
+//!
+//! A rate needs a denominator and there are two, which answer different
+//! questions:
+//!
+//! - [`ChannelStats::accepted`] — what suppliers handed in. One per `push`,
+//!   whatever it fans out to. `dropped / accepted` can exceed 1 and means
+//!   nothing on its own.
+//! - [`ChannelStats::fanned_out`] — the per-proxy copies those events became,
+//!   one per connected proxy per accepted event. This is the denominator the
+//!   per-proxy bound is spent against, so `dropped_overflow / fanned_out` is
+//!   the honest **back-pressure drop rate**, and `fanned_out / accepted` is
+//!   the fan-out multiplication itself.
+//!
+//! ## What these numbers cannot say
+//!
+//! Two limits, stated because the trigger above is phrased in terms of both.
+//!
+//! 1. **They are channel-wide, not per consumer.** Every counter here lives in
+//!    one [`ChannelStats`]; the queues are per proxy but the accounting is
+//!    not. "Which consumer is dropping" is a question this shape cannot
+//!    answer, and answering it means per-proxy counters and a way to publish
+//!    them — a design change, not a counter. Nothing here guesses at it by
+//!    dividing by [`ChannelStats::consumers_connected`], which would be a
+//!    fabricated attribution that happens to have a plausible magnitude.
+//! 2. **"Unwanted" is not observable in this servant at all.** `CosEventComm`
+//!    has no subscription predicate: a connected consumer receives everything
+//!    the channel accepts, so there is nothing anywhere in this module that
+//!    records what a consumer *wanted*. A drop can be attributed to
+//!    back-pressure — that is what the split buys — but never to fan-out
+//!    being unwanted, because wanting is not represented. That capability is
+//!    precisely what `CosNotification`'s filters would add, which makes §1's
+//!    trigger circular as written: it asks this channel to measure the thing
+//!    the deferred chapter exists to introduce.
 //!
 //! # Relaying an `any` verbatim
 //!
@@ -413,18 +477,66 @@ struct ProxyConsumer {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ChannelStats {
     /// Events accepted from suppliers (each fans out to every consumer).
+    ///
+    /// One per `push` or [`ChannelHandle::publish`], whatever it fans out to.
+    /// It is therefore *not* the denominator of a per-consumer drop rate —
+    /// `fanned_out` is. See the module docs, "What a drop rate can be taken
+    /// over".
     pub accepted: u64,
+    /// Queue slots filled by fan-out: one per connected proxy per accepted
+    /// event, push and pull alike.
+    ///
+    /// The denominator `dropped_overflow` needs. `accepted` counts what
+    /// suppliers handed in; this counts the copies the channel made of them,
+    /// which is what the per-proxy bound is spent on, and
+    /// `fanned_out / accepted` is the multiplication itself.
+    pub fanned_out: u64,
     /// Successful outbound `push` invocations.
     pub delivered: u64,
-    /// Queued events discarded: by overflow (drop-oldest) or by a disconnect
-    /// abandoning a backlog.
+    /// **Every** queued event this channel discarded, whatever the reason:
+    /// the total of the five per-cause counters ([`ChannelStats::by_cause`] is
+    /// that sum, [`ChannelStats::split_adds_up`] the assertion).
+    ///
+    /// Kept as the total, because a total is what "did this channel lose
+    /// anything?" wants. It cannot answer *why*, and it was being asked to: a
+    /// clean [`ChannelHandle::stop`] and an overloaded consumer moved the same
+    /// number, so no reading of it could tell back-pressure from housekeeping
+    /// (D011 §6.1).
     pub dropped: u64,
+    /// Discarded because a proxy's bounded queue was full — the oldest went.
+    ///
+    /// The only cause that means **back-pressure**: a producer faster than a
+    /// consumer, or a bound sized for a slower producer. The other four are
+    /// housekeeping or this channel's own limitation.
+    pub dropped_overflow: u64,
+    /// Discarded because a consumer disconnected *itself*
+    /// (`disconnect_push_supplier`, `disconnect_pull_supplier`) with a backlog
+    /// still queued. Housekeeping: the consumer asked.
+    pub dropped_on_disconnect: u64,
+    /// Discarded because *this channel* cut a proxy that had failed
+    /// [`MAX_CONSECUTIVE_FAILURES`] times in a row, abandoning its backlog.
+    ///
+    /// The consumer's fault or the network's, not the producer's rate — which
+    /// is why it is not `dropped_overflow`, even though both mean "a consumer
+    /// was not keeping up".
+    pub dropped_on_failure_disconnect: u64,
+    /// Discarded because [`ChannelHandle::stop`] ended the channel with events
+    /// still queued. Housekeeping, and the one that must never be read as a
+    /// symptom of anything.
+    pub dropped_at_stop: u64,
     /// Outbound `push` invocations that failed.
     pub push_failures: u64,
     /// Proxies disconnected for reaching [`MAX_CONSECUTIVE_FAILURES`].
     pub disconnected_for_failure: u64,
-    /// Events refused delivery because the destination's CDR alignment
+    /// Events refused because the destination's CDR alignment or byte order
     /// differs from where the `any` was captured. See the module docs.
+    ///
+    /// The fifth drop cause as well as its own counter: a refused event is
+    /// always discarded — on the pull path by
+    /// [`ChannelState::take_pull_event`], on the push path by the delivery
+    /// thread, which had already taken it out of a queue. So it counts in
+    /// `dropped` too, and there is no separate `dropped_unrelayable` because
+    /// this number is already exactly that.
     pub unrelayable: u64,
     /// Events handed to a consumer by `pull` or `try_pull`.
     ///
@@ -439,6 +551,65 @@ pub struct ChannelStats {
     pub consumers_connected: usize,
     /// Pull proxies a consumer has connected itself to.
     pub pull_consumers_connected: usize,
+}
+
+/// Why an event was discarded.
+///
+/// Five causes, and the point of naming them is that they answer different
+/// questions: one is back-pressure, one is this channel's own limitation, and
+/// three are housekeeping. [`ChannelStats::dropped`] summed all five, and
+/// `PLAN-DEFERRED.md` §1's un-defer trigger — *"F7 reports a measured drop
+/// rate caused by unwanted fan-out"* — asks about exactly one of them, so the
+/// one number could not be that trigger's instrument in either direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DropCause {
+    /// A bounded queue was full and the oldest event went.
+    Overflow,
+    /// The `any` could not be relayed to this destination verbatim.
+    Unrelayable,
+    /// A consumer disconnected itself and left a backlog.
+    Disconnect,
+    /// This channel cut a repeatedly-failing proxy and left its backlog.
+    FailureDisconnect,
+    /// [`ChannelHandle::stop`] ended the channel with events still queued.
+    Stop,
+}
+
+impl ChannelStats {
+    /// The sum of the five per-cause counters. Equals `dropped`, always.
+    pub fn by_cause(&self) -> u64 {
+        self.dropped_overflow
+            + self.unrelayable
+            + self.dropped_on_disconnect
+            + self.dropped_on_failure_disconnect
+            + self.dropped_at_stop
+    }
+
+    /// Whether the split accounts for every drop.
+    ///
+    /// A caller asserting this is asserting that no discard path was added
+    /// without naming its cause — the failure mode the split exists to end,
+    /// arriving a second time. Every test here that drives a drop checks it.
+    pub fn split_adds_up(&self) -> bool {
+        self.by_cause() == self.dropped
+    }
+
+    /// The **only** way anything in this module discards an event.
+    ///
+    /// One call moves the total and exactly one cause, so the two cannot
+    /// disagree — the reason this is a method and not five `+=` pairs spread
+    /// over six call sites, which is the shape the counter had when it lost
+    /// the ability to say what happened.
+    fn discard(&mut self, cause: DropCause, n: u64) {
+        self.dropped += n;
+        match cause {
+            DropCause::Overflow => self.dropped_overflow += n,
+            DropCause::Unrelayable => self.unrelayable += n,
+            DropCause::Disconnect => self.dropped_on_disconnect += n,
+            DropCause::FailureDisconnect => self.dropped_on_failure_disconnect += n,
+            DropCause::Stop => self.dropped_at_stop += n,
+        }
+    }
 }
 
 /// Everything both the servant thread and the delivery thread touch.
@@ -528,17 +699,18 @@ impl ChannelState {
                 continue;
             }
             proxy.queue.push_back(Arc::clone(&event));
+            self.stats.fanned_out += 1;
             while proxy.queue.len() > limit {
                 proxy.queue.pop_front();
-                self.stats.dropped += 1;
+                self.stats.discard(DropCause::Overflow, 1);
                 // Loud, per event. Control-plane granularity means a healthy
                 // channel prints none of these at all, so a stream of them is
                 // the signal, not noise.
                 eprintln!(
                     "orbweaver: event channel dropped the oldest event for proxy {} \
-                     (queue limit {limit}, {} dropped in total)",
+                     (queue limit {limit}, {} overflow drop(s) in total)",
                     String::from_utf8_lossy(key),
-                    self.stats.dropped
+                    self.stats.dropped_overflow
                 );
             }
         }
@@ -550,14 +722,15 @@ impl ChannelState {
                 continue;
             }
             proxy.queue.push_back(Arc::clone(&event));
+            self.stats.fanned_out += 1;
             while proxy.queue.len() > limit {
                 proxy.queue.pop_front();
-                self.stats.dropped += 1;
+                self.stats.discard(DropCause::Overflow, 1);
                 eprintln!(
                     "orbweaver: event channel dropped the oldest event for pull proxy {} \
-                     (queue limit {limit}, {} dropped in total)",
+                     (queue limit {limit}, {} overflow drop(s) in total)",
                     String::from_utf8_lossy(key),
-                    self.stats.dropped
+                    self.stats.dropped_overflow
                 );
             }
         }
@@ -581,8 +754,7 @@ impl ChannelState {
                     return Some(event);
                 }
                 Err(why) => {
-                    self.stats.unrelayable += 1;
-                    self.stats.dropped += 1;
+                    self.stats.discard(DropCause::Unrelayable, 1);
                     eprintln!(
                         "orbweaver: event channel cannot hand an event to the puller on {}: \
                          {why}; the event was dropped",
@@ -629,7 +801,13 @@ impl ChannelState {
             Outcome::Unrelayable(why) => {
                 // Our limitation, not the consumer's: it must not count
                 // towards disconnecting a consumer that is answering fine.
-                self.stats.unrelayable += 1;
+                //
+                // It *is* a discard, though, and until the split it was the
+                // one that never said so: the delivery thread had already
+                // taken the event out of the queue, so refusing it here lost
+                // it while `dropped` stood still. The pull path counted the
+                // same refusal in both numbers. Now both paths do.
+                self.stats.discard(DropCause::Unrelayable, 1);
                 eprintln!("orbweaver: event channel cannot relay to {name}: {why}");
             }
             Outcome::Failed(why) => {
@@ -644,7 +822,7 @@ impl ChannelState {
                     proxy.queue.clear();
                     proxy.consumer = None;
                     proxy.consecutive_failures = 0;
-                    self.stats.dropped += abandoned as u64;
+                    self.stats.discard(DropCause::FailureDisconnect, abandoned as u64);
                     self.stats.disconnected_for_failure += 1;
                     eprintln!(
                         "orbweaver: event channel disconnected {name} after \
@@ -837,7 +1015,7 @@ impl ChannelHandle {
         let abandoned: usize = state.proxy_suppliers.values().map(|p| p.queue.len()).sum::<usize>()
             + state.proxy_pull_suppliers.values().map(|p| p.queue.len()).sum::<usize>();
         if abandoned > 0 {
-            state.stats.dropped += abandoned as u64;
+            state.stats.discard(DropCause::Stop, abandoned as u64);
             eprintln!("orbweaver: event channel stopped with {abandoned} undelivered event(s)");
             for proxy in state.proxy_suppliers.values_mut() {
                 proxy.queue.clear();
@@ -1270,7 +1448,7 @@ impl EventChannelServer {
                     proxy.queue.clear();
                     proxy.consumer = None;
                     proxy.consecutive_failures = 0;
-                    state.stats.dropped += abandoned;
+                    state.stats.discard(DropCause::Disconnect, abandoned);
                     if abandoned > 0 {
                         eprintln!(
                             "orbweaver: event channel disconnected {} with {abandoned} \
@@ -1417,7 +1595,7 @@ impl EventChannelServer {
                     proxy.queue.clear();
                     proxy.connected = false;
                     proxy.consumer = None;
-                    state.stats.dropped += abandoned;
+                    state.stats.discard(DropCause::Disconnect, abandoned);
                     if abandoned > 0 {
                         eprintln!(
                             "orbweaver: event channel disconnected pull proxy {} with \
@@ -2015,6 +2193,39 @@ mod tests {
         }
     }
 
+    /// Every drop cause, so a new one cannot be added without this array
+    /// noticing that [`assert_only_cause`] does not check it.
+    const EVERY_CAUSE: [DropCause; 5] = [
+        DropCause::Overflow,
+        DropCause::Unrelayable,
+        DropCause::Disconnect,
+        DropCause::FailureDisconnect,
+        DropCause::Stop,
+    ];
+
+    /// Asserts that **one** drop cause moved, by `n`, that no other did, and
+    /// that the per-cause counters account for the whole of `dropped`.
+    ///
+    /// This is the assertion the old single counter could not make. Sum the
+    /// five back into one number and every caller of this function fails
+    /// naming the cause it could not tell apart from the others — which is
+    /// the negative control recorded in this batch's commit message.
+    fn assert_only_cause(stats: &ChannelStats, cause: DropCause, n: u64) {
+        for c in EVERY_CAUSE {
+            let got = match c {
+                DropCause::Overflow => stats.dropped_overflow,
+                DropCause::Unrelayable => stats.unrelayable,
+                DropCause::Disconnect => stats.dropped_on_disconnect,
+                DropCause::FailureDisconnect => stats.dropped_on_failure_disconnect,
+                DropCause::Stop => stats.dropped_at_stop,
+            };
+            let want = if c == cause { n } else { 0 };
+            assert_eq!(got, want, "drop cause {c:?} should be {want}: {stats:?}");
+        }
+        assert_eq!(stats.dropped, n, "the total is the one cause that moved: {stats:?}");
+        assert!(stats.split_adds_up(), "the split must account for every drop: {stats:?}");
+    }
+
     /// A reference to a port that was bound and then released: dialling it is
     /// refused immediately, which is what a dead consumer looks like without
     /// waiting out a connect timeout.
@@ -2539,9 +2750,13 @@ mod tests {
         }
         let stats = served.handle.stats();
         assert_eq!(stats.accepted, 9);
+        assert_eq!(stats.fanned_out, 9, "one connected proxy, so one copy of each");
         assert_eq!(stats.queued, 3, "the queue is bounded");
         assert_eq!(stats.dropped, 6, "every discarded event is counted, none silently");
         assert_eq!(stats.delivered, 0, "no delivery thread is running yet");
+        // The cause, not just the count. Overflow is the one drop cause that
+        // means back-pressure, and it is the only one this test drove.
+        assert_only_cause(&stats, DropCause::Overflow, 6);
 
         served.begin_delivery();
         assert!(served.handle.wait_until(T, |s| s.delivered == 3), "{:?}", served.handle.stats());
@@ -2586,10 +2801,72 @@ mod tests {
         assert_eq!(stats.push_failures, u64::from(MAX_CONSECUTIVE_FAILURES));
         assert_eq!(stats.dropped, 3, "the three still queued when it was cut, counted");
         assert_eq!(stats.consumers_connected, 1, "only the live proxy is still attached");
-        assert_eq!(stats.unrelayable, 0);
+        assert_eq!(stats.fanned_out, 12, "two proxies, six events each");
+        // A cut consumer is not an overloaded one: nothing here overflowed,
+        // and a reader asking about back-pressure must not be handed these.
+        assert_only_cause(&stats, DropCause::FailureDisconnect, 3);
 
         served.shutdown(conn);
         live.shutdown();
+    }
+
+    /// A consumer that hangs up on purpose is **housekeeping**, and after the
+    /// split it says so: its abandoned backlog counts under its own cause and
+    /// leaves the back-pressure counter alone.
+    ///
+    /// Delivery is paused, so the backlog is exactly what was pushed and the
+    /// count is not a race against a drain.
+    #[test]
+    fn a_consumers_own_disconnect_abandons_its_backlog_under_its_own_cause() {
+        let served = Served::start_paused();
+        let proxy = served.consumer_proxy(&dead_consumer_ior());
+
+        let conn = served.supplier_proxy();
+        let mut supplier = conn;
+        for i in 0..4u32 {
+            client::push(&mut supplier, &TypeCode::ULong, move |e| e.put_u32(i)).unwrap();
+        }
+        assert_eq!(served.handle.stats().queued, 4);
+
+        let mut c = served.dial(&proxy);
+        client::disconnect_push_supplier(&mut c).unwrap();
+        drop(c);
+
+        let stats = served.handle.stats();
+        assert_eq!(stats.queued, 0, "the backlog goes with the connection");
+        assert_eq!(stats.consumers_connected, 0);
+        assert_only_cause(&stats, DropCause::Disconnect, 4);
+
+        served.shutdown(supplier);
+    }
+
+    /// A tidy shutdown is not a symptom. `stop` abandoning a backlog counts
+    /// under its own cause, so an operator reading `dropped_overflow` after a
+    /// restart sees zero rather than the size of the queue at the moment
+    /// somebody pressed the button — which is what the single counter showed
+    /// and what made `PLAN-DEFERRED.md` §1's trigger unanswerable.
+    #[test]
+    fn stopping_the_channel_counts_its_backlog_at_stop_and_never_as_pressure() {
+        let served = Served::start_paused();
+        served.consumer_proxy(&dead_consumer_ior());
+
+        let mut supplier = served.supplier_proxy();
+        for i in 0..5u32 {
+            client::push(&mut supplier, &TypeCode::ULong, move |e| e.put_u32(i)).unwrap();
+        }
+        assert_eq!(served.handle.stats().queued, 5);
+
+        served.handle.stop();
+        let stats = served.handle.stats();
+        assert_eq!(stats.queued, 0, "a stopped channel keeps nothing");
+        assert_only_cause(&stats, DropCause::Stop, 5);
+
+        // Idempotent, and it must not re-count: `Delivery::drop` calls `stop`
+        // too, so a second call is the ordinary case rather than an odd one.
+        served.handle.stop();
+        assert_only_cause(&served.handle.stats(), DropCause::Stop, 5);
+
+        served.shutdown(supplier);
     }
 
     /// In-process publishing reaches the same consumers over the same relay,

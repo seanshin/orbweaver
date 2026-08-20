@@ -321,9 +321,16 @@ fn a_pull_queue_at_its_bound_drops_the_oldest_and_counts_it() {
 
     let stats = chan.handle.stats();
     assert_eq!(stats.accepted, 9);
+    assert_eq!(stats.fanned_out, 9, "one connected pull proxy, so one copy of each");
     assert_eq!(stats.queued, 3, "the pull queue is bounded, and by the same bound");
     assert_eq!(stats.dropped, 6, "every discarded event is counted, none silently");
     assert_eq!(stats.pull_consumers_connected, 1);
+    // The same bound *and* the same cause: a pull queue at its bound is
+    // back-pressure, told apart from housekeeping by the counter it moves.
+    assert_eq!(stats.dropped_overflow, 6, "and counted as back-pressure, which is what it is");
+    assert_eq!(stats.dropped_on_disconnect, 0);
+    assert_eq!(stats.dropped_at_stop, 0);
+    assert!(stats.split_adds_up(), "{stats:?}");
 
     let kept: Vec<u32> = (0..3).map(|_| ulong(&client::pull(&mut puller).unwrap())).collect();
     assert_eq!(kept, vec![6, 7, 8], "drop-oldest keeps the tail");
@@ -358,6 +365,10 @@ fn a_pull_proxy_and_a_push_proxy_see_the_same_events_independently() {
 
     let stats = chan.handle.stats();
     assert_eq!(stats.accepted, 4, "one push per event, whatever it fans out to");
+    // The fan-out itself, which `accepted` deliberately does not show: two
+    // proxies means the channel made eight queue entries out of four events,
+    // and eight is the denominator a per-consumer drop rate is taken over.
+    assert_eq!(stats.fanned_out, 8, "four events, two connected proxies");
     assert_eq!(stats.pulled, 4);
     assert_eq!(stats.queued, 4, "the idle puller's backlog is still counted");
     assert_eq!(stats.pull_consumers_connected, 2);
@@ -406,7 +417,13 @@ fn the_pull_connect_and_disconnect_state_machine() {
     let stats = chan.handle.stats();
     assert_eq!(stats.queued, 0, "the backlog goes with the connection");
     assert_eq!(stats.dropped, 3, "and is counted, not forgotten");
+    assert_eq!(
+        stats.dropped_on_disconnect, 3,
+        "under the cause that happened: the consumer asked, nothing overflowed"
+    );
+    assert_eq!(stats.dropped_overflow, 0);
     assert_eq!(stats.pull_consumers_connected, 0);
+    assert!(stats.split_adds_up(), "{stats:?}");
 
     for op in ["pull", "try_pull"] {
         let err = conn.invoke_nullary(op).expect_err("disconnected");
@@ -454,6 +471,11 @@ fn an_event_captured_in_the_other_byte_order_is_refused_to_a_puller_and_counted(
         let stats = chan.handle.stats();
         assert_eq!(stats.unrelayable, 1, "{supplied:?}->{pulled:?}");
         assert_eq!(stats.dropped, 1, "{supplied:?}->{pulled:?}: refused is discarded, and counted");
+        // `unrelayable` is this cause's share of `dropped`, not a number
+        // beside it — the refusal is our limitation, and the loss is real.
+        assert_eq!(stats.dropped_overflow, 0, "{supplied:?}->{pulled:?}: nothing overflowed");
+        assert_eq!(stats.dropped_on_disconnect, 0, "{supplied:?}->{pulled:?}");
+        assert!(stats.split_adds_up(), "{supplied:?}->{pulled:?}: {stats:?}");
         assert_eq!(stats.pulled, 1, "{supplied:?}->{pulled:?}");
         assert_eq!(stats.queued, 0, "{supplied:?}->{pulled:?}");
 

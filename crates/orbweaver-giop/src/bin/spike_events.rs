@@ -260,25 +260,54 @@ fn run(out_path: &str, hold: bool) -> Result<(), Box<dyn std::error::Error>> {
     // phase-2 condition here waits with a deadline; this one read a counter
     // another thread was about to increment. Wait for it like the rest.
     require(
-        handle.wait_until(T, |s| s.dropped > 0),
+        handle.wait_until(T, |s| s.dropped_on_failure_disconnect > 0),
         "the dead consumer's backlog must be counted as dropped, loudly",
     )?;
     let stats = handle.stats();
     println!(
-        "  drop report: accepted={} delivered={} dropped={} push_failures={} \
-         disconnected_for_failure={} unrelayable={}",
+        "  drop report: accepted={} fanned_out={} delivered={} dropped={} \
+         (overflow={} unrelayable={} on_disconnect={} on_failure_disconnect={} at_stop={}) \
+         push_failures={} disconnected_for_failure={}",
         stats.accepted,
+        stats.fanned_out,
         stats.delivered,
         stats.dropped,
+        stats.dropped_overflow,
+        stats.unrelayable,
+        stats.dropped_on_disconnect,
+        stats.dropped_on_failure_disconnect,
+        stats.dropped_at_stop,
         stats.push_failures,
-        stats.disconnected_for_failure,
-        stats.unrelayable
+        stats.disconnected_for_failure
     );
     require(
         stats.push_failures == u64::from(MAX_CONSECUTIVE_FAILURES),
         "exactly the threshold's worth of failures should have been spent on the dead consumer",
     )?;
-    ok("drops were counted and reported, none silent");
+    require(stats.split_adds_up(), "the per-cause drop counters must account for every drop")?;
+    // The whole point of the split, asserted over real sockets rather than in
+    // a unit test's memory: this phase disconnected a dead consumer and did
+    // nothing else, so every drop must carry that cause and no other. Before
+    // the split all five causes were one number and this could not be said.
+    require(
+        stats.dropped == stats.dropped_on_failure_disconnect,
+        "every drop here is the cut consumer's backlog — no other cause may be mixed in",
+    )?;
+    require(
+        stats.dropped_overflow == 0,
+        "nothing overflowed: 26 events, a bound of 64, so a drop counted as back-pressure \
+         would be a miscount",
+    )?;
+    // Fan-out, measured rather than assumed: the second consumer was attached
+    // for phase 2, so more queue slots were filled than events were accepted.
+    // Not an equality — the dead proxy is cut partway through phase 2, so how
+    // many of the six events it was still connected for is a race, and an
+    // exact number here would be a flaky assertion about scheduling.
+    require(
+        stats.fanned_out > stats.accepted,
+        "fan-out must have made more queue entries than events accepted",
+    )?;
+    ok("drops were counted by cause and reported, none silent, none miscounted");
 
     drop(supplier);
 
