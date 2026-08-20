@@ -13,25 +13,29 @@
 //!
 //! # What agreement means here, exactly
 //!
-//! **Every id the generator skips for §4.4 is a declaration the rule names.**
-//! That is the direction that matters for the gate: nothing the generator will
-//! refuse gets past S4's refusing form. Over `corpus/golden/` that set is
-//! `gc21::{Amount, Invoice, Billing}`.
+//! **The two sets are equal.** Every id the generator skips for §4.4 is a
+//! declaration the rule names, and every declaration the rule names is one the
+//! generator skips: nothing the generator will refuse gets past S4's refusing
+//! form, and nothing S4 refuses is quietly generated anyway.
 //!
-//! **The rule names more, and this test pins exactly what.** The generator's
-//! closure follows `TypeCode::Fixed` and nothing else: the registry records a
-//! `valuetype` and an abstract interface as `TypeCode::ObjRef` — deliberately,
-//! so `_is_a` and the catalogue keep working — and the generator therefore
-//! emits a **reference** for them and skips nothing. `gc20::Wallet::balance()`
-//! generates as returning an object reference where the peer will send a
-//! value. The rule reports all four of golden 20's declarations; the generator
-//! reports none. That is a real divergence in the generator, recorded here as
-//! a pinned set rather than hidden by loosening the assertion: when the
-//! generator starts refusing valuetypes (or marshalling them), the second
-//! assertion goes red and this file is where the new agreement is written down.
+//! It was not always equal, and what the surplus was is worth keeping. Until
+//! 2026-08-20 the generator's closure followed `TypeCode::Fixed` and nothing
+//! else, because the registry recorded a `valuetype` and an abstract interface
+//! as `TypeCode::ObjRef` — "so `_is_a` and the catalogue keep working" — and
+//! both emitters therefore emitted a **reference** for them and skipped
+//! nothing. `gc20::Wallet::balance()` generated as returning an object
+//! reference where a conformant peer sends a value. The rule named all four of
+//! golden 20's declarations and the generator named none; the surplus was
+//! pinned here as the exact set `{gc20::Describable, Money, Named, Wallet,
+//! gcdr::Describable, Memo, Note, Registrar}` rather than hidden by a looser
+//! assertion, and that pin is what this batch had to delete. The registry now
+//! records `TypeCode::Value` and `TypeCode::AbstractInterface`, which nothing
+//! can mistake for a reference, and the surplus is empty.
 //!
-//! *생성기는 `fixed`만 거부하고 valuetype은 객체 참조로 내보낸다. 규칙은 넷을
-//! 모두 잡는다. 그 차이를 느슨한 단언으로 감추지 않고 집합으로 고정한다.*
+//! *두 집합은 같다. 예전에는 생성기가 `fixed`만 거부하고 valuetype은 객체
+//! 참조로 내보냈다 — 레지스트리가 둘 다 `ObjRef`로 기록했기 때문이다. 그
+//! 차이를 느슨한 단언으로 감추지 않고 집합으로 고정해 두었고, 이번 배치가
+//! 그 고정을 지웠다.*
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -106,58 +110,60 @@ fn sets(src: &str) -> Sets {
 }
 
 /// Over the golden corpus: the generator's §4.4 skips are exactly the rule's
-/// `fixed` findings, in both targets, and the rule's surplus is exactly the
-/// valuetype/abstract-interface findings — file by file, so a new golden file
-/// that breaks either half names itself.
+/// findings, in both targets — file by file, so a new golden file that breaks
+/// the agreement names itself.
 #[test]
 fn over_the_golden_corpus_the_rule_names_every_generator_skip() {
     let mut all_rule = BTreeSet::new();
     let mut all_rust = BTreeSet::new();
+    let mut all_fixed = BTreeSet::new();
     for (name, src) in golden() {
         let s = sets(&src);
-        assert_eq!(s.rust, s.rule_fixed, "{name}: Rust emitter vs the rule's fixed findings");
-        assert_eq!(s.python, s.rule_fixed, "{name}: Python emitter vs the rule's fixed findings");
-        assert!(s.rust.is_subset(&s.rule), "{name}: a skip the rule did not name: {:?}", s.rust);
+        assert_eq!(s.rust, s.rule, "{name}: Rust emitter vs the rule");
+        assert_eq!(s.python, s.rule, "{name}: Python emitter vs the rule");
         all_rule.extend(s.rule);
         all_rust.extend(s.rust);
+        all_fixed.extend(s.rule_fixed);
     }
-    // The sets themselves, so the numbers in the record are checked, not
-    // typed: three from 21, eight from `deferred-reach`, and the valuetype
-    // side — four from 20, four more from `deferred-reach` — that only the
-    // rule names.
+    // The set itself, so the numbers in the record are checked, not typed:
+    // three from 21 and eight from `deferred-reach` reach `fixed`; four from
+    // 20 and five more from `deferred-reach` reach a valuetype or an abstract
+    // interface. Twenty declarations, one list, both halves of the gate.
     assert_eq!(
         all_rust.iter().map(String::as_str).collect::<Vec<_>>(),
-        [
-            "gc21::Amount",
-            "gc21::Billing",
-            "gc21::Invoice",
-            "gcdr::Cashier",
-            "gcdr::Column",
-            "gcdr::Ledger",
-            "gcdr::Overdrawn",
-            "gcdr::Payment",
-            "gcdr::Rate",
-            "gcdr::Rates",
-            "gcdr::Teller",
-        ]
-    );
-    // The pinned divergence, stated as the set it is. When the generator
-    // starts refusing what the wire cannot carry, this is the line to change.
-    let surplus: Vec<&str> = all_rule.difference(&all_rust).map(String::as_str).collect();
-    assert_eq!(
-        surplus,
         [
             "gc20::Describable",
             "gc20::Money",
             "gc20::Named",
             "gc20::Wallet",
+            "gc21::Amount",
+            "gc21::Billing",
+            "gc21::Invoice",
+            "gcdr::Cashier",
+            "gcdr::Column",
             "gcdr::Describable",
+            "gcdr::Ledger",
             "gcdr::Memo",
             "gcdr::Note",
+            "gcdr::Overdrawn",
+            "gcdr::Payment",
+            "gcdr::Rate",
+            "gcdr::Rates",
             "gcdr::Registrar",
+            "gcdr::Tagged",
+            "gcdr::Teller",
         ]
     );
-    assert_eq!(all_rule.len(), 19);
+    // The surplus the previous batch pinned as the generator's divergence,
+    // asserted empty. Written as a difference rather than deleted, because
+    // "the rule names something the generator serves" is the failure this file
+    // exists to catch and it must have a live assertion, not a comment.
+    let surplus: Vec<&str> = all_rule.difference(&all_rust).map(String::as_str).collect();
+    assert!(surplus.is_empty(), "the rule names what the generator serves: {surplus:?}");
+    // The `fixed` half unchanged at eleven, so a change to the valuetype half
+    // cannot quietly move it.
+    assert_eq!(all_fixed.len(), 11, "{all_fixed:?}");
+    assert_eq!(all_rule.len(), 20);
 }
 
 /// Every shape the rule's own tests know for `fixed`, through both closures:

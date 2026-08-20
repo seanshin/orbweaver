@@ -1066,7 +1066,10 @@ fn interface_entry(desc: &FullInterfaceDescription, bases: Vec<RepositoryId>) ->
             },
         );
     }
-    InterfaceEntry { bases, operations, attributes, forward_only: false }
+    // `abstract_interface: false` is "not known to be abstract", not "known to
+    // be concrete": a `FullInterfaceDescription` has no field for it, so this
+    // is the honest answer a remote IFR can give. See the field's own doc.
+    InterfaceEntry { bases, operations, attributes, forward_only: false, abstract_interface: false }
 }
 
 /// Collects every named `TypeCode` a description mentions.

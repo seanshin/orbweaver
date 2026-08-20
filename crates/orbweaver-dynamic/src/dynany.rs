@@ -438,6 +438,15 @@ fn default_within(tc: &TypeCode, open: &mut Vec<TypeCode>, path: &str) -> Result
             });
         }
         TypeCode::Fixed { .. } => return Err(unsupported("`fixed`")),
+        // Refused, and refused *here* rather than by falling through to the
+        // reference case. A valuetype's state goes on the wire inline behind a
+        // value tag (CORBA 3.4 Part 2, §9.3.4) and an abstract interface goes
+        // as the union of a value and a reference; marshalling either as an
+        // IOR is not a partial implementation of §4.4's deferral, it is the
+        // wrong bytes. The registry used to record both as `ObjRef` and this
+        // path marshalled them without a word.
+        TypeCode::Value { .. } => return Err(unsupported("`valuetype`")),
+        TypeCode::AbstractInterface { .. } => return Err(unsupported("an abstract interface")),
         TypeCode::Principal => return Err(unsupported("`Principal`")),
         // open_type followed both; arriving here would mean it had not.
         TypeCode::Recursive(_) | TypeCode::Alias { .. } => {

@@ -129,6 +129,19 @@ fn leaf(tc: &TypeCode, tick: &mut u64) -> Result<Value, Uncovered> {
         TypeCode::Fixed { .. } => {
             return Err(Uncovered("`fixed` has no Value variant (docs/PLAN.md §4.4)".into()));
         }
+        // The other two of §4.4's three, uncovered for the same reason and now
+        // *named* for the same reason. They used to arrive here as
+        // `TypeCode::ObjRef` and be sampled as `Value::ObjRef(None)` — walked,
+        // counted as covered, and covered nothing: the sampler was answering
+        // about a reference where the type is a value.
+        TypeCode::Value { .. } => {
+            return Err(Uncovered("a `valuetype` has no Value variant (docs/PLAN.md §4.4)".into()));
+        }
+        TypeCode::AbstractInterface { .. } => {
+            return Err(Uncovered(
+                "an abstract interface has no Value variant (docs/PLAN.md §4.4)".into(),
+            ));
+        }
         TypeCode::Principal => return Err(Uncovered("`Principal` has no Value variant".into())),
         other => return Err(Uncovered(format!("no leaf value for {other:?}"))),
     })
@@ -438,20 +451,26 @@ fn every_golden_type_survives_a_dynany_walk() {
         r.walked
     );
 
-    // `fixed` is the one deferred type (docs/PLAN.md §4.4, corpus/golden/21):
-    // it has no `Value` variant, so there is nothing for a navigator to hold.
-    // Anything else appearing here is a new gap and has to be looked at.
+    // The deferred types are §4.4's three, and every one of them must say so.
+    // `fixed` used to be the only entry here, not because it was the only
+    // deferred type but because the other two arrived as `TypeCode::ObjRef`
+    // and were walked as references — the gap was invisible to the gap
+    // report. Anything uncovered for a reason that does not cite §4.4 is a new
+    // gap and has to be looked at.
     for gap in &r.unsupported {
         assert!(
-            gap.contains("`fixed`"),
+            gap.contains("§4.4"),
             "a type is uncovered for a reason that is not the known one:\n  {}",
             r.unsupported.join("\n  ")
         );
     }
-    assert!(
-        !r.unsupported.is_empty(),
-        "corpus/golden/21-deferred-fixed.idl must still report `fixed` as uncovered"
-    );
+    for what in ["`fixed`", "`valuetype`", "abstract interface"] {
+        assert!(
+            r.unsupported.iter().any(|g| g.contains(what)),
+            "corpus/golden must still report {what} as uncovered:\n  {}",
+            r.unsupported.join("\n  ")
+        );
+    }
 }
 
 /// The service contracts as well: they are the ones an agent actually reaches,

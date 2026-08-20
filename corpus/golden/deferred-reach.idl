@@ -31,13 +31,22 @@ module gcdr {
   struct Memo { Note body; };
   abstract interface Describable { string describe(); };
   interface Registrar { void enrol(in Describable item); };
+  // As a struct member, so the dynamic path's corpus walk reaches an abstract
+  // interface at all: the walk visits types, and `Registrar`'s parameter is
+  // inside an interface, so until this member existed the walk reported
+  // `fixed` and valuetypes as its only §4.4 gaps and said nothing about the
+  // third construct.
+  struct Tagged { Describable subject; };
 
   // ── servable: a *reference* to an unservable interface is an IOR ─────────
-  // (A struct member `Teller window;` is the same shape and is deliberately
-  // not here: the Python emitter writes an empty name into the tk_objref
-  // TypeCode of an interface it skipped, so `struct Counter { Teller window; }`
-  // in an `any` diverges from the Rust bytes — found by adding it, recorded in
-  // the batch that added this file, and left for the emitter's own batch.)
+  // `struct Counter { Teller window; }` is the shape the batch that added this
+  // file left out with a note: the Python emitter wrote an **empty name** into
+  // the `tk_objref` TypeCode of an interface it had skipped, so this struct
+  // inside an `any` went out as `"IDL:gcdr/Teller:1.0" 00 00 00 01 00` where
+  // the Rust emitter wrote `… 00 00 00 07 "Teller\0"`. The skip is the reason
+  // the reference is all there is, so a skipped interface now registers its
+  // name anyway, and the line is here to execute that.
+  struct Counter { Teller window; };
   interface Directory { Teller find(in string branch); Rates spot_rates(); };
   struct Plain { long a; string b; };
 };

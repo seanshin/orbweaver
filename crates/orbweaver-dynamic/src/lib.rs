@@ -345,7 +345,9 @@ fn describe(tc: &TypeCode) -> String {
         | TypeCode::Enum { name, .. }
         | TypeCode::Except { name, .. }
         | TypeCode::Alias { name, .. }
-        | TypeCode::ObjRef { name, .. } => name.clone(),
+        | TypeCode::ObjRef { name, .. }
+        | TypeCode::Value { name, .. }
+        | TypeCode::AbstractInterface { name, .. } => name.clone(),
         TypeCode::Sequence { element, bound } if *bound > 0 => {
             format!("sequence<{}, {bound}>", describe(element))
         }
@@ -402,7 +404,9 @@ fn type_id_of(tc: &TypeCode) -> Option<&str> {
         | TypeCode::Union { id, .. }
         | TypeCode::Alias { id, .. }
         | TypeCode::Enum { id, .. }
-        | TypeCode::ObjRef { id, .. } => Some(id),
+        | TypeCode::ObjRef { id, .. }
+        | TypeCode::Value { id, .. }
+        | TypeCode::AbstractInterface { id, .. } => Some(id),
         _ => None,
     }
 }
@@ -646,6 +650,25 @@ fn encode_at(
                 .map_err(|err| Error { path: p.render(), message: err.to_string() })
         }
 
+        // §4.4's two remaining deferrals, refused by name.
+        //
+        // They would already have been refused by `wrong_kind` below — there
+        // is no `Value` variant to marshal a valuetype's state from — but the
+        // sentence matters: until 2026-08-20 the registry recorded both as
+        // `TypeCode::ObjRef`, this arm matched `(ObjRef, ObjRef)` and an IOR
+        // went out where the peer sends a value. "Expected a value of type
+        // Money, got a struct" would be a true sentence about the wrong
+        // problem.
+        (TypeCode::Value { name, .. }, _) => p.fail(format!(
+            "valuetype {name} is not marshalled by the v1 wire (docs/PLAN.md §4.4): its state \
+             goes inline behind a value tag, and this path has no encoding for it"
+        )),
+        (TypeCode::AbstractInterface { name, .. }, _) => p.fail(format!(
+            "abstract interface {name} is not marshalled by the v1 wire (docs/PLAN.md §4.4): on \
+             the wire it is the union of a value and a reference, and this path has no encoding \
+             for either form of it"
+        )),
+
         (t, v) => wrong_kind(p, t, v),
     }
 }
@@ -852,6 +875,21 @@ fn decode_at(d: &mut Decoder<'_>, tc: &TypeCode, p: &Path<'_>, wide: WideCodec) 
                 .map_err(|e| Error { path: p.render(), message: e.to_string() })?;
             Value::TypeCode(Box::new(carried))
         }
+        // The same two, on the way in. A peer that sends us a value is a peer
+        // we have to answer honestly rather than by reading an IOR out of its
+        // value tag.
+        TypeCode::Value { name, .. } => {
+            return p.fail(format!(
+                "valuetype {name} is not marshalled by the v1 wire (docs/PLAN.md §4.4); the \
+                 TypeCode describing it reads, the value behind it does not"
+            ));
+        }
+        TypeCode::AbstractInterface { name, .. } => {
+            return p.fail(format!(
+                "abstract interface {name} is not marshalled by the v1 wire (docs/PLAN.md §4.4); \
+                 the TypeCode describing it reads, the value behind it does not"
+            ));
+        }
         other => return p.fail(format!("cannot decode {} yet", describe(other))),
     })
 }
@@ -888,6 +926,66 @@ mod tests {
             name: name.into(),
             members: members.into_iter().map(|(n, tc)| Member { name: n.into(), tc }).collect(),
         }
+    }
+
+    /// §4.4's two remaining deferrals are refused, in both directions, with the
+    /// section named — and a member of a struct carries the refusal out with it.
+    ///
+    /// The negative control is what this test is for. Until 2026-08-20 the
+    /// registry recorded a `valuetype` as `TypeCode::ObjRef`, the encoder's
+    /// `(ObjRef, ObjRef)` arm matched, and an IOR went out where a conformant
+    /// peer sends a value inline behind a value tag. Nothing was red: an IOR
+    /// is a perfectly good thing to marshal, and both ends of every test we
+    /// had were reading the same wrong type.
+    #[test]
+    fn a_valuetype_and_an_abstract_interface_are_refused_naming_the_section() {
+        let money = TypeCode::Value {
+            id: "IDL:m/Money:1.0".into(),
+            name: "Money".into(),
+            modifier: 0,
+            base: None,
+            members: vec![orbweaver_giop::typecode::ValueMember {
+                name: "units".into(),
+                tc: TypeCode::Long,
+                visibility: 1,
+            }],
+        };
+        let describable =
+            TypeCode::AbstractInterface { id: "IDL:m/D:1.0".into(), name: "D".into() };
+
+        for (tc, what) in [(&money, "valuetype Money"), (&describable, "abstract interface D")] {
+            for endian in [Endian::Big, Endian::Little] {
+                // Every `Value` shape a caller might reach for, including the
+                // one the old code accepted.
+                for v in [
+                    Value::ObjRef(None),
+                    Value::Struct(vec![("units".into(), Value::Long(1))]),
+                    Value::Long(1),
+                ] {
+                    let err = encode(&mut Encoder::new(endian), tc, &v)
+                        .expect_err("{what} must not marshal");
+                    assert!(err.message.contains(what), "{err}");
+                    assert!(err.message.contains("§4.4"), "{err}");
+                }
+                let err = decode(&mut Decoder::new(&[0u8; 16], endian), tc)
+                    .expect_err("{what} must not decode");
+                assert!(err.message.contains(what), "{err}");
+                assert!(err.message.contains("§4.4"), "{err}");
+            }
+        }
+
+        // And the refusal travels: a struct holding one is refused at the
+        // member, with the member's path in front of the reason, rather than
+        // written as far as the member and then failed.
+        let holder = tc_struct("Holder", vec![("body", money.clone())]);
+        let err = encode(
+            &mut Encoder::new(Endian::Big),
+            &holder,
+            &Value::Struct(vec![("body".into(), Value::ObjRef(None))]),
+        )
+        .expect_err("a struct holding a valuetype must not marshal");
+        assert_eq!(err.path, "body", "{err}");
+        assert!(err.message.contains("§4.4"), "{err}");
     }
 
     /// Both byte orders, every time. An encoder that only works native-endian
