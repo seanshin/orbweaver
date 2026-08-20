@@ -258,6 +258,32 @@ if cargo test -q -p orbweaver-giop --test union_default_label_from_a_peer >/dev/
 else
   echo "  FAIL a defaulted union TypeCode does not survive the wire"; fail_total=$((fail_total+1))
 fi
+
+hr "valuetype and abstract interface TypeCodes — a peer's bytes, not our reading"
+# The registry recorded both as TypeCode::ObjRef "so `_is_a` and the catalogue
+# keep working", so both emitters emitted a REFERENCE for them and the dynamic
+# path marshalled an IOR where a peer sends a value — for six phases, because
+# tk_abstract_interface's parameter list is byte-for-byte tk_objref's, and
+# nothing here had ever asked omniORB what it writes. Fifteen captures, both
+# stream orders; a recording nobody re-takes is a claim about the past.
+# Negative controls (74b5662): registry back to ObjRef -> the registry test
+# fails 3 of 3 ("Money LE: not equal", both orders); from_u32 forgetting 29
+# and 32 -> the giop test fails 2 of 4 ("unknown or unsupported TCKind").
+vtc_out=$(python3 spikes/valuetype_capture.py 2>&1); vtc_rc=$?
+printf '%s\n' "$vtc_out"
+if [ "$vtc_rc" -eq 2 ]; then
+  skipped=$((skipped+1))
+elif [ "$vtc_rc" -ne 0 ]; then
+  echo "  FAIL the recorded valuetype bytes no longer match the live peer"
+  fail_total=$((fail_total+1))
+fi
+if cargo test -q -p orbweaver-giop --test valuetype_typecode_from_a_peer >/dev/null 2>&1 \
+   && cargo test -q -p orbweaver-registry --test valuetype_shape_from_a_peer >/dev/null 2>&1; then
+  echo "  ok   a valuetype is tk_value and an abstract interface is tk_abstract_interface — decoded, and our derived TypeCode == the peer's, both orders"
+else
+  echo "  FAIL a valuetype or abstract interface TypeCode does not match the peer's"
+  fail_total=$((fail_total+1))
+fi
 # The member list itself (f8daa21): a branch that is both labelled and
 # `default:` is one member per label plus a labelless default member where
 # `default:` was written — omniidl's list, member for member, structurally
@@ -1423,13 +1449,16 @@ fi
 # §4.4's count over golden (18c1ef1): the declarations the v1 wire cannot
 # carry, and how many of them the property sweep cannot even sample. Pinned
 # rather than gated to zero — golden 20/21/deferred-reach exist to carry them.
-# Negative control in that commit: deleting deferred-reach.idl prints '7 2'.
+# 19/7 until 2026-08-20, when a valuetype and an abstract interface stopped
+# being recorded as object references (74b5662): three valuetypes and a struct
+# stopped being sampled *as references*, so the property measures four fewer
+# and the closure names one more.
 cc_wire=$(printf '%s\n' "$cc_out" | sed -n 's/.* \([0-9][0-9]*\) deferred-wire declaration(s) (§4.4) of which \([0-9][0-9]*\) unmeasured.*/\1 \2/p')
 set -- $cc_wire
-if [ "${1:-}" = 19 ] && [ "${2:-}" = 7 ]; then
-  echo "  ok   19 deferred-wire declaration(s) over golden (§4.4), 7 unmeasured by the property"
+if [ "${1:-}" = 20 ] && [ "${2:-}" = 12 ]; then
+  echo "  ok   20 deferred-wire declaration(s) over golden (§4.4), 12 unmeasured by the property"
 else
-  echo "  FAIL deferred-wire count over golden: '${cc_wire:-absent}' (pinned 19 of which 7)"
+  echo "  FAIL deferred-wire count over golden: '${cc_wire:-absent}' (pinned 20 of which 12)"
   fail_total=$((fail_total+1))
 fi
 # Panic freedom. Rust rules out the memory-corruption half of "wire parsing is
