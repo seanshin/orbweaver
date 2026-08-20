@@ -170,7 +170,21 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   decodes it and re-encodes back to the peer's bytes; the harness re-takes
   every capture from the live fixture (`spikes/*_capture.py`).
 - **A class-B claim lands as a counted `SKIPPED` group naming its fixture,
-  never as a `note` and never as `ok`** (D010 §2). The verdict line counts
+  never as a `note` and never as `ok`** (D010 §2).
+- **A batch scoped to a keyword will fix a keyword; scope it to the rule.**
+  Twice in one release the defect handed to a batch was one instance of a
+  production-wide divergence: a signature takes `param_type_spec` (ten
+  divergences from the oracle, eight closed by one function — a `fixed`-only
+  fix would have closed three) and a constant takes `const_type` (seven
+  shapes, one cause, two of seven). Both agents re-measured the neighbours of
+  the shape they were given, which is why the count is known at all.
+- **A record written by a script that fails is not a record.** A `python3 -
+  <<EOF` whose anchor has drifted exits non-zero, and the `git commit` on the
+  next line runs anyway: twice this release a records commit carried only part
+  of what its message claimed, and `records_keep_up.py` read eighteen commits
+  behind while the failure looked like a false alarm. Check the writer's exit
+  status before staging, and read the gate's complaint as true until measured
+  otherwise. The verdict line counts
   SKIPPED; prose after an `ok` is not counted and reads as coverage.
 
 ### Where a fact lives / 사실이 사는 곳
@@ -220,7 +234,7 @@ decisions being approved and work landing.
 ## Commands
 
 ```bash
-cargo test --workspace          # ~1440 tests across twelve crates
+cargo test --workspace          # ~1515 tests across twelve crates
 ./spikes/run_checks.sh          # the harness; exit code is the verdict, one run at a time
 ```
 

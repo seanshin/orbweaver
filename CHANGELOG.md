@@ -10,6 +10,57 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+_Nothing yet._
+
+---
+
+## v0.6.0 — 2026-08-20
+
+The release **the plan reviewed against the code** produced. Three reviewers
+read every remaining-work, status and risk row of `PLAN.md` §7–§12,
+`PLAN-SERVICES`, `PLAN-MOE`, `PLAN-DEFERRED` and D010 §5 against the tree and
+found progress wrong in **both directions**: nineteen rows understated what had
+landed, six overstated it, four named an instrument that did not exist, and six
+hand-typed numbers had gone stale within five days. Every section rewritten
+against the code that week was accurate; every section nobody had re-read since
+was not. The restatement is one commit; what it *found* is most of this release.
+
+Because the same reading turned up work nobody had asked for, five defects
+below were found by a batch sent after something else. **`sidl-validate
+--against` had never run the §5.3 comparison over a guarded multi-file
+contract** — the ordinary shape of a released one — and exited 1 anyway, so
+nothing looked wrong. **A `valuetype` and an abstract interface went on the
+wire as object references**, invisible for six phases because
+`tk_abstract_interface`'s parameter list is byte-for-byte `tk_objref`'s and
+nobody had asked omniORB what it writes. **`--repair-prompt` gave a model the
+wrong file's line number.** **A permanent forward moved one handle and not its
+clones**, costing a forward per call forever, silently, because §9.6 keeps the
+old address valid. And the front end diverged from the oracle in **both**
+directions on constants — seven shapes, one production.
+
+Twice the batch that was sent to fix a keyword found a production: a signature
+takes `param_type_spec` (ten divergences, eight closed by one function), and a
+constant takes `const_type` (seven shapes, one cause). Fixing the keyword each
+time would have closed three of ten and two of seven.
+
+Three decisions were written and none adopted: D011 (a control-plane event is
+not the D004 record, and the channel has nobody to redact for), D012 (the pool
+cannot hear a caller, and nothing outside tests needs it to yet), and D010's
+class-A rows all landed. Two counters were split because a trigger had no
+instrument, and one of those triggers turned out to be **circular** — CosEvent
+cannot report that fan-out was unwanted, because the filters that would know
+are what the deferred chapter would add.
+
+이번 릴리즈는 **계획서를 코드에 대조한 검토**가 만들었다. 검토는 진행률이
+**양방향으로** 틀렸음을 찾았다 — 19행 과소, 6행 과대, 계측기 이름 오류 4건,
+닷새 만에 낡은 손수치 6건. 그리고 그 읽기가 아무도 요청하지 않은 일을 드러냈다:
+**가드가 있는 다중 파일 계약에서 `--against`의 §5.3 비교가 한 번도 실행되지
+않았고**(종료 코드는 1이라 아무도 몰랐다), **valuetype과 추상 인터페이스가
+객체 참조로 와이어에 나갔으며**(여섯 페이즈 동안 보이지 않았다),
+**`--repair-prompt`가 모델에게 엉뚱한 파일의 줄을 주었고**, **영속 포워드가 한
+핸들만 옮겨** 매 호출마다 포워드 하나를 조용히 치렀다. 키워드를 고치라고 보낸
+배치가 두 번 모두 **프로덕션**을 찾았다.
+
 ### Decided / 결정
 
 - **D012 — a per-caller version cap on the pooled path** (**PROPOSED**, not
@@ -111,8 +162,6 @@ records what changed and, where it matters, what it changes on the wire.
   Python은 건너뛴 인터페이스의 `tk_objref`에 빈 이름을 쓴다; 파서는 omniidl이
   거부하는 맨 `fixed` 파라미터를 받는다.
 
-### Added / 추가
-
 - **The catalogue says, per peer, who enforces a caller identity.**
   `orbweaver-console catalog … --ior <file>` carries each reference's CSIv2
   capability record beside its interface — `enforces_identity`,
@@ -143,8 +192,6 @@ records what changed and, where it matters, what it changes on the wire.
   `connect_static`을 통해 채워진다** — `CallStats`는 `CallPath` 열을 가진 하나의
   저장소; gen-corpus I4 오라클의 로컬 `CallStats`는 사라졌다.
 
-### Added / 추가
-
 - **`idl-diff --approve` is now a record, not a printed line.** Each blocking
   finding accepted under `--approve <reason>` is appended to
   `<proposed>.approvals.tsv` (or `--approvals <file>`) with the two units'
@@ -167,8 +214,6 @@ records what changed and, where it matters, what it changes on the wire.
   바뀌면 행이 무효가 되어 다시 거부하며, 이름 없는 행이 있으면 저장소 전체를
   거부한다. 재실행 기록은 시각 열을 빼면 바이트까지 같다. 콘솔 `diff` 페이지는
   같은 저장소에서 누가·왜·언제를 그리고 결정하지 않는다.
-
-### Added / 추가
 
 - **SIDL v1 has a version constant.** `SIDL_VERSION = "1"` beside both
   vocabulary copies (forge S3, test S7), pinned equal across crates for the

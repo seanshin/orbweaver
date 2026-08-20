@@ -1,6 +1,6 @@
 # Component coverage — measured, not aspirational / 구성요소 커버리지 — 측정 기준
 
-Reviewed 2026-08-19 (v0.5.0) against the roster in README and PLAN §5/§6, and against D010's gap columns. "✅" means
+Reviewed 2026-08-20 (v0.6.0) against the roster in README and PLAN §5/§6, against D010's gap columns, and — since the plan review of 2026-08-19 — row by row against the code rather than against memory. "✅" means
 landed **and** exercised by the harness or tests named in a PHASE report;
 "◐" means partially landed with the missing half stated; "❌" means no code.
 Anything requiring a new dependency class needs a decision document first
