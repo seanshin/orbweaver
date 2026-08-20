@@ -44,6 +44,7 @@ use orbweaver_dynamic::{Value, encode};
 use orbweaver_gen::python::{descriptor, emit_python};
 use orbweaver_giop::typecode::Member;
 use orbweaver_giop::typecode::TypeCode;
+use orbweaver_giop::typecode::ValueMember;
 use orbweaver_giop::{IiopProfile, Ior, Version};
 use orbweaver_registry::{Entry, ParamDirection, Registry};
 
@@ -201,6 +202,44 @@ fn described() -> TypeCode {
     }
 }
 
+/// The TypeCode of a `valuetype` — `tk_value`, 29 — with the three slots the
+/// two implementations have to agree about beyond a struct's: the
+/// `ValueModifier`, a concrete base (absent is `tk_null` and not `tk_void`),
+/// and a per-member visibility.
+///
+/// §4.4 defers the *value*, not this. It is a TypeCode, a TypeCode is a value
+/// the v1 wire carries, and so it crosses inside an `any` like any other —
+/// which is exactly the thing the Python runtime had no reading half for.
+fn deferred_value() -> TypeCode {
+    TypeCode::Value {
+        id: "IDL:witness/Priced:1.0".into(),
+        name: "Priced".into(),
+        modifier: 0,
+        base: Some(Box::new(TypeCode::Value {
+            id: "IDL:witness/Money:1.0".into(),
+            name: "Money".into(),
+            modifier: 0,
+            base: None,
+            members: vec![
+                ValueMember { name: "currency".into(), tc: TypeCode::String(3), visibility: 1 },
+                ValueMember { name: "amount".into(), tc: TypeCode::LongLong, visibility: 0 },
+            ],
+        })),
+        members: vec![ValueMember { name: "sku".into(), tc: TypeCode::String(0), visibility: 1 }],
+    }
+}
+
+/// The TypeCode of an abstract interface — `tk_abstract_interface`, 32. An id
+/// and a name, like an object reference, and pointedly a different kind: on
+/// the wire it is the union of a value and a reference, so spelling it as a
+/// reference is the wrong answer rather than the deferred one.
+fn deferred_abstract() -> TypeCode {
+    TypeCode::AbstractInterface {
+        id: "IDL:witness/Describable:1.0".into(),
+        name: "Describable".into(),
+    }
+}
+
 fn described_value() -> Value {
     let any = |tc: TypeCode, v: Value| Value::Any(Box::new(tc), Box::new(v));
     Value::Struct(vec![
@@ -235,6 +274,15 @@ fn described_value() -> Value {
                     Value::List(vec![Value::Octet(1), Value::Octet(2)]),
                 ),
                 any(TypeCode::TypeCode, Value::TypeCode(Box::new(TypeCode::Long))),
+                // §4.4's two deferrals, as the only thing about them that
+                // crosses: their TypeCode. Both go through the whole loop —
+                // Rust writes the structural form, Python reads it, relays it
+                // and writes it back, Rust decodes it and re-encodes it in
+                // both byte orders — so `tk_value` and `tk_abstract_interface`
+                // are held to the same criterion as every other type here
+                // rather than being tested one implementation at a time.
+                any(TypeCode::TypeCode, Value::TypeCode(Box::new(deferred_value()))),
+                any(TypeCode::TypeCode, Value::TypeCode(Box::new(deferred_abstract()))),
                 any(TypeCode::Any, any(TypeCode::Double, Value::Double(2.5))),
             ]),
         ),
@@ -1161,6 +1209,182 @@ print("wrote it back")
     };
     let Value::Any(want, _) = &carried else { unreachable!() };
     assert_eq!(&tc, want, "the rebuilt TypeCode is the one that was described");
+}
+
+/// §4.4's two deferrals, peer-fed: the **description** is read, synthesised and
+/// written back byte-identically, and an **instance** is refused — on both
+/// sides of the mapping, with the section named.
+///
+/// The asymmetry is the point and is deliberate. A `valuetype`'s TypeCode is
+/// `tk_value` (29) and an abstract interface's is `tk_abstract_interface` (32);
+/// both are values the v1 wire carries, so a document describing one has to be
+/// readable by a reader that will never be able to instantiate it. Until this
+/// existed the Python runtime had no `_desc_of` arm for either form, so a
+/// peer-fed document carrying one was refused rather than read — and a *struct*
+/// with a valuetype member was unreadable in its entirety, for a member whose
+/// value was never going to be asked for.
+///
+/// What must never become symmetric: reading the description must not become
+/// permission to marshal the value. Both refusals are asserted here, in both
+/// directions, in both implementations, and they are held to the same sentence.
+#[test]
+fn a_peer_fed_deferral_is_described_read_and_written_back_but_never_instantiated() {
+    // A recursive valuetype as well as the sweep's two: `valuetype Node {
+    // public sequence<Node> kids; };` is where the indirection marker sits
+    // inside a kind Python had no class for, and it is the case that would
+    // have gone quietly wrong had the synthesised class been registered after
+    // its members were read rather than before.
+    let node_id = "IDL:elsewhere/Node:1.0";
+    let node = TypeCode::Value {
+        id: node_id.into(),
+        name: "Node".into(),
+        modifier: 1,
+        base: None,
+        members: vec![
+            ValueMember { name: "tag".into(), tc: TypeCode::String(0), visibility: 1 },
+            ValueMember {
+                name: "kids".into(),
+                tc: TypeCode::Sequence {
+                    element: Box::new(TypeCode::Recursive(node_id.into())),
+                    bound: 0,
+                },
+                visibility: 0,
+            },
+        ],
+    };
+    let cases: Vec<TypeCode> = vec![deferred_value(), deferred_abstract(), node];
+
+    let mut handles = LocalReferences::new();
+    let carried = Value::List(
+        cases
+            .iter()
+            .map(|tc| {
+                Value::Any(
+                    Box::new(TypeCode::TypeCode),
+                    Box::new(Value::TypeCode(Box::new(tc.clone()))),
+                )
+            })
+            .collect(),
+    );
+    let carrier = TypeCode::Sequence { element: Box::new(TypeCode::Any), bound: 0 };
+    let doc = anyjson::to_json(&carrier, &carried, &mut handles).expect("Rust writes it");
+
+    // ── the Rust half of the refusal ────────────────────────────────────────
+    // Stated here rather than only in `orbweaver-dynamic`'s own tests because
+    // what is being pinned is that the two implementations refuse the *same*
+    // thing — an instance, never a description — and that is a fact about the
+    // pair, which neither crate's tests can hold on its own.
+    for tc in &cases {
+        let mut e = Encoder::new(Endian::Little);
+        let why = orbweaver_dynamic::encode(&mut e, tc, &Value::Struct(Vec::new()))
+            .expect_err("an instance of a deferred type has no encoding");
+        assert!(why.message.contains("§4.4"), "Rust encode: {why}");
+        let mut d = orbweaver_cdr::Decoder::new(&[0u8; 16], Endian::Little);
+        let why = orbweaver_dynamic::decode(&mut d, tc)
+            .expect_err("an instance of a deferred type cannot be read");
+        assert!(why.message.contains("§4.4"), "Rust decode: {why}");
+    }
+
+    let script = r#"
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from deferred import _rt
+
+docs = json.loads(r'''__DOC__''')
+priced, describable, node = [_rt.from_json("any", d)[1] for d in docs]
+
+# ── read ────────────────────────────────────────────────────────────────────
+# A `tk_value` describes itself down to the modifier, the concrete base and
+# each member's visibility, and every one of those is a byte a peer compares.
+d = priced.descriptor()
+assert d == ("ref", "IDL:witness/Priced:1.0"), d
+Priced = _rt.TYPES["IDL:witness/Priced:1.0"]
+Money = _rt.TYPES["IDL:witness/Money:1.0"]
+assert issubclass(Priced, _rt.ValueType) and issubclass(Money, _rt.ValueType)
+assert not issubclass(Priced, _rt.Struct), "a valuetype is not a struct that happens to defer"
+assert Priced._idl_base == ("ref", "IDL:witness/Money:1.0"), Priced._idl_base
+assert Money._idl_base is None, "no concrete base is tk_null, not a base of type null"
+assert Money._idl_members == (("currency", ("string", 3), 1), ("amount", "longlong", 0)), \
+    Money._idl_members
+assert _rt.NAMES["IDL:witness/Money:1.0"] == "Money"
+
+da = describable.descriptor()
+assert da == ("abstract_interface", "IDL:witness/Describable:1.0"), da
+assert _rt.NAMES["IDL:witness/Describable:1.0"] == "Describable"
+
+# A valuetype whose member re-enters it: the class has to be registered before
+# its members are read, or the marker resolves to nothing.
+dn = node.descriptor()
+Node = _rt.TYPES["IDL:elsewhere/Node:1.0"]
+assert Node._idl_modifier == 1, "the ValueModifier is carried, not assumed"
+assert Node._idl_members[1] == ("kids", ("seq", ("ref", "IDL:elsewhere/Node:1.0"), 0), 0), \
+    Node._idl_members
+print("read:", Priced.__name__, Money.__name__, Node.__name__, da[0])
+
+# ── written back ────────────────────────────────────────────────────────────
+for tc, desc in ((priced, d), (describable, da), (node, dn)):
+    assert _rt.TypeCode.of(desc).form == tc.form, (desc, _rt.TypeCode.of(desc).form, tc.form)
+
+# ── and never instantiated ──────────────────────────────────────────────────
+# Both directions, both kinds, and the two sentences are the same sentence.
+seen = []
+for desc, what in ((d, "valuetype"), (da, "abstract interface"), (dn, "valuetype")):
+    for call in (lambda: _rt.to_json(desc, object()), lambda: _rt.from_json(desc, {})):
+        try:
+            call()
+            raise SystemExit("a value of a deferred type was marshalled: %r" % (desc,))
+        except _rt.MarshalError as e:
+            assert "docs/PLAN.md §4.4" in e.message, e.message
+            assert e.message.startswith(what + " "), e.message
+            seen.append(e.message)
+assert len(set(seen)) == 3, seen
+try:
+    Priced()
+    raise SystemExit("a valuetype was constructed")
+except _rt.MarshalError as e:
+    assert "§4.4" in e.message, e.message
+
+# The shape a peer actually sends when it sends the thing we cannot read: an
+# `any` whose `_t` IS the deferred type. Refused at the value, by name — not
+# at the type, which is what makes the description still readable.
+for form in (priced.form, describable.form):
+    try:
+        _rt.from_json("any", {"_t": form, "_v": {}})
+        raise SystemExit("an instance arrived and was accepted")
+    except _rt.MarshalError as e:
+        assert "docs/PLAN.md §4.4" in e.message, e.message
+print("refused:", seen[0])
+
+open(sys.argv[1] + "/back.json", "w").write(json.dumps(
+    [_rt.to_json("any", ("typecode", _rt.TypeCode.of(x))) for x in (d, da, dn)]))
+print("wrote it back")
+"#;
+    let text = doc.to_string();
+    assert!(!text.contains("'''"), "the document cannot be embedded verbatim: {text}");
+    let tmp = Path::new(env!("CARGO_TARGET_TMPDIR")).join("python-target/deferred");
+    let out = run_script(
+        "deferred",
+        "module deferred_m { interface Nothing {}; };",
+        &script.replace("__DOC__", &text),
+    );
+    assert!(out.contains("read: Priced Money Node abstract_interface"), "{out}");
+    assert!(out.contains("refused:"), "{out}");
+    assert!(out.contains("wrote it back"), "{out}");
+
+    // The §4.5 criterion, on what Python rebuilt from the descriptor rather
+    // than on what it relayed: the TypeCode has to come back the same value
+    // and the same bytes, in both byte orders.
+    let back = std::fs::read_to_string(tmp.join("back.json")).expect("back");
+    let back = Json::parse(&back).expect("json");
+    let after = anyjson::from_json(&carrier, &back, &handles)
+        .unwrap_or_else(|e| panic!("what Python produced is not a sequence<any>: {e}\n  {back}"));
+    same_bytes(&carrier, &carried, &after).unwrap_or_else(|why| panic!("{why}\n  {back}"));
+    let Value::List(items) = &after else { panic!("not a list") };
+    for (item, want) in items.iter().zip(&cases) {
+        let Value::Any(_, v) = item else { panic!("not an any") };
+        let Value::TypeCode(got) = &**v else { panic!("not a TypeCode") };
+        assert_eq!(&**got, want, "the TypeCode Python rebuilt is the one it was given");
+    }
 }
 
 /// A union's Python surface: `_d`/`_v`, the named branch accessors, and the
