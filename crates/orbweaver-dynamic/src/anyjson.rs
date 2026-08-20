@@ -36,7 +36,7 @@ use std::collections::BTreeMap;
 
 use orbweaver_cdr::{Decoder, Encoder, Endian};
 
-use orbweaver_giop::typecode::{Member, TypeCode, UnionCase};
+use orbweaver_giop::typecode::{Member, TypeCode, UnionCase, ValueMember};
 
 use crate::json::Json;
 use crate::{Error, Path, Result, Value};
@@ -630,6 +630,39 @@ pub fn tc_to_json(tc: &TypeCode) -> Json {
             ("scale", number(scale)),
         ]),
         TypeCode::ObjRef { id, name } => named("objref", id, name, vec![]),
+        // §4.4 defers the *value*, not its description. D008's rule is that a
+        // TypeCode is a value whose AnyJSON form is the structural one, and a
+        // form that stopped at the deferral would put a valuetype's TypeCode
+        // through the fallthrough below and render it as the string "void" —
+        // a silent wrong answer of exactly the kind the deferral was hiding
+        // in. The instance is still refused by `encode`/`decode`, by name.
+        TypeCode::AbstractInterface { id, name } => named("abstract_interface", id, name, vec![]),
+        TypeCode::Value { id, name, modifier, base, members } => named(
+            "value",
+            id,
+            name,
+            vec![
+                ("modifier", number(modifier)),
+                // Absence is JSON null, which is the document's spelling for
+                // the wire's `tk_null` in that slot.
+                ("base", base.as_ref().map_or(Json::Null, |b| tc_to_json(b))),
+                (
+                    "members",
+                    Json::Array(
+                        members
+                            .iter()
+                            .map(|m| {
+                                obj([
+                                    ("name", Json::String(m.name.clone())),
+                                    ("type", tc_to_json(&m.tc)),
+                                    ("visibility", number(m.visibility)),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ),
+            ],
+        ),
         TypeCode::Struct { id, name, members } => {
             named("struct", id, name, vec![("members", members_json(members))])
         }
@@ -736,6 +769,33 @@ pub fn tc_from_json(j: &Json, p: &str) -> Result<TypeCode> {
         },
         "fixed" => TypeCode::Fixed { digits: num(j, "digits", p)?, scale: num(j, "scale", p)? },
         "objref" => TypeCode::ObjRef { id: text(j, "id", p)?, name: text(j, "name", p)? },
+        "abstract_interface" => {
+            TypeCode::AbstractInterface { id: text(j, "id", p)?, name: text(j, "name", p)? }
+        }
+        "value" => TypeCode::Value {
+            id: text(j, "id", p)?,
+            name: text(j, "name", p)?,
+            modifier: num(j, "modifier", p)?,
+            base: match field(j, "base", p)? {
+                Json::Null => None,
+                other => Some(Box::new(tc_from_json(other, &member(p, "base"))?)),
+            },
+            members: match field(j, "members", p)? {
+                Json::Array(items) => items
+                    .iter()
+                    .enumerate()
+                    .map(|(i, m)| {
+                        let at = index(&member(p, "members"), i);
+                        Ok(ValueMember {
+                            name: text(m, "name", &at)?,
+                            tc: tc_from_json(field(m, "type", &at)?, &at)?,
+                            visibility: num(m, "visibility", &at)?,
+                        })
+                    })
+                    .collect::<Result<_>>()?,
+                other => return wrong(p, "an array of value members", other),
+            },
+        },
         "struct" => TypeCode::Struct {
             id: text(j, "id", p)?,
             name: text(j, "name", p)?,
@@ -967,7 +1027,7 @@ fn named_type(name: &str) -> Option<TypeCode> {
 mod tests {
     use super::*;
     use orbweaver_cdr::{Decoder, Encoder, Endian};
-    use orbweaver_giop::typecode::{Member, UnionCase};
+    use orbweaver_giop::typecode::{Member, UnionCase, ValueMember};
 
     /// The acceptance criterion from §8: the bytes must come back identical.
     /// Comparing `Value`s would miss an encoder that agrees with a decoder and
@@ -997,6 +1057,52 @@ mod tests {
         let bytes = e.finish().unwrap();
         let decoded = crate::decode(&mut Decoder::new(&bytes, Endian::Big), tc).unwrap();
         assert_eq!(&decoded, &back, "decode disagreed for {text}");
+    }
+
+    /// §4.4's two deferrals have a *description* that crosses, and no value
+    /// that does.
+    ///
+    /// D008's rule is that a TypeCode is a value whose AnyJSON form is the
+    /// structural one, and that has to hold for a type whose instances this
+    /// ORB will not marshal — otherwise a valuetype's TypeCode falls through
+    /// `tc_to_json`'s short-name arm and crosses as the string `"void"`, which
+    /// is a silent wrong answer rather than a refusal. The instance is refused
+    /// by `encode`, and `crate::tests` pins that with the section named.
+    #[test]
+    fn a_valuetype_typecode_crosses_structurally_even_though_its_value_cannot() {
+        let money = TypeCode::Value {
+            id: "IDL:m/Money:1.0".into(),
+            name: "Money".into(),
+            modifier: 0,
+            base: None,
+            members: vec![
+                ValueMember { name: "units".into(), tc: TypeCode::Long, visibility: 1 },
+                ValueMember { name: "note".into(), tc: TypeCode::String(0), visibility: 0 },
+            ],
+        };
+        let named = TypeCode::Value {
+            id: "IDL:m/Named:1.0".into(),
+            name: "Named".into(),
+            modifier: 2,
+            base: Some(Box::new(money.clone())),
+            members: vec![ValueMember {
+                name: "label".into(),
+                tc: TypeCode::String(4),
+                visibility: 1,
+            }],
+        };
+        let abstract_iface =
+            TypeCode::AbstractInterface { id: "IDL:m/D:1.0".into(), name: "D".into() };
+        for tc in [&money, &named, &abstract_iface] {
+            let doc = tc_to_json(tc);
+            let text = doc.to_string();
+            assert!(!text.contains("\"void\""), "rendered as void: {text}");
+            let back = tc_from_json(&Json::parse(&text).expect("parses"), "").expect("reads back");
+            assert_eq!(&back, tc, "{text}");
+        }
+        // And the visibility short is carried, not normalised: a private
+        // member read from a peer must come back private.
+        assert!(tc_to_json(&money).to_string().contains("\"visibility\":0"));
     }
 
     #[test]

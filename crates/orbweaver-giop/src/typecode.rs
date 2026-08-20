@@ -69,6 +69,21 @@ pub enum TcKind {
     WChar = 26,
     WString = 27,
     Fixed = 28,
+    /// `tk_value`. Measured, not read off the table: omniORB 4.3.4 writes 29
+    /// for `valuetype V { public long x; };` — see
+    /// `tests/valuetype_typecode_from_a_peer.rs`.
+    Value = 29,
+    /// `tk_abstract_interface`. Measured the same way: 32, and its parameter
+    /// list is `tk_objref`'s — repository id and name, nothing else.
+    ///
+    /// 30 (`tk_value_box`), 31 (`tk_native`) and 33 (`tk_local_interface`) sit
+    /// between them and are deliberately absent: nothing in this project
+    /// produces or has been shown one, and an ordinal we have never seen a
+    /// peer write is a guess. [`TcKind::from_u32`] answers `None` for them,
+    /// which the decoder reports as "unknown or unsupported TCKind" — a
+    /// refusal that names itself, rather than a variant that would be decoded
+    /// wrong.
+    AbstractInterface = 32,
 }
 
 impl TcKind {
@@ -103,6 +118,8 @@ impl TcKind {
             26 => TcKind::WChar,
             27 => TcKind::WString,
             28 => TcKind::Fixed,
+            29 => TcKind::Value,
+            32 => TcKind::AbstractInterface,
             _ => return None,
         })
     }
@@ -115,6 +132,24 @@ pub struct Member {
     pub name: String,
     /// Member type.
     pub tc: TypeCode,
+}
+
+/// A state member of a `valuetype`.
+///
+/// Separate from [`Member`] because a value member carries a third field the
+/// wire requires — the visibility short — and folding it into `Member` would
+/// have put a field on every struct member that only one kind can answer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValueMember {
+    /// Member name as written in IDL.
+    pub name: String,
+    /// Member type.
+    pub tc: TypeCode,
+    /// `PRIVATE_MEMBER` (0) or `PUBLIC_MEMBER` (1) — CORBA 3.4 Part 2,
+    /// Table 9.2. Kept as the wire short rather than a `bool`, because the
+    /// value is read from a peer and an unknown one must survive a round trip
+    /// rather than be normalised to one of two guesses.
+    pub visibility: i16,
 }
 
 /// A union branch.
@@ -197,6 +232,46 @@ pub enum TypeCode {
         name: String,
         members: Vec<Member>,
     },
+    /// A `valuetype`: state marshalled **inline**, not as a reference.
+    ///
+    /// This variant exists to make a wrong answer impossible rather than to
+    /// enable a feature. Until it did, the registry recorded a `valuetype` as
+    /// [`TypeCode::ObjRef`] "so `_is_a` and the catalogue keep working", and
+    /// the cost was that both emitters generated a *reference* for
+    /// `gc20::Wallet::balance()` where a conformant peer sends a value —
+    /// deferred work reported as finished work. `docs/PLAN.md` §4.4 defers the
+    /// **value's** marshalling, and describing a type is not marshalling one:
+    /// this `TypeCode` encodes and decodes (a peer's `any` naming a valuetype
+    /// is readable, an IFR can hold it, the catalogue can draw it) while
+    /// `orbweaver-dynamic` refuses to marshal an instance and both emitters
+    /// skip it, exactly as they do `fixed`.
+    Value {
+        /// Repository id.
+        id: String,
+        /// IDL name.
+        name: String,
+        /// `ValueModifier`: `VM_NONE` 0, `VM_CUSTOM` 1, `VM_ABSTRACT` 2,
+        /// `VM_TRUNCATABLE` 3.
+        modifier: i16,
+        /// The concrete base value type, or `None`. On the wire the absence is
+        /// `tk_null`, which is what omniORB 4.3.4 writes and what we write.
+        base: Option<Box<TypeCode>>,
+        /// State members, in declaration order — which is wire order.
+        members: Vec<ValueMember>,
+    },
+    /// An `abstract interface`: on the wire a union of a value and a
+    /// reference, and so neither.
+    ///
+    /// Same argument as [`TypeCode::Value`], and the same parameter list as
+    /// [`TypeCode::ObjRef`] — which is exactly why recording one as the other
+    /// went unnoticed: the bytes of the *TypeCode* differ only in the kind
+    /// ordinal, while the bytes of a *value* differ completely.
+    AbstractInterface {
+        /// Repository id.
+        id: String,
+        /// IDL name.
+        name: String,
+    },
     /// A reference back to an enclosing type, produced by an indirection that
     /// pointed at a `TypeCode` still being decoded.
     ///
@@ -241,6 +316,8 @@ impl TypeCode {
             TypeCode::Array { .. } => TcKind::Array,
             TypeCode::Alias { .. } => TcKind::Alias,
             TypeCode::Except { .. } => TcKind::Except,
+            TypeCode::Value { .. } => TcKind::Value,
+            TypeCode::AbstractInterface { .. } => TcKind::AbstractInterface,
             TypeCode::Recursive(_) => return None,
         })
     }
@@ -253,7 +330,9 @@ impl TypeCode {
             | TypeCode::Union { id, .. }
             | TypeCode::Enum { id, .. }
             | TypeCode::Alias { id, .. }
-            | TypeCode::Except { id, .. } => Some(id),
+            | TypeCode::Except { id, .. }
+            | TypeCode::Value { id, .. }
+            | TypeCode::AbstractInterface { id, .. } => Some(id),
             TypeCode::Recursive(id) => Some(id),
             _ => None,
         }
@@ -357,9 +436,26 @@ fn encode_inner(
         _ => {
             let (len_at, saved_origin) = encapsulation_begin(e);
             match tc {
-                TypeCode::ObjRef { id, name } => {
+                TypeCode::ObjRef { id, name } | TypeCode::AbstractInterface { id, name } => {
                     e.put_str(id);
                     e.put_str(name);
+                }
+                TypeCode::Value { id, name, modifier, base, members } => {
+                    e.put_str(id);
+                    e.put_str(name);
+                    e.put_i16(*modifier);
+                    // Absence is `tk_null`, measured: omniORB writes kind 0
+                    // for a valuetype with no concrete base.
+                    match base {
+                        Some(b) => encode_inner(e, b, seen, depth + 1)?,
+                        None => encode_inner(e, &TypeCode::Null, seen, depth + 1)?,
+                    }
+                    e.put_u32(members.len() as u32);
+                    for m in members {
+                        e.put_str(&m.name);
+                        encode_inner(e, &m.tc, seen, depth + 1)?;
+                        e.put_i16(m.visibility);
+                    }
                 }
                 TypeCode::Struct { id, name, members } | TypeCode::Except { id, name, members } => {
                     e.put_str(id);
@@ -588,6 +684,35 @@ fn decode_complex(
     let out = (|| -> Result<TypeCode> {
         Ok(match kind {
             TcKind::ObjRef => TypeCode::ObjRef { id: get_string(d)?, name: get_string(d)? },
+            TcKind::AbstractInterface => {
+                TypeCode::AbstractInterface { id: get_string(d)?, name: get_string(d)? }
+            }
+            TcKind::Value => {
+                let id = get_string(d)?;
+                let name = get_string(d)?;
+                // Registered before the body is read, exactly as struct and
+                // union do: a valuetype whose member is a sequence of itself
+                // points an indirection back here.
+                open.insert(start, id.clone());
+                let modifier = d.get_i16()?;
+                let base = match decode_inner(d, open, done, depth + 1)? {
+                    // `tk_null` is "no concrete base", not a base of type
+                    // null — the one place in Table 9.2 where a TypeCode slot
+                    // is an optional rather than a type.
+                    TypeCode::Null => None,
+                    other => Some(Box::new(other)),
+                };
+                let n = d.get_u32()?;
+                let n = d.validate_count(n, 5)?;
+                let mut members = Vec::with_capacity(n);
+                for _ in 0..n {
+                    let mname = get_string(d)?;
+                    let tc = decode_inner(d, open, done, depth + 1)?;
+                    members.push(ValueMember { name: mname, tc, visibility: d.get_i16()? });
+                }
+                open.remove(&start);
+                TypeCode::Value { id, name, modifier, base, members }
+            }
             TcKind::Struct | TcKind::Except => {
                 let id = get_string(d)?;
                 let name = get_string(d)?;

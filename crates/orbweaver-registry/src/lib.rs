@@ -51,7 +51,9 @@ pub mod ingest;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
-use orbweaver_giop::typecode::{Member as TcMember, TypeCode, UnionCase as TcUnionCase};
+use orbweaver_giop::typecode::{
+    Member as TcMember, TypeCode, UnionCase as TcUnionCase, ValueMember as TcValueMember,
+};
 use orbweaver_idl::ast::*;
 use orbweaver_idl::include::{SearchPath, Unit, preprocess_file};
 use orbweaver_idl::sema::Diagnostic;
@@ -162,6 +164,21 @@ pub struct InterfaceEntry {
     pub attributes: BTreeMap<String, AttributeSig>,
     /// Whether only a forward declaration was seen.
     pub forward_only: bool,
+    /// Whether it was declared `abstract interface`.
+    ///
+    /// Recorded here and not left to be inferred from the `TypeCode`, because
+    /// an interface's own entry is an [`Entry::Interface`] and has no
+    /// `TypeCode` to inspect: a consumer asking "may I generate a stub for
+    /// this?" reaches the entry, not the reference. `docs/PLAN.md` §4.4 defers
+    /// abstract interfaces from the v1 wire, and until this field existed the
+    /// generators had no way to tell one from a plain interface and emitted a
+    /// stub for `gc20::Describable` that a peer would never answer.
+    ///
+    /// Not set by [`Registry::define_ingested`]'s callers: the Interface
+    /// Repository's `FullInterfaceDescription` does not carry it, so an
+    /// ingested interface is `false` — "not known to be abstract", which is
+    /// what a remote IFR can honestly tell us.
+    pub abstract_interface: bool,
 }
 
 /// A reference the registry could not resolve to a registered id, kept rather
@@ -810,10 +827,27 @@ enum DefRef {
     Typedef(Typedef),
     /// Matched for its kind only: an interface's TypeCode is an object
     /// reference built from the repository id, with no body to consult.
-    Interface,
-    /// Neither is marshalled in v1 (PLAN §4.4).
-    ValueType,
-    /// Likewise.
+    ///
+    /// `abstract` is carried because it changes the *kind*, not the body: a
+    /// plain interface is `tk_objref` and an `abstract interface` is
+    /// `tk_abstract_interface` (32, measured from omniORB — see
+    /// `orbweaver-giop/tests/valuetype_typecode_from_a_peer.rs`). Their
+    /// parameter lists are identical, which is exactly why recording one as
+    /// the other cost nothing at the TypeCode and everything at the value.
+    Interface {
+        is_abstract: bool,
+    },
+    /// Kept whole, because a `valuetype`'s TypeCode has a body: modifier,
+    /// concrete base and state members with their visibility.
+    ///
+    /// It used to be a bare marker mapped to `TypeCode::ObjRef`. See
+    /// [`TypeCode::Value`] for what that cost.
+    ValueType(Box<ValueTypeDef>),
+    /// `native X;` — not marshalled either, and *not* on §4.4's list, which
+    /// names `valuetype`, abstract interfaces and `fixed`. Still recorded as
+    /// an object reference, still wrong for the same reason, and left alone
+    /// deliberately: no rule names it, so a change here would be a claim no
+    /// gate checks. Reported, not fixed.
     Native,
 }
 
@@ -829,7 +863,8 @@ impl NameTable {
                 Definition::Interface(i) => {
                     // A body replaces a forward declaration.
                     if i.body.is_some() || !self.defs.contains_key(&key) {
-                        self.defs.insert(key.clone(), DefRef::Interface);
+                        let is_abstract = matches!(i.modifier, Some(InterfaceModifier::Abstract));
+                        self.defs.insert(key.clone(), DefRef::Interface { is_abstract });
                     }
                     if let Some(body) = &i.body {
                         // A forward declaration carries no bases, so only a
@@ -875,8 +910,13 @@ impl NameTable {
                 Definition::Typedef(t) => {
                     self.defs.insert(key, DefRef::Typedef(t.clone()));
                 }
-                Definition::ValueType(_) => {
-                    self.defs.insert(key, DefRef::ValueType);
+                Definition::ValueType(v) => {
+                    // A body replaces a forward declaration, as for interfaces:
+                    // `valuetype V;` ahead of `valuetype V { … };` must not
+                    // erase the members.
+                    if v.members.is_some() || !self.defs.contains_key(&key) {
+                        self.defs.insert(key, DefRef::ValueType(Box::new(v.clone())));
+                    }
                 }
                 Definition::Native(_) => {
                     self.defs.insert(key, DefRef::Native);
@@ -1186,8 +1226,14 @@ impl Builder<'_> {
                 }
             })
             .collect();
+        let abstract_interface = matches!(i.modifier, Some(InterfaceModifier::Abstract));
         let Some(body) = &i.body else {
-            return InterfaceEntry { bases, forward_only: true, ..InterfaceEntry::default() };
+            return InterfaceEntry {
+                bases,
+                forward_only: true,
+                abstract_interface,
+                ..InterfaceEntry::default()
+            };
         };
         let mut operations = BTreeMap::new();
         let mut attributes = BTreeMap::new();
@@ -1243,7 +1289,7 @@ impl Builder<'_> {
                 InterfaceMember::Nested(_) => {}
             }
         }
-        InterfaceEntry { bases, operations, attributes, forward_only: false }
+        InterfaceEntry { bases, operations, attributes, forward_only: false, abstract_interface }
     }
 
     /// Derives the `TypeCode` of the definition at `path`.
@@ -1345,11 +1391,61 @@ impl Builder<'_> {
                     cases,
                 }
             }
-            DefRef::Interface => TypeCode::ObjRef { id: id.clone(), name },
-            DefRef::ValueType | DefRef::Native => {
-                // Neither is marshalled in v1 (PLAN §4.4). Registering the name
-                // as an object reference keeps `_is_a` and catalogue lookups
-                // working without implying a wire form we do not have.
+            DefRef::Interface { is_abstract: false } => TypeCode::ObjRef { id: id.clone(), name },
+            DefRef::Interface { is_abstract: true } => {
+                TypeCode::AbstractInterface { id: id.clone(), name }
+            }
+            DefRef::ValueType(v) => {
+                // Described, not marshalled. §4.4 defers the *value's* wire
+                // form; this is the type's description, and the two are not
+                // the same claim — see [`TypeCode::Value`] for why saying
+                // `ObjRef` here was a wrong answer rather than a deferred one.
+                //
+                // The base is resolved through the same name table every other
+                // reference uses, so a base declared later in the file is
+                // found; a base that does not resolve is recorded as
+                // unresolved and dropped from the TypeCode rather than
+                // invented, which is the rule [`Unresolved`] states.
+                let base = v.base.as_ref().and_then(|b| match self.names.resolve(scope, b) {
+                    Some(p) => self.derive(&p).map(Box::new),
+                    None => {
+                        self.note_unresolved(&qualified(path), UnresolvedKind::Base, b);
+                        None
+                    }
+                });
+                // VM_ABSTRACT is 2; VM_NONE is 0. `custom` and `truncatable`
+                // are not in the front end's AST, so they are not invented
+                // here — a modifier we cannot see is VM_NONE, and a contract
+                // using one would be reported by the front end first.
+                let modifier = if v.is_abstract { 2 } else { 0 };
+                let members = v
+                    .members
+                    .as_deref()
+                    .unwrap_or(&[])
+                    .iter()
+                    .flat_map(|m| match m {
+                        ValueMember::State { public, member } => {
+                            let tc = self.type_of(path, &member.ty);
+                            member
+                                .names
+                                .iter()
+                                .map(|n| TcValueMember {
+                                    name: n.text.clone(),
+                                    tc: tc.clone(),
+                                    // PUBLIC_MEMBER 1, PRIVATE_MEMBER 0.
+                                    visibility: i16::from(*public),
+                                })
+                                .collect::<Vec<_>>()
+                        }
+                        // Operations, attributes and nested definitions are not
+                        // state and do not appear in a tk_value's member list.
+                        _ => Vec::new(),
+                    })
+                    .collect();
+                TypeCode::Value { id: id.clone(), name, modifier, base, members }
+            }
+            DefRef::Native => {
+                // Not §4.4's list; see [`DefRef::Native`].
                 TypeCode::ObjRef { id: id.clone(), name }
             }
         };

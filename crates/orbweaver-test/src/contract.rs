@@ -941,6 +941,7 @@ mod tests {
             operations: BTreeMap::from([("settle".to_owned(), sig)]),
             attributes: BTreeMap::new(),
             forward_only: false,
+            abstract_interface: false,
         });
         let mut r = Registry::new();
         r.define_ingested("IDL:remote/Ledger:1.0".to_owned(), entry, "a foreign IR")

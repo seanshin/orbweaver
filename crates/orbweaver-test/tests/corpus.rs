@@ -118,22 +118,31 @@ fn the_coverage_gaps_over_the_corpus_are_the_known_ones() {
     // `corpus/golden/deferred-reach.idl` (2026-08-19) added five: every way a
     // declaration reaches `fixed` without naming it — an exception, a union
     // whose branches are all `fixed`, an array typedef and the struct holding
-    // it, an attribute's typedef. Acknowledged here, as this list asks; the
-    // same five are the `wire/deferred-type` findings S4 now reports for that
-    // file, minus the interfaces (no `TypeCode`) and the valuetype side (which
-    // the registry records as a reference and this leg therefore *does* run,
-    // as a reference — a measurement of the wrong wire form, recorded in the
-    // batch that added the file).
+    // it, an attribute's typedef. Acknowledged here, as this list asks.
+    //
+    // 2026-08-20 added five more, and they are the interesting half. The
+    // valuetype side used to be *absent* from this list, and not because it
+    // crossed: the registry recorded a `valuetype` and an abstract interface
+    // as `TypeCode::ObjRef`, so this leg ran for them — as a reference. A
+    // measurement of the wrong wire form counted as coverage. The registry now
+    // records `TypeCode::Value` and `TypeCode::AbstractInterface`, the mapping
+    // has no form for either, and the four valuetypes plus the struct holding
+    // an abstract interface say so here instead of passing quietly.
     assert_eq!(
         unmapped,
         [
+            "IDL:gc20/Money:1.0",
+            "IDL:gc20/Named:1.0",
             "IDL:gc21/Amount:1.0",
             "IDL:gc21/Invoice:1.0",
             "IDL:gcdr/Column:1.0",
             "IDL:gcdr/Ledger:1.0",
+            "IDL:gcdr/Memo:1.0",
+            "IDL:gcdr/Note:1.0",
             "IDL:gcdr/Overdrawn:1.0",
             "IDL:gcdr/Payment:1.0",
             "IDL:gcdr/Rate:1.0",
+            "IDL:gcdr/Tagged:1.0",
         ],
         "the set of types the JSON leg does not run for changed:\n  {}",
         gaps.iter()
