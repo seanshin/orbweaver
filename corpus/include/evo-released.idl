@@ -1,0 +1,38 @@
+// ---------------------------------------------------------------------------
+// The released root of the §5.3 `--against` pair: the file a caller points
+// `sidl-validate --against` at, whose interesting content is one file away.
+//
+// `evo-proposed.idl` is this file with one character group changed — the name
+// in its `#include` — and nothing else.  That is the shape being pinned:
+//
+//   sidl-validate --against evo-released.idl evo-proposed.idl
+//     must report  evolution/BREAKING  Depot::OrderLine  member "bay" removed
+//
+// It used to report an `unsupported-directive` error about `#ifndef` on line 1
+// of a header, because the comparison was handed the SPLICED TEXT of the
+// resolved unit rather than the unit: re-preprocessing a splice sees the
+// guards of every file it contains, and a guard that is not the first
+// directive of the text it is in is conditional compilation.  The §5.3
+// comparison therefore never ran on any guarded multi-file contract — an
+// unmeasured check reported as a refusal.
+//
+// 이 루트와 `evo-proposed.idl`은 `#include` 대상 이름 하나만 다르다.  변경은
+// 헤더 안에 있고, 비교는 스플라이스된 텍스트가 아니라 유닛끼리 이루어져야 한다.
+// ---------------------------------------------------------------------------
+#ifndef _OW_EVO_RELEASED_IDL_
+#define _OW_EVO_RELEASED_IDL_
+
+#include "evo-shared.idl"
+
+#pragma prefix "depot.example"
+
+module Depot {
+    //@ ai_desc: Reads picking orders out of the depot
+    interface Picker {
+        //@ ai_desc: The line an order was written against
+        //@ ai_effect: read_only
+        OrderLine line_of(in string order_ref);
+    };
+};
+
+#endif // _OW_EVO_RELEASED_IDL_

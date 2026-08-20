@@ -1,0 +1,32 @@
+// ---------------------------------------------------------------------------
+// The released half of the §5.3 `--against` pair, and the file the change is
+// actually in.  Guarded, prefixed, and included by `evo-released.idl`.
+//
+// A contract in the field is a directory, so the type a peer marshals is
+// usually declared in a header rather than in the root file somebody points
+// the validator at.  This is that header at the released revision;
+// `evo-shared-narrowed.idl` is the same header one member shorter.  Neither
+// root file differs from the other by a single character of its own text, so
+// a comparison that reads only the roots reports nothing at all.
+//
+// 계약은 디렉터리다.  피어가 마샬링하는 타입은 루트가 아니라 헤더에 있다.
+// 이 파일이 릴리스된 헤더이고, 변경은 여기서 일어난다.
+// ---------------------------------------------------------------------------
+#ifndef _OW_EVO_SHARED_IDL_
+#define _OW_EVO_SHARED_IDL_
+
+#pragma prefix "depot.example"
+
+module Depot {
+    //@ ai_desc: One line of a picking order
+    struct OrderLine {
+        //@ ai_desc: The stock-keeping unit
+        string sku;
+        //@ ai_desc: How many of it
+        unsigned long count;
+        //@ ai_desc: Where in the depot it is picked from
+        string bay;
+    };
+};
+
+#endif // _OW_EVO_SHARED_IDL_

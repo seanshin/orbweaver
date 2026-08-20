@@ -1,0 +1,29 @@
+// ---------------------------------------------------------------------------
+// The proposed root: `evo-released.idl` with its `#include` pointed at the
+// narrowed header, and not one other character changed.
+//
+// Diff the two roots and the only line that moves is the `#include`.  The
+// breaking change is `bay`, a member of a struct declared in a file neither
+// root mentions by name.  A §5.3 comparison that resolved neither side, or
+// only one, would call this pair compatible.
+//
+// 두 루트의 차이는 `#include` 한 줄뿐이다.  파괴적 변경은 어느 루트도
+// 이름으로 언급하지 않는 파일 안에 있다.
+// ---------------------------------------------------------------------------
+#ifndef _OW_EVO_RELEASED_IDL_
+#define _OW_EVO_RELEASED_IDL_
+
+#include "evo-shared-narrowed.idl"
+
+#pragma prefix "depot.example"
+
+module Depot {
+    //@ ai_desc: Reads picking orders out of the depot
+    interface Picker {
+        //@ ai_desc: The line an order was written against
+        //@ ai_effect: read_only
+        OrderLine line_of(in string order_ref);
+    };
+};
+
+#endif // _OW_EVO_RELEASED_IDL_

@@ -530,25 +530,66 @@ pub fn validate_source_against_for(
     wire: WireGate,
 ) -> Report {
     let unit = orbweaver_idl::preprocess(proposed.text, proposed.origin, search);
-    let mut report = validate_unit_for(&unit, wire);
+    let released_unit = orbweaver_idl::preprocess(released.text, released.origin, search);
+    let mut report = validate_unit_against_for(&unit, &released_unit, wire);
     locate_findings(&mut report, &unit);
+    report
+}
+
+/// The §5.3 comparison over two **already-resolved** translation units.
+///
+/// The unit form exists for the same reason [`validate_unit`] does, and it is
+/// the same defect one comparison later. A caller that has resolved both sides
+/// — `sidl-validate --against` had, twice, for its own error reporting — used
+/// to hand the two [`Unit::text`](orbweaver_idl::include::Unit)s back to
+/// [`validate_against`], which preprocessed each *splice* a second time. A
+/// splice is not a file: it holds the `#ifndef` of every file it contains, and
+/// a guard that is not the first directive of the text it sits in is
+/// conditional compilation, which this front end refuses on purpose. So a
+/// guarded multi-file contract — the ordinary shape of a released contract —
+/// was refused with `unsupported-directive` on a header's line 1 and the §5.3
+/// comparison never ran at all.
+///
+/// Positions are **not** mapped here, exactly as [`validate_unit_for`] does not
+/// map them: the caller holds the unit that does the mapping and there must not
+/// be two conventions for who owns a position. [`validate_source_against_for`]
+/// resolves both sides and then maps; a caller passing units maps with
+/// [`Unit::locate`](orbweaver_idl::include::Unit::locate) itself.
+///
+/// The gate applies to the *proposal* only, as in
+/// [`validate_source_against_for`].
+///
+/// *스플라이스는 파일이 아니다. 이미 해석된 쪽은 유닛끼리 비교한다.*
+pub fn validate_unit_against(
+    proposed: &orbweaver_idl::include::Unit,
+    released: &orbweaver_idl::include::Unit,
+) -> Report {
+    validate_unit_against_for(proposed, released, WireGate::Deferred)
+}
+
+/// [`validate_unit_against`], judging for a chosen wire — see [`WireGate`].
+pub fn validate_unit_against_for(
+    proposed: &orbweaver_idl::include::Unit,
+    released: &orbweaver_idl::include::Unit,
+    wire: WireGate,
+) -> Report {
+    let mut report = validate_unit_for(proposed, wire);
     if !report.is_ok() {
         return report;
     }
-    let released_unit = orbweaver_idl::preprocess(released.text, released.origin, search);
-    let old_spec = match orbweaver_idl::check_unit(&released_unit) {
+    let old_spec = match orbweaver_idl::check_unit(released) {
         Ok(spec) => spec,
         Err(diags) => {
             let why = diags
                 .first()
-                .map(|d| released_unit.render(d))
+                .map(|d| released.render(d))
                 .unwrap_or_else(|| "it did not check out".to_owned());
             return never_compared(report, why);
         }
     };
     // `report.is_ok()` above means the proposal already checked out; matched
     // rather than unwrapped so a future divergence is a finding, not a panic.
-    let Ok(new_spec) = orbweaver_idl::check_unit(&unit) else {
+    let Ok(new_spec) = orbweaver_idl::check_unit(proposed) else {
         return never_compared(report, "the proposal stopped checking out".to_owned());
     };
     let (mut old, mut new) = (Registry::new(), Registry::new());

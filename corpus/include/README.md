@@ -135,6 +135,41 @@ end on the **root**, never one of them on the other's splice.
 > 아니라 단순 이어붙이기를 측정하게 된다. 두 front end는 각각 **루트**에 대해
 > 돌려서 비교한다.
 
+## The `evo-*` files: a §5.3 comparison where the change is in a header
+
+`sidl-validate --against <released> <proposed>` asks whether a proposal may
+ship. Every pair it had ever been given was **two single files**, which is the
+same structural blindness as the rest of this page one tool over: a contract in
+the field is a directory, so the type a peer marshals is usually declared in a
+header and not in the root somebody points the validator at.
+
+`evo-released.idl` and `evo-proposed.idl` (2026-08-20) differ in **the name
+inside their `#include` and nothing else**; the breaking change — a struct
+member removed — is in `evo-shared.idl` / `evo-shared-narrowed.idl`, files
+neither root mentions. Both roots and both headers are guarded and prefixed,
+because that is the shape that was refused: the command resolved both sides and
+then handed the two **splices** back to a string entry point, which
+preprocessed each of them a second time and read the headers' `#ifndef` — no
+longer the first directive of the text it sat in — as conditional compilation.
+So over any guarded multi-file contract the §5.3 comparison did not run; it was
+refused with `unsupported-directive` at a header's line 1. An unmeasured check,
+reported as a refusal.
+
+`cases.tsv` files each of the four as a root and says why the *pair* cannot be
+a row: the row shape has no column for a baseline, and the manifest's gate
+lives in `orbweaver-idl` while the comparison lives in `orbweaver-forge`, which
+depends on it. The pair is gated by
+`crates/orbweaver-forge/tests/include_origin.rs`, which runs the real binary
+over these paths.
+
+> `--against`에 주어진 쌍은 늘 **단일 파일 두 개**였다. 현장의 계약은 디렉터리이고
+> 피어가 마샬링하는 타입은 대개 헤더에 있다. `evo-released.idl`과
+> `evo-proposed.idl`은 `#include` 대상 이름 하나만 다르며, 파괴적 변경은 어느
+> 루트도 언급하지 않는 헤더 안에 있다. 넷 다 가드가 있는데, 그것이 바로 거부되던
+> 모양이다 — 해석된 **스플라이스**를 문자열 진입점에 되돌려 주면 두 번 전처리되고
+> 헤더의 `#ifndef`가 조건부 컴파일로 읽힌다. 쌍 자체는 매니페스트가 표현할 수
+> 없으므로 forge 쪽 테스트가 실제 바이너리로 게이트한다.
+
 ## The two deliberate divergences
 
 Both are in `cases.tsv` with their reasons, and they point in opposite

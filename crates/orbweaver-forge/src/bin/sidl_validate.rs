@@ -15,6 +15,15 @@
 //! reported against the file the line was written in, never against the
 //! spliced unit, because nobody has that file to open.
 //!
+//! `--against` resolves **both** contracts and compares the two resolved
+//! units. It used to resolve both and then hand the two splices back to a
+//! string entry point, which preprocessed each of them a second time — and a
+//! splice carries the `#ifndef` of every header inside it, which the second
+//! pass reads as conditional compilation. So the §5.3 comparison over a
+//! guarded multi-file contract never ran; it was refused with
+//! `unsupported-directive` at a header's line 1. *비교는 스플라이스가 아니라
+//! 유닛끼리 한다.*
+//!
 //! Exit status: 0 clean, 1 rejected, 2 could not run. Advice and warnings do
 //! not fail the run — a gate that blocks on advice is one people route around,
 //! and then it blocks nothing.
@@ -27,7 +36,7 @@
 //! two defaults differ.
 
 use orbweaver_dynamic::json::Json;
-use orbweaver_forge::{Report, Severity, WireGate, validate_against_for, validate_unit_for};
+use orbweaver_forge::{Report, Severity, WireGate, validate_unit_against_for, validate_unit_for};
 use orbweaver_idl::include::{SearchPath, Unit, preprocess_file};
 
 fn main() -> std::process::ExitCode {
@@ -97,9 +106,16 @@ fn main() -> std::process::ExitCode {
     // proposal with an unresolved baseline reports every name the baseline's
     // headers declared as newly added. Read as a string it was the one file in
     // this tool that `#include` resolution had not reached.
+    //
+    // The `Unit` is kept, not its `.text`: handing the splice back to a
+    // string entry point preprocesses it a second time, and the second pass
+    // sees the `#ifndef` of every header the first pass spliced in. A guard
+    // that is not the first directive of the text it sits in is conditional
+    // compilation, which this front end refuses — so every guarded
+    // multi-file contract was refused here and the §5.3 comparison never ran.
     let baseline = match against.as_deref() {
         Some(path) => match preprocess_file(std::path::Path::new(path), &search) {
-            Ok(u) if u.is_ok() => Some(u.text),
+            Ok(u) if u.is_ok() => Some(u),
             Ok(u) => {
                 for d in &u.errors {
                     eprintln!("{}", u.render(d));
@@ -140,11 +156,13 @@ fn main() -> std::process::ExitCode {
         for a in &unit.advice {
             println!("advice: {}", unit.render(a));
         }
-        // The unit, not its text: the guard directives of every included file
-        // are still in there, and four `#ifndef` blocks in one string is
-        // conditional compilation rather than an include guard.
+        // The unit, not its text — on both sides of the comparison. The guard
+        // directives of every included file are still in the splice, and four
+        // `#ifndef` blocks in one string is conditional compilation rather than
+        // an include guard. Neither entry point maps positions, which is what
+        // lets the one printer below do it for both.
         let report = match &baseline {
-            Some(b) => validate_against_for(&unit.text, b, wire),
+            Some(b) => validate_unit_against_for(&unit, b, wire),
             None => validate_unit_for(&unit, wire),
         };
         if !report.is_ok() {
