@@ -338,6 +338,51 @@ fn wrong_kind<T>(p: &Path<'_>, tc: &TypeCode, value: &Value) -> Result<T> {
     p.fail(format!("expected a value of type {}, got {}", describe(tc), kind_of(value)))
 }
 
+/// How a construct `docs/PLAN.md` §4.4 defers is named in a refusal, or `None`
+/// for a type the v1 wire does carry.
+///
+/// The kind word and the type's own name — `valuetype Money`, `abstract
+/// interface Describable`, `fixed<9,2>` — which is the spelling the generated
+/// Python runtime produces from its own `_DEFERRED` format string
+/// (`crates/orbweaver-gen/src/python_rt.py`). Aliases are followed, because a
+/// `typedef` renames a construct without making the wire able to carry it.
+pub(crate) fn deferred_wire_name(tc: &TypeCode) -> Option<String> {
+    Some(match resolved(tc) {
+        TypeCode::Value { name, .. } => format!("valuetype {name}"),
+        TypeCode::AbstractInterface { name, .. } => format!("abstract interface {name}"),
+        TypeCode::Fixed { digits, scale } => format!("fixed<{digits},{scale}>"),
+        _ => return None,
+    })
+}
+
+/// The head every §4.4 refusal shares, whichever layer raises it.
+///
+/// One function rather than five literals: the CDR path, the AnyJSON path and
+/// the generated Python runtime each refuse the same three constructs, and a
+/// reader who meets one of those refusals has to be able to find the other two
+/// by the same words. `deferred_sentences_agree_across_the_layers` pins the
+/// Rust pair equal, and `orbweaver-gen`'s `python_target` pins the Python one
+/// against this — they are in different crates and Python cannot share code,
+/// so the equality is held by a test rather than by hope.
+pub(crate) fn deferred_wire_head(what: &str) -> String {
+    format!("{what} is not marshalled by the v1 wire (docs/PLAN.md §4.4)")
+}
+
+/// The whole sentence a **peer-fed** document or stream is refused with.
+///
+/// The tail is D008's distinction, said out loud: a *description* of a deferred
+/// type crosses (a `TypeCode` is a value, and `tc_to_json` spells `tk_value`,
+/// `tk_abstract_interface` and `tk_fixed` structurally), an *instance* does
+/// not. A refusal that said only "cannot cross yet" would read as the whole
+/// type being unreachable, and a reader would stop sending the description too
+/// — which is the one thing D008 decided must keep working.
+pub(crate) fn deferred_wire_sentence(what: &str) -> String {
+    format!(
+        "{}; the TypeCode describing it reads, the value behind it does not",
+        deferred_wire_head(what)
+    )
+}
+
 fn describe(tc: &TypeCode) -> String {
     match tc {
         TypeCode::Struct { name, .. }
@@ -659,14 +704,14 @@ fn encode_at(
         // went out where the peer sends a value. "Expected a value of type
         // Money, got a struct" would be a true sentence about the wrong
         // problem.
-        (TypeCode::Value { name, .. }, _) => p.fail(format!(
-            "valuetype {name} is not marshalled by the v1 wire (docs/PLAN.md §4.4): its state \
-             goes inline behind a value tag, and this path has no encoding for it"
+        (TypeCode::Value { .. }, _) => p.fail(format!(
+            "{}: its state goes inline behind a value tag, and this path has no encoding for it",
+            deferred_wire_head(&deferred_wire_name(tc).expect("a valuetype is deferred"))
         )),
-        (TypeCode::AbstractInterface { name, .. }, _) => p.fail(format!(
-            "abstract interface {name} is not marshalled by the v1 wire (docs/PLAN.md §4.4): on \
-             the wire it is the union of a value and a reference, and this path has no encoding \
-             for either form of it"
+        (TypeCode::AbstractInterface { .. }, _) => p.fail(format!(
+            "{}: on the wire it is the union of a value and a reference, and this path has no \
+             encoding for either form of it",
+            deferred_wire_head(&deferred_wire_name(tc).expect("an abstract interface is deferred"))
         )),
 
         (t, v) => wrong_kind(p, t, v),
@@ -878,17 +923,9 @@ fn decode_at(d: &mut Decoder<'_>, tc: &TypeCode, p: &Path<'_>, wide: WideCodec) 
         // The same two, on the way in. A peer that sends us a value is a peer
         // we have to answer honestly rather than by reading an IOR out of its
         // value tag.
-        TypeCode::Value { name, .. } => {
-            return p.fail(format!(
-                "valuetype {name} is not marshalled by the v1 wire (docs/PLAN.md §4.4); the \
-                 TypeCode describing it reads, the value behind it does not"
-            ));
-        }
-        TypeCode::AbstractInterface { name, .. } => {
-            return p.fail(format!(
-                "abstract interface {name} is not marshalled by the v1 wire (docs/PLAN.md §4.4); \
-                 the TypeCode describing it reads, the value behind it does not"
-            ));
+        TypeCode::Value { .. } | TypeCode::AbstractInterface { .. } => {
+            let what = deferred_wire_name(tc).expect("§4.4 defers both of these");
+            return p.fail(deferred_wire_sentence(&what));
         }
         other => return p.fail(format!("cannot decode {} yet", describe(other))),
     })
