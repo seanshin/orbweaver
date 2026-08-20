@@ -1,0 +1,29 @@
+// ---------------------------------------------------------------------------
+// The proposed half of the pair: `evo-shared.idl` with `bay` removed.
+//
+// Removing a member is `Verdict::Breaking` by §5.3 — CDR is positional, so
+// every following member shifts and a peer built against the released header
+// decodes garbage.  The guard macro is deliberately the SAME as the released
+// header's: a released and a proposed revision of one header are the same
+// file at two revisions, and that is what their guards look like.  No root
+// here reaches both, which is the only thing that would make it matter.
+//
+// 멤버 삭제는 §5.3 기준 파괴적 변경이다 — CDR은 위치 기반이므로 뒤의 모든
+// 멤버가 밀린다.  가드 매크로가 릴리스본과 같은 것은 의도된 것이다.
+// ---------------------------------------------------------------------------
+#ifndef _OW_EVO_SHARED_IDL_
+#define _OW_EVO_SHARED_IDL_
+
+#pragma prefix "depot.example"
+
+module Depot {
+    //@ ai_desc: One line of a picking order
+    struct OrderLine {
+        //@ ai_desc: The stock-keeping unit
+        string sku;
+        //@ ai_desc: How many of it
+        unsigned long count;
+    };
+};
+
+#endif // _OW_EVO_SHARED_IDL_
