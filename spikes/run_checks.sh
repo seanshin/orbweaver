@@ -1062,6 +1062,21 @@ case "$chainout" in
      printf '%s' "$chainout" | grep -E "panicked|left:|right:" | head -4 | sed 's/^/       /'
      fail_total=$((fail_total+1)) ;;
 esac
+# cd9f88f: a permanent forward is the object moving, so it is shared by every
+# clone of the Reference (Arc<Guarded<Ior>>), while the temporary cache stays
+# per handle — §9.6 keeps the original authoritative for a temporary hop, so
+# that one is routing state and self-corrects. Negative control in that
+# commit: refresh() made a no-op -> a clone taken before the move still reads
+# b"old"; with the ior asserts muted, 3 requests at the address the object
+# left instead of 1.
+cloneout=$(cargo test -q -p orbweaver-giop --test forward_clone 2>&1)
+case "$cloneout" in
+  *"test result: ok. 5 passed"*)
+    echo "  ok   a permanent forward is seen by every clone of the reference — 3 requests at the old address down to 1, both reply orders; the temporary cache stays per handle" ;;
+  *) echo "  FAIL reference clones and a permanent forward"
+     printf '%s' "$cloneout" | grep -E "panicked|left:|right:" | head -4 | sed 's/^/       /'
+     fail_total=$((fail_total+1)) ;;
+esac
 # A caller's version cap across a hop and a restart (adf0867): move_to
 # restored byte order, converter, TLS policy and origin but re-negotiated the
 # version from the forwarded-to profile, so a caller capped to 1.1 spoke 1.2
