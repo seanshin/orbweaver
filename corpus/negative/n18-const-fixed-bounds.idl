@@ -1,0 +1,22 @@
+// n18 — `fixed` in a constant's type takes no <digits, scale>.
+//
+// CORBA 3.4 §7.4.1.4.2 has two fixed-point productions and a `const` takes the
+// bound-less one:
+//   fixed_pt_type       ::= "fixed" "<" positive_int_const "," positive_int_const ">"
+//   fixed_pt_const_type ::= "fixed"
+// The digits and scale of a fixed constant come from its value, so writing
+// them on the type is not a redundancy the grammar tolerates — it is a
+// different production, and this is not it.
+//
+// omniidl 4.3.4, measured 2026-08-20:
+//   1: Syntax error in definition
+//   1: Syntax error in abstract valuetype   (its recovery, not a second cause)
+//
+// The legal form is corpus/golden/30-const-type.idl. We accepted this file
+// until the commit that added it, and rejected the legal one — the same
+// production, wrong in both directions at once.
+//
+// 상수의 `fixed`는 <자릿수, 소수자리>를 받지 않는다. 값이 정하기 때문이다.
+module n18 {
+  const fixed<3,1> LIMIT = 9.9d;
+};

@@ -790,7 +790,7 @@ impl Parser {
 
     fn const_def(&mut self, annotations: Vec<Annotation>) -> Result<ConstDef> {
         self.next(); // const
-        let ty = self.type_spec()?;
+        let ty = self.const_type()?;
         let name = self.expect_ident()?;
         self.expect_punct("=")?;
         let value = self.const_expr()?;
@@ -967,6 +967,88 @@ impl Parser {
         Err(ParseError { message, span, rule })
     }
 
+    /// `const_type`, the third production narrower than `type_spec`.
+    ///
+    /// CORBA 3.4 §7.4.1.4.2:
+    ///
+    /// ```text
+    /// const_dcl  ::= "const" const_type identifier "=" const_exp
+    /// const_type ::= integer_type | char_type | wide_char_type | boolean_type
+    ///              | floating_pt_type | string_type | wide_string_type
+    ///              | fixed_pt_const_type | scoped_name | octet_type
+    /// fixed_pt_const_type ::= "fixed"
+    /// ```
+    ///
+    /// It differs from `type_spec` in both directions at once, which is why
+    /// calling `type_spec` here was wrong twice over. Measured against omniidl
+    /// 4.3.4 on 2026-08-20, one file per shape:
+    ///
+    /// ```text
+    /// const fixed LIMIT = 9.9d;      accepted, and we rejected it
+    ///                                  ("'fixed' needs <digits, scale>")
+    /// const fixed<3,1> LIMIT = 9.9d; 1: Syntax error in definition
+    /// const any WHATEVER = 1;        1: Syntax error in definition
+    /// const sequence<long> MANY = 1; 1: Syntax error in definition
+    /// const void NOTHING = 1;        1: Syntax error in definition
+    /// const Object REF = 1;          1: Syntax error in definition
+    /// const ValueBase VB = 1;        1: Syntax error in definition
+    /// ```
+    ///
+    /// and the last five we accepted. Six lax shapes and one strict one, all
+    /// from the same cause: `const_def` called `type_spec`. `octet`,
+    /// `string<5>`, an enum through `scoped_name` and a `typedef`'d
+    /// `fixed<3,1>` are all legal and were measured accepting on both sides,
+    /// so the narrowing is the production and not a keyword ban.
+    fn const_type(&mut self) -> Result<TypeSpec> {
+        let start = self.peek().span;
+        // `fixed` is handled ahead of `type_spec` rather than after it,
+        // because here the *absence* of `<d,s>` is the legal form and
+        // `type_spec` refuses it outright — a post-filter cannot see a shape
+        // its input never produces.
+        if self.eat_kw("fixed") {
+            if !self.at_punct("<") {
+                return Ok(TypeSpec::Fixed { bounds: None });
+            }
+            // Consumed so the span covers the whole `fixed<3,1>`: a fix hint
+            // that slices the source must get the text it wants deleted.
+            self.next();
+            let _ = self.const_expr()?;
+            self.expect_punct(",")?;
+            let _ = self.const_expr()?;
+            self.close_angle()?;
+            return Err(ParseError {
+                message: "'fixed' takes no <digits, scale> in a constant's type: the grammar \
+                          has two productions and a const takes `fixed_pt_const_type ::= \
+                          \"fixed\"`, whose digits and scale come from the value. Write \
+                          `const fixed NAME = 9.9d;`, or name a `typedef fixed<d,s>` and use \
+                          that."
+                    .to_owned(),
+                span: span_over(start, self.prev_span()),
+                rule: "not-a-const-type",
+            });
+        }
+        let ty = self.type_spec()?;
+        let span = span_over(start, self.prev_span());
+        let what = match &ty {
+            TypeSpec::Any => "'any'",
+            TypeSpec::Object => "'Object'",
+            TypeSpec::ValueBase => "'ValueBase'",
+            TypeSpec::Sequence { .. } => "a 'sequence'",
+            TypeSpec::Void => "'void'",
+            _ => return Ok(ty),
+        };
+        Err(ParseError {
+            message: format!(
+                "{what} cannot be a constant's type: IDL's const_type admits the integer types, \
+                 `char`, `wchar`, `boolean`, the floating-point types, `octet`, `string`, \
+                 `wstring`, bare `fixed` and a scoped name — nothing else. Give the constant a \
+                 type that can hold a literal."
+            ),
+            span,
+            rule: "not-a-const-type",
+        })
+    }
+
     /// The span of the token last consumed.
     fn prev_span(&self) -> Span {
         self.toks[self.i.saturating_sub(1).min(self.toks.len() - 1)].span
@@ -1022,9 +1104,15 @@ impl Parser {
                 self.expect_punct(",")?;
                 let scale = Box::new(self.const_expr()?);
                 self.close_angle()?;
-                return Ok(TypeSpec::Fixed { digits, scale });
+                return Ok(TypeSpec::Fixed { bounds: Some((digits, scale)) });
             }
-            return self.err("'fixed' needs <digits, scale>");
+            // Legal in a constant's type and nowhere else; `const_type`
+            // intercepts `fixed` before reaching here, so this position really
+            // is `fixed_pt_type` and really does need the bounds.
+            return self.err(
+                "'fixed' needs <digits, scale> here: only a constant's type may \
+                             write bare `fixed`, where they come from the value",
+            );
         }
         if self.eat_kw("sequence") {
             self.expect_punct("<")?;
@@ -1553,6 +1641,111 @@ mod tests {
         let src = "interface I { void f(in sequence<long> nums); };";
         let e = parse(src).expect_err("refused");
         assert_eq!(&src[e.span.start..e.span.end], "sequence<long>");
+    }
+
+    // ── const_type vs type_spec ─────────────────────────────────────────────
+
+    /// The direction we were *strict* in, which a differential cannot find at
+    /// all: a legal file we refuse is only visible once somebody writes one.
+    ///
+    /// `fixed_pt_const_type ::= "fixed"`. omniidl 4.3.4 accepts all three of
+    /// these (measured 2026-08-20) and echoes the literal back unchanged;
+    /// `-b python` shows the value as `CORBA.fixed('9.9')`, so the digits and
+    /// the scale really do come from the literal. We answered `'fixed' needs
+    /// <digits, scale>`. `corpus/golden/30-const-type.idl`.
+    #[test]
+    fn a_constants_fixed_type_takes_no_bounds() {
+        for src in [
+            "const fixed LIMIT = 9.9d;",
+            "const fixed FLOOR = -1.25d;",
+            "module m { const fixed A = 1.5d; const fixed B = A + 2.25d; };",
+        ] {
+            parse(src).unwrap_or_else(|e| panic!("{src}: the oracle accepts this: {e}"));
+        }
+        let spec = parse("const fixed LIMIT = 9.9d;").expect("parses");
+        let Definition::Const(c) = &spec.definitions[0] else { panic!("const") };
+        assert_eq!(c.ty, TypeSpec::Fixed { bounds: None });
+    }
+
+    /// And the direction we were *lax* in, from the same cause. omniidl calls
+    /// it "Syntax error in definition"; `corpus/negative/n18`.
+    #[test]
+    fn a_constants_fixed_type_may_not_carry_bounds() {
+        let src = "const fixed<3,1> LIMIT = 9.9d;";
+        let e = parse(src).expect_err("the oracle refuses this");
+        assert_eq!(e.rule, "not-a-const-type", "{}", e.message);
+        // The span is the whole type, so a fix hint can quote what it wants
+        // deleted — the RC-2 property again.
+        assert_eq!(&src[e.span.start..e.span.end], "fixed<3,1>");
+        // Bare `fixed` stays refused everywhere `fixed_pt_type` applies, and
+        // says which position would have taken it.
+        let e = parse("typedef fixed Amount;").expect_err("a declaration needs the bounds");
+        assert!(e.message.contains("only a constant's type"), "{}", e.message);
+    }
+
+    /// The other five shapes the same production excludes, so the fix is the
+    /// production and not a test for the `fixed` keyword — the lesson the
+    /// `param_type_spec` batch left. omniidl refuses every one of these with
+    /// "Syntax error in definition" (measured 2026-08-20) and we accepted all
+    /// five.
+    #[test]
+    fn const_type_admits_neither_any_object_valuebase_sequence_nor_void() {
+        for (src, named) in [
+            ("const any WHATEVER = 1;", "'any'"),
+            ("const Object REF = 1;", "'Object'"),
+            ("const ValueBase VB = 1;", "'ValueBase'"),
+            ("const sequence<long> MANY = 1;", "a 'sequence'"),
+            ("const void NOTHING = 1;", "'void'"),
+        ] {
+            let e = parse(src).expect_err("the oracle refuses this");
+            assert_eq!(e.rule, "not-a-const-type", "{src}: {}", e.message);
+            assert!(e.message.contains(named), "{src}: {}", e.message);
+        }
+    }
+
+    /// The legal neighbours, which is the half a strictness fix breaks
+    /// silently. omniidl accepts every line here (measured 2026-08-20), and
+    /// `octet`, `string<N>` and a scoped name are all named by `const_type`
+    /// itself.
+    ///
+    /// `long double` is here because the grammar names `floating_pt_type` and
+    /// `floating_pt_type ::= "float" | "double" | "long" "double"`. omniidl
+    /// refuses it — "Invalid type for constant: long double", a semantic
+    /// refusal and not a syntax error — which is an omniORB limit rather than
+    /// the grammar's, so it is not in the corpus where `differential.sh` would
+    /// see it. Recorded in the commit that added this test.
+    #[test]
+    fn the_rest_of_const_type_stays_legal() {
+        parse(
+            "typedef fixed<3,1> Ratio;\n\
+             enum Grade { STANDARD, PRIORITY };\n\
+             const Ratio CEILING = 9.9d;\n\
+             const Grade BASELINE = STANDARD;\n\
+             const octet FRAME_TAG = 7;\n\
+             const string<8> LABEL = \"ledger\";\n\
+             const wstring<8> WIDE_LABEL = \"ledger\";\n\
+             const char SEPARATOR = ':';\n\
+             const boolean AUDITED = TRUE;\n\
+             const float SMALL = 1.0;\n\
+             const double TOLERANCE = 0.0001;\n\
+             const long double BIG = 1.0;\n\
+             const unsigned long long CAPACITY = 4294967296;",
+        )
+        .expect("every one of these is a const_type");
+    }
+
+    /// A bounded `fixed` reaches a constant only through `scoped_name`, and
+    /// the two halves land on opposite sides of §4.4's closure: the typedef is
+    /// a declaration the v1 wire cannot carry, the constant is not carried at
+    /// all. Kept here rather than in `corpus/golden/30-const-type.idl`, which
+    /// would otherwise become a fourth golden file `--wire v1` refuses.
+    #[test]
+    fn a_bounded_fixed_reaches_a_constant_only_through_a_name() {
+        let spec = parse("module m { typedef fixed<3,1> Ratio; const Ratio LIMIT = 9.9d; };")
+            .expect("omniidl accepts this");
+        let named: Vec<String> =
+            crate::deferred_wire_types(&spec).iter().map(|d| d.declaration.clone()).collect();
+        assert_eq!(named, ["m::Ratio"], "the typedef, and only the typedef");
     }
 
     /// The invariant the whole change rests on: a file with no identity pragma

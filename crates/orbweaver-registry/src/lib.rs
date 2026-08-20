@@ -1495,9 +1495,21 @@ impl Builder<'_> {
             TypeSpec::WString(b) => {
                 TypeCode::WString(b.as_deref().and_then(const_u32).unwrap_or(0))
             }
-            TypeSpec::Fixed { digits, scale } => TypeCode::Fixed {
-                digits: const_u32(digits).unwrap_or(0) as u16,
-                scale: const_u32(scale).unwrap_or(0) as i16,
+            // A declaration writes `fixed<d,s>`; a constant writes bare `fixed`
+            // and CORBA 3.4 §7.4.1.4.2 takes its digits and scale from the
+            // *value*. We cannot compute those: the lexer folds `9.9d` to
+            // `Tok::Float(9.9)` and the decimal text is gone by the time a
+            // `ConstExpr` exists, so any pair here would be a guess about a
+            // binary approximation. `0, 0` is this function's existing marker
+            // for a bound it could not evaluate (the `unwrap_or(0)` beside it),
+            // and it is the honest answer for the same reason: nothing is
+            // claimed. Nothing downstream reads it — §4.4 defers `fixed`, so no
+            // fixed TypeCode is marshalled, `coerce` has no arm for one so the
+            // entry stores no value, and both emitters skip a valueless
+            // constant. Recorded rather than invented.
+            TypeSpec::Fixed { bounds } => TypeCode::Fixed {
+                digits: bounds.as_ref().and_then(|(d, _)| const_u32(d)).unwrap_or(0) as u16,
+                scale: bounds.as_ref().and_then(|(_, s)| const_u32(s)).unwrap_or(0) as i16,
             },
             TypeSpec::Sequence { element, bound } => TypeCode::Sequence {
                 element: Box::new(self.type_of(scope, element)),

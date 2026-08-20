@@ -723,6 +723,17 @@ fn fix_for(d: &Diagnostic, src: &str) -> Option<String> {
              parameter or a return only through a name. Declare `typedef {text} <Name>;` \
              outside the interface and write `<Name>` here."
         )),
+        // `const_type` is narrower than `type_spec` in both directions at once,
+        // and the edit is unambiguous either way: drop the bounds, or name a
+        // type that can hold a literal. `corpus/negative/n18`.
+        "not-a-const-type" => Some(format!(
+            "`{text}` is not a const_type (CORBA 3.4 §7.4.1.4.2 admits the integer types, \
+             `char`, `wchar`, `boolean`, the floating-point types, `octet`, `string`, \
+             `wstring`, bare `fixed` and a scoped name). A fixed constant is written \
+             `const fixed NAME = 9.9d;` — the digits and scale come from the value, so the \
+             type takes no `<d,s>`. For anything else, declare the type with a `typedef` and \
+             name it here, or give the constant a type that can hold a literal."
+        )),
         "void-in-signature" => Some(format!(
             "`{text}` is a return type and nothing else: `op_type_spec` names it and \
              `param_type_spec` does not. Give the attribute or parameter the type its value \
