@@ -173,12 +173,17 @@ fn over_the_golden_corpus_the_rule_names_every_generator_skip() {
 /// and, as the negative control, a struct holding a *reference* to a deferred
 /// interface, which neither closure may follow.
 ///
-/// One shape agrees on the verdict and not on the reason, and is pinned as
-/// such: a `const fixed<3,1>`. Both emitters skip it, but because the registry
-/// stores no value for a fixed literal — "could not evaluate its expression" —
-/// which is a consequence of §4.4 reported as if it were a folding failure.
-/// The rule names the cause. Recorded, not repaired: the emitters are outside
-/// this batch's footprint.
+/// One shape is on neither side and is pinned as such: a `const fixed`. Both
+/// emitters skip it — the registry has no `ConstValue` for a decimal, so
+/// `emit_const` bails before it ever reaches the type mapper that would name
+/// §4.4 — and the rule does not name it, because a constant is not marshalled
+/// and refusing a whole file under `--wire v1` for one would be a false
+/// refusal. The two sets agree; the *reason* the emitters give is still
+/// imprecise ("could not evaluate its expression" for what is really "there is
+/// no decimal type here yet"), and that is asserted below so a change to it
+/// cannot pass unnoticed. It was written as `const fixed<3,1>` until
+/// 2026-08-20, which omniidl refuses outright — a fixture the oracle would
+/// never have compiled.
 #[test]
 fn every_fixed_shape_agrees_between_the_rule_and_both_emitters() {
     let src = "module m {
@@ -192,7 +197,7 @@ fn every_fixed_shape_agrees_between_the_rule_and_both_emitters() {
         };
         interface J { void h() raises (Bad); };
         interface K : J { void ping(); };
-        const fixed<3,1> C = 12.5D;
+        const fixed C = 12.5D;
         typedef fixed<7,3> Arr[4];
         struct Deep { Seq s; };
         struct Deeper { Deep d; };
@@ -203,19 +208,24 @@ fn every_fixed_shape_agrees_between_the_rule_and_both_emitters() {
     };";
     let s = sets(src);
     assert_eq!(s.rule, s.rule_fixed, "nothing here is a valuetype");
-    let mut except_const = s.rule.clone();
-    assert!(except_const.remove("m::C"), "the constant is the rule's: {:?}", s.rule);
-    assert_eq!(s.rust, except_const, "Rust emitter vs the rule");
-    assert_eq!(s.python, except_const, "Python emitter vs the rule");
+    assert!(!s.rule.contains("m::C"), "a constant is not marshalled: {:?}", s.rule);
+    assert_eq!(s.rust, s.rule, "Rust emitter vs the rule");
+    assert_eq!(s.python, s.rule, "Python emitter vs the rule");
+    // The constant is skipped by both, under a reason that is not §4.4's — so
+    // it lands in neither set and the equality above holds without an
+    // exception. The reason is pinned because it is wrong about the cause: the
+    // registry folded the expression fine and could not *coerce* it, there
+    // being no `ConstValue` for a decimal. If it ever names §4.4 instead, the
+    // constant joins both sets at once and this block becomes the wrong shape.
     for (target, skipped) in [("Rust", &s.rust_skipped), ("Python", &s.python_skipped)] {
         let (_, why) = skipped
             .iter()
             .find(|(id, _)| id == "m::C")
             .unwrap_or_else(|| panic!("{target}: the fixed constant was emitted: {skipped:?}"));
         assert!(
-            why.contains("could not evaluate"),
-            "{target}: the reason changed — if it now names §4.4, fold m::C into the equality \
-             above: {why}"
+            why.contains("could not evaluate") && !why.contains("4.4"),
+            "{target}: the reason changed — a §4.4 reason puts m::C in the emitter's set, and \
+             the rule must then name it too: {why}"
         );
     }
     for kept in ["m::Holder", "m::Lookup", "m::Plain", "m::Nesting"] {

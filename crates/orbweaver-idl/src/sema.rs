@@ -582,7 +582,7 @@ impl Analyser {
                 }
             }
             TypeSpec::String(Some(b)) | TypeSpec::WString(Some(b)) => self.const_expr(scope, b),
-            TypeSpec::Fixed { digits, scale } => {
+            TypeSpec::Fixed { bounds: Some((digits, scale)) } => {
                 self.const_expr(scope, digits);
                 self.const_expr(scope, scale);
             }
@@ -1097,10 +1097,28 @@ impl Analyser {
                 decl.kind = "typedef";
                 self.wire_type(scope, "", &t.ty, &mut decl);
             }
-            Definition::Const(c) => {
-                decl.kind = "const";
-                self.wire_type(scope, "its type", &c.ty, &mut decl);
-            }
+            // A constant is **not** in this rule's closure, and this arm used
+            // to put it there.
+            //
+            // The rule answers one question: can a v1 peer be served this
+            // contract? A constant is never marshalled — no operation carries
+            // one, no TypeCode of one is ever encoded, no peer ever sees it —
+            // so `const fixed TAX = 0.08d;` beside operations that all take
+            // `double` costs the wire nothing, and refusing the whole file
+            // under `--wire v1` for it would be a false refusal that blocks
+            // work which would have succeeded. The message it produced said so
+            // in as many words and was simply untrue: *const "LIMIT" cannot go
+            // on the v1 wire*.
+            //
+            // What such a constant does cost is one generated binding: both
+            // emitters skip it, because the registry has no `ConstValue` for a
+            // decimal. That is reported where it happens, in
+            // `Generated::skipped`, and its wording is imprecise — see the
+            // commit that removed this arm.
+            //
+            // 상수는 마샬링되지 않으므로 §4.4 폐쇄집합 밖이다. 와이어에 오르지
+            // 않는 선언 때문에 파일 전체를 거부하는 것은 거짓 거부다.
+            Definition::Const(_) => return,
             Definition::ValueType(v) => {
                 decl.kind = "valuetype";
                 let construct = if v.is_abstract { "abstract valuetype" } else { "valuetype" };
@@ -1121,8 +1139,19 @@ impl Analyser {
         // member adds nothing a reader needs.
         let first = decl.direct.is_none();
         match t {
-            TypeSpec::Fixed { digits, scale } if first => {
-                let construct = format!("fixed<{},{}>", const_text(digits), const_text(scale));
+            TypeSpec::Fixed { bounds } if first => {
+                let construct = match bounds {
+                    Some((digits, scale)) => {
+                        format!("fixed<{},{}>", const_text(digits), const_text(scale))
+                    }
+                    // Only a constant's type writes bare `fixed`, and a
+                    // constant is not a wire declaration (see the
+                    // `Definition::Const` arm above) — so this is unreachable
+                    // through `deferred_wire_types` today and spelled as the
+                    // source spells it rather than invented, in case a later
+                    // caller does reach it.
+                    None => "fixed".to_owned(),
+                };
                 decl.direct = Some((at(), construct));
             }
             TypeSpec::ValueBase if first => decl.direct = Some((at(), "ValueBase".into())),
@@ -1591,7 +1620,8 @@ mod wire_tests {
               void g(inout Rate x);
             };
             interface J { void h(in Bad b); };
-            const fixed<3,1> C = 12.5D;
+            const fixed C = 12.5D;
+            const Rate R = 12.5D;
             typedef fixed<7,3> Arr[4];
             struct Deep { Seq s; };
             struct Deeper { Deep d; };
@@ -1612,7 +1642,10 @@ mod wire_tests {
                     "parameter \"b\" of operation \"h\" is \"m::Bad\", whose member \"why\" is \
                      fixed<2,1>"
                 ),
-                ("m::C", "its type is fixed<3,1>"),
+                // `m::C` and `m::R` are absent on purpose: a constant is not
+                // marshalled, so it is outside this rule's closure however
+                // its type is spelled — bare `fixed` or a name that resolves
+                // to one. See the `Definition::Const` arm.
                 ("m::Arr", "it is fixed<7,3>"),
                 ("m::Deep", "member \"s\" is \"m::Seq\", which is fixed<5,1>"),
                 (
@@ -1622,6 +1655,33 @@ mod wire_tests {
                 ),
             ]
         );
+        assert!(
+            !got.iter().any(|(name, _)| *name == "m::C" || *name == "m::R"),
+            "a constant is not a wire declaration: {got:?}"
+        );
+    }
+
+    /// A constant is out of the closure, stated on its own rather than left to
+    /// an absence in the list above.
+    ///
+    /// The rule answers "can a v1 peer be served this contract", and nothing
+    /// about a constant reaches a peer: no operation carries one, no TypeCode
+    /// of one is encoded. Naming it made `--wire v1` refuse a whole file for a
+    /// declaration whose wire cost is zero, under a message that said the
+    /// constant could not go on the wire — which is true of no constant at
+    /// all. What such a constant does cost is one generated binding, and both
+    /// emitters report that as a skip of their own.
+    #[test]
+    fn a_constant_is_outside_the_closure_and_its_typedef_is_not() {
+        assert!(names("const fixed C = 12.5D;").is_empty());
+        assert_eq!(
+            names("module m { typedef fixed<3,1> Ratio; const Ratio LIMIT = 9.9d; };"),
+            ["m::Ratio"],
+            "the typedef is a type a signature can use; the constant is not"
+        );
+        // A file whose only §4.4 construct is a constant is servable, which is
+        // the verdict `--wire v1` now gives it.
+        assert!(names("module m { const fixed C = 1.5d; interface I { long f(); }; };").is_empty());
     }
 
     /// The exception reached only through `raises` cascades to the interface

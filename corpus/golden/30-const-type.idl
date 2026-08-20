@@ -1,0 +1,51 @@
+// 30 — const_type, the third production narrower than type_spec.
+//
+// CORBA 3.4 §7.4.1.4.2:
+//   const_type ::= integer_type | char_type | wide_char_type | boolean_type
+//                | floating_pt_type | string_type | wide_string_type
+//                | fixed_pt_const_type | scoped_name | octet_type
+//   fixed_pt_const_type ::= "fixed"
+//
+// The bare `fixed` is why this file exists. It is legal in a constant's type
+// and nowhere else — the digits and scale come from the literal rather than
+// from the type — and we used to reject it ("'fixed' needs <digits, scale>")
+// while accepting `const fixed<3,1>`, which omniidl calls a syntax error. Both
+// measured against omniidl 4.3.4 on 2026-08-20; the illegal half is
+// corpus/negative/n18-const-fixed-bounds.idl.
+//
+// A `const fixed` is deliberately NOT a `wire/deferred-type` finding: a
+// constant is never marshalled, so it costs the v1 wire nothing. It does cost
+// one generated binding, which both emitters report as a skip.
+//
+// Two of const_type's ten alternatives are missing below and cannot be written
+// here yet: `wide_char_type` and `wide_string_type` need an `L`-prefixed
+// literal, which our lexer does not accept — measured 2026-08-20, omniidl
+// takes `const wchar B = L'x';` and refuses the unprefixed `'x'` with "Cannot
+// interpret character literal as a wide character", so there is no spelling
+// this corpus can use. No file in this repository has ever written one.
+//
+// 상수 타입은 선언 타입보다 좁은 세 번째 생성 규칙이다. 맨 `fixed`는 상수
+// 타입에서만 합법이며 자릿수와 소수 자리는 리터럴이 정한다.
+module gc30 {
+  const fixed   CEILING     = 99999.99d;
+  const fixed   ADJUSTMENT  = -1.25d;
+  const fixed   DERIVED     = CEILING - 0.01d;
+
+  // The neighbours const_type also admits, each measured accepting on both
+  // sides — the narrowing is the production, not a ban on one keyword.
+  const octet   FRAME_TAG   = 7;
+  const string<8> LABEL     = "ledger";
+  const char    SEPARATOR   = ':';
+  const boolean AUDITED     = TRUE;
+  const double  TOLERANCE   = 0.0001;
+  const unsigned long long CAPACITY = 4294967296;
+
+  enum Grade { STANDARD, PRIORITY };
+  const Grade   BASELINE    = STANDARD;
+
+  // A *bounded* fixed reaches a constant only through `scoped_name`, and that
+  // pair lives in a unit test rather than here: the typedef would be a §4.4
+  // deferred declaration and this file exists to pin the const_type
+  // production, not to add a fourth golden file that `--wire v1` refuses.
+  // See orbweaver-idl `a_bounded_fixed_reaches_a_constant_only_through_a_name`.
+};

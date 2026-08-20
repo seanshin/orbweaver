@@ -365,10 +365,27 @@ pub enum TypeSpec {
     String(Option<Box<ConstExpr>>),
     /// `wstring` or `wstring<N>`.
     WString(Option<Box<ConstExpr>>),
-    /// `fixed<digits, scale>`.
+    /// `fixed<digits, scale>`, or bare `fixed` in a constant's type.
+    ///
+    /// CORBA 3.4 §7.4.1.4.2 has *two* fixed-point productions, and they are
+    /// not interchangeable:
+    ///
+    /// ```text
+    /// fixed_pt_type       ::= "fixed" "<" positive_int_const "," positive_int_const ">"
+    /// fixed_pt_const_type ::= "fixed"
+    /// ```
+    ///
+    /// A declaration takes the first; a `const` takes the second, whose digits
+    /// and scale come from the literal rather than from the type. So `None` is
+    /// legal in exactly one position and [`Parser::const_type`] is the only
+    /// thing that produces it — the same arrangement [`TypeSpec::Void`] has
+    /// already, legal only as a return and enforced by the parser rather than
+    /// by the type. One `Option` over the pair and not one each, because the
+    /// grammar never writes a digit count without a scale.
+    ///
+    /// [`Parser::const_type`]: crate::parse
     Fixed {
-        digits: Box<ConstExpr>,
-        scale: Box<ConstExpr>,
+        bounds: Option<(Box<ConstExpr>, Box<ConstExpr>)>,
     },
     /// `sequence<T>` or `sequence<T, N>`.
     Sequence {

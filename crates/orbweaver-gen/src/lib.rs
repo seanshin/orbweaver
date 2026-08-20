@@ -1510,7 +1510,25 @@ mod tests {
             // generates all five of its constants, and the exemption is gone —
             // the only files that may skip are the ones whose names say they
             // are deferred wire types.
-            if !deferred && !g.skipped.is_empty() {
+            // `30-const-type` is the one file that skips without saying
+            // "deferred" in its name, and it is named here rather than let
+            // through by a wider rule. Its three `fixed` constants have no
+            // Rust binding because the registry has no `ConstValue` for a
+            // decimal — while the file itself is perfectly servable, which is
+            // exactly why the S4 rule does not name them (a constant is not
+            // marshalled; see orbweaver-idl `sema.rs`, `Definition::Const`).
+            // The set is exact, so the exemption cannot widen quietly, and the
+            // day a decimal type lands this goes red and gets deleted.
+            let expected: &[&str] = if stem == "30-const-type" {
+                &["IDL:gc30/CEILING:1.0", "IDL:gc30/ADJUSTMENT:1.0", "IDL:gc30/DERIVED:1.0"]
+            } else {
+                &[]
+            };
+            let mut got: Vec<&str> = g.skipped.iter().map(|(id, _)| id.as_str()).collect();
+            got.sort_unstable();
+            let mut want: Vec<&str> = expected.to_vec();
+            want.sort_unstable();
+            if !deferred && got != want {
                 failures.push(format!("{stem}: skipped {:?}", g.skipped));
             }
             if g.emitted == 0 && !deferred {
