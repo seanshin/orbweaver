@@ -521,7 +521,9 @@ impl Pool {
     /// sent to whatever `ior` the caller passes.
     ///
     /// Only the last hop of a chain is reported, as [`Connection::forwarded`]
-    /// reports it: it is the one that answered.
+    /// reports it: it is the one that answered. What the *rest* of the chain
+    /// meant for the reference is not this — [`Reference`] is told the whole
+    /// chain, hop by hop, and this is the summary for everybody else.
     pub fn invoke_tracking<F>(
         &self,
         ior: &Ior,
@@ -532,7 +534,9 @@ impl Pool {
     where
         F: Fn(&mut Encoder),
     {
-        self.attempt(ior, operation, &write_args, timeout).map_err(|f| f.error)
+        self.attempt(ior, operation, &write_args, timeout)
+            .map(|(reply, chain)| (reply, chain.last))
+            .map_err(|f| f.error)
     }
 
     /// [`Pool::invoke_tracking`], keeping the one fact a caller that holds
@@ -550,21 +554,21 @@ impl Pool {
         operation: &str,
         write_args: &F,
         timeout: Duration,
-    ) -> std::result::Result<(Reply, Option<Forward>), Failed>
+    ) -> std::result::Result<(Reply, Chain), Failed>
     where
         F: Fn(&mut Encoder),
     {
         let mut target = ior.clone();
-        let mut followed: Option<Forward> = None;
+        let mut chain = Chain::default();
         let mut retried = false;
         for _ in 0..MAX_FORWARD_HOPS {
             let (mux, key) =
                 self.acquire(&target).map_err(|error| Failed { error, unsent: true })?;
             match mux.call_on(&key, operation, write_args, timeout) {
-                Ok(Sent::Reply(reply)) => return Ok((*reply, followed)),
+                Ok(Sent::Reply(reply)) => return Ok((*reply, chain)),
                 Ok(Sent::Forward(next)) => {
                     target = next.ior().clone();
-                    followed = Some(*next);
+                    chain.hop(*next);
                 }
                 Err(Failed { error, unsent }) => {
                     // The connection is out either way: a fault means it can
@@ -701,6 +705,54 @@ fn pick(s: &State, key: &Key, limits: Limits) -> Option<Mux> {
     Some(best)
 }
 
+/// What one call's forward chain left behind, hop by hop.
+///
+/// [`Pool::attempt`] follows every hop of a chain, and the hops are not all
+/// the same kind: a servant may forward permanently to another one that then
+/// forwards temporarily, and the two hops mean different things to the
+/// reference that made the call. §9.6's *may replace the old IOR* belongs to
+/// the permanent hop; a temporary hop that comes **after** it is forwarding
+/// information about *that* reference, not about the one the caller started
+/// with.
+///
+/// Reporting only the last hop — which is all [`Pool::invoke_tracking`]
+/// answers with, because it is the hop that answered — loses exactly that
+/// distinction, and the loss is not free: a `permanent → temporary` chain
+/// left `Reference::ior` untouched and cached the temporary target against
+/// it, so §9.6's restart went back through a hop the servant had already
+/// told the client to stop using. Within the spec, and one hop more than
+/// needed. [`Connection`] never had it, because it applies each hop as it
+/// takes it (`Connection::follow`); this is the same rule, accumulated
+/// across a chain the pool walks in one call.
+#[derive(Debug, Clone, Default)]
+struct Chain {
+    /// The last permanent hop: what the reference re-points to.
+    repoint: Option<Ior>,
+    /// The forwarding information in force at the end of the chain — the
+    /// last temporary hop, and only while no permanent hop came after it.
+    via: Option<Ior>,
+    /// The last hop of any kind: the one that answered, and what
+    /// [`Reference::forwarded`] reports.
+    last: Option<Forward>,
+}
+
+impl Chain {
+    /// Takes one hop, by the rule `Connection::follow` applies to one.
+    fn hop(&mut self, forward: Forward) {
+        match &forward {
+            Forward::Temporary(to) => self.via = Some(to.clone()),
+            Forward::Permanent(to) => {
+                self.repoint = Some(to.clone());
+                // Forwarding information cached before a permanent hop is
+                // information about an address the servant has just
+                // superseded; keeping it would make the restart aim there.
+                self.via = None;
+            }
+        }
+        self.last = Some(forward);
+    }
+}
+
 /// A reference plus the pool that will carry its calls, so generated stubs —
 /// which are generic over [`Invoker`] — run over pooled, multiplexed
 /// connections without knowing it.
@@ -731,10 +783,15 @@ fn pick(s: &State, key: &Key, limits: Limits) -> Option<Mux> {
 ///   wants them to agree keeps one and clones after the call, as it would
 ///   with any cached fact.
 ///
-/// Only the last hop of a chain reaches here (as [`Pool::invoke_tracking`]
-/// reports it), so a chain that goes permanent-then-temporary caches the
-/// temporary hop and keeps `ior` as it was; a restart from there goes back
-/// through the permanent hop, which is more than §9.6 asks and within it.
+/// Both rules are applied **per hop**, over the whole chain one call
+/// followed, and not to the last hop alone: a chain that goes
+/// permanent-then-temporary re-points `ior` at the permanent hop *and*
+/// caches the temporary one relative to it, so a restart returns to the
+/// reference as it now stands rather than through a hop the servant has
+/// already superseded. That is the hop this saves, and it is the difference
+/// between the two orderings: temporary-then-permanent ends re-pointed with
+/// nothing cached, because a permanent hop clears the forwarding
+/// information it replaces.
 #[derive(Debug, Clone)]
 pub struct Reference {
     pool: Pool,
@@ -777,21 +834,24 @@ impl Reference {
         self.forwarded.as_ref()
     }
 
-    /// Records what a two-way call followed. `None` means answered where it
-    /// was sent, which changes nothing: a cached temporary forward stays
-    /// cached, a re-pointed reference stays re-pointed.
-    fn note(&mut self, followed: Option<Forward>) {
-        match followed {
-            Some(Forward::Temporary(to)) => {
-                self.via = Some(to.clone());
-                self.forwarded = Some(Forward::Temporary(to));
-            }
-            Some(Forward::Permanent(to)) => {
-                self.ior = to.clone();
-                self.via = None;
-                self.forwarded = Some(Forward::Permanent(to));
-            }
-            None => {}
+    /// Records what a two-way call's chain came to. An empty chain —
+    /// answered where it was sent — changes nothing: a cached temporary
+    /// forward stays cached, a re-pointed reference stays re-pointed.
+    ///
+    /// The order is the chain's own: re-point first, then cache, because a
+    /// temporary hop that survived the accumulation is one that came after
+    /// the permanent one and is forwarding information *for the re-pointed
+    /// reference*.
+    fn note(&mut self, chain: Chain) {
+        if let Some(to) = chain.repoint {
+            self.ior = to;
+            self.via = None;
+        }
+        if let Some(to) = chain.via {
+            self.via = Some(to);
+        }
+        if chain.last.is_some() {
+            self.forwarded = chain.last;
         }
     }
 }
@@ -805,24 +865,27 @@ impl Invoker for Reference {
         let timeout = crate::mux::DEFAULT_CALL_TIMEOUT;
         if let Some(via) = self.via.clone() {
             match self.pool.attempt(&via, operation, &write_args, timeout) {
-                Ok((reply, followed)) => {
-                    self.note(followed);
+                Ok((reply, chain)) => {
+                    self.note(chain);
                     return Ok(reply);
                 }
                 Err(Failed { error, unsent: false }) => return Err(error),
                 Err(Failed { unsent: true, .. }) => {
                     // The forwarding information failed and the request did
-                    // not run: §9.6's restart, at the original address, in
-                    // this same call. The dropped error is the target's
-                    // refusal; whatever the original says next is the answer.
+                    // not run: §9.6's restart, in this same call, at the
+                    // reference as it now stands — which is the last
+                    // permanent hop when the chain had one, and the address
+                    // the caller started from when it did not. The dropped
+                    // error is the target's refusal; whatever the reference
+                    // says next is the answer.
                     self.via = None;
                     self.forwarded = None;
                 }
             }
         }
-        let (reply, followed) =
-            self.pool.invoke_tracking(&self.ior, operation, write_args, timeout)?;
-        self.note(followed);
+        let (reply, chain) =
+            self.pool.attempt(&self.ior, operation, &write_args, timeout).map_err(|f| f.error)?;
+        self.note(chain);
         Ok(reply)
     }
 

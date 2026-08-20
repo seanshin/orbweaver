@@ -1718,6 +1718,10 @@ pub struct Connection {
     endpoint: (String, u16),
     object_key: Vec<u8>,
     version: Version,
+    /// The ceiling [`Connection::cap_version`] declared, kept so a forward or
+    /// a §9.6 restart — each a fresh connection negotiating from a fresh
+    /// profile — cannot raise the version back above it. See that method.
+    version_cap: Option<Version>,
     endian: Endian,
     next_id: u32,
     max_message_size: usize,
@@ -1916,6 +1920,7 @@ impl Connection {
             endpoint,
             object_key: p.object_key.clone(),
             version: Version::negotiate(p.version),
+            version_cap: None,
             endian: Endian::native(),
             next_id: 1,
             max_message_size: DEFAULT_MAX_MESSAGE_SIZE,
@@ -2003,7 +2008,26 @@ impl Connection {
     /// lower the negotiated version, never raise it. Exists because the
     /// version-conditional paths — `wstring` lengths above all — are otherwise
     /// only reachable against a peer that happens to be old.
+    ///
+    /// **The cap outlives the socket it was set on.** Following a
+    /// `LOCATION_FORWARD`, and §9.6's restart at [`Connection::origin`], each
+    /// replace this connection with one dialled from another profile — and a
+    /// caller cannot see either happen, because both are transparent by
+    /// design. Re-negotiating from the new profile alone would therefore
+    /// raise the version back under a caller who never withdrew the cap and
+    /// whose arguments were written for the version it declared; that was the
+    /// behaviour until this field existed. What each new endpoint contributes
+    /// is §9.4.1's own ceiling, and the version spoken is the **lower of the
+    /// two** — so a profile can never contradict a cap, only lower it
+    /// further, which is why carrying it is a fix and not a policy.
+    ///
+    /// Successive calls keep the lowest: a cap is a promise not to exceed,
+    /// and raising it is what this method has never done.
     pub fn cap_version(&mut self, max: Version) {
+        self.version_cap = Some(match self.version_cap {
+            Some(cap) => cap.min(max),
+            None => max,
+        });
         if max < self.version {
             self.version = max;
         }
@@ -2290,9 +2314,14 @@ impl Connection {
     }
 
     /// Replaces this connection with a fresh one to `ior`, keeping everything
-    /// the caller decided — byte order, converter, TLS policy — and the
-    /// origin and the standing forward. On a dial failure `self` is left as
-    /// it was, poisoned or not.
+    /// the caller decided — byte order, converter, TLS policy, version cap —
+    /// and the origin and the standing forward. On a dial failure `self` is
+    /// left as it was, poisoned or not.
+    ///
+    /// "Everything the caller decided" is the rule, and it is worth stating
+    /// as one: a hop and a restart are invisible to the caller by design, so
+    /// anything they silently un-decide is a change made behind the caller's
+    /// back. The version cap was the field this list was missing.
     fn move_to(&mut self, ior: &Ior) -> Result<()> {
         // A forwarded reference is a full IOR and may itself name several
         // endpoints, so it gets the same failover as the original connect
@@ -2310,6 +2339,9 @@ impl Connection {
         let converting = self.caller_converts_chars;
         let origin = self.origin.clone();
         let forwarded = self.forwarded.take();
+        // The caller's declared ceiling, which the new endpoint's profile can
+        // lower further but never lift. See `Connection::cap_version`.
+        let version_cap = self.version_cap;
         // §7.10.2.5 negotiates per *connection*, and a forward is a
         // different connection. A caller that took a converter is
         // still encoding through the one it holds, so the new
@@ -2321,6 +2353,12 @@ impl Connection {
         self.endian = endian;
         self.origin = origin;
         self.forwarded = forwarded;
+        self.version_cap = version_cap;
+        if let Some(cap) = version_cap {
+            // `Version::negotiate` already applied §9.4.1 to the new
+            // profile; the lower of the two is what may go on the wire.
+            self.version = self.version.min(cap);
+        }
         if converting {
             let after = self.char_codeset.agreed().map(|c| c.id());
             if after != before {
