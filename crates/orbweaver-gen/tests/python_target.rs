@@ -1415,6 +1415,152 @@ print("wrote it back")
     }
 }
 
+/// The two families this runtime refuses at the **type form** rather than at
+/// the value — `fixed` and `native` — each held to the Rust sentence for its
+/// own boundary, by equality, across the crate boundary.
+///
+/// The test above covers the two §4.4 constructs Python has a descriptor for. A
+/// `fixed` and a `native` have none, so `_desc_of` is where a peer-fed document
+/// carrying one stops, and each was writing its own sentence there:
+///
+/// ```text
+/// fixed   "fixed<9,2> is deferred at wire level (§4.4)"    (a fourth wording
+///                                                           of §4.4's, in the
+///                                                           layer a peer meets)
+/// native  "no AnyJSON value form for a 'native' type"      (names neither the
+///                                                           construct nor any
+///                                                           boundary)
+/// ```
+///
+/// Both now come from a constant — `_DEFERRED` and `_UNMARSHALLABLE` — and the
+/// assertion is **equality** with what the Rust layers raise for the same
+/// TypeCode, because Python cannot import a Rust constant and a substring check
+/// would let the halves drift into two explanations of one boundary.
+///
+/// # Why the two constants must not become one
+///
+/// `native X;` is not deferred: §4.4's three have a wire form the specification
+/// defines and this version has not implemented, and a native has none to
+/// implement in any version. So the two sentences have to read *differently*,
+/// and the two ways a reader is told something false are asserted here in
+/// Python as well as in Rust — "yet" promises a version that will never come,
+/// and §4.4's deferral claim sends the reader to a plan entry that does not
+/// name the construct. Both were live in shipped code on 2026-08-21.
+#[test]
+fn a_peer_fed_form_with_no_descriptor_is_refused_in_the_rust_layers_words() {
+    let cases: Vec<(&str, TypeCode)> = vec![
+        ("fixed<9,2>", TypeCode::Fixed { digits: 9, scale: 2 }),
+        (
+            "native Handle",
+            TypeCode::Native { id: "IDL:witness/Handle:1.0".into(), name: "Handle".into() },
+        ),
+    ];
+
+    let mut forms = Vec::new();
+    let mut wants = Vec::new();
+    for (what, tc) in &cases {
+        // What Rust says, taken from the code rather than typed here. Both
+        // AnyJSON directions, and — for the native, which the CDR path also has
+        // arms for — both CDR directions too, so a Python string equal to one
+        // of them is equal to all of them. `fixed` has no CDR arm at all, which
+        // `orbweaver-dynamic`'s `the_cdr_path_does_not_yet_name_the_section_for_fixed`
+        // records as a measured gap rather than a wish.
+        let mut h = LocalReferences::new();
+        let mut said = vec![
+            anyjson::to_json(tc, &Value::Struct(Vec::new()), &mut h)
+                .expect_err("an instance has no AnyJSON form")
+                .message,
+            anyjson::from_json(tc, &Json::parse("{}").expect("document"), &h)
+                .expect_err("an instance has no AnyJSON form")
+                .message,
+        ];
+        if matches!(tc, TypeCode::Native { .. }) {
+            said.push(
+                encode(&mut Encoder::new(Endian::Little), tc, &Value::Struct(Vec::new()))
+                    .expect_err("an instance has no encoding")
+                    .message,
+            );
+            said.push(
+                orbweaver_dynamic::decode(
+                    &mut orbweaver_cdr::Decoder::new(&[0u8; 16], Endian::Little),
+                    tc,
+                )
+                .expect_err("an instance cannot be read")
+                .message,
+            );
+        }
+        said.dedup();
+        assert_eq!(said.len(), 1, "{what}: the Rust layers disagree with each other: {said:?}");
+        let want = said.remove(0);
+        assert!(want.starts_with(what), "{want}");
+
+        // The form a peer actually sends. `orbweaver_dynamic::tc_to_json`
+        // writes both structurally, which is what makes `_desc_of`'s arms
+        // reachable at all.
+        let form = anyjson::tc_to_json(tc).to_string();
+        assert!(!form.contains("'''"), "{form}");
+        forms.push(Json::parse(&form).expect("a form"));
+        wants.push(Json::String(want));
+    }
+
+    // The distinction, asserted on the Rust side before it is handed over: the
+    // deferred sentence and the never sentence are not one string, and the
+    // never one carries neither falsehood.
+    let Json::String(fixed_want) = &wants[0] else { unreachable!() };
+    let Json::String(native_want) = &wants[1] else { unreachable!() };
+    assert!(
+        fixed_want.contains("is not marshalled by the v1 wire (docs/PLAN.md §4.4)"),
+        "{fixed_want}"
+    );
+    assert!(!native_want.contains("yet"), "{native_want}");
+    assert!(
+        !native_want.contains("is not marshalled by the v1 wire (docs/PLAN.md §4.4)"),
+        "a native must not carry §4.4's deferral claim: {native_want}"
+    );
+
+    let forms = Json::Array(forms).to_string();
+    let wants = Json::Array(wants).to_string();
+    assert!(!forms.contains("'''") && !wants.contains("'''"), "{forms} {wants}");
+
+    let script = r#"
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from nodesc import _rt
+
+forms = json.loads(r'''__FORMS__''')
+wants = json.loads(r'''__WANTS__''')
+assert [f["kind"] for f in forms] == ["fixed", "native"], forms
+
+# Both entry points a peer-fed document can arrive through: a bare type form,
+# and the `any` that carries one.
+seen = []
+for form, want in zip(forms, wants):
+    for call in (lambda: _rt._desc_of(form, ""),
+                 lambda: _rt.from_json("any", {"_t": form, "_v": {}})):
+        try:
+            call()
+            raise SystemExit("a form with no descriptor was accepted: %r" % (form,))
+        except _rt.MarshalError as e:
+            assert e.message == want, (e.message, want)
+    seen.append(want)
+
+# The §4.4 half says the section; the fourth family's says the opposite, and
+# neither may say "yet" about the other's boundary.
+assert _rt._DEFERRED % "fixed<9,2>" == seen[0], _rt._DEFERRED
+assert _rt._UNMARSHALLABLE % "native Handle" == seen[1], _rt._UNMARSHALLABLE
+assert _rt._UNMARSHALLABLE != _rt._DEFERRED, "the two families are one string"
+assert "yet" not in seen[1], seen[1]
+assert "is not marshalled by the v1 wire" not in seen[1], seen[1]
+print("refused:", seen[1])
+"#;
+    let out = run_script(
+        "nodesc",
+        "module nodesc_m { interface Nothing {}; };",
+        &script.replace("__FORMS__", &forms).replace("__WANTS__", &wants),
+    );
+    assert!(out.contains("refused: native Handle has no wire form at all"), "{out}");
+}
+
 /// A union's Python surface: `_d`/`_v`, the named branch accessors, and the
 /// refusal to read a branch that is not the active one.
 ///

@@ -220,6 +220,87 @@ fn over_the_golden_corpus_the_rule_names_every_generator_skip() {
     assert_eq!(all_rule.len(), 30);
 }
 
+/// The three ways a reader is told something false about a `native`, asserted
+/// over every layer that produces a sentence about one.
+///
+/// The name of the rule is `wire/deferred-type` for all four families and it is
+/// imprecise for this one — renaming it would break every consumer for a word,
+/// and the imprecision is answered in the *message* instead. So the message is
+/// what has to be checked. A refusal that said "yet" would promise a version
+/// that cannot come, and one that carried §4.4's deferral claim would send the
+/// reader to a plan entry that does not name the construct and never will.
+///
+/// Both were live in shipped code on 2026-08-21, in the two layers this file
+/// does not reach (`anyjson::from_json`, `dynany::default_value`); those are
+/// held by `orbweaver-dynamic`'s `deferred_sentence_agreement`. What is held
+/// here is the pair this file *is* about — the front end's rule and the two
+/// emitters — because each of them writes its own sentence, and the reason the
+/// native family survived six phases is that nobody compared them.
+///
+/// # The third way, and how this test came to have it
+///
+/// The first negative control run against this test came back **green**. It
+/// replaced the rule's `fix()` advice with *"wait for §4.4 to land natives, or
+/// declare the type in IDL…"*, which is the exact falsehood the test exists to
+/// forbid — and it contains neither "yet" nor the deferral claim, so both
+/// assertions passed. Two substrings are not the rule; the rule is that **every
+/// mention of §4.4 in a sentence about a native is a denial**, since these
+/// layers have to name the section in order to say it does not apply (the
+/// emitters' reason string is what `sets()` above reads to tell a wire refusal
+/// from an ordinary skip). So the check is now about the mention: a negation
+/// has to sit in front of it.
+#[test]
+fn no_layer_calls_a_native_deferred_and_none_of_them_says_yet() {
+    // §4.4's deferral claim, spelled out rather than imported: this crate
+    // cannot see `orbweaver_dynamic::deferred_wire_head`, and a change to that
+    // wording is a change this test has to be told about.
+    const DEFERRAL_CLAIM: &str = "is not marshalled by the v1 wire (docs/PLAN.md §4.4)";
+    // How far back a denial may sit from the mention it denies. Wide enough for
+    // "so this is **not** one of docs/PLAN.md §4.4's three deferrals" and for
+    // "**Not** deferred like §4.4's three constructs", narrow enough that a
+    // negation about some other clause cannot launder a promise.
+    const WINDOW: usize = 40;
+
+    let src = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/golden/31-native-type.idl"),
+    )
+    .expect("corpus/golden/31-native-type.idl");
+    let spec = orbweaver_idl::check(&src).expect("checks out");
+
+    // The front end's rule: the message a reader of an S4 report meets, and
+    // the fix it offers them.
+    let uses = orbweaver_idl::deferred_wire_types(&spec);
+    let natives: Vec<_> = uses.iter().filter(|d| d.family() == "natives").collect();
+    assert!(!natives.is_empty(), "31-native-type declares one");
+    let mut sentences: Vec<String> = natives.iter().flat_map(|d| [d.message(), d.fix()]).collect();
+
+    // Both emitters: the reason string attached to every skip caused by a
+    // native. It is the string `sets()` above reads to tell a wire refusal
+    // from an ordinary skip, so it has to name §4.4 — and it names it only to
+    // say the section does not apply, which is the distinction being pinned.
+    let s = sets(&src);
+    let native_ids: Vec<&str> = natives.iter().map(|d| d.declaration.as_str()).collect();
+    for (name, why) in s.rust_skipped.iter().chain(&s.python_skipped) {
+        if native_ids.iter().any(|d| d == name) {
+            sentences.push(why.clone());
+        }
+    }
+    assert!(sentences.len() > natives.len() * 2, "no emitter reason was collected: {sentences:?}");
+
+    for s in &sentences {
+        assert!(!s.contains("yet"), "a native is not waiting on an implementation: {s}");
+        assert!(!s.contains(DEFERRAL_CLAIM), "a native must not be called a §4.4 deferral: {s}");
+        for (at, _) in s.match_indices("§4.4") {
+            let before = &s[at.saturating_sub(WINDOW)..at].to_lowercase();
+            assert!(
+                before.contains("not"),
+                "a native sentence names §4.4 without denying it — \
+                 \"…{before}§4.4…\" promises a section that will never carry one: {s}"
+            );
+        }
+    }
+}
+
 /// Every shape the rule's own tests know for `fixed`, through both closures:
 /// a sequence element, a union case, an exception reached only through
 /// `raises`, an attribute, a parameter, an inherited operation, two hops of

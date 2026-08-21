@@ -216,9 +216,7 @@ pub fn descriptor(tc: &TypeCode) -> Result<String, String> {
         | TypeCode::Except { id, .. }
         | TypeCode::Alias { id, .. }
         | TypeCode::Recursive(id) => format!("(\"ref\", {})", py_str(id)),
-        TypeCode::Fixed { digits, scale } => {
-            return Err(format!("fixed<{digits},{scale}> is deferred at wire level (§4.4)"));
-        }
+        TypeCode::Fixed { digits, scale } => return Err(crate::deferred_fixed(*digits, *scale)),
         // No descriptor, deliberately. `("objref", id)` was available and
         // wrong: the Python runtime would have marshalled an IOR where the
         // peer sends a value, and the bridge would have agreed with it,

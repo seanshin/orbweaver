@@ -320,6 +320,17 @@ fn to_json_at(tc: &TypeCode, v: &Value, h: &mut dyn References, at: &Path<'_>) -
             return fail(p, crate::deferred_wire_sentence(&what));
         }
 
+        // The fourth family, and the one this layer had no arm for at all: a
+        // `native` fell to the mismatch arm below and was refused with
+        // `"Struct([]) is not a value of IDL:m/Handle:1.0"` — a true sentence
+        // about the wrong problem, and one that names neither the construct
+        // nor any boundary. Its own sentence, not §4.4's: see
+        // [`crate::unmarshallable_wire_sentence`] for why the two differ.
+        (t, _) if crate::unmarshallable_wire_name(t).is_some() => {
+            let what = crate::unmarshallable_wire_name(t).expect("just matched");
+            return fail(p, crate::unmarshallable_wire_sentence(&what));
+        }
+
         (t, v) => return fail(p, format!("{v:?} is not a value of {}", type_name(t))),
     })
 }
@@ -502,6 +513,17 @@ fn from_json_at(tc: &TypeCode, j: &Json, h: &dyn References, at: &Path<'_>) -> R
         other if crate::deferred_wire_name(other).is_some() => {
             let what = crate::deferred_wire_name(other).expect("just matched");
             return fail(p, crate::deferred_wire_sentence(&what));
+        }
+
+        // And the fourth, on the way in — the direction that told the reader
+        // something false. Until this arm existed a peer-fed `native` fell to
+        // the line below and was answered `"IDL:m/Handle:1.0 cannot cross
+        // yet"`: "yet" promises a later version, and there is no later version
+        // in which a native crosses. Nothing else in this file may say "yet"
+        // about one.
+        other if crate::unmarshallable_wire_name(other).is_some() => {
+            let what = crate::unmarshallable_wire_name(other).expect("just matched");
+            return fail(p, crate::unmarshallable_wire_sentence(&what));
         }
 
         other => return fail(p, format!("{} cannot cross yet", type_name(other))),

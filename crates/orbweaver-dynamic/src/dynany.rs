@@ -338,12 +338,35 @@ pub fn default_value(tc: &TypeCode) -> Result<Value> {
 
 fn default_within(tc: &TypeCode, open: &mut Vec<TypeCode>, path: &str) -> Result<Value> {
     let node = open_type(tc.clone(), open, path)?;
+    // The tail this navigator adds to whichever head applies, and nothing more.
+    //
+    // It used to be the whole message and it named `docs/PLAN.md §4.4` for
+    // every caller — which was true for three of them and false for the other
+    // two. A `native` is not deferred by §4.4 and `Principal` is not in §4.4 at
+    // all; both were sent to a plan entry that does not name them. The head now
+    // comes from the one place that owns it — [`crate::deferred_wire_head`] for
+    // §4.4's three, [`crate::unmarshallable_wire_head`] for a native — and this
+    // closure only says what a *navigator* could not do.
+    const NO_START: &str = ", so there is nothing to start a value of it at";
+    let cannot_start = |head: String| Error { path: path.to_string(), message: head + NO_START };
     let unsupported = |what: &str| Error {
         path: path.to_string(),
-        message: format!(
-            "{what} has no value in the dynamic path, so there is nothing to start it at; see \
-             docs/PLAN.md §4.4"
-        ),
+        message: format!("{what} has no value in the dynamic path{NO_START}"),
+    };
+    // §4.4's three and the fourth family, each named by the function that owns
+    // its head. Called from the arms below rather than before the match,
+    // because the match is exhaustive over `TypeCode` and that exhaustiveness
+    // is what makes a *fifth* unmarshallable construct go red here instead of
+    // silently acquiring a default value.
+    let deferred = |tc: &TypeCode| {
+        cannot_start(crate::deferred_wire_head(
+            &crate::deferred_wire_name(tc).expect("§4.4 names this construct"),
+        ))
+    };
+    let unmarshallable = |tc: &TypeCode| {
+        cannot_start(crate::unmarshallable_wire_head(
+            &crate::unmarshallable_wire_name(tc).expect("no wire version carries this construct"),
+        ))
     };
     Ok(match &node {
         TypeCode::Null | TypeCode::Void => Value::Struct(Vec::new()),
@@ -437,20 +460,25 @@ fn default_within(tc: &TypeCode, open: &mut Vec<TypeCode>, path: &str) -> Result
                 ),
             });
         }
-        TypeCode::Fixed { .. } => return Err(unsupported("`fixed`")),
-        // Refused, and refused *here* rather than by falling through to the
-        // reference case. A valuetype's state goes on the wire inline behind a
-        // value tag (CORBA 3.4 Part 2, §9.3.4) and an abstract interface goes
-        // as the union of a value and a reference; marshalling either as an
-        // IOR is not a partial implementation of §4.4's deferral, it is the
-        // wrong bytes. The registry used to record both as `ObjRef` and this
-        // path marshalled them without a word.
-        TypeCode::Value { .. } => return Err(unsupported("`valuetype`")),
-        TypeCode::AbstractInterface { .. } => return Err(unsupported("an abstract interface")),
+        // §4.4's three, each refused *here* rather than by falling through to
+        // the reference case. A valuetype's state goes on the wire inline
+        // behind a value tag (CORBA 3.4 Part 2, §9.3.4) and an abstract
+        // interface goes as the union of a value and a reference; marshalling
+        // either as an IOR is not a partial implementation of §4.4's deferral,
+        // it is the wrong bytes. The registry used to record both as `ObjRef`
+        // and this path marshalled them without a word.
+        TypeCode::Fixed { .. } | TypeCode::Value { .. } | TypeCode::AbstractInterface { .. } => {
+            return Err(deferred(&node));
+        }
         // And the fourth. `ObjRef` gave it a perfectly good default — `None`,
         // a nil reference — which is the shape of every wrong answer in this
-        // class: legal, silent, and about a different type.
-        TypeCode::Native { .. } => return Err(unsupported("a `native`")),
+        // class: legal, silent, and about a different type. Its head is not
+        // §4.4's, and until now this arm said it was.
+        TypeCode::Native { .. } => return Err(unmarshallable(&node)),
+        // `Principal` keeps the closure above to itself. It is not deferred
+        // and it is not a native — it was withdrawn from CORBA — so neither
+        // head applies. It is the other of the two arms that used to be sent
+        // to §4.4 for a boundary it never hit.
         TypeCode::Principal => return Err(unsupported("`Principal`")),
         // open_type followed both; arriving here would mean it had not.
         TypeCode::Recursive(_) | TypeCode::Alias { .. } => {
