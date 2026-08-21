@@ -289,7 +289,7 @@ Phase 1 도중에 재론하지 않도록 여기서 확정한다.
 
 **객체 참조 획득.** 겨눌 IOR이 없으면 DII는 무용지물이다. v1은 IOR 문자열·파일, `corbaloc:`·`corbaname:` URL, 그리고 표준 INS 표면인 **CosNaming 클라이언트**로 참조를 해석한다 — 레지스트리가 살아있는 객체에 닿지 못하면 발견은 무의미하므로 `orbweaver-giop`에 내장한다.
 
-**v1 와이어 타입 지원 매트릭스.** 기본형, `string`/`wstring`, `enum`, `struct`, `union`, `sequence`, 배열, `exception`, `any`, `TypeCode`(간접 참조 포함)는 완전한 CDR 왕복을 지원한다. **보류: `valuetype`(청크 인코딩과 절단은 그 자체로 하나의 프로젝트다), abstract interface, `fixed`.** 파서는 전부 수용하되, 와이어 지원은 파일럿 수요를 근거로 한 Phase 4 결정 게이트로 미룬다.
+**v1 와이어 타입 지원 매트릭스.** 기본형, `string`/`wstring`, `enum`, `struct`, `union`, `sequence`, 배열, `exception`, `any`, `TypeCode`(간접 참조 포함)는 완전한 CDR 왕복을 지원한다. **보류: `valuetype`(청크 인코딩과 절단은 그 자체로 하나의 프로젝트다), abstract interface, `fixed`.** 파서는 전부 수용하되, 와이어 지원은 파일럿 수요를 근거로 한 Phase 4 결정 게이트로 미룬다. **`native`는 이 와이어가 싣지 못하는 네 번째 것이며 보류가 아니다** — 언어 매핑만 아는 타입을 이름하므로 이번 버전에도, 이후 어떤 버전에도 구현할 와이어 형식이 없다. omniORB도 같은 답을 준다: C++ 백엔드는 선언 자체를 거부하고, ORB에는 `create_native_tc`가 아예 없다(2026-08-21, `spikes/native_capture.py`). S4의 `wire/deferred-type` 규칙이 넷 모두를 폐쇄집합으로 묶고 어느 문장이 적용되는지 말하며, `crates/orbweaver-gen/tests/deferred_wire_agreement.rs`가 규칙과 두 이미터를 한 집합으로 묶는다. `ValueBase`는 다섯 번째가 아니다 — 모든 valuetype의 추상 기반이며, omniORB는 VM_NONE의 `tk_value`로 쓴다.
 
 **런타임 모델.** Rust 코어는 비동기(tokio)이며 블로킹 C-ABI 파사드를 제공하고, Python 제어평면은 PyO3로 블로킹 파사드에 바인딩한다. 다수의 동시 요청에서 전송 계층의 동시성을 유지하면서 파이프라인 코드에는 비동기 복잡성을 강요하지 않는다.
 

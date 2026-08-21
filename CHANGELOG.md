@@ -46,6 +46,57 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **A `native` and a `ValueBase` are no longer recorded as object references.**
+  `native X;` was `TypeCode::ObjRef`, so both emitters generated a reference
+  and the dynamic path put an **IOR** on the wire for a type that has no wire
+  form at all; `ValueBase` was the same defect in the one spelling with no
+  declaration behind it, and it is a valuetype. The peer was asked before a
+  representation was chosen, and **for `native` the measurement is a refusal by
+  all four routes omniORB has**: `-b dump` accepts the declaration, `-bcxx`
+  exits 1 on it, `-bpython` ignores it and leaves a dangling `typeMapping`
+  entry that raises `KeyError` one import later, and the ORB has no
+  `create_native_tc` — `createTypeCode((tv_native, …))` raises `INTERNAL`. So
+  `TypeCode::Native` has **no `TCKind`**, `encode` refuses it by name, and
+  `from_u32` still has no arm for 31, refusing a peer that sends one. For
+  `ValueBase` the measurement is bytes: `tk_value`, **VM_NONE** — not
+  VM_ABSTRACT, which is what a reasoned answer gets wrong — `tk_null` base,
+  zero members, byte-for-byte in both stream orders. S4's `wire/deferred-type`
+  rule now closes over natives with **its own sentence** — a native is not
+  deferred, there is nothing to defer — and `deferred_wire_agreement` holds the
+  rule and both emitters to one set of thirty. Two corpus files, both accepted
+  by `omniidl -b dump`; **JacORB rejects both with NullPointerExceptions rather
+  than diagnostics**, recorded in `corpus/divergences.tsv`. Landing it also
+  closed two things it uncovered: a native TypeCode crossed AnyJSON as the
+  string `"void"` (the silent wrong answer D008's rule exists to prevent — the
+  arm's first negative control came back **green**, because the property's JSON
+  leg carries values and not TypeCodes, so the arm was unmeasured until a
+  native joined that test), and a sequence whose element cannot be sampled has
+  exactly one value, the empty one, which the CDR leg took and the JSON leg
+  refused — **5824 of 5952** round trips. The leg now runs for it: **5952 of
+  5952**, 128 more measured than before.
+
+  **`native`와 `ValueBase`를 더 이상 객체 참조로 기록하지 않는다.** `native X;`가
+  `TypeCode::ObjRef`였고, 두 이미터 모두 참조를 생성했으며 동적 경로는 와이어
+  형식이 아예 없는 타입에 IOR을 실었다. `ValueBase`는 선언이 없는 철자에서 같은
+  결함이 살아남은 경우이며, 그것은 valuetype이다. 표현을 정하기 전에 피어에게
+  물었고, **`native`의 측정은 네 경로 모두에서의 거부다**: `-b dump`는 선언을
+  받아들이고, `-bcxx`는 exit 1, `-bpython`은 선언을 무시한 뒤 끊어진
+  `typeMapping`을 남겨 import에서 `KeyError`를 내며, ORB에는 `create_native_tc`가
+  없다. 그래서 `TypeCode::Native`에는 `TCKind`가 없고, `encode`는 이름을 대며
+  거부하며, `from_u32`에는 31 아암이 없어 31을 보낸 피어도 대칭적으로 거부된다.
+  `ValueBase`의 측정은 바이트다: `tk_value`, **VM_NONE**(VM_ABSTRACT가 아니다 —
+  추론으로 답하면 틀리는 자리), `tk_null` 기반, 멤버 0, 두 스트림 순서 모두 바이트
+  단위 일치. S4의 `wire/deferred-type` 규칙은 native까지 폐쇄집합에 넣되 **문장은
+  따로 둔다** — native는 미뤄진 것이 아니라 미룰 것이 없다. 코퍼스 두 파일은
+  `omniidl -b dump`가 받아들이고 **JacORB는 둘 다 진단이 아니라 NPE로 거부**하여
+  `corpus/divergences.tsv`에 기록했다. 착지 과정에서 드러난 둘도 함께 닫았다:
+  native TypeCode가 AnyJSON을 문자열 `"void"`로 건너던 것(D008이 막으려던 조용한
+  오답 — 이 아암의 첫 음성대조는 **초록으로 돌아왔다**. 속성 검사의 JSON 다리는
+  값을 건네지 TypeCode를 건네지 않기 때문이며, native가 그 테스트에 들어가기
+  전까지 아암은 측정되지 않고 있었다), 그리고 원소를 표본화할 수 없는 시퀀스의
+  유일한 값인 빈 시퀀스를 CDR은 세고 JSON은 건너뛰던 것(**5824/5952**). 이제 다리가
+  돌고 **5952/5952**, 이 배치 이전보다 128 왕복을 더 잰다.
+
 - **The AnyJSON layer names the rule that refused.** §4.4 defers `valuetype`,
   abstract interfaces and `fixed`; three layers refuse an *instance* and only
   two named the section. The AnyJSON layer — **the one a peer-fed document
