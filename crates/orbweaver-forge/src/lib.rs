@@ -734,6 +734,38 @@ fn fix_for(d: &Diagnostic, src: &str) -> Option<String> {
              type takes no `<d,s>`. For anything else, declare the type with a `typedef` and \
              name it here, or give the constant a type that can hold a literal."
         )),
+        // A constant's value must be a literal of its own type, with no
+        // conversion at all — omniidl converts nothing here, measured across
+        // sixteen pairs. The edit is unambiguous because the message already
+        // names the class that was wanted and how to write one.
+        // `corpus/negative/n19`.
+        "const-value-type" => Some(format!(
+            "The constant {text:?} has a value of the wrong class. IDL performs no conversion \
+             in a constant initialiser: `const double D = 5;` is an error and `5.0` is the \
+             fix, as are `9.9d` for a `fixed`, `'a'` for a `char`, `L'a'` for a `wchar`, \
+             `\"s\"` for a `string`, `L\"s\"` for a `wstring` and `TRUE`/`FALSE` for a \
+             `boolean`. Width is not the axis — `char` and `octet` are both one octet and \
+             neither takes the other's literal. Rewrite the literal in the constant's own \
+             class, or change the constant's type to the class the value already has."
+        )),
+        // Range and divide-by-zero. Both edits are the same shape: the value
+        // has to change, or the type does. `corpus/negative/n20`.
+        "const-value-range" => Some(format!(
+            "The constant {text:?} has a value its declared type cannot hold. Widen the \
+             type — `short` to `long`, `long` to `long long`, or the signed form to the \
+             unsigned one if the value is never negative — or write a value inside the \
+             range the message names. Do not truncate it: a constant is part of the \
+             contract, and a consumer that reads a wrapped number reads one nobody wrote."
+        )),
+        // The literal itself is malformed, and unlike most lexical failures the
+        // offending text is exactly the thing to edit. `corpus/negative/n22`.
+        "fixed-literal" => Some(format!(
+            "`{text}` is not a fixed-point literal. CORBA 3.4 §7.2.6.5 spells one as digits, \
+             an optional point, more digits and a `d` — there is no exponent production, so \
+             write `1000d` rather than `1e3d` (or drop the `d` and let it be a `double`). \
+             §7.11.3 caps it at 31 significant digits; a longer one has to lose digits \
+             deliberately, because rounding it silently would change the constant's value."
+        )),
         "void-in-signature" => Some(format!(
             "`{text}` is a return type and nothing else: `op_type_spec` names it and \
              `param_type_spec` does not. Give the attribute or parameter the type its value \

@@ -446,16 +446,30 @@ fn disc_of(tc: &TypeCode) -> Result<Disc, String> {
         TypeCode::UShort => Disc { put: "put_u16", get: "get_u16", ty: "u16".into() },
         TypeCode::Boolean => Disc { put: "put_bool", get: "get_bool", ty: "bool".into() },
         TypeCode::Char | TypeCode::Octet => Disc { put: "put_u8", get: "get_u8", ty: "u8".into() },
+        // `switch_type_spec ::= integer_type | char_type | boolean_type |
+        // enum_type | scoped_name` and `integer_type` reaches `long long`, so
+        // these two were always legal and always refused. Nothing noticed
+        // because no corpus file wrote one — the shape arrived with
+        // `31-const-values.idl`, whose union exists to carry a label at the top
+        // of `unsigned long long`'s range, and the label was the thing under
+        // test rather than the discriminator. `orbweaver_cdr` has had the two
+        // calls the whole time.
+        TypeCode::LongLong => Disc { put: "put_i64", get: "get_i64", ty: "i64".into() },
+        TypeCode::ULongLong => Disc { put: "put_u64", get: "get_u64", ty: "u64".into() },
         other => return Err(format!("unsupported union discriminator {other:?}")),
     })
 }
 
 /// A case label as a Rust literal of the discriminator's type.
 fn label_literal(label: &[u8], disc: &TypeCode) -> String {
+    // `u64` rather than `i64`: an eight-octet label at the top of `unsigned
+    // long long`'s range shifts its own sign bit into place, and an `i64`
+    // accumulator would sign-extend it into a negative before the cast below
+    // ever ran.
     let wide = |b: &[u8]| {
-        let mut v: i64 = 0;
+        let mut v: u64 = 0;
         for x in b {
-            v = (v << 8) | i64::from(*x);
+            v = (v << 8) | u64::from(*x);
         }
         v
     };
@@ -465,6 +479,8 @@ fn label_literal(label: &[u8], disc: &TypeCode) -> String {
         TypeCode::Short => format!("{}i16", wide(label) as i16),
         TypeCode::UShort => format!("{}u16", wide(label) as u16),
         TypeCode::Char | TypeCode::Octet => format!("{}u8", wide(label) as u8),
+        TypeCode::LongLong => format!("{}i64", wide(label) as i64),
+        TypeCode::ULongLong => format!("{}u64", wide(label)),
         _ => format!("{}u32", wide(label) as u32),
     }
 }
@@ -918,6 +934,21 @@ fn const_form(tc: &TypeCode, v: &ConstValue, cx: &Cx<'_>) -> Result<Form, String
             return Err("a `long double` constant has no const form: the value is 16 bytes of an \
                         encoding no Rust literal produces (§4.4)"
                 .to_owned());
+        }
+        // The value is known exactly and still has nowhere to go. It used to
+        // be skipped as *unevaluated*, which was true of the registry and
+        // false of the contract: the lexer had folded the decimal to an `f64`
+        // and the registry then refused to store a decimal it had no variant
+        // for. Both are fixed, so the reason had to stop being "could not
+        // evaluate" — the value is right here in the message.
+        (TypeCode::Fixed { .. }, v) => {
+            let text = v.as_decimal().unwrap_or_else(|| "the value".to_owned());
+            return Err(format!(
+                "a `fixed` constant has no const form: {text} is a decimal, and Rust's standard \
+                 library has no decimal type to hold it exactly — emitting it as an `f64` would \
+                 change the value, which is the whole reason it is a `fixed`. Read it from the \
+                 registry, where it is exact."
+            ));
         }
         (tc, v) => return Err(format!("no const form for {v:?} declared as {tc:?}")),
     })
@@ -1510,19 +1541,42 @@ mod tests {
             // generates all five of its constants, and the exemption is gone —
             // the only files that may skip are the ones whose names say they
             // are deferred wire types.
-            // `30-const-type` is the one file that skips without saying
-            // "deferred" in its name, and it is named here rather than let
-            // through by a wider rule. Its three `fixed` constants have no
-            // Rust binding because the registry has no `ConstValue` for a
-            // decimal — while the file itself is perfectly servable, which is
-            // exactly why the S4 rule does not name them (a constant is not
-            // marshalled; see orbweaver-idl `sema.rs`, `Definition::Const`).
-            // The set is exact, so the exemption cannot widen quietly, and the
-            // day a decimal type lands this goes red and gets deleted.
-            let expected: &[&str] = if stem == "30-const-type" {
-                &["IDL:gc30/CEILING:1.0", "IDL:gc30/ADJUSTMENT:1.0", "IDL:gc30/DERIVED:1.0"]
-            } else {
-                &[]
+            // Two files skip without saying "deferred" in their names, and
+            // both are named here rather than let through by a wider rule.
+            //
+            // The reason changed on 2026-08-21 and the exemption did not, which
+            // is worth a sentence. It used to read "the registry has no
+            // `ConstValue` for a decimal", and predicted that "the day a
+            // decimal type lands this goes red and gets deleted". A decimal
+            // type landed. It did not get deleted, because the prediction was
+            // about the wrong layer: `ConstValue::Fixed` now carries `9.9`
+            // exactly and the registry hands it to anyone who asks, but Rust's
+            // standard library still has no decimal for the *emitter* to write
+            // it into, and a `wstring` still cannot be built in a `const`
+            // initializer. So the set stays exact and the skips now quote the
+            // value they are skipping — which is how one can tell this
+            // exemption from the defect it used to cover.
+            let expected: &[&str] = match stem.as_str() {
+                "30-const-type" => &[
+                    "IDL:gc30/CEILING:1.0",
+                    "IDL:gc30/ADJUSTMENT:1.0",
+                    "IDL:gc30/DERIVED:1.0",
+                    "IDL:gc30/HEADING:1.0",
+                ],
+                "31-const-values" => &[
+                    "IDL:gc31/TAX_RATE:1.0",
+                    "IDL:gc31/UNIT_PRICE:1.0",
+                    "IDL:gc31/EPSILON:1.0",
+                    "IDL:gc31/ZERO:1.0",
+                    "IDL:gc31/SAME_AS_TAX_RATE:1.0",
+                    "IDL:gc31/ONE:1.0",
+                    "IDL:gc31/HALF:1.0",
+                    "IDL:gc31/WIDEST:1.0",
+                    "IDL:gc31/CEILING:1.0",
+                    "IDL:gc31/DERIVED:1.0",
+                    "IDL:gc31/CAPTION:1.0",
+                ],
+                _ => &[],
             };
             let mut got: Vec<&str> = g.skipped.iter().map(|(id, _)| id.as_str()).collect();
             got.sort_unstable();

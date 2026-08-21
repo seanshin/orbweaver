@@ -733,10 +733,12 @@ fn emit_type(id: &str, tc: &TypeCode) -> Result<String, String> {
 /// expression would need its enumerator object, and that is the one reference
 /// a descriptor cannot defer.
 fn json_label(label: &[u8], disc: &TypeCode) -> Result<String, String> {
+    // `u64`, so that an eight-octet label at the top of `unsigned long long`'s
+    // range does not sign-extend its own top bit on the way in.
     let wide = |b: &[u8]| {
-        let mut v: i64 = 0;
+        let mut v: u64 = 0;
         for x in b {
-            v = (v << 8) | i64::from(*x);
+            v = (v << 8) | u64::from(*x);
         }
         v
     };
@@ -747,6 +749,10 @@ fn json_label(label: &[u8], disc: &TypeCode) -> Result<String, String> {
         TypeCode::Short => format!("{}", wide(label) as i16),
         TypeCode::UShort => format!("{}", wide(label) as u16),
         TypeCode::Char | TypeCode::Octet => format!("{}", wide(label) as u8),
+        // `integer_type` in `switch_type_spec` reaches `long long`; these were
+        // legal and refused until corpus/golden/31-const-values.idl wrote one.
+        TypeCode::LongLong => format!("{}", wide(label) as i64),
+        TypeCode::ULongLong => format!("{}", wide(label)),
         TypeCode::Enum { members, name, .. } => {
             let ordinal = wide(label) as u32 as usize;
             match members.get(ordinal) {
@@ -833,6 +839,21 @@ fn const_literal(
             return Err("a `long double` constant has no Python literal: the value is 16 \
                         octets of an encoding no literal produces (§4.4)"
                 .to_owned());
+        }
+        // Skipped with the value in hand, not for want of one — see the Rust
+        // emitter's arm for what changed underneath this. Python is the target
+        // that *could* carry it: `decimal.Decimal("12.5")` is exact. It is not
+        // emitted because `_rt` is shipped verbatim and every generated module
+        // would carry the import whether or not it has a `fixed` constant;
+        // that is a decision about the emitted package, not about the value,
+        // and it is recorded rather than taken here.
+        (TypeCode::Fixed { .. }, v) => {
+            let text = v.as_decimal().unwrap_or_else(|| "the value".to_owned());
+            return Err(format!(
+                "a `fixed` constant has no Python literal here: {text} is a decimal, and a \
+                 `float` literal would change it. `decimal.Decimal({text:?})` would hold it \
+                 exactly — the registry has the value; this emitter does not import `decimal`."
+            ));
         }
         (tc, v) => return Err(format!("no Python literal for {v:?} declared as {tc:?}")),
     })

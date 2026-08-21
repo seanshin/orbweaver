@@ -1,0 +1,34 @@
+// n19 — a constant's value must be a literal of its own type. No conversion.
+//
+// This is the rule that had no check at all. The parser decided which *types*
+// a constant may have (`const_type`, corpus/golden/30) and then accepted any
+// literal whatsoever as the value, so all six lines below validated clean.
+//
+// omniidl 4.3.4 is strictly typed here, measured 2026-08-21, one file per line:
+//
+//   const double  A = 5;      Cannot interpret integer literal as a double
+//   const fixed   A = 5;      Cannot interpret integer literal as fixed point
+//   const char    A = 65;     Cannot interpret integer literal as a character
+//   const long    A = 'a';    Cannot interpret character literal as an integer
+//   const boolean A = 1;      Cannot interpret integer literal as a boolean
+//   const wstring A = "hi";   Cannot interpret string literal as a wide string
+//
+// Width is not the axis: `char` and `octet` are both one octet and neither
+// takes the other's literal. That is worth saying because the obvious guess —
+// "an integer fits anything integral" — is what a hand-written check would
+// have implemented, and it is wrong in six places.
+//
+// The wide pair is the shape that mattered most. `const wchar C = 'a';` was
+// accepted here while `L'a'` could not be lexed at all, so the only spelling
+// of a wide constant this repository could produce was the one omniidl
+// refuses. The legal spelling is in corpus/golden/30 and 31.
+//
+// 상수의 값은 그 상수 타입의 리터럴이어야 한다. 변환은 없다. 폭이 기준이 아니다.
+module n19 {
+  const double  RATIO     = 5;
+  const fixed   TALLY     = 5;
+  const char    INITIAL   = 65;
+  const long    OFFSET    = 'a';
+  const boolean ENABLED   = 1;
+  const wstring TITLE     = "plain";
+};

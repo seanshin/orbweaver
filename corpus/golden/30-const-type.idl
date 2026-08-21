@@ -17,12 +17,14 @@
 // constant is never marshalled, so it costs the v1 wire nothing. It does cost
 // one generated binding, which both emitters report as a skip.
 //
-// Two of const_type's ten alternatives are missing below and cannot be written
-// here yet: `wide_char_type` and `wide_string_type` need an `L`-prefixed
-// literal, which our lexer does not accept — measured 2026-08-20, omniidl
-// takes `const wchar B = L'x';` and refuses the unprefixed `'x'` with "Cannot
-// interpret character literal as a wide character", so there is no spelling
-// this corpus can use. No file in this repository has ever written one.
+// All ten of const_type's alternatives are now written. Two of them were
+// missing until 2026-08-21 — `wide_char_type` and `wide_string_type`, which
+// need an `L`-prefixed literal the lexer did not accept. What made that worth
+// closing rather than noting is the *other* half of the same measurement: the
+// unprefixed `const wchar B = 'x';` was **accepted** here and is refused by
+// omniidl ("Cannot interpret character literal as a wide character"), so the
+// only spelling of a wide constant this repository could produce was the one
+// no deployed compiler takes. See corpus/golden/31-const-values.idl.
 //
 // 상수 타입은 선언 타입보다 좁은 세 번째 생성 규칙이다. 맨 `fixed`는 상수
 // 타입에서만 합법이며 자릿수와 소수 자리는 리터럴이 정한다.
@@ -39,6 +41,17 @@ module gc30 {
   const boolean AUDITED     = TRUE;
   const double  TOLERANCE   = 0.0001;
   const unsigned long long CAPACITY = 4294967296;
+
+  // The two alternatives this file could not write until the lexer took an
+  // `L` prefix. `wide_char_type` and `wide_string_type` complete the ten.
+  // ASCII on purpose: omniidl 4.3.4 reads a wide literal one *byte* at a time,
+  // so `L'§'` is "Error in look-up of 'L'" and `L"aéb"` dumps back as
+  // `L"aￃﾩb"` — its two UTF-8 bytes as two code units. Measured
+  // 2026-08-21 and recorded in corpus/divergences.tsv; a golden file is for
+  // what both front ends agree on, so the non-ASCII case is pinned in
+  // orbweaver-idl's unit tests instead.
+  const wchar   MARKER      = L'#';
+  const wstring HEADING     = L"ledger";
 
   enum Grade { STANDARD, PRIORITY };
   const Grade   BASELINE    = STANDARD;

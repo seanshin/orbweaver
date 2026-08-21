@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::lex::{Annotation, Span};
+use crate::lex::{Annotation, FixedLit, Span};
 
 /// A parsed IDL file.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -401,14 +401,29 @@ pub enum TypeSpec {
 /// Folding at parse time would lose the source form, and the registry needs to
 /// report what an author wrote as well as what it evaluates to.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(missing_docs)]
 pub enum ConstExpr {
-    Int(i64),
+    /// An integer literal, widened from the lexer's `u64` magnitude so that
+    /// unary `-` stays exact: `unsigned long long`'s maximum and `long long`'s
+    /// minimum are both expressible here and neither fits an `i64`.
+    Int(i128),
+    /// A floating-point literal.
     Float(f64),
+    /// A fixed-point literal, still a decimal. See [`FixedLit`].
+    Fixed(FixedLit),
+    /// A string literal.
     Str(String),
+    /// A wide string literal, `L"…"`.
+    WStr(String),
+    /// A character literal.
     Char(char),
+    /// A wide character literal, `L'…'`.
+    WChar(char),
+    /// `TRUE` or `FALSE`.
     Bool(bool),
+    /// Another constant, or an enumerator.
     Name(ScopedName),
+    #[allow(missing_docs)]
     Unary { op: &'static str, operand: Box<ConstExpr> },
+    #[allow(missing_docs)]
     Binary { op: &'static str, left: Box<ConstExpr>, right: Box<ConstExpr> },
 }

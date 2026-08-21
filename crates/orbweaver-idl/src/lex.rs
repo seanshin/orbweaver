@@ -122,20 +122,125 @@ pub struct PragmaAt {
     pub span: Span,
 }
 
+/// A fixed-point literal, kept as the decimal it was written as.
+///
+/// # Why this is not an `f64`
+///
+/// `9.9` is not representable in binary floating point: the nearest `f64` is
+/// 9.9000000000000003552713678800500929355621337890625. For a `double` that is
+/// the answer, because a `double` *is* a binary float and the author asked for
+/// one. For a `fixed` it is a wrong answer to a question nobody asked — the
+/// author wrote a decimal, IDL's `fixed` **is** a decimal, and the only reason
+/// to round it is that the lexer reached for the nearest Rust type.
+///
+/// The loss is silent and it is upstream of everything: the registry, the IFR,
+/// the console catalogue, both generators' emitters and `idl-diff`'s §5.3
+/// comparison all read what the lexer decided. §4.4 keeps a `fixed` **value**
+/// off the wire, so nothing here is a marshalling question; a constant's value
+/// is part of what a released contract promises, and a differ that cannot tell
+/// `9.9d` from `9.9000000000000004` cannot report that promise changing.
+///
+/// *`fixed`는 십진수다. 렉서가 f64로 접으면 값은 아무것도 실행되기 전에 이미
+/// 틀린다.*
+///
+/// # The normal form, taken from the oracle
+///
+/// The value is `unscaled / 10^scale`, with `unscaled` unsigned: a leading `-`
+/// is IDL's unary operator, not part of the literal. Both fields are normalised
+/// exactly as omniidl 4.3.4 normalises them, measured 2026-08-21 by reading
+/// back its own `-b dump`:
+///
+/// ```text
+/// 9.9d      -> 9.9d       0.0d    -> 0d      100.d -> 100d
+/// 9.90d     -> 9.9d       00.10d  -> 0.1d    .5d   -> 0.5d
+/// 0.10d     -> 0.1d       000…01d -> 1d
+/// ```
+///
+/// So trailing fractional zeros and leading integer zeros are **not** part of
+/// the value: `9.9d` and `9.90d` are the same constant, and a differ must not
+/// report a change between them. That was worth measuring rather than
+/// assuming — the batch that produced this type was briefed the other way
+/// round, and the oracle said otherwise on the first query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FixedLit {
+    /// The digits as one integer, with the point removed. Unsigned: sign is
+    /// an operator applied to this.
+    pub unscaled: u128,
+    /// How many of those digits fall to the right of the point.
+    pub scale: u16,
+}
+
+/// The most significant digits a `fixed` may carry (CORBA 3.4 §7.11.3).
+pub const FIXED_MAX_DIGITS: u32 = 31;
+
+impl FixedLit {
+    /// Builds one from the literal text with the `d`/`D` suffix already gone,
+    /// in the normal form above. `None` when the digits do not fit.
+    fn parse(text: &str) -> Option<Self> {
+        let (int_part, frac_part) = match text.split_once('.') {
+            Some((i, f)) => (i, f),
+            None => (text, ""),
+        };
+        // Trailing fractional zeros are not significant, and dropping them is
+        // what makes `9.90d == 9.9d` — the oracle's normalisation, not ours.
+        let frac = frac_part.trim_end_matches('0');
+        let digits: String = format!("{int_part}{frac}");
+        let trimmed = digits.trim_start_matches('0');
+        let unscaled: u128 = if trimmed.is_empty() { 0 } else { trimmed.parse().ok()? };
+        Some(FixedLit { unscaled, scale: u16::try_from(frac.len()).ok()? })
+    }
+
+    /// How many significant digits it carries. `0d` carries one.
+    pub fn digits(self) -> u32 {
+        let mut n = 1;
+        let mut v = self.unscaled / 10;
+        while v > 0 {
+            n += 1;
+            v /= 10;
+        }
+        n.max(u32::from(self.scale))
+    }
+}
+
+impl fmt::Display for FixedLit {
+    /// The normal form, spelled the way omniidl spells it back.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.scale == 0 {
+            return write!(f, "{}d", self.unscaled);
+        }
+        let s = format!("{:0>width$}", self.unscaled, width = usize::from(self.scale) + 1);
+        let split = s.len() - usize::from(self.scale);
+        write!(f, "{}.{}d", &s[..split], &s[split..])
+    }
+}
+
 /// What a token is.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Tok {
     /// An identifier, or a keyword — the parser decides which by context,
     /// because IDL keywords are only reserved where the grammar expects them.
     Ident(String),
-    /// An integer literal.
-    Int(i64),
+    /// An integer literal, as the **magnitude** the source spelled.
+    ///
+    /// Unsigned, and `u64` rather than `i64`, because IDL's integer literals
+    /// are unsigned and a leading `-` is the unary operator `const_exp` names.
+    /// An `i64` here cannot hold `18446744073709551615`, which is a perfectly
+    /// ordinary `unsigned long long` constant and a perfectly ordinary
+    /// `unsigned long long` union label — both of which we rejected at the
+    /// lexer, in a message about 64 bits, until this was widened.
+    Int(u64),
     /// A floating-point literal.
     Float(f64),
+    /// A fixed-point literal — `9.9d`. Kept as a decimal; see [`FixedLit`].
+    Fixed(FixedLit),
     /// A string literal, with escapes already resolved.
     Str(String),
+    /// A wide string literal — `L"…"`.
+    WStr(String),
     /// A character literal.
     Char(char),
+    /// A wide character literal — `L'…'`.
+    WChar(char),
     /// Punctuation or an operator, as written.
     Punct(&'static str),
     /// End of input.
@@ -148,8 +253,11 @@ impl fmt::Display for Tok {
             Tok::Ident(s) => write!(f, "{s}"),
             Tok::Int(v) => write!(f, "{v}"),
             Tok::Float(v) => write!(f, "{v}"),
+            Tok::Fixed(v) => write!(f, "{v}"),
             Tok::Str(s) => write!(f, "{s:?}"),
+            Tok::WStr(s) => write!(f, "L{s:?}"),
             Tok::Char(c) => write!(f, "'{c}'"),
+            Tok::WChar(c) => write!(f, "L'{c}'"),
             Tok::Punct(p) => write!(f, "{p}"),
             Tok::Eof => write!(f, "end of file"),
         }
@@ -193,6 +301,26 @@ pub struct LexError {
     pub message: String,
     /// Where.
     pub span: Span,
+}
+
+impl LexError {
+    /// The rule a lexical failure files under, for the consumers that key on
+    /// one.
+    ///
+    /// Almost every lexical failure is `parse`: the cause is wherever the
+    /// scanner gave up, which is not reliably where the edit belongs, and a
+    /// confident wrong fix hint costs a self-repair round. The two exceptions
+    /// are the fixed-point literal shapes, where the edit *is* unambiguous —
+    /// the literal is right here and the specification says exactly what is
+    /// wrong with it.
+    ///
+    /// Derived from the message rather than carried on the struct so that the
+    /// twenty existing construction sites keep saying nothing about a rule
+    /// they have no opinion on.
+    #[must_use]
+    pub fn rule(&self) -> &'static str {
+        if self.message.starts_with("fixed-point literal") { "fixed-literal" } else { "parse" }
+    }
 }
 
 impl fmt::Display for LexError {
@@ -583,7 +711,28 @@ impl<'a> Lexer<'a> {
         };
 
         let mut escaped_ident = false;
-        let tok = if c == '_' || c.is_ascii_alphabetic() {
+        // `L'a'` and `L"hi"` — the wide literals. Matched ahead of the
+        // identifier rule, which would otherwise read the `L` as a name and
+        // leave the quote to be lexed on its own: that is exactly what
+        // happened, and the diagnostic was `expected ";", found 'a'`, which
+        // names neither `L` nor `wchar`. Without these two forms a `wchar` or
+        // `wstring` constant cannot be written at all — while `const wchar C =
+        // 'a';` was *accepted*, so the only spelling we took was the one
+        // omniidl refuses.
+        let tok = if c == 'L' && matches!(self.peek_at(1), Some('\'') | Some('"')) {
+            self.bump();
+            if self.peek() == Some('"') {
+                match self.string(start, sl, sc)? {
+                    Tok::Str(s) => Tok::WStr(s),
+                    other => other,
+                }
+            } else {
+                match self.character(start, sl, sc)? {
+                    Tok::Char(c) => Tok::WChar(c),
+                    other => other,
+                }
+            }
+        } else if c == '_' || c.is_ascii_alphabetic() {
             // IDL allows a leading underscore to escape a keyword; the escaped
             // name is the identifier without it.
             escaped_ident = c == '_';
@@ -638,9 +787,27 @@ impl<'a> Lexer<'a> {
         })
     }
 
+    /// Lexes a numeric literal **without choosing a Rust type that cannot hold
+    /// it**, which is the rule this function got wrong three ways at once.
+    ///
+    /// Measured against omniidl 4.3.4 on 2026-08-21, the three were one cause:
+    /// every literal was funnelled into `i64` or `f64` and whatever those could
+    /// not represent was lost or refused.
+    ///
+    /// | written | was | is |
+    /// |---|---|---|
+    /// | `9.9d` | `Float(9.900000000000000355…)` | `Fixed(99, scale 1)` |
+    /// | `18446744073709551615` | refused, "does not fit in 64 bits" | `Int` |
+    /// | `0xFFFFFFFFFFFFFFFF` | refused, "malformed hexadecimal" | `Int` |
+    ///
+    /// The two refusals are legal `unsigned long long` — omniidl accepts both,
+    /// as a constant and as a union case label. See [`Tok::Int`] and
+    /// [`FixedLit`] for why the types are what they are.
     fn number(&mut self, start: usize, sl: u32, sc: u32) -> Result<Tok, LexError> {
         let from = self.pos;
         let mut is_float = false;
+        let mut has_exponent = false;
+        let mut is_fixed = false;
 
         if self.peek() == Some('0') && matches!(self.peek_at(1), Some('x') | Some('X')) {
             self.bump();
@@ -650,7 +817,7 @@ impl<'a> Lexer<'a> {
                 self.bump();
             }
             let text = &self.src[hex_from..self.pos];
-            return i64::from_str_radix(text, 16).map(Tok::Int).map_err(|_| LexError {
+            return u64::from_str_radix(text, 16).map(Tok::Int).map_err(|_| LexError {
                 message: format!("malformed hexadecimal literal {text:?}"),
                 span: self.here(start, sl, sc),
             });
@@ -667,15 +834,14 @@ impl<'a> Lexer<'a> {
                 }
                 'e' | 'E' => {
                     is_float = true;
+                    has_exponent = true;
                     self.bump();
                     if matches!(self.peek(), Some('+') | Some('-')) {
                         self.bump();
                     }
                 }
                 'd' | 'D' => {
-                    // A fixed-point literal suffix. Treated as a float for now;
-                    // `fixed` is parser-only in v1 (PLAN §4.4).
-                    is_float = true;
+                    is_fixed = true;
                     self.bump();
                     break;
                 }
@@ -683,23 +849,54 @@ impl<'a> Lexer<'a> {
             }
         }
         let text = &self.src[from..self.pos];
-        if is_float {
+        if is_fixed {
             let cleaned = text.trim_end_matches(['d', 'D']);
-            cleaned.parse::<f64>().map(Tok::Float).map_err(|_| LexError {
+            if has_exponent {
+                // omniidl: "Cannot interpret floating point literal as fixed
+                // point". `fixed_pt_literal` has no exponent production, so
+                // `1e3d` is a float literal wearing a `d`.
+                return Err(LexError {
+                    message: format!(
+                        "fixed-point literal {text:?} may not carry an exponent: IDL's \
+                         `fixed_pt_literal` is digits, a point and more digits. Write the \
+                         digits out, or drop the `d` and let it be a `double`."
+                    ),
+                    span: self.here(start, sl, sc),
+                });
+            }
+            let lit = FixedLit::parse(cleaned).ok_or_else(|| LexError {
+                message: format!("malformed fixed-point literal {text:?}"),
+                span: self.here(start, sl, sc),
+            })?;
+            if lit.digits() > FIXED_MAX_DIGITS {
+                return Err(LexError {
+                    message: format!(
+                        "fixed-point literal {text:?} has {} significant digits: a `fixed` \
+                         carries at most {FIXED_MAX_DIGITS} (CORBA 3.4 §7.11.3). Drop digits \
+                         until it fits — rounding it here would change the value silently.",
+                        lit.digits()
+                    ),
+                    span: self.here(start, sl, sc),
+                });
+            }
+            return Ok(Tok::Fixed(lit));
+        }
+        if is_float {
+            return text.parse::<f64>().map(Tok::Float).map_err(|_| LexError {
                 message: format!("malformed floating-point literal {text:?}"),
                 span: self.here(start, sl, sc),
-            })
-        } else if text.len() > 1 && text.starts_with('0') {
-            i64::from_str_radix(&text[1..], 8).map(Tok::Int).map_err(|_| LexError {
+            });
+        }
+        if text.len() > 1 && text.starts_with('0') {
+            return u64::from_str_radix(&text[1..], 8).map(Tok::Int).map_err(|_| LexError {
                 message: format!("malformed octal literal {text:?}"),
                 span: self.here(start, sl, sc),
-            })
-        } else {
-            text.parse::<i64>().map(Tok::Int).map_err(|_| LexError {
-                message: format!("integer literal {text:?} does not fit in 64 bits"),
-                span: self.here(start, sl, sc),
-            })
+            });
         }
+        text.parse::<u64>().map(Tok::Int).map_err(|_| LexError {
+            message: format!("integer literal {text:?} does not fit in 64 bits"),
+            span: self.here(start, sl, sc),
+        })
     }
 
     fn escape(&mut self, start: usize, sl: u32, sc: u32) -> Result<char, LexError> {
@@ -848,6 +1045,84 @@ mod tests {
         assert_eq!(toks("1.5"), vec![Tok::Float(1.5), Tok::Eof]);
         assert_eq!(toks("1e3"), vec![Tok::Float(1000.0), Tok::Eof]);
         assert_eq!(toks(".5"), vec![Tok::Float(0.5), Tok::Eof]);
+    }
+
+    /// The magnitudes an `i64` could not hold. Both were refused outright, in
+    /// two different messages, and both are ordinary `unsigned long long`.
+    #[test]
+    fn an_integer_literal_reaches_the_top_of_unsigned_long_long() {
+        assert_eq!(toks("18446744073709551615"), vec![Tok::Int(u64::MAX), Tok::Eof]);
+        assert_eq!(toks("0xFFFFFFFFFFFFFFFF"), vec![Tok::Int(u64::MAX), Tok::Eof]);
+        // One past it is still refused, and by the same rule rather than by a
+        // Rust type's edge — the message names the width IDL names.
+        assert!(Lexer::new("18446744073709551616").tokenize().is_err());
+    }
+
+    /// A fixed literal keeps its decimal, in the normal form the oracle uses.
+    #[test]
+    fn a_fixed_literal_is_a_decimal_and_not_a_float() {
+        let fixed = |src: &str| match toks(src).first() {
+            Some(Tok::Fixed(f)) => *f,
+            other => panic!("{src} should lex as a fixed literal, got {other:?}"),
+        };
+        // 9.9 has no `f64`. Kept as 99 with scale 1, so it is 9.9 exactly.
+        assert_eq!(fixed("9.9d"), FixedLit { unscaled: 99, scale: 1 });
+        assert_eq!(fixed("1.005d"), FixedLit { unscaled: 1005, scale: 3 });
+        assert_eq!(fixed("9.9D"), fixed("9.9d"), "the suffix may be either case");
+
+        // Normalisation, taken from `omniidl -b dump` reading its own output
+        // back (2026-08-21): trailing fractional zeros and leading integer
+        // zeros are not part of the value.
+        assert_eq!(fixed("9.90d"), fixed("9.9d"));
+        assert_eq!(fixed("0.10d"), fixed("0.1d"));
+        assert_eq!(fixed("000000001d"), fixed("1d"));
+        assert_eq!(fixed("0.0d"), FixedLit { unscaled: 0, scale: 0 });
+        assert_eq!(fixed("100.d"), FixedLit { unscaled: 100, scale: 0 });
+        assert_eq!(fixed(".5d"), FixedLit { unscaled: 5, scale: 1 });
+
+        // Spelled back the way omniidl spells it.
+        assert_eq!(fixed("9.90d").to_string(), "9.9d");
+        assert_eq!(fixed("0.001d").to_string(), "0.001d");
+        assert_eq!(fixed("0.0d").to_string(), "0d");
+
+        // The digit cap is the specification's, and 31 is exercised rather
+        // than described. omniidl silently truncates a 32nd *fractional*
+        // digit; we refuse, and corpus/divergences.tsv says why.
+        assert_eq!(fixed("1234567890123456789012345678901d").digits(), 31);
+        assert!(Lexer::new("12345678901234567890123456789012d").tokenize().is_err());
+        assert!(Lexer::new("0.12345678901234567890123456789012d").tokenize().is_err());
+
+        // `fixed_pt_literal` has no exponent production, so this is a float
+        // wearing a suffix. It used to lex as `Float(1000.0)`, because the
+        // suffix was stripped before anything looked at it.
+        assert!(Lexer::new("1e3d").tokenize().is_err());
+    }
+
+    /// `L'a'` and `L"hi"`, which had no spelling at all.
+    ///
+    /// The `L` used to be read as an identifier, leaving the quote to be lexed
+    /// on its own — so the error was `expected ";", found 'a'`, naming neither
+    /// `L` nor `wchar`. Meanwhile the unprefixed `const wchar C = 'a';` was
+    /// accepted, and omniidl refuses that: the only spelling of a wide
+    /// constant this repository could produce was the wrong one.
+    #[test]
+    fn wide_literals_take_an_l_prefix() {
+        assert_eq!(toks("L'a'"), vec![Tok::WChar('a'), Tok::Eof]);
+        assert_eq!(toks(r#"L"hi""#), vec![Tok::WStr("hi".into()), Tok::Eof]);
+        assert_eq!(toks(r"L'\n'"), vec![Tok::WChar('\n'), Tok::Eof], "escapes still resolve");
+
+        // A code point above U+00FF, kept whole. omniidl reads a wide literal
+        // one *byte* at a time and cannot lex this at all (measured
+        // 2026-08-21, corpus/divergences.tsv), which is why no golden file
+        // carries one and this pin does.
+        assert_eq!(toks("L'\u{ac00}'"), vec![Tok::WChar('\u{ac00}'), Tok::Eof]);
+        assert_eq!(toks("L\"\u{c6d0}\u{c7a5}\""), vec![Tok::WStr("원장".into()), Tok::Eof]);
+
+        // The prefix is only a prefix when a quote follows it: `L` and `Ledger`
+        // are ordinary identifiers, and reading them as literals would be a
+        // spectacular way to break every contract with an `L`-initial name.
+        assert_eq!(toks("L"), vec![Tok::Ident("L".into()), Tok::Eof]);
+        assert_eq!(toks("Ledger"), vec![Tok::Ident("Ledger".into()), Tok::Eof]);
     }
 
     #[test]
