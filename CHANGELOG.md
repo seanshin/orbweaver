@@ -46,6 +46,39 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **A `native` refusal comes from one place, as §4.4's three already did — and
+  two of the ten sentences it replaced were false.** 41b352d gave the three
+  deferrals one sentence across the CDR path, the AnyJSON path and the
+  generated Python runtime; 22637a8 then added a fourth family whose refusals
+  were written standalone, because the helper was not on its branch. Measured
+  before repairing, by running each layer rather than reading it: **ten
+  distinct sentences across thirteen call sites** for one type. Two of them lie
+  to a reader, and both sit in the layer a *peer-fed* document meets — the
+  AnyJSON read direction said a native `cannot cross yet`, promising a version
+  that will never carry one, and the dynamic navigator's default pointed at
+  §4.4, which does not defer a native and never will. Now five Rust layers and
+  the Python runtime read two functions, held by equality across the crate
+  boundary. Scoped to the rule rather than the keyword, it found three more of
+  the same: `dynany.rs` named §4.4 for **all five** of its refusals including
+  `Principal`, which is in no section at all; the generated Python runtime
+  wrote a **fourth** wording for `fixed`, in the peer-facing layer, measured by
+  nothing until it was broken on purpose; and `orbweaver-gen` kept the `fixed`
+  sentence as three identical literals. The pin asserts the *distinction* too —
+  the native sentence must not claim a §4.4 deferral and must not say "yet".
+
+  **음성대조 하나가 초록으로 돌아왔다**, 그리고 그것이 이 항목에서 가장 중요한
+  줄이다: S4 규칙의 `fix()`를 *"wait for §4.4 to land natives…"* 라는 바로 그
+  거짓으로 바꿨는데 통과했다 — "yet"도 없고 유예 주장 문자열도 없었기 때문이다.
+  부분문자열 둘은 규칙이 아니다. `§4.4` 언급 40자 이내에 부정이 있어야 한다는
+  조건으로 넓힌 뒤에야 red가 되었다. 그 절을 방금 읽은 사람이 쓴 대조였고, 리뷰가
+  아니라 실행이 잡았다. 나머지: `native` 거부가 호출 지점 **13곳에 문장 10개**로
+  흩어져 있었고 그중 둘은 거짓이었다(AnyJSON 읽기 방향의 `cannot cross yet`,
+  `dynany`의 §4.4 지시). 이제 러스트 다섯 계층과 파이썬 런타임이 함수 두 개를
+  읽으며, 크레이트 경계를 넘어 동등성으로 고정된다. 규칙으로 범위를 잡자 같은
+  부류가 셋 더 나왔다 — `dynany`는 `Principal`까지 §4.4로 돌려보냈고, 생성된
+  파이썬 런타임은 `fixed`에 네 번째 문구를 따로 썼으며, `gen`은 같은 리터럴을
+  세 번 복사해 두고 있었다.
+
 - **A `native` and a `ValueBase` are no longer recorded as object references.**
   `native X;` was `TypeCode::ObjRef`, so both emitters generated a reference
   and the dynamic path put an **IOR** on the wire for a type that has no wire
