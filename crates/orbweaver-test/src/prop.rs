@@ -624,9 +624,25 @@ fn json_unmapped(tc: &TypeCode) -> Option<String> {
         TypeCode::Union { discriminator, cases, .. } => {
             json_unmapped(discriminator).or_else(|| cases.iter().find_map(|c| json_unmapped(&c.tc)))
         }
-        TypeCode::Sequence { element, .. } | TypeCode::Array { element, .. } => {
-            json_unmapped(element)
+        // A sequence whose element cannot be sampled has exactly one value —
+        // the empty one — and AnyJSON carries that value in both directions.
+        // Propagating the element's limit here would mark the JSON leg
+        // unmeasured for a type whose every *existing* value does cross, and
+        // the count says so: `sequence<Handle>` and `sequence<ValueBase>` were
+        // sampled 32 times each in both orders, so the CDR leg took 128 round
+        // trips the JSON leg refused to take, and "every CDR round trip also
+        // crossed AnyJSON" stopped being true for a reason that was not a gap
+        // in the mapping. Asked at the element's depth, as the sampler asks it.
+        //
+        // An array is different and keeps propagating: it has no empty value,
+        // so an unmappable element makes the array itself unsamplable and the
+        // leg never runs for it either way.
+        TypeCode::Sequence { element, .. } => {
+            let probe =
+                Sampler { rng: Rng::new(0), gaps: BTreeSet::new(), depth: 0, open: Vec::new() };
+            if probe.can_sample_at(element, 1) { json_unmapped(element) } else { None }
         }
+        TypeCode::Array { element, .. } => json_unmapped(element),
         // A marker names a type that is under construction and has already
         // been asked; `any` and `TypeCode` carry their own type per value and
         // the mapping spells every TypeCode.

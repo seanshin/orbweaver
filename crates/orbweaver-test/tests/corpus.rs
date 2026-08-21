@@ -160,7 +160,14 @@ fn the_coverage_gaps_over_the_corpus_are_the_known_ones() {
     // Three from `32-valuebase`: `ValueBase` is a valuetype and was recorded
     // as a reference for exactly as long as the keyword had been parsed.
     // Note which ids are *absent*: `gn31::Desk` and `gvb32::Depot` hold
-    // references to unservable interfaces, and a reference crosses.
+    // references to unservable interfaces, and a reference crosses. Two more
+    // are absent for a different reason and were on this list for half a day:
+    // `gn31::Roster` is a `sequence<Handle>` and `gvb32::Cargo` a
+    // `sequence<ValueBase>`, and a sequence whose element cannot be sampled
+    // has exactly one value — the empty one — which AnyJSON carries in both
+    // directions. Propagating the element's limit through the sequence made
+    // the leg report itself unmeasured for a type whose every existing value
+    // does cross, and cost 128 round trips the CDR leg had taken.
     assert_eq!(
         unmapped,
         [
@@ -170,10 +177,8 @@ fn the_coverage_gaps_over_the_corpus_are_the_known_ones() {
             "IDL:gc21/Invoice:1.0",
             "IDL:gn31/Booking:1.0",
             "IDL:gn31/Handle:1.0",
-            "IDL:gn31/Roster:1.0",
             "IDL:gn31/Session:1.0",
             "IDL:gn31/Slot:1.0",
-            "IDL:gvb32/Cargo:1.0",
             "IDL:gvb32/Envelope:1.0",
             "IDL:gvb32/Manifest:1.0",
             "IDL:gcdr/Column:1.0",
@@ -255,11 +260,16 @@ fn every_golden_value_also_crosses_anyjson() {
          accounts for them",
         total.cdr - total.json
     );
-    // And the ones a `json/unmapped` finding does account for, pinned: two
-    // types, sixteen cases, both byte orders. Pinned rather than allowed,
-    // because "some CDR round trips have no JSON leg" is exactly the sentence
-    // a regression in the mapping would also produce.
-    assert_eq!(unmapped_cdr, 2 * 16 * 2, "the CDR-only set changed size");
+    // And the ones a `json/unmapped` finding does account for: **none**, since
+    // 2026-08-21. Every type the mapping refuses is also a type the sampler
+    // cannot build a value for, so a refused type contributes no CDR round
+    // trip either — the two limits coincide, and where they stopped coinciding
+    // (a sequence of an unsamplable element, whose one value is empty) the
+    // fix was to let the leg run rather than to widen this number. Pinned at
+    // zero rather than deleted, because "some CDR round trips have no JSON
+    // leg" is exactly the sentence a regression in the mapping would produce,
+    // and it must be read rather than absorbed by an inequality.
+    assert_eq!(unmapped_cdr, 0, "the CDR-only set changed size");
 }
 
 /// The contract half runs clean over the corpus in the sense that matters:
