@@ -1069,10 +1069,18 @@ esac
 # commit: refresh() made a no-op -> a clone taken before the move still reads
 # b"old"; with the ior asserts muted, 3 requests at the address the object
 # left instead of 1.
+#
+# The sixth cell (b4a0963) pins the *boundary* of that sharing, which D013
+# turns on: three references created independently from one IOR (Pool::reference,
+# not Clone) cost 3 requests at the address the object left and 7 at the object,
+# both reply orders — one forward per reference, once, because a second
+# reference re-points itself on its own first hop. omniORB 4.3.4 charges the
+# same 3 of 7 in the identical shape. It pins a cost, not a virtue, and goes
+# red on purpose if the identity map D013 declines to build is ever built.
 cloneout=$(cargo test -q -p orbweaver-giop --test forward_clone 2>&1)
 case "$cloneout" in
-  *"test result: ok. 5 passed"*)
-    echo "  ok   a permanent forward is seen by every clone of the reference — 3 requests at the old address down to 1, both reply orders; the temporary cache stays per handle" ;;
+  *"test result: ok. 6 passed"*)
+    echo "  ok   a permanent forward is seen by every clone of the reference — 3 requests at the old address down to 1, both reply orders; two independent references cost one forward each, once (D013); the temporary cache stays per handle" ;;
   *) echo "  FAIL reference clones and a permanent forward"
      printf '%s' "$cloneout" | grep -E "panicked|left:|right:" | head -4 | sed 's/^/       /'
      fail_total=$((fail_total+1)) ;;

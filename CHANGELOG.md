@@ -10,6 +10,40 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+### Measured / 측정
+
+- **Two references to one object cost one request each — and that is what
+  omniORB costs too.** `cd9f88f` shared a permanent forward across every
+  *clone* of a `Reference` and reported that two `Pool::reference` calls for
+  one IOR still do not agree, proposing an identity map because "omniORB
+  deduplicates by object key". Measured before deciding: three independently
+  created references, seven calls — **3 requests at the address the object
+  left and 7 at the object, both reply byte orders**. A second reference pays
+  on its own first call and then re-points itself, so the cost is one request
+  **per reference, once**, not one per call. omniORB 4.3.4 in the identical
+  shape (two `string_to_object` calls on one IOR string, plus a third after
+  the move, over TCP) pays **the same 3 of 7** under both forward statuses,
+  with `_is_equivalent` answering true — **the premise the identity map rested
+  on is refuted by the ORB it named**.
+  `docs/decisions/D013-reference-identity-in-the-pool.md` (PROPOSED) therefore
+  recommends **building nothing**, records the weak-reference map as the shape
+  if its trigger fires, and names the trap that makes a naive map a wrong-string
+  bug: `pool::Key` carries version and published codeset, so two IORs naming
+  one `(endpoint, object key)` with different `TAG_CODE_SETS` would let the
+  second reference inherit the first's profile — D012 §3's class through
+  another door. The harness pin moved 5 → 6.
+
+  **한 객체를 가리키는 레퍼런스 둘의 비용은 각 한 번이며, omniORB도 같은 값을
+  문다.** `cd9f88f`은 "omniORB는 객체 키로 중복 제거한다"를 근거로 식별 지도를
+  제안했다. 결정 전에 측정했다 — 독립 생성 레퍼런스 셋, 호출 일곱 번, **떠난
+  주소에 3, 객체에 7, 두 바이트 순서 모두**. 두 번째 레퍼런스는 자기 첫 호출에서
+  한 번 물고 스스로 재지정되므로 비용은 호출당이 아니라 **레퍼런스당 한 번**이다.
+  omniORB 4.3.4도 같은 모양에서 **같은 3/7**을 물고 `_is_equivalent`는 참을
+  답한다 — **지도가 딛고 선 전제를 그 지도가 이름한 ORB가 반증했다.** 따라서
+  D013(제안)은 **짓지 않기**를 권고하고, 방아쇠가 당겨질 때의 모양으로 약한 참조
+  지도를 기록하며, 순진한 지도를 "틀린 문자열" 버그로 만드는 `pool::Key` 코드셋
+  함정을 적는다.
+
 ### Fixed / 수정
 
 - **The AnyJSON layer names the rule that refused.** §4.4 defers `valuetype`,
