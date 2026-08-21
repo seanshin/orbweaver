@@ -299,6 +299,27 @@ fn to_json_at(tc: &TypeCode, v: &Value, h: &mut dyn References, at: &Path<'_>) -
             ])),
         },
 
+        // §4.4's three deferrals, refused by name and by section — the same
+        // sentence the CDR path and the generated Python runtime use.
+        //
+        // This layer is the one a peer-fed document actually meets, and until
+        // 2026-08-21 it was the only one of the three that did not say which
+        // rule refused: a `valuetype` fell through to "Struct([…]) is not a
+        // value of IDL:m/Money:1.0" and a `fixed` to "… is not a value of
+        // <anonymous>", because `type_name` has no name for a type with no
+        // repository id. Both are true sentences about the wrong problem, and
+        // both invite the reader to fix their document.
+        //
+        // Placed *after* every real arm and before the mismatch arm so that
+        // the D008 asymmetry stays legible in the code as well as in the
+        // message: `tc_to_json` below still writes all three structurally,
+        // because the description is a value the v1 wire carries and only the
+        // instance is not.
+        (t, _) if crate::deferred_wire_name(t).is_some() => {
+            let what = crate::deferred_wire_name(t).expect("just matched");
+            return fail(p, crate::deferred_wire_sentence(&what));
+        }
+
         (t, v) => return fail(p, format!("{v:?} is not a value of {}", type_name(t))),
     })
 }
@@ -471,6 +492,17 @@ fn from_json_at(tc: &TypeCode, j: &Json, h: &dyn References, at: &Path<'_>) -> R
             },
             _ => return fail(p, "an object reference is {\"_ref\": <handle>} or {\"_ref\": null}"),
         },
+
+        // The same three, on the way in — and this is the direction that
+        // matters, because a document naming one of them was written by a peer
+        // rather than by us. `{"_t": {"kind":"value",…}, "_v": {…}}` is exactly
+        // what a conformant sender produces for a `valuetype`, and the reader
+        // has to be told that the `_t` half was understood and the `_v` half is
+        // where v1 stops. "tk_value cannot cross yet" said neither.
+        other if crate::deferred_wire_name(other).is_some() => {
+            let what = crate::deferred_wire_name(other).expect("just matched");
+            return fail(p, crate::deferred_wire_sentence(&what));
+        }
 
         other => return fail(p, format!("{} cannot cross yet", type_name(other))),
     })

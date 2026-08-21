@@ -1274,6 +1274,15 @@ fn a_peer_fed_deferral_is_described_read_and_written_back_but_never_instantiated
     // what is being pinned is that the two implementations refuse the *same*
     // thing — an instance, never a description — and that is a fact about the
     // pair, which neither crate's tests can hold on its own.
+    //
+    // The sentences are collected rather than only pattern-matched, and handed
+    // to the script below to be compared for **equality** with what `_rt.py`
+    // raises. Python cannot import a Rust constant, so the only thing holding
+    // `_DEFERRED` to `orbweaver_dynamic`'s wording is this comparison; asserting
+    // that both merely contain "§4.4" would let the halves drift into two
+    // different explanations of the same boundary, which is the state the
+    // AnyJSON layer was in until 2026-08-21.
+    let mut want = Vec::new();
     for tc in &cases {
         let mut e = Encoder::new(Endian::Little);
         let why = orbweaver_dynamic::encode(&mut e, tc, &Value::Struct(Vec::new()))
@@ -1283,7 +1292,20 @@ fn a_peer_fed_deferral_is_described_read_and_written_back_but_never_instantiated
         let why = orbweaver_dynamic::decode(&mut d, tc)
             .expect_err("an instance of a deferred type cannot be read");
         assert!(why.message.contains("§4.4"), "Rust decode: {why}");
+        let read = why.message.clone();
+
+        // The AnyJSON layer, which is the one `_rt.to_json`/`_rt.from_json` are
+        // the second implementation of, in both directions.
+        let mut h = LocalReferences::new();
+        let out = anyjson::to_json(tc, &Value::Struct(Vec::new()), &mut h)
+            .expect_err("an instance of a deferred type has no AnyJSON form");
+        let back = anyjson::from_json(tc, &Json::parse("{}").expect("document"), &h)
+            .expect_err("an instance of a deferred type has no AnyJSON form");
+        assert_eq!(out.message, read, "Rust to_json vs decode");
+        assert_eq!(back.message, read, "Rust from_json vs decode");
+        want.push(Json::String(read));
     }
+    let want = Json::Array(want).to_string();
 
     let script = r#"
 import json, sys
@@ -1291,6 +1313,7 @@ sys.path.insert(0, sys.argv[1])
 from deferred import _rt
 
 docs = json.loads(r'''__DOC__''')
+want = json.loads(r'''__WANT__''')
 priced, describable, node = [_rt.from_json("any", d)[1] for d in docs]
 
 # ── read ────────────────────────────────────────────────────────────────────
@@ -1326,9 +1349,12 @@ for tc, desc in ((priced, d), (describable, da), (node, dn)):
     assert _rt.TypeCode.of(desc).form == tc.form, (desc, _rt.TypeCode.of(desc).form, tc.form)
 
 # ── and never instantiated ──────────────────────────────────────────────────
-# Both directions, both kinds, and the two sentences are the same sentence.
+# Both directions, both kinds, and the two sentences are the same sentence —
+# not "the same shape", the same string as the Rust CDR and AnyJSON layers
+# produce for these very TypeCodes, which is what `want` carries in.
 seen = []
-for desc, what in ((d, "valuetype"), (da, "abstract interface"), (dn, "valuetype")):
+for (desc, what), expected in zip(
+        ((d, "valuetype"), (da, "abstract interface"), (dn, "valuetype")), want):
     for call in (lambda: _rt.to_json(desc, object()), lambda: _rt.from_json(desc, {})):
         try:
             call()
@@ -1336,6 +1362,7 @@ for desc, what in ((d, "valuetype"), (da, "abstract interface"), (dn, "valuetype
         except _rt.MarshalError as e:
             assert "docs/PLAN.md §4.4" in e.message, e.message
             assert e.message.startswith(what + " "), e.message
+            assert e.message == expected, (e.message, expected)
             seen.append(e.message)
 assert len(set(seen)) == 3, seen
 try:
@@ -1362,10 +1389,11 @@ print("wrote it back")
     let text = doc.to_string();
     assert!(!text.contains("'''"), "the document cannot be embedded verbatim: {text}");
     let tmp = Path::new(env!("CARGO_TARGET_TMPDIR")).join("python-target/deferred");
+    assert!(!want.contains("'''"), "the sentences cannot be embedded verbatim: {want}");
     let out = run_script(
         "deferred",
         "module deferred_m { interface Nothing {}; };",
-        &script.replace("__DOC__", &text),
+        &script.replace("__DOC__", &text).replace("__WANT__", &want),
     );
     assert!(out.contains("read: Priced Money Node abstract_interface"), "{out}");
     assert!(out.contains("refused:"), "{out}");
