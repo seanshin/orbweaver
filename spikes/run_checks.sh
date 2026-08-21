@@ -1455,10 +1455,13 @@ fi
 s4_wire_out=$(cargo run -q --bin sidl-validate -- --wire v1 corpus/golden/*.idl 2>/dev/null)
 s4_wire_files=$(printf '%s\n' "$s4_wire_out" | grep 'error: .*\[wire/deferred-type\]' \
   | cut -d: -f1 | sort -u | xargs -n1 basename | tr '\n' ' ')
-if [ "$s4_wire_files" = "20-deferred-valuetype.idl 21-deferred-fixed.idl deferred-reach.idl " ]; then
-  echo "  ok   --wire v1 refuses exactly the three golden files that reach a §4.4 construct"
+# Three files until 2026-08-21, when `native` joined the closure as a fourth
+# family that is not a deferral: `31-native-type` and `32-valuebase` are refused
+# under --wire v1 for two different reasons, and the rule says which.
+if [ "$s4_wire_files" = "20-deferred-valuetype.idl 21-deferred-fixed.idl 31-native-type.idl 32-valuebase.idl deferred-reach.idl " ]; then
+  echo "  ok   --wire v1 refuses exactly the five golden files that reach a construct the wire cannot carry"
 else
-  echo "  FAIL --wire v1 refused: '$s4_wire_files' (expected 20, 21, deferred-reach)"
+  echo "  FAIL --wire v1 refused: '$s4_wire_files' (expected 20, 21, 31, 32, deferred-reach)"
   fail_total=$((fail_total+1))
 fi
 

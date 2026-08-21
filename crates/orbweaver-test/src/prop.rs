@@ -214,6 +214,16 @@ pub fn roundtrip_property_measured(
 ) -> (Vec<Finding>, Measured) {
     let mut out = Vec::new();
     let mut gaps = BTreeSet::new();
+    // Two different facts used to share `prop/unmeasured`, and the harness
+    // group that reads it is about one of them: a case that produced no
+    // value ran nothing while the summary still counted it, which is the
+    // sampler disagreeing with its own predicate. A sequence whose element
+    // cannot be sampled being empty every time is the other, and it is an
+    // honest limit rather than a defect — nothing is inconsistent, the type
+    // simply has one value. Filed under one id, the second silenced the
+    // first: a real self-contradiction would have arrived as one more line
+    // in a group already failing for a reason nobody had to act on.
+    let mut empty_by_construction = BTreeSet::new();
     let mut measured = Measured::default();
 
     if cases == 0 {
@@ -284,12 +294,26 @@ pub fn roundtrip_property_measured(
             ));
             continue;
         };
-        gaps.append(&mut sampler.gaps);
+        empty_by_construction.append(&mut sampler.gaps);
         for endian in [Endian::Big, Endian::Little] {
             out.extend(one_case(tc, &value, seed, endian, phase, cross_json, &mut measured));
         }
     }
 
+    for gap in empty_by_construction {
+        out.push(finding(
+            "prop/empty-by-construction",
+            Severity::Advice,
+            format!("while generating {}: {gap}", type_id(tc)),
+            type_id(tc),
+            Some(
+                "not a defect and not an inconsistency: the type has exactly this one \
+                 value, and it is measured. Cover the element itself when the wire grows \
+                 a form for it"
+                    .into(),
+            ),
+        ));
+    }
     for gap in gaps {
         out.push(finding(
             "prop/unmeasured",
@@ -1498,7 +1522,13 @@ mod tests {
     /// naming its own enclosing type now expands and is covered by
     /// `a_resolvable_cycle_is_generated_rather_than_reported`. The distinction
     /// is the point — one is a limit of the type, the other was a limit of the
-    /// generator.
+    /// generator, and since 2026-08-21 they are two rule ids for the same
+    /// reason: this one files under `prop/empty-by-construction`, which says
+    /// the type has exactly this one value and it was measured, while
+    /// `prop/unmeasured` is kept for the sampler contradicting its own
+    /// predicate — a case that produced no value and ran nothing. The harness
+    /// fails on the second and reads the first, and while they shared an id
+    /// the honest limit silenced the real inconsistency.
     #[test]
     fn an_unresolvable_cycle_reports_its_unmeasured_arm() {
         let tc = tc_struct(
@@ -1516,7 +1546,7 @@ mod tests {
         );
         let findings = roundtrip_property(&tc, 16);
         assert_eq!(findings.len(), 1, "{findings:?}");
-        assert_eq!(findings[0].rule, "prop/unmeasured");
+        assert_eq!(findings[0].rule, "prop/empty-by-construction");
         assert_eq!(findings[0].severity, Severity::Advice, "a gap is not a defect");
         assert!(findings[0].message.contains("recursive"), "{}", findings[0].message);
     }

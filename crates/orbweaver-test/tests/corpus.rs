@@ -69,12 +69,14 @@ fn every_golden_type_is_byte_stable() {
 #[test]
 fn the_coverage_gaps_over_the_corpus_are_the_known_ones() {
     let mut gaps = Vec::new();
-    // The `prop/unmeasured` reasons, kept beside the one-line form: two very
-    // different gaps file under that rule — a recursive arm that could not be
-    // resolved, and a sequence whose element the wire cannot carry at all —
-    // and only the message tells them apart. Counting the rule alone made the
-    // first indistinguishable from the second, which is how a new gap class
-    // would have arrived reading as a regression in the old one.
+    // Two very different gaps used to file under `prop/unmeasured` and only
+    // the message told them apart: a case that produced no value and ran
+    // nothing (the sampler contradicting its own predicate) and a sequence
+    // whose element the wire cannot carry at all (one value, and it is
+    // measured). They are two rule ids since 2026-08-21, because the harness
+    // group that reads the first went red for the second on the day the
+    // second arrived — an honest limit silencing a real inconsistency is the
+    // failure mode a shared id produces, and it produced it.
     let mut unmeasured: Vec<(String, String)> = Vec::new();
     for path in corpus("corpus/golden") {
         let reg = registry_of(&path);
@@ -82,7 +84,7 @@ fn the_coverage_gaps_over_the_corpus_are_the_known_ones() {
             let Some(tc) = reg.typecode(&id) else { continue };
             for f in prop::roundtrip_property(tc, 8) {
                 if f.severity != Severity::Error {
-                    if f.rule == "prop/unmeasured" {
+                    if f.rule == "prop/unmeasured" || f.rule == "prop/empty-by-construction" {
                         unmeasured.push((f.source.clone(), f.message.clone()));
                     }
                     gaps.push(format!("{}: {} {}", path.display(), f.rule, f.source));
