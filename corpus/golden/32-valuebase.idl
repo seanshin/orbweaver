@@ -1,0 +1,34 @@
+// 32 — `ValueBase` is a valuetype, not an object reference.
+//
+// The keyword names the abstract base of every valuetype, and PLAN §4.4
+// defers valuetypes — so a declaration reaching one is unservable for exactly
+// the reason `corpus/golden/20`'s are. It was not treated that way: the
+// registry mapped `TypeSpec::ValueBase` to `TypeCode::ObjRef`, so both
+// emitters emitted an object reference and the dynamic path put an **IOR** on
+// the wire where a conformant peer sends a value. S4's closure named these
+// declarations the whole time; the generators skipped none of them, and the
+// two sets were never compared over a corpus file because no corpus file
+// wrote the keyword. That is the gap this file closes.
+//
+// What omniORB writes for `struct Holder { ValueBase slot; };`, measured
+// 2026-08-21 (`spikes/native_capture.py`): the member is TCKind **29**
+// (tk_value), 72 bytes, `IDL:omg.org/CORBA/ValueBase:1.0` / `ValueBase`,
+// ValueModifier `00 00` — VM_NONE, **not** VM_ABSTRACT — concrete base
+// `tk_null`, zero state members.
+module gvb32 {
+  // ── unservable: reaches ValueBase ───────────────────────────────────────
+  // as a member, which is the shape that produced `{"_ref": …}` and an IOR
+  struct Envelope { ValueBase payload; string routing; };
+  // as a return type and as a parameter
+  interface Courier { ValueBase collect(in string waybill); void hand(in ValueBase item); };
+  // through a sequence element
+  typedef sequence<ValueBase> Cargo;
+  // one hop further out, so the cascade is executed and not just the direct case
+  struct Manifest { Envelope sealed; long weight; };
+
+  // ── servable: the negative controls ─────────────────────────────────────
+  // A reference to an unservable interface is still an IOR.
+  struct Depot { Courier agent; };
+  struct Plain { long a; string b; };
+  interface Lookup { Plain find(in string key); };
+};

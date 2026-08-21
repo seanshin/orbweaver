@@ -242,6 +242,7 @@ pub(crate) fn rust_type(tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
         }
         TypeCode::Value { name, .. } => return Err(deferred_value(name)),
         TypeCode::AbstractInterface { name, .. } => return Err(deferred_abstract(name)),
+        TypeCode::Native { name, .. } => return Err(unmarshallable_native(name)),
         other => return Err(format!("no static mapping for {other:?}")),
     })
 }
@@ -264,6 +265,31 @@ pub(crate) fn deferred_abstract(name: &str) -> String {
     format!(
         "abstract interface {name} is deferred at wire level (§4.4): on the wire it is the \
          union of a value and a reference, not an object reference"
+    )
+}
+
+/// The same, for a `native` — with the one word that differs said out loud.
+///
+/// §4.4 defers three constructs, meaning *this project has not implemented a
+/// wire form that exists*. A native is the fourth thing the wire cannot carry
+/// and it is not deferred: there is no wire form to implement, in this version
+/// or any later one, because a native names a type only the language mapping
+/// knows. The sentence names §4.4 in order to say it does **not** apply, and
+/// it has to name it: the reason string is what
+/// `tests/deferred_wire_agreement.rs` reads to tell a wire refusal from an
+/// ordinary skip, and a native that landed in neither set is exactly how this
+/// wrong answer survived six phases.
+///
+/// The refusal is spelled from the measurement, not from the section: omniORB
+/// refuses `native` outright in its C++ back end and ignores it in its Python
+/// one — see [`orbweaver_giop::TypeCode::Native`].
+pub(crate) fn unmarshallable_native(name: &str) -> String {
+    format!(
+        "native {name} has no wire form at all — it names a type only a language mapping \
+         knows, so there is nothing to marshal. Not deferred like §4.4's three constructs: \
+         those have a wire form this version does not implement, and a native has none to \
+         implement (omniORB's C++ back end refuses the declaration; its Python back end \
+         ignores it and leaves a dangling type mapping)"
     )
 }
 
@@ -486,6 +512,10 @@ fn representable(tc: &TypeCode, visiting: &mut Vec<String>) -> Result<(), String
         // representable — the cascade was correct and its input was not.
         TypeCode::Value { name, .. } => Err(deferred_value(name)),
         TypeCode::AbstractInterface { name, .. } => Err(deferred_abstract(name)),
+        // The fourth thing the wire cannot carry, cascading the same way and
+        // for a stronger reason — see [`unmarshallable_native`]. It reached
+        // here as a `TypeCode::ObjRef` until 2026-08-21, which is representable.
+        TypeCode::Native { name, .. } => Err(unmarshallable_native(name)),
         TypeCode::Sequence { element, .. } | TypeCode::Array { element, .. } => {
             representable(element, visiting)
         }
@@ -1503,7 +1533,16 @@ mod tests {
             }
             let g = emit(&r, "g");
             let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
-            let deferred = stem.contains("deferred");
+            // Two more files whose declarations the wire cannot carry and
+            // which cannot say "deferred" in their names. `31-native-type`
+            // must not, because a `native` is not deferred — there is no wire
+            // form waiting to be implemented. `32-valuebase` is about the
+            // keyword rather than the deferral, and the keyword is what had
+            // no corpus file. Named here rather than matched by a looser
+            // pattern, so the exemption stays a list of files somebody
+            // decided about.
+            let deferred =
+                stem.contains("deferred") || stem == "31-native-type" || stem == "32-valuebase";
             // This filter used to exempt every constant, because constants were
             // a named non-goal: "the registry records the type but not the
             // value". The registry records the value now, `14-modules-constants`

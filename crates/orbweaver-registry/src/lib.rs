@@ -843,11 +843,27 @@ enum DefRef {
     /// It used to be a bare marker mapped to `TypeCode::ObjRef`. See
     /// [`TypeCode::Value`] for what that cost.
     ValueType(Box<ValueTypeDef>),
-    /// `native X;` — not marshalled either, and *not* on §4.4's list, which
-    /// names `valuetype`, abstract interfaces and `fixed`. Still recorded as
-    /// an object reference, still wrong for the same reason, and left alone
-    /// deliberately: no rule names it, so a change here would be a claim no
-    /// gate checks. Reported, not fixed.
+    /// `native X;` — recorded as [`TypeCode::Native`], which is neither a
+    /// reference nor a deferred construct.
+    ///
+    /// It was `TypeCode::ObjRef` until 2026-08-21, for the same reason a
+    /// `valuetype` was: an object reference is a legal thing to emit, so
+    /// nothing was red. The previous batch left it alone with an honest
+    /// reason — *"no rule names it, so a change here would be a claim no gate
+    /// checks"* — and the fix for that was to make the rule name it, not to
+    /// leave the wrong answer in place. `wire/deferred-type` now closes over
+    /// natives and `orbweaver-gen`'s `deferred_wire_agreement` test holds the
+    /// two sets equal, so this *is* checked.
+    ///
+    /// A native is not deferred: §4.4's three constructs have a wire form this
+    /// project has not implemented, and a native has none to implement in any
+    /// version. See [`TypeCode::Native`] for what omniORB does when asked.
+    ///
+    /// Only a `native X;` written in the contract reaches here. The
+    /// predeclared `::CORBA::TypeCode` is not a definition and never enters
+    /// the name table; it is answered by `is_corba_typecode` as
+    /// [`TypeCode::TypeCode`], which is `tk_TypeCode` and marshals perfectly
+    /// well.
     Native,
 }
 
@@ -1444,10 +1460,9 @@ impl Builder<'_> {
                     .collect();
                 TypeCode::Value { id: id.clone(), name, modifier, base, members }
             }
-            DefRef::Native => {
-                // Not §4.4's list; see [`DefRef::Native`].
-                TypeCode::ObjRef { id: id.clone(), name }
-            }
+            // Described, not marshalled — and unlike a `valuetype` there is
+            // nothing to marshal at any wire version. See [`DefRef::Native`].
+            DefRef::Native => TypeCode::Native { id: id.clone(), name },
         };
         self.in_progress.pop();
         Some(tc)
@@ -1487,9 +1502,30 @@ impl Builder<'_> {
                 id: "IDL:omg.org/CORBA/Object:1.0".into(),
                 name: "Object".into(),
             },
-            TypeSpec::ValueBase => TypeCode::ObjRef {
+            // `ValueBase` is a **valuetype**, and this said object reference —
+            // the same wrong answer `valuetype` and `native` carried, in the
+            // one spelling that has no declaration to hang a fix on. It was
+            // the last one left: S4's closure already named it
+            // (`sema.rs`, `TypeSpec::ValueBase`), and because the registry
+            // handed the generators an `ObjRef` they skipped nothing, so
+            // `struct Anything { ValueBase v; }` generated as a reference and
+            // put an IOR on the wire where a peer sends a value.
+            //
+            // Measured rather than reasoned (`spikes/native_capture.py`,
+            // omniORB 4.3.4, 2026-08-21): for `struct Holder { ValueBase
+            // slot; };` omniORB writes the member as TCKind **29**, seventy-two
+            // bytes, `IDL:omg.org/CORBA/ValueBase:1.0` / `ValueBase`,
+            // ValueModifier `00 00` — **VM_NONE, not VM_ABSTRACT**, which is
+            // the one field a reasoned answer would have got wrong — concrete
+            // base `tk_null`, and zero state members. This constructs exactly
+            // that, so our TypeCode for a `ValueBase` member is byte-for-byte
+            // omniORB's.
+            TypeSpec::ValueBase => TypeCode::Value {
                 id: "IDL:omg.org/CORBA/ValueBase:1.0".into(),
                 name: "ValueBase".into(),
+                modifier: 0,
+                base: None,
+                members: Vec::new(),
             },
             TypeSpec::String(b) => TypeCode::String(b.as_deref().and_then(const_u32).unwrap_or(0)),
             TypeSpec::WString(b) => {

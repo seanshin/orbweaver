@@ -2,6 +2,27 @@
 //! assumed, over the golden corpus and over every shape the rule knows.
 //!
 //! `docs/PLAN.md` §4.4 defers `valuetype`, abstract interfaces and `fixed`.
+//! **The set this test holds equal is four families, not three.** The fourth
+//! is `native X;`, and the difference is not pedantry: §4.4's three have a
+//! wire form the specification defines and this version does not implement,
+//! while a native has none to implement in any version. It was missing from
+//! both sides for exactly that reason, inverted — because §4.4 did not name
+//! it, the rule did not, so the generator could not refuse it without
+//! breaking this test, so the registry kept recording it as
+//! `TypeCode::ObjRef` and both emitters emitted an object reference: an IOR
+//! on the wire where nothing at all should go. The previous batch fixed the
+//! same wrong answer for `valuetype` and abstract interfaces and left this
+//! one with an honest note ("no rule names it, so a change there would be a
+//! claim no gate checks"). The fix for that was to make the rule name it.
+//!
+//! `ValueBase` is the same defect in the one spelling that has no declaration
+//! behind it: the keyword names the abstract base of every valuetype, the
+//! rule named it the whole time, and the registry mapped it to an object
+//! reference — so the generators skipped nothing and nothing was red. It is
+//! not a fifth family; it is a valuetype, and it is here because until
+//! `corpus/golden/32` no corpus file wrote the keyword, so the two sets were
+//! never compared over one.
+//!
 //! Two places compute what that costs a contract: the front end's
 //! [`orbweaver_idl::deferred_wire_types`], which S4 reports (`wire/deferred-type`,
 //! a warning by default and a refusal under `--wire v1`), and this crate's
@@ -69,6 +90,7 @@ fn golden() -> Vec<(String, String)> {
 struct Sets {
     rule: BTreeSet<String>,
     rule_fixed: BTreeSet<String>,
+    rule_native: BTreeSet<String>,
     rust: BTreeSet<String>,
     python: BTreeSet<String>,
     /// Everything the two emitters skipped, with the reason — for the one
@@ -86,6 +108,8 @@ fn sets(src: &str) -> Sets {
     let rule: BTreeSet<String> = uses.iter().map(|d| d.declaration.clone()).collect();
     let rule_fixed: BTreeSet<String> =
         uses.iter().filter(|d| d.family() == "fixed").map(|d| d.declaration.clone()).collect();
+    let rule_native: BTreeSet<String> =
+        uses.iter().filter(|d| d.family() == "natives").map(|d| d.declaration.clone()).collect();
 
     let qualified = |skipped: &[(String, String)]| -> BTreeSet<String> {
         skipped
@@ -106,7 +130,7 @@ fn sets(src: &str) -> Sets {
     let python_skipped = name(&emit_python(&registry, "g").skipped);
     let rust = qualified(&emit(&registry, "g").skipped);
     let python = qualified(&emit_python(&registry, "g").skipped);
-    Sets { rule, rule_fixed, rust, python, rust_skipped, python_skipped }
+    Sets { rule, rule_fixed, rule_native, rust, python, rust_skipped, python_skipped }
 }
 
 /// Over the golden corpus: the generator's §4.4 skips are exactly the rule's
@@ -117,6 +141,7 @@ fn over_the_golden_corpus_the_rule_names_every_generator_skip() {
     let mut all_rule = BTreeSet::new();
     let mut all_rust = BTreeSet::new();
     let mut all_fixed = BTreeSet::new();
+    let mut all_native = BTreeSet::new();
     for (name, src) in golden() {
         let s = sets(&src);
         assert_eq!(s.rust, s.rule, "{name}: Rust emitter vs the rule");
@@ -124,11 +149,16 @@ fn over_the_golden_corpus_the_rule_names_every_generator_skip() {
         all_rule.extend(s.rule);
         all_rust.extend(s.rust);
         all_fixed.extend(s.rule_fixed);
+        all_native.extend(s.rule_native);
     }
     // The set itself, so the numbers in the record are checked, not typed:
     // three from 21 and eight from `deferred-reach` reach `fixed`; four from
     // 20 and five more from `deferred-reach` reach a valuetype or an abstract
-    // interface. Twenty declarations, one list, both halves of the gate.
+    // interface; six from 31 reach a `native`, which §4.4 does not defer
+    // because there is nothing to defer; four from 32 reach `ValueBase`,
+    // which is a valuetype and had been an object reference in the registry
+    // for as long as the keyword had been parsed. Thirty declarations, one
+    // list, both halves of the gate.
     assert_eq!(
         all_rust.iter().map(String::as_str).collect::<Vec<_>>(),
         [
@@ -152,6 +182,16 @@ fn over_the_golden_corpus_the_rule_names_every_generator_skip() {
             "gcdr::Registrar",
             "gcdr::Tagged",
             "gcdr::Teller",
+            "gn31::Booking",
+            "gn31::Broker",
+            "gn31::Handle",
+            "gn31::Roster",
+            "gn31::Session",
+            "gn31::Slot",
+            "gvb32::Cargo",
+            "gvb32::Courier",
+            "gvb32::Envelope",
+            "gvb32::Manifest",
         ]
     );
     // The surplus the previous batch pinned as the generator's divergence,
@@ -161,9 +201,23 @@ fn over_the_golden_corpus_the_rule_names_every_generator_skip() {
     let surplus: Vec<&str> = all_rule.difference(&all_rust).map(String::as_str).collect();
     assert!(surplus.is_empty(), "the rule names what the generator serves: {surplus:?}");
     // The `fixed` half unchanged at eleven, so a change to the valuetype half
-    // cannot quietly move it.
+    // cannot quietly move it — and the native half pinned separately for the
+    // same reason. `natives` is a family of its own precisely because the
+    // sentence differs: the other three are §4.4 deferrals and this one is
+    // not deferred at all.
     assert_eq!(all_fixed.len(), 11, "{all_fixed:?}");
-    assert_eq!(all_rule.len(), 20);
+    assert_eq!(
+        all_native.iter().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "gn31::Booking",
+            "gn31::Broker",
+            "gn31::Handle",
+            "gn31::Roster",
+            "gn31::Session",
+            "gn31::Slot",
+        ]
+    );
+    assert_eq!(all_rule.len(), 30);
 }
 
 /// Every shape the rule's own tests know for `fixed`, through both closures:

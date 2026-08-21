@@ -83,6 +83,17 @@ pub enum TcKind {
     /// which the decoder reports as "unknown or unsupported TCKind" — a
     /// refusal that names itself, rather than a variant that would be decoded
     /// wrong.
+    ///
+    /// 31 in particular was *asked for* and refused, which is a stronger
+    /// result than "not yet seen" — see [`TypeCode::Native`] and
+    /// `tests/native_typecode_from_a_peer.rs`. omniORB names the ordinal
+    /// (`CORBA.tk_native._v == 31`) and cannot produce a TypeCode carrying it
+    /// by any route: the ORB has no `create_native_tc` beside its sixteen
+    /// other `create_*_tc` factories, `tcInternal.createTypeCode((31, id,
+    /// name))` raises `CORBA.INTERNAL`, and both back ends refuse or ignore
+    /// the declaration. So the ordinal is known and the *parameter list* is
+    /// not, and this enum records what was measured rather than what CORBA
+    /// 3.4 Table 9.2 says a conformant peer would write.
     AbstractInterface = 32,
 }
 
@@ -272,6 +283,50 @@ pub enum TypeCode {
         /// IDL name.
         name: String,
     },
+    /// `native X;` — a type only a language mapping knows, with **no CDR
+    /// encoding at all**.
+    ///
+    /// Not a deferred construct and not an object reference. Until 2026-08-21
+    /// the registry recorded one as [`TypeCode::ObjRef`], which is the same
+    /// wrong answer [`TypeCode::Value`] documents and worse in one respect:
+    /// a `valuetype` at least *has* a wire form we have not implemented, while
+    /// a `native` has none to implement. An IOR went out where nothing should.
+    ///
+    /// It has no [`TcKind`] because the peer has none to give. Measured
+    /// (`spikes/native_capture.py`, omniORB 4.3.4, 2026-08-21, clause (b) of
+    /// the licensing boundary — omniidl run as an external program and its
+    /// output read):
+    ///
+    /// - `omniidl -b dump` accepts `native Handle;` at module level and inside
+    ///   an interface, and accepts a struct member and an operation typed by
+    ///   it. The **front end** has no objection: this is legal IDL.
+    /// - `omniidl -bcxx` exits 1 on the bare declaration alone:
+    ///   *"Unsupported IDL construct found in input (native)"*.
+    /// - `omniidl -bpython` exits 0 with *"Warning: ignoring declaration of
+    ///   native Handle"* and emits nothing for it. If anything uses the type,
+    ///   the module it generated cannot even be imported: the descriptor
+    ///   references `omniORB.typeMapping["IDL:nfx2/Handle:1.0"]`, which the
+    ///   ignored declaration never registered, and the import raises
+    ///   `KeyError 'IDL:nfx2/Handle:1.0'`.
+    /// - At runtime the ORB has `create_value_tc`, `create_abstract_interface_tc`
+    ///   and fourteen more, and **no `create_native_tc`**;
+    ///   `tcInternal.createTypeCode((tv_native, id, name))` raises
+    ///   `CORBA.INTERNAL`.
+    ///
+    /// So there is no recording to hold ourselves to and none to invent. This
+    /// variant therefore *describes* a native — the registry can hold it, the
+    /// catalogue can draw it, both emitters skip it by name — and [`kind`]
+    /// answers `None`, so [`encode`] refuses it with the type named instead of
+    /// writing a guess. A peer that sends 31 is refused symmetrically, by
+    /// [`TcKind::from_u32`] having no arm for it.
+    ///
+    /// [`kind`]: TypeCode::kind
+    Native {
+        /// Repository id.
+        id: String,
+        /// IDL name.
+        name: String,
+    },
     /// A reference back to an enclosing type, produced by an indirection that
     /// pointed at a `TypeCode` still being decoded.
     ///
@@ -283,8 +338,11 @@ pub enum TypeCode {
 }
 
 impl TypeCode {
-    /// The `TCKind` ordinal, or `None` for [`TypeCode::Recursive`], which is
-    /// our own marker rather than a wire kind.
+    /// The `TCKind` ordinal, or `None` for the two variants that are not wire
+    /// kinds: [`TypeCode::Recursive`], our own marker for an indirection, and
+    /// [`TypeCode::Native`], for which no peer has a kind to give — see that
+    /// variant for the measurement. Both are refused by [`encode`], which is
+    /// the point of answering `None` rather than picking an ordinal.
     pub fn kind(&self) -> Option<TcKind> {
         Some(match self {
             TypeCode::Null => TcKind::Null,
@@ -318,7 +376,7 @@ impl TypeCode {
             TypeCode::Except { .. } => TcKind::Except,
             TypeCode::Value { .. } => TcKind::Value,
             TypeCode::AbstractInterface { .. } => TcKind::AbstractInterface,
-            TypeCode::Recursive(_) => return None,
+            TypeCode::Native { .. } | TypeCode::Recursive(_) => return None,
         })
     }
 
@@ -332,7 +390,8 @@ impl TypeCode {
             | TypeCode::Alias { id, .. }
             | TypeCode::Except { id, .. }
             | TypeCode::Value { id, .. }
-            | TypeCode::AbstractInterface { id, .. } => Some(id),
+            | TypeCode::AbstractInterface { id, .. }
+            | TypeCode::Native { id, .. } => Some(id),
             TypeCode::Recursive(id) => Some(id),
             _ => None,
         }
@@ -388,6 +447,14 @@ fn encode_inner(
 
     let kind = match tc.kind() {
         Some(k) => k,
+        // A native has no TCKind because no peer has one to give — refused by
+        // name, not by falling through to the recursion message, which would
+        // be a true sentence about the wrong problem.
+        None if matches!(tc, TypeCode::Native { .. }) => {
+            return Err(Error::Cdr(orbweaver_cdr::Error::Malformed(
+                "a native has no TypeCode: it names a type only a language mapping knows",
+            )));
+        }
         // A Recursive marker with no prior sighting means the caller handed us
         // a fragment of a type rather than a whole one.
         None => {

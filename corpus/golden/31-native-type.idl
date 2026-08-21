@@ -1,0 +1,44 @@
+// 31 — `native X;` is legal IDL with **no wire form at all**, which is not
+// the same claim as PLAN §4.4's three deferrals and is why this file is
+// separate from 20 and 21.
+//
+// §4.4 defers `valuetype`, abstract interfaces and `fixed`: each has a wire
+// form the specification defines and this version does not implement. A
+// native has none to implement — it names a type only a language mapping
+// knows — so no wire version will carry one. The measurement is in
+// `spikes/native_capture.py`: omniidl's front end accepts every line below,
+// its C++ back end exits 1 on the declaration alone ("Unsupported IDL
+// construct found in input (native)"), and its Python back end prints
+// "ignoring declaration of native" and emits a module that cannot be
+// imported if anything uses the type.
+//
+// Golden rather than negative because the *oracle accepts the file*: this is
+// a contract a conformant front end must parse. What must not happen is what
+// happened until 2026-08-21 — the registry recording `Handle` as
+// `TypeCode::ObjRef`, both emitters emitting an object reference for it, and
+// an IOR going out where nothing should. Every unservable declaration here is
+// pinned twice, by `wire/deferred-type` at S4 and by orbweaver-gen's skip
+// list, which `crates/orbweaver-gen/tests/deferred_wire_agreement.rs` holds
+// to the same set.
+module gn31 {
+  native Handle;
+
+  // ── unservable: reaches the native ──────────────────────────────────────
+  // by value, as a member
+  struct Session { Handle token; long ttl; };
+  // through a sequence element
+  typedef sequence<Handle> Roster;
+  // through a typedef of the native itself
+  typedef Handle Slot;
+  // in a signature: the return, and a parameter
+  interface Broker { Handle acquire(in string room); void surrender(in Slot held); };
+  // through a struct that holds the struct that holds it — two hops
+  struct Booking { Session held; string tenant; };
+
+  // ── servable: the negative controls ─────────────────────────────────────
+  // A reference to an interface that is itself unservable is still an IOR, as
+  // it is for the deferred three.
+  struct Desk { Broker agent; };
+  struct Plain { long a; string b; };
+  interface Lookup { Plain find(in string key); };
+};

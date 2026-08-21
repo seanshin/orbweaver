@@ -69,18 +69,28 @@ fn every_golden_type_is_byte_stable() {
 #[test]
 fn the_coverage_gaps_over_the_corpus_are_the_known_ones() {
     let mut gaps = Vec::new();
+    // The `prop/unmeasured` reasons, kept beside the one-line form: two very
+    // different gaps file under that rule — a recursive arm that could not be
+    // resolved, and a sequence whose element the wire cannot carry at all —
+    // and only the message tells them apart. Counting the rule alone made the
+    // first indistinguishable from the second, which is how a new gap class
+    // would have arrived reading as a regression in the old one.
+    let mut unmeasured: Vec<(String, String)> = Vec::new();
     for path in corpus("corpus/golden") {
         let reg = registry_of(&path);
         for id in reg.ids().cloned().collect::<Vec<_>>() {
             let Some(tc) = reg.typecode(&id) else { continue };
             for f in prop::roundtrip_property(tc, 8) {
                 if f.severity != Severity::Error {
+                    if f.rule == "prop/unmeasured" {
+                        unmeasured.push((f.source.clone(), f.message.clone()));
+                    }
                     gaps.push(format!("{}: {} {}", path.display(), f.rule, f.source));
                 }
             }
         }
     }
-    let recursive = gaps.iter().filter(|g| g.contains("prop/unmeasured")).count();
+    let recursive = unmeasured.iter().filter(|(_, m)| m.contains("recursive")).count();
     let unsupported = gaps.iter().filter(|g| g.contains("prop/unsupported-type")).count();
     let unmapped: Vec<&str> = gaps
         .iter()
@@ -97,11 +107,25 @@ fn the_coverage_gaps_over_the_corpus_are_the_known_ones() {
         recursive,
         0,
         "a recursive arm is unmeasured again:\n  {}",
-        gaps.iter()
-            .filter(|g| g.contains("prop/unmeasured"))
-            .cloned()
-            .collect::<Vec<_>>()
-            .join("\n  ")
+        unmeasured.iter().map(|(s, m)| format!("{s}: {m}")).collect::<Vec<_>>().join("\n  ")
+    );
+    // The other `prop/unmeasured` class, pinned by id: a `sequence<T>` whose
+    // element the wire cannot carry has exactly one value — the empty one — so
+    // every case the sampler draws for it is the same case, and saying so is
+    // the whole point of the rule. Both entries arrived on 2026-08-21 with the
+    // corpus files for `native` and `ValueBase`; before them the corpus had no
+    // sequence of an unmarshallable element, so this arm of `gap_reason` had
+    // never run over the corpus at all.
+    let empty_sequences: Vec<&str> = unmeasured
+        .iter()
+        .filter(|(_, m)| !m.contains("recursive"))
+        .map(|(s, _)| s.as_str())
+        .collect();
+    assert_eq!(
+        empty_sequences,
+        ["IDL:gn31/Roster:1.0", "IDL:gvb32/Cargo:1.0"],
+        "the set of sequences that can only be empty changed:\n  {}",
+        unmeasured.iter().map(|(s, m)| format!("{s}: {m}")).collect::<Vec<_>>().join("\n  ")
     );
     assert!(
         unsupported > 0,
@@ -128,6 +152,15 @@ fn the_coverage_gaps_over_the_corpus_are_the_known_ones() {
     // records `TypeCode::Value` and `TypeCode::AbstractInterface`, the mapping
     // has no form for either, and the four valuetypes plus the struct holding
     // an abstract interface say so here instead of passing quietly.
+    //
+    // 2026-08-21 added eight, and they are the same story twice more. Five
+    // from `31-native-type`: a `native` had been recorded as
+    // `TypeCode::ObjRef`, so this leg ran for it — as a reference — and a
+    // measurement of a wire form the type does not have counted as coverage.
+    // Three from `32-valuebase`: `ValueBase` is a valuetype and was recorded
+    // as a reference for exactly as long as the keyword had been parsed.
+    // Note which ids are *absent*: `gn31::Desk` and `gvb32::Depot` hold
+    // references to unservable interfaces, and a reference crosses.
     assert_eq!(
         unmapped,
         [
@@ -135,6 +168,14 @@ fn the_coverage_gaps_over_the_corpus_are_the_known_ones() {
             "IDL:gc20/Named:1.0",
             "IDL:gc21/Amount:1.0",
             "IDL:gc21/Invoice:1.0",
+            "IDL:gn31/Booking:1.0",
+            "IDL:gn31/Handle:1.0",
+            "IDL:gn31/Roster:1.0",
+            "IDL:gn31/Session:1.0",
+            "IDL:gn31/Slot:1.0",
+            "IDL:gvb32/Cargo:1.0",
+            "IDL:gvb32/Envelope:1.0",
+            "IDL:gvb32/Manifest:1.0",
             "IDL:gcdr/Column:1.0",
             "IDL:gcdr/Ledger:1.0",
             "IDL:gcdr/Memo:1.0",
@@ -154,7 +195,7 @@ fn the_coverage_gaps_over_the_corpus_are_the_known_ones() {
     // Everything non-Error is one of these three, or a new gap class has
     // appeared and deserves a look rather than a silent pass.
     assert_eq!(
-        recursive + unsupported + unmapped.len(),
+        unmeasured.len() + unsupported + unmapped.len(),
         gaps.len(),
         "unexpected gap class:\n  {}",
         gaps.join("\n  ")
@@ -170,13 +211,32 @@ fn the_coverage_gaps_over_the_corpus_are_the_known_ones() {
 fn every_golden_value_also_crosses_anyjson() {
     let mut defects = Vec::new();
     let mut total = prop::Measured::default();
+    // CDR round trips taken for a type the mapping does not carry. It used to
+    // be structurally impossible for this to be non-zero — a type AnyJSON
+    // refused was one the sampler could not sample either, so it contributed
+    // nothing to either leg. `typedef sequence<Handle>` broke the coincidence
+    // on 2026-08-21: the sequence has exactly one value, the empty one, which
+    // marshals to a length of zero perfectly well, so the CDR leg runs
+    // sixteen times in each byte order while the JSON leg correctly does not.
+    let mut unmapped_cdr = 0usize;
     for path in corpus("corpus/golden") {
         let reg = registry_of(&path);
         for id in reg.ids().cloned().collect::<Vec<_>>() {
             let Some(tc) = reg.typecode(&id) else { continue };
             let (findings, measured) =
                 prop::roundtrip_property_measured(tc, 16, prop::DEFAULT_SEED);
-            total.add(measured);
+            if findings.iter().any(|f| f.rule == "json/unmapped") {
+                assert_eq!(
+                    measured.json,
+                    0,
+                    "{}: {id} is json/unmapped and the JSON leg ran {} time(s) anyway",
+                    path.display(),
+                    measured.json
+                );
+                unmapped_cdr += measured.cdr;
+            } else {
+                total.add(measured);
+            }
             for f in findings {
                 if f.severity == Severity::Error && f.rule.starts_with("json/") {
                     defects.push(format!("{}: {f}", path.display()));
@@ -185,9 +245,8 @@ fn every_golden_value_also_crosses_anyjson() {
         }
     }
     assert!(defects.is_empty(), "AnyJSON is not a round trip:\n  {}", defects.join("\n  "));
-    // The ratio, not only the absence of findings: the leg that is skipped
-    // for a type is skipped under `json/unmapped`, which the test above pins,
-    // so here every CDR round trip must have had a JSON leg too.
+    // The ratio, not only the absence of findings: for every type the mapping
+    // *does* carry, each CDR round trip must have had a JSON leg too.
     assert!(total.cdr >= 60 * 16 * 2, "the corpus should measure far more than {}", total.cdr);
     assert_eq!(
         total.json,
@@ -196,6 +255,11 @@ fn every_golden_value_also_crosses_anyjson() {
          accounts for them",
         total.cdr - total.json
     );
+    // And the ones a `json/unmapped` finding does account for, pinned: two
+    // types, sixteen cases, both byte orders. Pinned rather than allowed,
+    // because "some CDR round trips have no JSON leg" is exactly the sentence
+    // a regression in the mapping would also produce.
+    assert_eq!(unmapped_cdr, 2 * 16 * 2, "the CDR-only set changed size");
 }
 
 /// The contract half runs clean over the corpus in the sense that matters:

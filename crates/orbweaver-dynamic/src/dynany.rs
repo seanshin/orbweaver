@@ -447,6 +447,10 @@ fn default_within(tc: &TypeCode, open: &mut Vec<TypeCode>, path: &str) -> Result
         // path marshalled them without a word.
         TypeCode::Value { .. } => return Err(unsupported("`valuetype`")),
         TypeCode::AbstractInterface { .. } => return Err(unsupported("an abstract interface")),
+        // And the fourth. `ObjRef` gave it a perfectly good default — `None`,
+        // a nil reference — which is the shape of every wrong answer in this
+        // class: legal, silent, and about a different type.
+        TypeCode::Native { .. } => return Err(unsupported("a `native`")),
         TypeCode::Principal => return Err(unsupported("`Principal`")),
         // open_type followed both; arriving here would mean it had not.
         TypeCode::Recursive(_) | TypeCode::Alias { .. } => {

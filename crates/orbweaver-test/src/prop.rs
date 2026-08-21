@@ -607,6 +607,11 @@ fn json_unmapped(tc: &TypeCode) -> Option<String> {
              and a reference, and v1 carries neither form of it (docs/PLAN.md §4.4)"
                 .into(),
         ),
+        TypeCode::Native { .. } => Some(
+            "a `native` has no AnyJSON form and no CDR form either: it names a type only a \
+             language mapping knows, so there is nothing to cross — not a §4.4 deferral"
+                .into(),
+        ),
         TypeCode::Principal => {
             Some("`Principal` has no AnyJSON form (withdrawn from CORBA)".into())
         }
@@ -866,9 +871,12 @@ impl Sampler {
             // no longer sampled *as* object references — which is what the
             // property used to do, silently, and is why the §4.4 count and the
             // count the property measured differed by more than interfaces.
+            // `Native` joined them for the same reason on 2026-08-21, and is
+            // the one of the four that is not deferred at all.
             TypeCode::Fixed { .. }
             | TypeCode::Value { .. }
             | TypeCode::AbstractInterface { .. }
+            | TypeCode::Native { .. }
             | TypeCode::Principal => return None,
         })
     }
@@ -902,6 +910,7 @@ impl Sampler {
             TypeCode::Fixed { .. }
             | TypeCode::Value { .. }
             | TypeCode::AbstractInterface { .. }
+            | TypeCode::Native { .. }
             | TypeCode::Principal => false,
             // Samplable exactly when the type it names is under way, there is
             // depth left to expand it into, and the type it names is itself
@@ -1170,6 +1179,10 @@ fn why_unsupported(tc: &TypeCode) -> &'static str {
         TypeCode::AbstractInterface { .. } => {
             "an abstract interface parses but v1 does not marshal it (docs/PLAN.md §4.4)"
         }
+        TypeCode::Native { .. } => {
+            "a `native` parses and no wire version marshals it — it names a type only a \
+             language mapping knows, so it is not deferred, there is nothing to defer"
+        }
         TypeCode::TypeCode => "a bare `TypeCode` has no `Value` representation in the dynamic path",
         TypeCode::Principal => "`Principal` is withdrawn from CORBA and is not marshalled",
         TypeCode::Recursive(_) => "the type is recursive and has no finite expansion",
@@ -1197,7 +1210,8 @@ fn describe(tc: &TypeCode) -> String {
         | TypeCode::Alias { name, .. }
         | TypeCode::ObjRef { name, .. }
         | TypeCode::Value { name, .. }
-        | TypeCode::AbstractInterface { name, .. } => name.clone(),
+        | TypeCode::AbstractInterface { name, .. }
+        | TypeCode::Native { name, .. } => name.clone(),
         TypeCode::Sequence { element, .. } => format!("sequence<{}>", describe(element)),
         TypeCode::Array { element, length } => format!("{}[{length}]", describe(element)),
         other => format!("{other:?}").split(' ').next().unwrap_or("a type").to_lowercase(),
@@ -1215,7 +1229,8 @@ fn type_id(tc: &TypeCode) -> String {
         | TypeCode::Alias { id, .. }
         | TypeCode::ObjRef { id, .. }
         | TypeCode::Value { id, .. }
-        | TypeCode::AbstractInterface { id, .. } => id.clone(),
+        | TypeCode::AbstractInterface { id, .. }
+        | TypeCode::Native { id, .. } => id.clone(),
         TypeCode::Recursive(id) => id.clone(),
         other => describe(other),
     }
