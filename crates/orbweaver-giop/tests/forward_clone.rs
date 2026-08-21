@@ -20,6 +20,12 @@
 //! address the object left. `a_reference_cloned_per_call_pays_the_forward_once`
 //! is that measurement.
 //!
+//! And the boundary of that sharing, measured in the same shape rather than
+//! described: two `Pool::reference` calls for one IOR are two references and
+//! neither hears the other's forward —
+//! `two_references_to_one_object_each_pay_the_forward_once`. The number it
+//! reports is what `docs/decisions/D013-*.md` decides on.
+//!
 //! The peer is scripted TCP built out of this crate's own encoders — a
 //! self-test of a decoded property, not an interop result, the same posture
 //! `forward_chain.rs` and `mux_pool.rs` take. The axis varied is the **reply's**
@@ -316,6 +322,99 @@ fn a_reference_cloned_per_call_pays_the_forward_once_not_every_call() {
         let (at_old, at_new) = m.counts(&label);
         assert_eq!(at_old, 1, "{label}: the forward is paid once, not per call");
         assert_eq!(at_new, 3, "{label}: all three calls reached the object");
+    }
+}
+
+/// What sharing across clones does **not** buy: two `Pool::reference` calls
+/// for one IOR are two references, and neither hears the other's forward.
+///
+/// This is `_duplicate` against `string_to_object`, and the number here is the
+/// whole argument about whether the pool needs an identity map — so it is
+/// measured rather than reasoned. It is **one forward per independently
+/// created reference, once**, not one per call: a second reference pays on its
+/// own first call and re-points itself with the same `moved` cell a clone
+/// would have shared, so the third call through it costs nothing. Seven calls
+/// through three independently created references cost three requests at the
+/// address the object left.
+///
+/// **omniORB 4.3.4 measured in the identical shape, 2026-08-21: the same three
+/// and seven.** Two `string_to_object` calls on one IOR string, a third after
+/// the move, against `spike-server` forwarding `LOCATION_FORWARD_PERM`
+/// (`ORBWEAVER_FORWARD_STATUS=permanent`) — `_is_equivalent` answers true and
+/// each proxy still pays its own forward exactly once. So the reference ORB
+/// does not give its user agreement between independently created references
+/// either, which is the fact `docs/decisions/D013-*.md` §5 turns on. The
+/// experiment is a separate process over TCP, never a dependency
+/// (CLAUDE.md, licensing boundary); it is not committed as a gate, which
+/// D013 §8 records as unmeasured-here.
+///
+/// **This test pins the cost, not a virtue.** If the identity map D013
+/// describes is ever built, `at_old` becomes 1 and this assertion goes red on
+/// purpose — read D013 before changing the number.
+#[test]
+fn two_references_to_one_object_each_pay_the_forward_once() {
+    /// Calls through the second reference after the first has been told.
+    /// More than one, because the question this answers is whether the cost
+    /// is per reference or per call, and a single call cannot tell them
+    /// apart. Five is what the omniORB run used, so the two numbers compare.
+    const THROUGH_THE_SECOND: usize = 5;
+
+    for reply_endian in [Endian::Big, Endian::Little] {
+        let label = format!("reply {reply_endian:?}");
+        let m = Moved::set_up(true, reply_endian);
+
+        let pool = Pool::new();
+        // Independently created, not cloned: this is the `string_to_object`
+        // shape, and the two share the pool — and so the connection — while
+        // sharing nothing about where the object is.
+        let mut first = pool.reference(m.old.clone());
+        let mut second = pool.reference(m.old.clone());
+
+        assert_eq!(
+            body_i32(&first.invoke("op", |_| {}).expect("the forward is followed")),
+            ANSWER,
+            "{label}: the first reference is answered from where the object moved to"
+        );
+        assert_eq!(addressed(first.ior()), addressed(&m.new), "{label}: and it was re-pointed");
+        assert_eq!(
+            addressed(second.ior()),
+            addressed(&m.old),
+            "{label}: the other reference was not told — it is not a clone"
+        );
+
+        for call in 1..=THROUGH_THE_SECOND {
+            assert_eq!(
+                body_i32(&second.invoke("op", |_| {}).expect("answered")),
+                ANSWER,
+                "{label}: call {call} through the second reference"
+            );
+        }
+        assert_eq!(
+            addressed(second.ior()),
+            addressed(&m.new),
+            "{label}: which paid its own forward on its first call and then knew"
+        );
+
+        // And one created after both had been re-pointed: it starts from the
+        // IOR it was handed, because nothing in the pool remembers.
+        let mut third = pool.reference(m.old.clone());
+        assert_eq!(
+            body_i32(&third.invoke("op", |_| {}).expect("answered")),
+            ANSWER,
+            "{label}: a reference created after the move is still answered"
+        );
+
+        drop(pool);
+        let (at_old, at_new) = m.counts(&label);
+        assert_eq!(
+            at_old, 3,
+            "{label}: one forward per independently created reference, not one per call"
+        );
+        assert_eq!(
+            at_new,
+            1 + THROUGH_THE_SECOND + 1,
+            "{label}: every call is answered, which is why nothing goes red on its own"
+        );
     }
 }
 
