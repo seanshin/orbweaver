@@ -296,6 +296,37 @@ else
   echo "  FAIL the registry's union TypeCode is not structurally equal to the peer's"; fail_total=$((fail_total+1))
 fi
 
+hr "a native and a ValueBase — the refusal and the bytes, asked of the peer"
+# The same defect one keyword over, and it survived the batch that named it:
+# `native X;` was TypeCode::ObjRef, so both emitters emitted a reference and the
+# dynamic path put an IOR on the wire for a type that has no wire form in any
+# version. Asked of omniORB before choosing a representation, and here the
+# measurement is a REFUSAL by all four routes it has: -b dump accepts the
+# declaration, -bcxx exits 1 on it, -bpython ignores it and leaves a dangling
+# typeMapping entry (KeyError one import later), and the ORB has no
+# create_native_tc at all -- createTypeCode((tv_native, ...)) raises INTERNAL.
+# So TypeCode::Native has no TcKind and encode refuses it by name. `ValueBase`
+# is bytes, not a refusal: tk_value, VM_NONE (not VM_ABSTRACT, which is what a
+# reasoned answer gets wrong), tk_null base, zero members.
+# Negative controls (22637a8): registry back to ObjRef -> valuebase_shape fails
+# with "Envelope BE: not equal"; from_u32 given an arm for 31 -> the giop test
+# fails on a peer's 31 being accepted where omniORB itself cannot produce one.
+ntc_out=$(python3 spikes/native_capture.py 2>&1); ntc_rc=$?
+printf '%s\n' "$ntc_out"
+if [ "$ntc_rc" -eq 2 ]; then
+  skipped=$((skipped+1))
+elif [ "$ntc_rc" -ne 0 ]; then
+  echo "  FAIL the recorded native/ValueBase answers no longer match the live peer"
+  fail_total=$((fail_total+1))
+fi
+if cargo test -q -p orbweaver-giop --test native_typecode_from_a_peer >/dev/null 2>&1 \
+   && cargo test -q -p orbweaver-registry --test valuebase_shape_from_a_peer >/dev/null 2>&1; then
+  echo "  ok   a native has no TypeCode to send and ValueBase is tk_value/VM_NONE — the peer's refusal and the peer's bytes, both orders"
+else
+  echo "  FAIL a native or a ValueBase does not agree with the peer"
+  fail_total=$((fail_total+1))
+fi
+
 hr "performance — the dynamic path against the static stub"
 # §8 has cited a LAN echo benchmark since v0.2 and there was none. This runs
 # for the *shape* of the answer, never for a threshold: the exit code depends
@@ -1497,12 +1528,18 @@ fi
 # being recorded as object references (74b5662): three valuetypes and a struct
 # stopped being sampled *as references*, so the property measures four fewer
 # and the closure names one more.
-cc_wire=$(printf '%s\n' "$cc_out" | sed -n 's/.* \([0-9][0-9]*\) deferred-wire declaration(s) (§4.4) of which \([0-9][0-9]*\) unmeasured.*/\1 \2/p')
+# 20/12 until 2026-08-21, when a `native` and a `ValueBase` stopped being
+# recorded as object references too (22637a8): six native declarations and four
+# ValueBase ones joined the closure, and the label changed with it -- the set is
+# no longer "§4.4" alone, because a native is not deferred, there is nothing to
+# defer. The unmeasured half went 12 -> 18 and not 20: a sequence of an
+# unsamplable element has one value, the empty one, and that one is measured.
+cc_wire=$(printf '%s\n' "$cc_out" | sed -n 's/.* \([0-9][0-9]*\) declaration(s) the wire cannot carry (§4.4 and natives) of which \([0-9][0-9]*\) unmeasured.*/\1 \2/p')
 set -- $cc_wire
-if [ "${1:-}" = 20 ] && [ "${2:-}" = 12 ]; then
-  echo "  ok   20 deferred-wire declaration(s) over golden (§4.4), 12 unmeasured by the property"
+if [ "${1:-}" = 30 ] && [ "${2:-}" = 18 ]; then
+  echo "  ok   30 declaration(s) over golden the wire cannot carry (§4.4 and natives), 18 unmeasured by the property"
 else
-  echo "  FAIL deferred-wire count over golden: '${cc_wire:-absent}' (pinned 20 of which 12)"
+  echo "  FAIL deferred-wire count over golden: '${cc_wire:-absent}' (pinned 30 of which 18)"
   fail_total=$((fail_total+1))
 fi
 # Panic freedom. Rust rules out the memory-corruption half of "wire parsing is
