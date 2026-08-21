@@ -179,8 +179,8 @@ fn main() -> std::process::ExitCode {
         println!(
             "\n{} file(s), {types} type(s) × {cases} case(s) × 2 byte orders: {defects} \
              property defect(s), {} of {} CDR round trip(s) also taken across AnyJSON, {advice} \
-             contract finding(s), {deferred_wire} deferred-wire declaration(s) (§4.4) of which \
-             {deferred_unmeasured} unmeasured by the property",
+             contract finding(s), {deferred_wire} declaration(s) the wire cannot carry (§4.4 \
+             and natives) of which {deferred_unmeasured} unmeasured by the property",
             reports.len(),
             measured.json,
             measured.cdr

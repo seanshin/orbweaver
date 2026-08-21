@@ -392,7 +392,8 @@ fn describe(tc: &TypeCode) -> String {
         | TypeCode::Alias { name, .. }
         | TypeCode::ObjRef { name, .. }
         | TypeCode::Value { name, .. }
-        | TypeCode::AbstractInterface { name, .. } => name.clone(),
+        | TypeCode::AbstractInterface { name, .. }
+        | TypeCode::Native { name, .. } => name.clone(),
         TypeCode::Sequence { element, bound } if *bound > 0 => {
             format!("sequence<{}, {bound}>", describe(element))
         }
@@ -451,7 +452,8 @@ fn type_id_of(tc: &TypeCode) -> Option<&str> {
         | TypeCode::Enum { id, .. }
         | TypeCode::ObjRef { id, .. }
         | TypeCode::Value { id, .. }
-        | TypeCode::AbstractInterface { id, .. } => Some(id),
+        | TypeCode::AbstractInterface { id, .. }
+        | TypeCode::Native { id, .. } => Some(id),
         _ => None,
     }
 }
@@ -713,6 +715,15 @@ fn encode_at(
              encoding for either form of it",
             deferred_wire_head(&deferred_wire_name(tc).expect("an abstract interface is deferred"))
         )),
+        // The fourth, and the one §4.4 does not name — which is why it was
+        // still `TypeCode::ObjRef` here when the other two were fixed, and why
+        // this path marshalled an IOR for it. Not deferred: there is no
+        // encoding to add later.
+        (TypeCode::Native { name, .. }, _) => p.fail(format!(
+            "native {name} has no CDR encoding at all: a native names a type only a language \
+             mapping knows, so no wire version marshals one — this is not a deferral like \
+             docs/PLAN.md §4.4's three constructs"
+        )),
 
         (t, v) => wrong_kind(p, t, v),
     }
@@ -927,6 +938,15 @@ fn decode_at(d: &mut Decoder<'_>, tc: &TypeCode, p: &Path<'_>, wide: WideCodec) 
             let what = deferred_wire_name(tc).expect("§4.4 defers both of these");
             return p.fail(deferred_wire_sentence(&what));
         }
+        // "yet" is the word this arm must not use: a native is not waiting on
+        // an implementation. Refused by name rather than through `describe`.
+        TypeCode::Native { name, .. } => {
+            return p.fail(format!(
+                "native {name} has no CDR encoding at all, so there are no bytes here to read \
+                 — a native names a type only a language mapping knows, and no wire version \
+                 marshals one"
+            ));
+        }
         other => return p.fail(format!("cannot decode {} yet", describe(other))),
     })
 }
@@ -1023,6 +1043,55 @@ mod tests {
         .expect_err("a struct holding a valuetype must not marshal");
         assert_eq!(err.path, "body", "{err}");
         assert!(err.message.contains("§4.4"), "{err}");
+    }
+
+    /// The same, for a `native` — with the sentence that is *not* the same.
+    ///
+    /// It was `TypeCode::ObjRef` here until 2026-08-21, so `Value::ObjRef(None)`
+    /// marshalled and an IOR went out for a type with no wire form. This test
+    /// exists because removing the refusal arm left the whole crate green: the
+    /// valuetype pair had a test and the native did not, which is the same
+    /// asymmetry that let the defect through in the first place.
+    ///
+    /// The assertion is deliberately *not* only "§4.4": the message must say
+    /// the section does not apply. A native is not deferred — there is no wire
+    /// form waiting to be implemented — and a refusal that filed it under §4.4
+    /// would promise a later release that cannot come.
+    #[test]
+    fn a_native_is_refused_and_the_refusal_says_it_is_not_a_deferral() {
+        let handle = TypeCode::Native { id: "IDL:m/Handle:1.0".into(), name: "Handle".into() };
+        for endian in [Endian::Big, Endian::Little] {
+            // Every `Value` shape a caller might reach for, including the one
+            // the old `ObjRef` recording accepted.
+            for v in [
+                Value::ObjRef(None),
+                Value::Struct(vec![("token".into(), Value::Long(1))]),
+                Value::Long(1),
+            ] {
+                let err = encode(&mut Encoder::new(endian), &handle, &v)
+                    .expect_err("a native must not marshal");
+                assert!(err.message.contains("native Handle"), "{err}");
+                assert!(err.message.contains("no CDR encoding at all"), "{err}");
+                assert!(err.message.contains("not a deferral"), "{err}");
+            }
+            let err = decode(&mut Decoder::new(&[0u8; 16], endian), &handle)
+                .expect_err("a native must not decode");
+            assert!(err.message.contains("native Handle"), "{err}");
+            assert!(err.message.contains("no CDR encoding at all"), "{err}");
+            // "yet" is the word the decode arm must not use.
+            assert!(!err.message.contains("yet"), "{err}");
+        }
+
+        // And the refusal travels to the member, as the valuetype's does.
+        let session = tc_struct("Session", vec![("token", handle.clone())]);
+        let err = encode(
+            &mut Encoder::new(Endian::Big),
+            &session,
+            &Value::Struct(vec![("token".into(), Value::ObjRef(None))]),
+        )
+        .expect_err("a struct holding a native must not marshal");
+        assert_eq!(err.path, "token", "{err}");
+        assert!(err.message.contains("native Handle"), "{err}");
     }
 
     /// Both byte orders, every time. An encoder that only works native-endian

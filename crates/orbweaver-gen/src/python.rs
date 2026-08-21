@@ -225,6 +225,11 @@ pub fn descriptor(tc: &TypeCode) -> Result<String, String> {
         // because both halves were reading the same wrong registry.
         TypeCode::Value { name, .. } => return Err(crate::deferred_value(name)),
         TypeCode::AbstractInterface { name, .. } => return Err(crate::deferred_abstract(name)),
+        // Same argument, one step stronger: `("objref", id)` was what the
+        // registry's `ObjRef` produced here, and there is no descriptor a
+        // native could honestly have — omniORB's own Python back end ignores
+        // the declaration and leaves the type mapping dangling.
+        TypeCode::Native { name, .. } => return Err(crate::unmarshallable_native(name)),
         // D008: a TypeCode is a value, and its AnyJSON form is the structural
         // one. Python holds it as `_rt.TypeCode` — the document, kept whole so
         // relaying it is exact — and `_rt._desc_of` reads that document as a
@@ -242,9 +247,10 @@ pub fn descriptor(tc: &TypeCode) -> Result<String, String> {
 /// Rust client cannot express, and merging the two checks would hide that.
 fn crossable(tc: &TypeCode, visiting: &mut Vec<String>) -> Result<(), String> {
     match tc {
-        TypeCode::Fixed { .. } | TypeCode::Value { .. } | TypeCode::AbstractInterface { .. } => {
-            descriptor(tc).map(|_| ())
-        }
+        TypeCode::Fixed { .. }
+        | TypeCode::Value { .. }
+        | TypeCode::AbstractInterface { .. }
+        | TypeCode::Native { .. } => descriptor(tc).map(|_| ()),
         TypeCode::Sequence { element, .. } | TypeCode::Array { element, .. } => {
             crossable(element, visiting)
         }

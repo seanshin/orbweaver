@@ -669,6 +669,14 @@ pub fn tc_to_json(tc: &TypeCode) -> Json {
         // a silent wrong answer of exactly the kind the deferral was hiding
         // in. The instance is still refused by `encode`/`decode`, by name.
         TypeCode::AbstractInterface { id, name } => named("abstract_interface", id, name, vec![]),
+        // A `native` is not a §4.4 deferral — it has no wire form to defer
+        // — but the reason its *description* must cross is the same one,
+        // and stronger: nothing will ever carry the value, so the
+        // description is all a peer can be told. Without this arm it fell
+        // through to the string "void", which is the silent wrong answer
+        // the arm above exists to prevent, and the JSON leg then measured
+        // one type fewer than the CDR leg without saying so.
+        TypeCode::Native { id, name } => named("native", id, name, vec![]),
         TypeCode::Value { id, name, modifier, base, members } => named(
             "value",
             id,
@@ -804,6 +812,7 @@ pub fn tc_from_json(j: &Json, p: &str) -> Result<TypeCode> {
         "abstract_interface" => {
             TypeCode::AbstractInterface { id: text(j, "id", p)?, name: text(j, "name", p)? }
         }
+        "native" => TypeCode::Native { id: text(j, "id", p)?, name: text(j, "name", p)? },
         "value" => TypeCode::Value {
             id: text(j, "id", p)?,
             name: text(j, "name", p)?,
@@ -1125,7 +1134,12 @@ mod tests {
         };
         let abstract_iface =
             TypeCode::AbstractInterface { id: "IDL:m/D:1.0".into(), name: "D".into() };
-        for tc in [&money, &named, &abstract_iface] {
+        // A `native` is here for a different reason and the same rule. It is
+        // not a §4.4 deferral — no version of the wire carries its value — so
+        // the description is not "for now", it is the *only* thing a peer can
+        // ever be told about the type. Without an arm it crossed as "void".
+        let native = TypeCode::Native { id: "IDL:m/Handle:1.0".into(), name: "Handle".into() };
+        for tc in [&money, &named, &abstract_iface, &native] {
             let doc = tc_to_json(tc);
             let text = doc.to_string();
             assert!(!text.contains("\"void\""), "rendered as void: {text}");

@@ -764,7 +764,32 @@ impl Analyser {
     }
 }
 
-// ── the v1 wire (docs/PLAN.md §4.4) ──────────────────────────────────────────
+// ── what the wire cannot carry (docs/PLAN.md §4.4, and one thing it omits) ───
+//
+// **This rule's set is four families, and §4.4 names three.** The fourth is
+// `native X;`, and the sentence that separates it from the other three is the
+// whole reason it is worth writing down: §4.4 *defers* `valuetype`, abstract
+// interfaces and `fixed` — each has a wire form the specification defines and
+// this version does not implement — while a `native` has no wire form to
+// implement, in v1 or in any later version. A native names a type only the
+// language mapping knows; there is nothing to marshal.
+//
+// It was missing here for exactly that reason, inverted: because §4.4 did not
+// name it, this rule did not name it, so the generator could not refuse it
+// without breaking `deferred_wire_agreement`, so the registry recorded a
+// native as `TypeCode::ObjRef` and both emitters emitted an object reference
+// — an IOR on the wire where nothing at all should go. The previous batch
+// fixed the same wrong answer for the other two and left this one with an
+// honest note: *"no rule names it, so a change here would be a claim no gate
+// checks."* The fix for that is a rule, which is this paragraph.
+//
+// The rule's *name* is `wire/deferred-type` and stays that way: renaming it
+// would break every consumer and the harness pins, for a word. The name is
+// imprecise for a native and the message is not — [`DeferredWireUse::message`]
+// says "cannot go on the wire at all" and says why §4.4 does not apply.
+//
+// *§4.4는 셋을 미룬다. 이 규칙의 집합은 넷이다 — `native`는 미뤄진 것이 아니라
+// 애초에 마샬링될 수 없는 것이고, 그 문장이 차이의 전부다.*
 //
 // The parser accepts `valuetype`, abstract interfaces and `fixed` because a
 // conformant front end has to, and `corpus/golden/20` and `21` pin that it
@@ -822,7 +847,21 @@ pub struct DeferredWireUse {
 
 impl DeferredWireUse {
     /// The finding as prose, in the shape S4's other rules take.
+    ///
+    /// Two sentences, because the set is two things: three constructs §4.4
+    /// *defers*, and one — `native` — it does not mention because there is
+    /// nothing to defer. Saying "§4.4 defers natives" would be false, and a
+    /// gate that says a false thing gets bypassed.
     pub fn message(&self) -> String {
+        if self.family() == "natives" {
+            return format!(
+                "{} {:?} cannot go on the wire at all: {}, which names a type only a language \
+                 mapping knows and has no CDR encoding in any version — so this is not one of \
+                 docs/PLAN.md §4.4's three deferrals, there is nothing here to defer; the \
+                 generator skips it and the dynamic path cannot marshal it",
+                self.kind, self.declaration, self.reason,
+            );
+        }
         format!(
             "{} {:?} cannot go on the v1 wire: {} — docs/PLAN.md §4.4 defers {}; the \
              generator skips it and the dynamic path cannot marshal it",
@@ -836,6 +875,12 @@ impl DeferredWireUse {
     /// The concrete edit, per construct family.
     pub fn fix(&self) -> String {
         match self.family() {
+            "natives" => "declare the type in IDL — a struct, a typedef, or an `interface` if \
+                          it is an object — so the contract says what crosses; a `native` \
+                          names a type only the language mapping knows, and no wire version \
+                          will carry one (omniORB's C++ back end refuses the declaration \
+                          outright)"
+                .into(),
             "fixed" => "carry the amount as a string, or as scaled integers (`long long` \
                         units plus a scale the contract documents), until §4.4 lands `fixed`; \
                         AnyJSON already carries decimals as strings"
@@ -851,12 +896,18 @@ impl DeferredWireUse {
         }
     }
 
-    /// The §4.4 family the construct belongs to, for the message and the fix.
+    /// The family the construct belongs to, for the message and the fix.
+    ///
+    /// Three of the four are §4.4's; `"natives"` is not, and
+    /// [`DeferredWireUse::message`] branches on exactly this answer so the
+    /// difference is said rather than glossed.
     pub fn family(&self) -> &'static str {
         if self.construct.starts_with("fixed") {
             "fixed"
         } else if self.construct == "abstract interface" {
             "abstract interfaces"
+        } else if self.construct == "native" {
+            "natives"
         } else {
             "valuetypes"
         }
@@ -1126,7 +1177,22 @@ impl Analyser {
                 // Its members are not walked: the valuetype is the reason, and
                 // whatever it carries is carried by a construct v1 has not met.
             }
-            Definition::Enum(_) | Definition::Native(_) => return,
+            // `native X;` — the fourth family, and the one §4.4 omits. See
+            // this section's header for why the omission is the defect rather
+            // than the justification.
+            //
+            // Only a native *written in the contract* reaches here. The
+            // predeclared `::CORBA::TypeCode` and `::CORBA::Principal` are
+            // `SymbolKind::Native` too, but they are not `Definition`s, so
+            // they never become a `WireDecl` and never acquire a cause — a
+            // struct member typed `::CORBA::TypeCode` is `tk_TypeCode`, which
+            // marshals perfectly well, and flagging it would be a false
+            // refusal. Asserted, not left to the shape of the code.
+            Definition::Native(_) => {
+                decl.kind = "native";
+                decl.direct = Some((None, "native".into()));
+            }
+            Definition::Enum(_) => return,
         }
         out.push(decl);
     }
@@ -1169,10 +1235,18 @@ impl Analyser {
     /// carries — a struct, union, exception, typedef, valuetype or interface
     /// — and whether the reference is by value (everything but an interface).
     ///
-    /// Enumerators, constants, natives and enums are not values that carry
-    /// anything and resolve to `None`. `::CORBA::ValueBase`, predeclared as a
-    /// valuetype, resolves like any other; a use of it is a §4.4 construct in
-    /// its own right (the keyword spelling is [`TypeSpec::ValueBase`]).
+    /// Enumerators, constants and enums are not values that carry anything and
+    /// resolve to `None`. `::CORBA::ValueBase`, predeclared as a valuetype,
+    /// resolves like any other; a use of it is a §4.4 construct in its own
+    /// right (the keyword spelling is [`TypeSpec::ValueBase`]).
+    ///
+    /// A **native** is by value, and used not to resolve at all — which is how
+    /// `struct Session { Handle token; }` was reported servable while its
+    /// member had no wire form. Whether it propagates is still decided by the
+    /// cause table rather than here: the predeclared `::CORBA::TypeCode` is a
+    /// `SymbolKind::Native` with no declaration behind it, so it is named here
+    /// and never found in the table, which is correct — it is `tk_TypeCode` on
+    /// the wire.
     fn wire_target(&self, scope: usize, n: &ScopedName) -> Option<(String, bool)> {
         let (container, sym) = self.find(scope, n)?;
         let by_value = match sym.kind {
@@ -1180,7 +1254,8 @@ impl Analyser {
             | SymbolKind::Union
             | SymbolKind::Exception
             | SymbolKind::Typedef
-            | SymbolKind::ValueType => true,
+            | SymbolKind::ValueType
+            | SymbolKind::Native => true,
             SymbolKind::Interface => false,
             _ => return None,
         };
@@ -1602,6 +1677,54 @@ mod wire_tests {
             "member \"d\" is \"m::Describable\", which is an abstract interface"
         );
         assert_eq!(d[2].reason, "member \"v\" is ValueBase");
+    }
+
+    /// A `native` is in this closure and the predeclared `::CORBA::TypeCode`
+    /// is not, and the second half is the one that had to be asserted rather
+    /// than reasoned about.
+    ///
+    /// Both are `SymbolKind::Native` in this analyser. Only a `native` written
+    /// in the contract becomes a `WireDecl` and so acquires a cause, so
+    /// `::CORBA::TypeCode` is named as a target and never found in the table —
+    /// which is correct, `tk_TypeCode` marshals perfectly well. That is a
+    /// property of the cause table rather than of `wire_target`, and a
+    /// property nobody wrote down is a property that gets refactored away.
+    ///
+    /// The family is checked too: a native must not be filed under
+    /// `"valuetypes"`, because [`DeferredWireUse::message`] branches on it to
+    /// say that §4.4 does not apply.
+    #[test]
+    fn a_native_propagates_and_the_predeclared_corba_typecode_does_not() {
+        let src = "module m {
+            native Handle;
+            struct Session { Handle token; };
+            typedef sequence<Handle> Roster;
+            interface Broker { Handle acquire(); };
+            struct Described { ::CORBA::TypeCode what; };
+            struct Plain { long a; };
+        };";
+        assert_eq!(names(src), ["m::Handle", "m::Session", "m::Roster", "m::Broker"]);
+        let d = deferred(src);
+        let got: Vec<(&str, &str, &str)> =
+            d.iter().map(|d| (d.declaration.as_str(), d.reason.as_str(), d.family())).collect();
+        assert_eq!(
+            got,
+            [
+                ("m::Handle", "it is a native", "natives"),
+                ("m::Session", "member \"token\" is \"m::Handle\", which is a native", "natives"),
+                ("m::Roster", "it is \"m::Handle\", which is a native", "natives"),
+                (
+                    "m::Broker",
+                    "the return of operation \"acquire\" is \"m::Handle\", which is a native",
+                    "natives"
+                ),
+            ]
+        );
+        // The sentence, not just the family: "§4.4 defers natives" would be
+        // false, and a gate that says a false thing gets bypassed.
+        let m = d[0].message();
+        assert!(m.contains("cannot go on the wire at all"), "{m}");
+        assert!(m.contains("not one of docs/PLAN.md §4.4's three deferrals"), "{m}");
     }
 
     /// Every site a `fixed` can hide behind, each reported once per

@@ -142,6 +142,18 @@ fn leaf(tc: &TypeCode, tick: &mut u64) -> Result<Value, Uncovered> {
                 "an abstract interface has no Value variant (docs/PLAN.md §4.4)".into(),
             ));
         }
+        // The fourth, and the only one of the four that is not §4.4's: a
+        // `native` has no Value variant and never will, because there is no
+        // wire form to give it one. It arrived here as `TypeCode::ObjRef` and
+        // was sampled as `Value::ObjRef(None)` until 2026-08-21 — walked,
+        // counted as covered, covering nothing at all.
+        TypeCode::Native { .. } => {
+            return Err(Uncovered(
+                "a `native` has no Value variant and no wire form to give it one — not a \
+                 docs/PLAN.md §4.4 deferral"
+                    .into(),
+            ));
+        }
         TypeCode::Principal => return Err(Uncovered("`Principal` has no Value variant".into())),
         other => return Err(Uncovered(format!("no leaf value for {other:?}"))),
     })
@@ -451,12 +463,14 @@ fn every_golden_type_survives_a_dynany_walk() {
         r.walked
     );
 
-    // The deferred types are §4.4's three, and every one of them must say so.
-    // `fixed` used to be the only entry here, not because it was the only
-    // deferred type but because the other two arrived as `TypeCode::ObjRef`
-    // and were walked as references — the gap was invisible to the gap
-    // report. Anything uncovered for a reason that does not cite §4.4 is a new
-    // gap and has to be looked at.
+    // The uncovered types are the four the wire cannot carry, and every one of
+    // them must say so. `fixed` used to be the only entry here, not because it
+    // was the only such type but because the other three arrived as
+    // `TypeCode::ObjRef` and were walked as references — the gap was invisible
+    // to the gap report. Anything uncovered for a reason that does not cite
+    // §4.4 is a new gap and has to be looked at; a `native` cites it in order
+    // to say it does not apply, which is the sentence that separates "not
+    // implemented yet" from "there is nothing to implement".
     for gap in &r.unsupported {
         assert!(
             gap.contains("§4.4"),
@@ -464,7 +478,7 @@ fn every_golden_type_survives_a_dynany_walk() {
             r.unsupported.join("\n  ")
         );
     }
-    for what in ["`fixed`", "`valuetype`", "abstract interface"] {
+    for what in ["`fixed`", "`valuetype`", "abstract interface", "`native`"] {
         assert!(
             r.unsupported.iter().any(|g| g.contains(what)),
             "corpus/golden must still report {what} as uncovered:\n  {}",
