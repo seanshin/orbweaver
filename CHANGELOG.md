@@ -10,7 +10,35 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
-_Nothing yet._
+### Fixed / 수정
+
+- **The AnyJSON layer names the rule that refused.** §4.4 defers `valuetype`,
+  abstract interfaces and `fixed`; three layers refuse an *instance* and only
+  two named the section. The AnyJSON layer — **the one a peer-fed document
+  actually meets** — answered `tk_value cannot cross yet` and
+  `Struct([…]) is not a value of IDL:m/Money:1.0`, and for `fixed` it named the
+  type `<anonymous>`. All three now say one sentence, both directions, all
+  three kinds: *`fixed<9,2>` is not marshalled by the v1 wire (docs/PLAN.md
+  §4.4); the TypeCode describing it reads, the value behind it does not.* The
+  tail is D008's distinction said out loud — the description crosses, the
+  instance does not — so a reader does not conclude the TypeCode form is
+  refused too, and the test asserts the crossing *beside* the refusal so the
+  two cannot drift into agreement. The Rust pair is pinned by
+  `deferred_sentence_agreement`; the generated Python half is compared for
+  **equality** in `python_target`, because Python cannot import a Rust
+  constant. No count moved. **Found on the way, not fixed:** `ValueBase`
+  marshals as an **object reference** — the valuetype-as-ObjRef defect of
+  2026-08-20 surviving in one keyword, named by S4's closure and refused by
+  nothing on the wire path.
+
+  **AnyJSON 레이어가 어느 규칙이 거부했는지 말한다.** 세 계층이 인스턴스를
+  거부하는데 절을 이름한 곳은 둘뿐이었고, 하필 피어 문서가 실제로 만나는 계층이
+  빠져 있었다(`fixed`는 타입 이름조차 `<anonymous>`였다). 이제 세 계층이 세
+  종류·양방향 모두 한 문장을 쓴다; 뒷부분은 D008의 구분을 그대로 말한 것이라
+  읽는 이가 TypeCode 형태까지 거부되었다고 결론짓지 않는다. **도중 발견(미수정):**
+  `ValueBase`가 객체 참조로 마샬링된다 — 어제 닫은 결함이 키워드 하나에 살아남았고,
+  S4는 이름을 대는데 와이어 경로의 어떤 층도 거부하지 않는다.
+
 
 ---
 
