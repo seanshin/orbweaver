@@ -383,6 +383,69 @@ pub(crate) fn deferred_wire_sentence(what: &str) -> String {
     )
 }
 
+/// How a construct with **no wire form at all** is named in a refusal, or
+/// `None` for a construct some version of the wire does carry — including the
+/// three [`deferred_wire_name`] answers for.
+///
+/// The fourth family, and the reason it is a separate function rather than a
+/// fourth arm of the one above: `native X;` is not deferred. §4.4's three have
+/// a wire form the specification defines and this version has not implemented;
+/// a native has none to implement, in v1 or in any later version, because it
+/// names a type only a language mapping knows. Aliases are followed for the
+/// same reason as above — a `typedef` renames a construct without giving the
+/// wire a way to carry it.
+pub(crate) fn unmarshallable_wire_name(tc: &TypeCode) -> Option<String> {
+    Some(match resolved(tc) {
+        TypeCode::Native { name, .. } => format!("native {name}"),
+        _ => return None,
+    })
+}
+
+/// The head every "no wire form at all" refusal shares, whichever layer raises
+/// it — the counterpart of [`deferred_wire_head`] for the fourth family.
+///
+/// It exists for the reason that one does and was written for the reason that
+/// one was *not*: when `native` landed (2026-08-21) the helper above was not on
+/// that branch, so five layers wrote five sentences for one fact and two of
+/// them told the reader something false — the AnyJSON read direction said
+/// `"IDL:m/Handle:1.0 cannot cross yet"`, and the dynamic navigator's default
+/// pointed at `docs/PLAN.md §4.4`. Both invite the reader to wait for a release
+/// that will never carry it.
+pub(crate) fn unmarshallable_wire_head(what: &str) -> String {
+    format!(
+        "{what} has no wire form at all: it names a type only a language mapping knows, and no \
+         version of the wire marshals one"
+    )
+}
+
+/// The whole sentence a **peer-fed** document or stream is refused with.
+///
+/// # Why this reads differently from [`deferred_wire_sentence`]
+///
+/// The two tails are the two different things a reader has to be told, and
+/// swapping them would be a lie in either direction.
+///
+/// §4.4's tail is D008's asymmetry: the *description* crosses and the
+/// *instance* does not, so keep sending the TypeCode. A native's tail is the
+/// absence of a deferral: there is no wire form waiting to be implemented, so
+/// the answer will not change in a later version and the fix is to change the
+/// contract. The word **"yet"** must never appear in it, and the section must
+/// be named only to say it does not apply — a refusal that read as a §4.4
+/// deferral would send the reader to a plan entry that does not name this
+/// construct and never will.
+///
+/// `deferred_sentence_agreement` holds both of those, and holds the four
+/// families to one source each; `orbweaver-gen`'s `python_target` holds the
+/// generated Python runtime's `_UNMARSHALLABLE` equal to this string across the
+/// crate boundary, because Python cannot import a Rust constant.
+pub(crate) fn unmarshallable_wire_sentence(what: &str) -> String {
+    format!(
+        "{}; this is not one of docs/PLAN.md §4.4's deferrals — those have a wire form this \
+         version has not implemented, and there is none here to implement",
+        unmarshallable_wire_head(what)
+    )
+}
+
 fn describe(tc: &TypeCode) -> String {
     match tc {
         TypeCode::Struct { name, .. }
@@ -718,12 +781,17 @@ fn encode_at(
         // The fourth, and the one §4.4 does not name — which is why it was
         // still `TypeCode::ObjRef` here when the other two were fixed, and why
         // this path marshalled an IOR for it. Not deferred: there is no
-        // encoding to add later.
-        (TypeCode::Native { name, .. }, _) => p.fail(format!(
-            "native {name} has no CDR encoding at all: a native names a type only a language \
-             mapping knows, so no wire version marshals one — this is not a deferral like \
-             docs/PLAN.md §4.4's three constructs"
-        )),
+        // encoding to add later, which is what the tail says.
+        //
+        // Unlike the two arms above, the write direction does **not** keep a
+        // tail of its own. A §4.4 write differs from a §4.4 read — the reader
+        // is told the description still crosses, the writer is told this path
+        // has no encoding — and for a native the two facts are the same fact,
+        // because neither direction will ever be implemented.
+        (t, _) if unmarshallable_wire_name(t).is_some() => {
+            let what = unmarshallable_wire_name(t).expect("just matched");
+            p.fail(unmarshallable_wire_sentence(&what))
+        }
 
         (t, v) => wrong_kind(p, t, v),
     }
@@ -939,13 +1007,11 @@ fn decode_at(d: &mut Decoder<'_>, tc: &TypeCode, p: &Path<'_>, wide: WideCodec) 
             return p.fail(deferred_wire_sentence(&what));
         }
         // "yet" is the word this arm must not use: a native is not waiting on
-        // an implementation. Refused by name rather than through `describe`.
-        TypeCode::Native { name, .. } => {
-            return p.fail(format!(
-                "native {name} has no CDR encoding at all, so there are no bytes here to read \
-                 — a native names a type only a language mapping knows, and no wire version \
-                 marshals one"
-            ));
+        // an implementation. Refused by name rather than through `describe`,
+        // and from the same source the other four layers read.
+        other if unmarshallable_wire_name(other).is_some() => {
+            let what = unmarshallable_wire_name(other).expect("just matched");
+            return p.fail(unmarshallable_wire_sentence(&what));
         }
         other => return p.fail(format!("cannot decode {} yet", describe(other))),
     })
@@ -1057,9 +1123,22 @@ mod tests {
     /// the section does not apply. A native is not deferred — there is no wire
     /// form waiting to be implemented — and a refusal that filed it under §4.4
     /// would promise a later release that cannot come.
+    ///
+    /// The exact wording lives in [`unmarshallable_wire_sentence`] and is held
+    /// to every other layer's by `tests/deferred_sentence_agreement.rs`. What
+    /// is asserted here is what that file cannot assert: that this arm exists
+    /// at all, for every `Value` shape and both byte orders. It is built from
+    /// the helper rather than re-typed, so a wording change lands in one place
+    /// and this test still fails if the arm is deleted.
     #[test]
     fn a_native_is_refused_and_the_refusal_says_it_is_not_a_deferral() {
         let handle = TypeCode::Native { id: "IDL:m/Handle:1.0".into(), name: "Handle".into() };
+        let want = unmarshallable_wire_sentence("native Handle");
+        assert!(!want.contains("yet"), "a native is not waiting on an implementation: {want}");
+        assert!(
+            !want.contains(&deferred_wire_head("native Handle")),
+            "a native must not carry §4.4's deferral claim: {want}"
+        );
         for endian in [Endian::Big, Endian::Little] {
             // Every `Value` shape a caller might reach for, including the one
             // the old `ObjRef` recording accepted.
@@ -1070,16 +1149,11 @@ mod tests {
             ] {
                 let err = encode(&mut Encoder::new(endian), &handle, &v)
                     .expect_err("a native must not marshal");
-                assert!(err.message.contains("native Handle"), "{err}");
-                assert!(err.message.contains("no CDR encoding at all"), "{err}");
-                assert!(err.message.contains("not a deferral"), "{err}");
+                assert_eq!(err.message, want, "{err}");
             }
             let err = decode(&mut Decoder::new(&[0u8; 16], endian), &handle)
                 .expect_err("a native must not decode");
-            assert!(err.message.contains("native Handle"), "{err}");
-            assert!(err.message.contains("no CDR encoding at all"), "{err}");
-            // "yet" is the word the decode arm must not use.
-            assert!(!err.message.contains("yet"), "{err}");
+            assert_eq!(err.message, want, "{err}");
         }
 
         // And the refusal travels to the member, as the valuetype's does.

@@ -102,15 +102,36 @@ class MarshalError(Error):
         super().__init__("%s: %s" % (path, message) if path else message)
 
 
-#: The one sentence §4.4's two remaining deferrals are refused with — one
-#: format string, so the ``valuetype`` refusal and the ``abstract interface``
-#: refusal cannot drift apart, and so both read as the Rust mapping's do
+#: The one sentence **all three** of §4.4's deferrals are refused with — one
+#: format string, so the ``valuetype``, ``abstract interface`` and ``fixed``
+#: refusals cannot drift apart, and so all three read as the Rust mapping's do
 #: (`orbweaver_dynamic::decode`, verbatim). The asymmetry is the message: the
 #: description crosses, the value does not, and a reader that met only "no
 #: AnyJSON form for <class>" would read that as a hole in this runtime rather
 #: than as the wire boundary it is.
-_DEFERRED = ("%s %s is not marshalled by the v1 wire (docs/PLAN.md §4.4); the TypeCode "
+#:
+#: The slot takes the whole construct name — ``"valuetype Money"``,
+#: ``"fixed<9,2>"`` — which is what `orbweaver_dynamic`'s ``deferred_wire_name``
+#: produces, because `fixed` has no kind word in front of it and a two-slot
+#: format could only spell it with a doubled space. ``fixed`` wrote its own
+#: sentence here until 2026-08-21 for exactly that reason.
+_DEFERRED = ("%s is not marshalled by the v1 wire (docs/PLAN.md §4.4); the TypeCode "
              "describing it reads, the value behind it does not")
+
+#: The fourth family, and **not** a fourth caller of the string above.
+#:
+#: A ``native`` is not deferred: §4.4's three have a wire form the
+#: specification defines and this version has not implemented, and a native has
+#: none to implement in any version, because it names a type only a language
+#: mapping knows. So the tail says the opposite of ``_DEFERRED``'s — there is
+#: nothing to wait for and nothing to keep sending — and the word "yet" must
+#: never appear in it. See `orbweaver_dynamic::unmarshallable_wire_sentence`,
+#: which this is held equal to by `orbweaver-gen`'s ``python_target``:
+#: Python cannot import a Rust constant, so the equality is a test.
+_UNMARSHALLABLE = ("%s has no wire form at all: it names a type only a language mapping knows, "
+                   "and no version of the wire marshals one; this is not one of docs/PLAN.md "
+                   "§4.4's deferrals — those have a wire form this version has not implemented, "
+                   "and there is none here to implement")
 
 
 class TransportError(Error):
@@ -452,7 +473,7 @@ class ValueType(object):
     _idl_members = ()
 
     def __init__(self, *args, **kw):
-        raise MarshalError("", _DEFERRED % ("valuetype", self._idl_name or type(self).__name__))
+        raise MarshalError("", _DEFERRED % ("valuetype " + (self._idl_name or type(self).__name__)))
 
 
 class LongDouble(object):
@@ -680,8 +701,7 @@ def to_json(desc, value, path=""):
                 raise MarshalError(path, "expected an ObjectRef or None, got %r" % (value,))
             return {"_ref": value.handle, "_type": value.type_id or d[1]}
         if kind == "abstract_interface":
-            raise MarshalError(path, _DEFERRED % ("abstract interface",
-                                                  NAMES.get(d[1]) or d[1]))
+            raise MarshalError(path, _DEFERRED % ("abstract interface " + (NAMES.get(d[1]) or d[1])))
         if kind in ("seq", "array"):
             # base64 is the **sequence<octet>** rule and not the array rule:
             # §4.5 gives it to a sequence because a megabyte of binary must not
@@ -726,7 +746,7 @@ def to_json(desc, value, path=""):
         return out
 
     if isinstance(d, type) and issubclass(d, ValueType):
-        raise MarshalError(path, _DEFERRED % ("valuetype", d._idl_name or d.__name__))
+        raise MarshalError(path, _DEFERRED % ("valuetype " + (d._idl_name or d.__name__)))
 
     raise MarshalError(path, "no AnyJSON form for %r" % (d,))
 
@@ -799,8 +819,7 @@ def from_json(desc, j, path=""):
                 return None
             return ObjectRef(j["_ref"], j.get("_type", d[1]))
         if kind == "abstract_interface":
-            raise MarshalError(path, _DEFERRED % ("abstract interface",
-                                                  NAMES.get(d[1]) or d[1]))
+            raise MarshalError(path, _DEFERRED % ("abstract interface " + (NAMES.get(d[1]) or d[1])))
         if kind in ("seq", "array"):
             elem = resolve(d[1])
             if kind == "seq" and elem == "octet":
@@ -846,7 +865,7 @@ def from_json(desc, j, path=""):
         return d(disc, from_json(case[2], j["_v"], _member(path, "_v")))
 
     if isinstance(d, type) and issubclass(d, ValueType):
-        raise MarshalError(path, _DEFERRED % ("valuetype", d._idl_name or d.__name__))
+        raise MarshalError(path, _DEFERRED % ("valuetype " + (d._idl_name or d.__name__)))
 
     raise MarshalError(path, "no AnyJSON form for %r" % (d,))
 
@@ -929,8 +948,23 @@ def _desc_of(form, path):
             _synthesise(kind, id, form, path)
         return ("ref", id)
     if kind == "fixed":
-        raise MarshalError(path, "fixed<%s,%s> is deferred at wire level (§4.4)"
-                           % (form.get("digits"), form.get("scale")))
+        # The third of §4.4's three, and the one that wrote its own sentence
+        # until 2026-08-21: "fixed<9,2> is deferred at wire level (§4.4)" is a
+        # fourth wording of a fact three layers already agreed on, and it is
+        # this layer — the one a peer-fed document actually meets.
+        raise MarshalError(path, _DEFERRED % ("fixed<%s,%s>"
+                                              % (form.get("digits"), form.get("scale"))))
+    if kind == "native":
+        # The fourth family. `orbweaver_dynamic::tc_to_json` writes this form,
+        # so a peer-fed document can carry one and this arm is reachable.
+        #
+        # Refused with `_UNMARSHALLABLE` and not with `_DEFERRED`: a native has
+        # no wire form to wait for. Until this arm existed it fell to the line
+        # below and was answered "no AnyJSON value form for a 'native' type",
+        # which names neither the construct nor any boundary — the fifth
+        # wording of one fact, in the fifth layer.
+        raise MarshalError(path, _UNMARSHALLABLE
+                           % ("native " + (_form_field(form, "name", path, str))))
     raise MarshalError(path, "no AnyJSON value form for a %r type" % (kind,))
 
 

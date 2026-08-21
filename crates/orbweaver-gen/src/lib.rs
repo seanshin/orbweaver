@@ -237,9 +237,7 @@ pub(crate) fn rust_type(tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
         | TypeCode::Except { id, .. }
         | TypeCode::Alias { id, .. } => rust_path(id, cx),
         TypeCode::Recursive(id) => rust_path(id, cx),
-        TypeCode::Fixed { digits, scale } => {
-            return Err(format!("fixed<{digits},{scale}> is deferred at wire level (§4.4)"));
-        }
+        TypeCode::Fixed { digits, scale } => return Err(deferred_fixed(*digits, *scale)),
         TypeCode::Value { name, .. } => return Err(deferred_value(name)),
         TypeCode::AbstractInterface { name, .. } => return Err(deferred_abstract(name)),
         TypeCode::Native { name, .. } => return Err(unmarshallable_native(name)),
@@ -258,6 +256,17 @@ pub(crate) fn deferred_value(name: &str) -> String {
         "valuetype {name} is deferred at wire level (§4.4): its state is marshalled inline \
          behind a value tag, not as an object reference"
     )
+}
+
+/// The same, for a `fixed`.
+///
+/// It had no function and three identical literals — `rust_type`,
+/// `representable` and Python's `descriptor` — while its two siblings above
+/// had one home each. Nothing had drifted yet; the generated Python runtime's
+/// copy of the same sentence had, which is what made this worth collapsing
+/// rather than counting.
+pub(crate) fn deferred_fixed(digits: u16, scale: i16) -> String {
+    format!("fixed<{digits},{scale}> is deferred at wire level (§4.4)")
 }
 
 /// The same, for an abstract interface.
@@ -503,9 +512,7 @@ fn label_literal(label: &[u8], disc: &TypeCode) -> String {
 /// the §4.4 reason lost on the way.
 fn representable(tc: &TypeCode, visiting: &mut Vec<String>) -> Result<(), String> {
     match tc {
-        TypeCode::Fixed { digits, scale } => {
-            Err(format!("fixed<{digits},{scale}> is deferred at wire level (§4.4)"))
-        }
+        TypeCode::Fixed { digits, scale } => Err(deferred_fixed(*digits, *scale)),
         // The other two of §4.4's three, cascading exactly as `fixed` does.
         // They did not, for six phases, because the registry handed this
         // function a `TypeCode::ObjRef` for both and an object reference is
