@@ -46,6 +46,114 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **A constant's value is the value that was written, and it is checked against
+  its type.** Scoped to the rule rather than to `fixed`: **67 constant shapes
+  and 25 of their neighbours outside const position**, one file each, through
+  `omniidl -b dump` and through us — **26 divergences in both directions, three
+  causes**. (1) *The lexer chose a Rust type and lost what it could not hold*
+  (5): `9.9d` became `Float(9.90000000000000035…)` before anything ran, and
+  `18446744073709551615` and `0xFFFFFFFFFFFFFFFF` were **refused**, in two
+  different messages, though both are ordinary `unsigned long long`. The
+  neighbour measurement is what makes this a rule about *literals* and not
+  about constants: `case 18446744073709551615:` on an `unsigned long long`
+  discriminator was refused by the same line of the same function. Now
+  `Tok::Int(u64)`, `Tok::Fixed(FixedLit{unscaled,scale})`, `ConstExpr::Int(i128)`
+  and exact decimal `+ - *` in the registry's fold — `/` folds to `None`,
+  because there is no exact decimal quotient and IDL names no rounding rule to
+  invent one. (2) *A constant's value was never checked against its type at
+  all* (16): `registry::coerce` held the range half and its own doc comment
+  called it "an IDL error the checker reports" while no checker reported it, so
+  the rule's only effect was that the registry stored no value and both
+  emitters skipped it in silence. Measured rather than assumed — omniidl is
+  strictly typed here and converts nothing, width is not the axis (`char` and
+  `octet` are one octet each and neither takes the other's literal), and
+  `const double A = 5;` **is an error**. Now sema `const-value-type` /
+  `const-value-range` / `not-a-const-type`, following typedefs, with fix hints
+  in forge. (3) *No wide literal existed* (5): `L` lexed as an identifier, so
+  `L'a'` failed with `expected ";", found 'a'` — naming neither `L` nor
+  `wchar`. Now `Tok::WChar` / `Tok::WStr`, and `const_type`'s last two
+  alternatives are written in `corpus/golden/30-const-type.idl`.
+
+  **26 → 2**, and both survivors are places we follow CORBA 3.4 over omniidl,
+  recorded in `corpus/divergences.tsv` with the measurement: `const long A =
+  -2147483648;` (omniidl types an integer literal by the magnitude it reads
+  before applying the unary minus, so the minimum of `long` and of `long long`
+  cannot be written for it — `short`'s minimum is unaffected, which is what
+  makes the pattern legible) and `case L'a':` (its union grammar admits no wide
+  literal though its `const` does). Two more omniidl behaviours are recorded
+  rather than copied: it **silently truncates a 32nd fractional `fixed` digit**
+  — dropping a digit from a constant is the failure this batch exists to close,
+  so we refuse it — and it reads a wide literal one *byte* at a time, so
+  `L"aéb"` comes back as its UTF-8 bytes.
+
+  What the fix unlocked, measured: **`idl-diff` was blind to every `fixed`
+  constant.** Both sides folded to `None`, so a released rate could change and
+  §5.3 printed "no change". It now separates `9.9d` from `9.91d` and correctly
+  does *not* report `9.9d` against `9.90d` — the brief for this batch assumed
+  the opposite and the oracle refuted it on the first query. `33-const-values.idl`
+  also exposed a gap neither emitter had ever been asked for: `long long` and
+  `unsigned long long` union discriminators, legal since `switch_type_spec ::=
+  integer_type`, refused by both. Closed in both. Corpus: golden **34 → 36**,
+  negative **19 → 23** (`n19` class, `n20` range, `n21` long double, `n22`
+  literal shape), every one checked against `omniidl -b dump`. Seven new gates,
+  each landed with its negative control run **red** (D010 §7.2).
+
+  **상수의 값은 쓰인 그대로이며, 자기 타입에 대해 검사된다.** `fixed`가 아니라
+  **규칙**으로 범위를 잡았다: 상수 형태 67개와 const 자리 밖 이웃 25개를 한 파일씩
+  omniidl과 우리 양쪽에 통과시켜 **양방향 26건의 불일치, 원인 셋**을 얻었다.
+  (1) *렉서가 러스트 타입을 골라 담지 못한 것을 잃었다*(5) — `9.9d`는 아무것도
+  실행되기 전에 부동소수가 되었고, 평범한 `unsigned long long`인
+  `18446744073709551615`와 `0xFFFFFFFFFFFFFFFF`는 서로 다른 두 메시지로 **거부**
+  되었다. 이것이 상수가 아니라 **리터럴**에 관한 규칙임은 이웃 측정이 말한다:
+  `unsigned long long` 판별자의 `case 18446744073709551615:`이 같은 함수의 같은
+  줄에서 거부되었다. (2) *상수의 값을 타입에 대해 검사하는 코드가 아예 없었다*(16)
+  — `registry::coerce`의 문서 주석은 "검사기가 보고하는 IDL 오류"라고 적혀 있었고
+  보고하는 검사기는 없었다. 그래서 규칙의 유일한 효과는 레지스트리가 값을 저장하지
+  않는 것이었고, 두 이미터는 그것을 조용히 건너뛰었다. 가정이 아니라 측정이다 —
+  omniidl은 여기서 엄격하며 변환하지 않고, 폭은 축이 아니며(`char`와 `octet`은
+  둘 다 1옥텟이지만 서로의 리터럴을 받지 않는다), `const double A = 5;`는 **오류다**.
+  (3) *넓은 리터럴이 존재하지 않았다*(5) — `L`이 식별자로 렉싱되어 `L'a'`는 `L`도
+  `wchar`도 이름하지 않는 메시지로 실패했다.
+
+  **26 → 2.** 남은 둘은 우리가 omniidl 대신 CORBA 3.4를 따르는 자리이며 측정과
+  함께 `corpus/divergences.tsv`에 기록했다. omniidl의 두 동작은 복사하지 않고
+  기록했다: 32번째 **소수부** `fixed` 자리를 말없이 잘라내는 것(상수에서 자리 하나를
+  말없이 잃는 것이 이 배치가 닫으려는 실패이므로 우리는 거부한다)과 넓은 리터럴을
+  한 **바이트**씩 읽는 것. 고침이 드러낸 것: **`idl-diff`는 모든 `fixed` 상수에
+  눈이 멀어 있었다** — 양쪽이 `None`으로 접혀, 배포된 요율이 바뀌어도 §5.3은
+  "변경 없음"을 찍었다. 코퍼스는 golden 34 → 36, negative 19 → 23이고, 새 게이트
+  일곱은 각각 음성대조를 **red로 돌린 뒤** 착지했다(D010 §7.2).
+
+  **Landed four days after its base, and the landing took the measurement the
+  batch's own machine could not.** The branch recorded the new file and its
+  `L`-prefixed literals as **unmeasured against a second front end** — JacORB
+  and TAO were absent there. JacORB 3.9 is a fixture here, and it disagrees
+  twice, both recorded in `corpus/divergences.tsv` with what was measured and
+  neither changing what we do. It **cannot lex a `fixed` literal whose written
+  integer part begins with `0`**: `0.0d`, `0.5d`, `0.001d`, `0.10d`, `0d` and
+  `000000001d` each stop the parse at the literal, while the same values are
+  taken with the integer part absent (`.5d`), behind a sign (`-0.5d`) or with a
+  nonzero first digit (`1.0d`, `2.50d`, `100d`), and `const double B = 0.0;`
+  and `const long C = 010;` both compile — so it is the `d` suffix, not the
+  leading zero, and a decimal type it otherwise supports cannot state zero.
+  And it **accepts `const long double`**, which omniidl and we refuse: it
+  writes `double value = 1.0;`, so the constant silently becomes narrower than
+  it was declared — the outcome the refusal exists to prevent, which is a
+  better argument for the refusal than the grammar was. Twenty-one one-line
+  probes, 2026-08-24.
+
+  **기반보다 나흘 늦게 착지했고, 착지가 배치의 기계에서는 할 수 없던 측정을 했다.**
+  브랜치는 새 파일과 `L` 리터럴을 **두 번째 프런트엔드에 대해 미측정**으로 기록했다 —
+  그 기계에 JacORB도 TAO도 없었기 때문이다. 여기에는 JacORB 3.9가 fixture로 있고,
+  두 곳에서 갈린다. 하나, **정수부가 `0`으로 시작하는 `fixed` 리터럴을 렉싱하지
+  못한다**: `0.0d`, `0.5d`, `0.001d`, `0d`, `000000001d`가 리터럴에서 파스를
+  멈추는 반면 `.5d`, `-0.5d`, `1.0d`, `100d`는 통과하고 `const double B = 0.0;`와
+  `const long C = 010;`은 컴파일된다 — 앞자리 0이 아니라 `d` 접미사의 문제이며,
+  지원한다는 십진 타입으로 0을 적을 수 없다는 뜻이다. 둘, **`const long double`을
+  받아들인다** — omniidl과 우리가 거부하는 것을. 그리고 `double value = 1.0;`을
+  써낸다: 상수가 선언된 것보다 조용히 좁아진다. 거부가 막으려는 결과 그 자체이며,
+  문법보다 나은 거부 근거다. 한 줄짜리 탐침 21개, 2026-08-24.
+
 - **A `native` refusal comes from one place, as §4.4's three already did — and
   two of the ten sentences it replaced were false.** 41b352d gave the three
   deferrals one sentence across the CDR path, the AnyJSON path and the
