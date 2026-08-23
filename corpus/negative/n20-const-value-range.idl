@@ -1,0 +1,28 @@
+// n20 — an integer constant must fit the type it was declared with.
+//
+// The rule existed and reported nothing. `orbweaver_registry::coerce` had it,
+// and its own doc comment said the out-of-range case "is an IDL error the
+// checker reports" — but no checker reported it, so the only effect of the
+// rule was that the registry silently stored no value for the constant. A
+// constant with no value is one an emitter skips, so `const octet O = 300;`
+// validated clean, generated nothing, and said nothing about either. The
+// sentence in the registry was a claim about a component that did not exist.
+//
+// 규칙은 레지스트리 안에 조용한 `None`으로만 있었고, 진단은 없었다.
+//
+// omniidl 4.3.4, measured 2026-08-21, one file per line:
+//   Value too large for octet / short / unsigned short / long
+//   Integer literal is too large for unsigned long
+//   Value too small for short / unsigned long
+//
+// The check is on the folded *result*, not on the operands — `40000 - 10000`
+// is a legal short and is in corpus/golden/31 — so this file writes literals.
+module n20 {
+  const octet          FRAME     = 300;
+  const short          DELTA     = 40000;
+  const short          FLOOR     = -32769;
+  const unsigned short SLOTS     = 65536;
+  const long           CAPACITY  = 2147483648;
+  const unsigned long  BUDGET    = 4294967296;
+  const unsigned long  DEFICIT   = -1;
+};

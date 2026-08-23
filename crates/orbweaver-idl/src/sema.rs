@@ -25,7 +25,7 @@
 use std::collections::HashMap;
 
 use crate::ast::*;
-use crate::lex::Span;
+use crate::lex::{FixedLit, Span};
 
 /// A semantic problem, phrased as something to fix.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +100,15 @@ pub struct Symbol {
     /// merged `struct A` and `struct a` in a reopened module instead of
     /// reporting the clash the oracle reports.
     pub defined: bool,
+    /// The type this symbol names or was declared with, for the kinds that
+    /// have one: a `Typedef`'s target, a `Const`'s declared type, and an
+    /// `Enumerator`'s enum (as a [`TypeSpec::Named`]).
+    ///
+    /// Carried so that a constant's type can be followed through `typedef`s
+    /// without a second symbol table. `typedef long double D; const D A = 1.0;`
+    /// is the shape that needs it: the rule is about `long double`, and the
+    /// declaration never says `long double`.
+    pub ty: Option<TypeSpec>,
 }
 
 /// A lexical scope.
@@ -196,7 +205,14 @@ impl Analyser {
         ] {
             self.scopes[corba].symbols.insert(
                 name.to_lowercase(),
-                Symbol { name: name.into(), kind, span: Span::empty(), scope: None, defined: true },
+                Symbol {
+                    name: name.into(),
+                    kind,
+                    span: Span::empty(),
+                    scope: None,
+                    defined: true,
+                    ty: None,
+                },
             );
         }
         self.scopes[0].symbols.insert(
@@ -207,6 +223,7 @@ impl Analyser {
                 span: Span::empty(),
                 scope: Some(corba),
                 defined: true,
+                ty: None,
             },
         );
     }
@@ -309,8 +326,34 @@ impl Analyser {
         self.note_spelling(scope, &name.text, name.span);
         self.scopes[scope].symbols.insert(
             key,
-            Symbol { name: name.text.clone(), kind, span: name.span, scope: inner, defined },
+            Symbol {
+                name: name.text.clone(),
+                kind,
+                span: name.span,
+                scope: inner,
+                defined,
+                ty: None,
+            },
         );
+    }
+
+    /// Declares a symbol and records the type it names or was declared with.
+    ///
+    /// Separate from [`Self::declare`] so that the dozen call sites with no
+    /// type keep saying nothing about one, rather than passing `None` twelve
+    /// times. Setting the field afterwards is safe because `declare` either
+    /// inserted under this key or reported a clash and inserted nothing — in
+    /// the second case there is an older symbol here whose type is its own,
+    /// and overwriting it would attribute the loser's type to the winner.
+    fn declare_typed(&mut self, scope: usize, name: &Named, kind: SymbolKind, ty: TypeSpec) {
+        let before = self.scopes[scope].symbols.contains_key(&name.text.to_lowercase());
+        self.declare(scope, name, kind, None);
+        if before {
+            return;
+        }
+        if let Some(sym) = self.scopes[scope].symbols.get_mut(&name.text.to_lowercase()) {
+            sym.ty = Some(ty);
+        }
     }
 
     /// Whether an existing symbol is the forward declaration `name` completes.
@@ -436,18 +479,30 @@ impl Analyser {
                 self.declare(scope, &e.name, SymbolKind::Enum, None);
                 // Enumerators live in the *enclosing* scope, not inside the
                 // enum, so two enums in one module cannot share a member name.
+                // Each carries the enum it belongs to, which is how
+                // `const E A = Y;` is told from `const E A = X;` when `Y`
+                // belongs to some other enum in the same scope.
+                let owner = TypeSpec::Named(ScopedName {
+                    absolute: false,
+                    parts: vec![e.name.text.clone()],
+                    span: e.name.span,
+                });
                 for m in &e.members {
-                    self.declare(scope, m, SymbolKind::Enumerator, None);
+                    self.declare_typed(scope, m, SymbolKind::Enumerator, owner.clone());
                 }
             }
             Definition::Typedef(t) => {
                 self.type_spec(scope, &t.ty);
-                self.declare(scope, &t.name, SymbolKind::Typedef, None);
+                self.declare_typed(scope, &t.name, SymbolKind::Typedef, t.ty.clone());
             }
             Definition::Const(c) => {
                 self.type_spec(scope, &c.ty);
                 self.const_expr(scope, &c.value);
-                self.declare(scope, &c.name, SymbolKind::Const, None);
+                // Checked before the name is declared: a constant cannot refer
+                // to itself, and declaring first would let `const long A = A;`
+                // resolve to the declaration being checked.
+                self.check_const(scope, c);
+                self.declare_typed(scope, &c.name, SymbolKind::Const, c.ty.clone());
             }
             Definition::ValueType(v) => {
                 let Some(members) = &v.members else {
@@ -529,6 +584,255 @@ impl Analyser {
         self.type_spec(scope, &m.ty);
         for n in &m.names {
             self.declare(scope, n, SymbolKind::Member, None);
+        }
+    }
+
+    // ── a constant's value against its declared type ────────────────────────
+
+    /// Follows a constant's declared type through `typedef`s to the type the
+    /// rules are written about. `None` when it does not resolve, or when the
+    /// chain is longer than any real one — a `typedef` cycle is a different
+    /// diagnostic and must not become a hang here.
+    fn base_type(&self, scope: usize, ty: &TypeSpec) -> Option<TypeSpec> {
+        let mut cur = ty.clone();
+        for _ in 0..32 {
+            let TypeSpec::Named(n) = &cur else { return Some(cur) };
+            let sym = self.lookup(scope, n)?;
+            match sym.kind {
+                SymbolKind::Typedef => cur = sym.ty.clone()?,
+                // An enum type is a base type: it is what an enumerator fits.
+                _ => return Some(cur),
+            }
+        }
+        None
+    }
+
+    /// Evaluates a constant expression far enough to type- and range-check it.
+    ///
+    /// # Why the front end folds at all
+    ///
+    /// `orbweaver_registry` folds constants too, and its own documentation
+    /// argues that folding should happen once. That argument is about
+    /// *consumers*: three emitters with three folders will disagree and the
+    /// silent one ships. A front end is not a consumer — `const short S =
+    /// 40000;` is an error in the language, and an error in the language is
+    /// reported by the thing that reads the language. omniidl folds here for
+    /// the same reason, and every message this check emits is one of its
+    /// messages.
+    ///
+    /// The two folders are held together by a test rather than by hope:
+    /// `registry_agrees_with_the_front_end` walks `corpus/golden/` and asserts
+    /// that every constant this pass accepts is one the registry gives a value
+    /// to, and every constant it rejects is one the registry leaves `None`.
+    ///
+    /// `None` here means *"not evaluated"*, never *"invalid"*: an unresolved
+    /// name, an operator this does not implement, an overflow. Nothing is
+    /// reported from a `None`, because a value that did not fold is not a value
+    /// that is wrong.
+    fn fold(&self, scope: usize, e: &ConstExpr) -> Option<ConstFold> {
+        Some(match e {
+            ConstExpr::Int(v) => ConstFold::Int(*v),
+            ConstExpr::Float(v) => ConstFold::Float(*v),
+            ConstExpr::Fixed(v) => ConstFold::Fixed(*v),
+            ConstExpr::Str(s) => ConstFold::Str(s.clone()),
+            ConstExpr::WStr(s) => ConstFold::WStr(s.clone()),
+            ConstExpr::Char(c) => ConstFold::Char(*c),
+            ConstExpr::WChar(c) => ConstFold::WChar(*c),
+            ConstExpr::Bool(b) => ConstFold::Bool(*b),
+            ConstExpr::Name(n) => {
+                let sym = self.lookup(scope, n)?;
+                match sym.kind {
+                    // An enumerator's value is the enum it belongs to: which
+                    // enum is the whole question, and the ordinal is not.
+                    SymbolKind::Enumerator => {
+                        let TypeSpec::Named(owner) = sym.ty.as_ref()? else { return None };
+                        ConstFold::Enum(owner.last().to_lowercase())
+                    }
+                    // Another constant contributes its *class*, taken from the
+                    // type it was declared with. That is enough for every rule
+                    // here except the integer range, which is why an integer
+                    // named rather than written is deliberately not folded.
+                    SymbolKind::Const => {
+                        let base = self.base_type(scope, sym.ty.as_ref()?)?;
+                        ConstFold::from_type(&base)?
+                    }
+                    _ => return None,
+                }
+            }
+            ConstExpr::Unary { op, operand } => match (*op, self.fold(scope, operand)?) {
+                ("+", v) => v,
+                ("-", ConstFold::Int(v)) => ConstFold::Int(v.checked_neg()?),
+                ("-", ConstFold::Float(v)) => ConstFold::Float(-v),
+                ("-", ConstFold::Fixed(v)) => ConstFold::Fixed(v),
+                ("~", ConstFold::Int(v)) => ConstFold::Int(!v),
+                _ => return None,
+            },
+            ConstExpr::Binary { op, left, right } => {
+                match (self.fold(scope, left)?, self.fold(scope, right)?) {
+                    (ConstFold::Int(a), ConstFold::Int(b)) => ConstFold::Int(match *op {
+                        "+" => a.checked_add(b)?,
+                        "-" => a.checked_sub(b)?,
+                        "*" => a.checked_mul(b)?,
+                        "/" => a.checked_div(b)?,
+                        "%" => a.checked_rem(b)?,
+                        "|" => a | b,
+                        "^" => a ^ b,
+                        "&" => a & b,
+                        "<<" => a.checked_shl(u32::try_from(b).ok()?)?,
+                        ">>" => a.checked_shr(u32::try_from(b).ok()?)?,
+                        _ => return None,
+                    }),
+                    // Arithmetic that mixes classes, or that this does not
+                    // implement exactly (a `fixed` sum needs decimal
+                    // arithmetic), stays unevaluated. The class of the result
+                    // is still the class of the operands, which is what the
+                    // type check needs.
+                    (a, b) if a.class() == b.class() => a,
+                    _ => return None,
+                }
+            }
+        })
+    }
+
+    /// Whether any `/` or `%` in the expression has a divisor that folds to
+    /// zero, anywhere in the tree.
+    fn divides_by_zero(&self, scope: usize, e: &ConstExpr) -> bool {
+        match e {
+            ConstExpr::Unary { operand, .. } => self.divides_by_zero(scope, operand),
+            ConstExpr::Binary { op, left, right } => {
+                if matches!(*op, "/" | "%")
+                    && matches!(self.fold(scope, right), Some(ConstFold::Int(0)))
+                {
+                    return true;
+                }
+                self.divides_by_zero(scope, left) || self.divides_by_zero(scope, right)
+            }
+            _ => false,
+        }
+    }
+
+    /// Reports a constant whose value does not fit the type it was declared
+    /// with. Every message here is omniidl 4.3.4's, measured 2026-08-21.
+    ///
+    /// # The shape of the bug this closes
+    ///
+    /// There was no check at all. `orbweaver_registry::coerce` had the range
+    /// half of it — and its own doc comment said the out-of-range case "is an
+    /// IDL error the checker reports" — but the checker did not report it, so
+    /// the rule's only effect was that the registry silently stored no value.
+    /// A constant with no value is one an emitter skips, so `const octet O =
+    /// 300;` validated clean, emitted nothing, and said nothing about either.
+    /// *규칙이 레지스트리 안에 조용한 `None`으로만 있었고 진단은 없었다.*
+    ///
+    /// Sixteen shapes were measured diverging from the oracle in the lax
+    /// direction across `const` and its neighbours; all sixteen are this.
+    fn check_const(&mut self, scope: usize, c: &ConstDef) {
+        let Some(base) = self.base_type(scope, &c.ty) else { return };
+        let span = c.name.span;
+
+        // `long double` is legal by `const_type`'s grammar — `floating_pt_type`
+        // admits it — and refused semantically, so it is checked before the
+        // value is looked at at all. It reaches here as `const long double`,
+        // and equally as a `typedef` nobody reading the declaration would see.
+        if base == TypeSpec::LongDouble {
+            self.diagnostics.push(Diagnostic {
+                message: "'long double' cannot be a constant's type: `const_type` admits it \
+                          through `floating_pt_type` and the oracle refuses it anyway \
+                          (\"Invalid type for constant: long double\"), because there is no \
+                          `long double` literal to write. Use `double`."
+                    .to_owned(),
+                span,
+                rule: "not-a-const-type",
+            });
+            return;
+        }
+
+        // Reported before the fold rather than inferred from its failure: a
+        // fold returns `None` for a dozen reasons and "did not evaluate" is
+        // not a diagnosis. This one has an answer — there is no value — so it
+        // is found by looking for it.
+        if self.divides_by_zero(scope, &c.value) {
+            self.diagnostics.push(Diagnostic {
+                message: format!(
+                    "{:?} divides by zero: the expression has no value, so the constant has \
+                     none either. Change the divisor.",
+                    c.name.text
+                ),
+                span,
+                rule: "const-value-range",
+            });
+            return;
+        }
+
+        let Some(want) = ConstFold::from_type(&base) else { return };
+        let Some(got) = self.fold(scope, &c.value) else { return };
+
+        if got.class() != want.class() {
+            self.diagnostics.push(Diagnostic {
+                message: format!(
+                    "cannot interpret {} as {}: a constant's value must be a literal of its own \
+                     type — IDL converts nothing here, so `{}` needs {}",
+                    got.class().literal_name(),
+                    want.class().article_name(),
+                    c.name.text,
+                    want.class().how_to_write(),
+                ),
+                span,
+                rule: "const-value-type",
+            });
+            return;
+        }
+
+        match (&got, &base) {
+            (ConstFold::Int(v), _) => {
+                if let Some((lo, hi, name)) = int_range(&base) {
+                    if *v < lo || *v > hi {
+                        let side = if *v < lo { "small" } else { "large" };
+                        self.diagnostics.push(Diagnostic {
+                            message: format!(
+                                "value {v} is too {side} for {name}: the range is {lo}..={hi}. \
+                                 Widen the type, or write a value inside it — a constant is \
+                                 part of the contract, and truncating one here would hand \
+                                 every consumer a number nobody wrote."
+                            ),
+                            span,
+                            rule: "const-value-range",
+                        });
+                    }
+                }
+            }
+            (ConstFold::Enum(from), TypeSpec::Named(want_enum))
+                if *from != want_enum.last().to_lowercase() =>
+            {
+                self.diagnostics.push(Diagnostic {
+                    message: format!(
+                        "enumerator does not belong to enum {:?}: an enumerator initialises a \
+                         constant only of its own enum. It belongs to {:?}.",
+                        want_enum.last(),
+                        from
+                    ),
+                    span,
+                    rule: "const-value-type",
+                });
+            }
+            (ConstFold::Str(s), TypeSpec::String(Some(b)))
+            | (ConstFold::WStr(s), TypeSpec::WString(Some(b))) => {
+                if let Some(ConstFold::Int(bound)) = self.fold(scope, b) {
+                    let len = i128::try_from(s.chars().count()).unwrap_or(i128::MAX);
+                    if len > bound {
+                        self.diagnostics.push(Diagnostic {
+                            message: format!(
+                                "string constant is {len} characters and the bound is {bound}: \
+                                 a bounded string constant may not exceed its own bound. \
+                                 Widen the bound, or shorten the value."
+                            ),
+                            span,
+                            rule: "const-value-range",
+                        });
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1353,13 +1657,175 @@ fn reason_prose(causes: &HashMap<String, Cause>, c: &Cause, first: bool) -> Stri
     }
 }
 
+/// What class of literal a value is, and what class a type wants.
+///
+/// # Why a class and not a type
+///
+/// IDL's rule for a constant's value, measured against omniidl 4.3.4 on
+/// 2026-08-21 one file per pair, is that **the literal's class must be the
+/// declared type's class, with no conversion whatsoever**. Every one of these
+/// is refused, and the first four were surprises worth measuring rather than
+/// assuming:
+///
+/// ```text
+/// const double  A = 5;      Cannot interpret integer literal as a double
+/// const fixed   A = 5;      Cannot interpret integer literal as fixed point
+/// const long    A = 'a';    Cannot interpret character literal as an integer
+/// const char    A = 65;     Cannot interpret integer literal as a character
+/// const long    A = TRUE;   Cannot interpret boolean literal as an integer
+/// const wstring A = "hi";   Cannot interpret string literal as a wide string
+/// const double  A = 9.9d;   Cannot interpret fixed point literal as a double
+/// const long    A = X;      Cannot interpret enumerator as an integer
+/// ```
+///
+/// So width is not the axis — `char` and `octet` are both one byte and neither
+/// takes the other's literal. The range check is a *second* rule that applies
+/// inside [`Class::Int`] only.
+///
+/// *리터럴의 종류가 선언된 타입의 종류와 같아야 한다. 변환은 없다.*
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Class {
+    Int,
+    Float,
+    Fixed,
+    Char,
+    WChar,
+    Str,
+    WStr,
+    Bool,
+    Enum,
+}
+
+impl Class {
+    /// How omniidl names this class in "cannot interpret _ as …".
+    fn literal_name(self) -> &'static str {
+        match self {
+            Class::Int => "an integer literal",
+            Class::Float => "a floating point literal",
+            Class::Fixed => "a fixed point literal",
+            Class::Char => "a character literal",
+            Class::WChar => "a wide character literal",
+            Class::Str => "a string literal",
+            Class::WStr => "a wide string literal",
+            Class::Bool => "a boolean literal",
+            Class::Enum => "an enumerator",
+        }
+    }
+
+    /// How omniidl names it as the target.
+    fn article_name(self) -> &'static str {
+        match self {
+            Class::Int => "an integer",
+            Class::Float => "a floating point number",
+            Class::Fixed => "fixed point",
+            Class::Char => "a character",
+            Class::WChar => "a wide character",
+            Class::Str => "a string",
+            Class::WStr => "a wide string",
+            Class::Bool => "a boolean",
+            Class::Enum => "an enumerator",
+        }
+    }
+
+    /// The edit, which is the half a diagnostic is for.
+    fn how_to_write(self) -> &'static str {
+        match self {
+            Class::Int => "a plain integer, as in `42`",
+            Class::Float => "a literal with a point or an exponent, as in `1.0`",
+            Class::Fixed => "a decimal with a `d` suffix, as in `9.9d`",
+            Class::Char => "a character literal, as in `'a'`",
+            Class::WChar => "a wide character literal, as in `L'a'`",
+            Class::Str => "a string literal, as in `\"text\"`",
+            Class::WStr => "a wide string literal, as in `L\"text\"`",
+            Class::Bool => "`TRUE` or `FALSE`",
+            Class::Enum => "one of that enum's own enumerators",
+        }
+    }
+}
+
+/// A constant's value as the front end evaluates it. See [`Analyser::fold`].
+#[derive(Debug, Clone, PartialEq)]
+enum ConstFold {
+    Int(i128),
+    Float(f64),
+    Fixed(FixedLit),
+    Char(char),
+    WChar(char),
+    Str(String),
+    WStr(String),
+    Bool(bool),
+    /// The lowercase name of the enum an enumerator belongs to.
+    Enum(String),
+}
+
+impl ConstFold {
+    fn class(&self) -> Class {
+        match self {
+            ConstFold::Int(_) => Class::Int,
+            ConstFold::Float(_) => Class::Float,
+            ConstFold::Fixed(_) => Class::Fixed,
+            ConstFold::Char(_) => Class::Char,
+            ConstFold::WChar(_) => Class::WChar,
+            ConstFold::Str(_) => Class::Str,
+            ConstFold::WStr(_) => Class::WStr,
+            ConstFold::Bool(_) => Class::Bool,
+            ConstFold::Enum(_) => Class::Enum,
+        }
+    }
+
+    /// A placeholder of the class a declared type wants, for comparing classes.
+    /// `None` for a type no constant can have — those are `const_type`'s
+    /// business and are already refused by the parser.
+    fn from_type(t: &TypeSpec) -> Option<Self> {
+        Some(match t {
+            TypeSpec::Short
+            | TypeSpec::UShort
+            | TypeSpec::Long
+            | TypeSpec::ULong
+            | TypeSpec::LongLong
+            | TypeSpec::ULongLong
+            | TypeSpec::Octet => ConstFold::Int(0),
+            TypeSpec::Float | TypeSpec::Double => ConstFold::Float(0.0),
+            TypeSpec::Fixed { .. } => ConstFold::Fixed(FixedLit { unscaled: 0, scale: 0 }),
+            TypeSpec::Char => ConstFold::Char('\0'),
+            TypeSpec::WChar => ConstFold::WChar('\0'),
+            TypeSpec::String(_) => ConstFold::Str(String::new()),
+            TypeSpec::WString(_) => ConstFold::WStr(String::new()),
+            TypeSpec::Boolean => ConstFold::Bool(false),
+            // A named type that survived `base_type` is an enum, or something
+            // that is not a constant's type at all; the enum arm is the only
+            // one with a literal, and a non-enum falls out as a class mismatch
+            // against whatever was written.
+            TypeSpec::Named(n) => ConstFold::Enum(n.last().to_lowercase()),
+            _ => return None,
+        })
+    }
+}
+
+/// The closed range of an integer type, and its name for a message.
+fn int_range(t: &TypeSpec) -> Option<(i128, i128, &'static str)> {
+    Some(match t {
+        TypeSpec::Octet => (0, 0xFF, "octet"),
+        TypeSpec::Short => (i128::from(i16::MIN), i128::from(i16::MAX), "short"),
+        TypeSpec::UShort => (0, i128::from(u16::MAX), "unsigned short"),
+        TypeSpec::Long => (i128::from(i32::MIN), i128::from(i32::MAX), "long"),
+        TypeSpec::ULong => (0, i128::from(u32::MAX), "unsigned long"),
+        TypeSpec::LongLong => (i128::from(i64::MIN), i128::from(i64::MAX), "long long"),
+        TypeSpec::ULongLong => (0, i128::from(u64::MAX), "unsigned long long"),
+        _ => return None,
+    })
+}
+
 /// A constant expression as it was written, for `fixed<9,2>` in a message.
 fn const_text(e: &ConstExpr) -> String {
     match e {
         ConstExpr::Int(v) => v.to_string(),
         ConstExpr::Float(v) => v.to_string(),
+        ConstExpr::Fixed(v) => v.to_string(),
         ConstExpr::Str(s) => format!("{s:?}"),
+        ConstExpr::WStr(s) => format!("L{s:?}"),
         ConstExpr::Char(c) => format!("'{c}'"),
+        ConstExpr::WChar(c) => format!("L'{c}'"),
         ConstExpr::Bool(b) => b.to_string(),
         ConstExpr::Name(n) => n.text(),
         ConstExpr::Unary { op, operand } => format!("{op}{}", const_text(operand)),
@@ -1450,6 +1916,161 @@ mod tests {
         let d = diags("module m { struct S { Widget w; }; };");
         assert_eq!(d.len(), 1, "{d:?}");
         assert_eq!(d[0].rule, "unknown-name");
+    }
+
+    // ── a constant's value against its declared type ────────────────────────
+
+    /// Every literal class against every type that takes one.
+    ///
+    /// omniidl 4.3.4 is strictly typed here and converts nothing: `char` and
+    /// `octet` are both one octet and neither takes the other's literal. All
+    /// of these validated clean before this check existed — there was no check
+    /// at all — and each row is one file measured on 2026-08-21.
+    #[test]
+    fn a_constants_value_must_be_a_literal_of_its_own_class() {
+        for (src, why) in [
+            ("const double A = 5;", "an integer is not a double"),
+            ("const float A = 5;", "nor a float"),
+            ("const fixed A = 5;", "nor fixed point"),
+            ("const fixed A = 9.9;", "a float literal is not a decimal"),
+            ("const double A = 9.9d;", "and a decimal is not a double"),
+            ("const char A = 65;", "an integer is not a character"),
+            ("const long A = 'a';", "nor the reverse"),
+            ("const octet A = 'a';", "width is not the axis"),
+            ("const boolean A = 1;", "a boolean takes TRUE or FALSE"),
+            ("const long A = TRUE;", "and gives nothing back"),
+            ("const wchar A = 'a';", "a narrow literal is not a wide one"),
+            ("const wstring A = \"hi\";", "in either shape"),
+            ("const char A = L'a';", "nor the reverse"),
+            ("const string A = L\"hi\";", "in either shape"),
+            ("const string A = 'a';", "a character is not a string"),
+            ("const char A = \"a\";", "nor the reverse"),
+        ] {
+            let d = diags(&format!("module m {{ {src} }};"));
+            assert_eq!(d.len(), 1, "{src}: {why} — {d:?}");
+            assert_eq!(d[0].rule, "const-value-type", "{src}");
+        }
+    }
+
+    /// The classes that *do* match, so the rule above is a rule and not a ban.
+    #[test]
+    fn a_matching_literal_class_is_accepted() {
+        for src in [
+            "const double A = 5.0;",
+            "const float A = 1e3;",
+            "const fixed A = 9.9d;",
+            "const char A = 'a';",
+            "const wchar A = L'a';",
+            "const string A = \"hi\";",
+            "const wstring A = L\"hi\";",
+            "const boolean A = TRUE;",
+            "const octet A = 7;",
+            "const unsigned long long A = 18446744073709551615;",
+            "enum E { X }; const E A = X;",
+            "typedef long Count; const Count A = 5;",
+            "const long A = 5; const long B = A;",
+        ] {
+            let d = diags(&format!("module m {{ {src} }};"));
+            assert!(d.is_empty(), "{src} is legal IDL: {d:?}");
+        }
+    }
+
+    /// An integer constant must fit the type it was declared with.
+    ///
+    /// The rule was in `orbweaver_registry::coerce` and reported nothing: its
+    /// only effect was that the registry stored no value, which both emitters
+    /// then skipped in silence. The registry's own doc comment described this
+    /// as "an IDL error the checker reports" while no checker reported it.
+    #[test]
+    fn an_integer_constant_must_fit_its_declared_type() {
+        for (src, edge) in [
+            ("const octet A = 256;", "255"),
+            ("const octet A = -1;", "0"),
+            ("const short A = 40000;", "32767"),
+            ("const short A = -32769;", "-32768"),
+            ("const unsigned short A = 65536;", "65535"),
+            ("const long A = 2147483648;", "2147483647"),
+            ("const unsigned long A = 4294967296;", "4294967295"),
+            ("const unsigned long A = -1;", "0"),
+        ] {
+            let d = diags(&format!("module m {{ {src} }};"));
+            assert_eq!(d.len(), 1, "{src}: {d:?}");
+            assert_eq!(d[0].rule, "const-value-range", "{src}");
+            assert!(d[0].message.contains(edge), "{src}: the message names the edge: {d:?}");
+        }
+        // The check is on the folded result, not on the operands — which is
+        // what omniidl does, measured: `40000 - 10000` is a legal short.
+        assert!(diags("module m { const short A = 40000 - 10000; };").is_empty());
+        // Each type's own boundary is inside it.
+        for src in [
+            "const octet A = 255;",
+            "const short A = -32768;",
+            "const long A = -2147483648;",
+            "const long long A = -9223372036854775808;",
+            "const unsigned long long A = 18446744073709551615;",
+        ] {
+            assert!(diags(&format!("module m {{ {src} }};")).is_empty(), "{src}");
+        }
+    }
+
+    /// `long double` is admitted by the grammar and refused by the language,
+    /// and the refusal follows a `typedef` because nothing at the declaration
+    /// says `long double`.
+    #[test]
+    fn long_double_is_never_a_constants_type() {
+        let d = diags("module m { const long double A = 1.0; };");
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].rule, "not-a-const-type");
+        let d = diags("module m { typedef long double D; const D A = 1.0; };");
+        assert_eq!(d.len(), 1, "through an alias too: {d:?}");
+        assert_eq!(d[0].rule, "not-a-const-type");
+        // The type itself is fine everywhere a value of it is not written.
+        assert!(diags("module m { struct S { long double d; }; };").is_empty());
+    }
+
+    /// An enumerator initialises a constant only of its own enum, and a
+    /// bounded string constant may not exceed its bound.
+    #[test]
+    fn an_enumerator_and_a_bound_are_checked_against_the_declared_type() {
+        let d = diags("module m { enum E { X }; enum F { Y }; const E A = Y; };");
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].rule, "const-value-type");
+        assert!(diags("module m { enum E { X, Z }; const E A = Z; };").is_empty());
+
+        let d = diags("module m { const string<2> A = \"abc\"; };");
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].rule, "const-value-range");
+        assert!(diags("module m { const string<8> A = \"abc\"; };").is_empty());
+    }
+
+    /// An expression with no value is reported as one, rather than falling out
+    /// of the fold as an unexplained `None`.
+    #[test]
+    fn a_constant_that_divides_by_zero_is_reported() {
+        let d = diags("module m { const long A = 1 / 0; };");
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].rule, "const-value-range");
+        let d = diags("module m { const long Z = 0; const long A = 8 / Z; };");
+        assert_eq!(d.len(), 1, "through a named divisor too: {d:?}");
+    }
+
+    /// A constant whose value this pass cannot evaluate is **not** an error.
+    ///
+    /// `None` from the fold means "not evaluated", never "invalid". A rule
+    /// that reported one as the other would reject legal IDL for the crime of
+    /// being written in a form the front end has not implemented — which is
+    /// the failure mode a checker built on a folder invites.
+    #[test]
+    fn an_unevaluated_constant_is_not_an_error() {
+        for src in [
+            // Exact decimal arithmetic the front end leaves to the registry.
+            "const fixed A = 1.0d + 2.0d;",
+            // A shift whose width this fold does not implement.
+            "const long A = 1 << 3;",
+        ] {
+            let d = diags(&format!("module m {{ {src} }};"));
+            assert!(d.is_empty(), "{src} is legal IDL: {d:?}");
+        }
     }
 
     /// An unresolved **qualified** name is a different diagnosis from an

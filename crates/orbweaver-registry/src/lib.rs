@@ -132,7 +132,25 @@ pub enum ConstValue {
     /// Every integer type, and `char`/`wchar`/`octet` as the code point they
     /// denote — the declared [`TypeCode`] says which of those it is, so a
     /// second variant would only be a second way to be wrong about it.
-    Int(i64),
+    ///
+    /// `i128` rather than `i64` for exactly one type: `unsigned long long`'s
+    /// upper half. `const unsigned long long M = 18446744073709551615;` is
+    /// ordinary IDL that omniidl accepts, and while this was an `i64` the
+    /// value could not be represented at any layer — the lexer refused the
+    /// literal before the question reached here.
+    Int(i128),
+    /// A `fixed` constant, as the decimal it was written as.
+    ///
+    /// Not a [`ConstValue::Float`], for the reason
+    /// [`orbweaver_idl::lex::FixedLit`] gives at length: `9.9` has no `f64`,
+    /// so folding a `fixed` into one loses the value before any consumer sees
+    /// it. `unscaled` carries the sign; the value is `unscaled / 10^scale`.
+    Fixed {
+        /// The digits as one signed integer, point removed.
+        unscaled: i128,
+        /// How many of them fall right of the point.
+        scale: u16,
+    },
     /// `float` and `double`, unrounded: a `float` constant keeps the value as
     /// written, and narrowing to `f32` is the consumer's to do at the point it
     /// emits one. Never infinite and never NaN — neither is expressible in IDL
@@ -151,6 +169,28 @@ pub enum ConstValue {
         /// Its ordinal, which is what travels on the wire.
         ordinal: u32,
     },
+}
+
+impl ConstValue {
+    /// A `fixed` constant as the decimal it is, sign included and no `d`
+    /// suffix — `12.5`, `-0.001`, `0`. `None` for every other variant.
+    ///
+    /// Rendering lives here rather than in each consumer because the scale is
+    /// the part that is easy to get wrong: `Fixed { unscaled: 1, scale: 3 }`
+    /// is `0.001`, and a consumer that divides by `10f64.powi(3)` to print it
+    /// has re-introduced the binary float this type exists to avoid.
+    #[must_use]
+    pub fn as_decimal(&self) -> Option<String> {
+        let ConstValue::Fixed { unscaled, scale } = self else { return None };
+        let sign = if *unscaled < 0 { "-" } else { "" };
+        let mag = unscaled.unsigned_abs();
+        if *scale == 0 {
+            return Some(format!("{sign}{mag}"));
+        }
+        let s = format!("{:0>width$}", mag, width = usize::from(*scale) + 1);
+        let split = s.len() - usize::from(*scale);
+        Some(format!("{sign}{}.{}", &s[..split], &s[split..]))
+    }
 }
 
 /// A registered interface.
@@ -1183,16 +1223,22 @@ impl Builder<'_> {
         Some(match e {
             ConstExpr::Int(v) => ConstValue::Int(*v),
             ConstExpr::Float(v) => ConstValue::Float(*v),
-            ConstExpr::Str(s) => ConstValue::Str(s.clone()),
+            ConstExpr::Fixed(v) => {
+                ConstValue::Fixed { unscaled: i128::try_from(v.unscaled).ok()?, scale: v.scale }
+            }
+            ConstExpr::Str(s) | ConstExpr::WStr(s) => ConstValue::Str(s.clone()),
             // A character literal folds to its code point; whether that is a
             // `char`, a `wchar` or an `octet` is the declared type's business.
-            ConstExpr::Char(c) => ConstValue::Int(*c as i64),
+            ConstExpr::Char(c) | ConstExpr::WChar(c) => ConstValue::Int(*c as i128),
             ConstExpr::Bool(b) => ConstValue::Bool(*b),
             ConstExpr::Name(n) => self.fold_name(scope, n)?,
             ConstExpr::Unary { op, operand } => match (*op, self.fold(scope, operand)?) {
                 ("+", v) => v,
                 ("-", ConstValue::Int(v)) => ConstValue::Int(v.checked_neg()?),
                 ("-", ConstValue::Float(v)) => ConstValue::Float(-v),
+                ("-", ConstValue::Fixed { unscaled, scale }) => {
+                    ConstValue::Fixed { unscaled: unscaled.checked_neg()?, scale }
+                }
                 ("~", ConstValue::Int(v)) => ConstValue::Int(!v),
                 _ => return None,
             },
@@ -1202,6 +1248,16 @@ impl Builder<'_> {
                     // it is in C, and folding it as a float would make
                     // `const long H = 7 / 2;` refuse to coerce back.
                     (ConstValue::Int(a), ConstValue::Int(b)) => ConstValue::Int(int_op(op, a, b)?),
+                    // Decimal arithmetic stays decimal, for the same reason
+                    // integer arithmetic stays integer and a stronger one:
+                    // routing `99999.99d - 0.01d` through `f64` would give a
+                    // value that is not 99999.98, and `coerce` would then have
+                    // to decide whether to believe it. `corpus/golden/30`
+                    // writes exactly that expression.
+                    (
+                        ConstValue::Fixed { unscaled: a, scale: sa },
+                        ConstValue::Fixed { unscaled: b, scale: sb },
+                    ) => fixed_op(op, a, sa, b, sb)?,
                     (a, b) => ConstValue::Float(float_op(op, as_f64(&a)?, as_f64(&b)?)?),
                 }
             }
@@ -1617,7 +1673,7 @@ fn to_map(ann: &[orbweaver_idl::lex::Annotation]) -> BTreeMap<String, String> {
 /// Integer arithmetic, checked. `None` is "there is no answer", never a wrap:
 /// a constant that silently wrapped would be a wrong number with a repository
 /// id on it.
-fn int_op(op: &str, a: i64, b: i64) -> Option<i64> {
+fn int_op(op: &str, a: i128, b: i128) -> Option<i128> {
     match op {
         "+" => a.checked_add(b),
         "-" => a.checked_sub(b),
@@ -1635,6 +1691,35 @@ fn int_op(op: &str, a: i64, b: i64) -> Option<i64> {
 
 /// Floating arithmetic. The bitwise operators are integer-only in IDL, so they
 /// have no float arm at all rather than a coerced one.
+/// `+`, `-` and `*` on two decimals, **exactly**, or `None`.
+///
+/// Addition and subtraction line the two scales up first; multiplication adds
+/// them. Every step is checked, so an expression whose result needs more than
+/// an `i128` folds to nothing rather than to a wrapped number.
+///
+/// Division is deliberately absent. `1.0d / 3.0d` has no exact decimal, and
+/// IDL has no rule saying what scale to round it to — so there is no answer
+/// this could give that is not invented. It folds to `None`, which
+/// [`ConstValue`] already documents as "an operation that has no answer".
+/// *나눗셈은 정확한 십진수가 없으므로 접지 않는다.*
+fn fixed_op(op: &str, a: i128, sa: u16, b: i128, sb: u16) -> Option<ConstValue> {
+    if op == "*" {
+        return Some(ConstValue::Fixed { unscaled: a.checked_mul(b)?, scale: sa.checked_add(sb)? });
+    }
+    let scale = sa.max(sb);
+    let lift = |v: i128, from: u16| {
+        let steps = u32::from(scale - from);
+        v.checked_mul(10i128.checked_pow(steps)?)
+    };
+    let (a, b) = (lift(a, sa)?, lift(b, sb)?);
+    let unscaled = match op {
+        "+" => a.checked_add(b)?,
+        "-" => a.checked_sub(b)?,
+        _ => return None,
+    };
+    Some(ConstValue::Fixed { unscaled, scale })
+}
+
 fn float_op(op: &str, a: f64, b: f64) -> Option<f64> {
     let v = match op {
         "+" => a + b,
@@ -1660,25 +1745,36 @@ fn as_f64(v: &ConstValue) -> Option<f64> {
 /// is an IDL error, and a registry that stored 44 would hand every consumer a
 /// number no author wrote.
 fn coerce(v: ConstValue, tc: &TypeCode) -> Option<ConstValue> {
-    let in_range = |i: i64, lo: i64, hi: i64| (lo..=hi).contains(&i).then_some(ConstValue::Int(i));
+    let in_range =
+        |i: i128, lo: i128, hi: i128| (lo..=hi).contains(&i).then_some(ConstValue::Int(i));
     match (tc, &v) {
         (TypeCode::Boolean, ConstValue::Bool(_)) => Some(v),
+        // A `fixed` constant keeps its decimal. The declared bounds are not
+        // checked against it here: `fixed_pt_const_type` is the bare keyword,
+        // so a constant's digits and scale come *from the value* and there is
+        // nothing to disagree with. A `typedef fixed<d,s>` used as a
+        // constant's type is the one shape that has both, and the oracle
+        // accepts it without complaint about either.
+        (TypeCode::Fixed { .. }, ConstValue::Fixed { .. }) => Some(v),
         (TypeCode::Octet | TypeCode::Char, ConstValue::Int(i)) => in_range(*i, 0, 0xFF),
         // A `wchar` is a code point, so the range is Unicode's and the
         // surrogate half is excluded — `char::from_u32` is the authority, and
         // it is the same call the generator has to make to spell one.
         (TypeCode::WChar, ConstValue::Int(i)) => {
-            u32::try_from(*i).ok().and_then(char::from_u32).map(|c| ConstValue::Int(c as i64))
+            u32::try_from(*i).ok().and_then(char::from_u32).map(|c| ConstValue::Int(c as i128))
         }
         (TypeCode::Short, ConstValue::Int(i)) => in_range(*i, i16::MIN.into(), i16::MAX.into()),
         (TypeCode::UShort, ConstValue::Int(i)) => in_range(*i, 0, u16::MAX.into()),
         (TypeCode::Long, ConstValue::Int(i)) => in_range(*i, i32::MIN.into(), i32::MAX.into()),
         (TypeCode::ULong, ConstValue::Int(i)) => in_range(*i, 0, u32::MAX.into()),
-        (TypeCode::LongLong, ConstValue::Int(_)) => Some(v),
-        // The AST carries `i64`, so `unsigned long long` above `i64::MAX` never
-        // reaches here as a positive number at all; the range check is the half
-        // that can be enforced, and it is enforced.
-        (TypeCode::ULongLong, ConstValue::Int(i)) => (*i >= 0).then_some(v),
+        (TypeCode::LongLong, ConstValue::Int(i)) => in_range(*i, i64::MIN.into(), i64::MAX.into()),
+        // Both bounds, now that there is a type that can hold the upper one.
+        // This arm used to check only `>= 0` and explain that the AST's `i64`
+        // made the upper half unreachable — which was true, and the reason it
+        // was true was a defect one layer up: the lexer refused
+        // `18446744073709551615` outright. The literal is legal, so the check
+        // is now a check.
+        (TypeCode::ULongLong, ConstValue::Int(i)) => in_range(*i, 0, u64::MAX.into()),
         (TypeCode::Float, ConstValue::Int(_) | ConstValue::Float(_)) => {
             let f = as_f64(&v)?;
             ((f as f32).is_finite()).then_some(ConstValue::Float(f))
@@ -1719,10 +1815,14 @@ fn const_u32(e: &ConstExpr) -> Option<u32> {
 /// boolean label is one octet and a long label is four, and using the wrong
 /// one shifts every case that follows.
 fn label_bytes(e: &ConstExpr, disc: &TypeCode) -> Vec<u8> {
-    let v: i64 = match e {
+    // `i128` follows the AST, so that an `unsigned long long` label above
+    // `i64::MAX` — `case 18446744073709551615:`, which omniidl accepts and
+    // which the lexer used to refuse — reaches the width cast below with its
+    // value intact rather than saturating to zero on the way in.
+    let v: i128 = match e {
         ConstExpr::Int(v) => *v,
-        ConstExpr::Bool(b) => i64::from(*b),
-        ConstExpr::Char(c) => *c as i64,
+        ConstExpr::Bool(b) => i128::from(*b),
+        ConstExpr::Char(c) | ConstExpr::WChar(c) => *c as i128,
         ConstExpr::Unary { op: "-", operand } => match operand.as_ref() {
             ConstExpr::Int(v) => -*v,
             _ => 0,
@@ -1731,7 +1831,7 @@ fn label_bytes(e: &ConstExpr, disc: &TypeCode) -> Vec<u8> {
         // TypeCode carries.
         ConstExpr::Name(n) => match disc.resolve_alias() {
             TypeCode::Enum { members, .. } => {
-                members.iter().position(|m| m == n.last()).unwrap_or(0) as i64
+                members.iter().position(|m| m == n.last()).unwrap_or(0) as i128
             }
             _ => 0,
         },
@@ -1740,7 +1840,7 @@ fn label_bytes(e: &ConstExpr, disc: &TypeCode) -> Vec<u8> {
     match disc.resolve_alias() {
         TypeCode::Boolean | TypeCode::Char | TypeCode::Octet => vec![v as u8],
         TypeCode::Short | TypeCode::UShort => (v as i16).to_be_bytes().to_vec(),
-        TypeCode::LongLong | TypeCode::ULongLong => v.to_be_bytes().to_vec(),
+        TypeCode::LongLong | TypeCode::ULongLong => (v as i64).to_be_bytes().to_vec(),
         _ => (v as i32).to_be_bytes().to_vec(),
     }
 }

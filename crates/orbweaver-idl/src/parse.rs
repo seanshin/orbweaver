@@ -107,7 +107,8 @@ impl std::error::Error for ParseError {}
 
 impl From<LexError> for ParseError {
     fn from(e: LexError) -> Self {
-        ParseError { message: e.message, span: e.span, rule: "parse" }
+        let rule = e.rule();
+        ParseError { message: e.message, span: e.span, rule }
     }
 }
 
@@ -1221,10 +1222,13 @@ impl Parser {
         }
         let t = self.next();
         match t.tok {
-            Tok::Int(v) => Ok(ConstExpr::Int(v)),
+            Tok::Int(v) => Ok(ConstExpr::Int(i128::from(v))),
             Tok::Float(v) => Ok(ConstExpr::Float(v)),
+            Tok::Fixed(v) => Ok(ConstExpr::Fixed(v)),
             Tok::Str(v) => Ok(ConstExpr::Str(v)),
+            Tok::WStr(v) => Ok(ConstExpr::WStr(v)),
             Tok::Char(v) => Ok(ConstExpr::Char(v)),
+            Tok::WChar(v) => Ok(ConstExpr::WChar(v)),
             Tok::Ident(s) if s == "TRUE" => Ok(ConstExpr::Bool(true)),
             Tok::Ident(s) if s == "FALSE" => Ok(ConstExpr::Bool(false)),
             // Both arms span the whole name, for the reason `scoped_name`

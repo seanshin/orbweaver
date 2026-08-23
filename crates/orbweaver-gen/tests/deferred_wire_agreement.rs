@@ -348,19 +348,37 @@ fn every_fixed_shape_agrees_between_the_rule_and_both_emitters() {
     assert_eq!(s.python, s.rule, "Python emitter vs the rule");
     // The constant is skipped by both, under a reason that is not §4.4's — so
     // it lands in neither set and the equality above holds without an
-    // exception. The reason is pinned because it is wrong about the cause: the
-    // registry folded the expression fine and could not *coerce* it, there
-    // being no `ConstValue` for a decimal. If it ever names §4.4 instead, the
-    // constant joins both sets at once and this block becomes the wrong shape.
+    // exception.
+    //
+    // **The reason changed on 2026-08-21, and the change is the point.** It
+    // used to be "could not evaluate", and this block pinned that while saying
+    // in as many words that it was *wrong about the cause*: the registry had
+    // no `ConstValue` for a decimal, so a perfectly well-formed `12.5D` was
+    // reported as an expression nobody could work out. Underneath that, the
+    // lexer had already folded the decimal to an `f64` — so even the value the
+    // registry refused to store was not the one the author wrote.
+    //
+    // Both are fixed. The value now reaches here exactly, and the assertion is
+    // now that the reason **names it**: a skip that quotes the value it is
+    // skipping cannot be the old "could not evaluate" one, and a target that
+    // silently rounded a decimal could never produce this string. Still not
+    // §4.4 — a constant is not marshalled — so the set shape above is
+    // unchanged.
     for (target, skipped) in [("Rust", &s.rust_skipped), ("Python", &s.python_skipped)] {
         let (_, why) = skipped
             .iter()
             .find(|(id, _)| id == "m::C")
             .unwrap_or_else(|| panic!("{target}: the fixed constant was emitted: {skipped:?}"));
         assert!(
-            why.contains("could not evaluate") && !why.contains("4.4"),
-            "{target}: the reason changed — a §4.4 reason puts m::C in the emitter's set, and \
-             the rule must then name it too: {why}"
+            why.contains("12.5") && !why.contains("4.4"),
+            "{target}: the skip must name the exact decimal it is skipping, and must not name \
+             §4.4 — a §4.4 reason puts m::C in the emitter's set, and the rule must then name \
+             it too: {why}"
+        );
+        assert!(
+            !why.contains("could not evaluate"),
+            "{target}: the value evaluates now; that reason described a defect, not the \
+             target: {why}"
         );
     }
     for kept in ["m::Holder", "m::Lookup", "m::Plain", "m::Nesting"] {

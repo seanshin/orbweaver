@@ -1,0 +1,93 @@
+// 31 — a constant's *value*, and the literals a lexer loses on the way in.
+//
+// `30-const-type.idl` pins which types a constant may have. This file pins
+// what its value is, which is a different question and was answered wrongly by
+// the same function: `lex::number` funnelled every numeric literal into an
+// `i64` or an `f64` and lost whatever those could not represent. Measured
+// against omniidl 4.3.4 on 2026-08-21:
+//
+//   written                  was                          is
+//   9.9d                     Float(9.90000000000000035…)  Fixed(99, scale 1)
+//   18446744073709551615     refused, "does not fit"      Int
+//   0xFFFFFFFFFFFFFFFF       refused, "malformed"         Int
+//   L'a' / L"hi"             refused, `expected ";"`      WChar / WStr
+//
+// §4.4 keeps a `fixed` *value* off the v1 wire, so none of this is a
+// marshalling question. A constant's value is part of what a released contract
+// promises, and `idl-diff`'s §5.3 comparison cannot report that promise
+// changing if the front end rounded it before the differ ever ran.
+//
+// 렉서가 리터럴을 러스트 타입에 맞춰 접으면 값은 아무것도 실행되기 전에 이미
+// 틀린다. 상수의 값은 계약의 일부다.
+module gc31 {
+
+  // ── decimals no binary float holds ───────────────────────────────────────
+  // Each of these has no exact `f64`. The nearest double to 9.9 is
+  // 9.9000000000000003552713678800500929355621337890625; a `fixed` is a
+  // decimal and 9.9 is what the author wrote.
+  const fixed TAX_RATE   = 9.9d;
+  const fixed UNIT_PRICE = 1.005d;
+  const fixed EPSILON    = -0.001d;
+  const fixed ZERO       = 0.0d;
+
+  // Normalisation, taken from the oracle rather than assumed: omniidl dumps
+  // `9.90d` back as `9.9d` and `000…01d` as `1d`, so trailing fractional zeros
+  // and leading integer zeros are not part of the value. `SAME_AS_TAX_RATE`
+  // and `TAX_RATE` are the same constant, and a differ must not call the pair
+  // a change.
+  const fixed SAME_AS_TAX_RATE = 9.90d;
+  const fixed ONE              = 000000001d;
+  const fixed HALF             = .5d;
+
+  // Thirty-one significant digits is the maximum (CORBA 3.4 §7.11.3), and the
+  // maximum is exercised rather than described.
+  const fixed WIDEST = 1234567890123456789012345678901d;
+
+  // Decimal arithmetic folds exactly. omniidl dumps this as 99999.98d;
+  // routing it through an `f64` gives 99999.98000000000465661287307739.
+  const fixed CEILING = 99999.99d;
+  const fixed DERIVED = CEILING - 0.01d;
+
+  // ── integers at the edges of their types ─────────────────────────────────
+  // The first two are the shapes that were refused by the lexer, in the two
+  // spellings a real contract uses. Neither fits an `i64`.
+  const unsigned long long ULL_MAX     = 18446744073709551615;
+  const unsigned long long ULL_MAX_HEX = 0xFFFFFFFFFFFFFFFF;
+  const long long          LL_MAX      = 9223372036854775807;
+  const unsigned long      UL_MAX      = 4294967295;
+  const unsigned short     US_MAX      = 65535;
+  const octet              O_MAX       = 255;
+
+  // `short`'s minimum is here; `long`'s and `long long`'s are not, and their
+  // absence is measured rather than accidental. omniidl types an integer
+  // literal as the narrowest type that holds the *magnitude*, so `-32768`
+  // folds through a `long` and is fine, while `2147483648` becomes an
+  // `unsigned long` and negating it is "Value too large for long". So
+  // `const long L = -2147483648;` — the minimum of the type, legal by CORBA
+  // 3.4 §7.11.1 — cannot be written for omniidl at all. We accept it; a
+  // golden file is what both front ends agree on, so it lives in
+  // corpus/divergences.tsv and in orbweaver-idl's unit tests.
+  const short              S_MIN       = -32768;
+
+  // Octal and hexadecimal reach the same range check as decimal does.
+  const unsigned long PERMISSIONS = 0755;
+  const unsigned long MASK        = 0xffffffff;
+
+  // Folded arithmetic is range-checked on the *result*, not on the operands:
+  // omniidl accepts `40000 - 10000` as a short and refuses the bare 40000.
+  const short WITHIN_AFTER_FOLDING = 40000 - 10000;
+
+  // ── the wide literals ────────────────────────────────────────────────────
+  // ASCII only; see corpus/divergences.tsv for what omniidl does with a
+  // non-ASCII one, and orbweaver-idl's unit tests for the code point we keep.
+  const wchar   BULLET  = L'*';
+  const wstring CAPTION = L"balance";
+
+  // A union whose discriminator reaches the top of its range. The label was
+  // refused by the lexer for exactly the reason the constant above was, which
+  // is what makes this a rule about literals and not a rule about constants.
+  union Wide switch (unsigned long long) {
+    case 18446744073709551615: long saturated;
+    default:                   short ordinary;
+  };
+};

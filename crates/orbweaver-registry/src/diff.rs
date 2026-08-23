@@ -130,7 +130,11 @@ pub fn diff(old: &Registry, new: &Registry) -> Vec<Change> {
                 if va != vb {
                     out.push(Change {
                         id: id.clone(),
-                        what: format!("constant value changed from {va:?} to {vb:?}"),
+                        what: format!(
+                            "constant value changed from {} to {}",
+                            render_const(va.as_ref()),
+                            render_const(vb.as_ref())
+                        ),
                         why: "a constant is compiled into its callers, so peers built against \
                               the old contract keep using the old value until they are rebuilt",
                         verdict: Verdict::ConditionallyBreaking,
@@ -150,6 +154,29 @@ pub fn diff(old: &Registry, new: &Registry) -> Vec<Change> {
 
     out.sort_by(|a, b| b.verdict.cmp(&a.verdict).then(a.id.cmp(&b.id)).then(a.what.cmp(&b.what)));
     out
+}
+
+/// A constant's value as a release note reads it.
+///
+/// `{:?}` on a [`crate::ConstValue::Fixed`] prints its two fields —
+/// `Fixed { unscaled: 991, scale: 2 }` — which is the internal shape and not
+/// the number anybody wrote. A §5.3 verdict is read by a person deciding
+/// whether to publish, so it says `9.91`.
+fn render_const(v: Option<&crate::ConstValue>) -> String {
+    match v {
+        None => "nothing the registry could evaluate".to_owned(),
+        Some(v) => match v.as_decimal() {
+            Some(d) => d,
+            None => match v {
+                crate::ConstValue::Int(i) => i.to_string(),
+                crate::ConstValue::Float(f) => format!("{f}"),
+                crate::ConstValue::Bool(b) => b.to_string(),
+                crate::ConstValue::Str(s) => format!("{s:?}"),
+                crate::ConstValue::Enum { member, .. } => member.clone(),
+                crate::ConstValue::Fixed { .. } => unreachable!("as_decimal answers for Fixed"),
+            },
+        },
+    }
 }
 
 fn diff_interface(
@@ -1071,6 +1098,49 @@ mod tests {
         assert_eq!(c.len(), 1, "{c:?}");
         assert_eq!(c[0].verdict, Verdict::Breaking);
         assert!(c[0].what.contains("parameter 0"), "{}", c[0].what);
+    }
+
+    /// §5.3 can tell one decimal from another, and cannot be made to cry wolf
+    /// about two spellings of the same one.
+    ///
+    /// This comparison was blind before 2026-08-21. The lexer folded `9.9d` to
+    /// an `f64` and the registry had no `ConstValue` for a decimal, so *every*
+    /// `fixed` constant was `None` on both sides of every diff — a released
+    /// tax rate could change and the release gate would print "no change".
+    /// The pair below is the one that makes the blindness visible rather than
+    /// arguable: `9.9d` against `9.91d` must break, and `9.9d` against `9.90d`
+    /// must not, and a `None`-on-both-sides comparison gets the first wrong
+    /// while a naive text comparison gets the second wrong.
+    #[test]
+    fn a_fixed_constants_value_is_compared_as_a_decimal() {
+        let changed = diff(
+            &reg("module m { const fixed RATE = 9.9d; };"),
+            &reg("module m { const fixed RATE = 9.91d; };"),
+        );
+        assert_eq!(changed.len(), 1, "{changed:?}");
+        assert_eq!(changed[0].verdict, Verdict::ConditionallyBreaking);
+        assert!(
+            changed[0].what.contains("9.9") && changed[0].what.contains("9.91"),
+            "the verdict names both values as decimals: {}",
+            changed[0].what
+        );
+
+        // Trailing fractional zeros are not part of the value — omniidl dumps
+        // `9.90d` as `9.9d` — so this pair is not a change and reporting one
+        // would block a release over a reformat.
+        let same = diff(
+            &reg("module m { const fixed RATE = 9.9d; };"),
+            &reg("module m { const fixed RATE = 9.90d; };"),
+        );
+        assert!(same.is_empty(), "9.9d and 9.90d are the same constant: {same:?}");
+
+        // And the value a binary float would have rounded it to is a change,
+        // which is the whole argument for keeping the decimal.
+        let rounded = diff(
+            &reg("module m { const fixed RATE = 9.9d; };"),
+            &reg("module m { const fixed RATE = 9.9000000000000004d; };"),
+        );
+        assert_eq!(rounded.len(), 1, "{rounded:?}");
     }
 
     /// A report is read from the top, so the thing that stops the release has

@@ -1,0 +1,24 @@
+// n21 — `long double` is legal by const_type's grammar and refused anyway.
+//
+// `const_type ::= … | floating_pt_type | …` and
+// `floating_pt_type ::= "float" | "double" | "long" "double"`, so the grammar
+// admits it and the parser is right to. The refusal is semantic: there is no
+// `long double` literal to write, so the declaration can never be completed.
+//
+// omniidl 4.3.4, both lines, measured 2026-08-21:
+//   Invalid type for constant: long double
+//
+// The second line is why the check follows typedefs. Nothing in
+// `const D PRECISION` says `long double`, and a rule that only reads the
+// declaration would pass it — which is the shape a real estate writes, since
+// a numeric alias is exactly the kind of thing a legacy contract defines once
+// and uses everywhere.
+//
+// 문법은 허용하고 의미가 거부한다. 쓸 수 있는 리터럴이 없기 때문이다.
+// 검사는 typedef를 따라가야 한다. 선언만 읽으면 두 번째 줄을 놓친다.
+module n21 {
+  const long double TOLERANCE = 1.0;
+
+  typedef long double Extended;
+  const Extended PRECISION = 1.0;
+};
