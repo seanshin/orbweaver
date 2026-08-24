@@ -41,8 +41,18 @@
 //! GIOP 1.0, where `wchar` is illegal, the codec's refusal is reported and a
 //! raw two-octet `echo_wchar` is sent anyway to see the server refuse it too.
 //!
+//! Both seats also print a `ROW`-tagged tab-separated line per event, which
+//! is **what `spikes/wide_rust.sh` counts**. It used to `grep -c` the exact
+//! English of the `println!`s below — including
+//! `"received bytes are not valid UTF-16"`, which is not this file's sentence
+//! at all but `orbweaver-giop`'s `NegotiationError` `Display` — so rewording
+//! a diagnostic for clarity would have taken a gate red or, worse, green.
+//! The prose is unchanged and stays; only the verdict moved off it. The
+//! vocabulary and the column list live in `rows/mod.rs`.
+//!
 //! *우리 스택을 wide.idl의 양쪽 자리에 앉힌다. 서버는 디코드한 값을 로그에 남기고,
-//! 클라이언트는 프로파일이 광고한 버전으로 두 바이트 순서 모두를 보낸다.*
+//! 클라이언트는 프로파일이 광고한 버전으로 두 바이트 순서 모두를 보낸다. 판정은
+//! 산문이 아니라 `ROW` 행에서 읽는다.*
 
 use std::time::Duration;
 
@@ -52,6 +62,11 @@ use orbweaver_giop::server::{Completion, Dispatch, MARSHAL, Request, Server, Sys
 use orbweaver_giop::{Connection, Error, Ior};
 use orbweaver_object::ObjectOps;
 use orbweaver_registry::{Registry, Strictness};
+
+/// The `ROW` channel `spikes/wide_rust.sh` keys its counts on, so that no
+/// verdict depends on the wording of a `println!` below. See its own docs.
+#[path = "rows/mod.rs"]
+mod rows;
 
 /// Matches `spikes/wide.idl`.
 const TYPE_ID: &str = "IDL:spike/Wide:1.0";
@@ -75,6 +90,7 @@ fn omg_minor(minor: u32) -> Option<u32> {
 
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    rows::header();
     match args.first().map(String::as_str) {
         Some("serve") => match serve(&args[1..]) {
             Ok(()) => std::process::ExitCode::SUCCESS,
@@ -127,14 +143,35 @@ impl Wide {
 impl Dispatch for Wide {
     fn dispatch(&mut self, req: &Request, out: &mut Encoder) -> Result<(), SystemException> {
         self.calls += 1;
+        // The three columns every row on this seat carries, built once.
+        let (gv, end, n) =
+            (rows::giop(req.version), rows::endian(req.endian), self.calls.to_string());
         if self.seen.insert((req.version.major, req.version.minor, req.endian == Endian::Little)) {
             println!("first request at {} ({:?})", req.version, req.endian);
+            rows::Row {
+                seat: rows::SERVE,
+                event: rows::event::FIRST,
+                giop: &gv,
+                endian: end,
+                ..Default::default()
+            }
+            .emit();
         }
         if ObjectOps::handles(&req.operation) {
             println!(
                 "served {} #{} at {} ({:?})",
                 req.operation, self.calls, req.version, req.endian
             );
+            rows::Row {
+                seat: rows::SERVE,
+                event: rows::event::SERVED,
+                op: &req.operation,
+                giop: &gv,
+                endian: end,
+                n: &n,
+                ..Default::default()
+            }
+            .emit();
             return ObjectOps {
                 registry: &self.registry,
                 type_id: TYPE_ID,
@@ -150,12 +187,37 @@ impl Dispatch for Wide {
                         "refused echo_wchar #{} at {} ({:?}): wchar is not legal at this version -> MARSHAL",
                         self.calls, req.version, req.endian
                     );
+                    rows::Row {
+                        seat: rows::SERVE,
+                        event: rows::event::REFUSED,
+                        op: "echo_wchar",
+                        giop: &gv,
+                        endian: end,
+                        n: &n,
+                        note: rows::note::VERSION_ILLEGAL,
+                        ..Default::default()
+                    }
+                    .emit();
                 })?;
                 let c = w.get_wchar(&mut args).map_err(|e| {
                     println!(
                         "refused echo_wchar #{} at {} ({:?}): {e} -> MARSHAL",
                         self.calls, req.version, req.endian
                     );
+                    // `{e}` above is `orbweaver-giop`'s `NegotiationError`
+                    // wording, two crates from here; the row is this seat's.
+                    rows::Row {
+                        seat: rows::SERVE,
+                        event: rows::event::REFUSED,
+                        op: "echo_wchar",
+                        giop: &gv,
+                        endian: end,
+                        codeset: &rows::codeset(w.codeset()),
+                        n: &n,
+                        note: rows::note::BAD_ENCODING,
+                        ..Default::default()
+                    }
+                    .emit();
                     SystemException::marshal()
                 })?;
                 println!(
@@ -166,6 +228,18 @@ impl Dispatch for Wide {
                     w.codeset(),
                     c as u32
                 );
+                rows::Row {
+                    seat: rows::SERVE,
+                    event: rows::event::SERVED,
+                    op: "echo_wchar",
+                    giop: &gv,
+                    endian: end,
+                    codeset: &rows::codeset(w.codeset()),
+                    n: &n,
+                    got: &rows::unit(c as u32),
+                    ..Default::default()
+                }
+                .emit();
                 w.put_wchar(out, c).map_err(|_| SystemException::marshal())?;
             }
             "echo_wstring" => {
@@ -174,12 +248,35 @@ impl Dispatch for Wide {
                         "refused echo_wstring #{} at {} ({:?}): wchar is not legal at this version -> MARSHAL",
                         self.calls, req.version, req.endian
                     );
+                    rows::Row {
+                        seat: rows::SERVE,
+                        event: rows::event::REFUSED,
+                        op: "echo_wstring",
+                        giop: &gv,
+                        endian: end,
+                        n: &n,
+                        note: rows::note::VERSION_ILLEGAL,
+                        ..Default::default()
+                    }
+                    .emit();
                 })?;
                 let s = w.get_wstring(&mut args).map_err(|e| {
                     println!(
                         "refused echo_wstring #{} at {} ({:?}): {e} -> MARSHAL",
                         self.calls, req.version, req.endian
                     );
+                    rows::Row {
+                        seat: rows::SERVE,
+                        event: rows::event::REFUSED,
+                        op: "echo_wstring",
+                        giop: &gv,
+                        endian: end,
+                        codeset: &rows::codeset(w.codeset()),
+                        n: &n,
+                        note: rows::note::BAD_ENCODING,
+                        ..Default::default()
+                    }
+                    .emit();
                     SystemException::marshal()
                 })?;
                 println!(
@@ -191,9 +288,33 @@ impl Dispatch for Wide {
                     s.encode_utf16().count(),
                     units_of(&s)
                 );
+                rows::Row {
+                    seat: rows::SERVE,
+                    event: rows::event::SERVED,
+                    op: "echo_wstring",
+                    giop: &gv,
+                    endian: end,
+                    codeset: &rows::codeset(w.codeset()),
+                    n: &s.encode_utf16().count().to_string(),
+                    ..Default::default()
+                }
+                .emit();
                 w.put_wstring(out, &s).map_err(|_| SystemException::marshal())?;
             }
-            _ => return Err(SystemException::bad_operation()),
+            other => {
+                rows::Row {
+                    seat: rows::SERVE,
+                    event: rows::event::REFUSED,
+                    op: other,
+                    giop: &gv,
+                    endian: end,
+                    n: &n,
+                    note: rows::note::BAD_OPERATION,
+                    ..Default::default()
+                }
+                .emit();
+                return Err(SystemException::bad_operation());
+            }
         }
         Ok(())
     }
@@ -272,17 +393,30 @@ fn call(args: &[String]) -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
+    let verdict = |n: u32, note: &str| {
+        rows::Row {
+            seat: rows::CALL,
+            event: rows::event::VERDICT,
+            n: &n.to_string(),
+            note,
+            ..Default::default()
+        }
+        .emit();
+    };
     match run(&ior_text, endian, &units, &texts) {
         Ok(0) => {
             println!("\nwide: PASS");
+            verdict(0, rows::note::PASS);
             std::process::ExitCode::SUCCESS
         }
         Ok(n) => {
             println!("\nwide: FAIL — {n} case(s)");
+            verdict(n, rows::note::FAILED);
             std::process::ExitCode::FAILURE
         }
         Err(e) => {
             println!("\nwide: FAIL — {e}");
+            verdict(1, rows::note::FAILED);
             std::process::ExitCode::FAILURE
         }
     }
@@ -295,6 +429,16 @@ fn run(ior_text: &str, endian: Endian, units: &[u32], texts: &[String]) -> Resul
     println!("  type_id    {}", ior.type_id);
     println!("  endpoint   {}:{}  (IIOP {}.{})", p.host, p.port, p.version.major, p.version.minor);
     println!("  object_key {} bytes", p.object_key.len());
+    // What the profile advertises, as a row: the script used to read this
+    // back out of the prose above with a `sed` over "(IIOP x.y)".
+    rows::Row {
+        seat: rows::CALL,
+        event: rows::event::TARGET,
+        giop: &rows::giop(p.version),
+        note: rows::note::PROFILE,
+        ..Default::default()
+    }
+    .emit();
 
     let mut conn = Connection::connect(&ior, Duration::from_secs(5))?;
     conn.set_endian(endian);
@@ -310,8 +454,10 @@ fn run(ior_text: &str, endian: Endian, units: &[u32], texts: &[String]) -> Resul
     let mut fails = 0u32;
     let codec = WideCodec::new(version, CodeSetId::UTF_16);
 
+    let asked = rows::giop(version);
     for &u in units {
         let label = format!("echo_wchar[U+{u:04X}]");
+        let sent = rows::unit(u);
         let Some(c) = char::from_u32(u) else {
             // Behaviour, not a verdict: a lone surrogate is not a `char`, so
             // our writer has nothing to encode. What our *reader* does with
@@ -319,6 +465,16 @@ fn run(ior_text: &str, endian: Endian, units: &[u32], texts: &[String]) -> Resul
             println!(
                 "  info {label}: not a character — our writer cannot ask for it (JacORB's char can)"
             );
+            rows::Row {
+                seat: rows::CALL,
+                event: rows::event::SKIPPED,
+                op: "echo_wchar",
+                giop: &asked,
+                sent: &sent,
+                note: rows::note::NOT_A_CHARACTER,
+                ..Default::default()
+            }
+            .emit();
             continue;
         };
         let w = match codec {
@@ -330,18 +486,55 @@ fn run(ior_text: &str, endian: Endian, units: &[u32], texts: &[String]) -> Resul
                 println!(
                     "  info {label}: wchar is illegal under {version}; our codec refuses to write it"
                 );
+                rows::Row {
+                    seat: rows::CALL,
+                    event: rows::event::SKIPPED,
+                    op: "echo_wchar",
+                    giop: &asked,
+                    sent: &sent,
+                    note: rows::note::VERSION_ILLEGAL,
+                    ..Default::default()
+                }
+                .emit();
+                let raw = rows::Row {
+                    seat: rows::CALL,
+                    op: "echo_wchar",
+                    giop: &asked,
+                    sent: &sent,
+                    ..Default::default()
+                };
                 match conn.invoke("echo_wchar", |e| e.put_u16(u as u16)) {
                     Err(Error::SystemException { id, minor, .. }) if id.contains("MARSHAL") => {
-                        let minor = match omg_minor(minor) {
+                        let omg = omg_minor(minor);
+                        let minor = match omg {
                             Some(m) => format!("OMG minor {m}"),
                             None => format!("minor {minor}"),
                         };
                         println!(
                             "  {OK} {label} sent as two raw octets under {version} -> the server refused it: MARSHAL ({minor})"
                         );
+                        // The row says MARSHAL-with-OMG-minor-6 as a token,
+                        // because that pair is what §9.3.1.6 prescribes and
+                        // what the gate is actually about.
+                        rows::Row {
+                            event: rows::event::RAW_REFUSED,
+                            note: if omg == Some(6) {
+                                rows::note::MARSHAL_OMG_6
+                            } else {
+                                rows::note::WRONG_EXCEPTION
+                            },
+                            ..raw
+                        }
+                        .emit();
                     }
                     Err(e) => {
                         println!("  {NO} {label} raw under {version}: expected MARSHAL, got {e}");
+                        rows::Row {
+                            event: rows::event::FAIL,
+                            note: rows::note::WRONG_EXCEPTION,
+                            ..raw
+                        }
+                        .emit();
                         fails += 1;
                     }
                     Ok(r) => {
@@ -349,6 +542,12 @@ fn run(ior_text: &str, endian: Endian, units: &[u32], texts: &[String]) -> Resul
                             "  {NO} {label} raw under {version}: the server answered (status {:?}) instead of refusing",
                             r.status
                         );
+                        rows::Row {
+                            event: rows::event::FAIL,
+                            note: rows::note::NOT_REFUSED,
+                            ..raw
+                        }
+                        .emit();
                         fails += 1;
                     }
                 }
@@ -363,6 +562,17 @@ fn run(ior_text: &str, endian: Endian, units: &[u32], texts: &[String]) -> Resul
             Ok(r) => {
                 let id = r.request_id;
                 let (rv, re) = (r.version, r.endian);
+                // Version and byte order of the *reply*, which is what the
+                // script asserted by matching "(reply id=… GIOP 1.x …)".
+                let rgv = rows::giop(rv);
+                let reply = rows::Row {
+                    seat: rows::CALL,
+                    op: "echo_wchar",
+                    giop: &rgv,
+                    endian: rows::endian(re),
+                    sent: &sent,
+                    ..Default::default()
+                };
                 match r.body().and_then(|mut b| {
                     let got = w
                         .get_wchar(&mut b)
@@ -373,23 +583,52 @@ fn run(ior_text: &str, endian: Endian, units: &[u32], texts: &[String]) -> Resul
                         println!(
                             "  {OK} {label} -> U+{:04X}  (reply id={id} {rv} {re:?})",
                             got as u32
-                        )
+                        );
+                        rows::Row { event: rows::event::OK, got: &rows::unit(got as u32), ..reply }
+                            .emit();
                     }
                     Ok((got, rest)) => {
                         println!(
                             "  {NO} {label} -> U+{:04X}, {rest} octet(s) left  (reply id={id} {rv} {re:?})",
                             got as u32
                         );
+                        rows::Row {
+                            event: rows::event::FAIL,
+                            got: &rows::unit(got as u32),
+                            note: if rest == 0 {
+                                rows::note::VALUE_DIFFERS
+                            } else {
+                                rows::note::OCTETS_LEFT
+                            },
+                            ..reply
+                        }
+                        .emit();
                         fails += 1;
                     }
                     Err(e) => {
                         println!("  {NO} {label}: reply would not decode: {e}  (reply id={id})");
+                        rows::Row {
+                            event: rows::event::FAIL,
+                            note: rows::note::UNDECODABLE,
+                            ..reply
+                        }
+                        .emit();
                         fails += 1;
                     }
                 }
             }
             Err(e) => {
                 println!("  {NO} {label}: {e}");
+                rows::Row {
+                    seat: rows::CALL,
+                    event: rows::event::FAIL,
+                    op: "echo_wchar",
+                    giop: &asked,
+                    sent: &sent,
+                    note: rows::note::CALL_FAILED,
+                    ..Default::default()
+                }
+                .emit();
                 fails += 1;
             }
         }
@@ -397,6 +636,7 @@ fn run(ior_text: &str, endian: Endian, units: &[u32], texts: &[String]) -> Resul
 
     for text in texts {
         let n = text.encode_utf16().count();
+        let units = n.to_string();
         let label = format!("echo_wstring[{n} units {text:?}]");
         let w = match codec {
             Ok(w) => w,
@@ -404,6 +644,16 @@ fn run(ior_text: &str, endian: Endian, units: &[u32], texts: &[String]) -> Resul
                 println!(
                     "  info {label}: wstring is illegal under {version}; our codec refuses to write it — not sent"
                 );
+                rows::Row {
+                    seat: rows::CALL,
+                    event: rows::event::SKIPPED,
+                    op: "echo_wstring",
+                    giop: &asked,
+                    n: &units,
+                    note: rows::note::VERSION_ILLEGAL,
+                    ..Default::default()
+                }
+                .emit();
                 continue;
             }
         };
@@ -414,6 +664,15 @@ fn run(ior_text: &str, endian: Endian, units: &[u32], texts: &[String]) -> Resul
             Ok(r) => {
                 let id = r.request_id;
                 let (rv, re) = (r.version, r.endian);
+                let rgv = rows::giop(rv);
+                let reply = rows::Row {
+                    seat: rows::CALL,
+                    op: "echo_wstring",
+                    giop: &rgv,
+                    endian: rows::endian(re),
+                    n: &units,
+                    ..Default::default()
+                };
                 match r.body().and_then(|mut b| {
                     let got = w
                         .get_wstring(&mut b)
@@ -423,26 +682,171 @@ fn run(ior_text: &str, endian: Endian, units: &[u32], texts: &[String]) -> Resul
                     Ok((got, 0)) if got == *text => {
                         println!(
                             "  {OK} {label} -> the same {n} units  (reply id={id} {rv} {re:?})"
-                        )
+                        );
+                        rows::Row { event: rows::event::OK, ..reply }.emit();
                     }
                     Ok((got, rest)) => {
                         println!(
                             "  {NO} {label} -> {} ({rest} octet(s) left)  (reply id={id} {rv} {re:?})",
                             units_of(&got)
                         );
+                        rows::Row {
+                            event: rows::event::FAIL,
+                            note: if rest == 0 {
+                                rows::note::VALUE_DIFFERS
+                            } else {
+                                rows::note::OCTETS_LEFT
+                            },
+                            ..reply
+                        }
+                        .emit();
                         fails += 1;
                     }
                     Err(e) => {
                         println!("  {NO} {label}: reply would not decode: {e}  (reply id={id})");
+                        rows::Row {
+                            event: rows::event::FAIL,
+                            note: rows::note::UNDECODABLE,
+                            ..reply
+                        }
+                        .emit();
                         fails += 1;
                     }
                 }
             }
             Err(e) => {
                 println!("  {NO} {label}: {e}");
+                rows::Row {
+                    seat: rows::CALL,
+                    event: rows::event::FAIL,
+                    op: "echo_wstring",
+                    giop: &asked,
+                    n: &units,
+                    note: rows::note::CALL_FAILED,
+                    ..Default::default()
+                }
+                .emit();
                 fails += 1;
             }
         }
     }
     Ok(fails)
+}
+
+#[cfg(test)]
+mod tests {
+    use orbweaver_giop::Version;
+
+    use super::*;
+
+    /// A real GIOP `Request`, encoded and decoded the way the wire does it,
+    /// so the rows below come out of the same `Dispatch` the harness runs.
+    fn request(
+        version: Version,
+        endian: Endian,
+        op: &str,
+        body: impl FnOnce(&mut Encoder),
+    ) -> Request {
+        let bytes =
+            orbweaver_giop::encode_request(version, endian, 7, OBJECT_KEY, op, true, body).unwrap();
+        let msg = orbweaver_giop::read_message(&mut &bytes[..], 1 << 20).unwrap();
+        orbweaver_giop::server::decode_request(msg).unwrap()
+    }
+
+    fn servant() -> Wide {
+        Wide {
+            self_ref: Ior { type_id: TYPE_ID.into(), profiles: vec![] },
+            registry: Registry::default(),
+            calls: 0,
+            seen: Default::default(),
+        }
+    }
+
+    /// Dispatch one request and return the rows it emitted, in order.
+    fn rows_of(w: &mut Wide, req: &Request) -> (Result<(), SystemException>, Vec<String>) {
+        let _ = rows::captured::drain();
+        let mut out = Encoder::new(req.endian);
+        let r = w.dispatch(req, &mut out);
+        (r, rows::captured::drain())
+    }
+
+    /// The four rows `spikes/wide_rust.sh` counts on the serving seat, spelled
+    /// out. Each of them replaced a `grep -c` of an English sentence — and one
+    /// of those sentences (`"received bytes are not valid UTF-16"`) is not
+    /// even this crate's: it is `orbweaver-giop`'s `NegotiationError`
+    /// `Display`. Reword any diagnostic and this test stays green; change a
+    /// token in a row and it goes red, which is the whole point.
+    #[test]
+    fn the_serving_seat_emits_the_rows_the_harness_counts() {
+        let mut w = servant();
+
+        // A wchar that round-trips: `first` once, then `served` with the
+        // codeset and the code point our reader decoded.
+        let codec = WideCodec::new(Version::V1_1, CodeSetId::UTF_16).unwrap();
+        let req = request(Version::V1_1, Endian::Big, "echo_wchar", |e| {
+            codec.put_wchar(e, '\u{D55C}').unwrap();
+        });
+        let (r, rows) = rows_of(&mut w, &req);
+        assert!(r.is_ok());
+        assert_eq!(
+            rows,
+            vec![
+                "ROW\tserve\tfirst\t-\t1.1\tBE\t-\t-\t-\t-\t-".to_owned(),
+                "ROW\tserve\tserved\techo_wchar\t1.1\tBE\t0x00010109\t1\t-\tU+D55C\t-".to_owned(),
+            ]
+        );
+
+        // A lone surrogate: at 1.1 a `wchar` is a bare code unit (§9.3.1.6 —
+        // the octet count arrives with 1.2), and `D8 3D` is not a UTF-16
+        // value. The refusal is `bad-encoding`, a token this file owns.
+        let req = request(Version::V1_1, Endian::Big, "echo_wchar", |e| {
+            e.put_u16(0xD83D);
+        });
+        let (r, rows) = rows_of(&mut w, &req);
+        assert!(r.is_err());
+        assert_eq!(
+            rows,
+            vec!["ROW\tserve\trefused\techo_wchar\t1.1\tBE\t0x00010109\t2\t-\t-\tbad-encoding"]
+        );
+
+        // GIOP 1.0: §9.3.1.6 makes wchar illegal, and there is no codec to
+        // build. `version-illegal`, before any octet is read.
+        let req = request(Version::V1_0, Endian::Little, "echo_wchar", |e| {
+            e.put_octet(0);
+        });
+        let (r, rows) = rows_of(&mut w, &req);
+        assert!(r.is_err());
+        assert_eq!(
+            rows,
+            vec![
+                "ROW\tserve\tfirst\t-\t1.0\tLE\t-\t-\t-\t-\t-".to_owned(),
+                "ROW\tserve\trefused\techo_wchar\t1.0\tLE\t-\t3\t-\t-\tversion-illegal".to_owned(),
+            ]
+        );
+
+        // An operation this servant does not have.
+        let req = request(Version::V1_1, Endian::Big, "no_such_op", |_| {});
+        let (r, rows) = rows_of(&mut w, &req);
+        assert!(r.is_err());
+        assert_eq!(
+            rows,
+            vec!["ROW\tserve\trefused\tno_such_op\t1.1\tBE\t-\t4\t-\t-\tbad-operation"]
+        );
+    }
+
+    /// A `wstring` at 1.2, whose `n` column is the UTF-16 unit count.
+    #[test]
+    fn a_wstring_row_carries_its_unit_count() {
+        let mut w = servant();
+        let codec = WideCodec::new(Version::V1_2, CodeSetId::UTF_16).unwrap();
+        let req = request(Version::V1_2, Endian::Little, "echo_wstring", |e| {
+            codec.put_wstring(e, "ab\u{D55C}").unwrap();
+        });
+        let (r, rows) = rows_of(&mut w, &req);
+        assert!(r.is_ok());
+        assert_eq!(
+            rows.last().unwrap(),
+            "ROW\tserve\tserved\techo_wstring\t1.2\tLE\t0x00010109\t3\t-\t-\t-"
+        );
+    }
 }
