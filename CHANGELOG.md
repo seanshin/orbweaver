@@ -46,6 +46,74 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **A refusal's head is published, and every classifier that retyped a
+  sentence now asks the function that writes it.** Two batches with one shape.
+  First, scope: the four wire-refusal heads in `orbweaver-dynamic`
+  (`deferred_wire_*`, `unmarshallable_wire_*`) went `pub(crate)` → `pub`,
+  because the fact they own is workspace-scoped and the pin that guarded them
+  (`deferred_sentence_agreement`) could only see one crate. Measured by running
+  each layer: **twelve literals in two other crates** — `orbweaver-gen`'s four
+  skip reasons, `orbweaver-test`'s `json_unmapped` and `why_unsupported`, four
+  families each — and **one had gone false**: `prop.rs` told a contract-check
+  reader that `from_json` answers `"cannot cross yet"` for a `fixed`, three
+  days after that arm landed (2026-08-21). All twelve now call the heads; the
+  new cross-crate gate `one_home_for_a_wire_refusal.rs` **computes** the
+  expected text by calling the same functions, so a layer that keeps a literal
+  fails at the next rewording, not at the next reading. Along the way the only
+  construct with two call sites was spelled two ways — the type mapper said
+  `abstract interface Describable`, the representability cascade
+  `w2::Describable`, because an abstract interface *declaration* has no
+  `TypeCode` in the registry to ask — unified by `abstract_name` (found, not
+  fixed: a simple name is ambiguous across modules; qualifying all four
+  families is `deferred_wire_name`'s batch, and the skip note keeps the
+  repository id as its subject).
+  Second, the same defect wearing the counting half's coat: **a classifier
+  that matches a hand-written fragment of a sentence some other function
+  owns.** Swept twelve crates: **five instances, three silent, one already
+  losing in the product** — `LexError::rule` classified by a retyped prefix
+  that one of its own three construction sites did not carry, so `"malformed
+  fixed-point literal …"` filed under `parse` and never received the
+  `fixed-literal` hint `orbweaver-forge` wrote for exactly that input. Now the
+  sites and the classifier share `FIXED_LITERAL_SUBJECT` (three refusal shapes
+  under one rule, tested with a `parse` negative control); the agent-reach
+  sweep's two matches read published markers (`orbweaver_cdr::
+  IMPLAUSIBLE_LENGTH`, `orbweaver_dynamic::json::NESTING_TOO_DEEP`) instead of
+  retyped copies — no test added there, because a shared constant makes the
+  drift impossible rather than detectable; and the two deferred-wire counters
+  (`deferred_wire_gaps`, `deferred_wire_agreement`'s equality) compute the
+  heads' markers by sentinel instead of matching `"§4.4"` — a `native` was in
+  the count only because its old sentence named the section *in order to deny
+  it*, and moving the wording into the shared head took the count 18 → 14
+  with nothing else changed. **The harness caught that; nothing in the test
+  suite did** — `a_native_is_counted_though_its_sentence_names_no_section`
+  now does. Codified as two CLAUDE.md rules: a pin whose scope is narrower
+  than its fact's goes green over the drift, and a classifier is a sentence
+  too.
+
+  **거부 문장의 머리는 공개되고, 문장을 옮겨 적던 분류자는 이제 문장을 쓰는
+  함수에게 묻는다.** 한 모양의 배치 둘. 첫째, 범위: 와이어 거부 머리 네 개가
+  `pub(crate)` → `pub` — 사실의 범위는 워크스페이스인데 핀의 범위는 크레이트
+  하나였다. 계층을 실행해 측정: **다른 두 크레이트에 리터럴 열두 개**, 그중
+  **하나는 이미 거짓** — `prop.rs`는 `from_json`이 `fixed`에 `"cannot cross
+  yet"`이라 답한다고 인용했지만 그 계층은 사흘 전에 그 말을 그만두었다. 열두
+  개 전부 이제 머리를 호출하고, 새 크레이트 횡단 게이트가 같은 함수를 호출해
+  기대 문장을 **계산**하므로 리터럴을 유지한 계층은 다음 문구 변경에서
+  실패한다. 유일하게 호출처가 둘인 abstract interface는 철자도 둘이었다
+  (선언에는 레지스트리에 물을 `TypeCode`가 없어서) — `abstract_name`으로
+  통일, 단순 이름의 모듈 간 모호성은 발견-미수정으로 기록. 둘째, 같은 결함이
+  세는 쪽 외투를 입은 것: **다른 함수가 소유한 문장의 조각을 손으로 옮겨 적는
+  분류자.** 열두 크레이트 스윕: **다섯 건, 셋은 침묵, 하나는 이미 제품에서
+  지는 중** — `LexError::rule`이 옮겨 적은 접두사로 분류해 세 생성처 중
+  하나가 `parse`로 잘못 접수되어 자기 앞으로 쓰인 `fixed-literal` 힌트를 받지
+  못했다. 이제 생성처와 분류자가 `FIXED_LITERAL_SUBJECT`를 공유하고, 에이전트
+  도달 스윕의 두 매치는 공개 표지(`IMPLAUSIBLE_LENGTH`, `NESTING_TOO_DEEP`)를
+  읽으며 — 공유 상수는 어긋남을 탐지 대상이 아니라 불가능으로 만들므로
+  테스트는 추가하지 않았다 — 지연 와이어 카운터 둘은 `"§4.4"` 매칭 대신
+  센티널로 머리 표지를 계산한다. `native`는 옛 문장이 그 절을 *부정하려고*
+  언급했기 때문에만 세어지고 있었고, 문구가 공유 머리로 옮겨가자 카운트가
+  18 → 14로 움직였다. **그것을 잡은 것은 하네스였고 테스트 스위트는
+  아니었다** — 이제 전용 테스트가 잡는다. CLAUDE.md 규칙 둘로 성문화.
+
 - **A constant's value is the value that was written, and it is checked against
   its type.** Scoped to the rule rather than to `fixed`: **67 constant shapes
   and 25 of their neighbours outside const position**, one file each, through
