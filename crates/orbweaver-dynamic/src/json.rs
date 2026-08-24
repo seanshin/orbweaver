@@ -33,6 +33,16 @@ use std::fmt::Write as _;
 /// before it — and far short of what would hurt.
 pub const MAX_DEPTH: usize = 64;
 
+/// The words the depth refusal opens with.
+///
+/// Published for the same reason [`orbweaver_cdr::IMPLAUSIBLE_LENGTH`] is: the
+/// agent-reach sweep in `orbweaver-test` counts how many fed documents were
+/// refused for depth rather than for shape, and until 2026-08-24 it counted by
+/// matching a retyped copy of this sentence. A rewording here would have zeroed
+/// that counter with nothing to notice it — the tests that pin this string pin
+/// the parser's own message, not the count.
+pub const NESTING_TOO_DEEP: &str = "nesting deeper than";
+
 /// A JSON value.
 ///
 /// Numbers keep their source text rather than becoming `f64`. AnyJSON maps
@@ -247,7 +257,7 @@ impl<'a> Parser<'a> {
         f: impl FnOnce(&mut Self) -> Result<T, ParseError>,
     ) -> Result<T, ParseError> {
         if self.depth >= MAX_DEPTH {
-            return Err(self.err(format!("nesting deeper than {MAX_DEPTH} levels")));
+            return Err(self.err(format!("{NESTING_TOO_DEEP} {MAX_DEPTH} levels")));
         }
         self.depth += 1;
         let r = f(self);

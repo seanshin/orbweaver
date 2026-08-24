@@ -346,7 +346,7 @@ fn wrong_kind<T>(p: &Path<'_>, tc: &TypeCode, value: &Value) -> Result<T> {
 /// Python runtime produces from its own `_DEFERRED` format string
 /// (`crates/orbweaver-gen/src/python_rt.py`). Aliases are followed, because a
 /// `typedef` renames a construct without making the wire able to carry it.
-pub(crate) fn deferred_wire_name(tc: &TypeCode) -> Option<String> {
+pub fn deferred_wire_name(tc: &TypeCode) -> Option<String> {
     Some(match resolved(tc) {
         TypeCode::Value { name, .. } => format!("valuetype {name}"),
         TypeCode::AbstractInterface { name, .. } => format!("abstract interface {name}"),
@@ -364,7 +364,22 @@ pub(crate) fn deferred_wire_name(tc: &TypeCode) -> Option<String> {
 /// Rust pair equal, and `orbweaver-gen`'s `python_target` pins the Python one
 /// against this — they are in different crates and Python cannot share code,
 /// so the equality is held by a test rather than by hope.
-pub(crate) fn deferred_wire_head(what: &str) -> String {
+///
+/// # Why this is `pub` and not `pub(crate)`
+///
+/// It was `pub(crate)` until 2026-08-24, and that visibility was the whole
+/// defect: a layer in another crate could not call it, so it wrote its own
+/// sentence, and `deferred_sentence_agreement` — which lives here — could only
+/// pin what was inside this crate. Measured that day: **twelve literals in two
+/// other crates for the four facts these functions own** (`orbweaver-gen`'s
+/// four skip reasons, `orbweaver-test`'s `json_unmapped` and `why_unsupported`,
+/// four each), and one of the twelve had gone false — `prop.rs` quoted
+/// `from_json` as answering `"cannot cross yet"` for a `fixed`, which that
+/// layer stopped saying on 2026-08-21 when the arm above it landed. Nothing
+/// went red, because the pin's scope was a crate and the fact's scope is the
+/// workspace. A refusal sentence's home is a function, and `pub(crate)` is how
+/// a fact escapes its home.
+pub fn deferred_wire_head(what: &str) -> String {
     format!("{what} is not marshalled by the v1 wire (docs/PLAN.md §4.4)")
 }
 
@@ -376,7 +391,7 @@ pub(crate) fn deferred_wire_head(what: &str) -> String {
 /// not. A refusal that said only "cannot cross yet" would read as the whole
 /// type being unreachable, and a reader would stop sending the description too
 /// — which is the one thing D008 decided must keep working.
-pub(crate) fn deferred_wire_sentence(what: &str) -> String {
+pub fn deferred_wire_sentence(what: &str) -> String {
     format!(
         "{}; the TypeCode describing it reads, the value behind it does not",
         deferred_wire_head(what)
@@ -394,7 +409,7 @@ pub(crate) fn deferred_wire_sentence(what: &str) -> String {
 /// names a type only a language mapping knows. Aliases are followed for the
 /// same reason as above — a `typedef` renames a construct without giving the
 /// wire a way to carry it.
-pub(crate) fn unmarshallable_wire_name(tc: &TypeCode) -> Option<String> {
+pub fn unmarshallable_wire_name(tc: &TypeCode) -> Option<String> {
     Some(match resolved(tc) {
         TypeCode::Native { name, .. } => format!("native {name}"),
         _ => return None,
@@ -411,7 +426,7 @@ pub(crate) fn unmarshallable_wire_name(tc: &TypeCode) -> Option<String> {
 /// `"IDL:m/Handle:1.0 cannot cross yet"`, and the dynamic navigator's default
 /// pointed at `docs/PLAN.md §4.4`. Both invite the reader to wait for a release
 /// that will never carry it.
-pub(crate) fn unmarshallable_wire_head(what: &str) -> String {
+pub fn unmarshallable_wire_head(what: &str) -> String {
     format!(
         "{what} has no wire form at all: it names a type only a language mapping knows, and no \
          version of the wire marshals one"
@@ -438,7 +453,7 @@ pub(crate) fn unmarshallable_wire_head(what: &str) -> String {
 /// families to one source each; `orbweaver-gen`'s `python_target` holds the
 /// generated Python runtime's `_UNMARSHALLABLE` equal to this string across the
 /// crate boundary, because Python cannot import a Rust constant.
-pub(crate) fn unmarshallable_wire_sentence(what: &str) -> String {
+pub fn unmarshallable_wire_sentence(what: &str) -> String {
     format!(
         "{}; this is not one of docs/PLAN.md §4.4's deferrals — those have a wire form this \
          version has not implemented, and there is none here to implement",

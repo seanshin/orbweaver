@@ -169,9 +169,31 @@ pub fn has_defect(report: &Report) -> bool {
     report.findings.iter().any(|f| f.severity == Severity::Error)
 }
 
-/// The types the property half could not measure **because the v1 wire does
-/// not carry them** (docs/PLAN.md §4.4) — the `prop/unsupported-type` and
-/// `json/unmapped` findings that cite the section, counted once per type.
+/// The part of a head that does not depend on the subject, taken by calling the
+/// head with a sentinel and removing it.
+///
+/// A classifier is a sentence too. Asking `orbweaver-dynamic` what its heads
+/// say — rather than writing a fragment of them here — is the difference
+/// between a count that follows the wording and a count that quietly stops
+/// following it.
+fn head_marker(head: fn(&str) -> String) -> String {
+    const SENTINEL: &str = "\u{0}";
+    head(SENTINEL).replace(SENTINEL, "")
+}
+
+/// The types the property half could not measure **because the wire does not
+/// carry them** — the `prop/unsupported-type` and `json/unmapped` findings
+/// whose sentence reads one of `orbweaver-dynamic`'s two heads, counted once
+/// per type.
+///
+/// **Two families, and the classifier has to know that.** It filtered on the
+/// literal `"§4.4"` until 2026-08-24, so the four `native` declarations were in
+/// the set only because their sentence mentioned the section in order to say it
+/// does *not* apply. The day that wording moved into the shared head — which
+/// names no section, because a native is not deferred — the count went 18 to 14
+/// with nothing else changed, and the label above it still read "§4.4 and
+/// natives". A classifier is a sentence too: it asks the crate that owns the
+/// heads what they say, rather than keeping a fragment of one.
 ///
 /// Advice, still, and deliberately: the sweep cannot round-trip a `fixed`, so
 /// there is no defect to report and no severity to raise. What was missing was
@@ -183,12 +205,14 @@ pub fn has_defect(report: &Report) -> bool {
 /// not the same number, and the difference is itself a measurement — see the
 /// binary.
 pub fn deferred_wire_gaps(report: &Report) -> std::collections::BTreeSet<String> {
+    let deferred = head_marker(orbweaver_dynamic::deferred_wire_head);
+    let native = head_marker(orbweaver_dynamic::unmarshallable_wire_head);
     report
         .findings
         .iter()
         .filter(|f| {
             matches!(f.rule.as_str(), "prop/unsupported-type" | "json/unmapped")
-                && f.message.contains("§4.4")
+                && (f.message.contains(&deferred) || f.message.contains(&native))
         })
         .map(|f| f.source.clone())
         .collect()

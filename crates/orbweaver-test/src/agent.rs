@@ -610,7 +610,7 @@ pub fn panic_freedom(cases: usize, root: u64) -> Vec<Finding> {
                 let mut d = orbweaver_cdr::Decoder::new(&probe, orbweaver_cdr::Endian::Big);
                 let refused_on_the_count = match orbweaver_dynamic::decode(&mut d, &tc) {
                     Ok(_) => false,
-                    Err(e) => e.message.contains("implausible CDR length prefix"),
+                    Err(e) => e.message.contains(orbweaver_cdr::IMPLAUSIBLE_LENGTH),
                 };
                 if !refused_on_the_count {
                     over_budget = Some(demanded);
@@ -800,7 +800,7 @@ pub fn reach(cases: usize, root: u64) -> Reach {
                 j
             }
             Err(e) => {
-                if e.message.contains("nesting deeper") {
+                if e.message.contains(orbweaver_dynamic::json::NESTING_TOO_DEEP) {
                     r.too_deep += 1;
                 }
                 continue;

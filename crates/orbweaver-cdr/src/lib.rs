@@ -99,13 +99,26 @@ pub enum Error {
     Malformed(&'static str),
 }
 
+/// The words a refusal on a **declared count** opens with.
+///
+/// Published rather than kept inside the `Display` arm because a caller in
+/// another crate has to be able to tell this refusal from any other: the
+/// allocation-hazard check in `orbweaver-test`'s agent-reach sweep decides
+/// whether an over-budget decode was refused *before* the reservation, and
+/// until 2026-08-24 it did so by matching a retyped copy of this sentence. A
+/// rewording here would have turned every guarded refusal into a manufactured
+/// finding, silently — the tests that pin this string pin this `Display`, not
+/// that check. Sharing the constant makes the drift impossible rather than
+/// detectable, which is why no test is added with it.
+pub const IMPLAUSIBLE_LENGTH: &str = "implausible CDR length prefix";
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Truncated { need, have } => {
                 write!(f, "truncated CDR stream: need {need} bytes, have {have}")
             }
-            Error::BadLength(n) => write!(f, "implausible CDR length prefix: {n}"),
+            Error::BadLength(n) => write!(f, "{IMPLAUSIBLE_LENGTH}: {n}"),
             Error::BadUtf8 => write!(f, "string is not valid UTF-8"),
             Error::MissingNul => write!(f, "string is missing its terminating NUL"),
             Error::EmbeddedNul => write!(f, "string contains an embedded NUL"),

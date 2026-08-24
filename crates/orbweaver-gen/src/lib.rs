@@ -253,8 +253,8 @@ pub(crate) fn rust_type(tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
 /// reader of the generated code had nothing to be suspicious of.
 pub(crate) fn deferred_value(name: &str) -> String {
     format!(
-        "valuetype {name} is deferred at wire level (§4.4): its state is marshalled inline \
-         behind a value tag, not as an object reference"
+        "{}: its state is marshalled inline behind a value tag, not as an object reference",
+        orbweaver_dynamic::deferred_wire_head(&format!("valuetype {name}"))
     )
 }
 
@@ -266,14 +266,14 @@ pub(crate) fn deferred_value(name: &str) -> String {
 /// copy of the same sentence had, which is what made this worth collapsing
 /// rather than counting.
 pub(crate) fn deferred_fixed(digits: u16, scale: i16) -> String {
-    format!("fixed<{digits},{scale}> is deferred at wire level (§4.4)")
+    orbweaver_dynamic::deferred_wire_head(&format!("fixed<{digits},{scale}>"))
 }
 
 /// The same, for an abstract interface.
 pub(crate) fn deferred_abstract(name: &str) -> String {
     format!(
-        "abstract interface {name} is deferred at wire level (§4.4): on the wire it is the \
-         union of a value and a reference, not an object reference"
+        "{}: on the wire it is the union of a value and a reference, not an object reference",
+        orbweaver_dynamic::deferred_wire_head(&format!("abstract interface {name}"))
     )
 }
 
@@ -294,11 +294,11 @@ pub(crate) fn deferred_abstract(name: &str) -> String {
 /// one — see [`orbweaver_giop::TypeCode::Native`].
 pub(crate) fn unmarshallable_native(name: &str) -> String {
     format!(
-        "native {name} has no wire form at all — it names a type only a language mapping \
-         knows, so there is nothing to marshal. Not deferred like §4.4's three constructs: \
-         those have a wire form this version does not implement, and a native has none to \
-         implement (omniORB's C++ back end refuses the declaration; its Python back end \
-         ignores it and leaves a dangling type mapping)"
+        "{}. Not deferred like §4.4's three constructs: those have a wire form this version \
+         does not implement, and a native has none to implement (omniORB's C++ back end \
+         refuses the declaration; its Python back end ignores it and leaves a dangling type \
+         mapping)",
+        orbweaver_dynamic::unmarshallable_wire_head(&format!("native {name}"))
     )
 }
 
@@ -577,6 +577,40 @@ fn representable(tc: &TypeCode, visiting: &mut Vec<String>) -> Result<(), String
     }
 }
 
+/// How an abstract interface is spelled in a refusal — from its `TypeCode`,
+/// which is where the type mapper takes it, so the two paths that can skip one
+/// cannot spell it differently.
+///
+/// They did until 2026-08-24, and it was the only construct of the four with
+/// two call sites: the type mapper said `abstract interface Describable` and
+/// this cascade said `abstract interface gc20::Describable`, so one fact had
+/// two spellings and a reader grepping for either found half the layers. Found
+/// by the cross-crate pin, which computes the expected head from the same
+/// namer rather than from a literal.
+///
+/// The cause, measured rather than assumed: **an abstract interface
+/// declaration has no `TypeCode` in the registry at all** — a valuetype does
+/// (`IDL:w2/Money:1.0` answers `valuetype Money`), and a *member* referring to
+/// either carries one — so this path had nothing to ask and fell back to
+/// `qualified_name`. The other three families never had a second call site and
+/// so never diverged. The simple name is the spelling here because it is the
+/// spelling the other three already use and the one a member's `TypeCode`
+/// gives for this construct too.
+///
+/// **Found and not fixed:** a simple name is ambiguous — two modules declaring
+/// `Describable` produce one string. That is
+/// `orbweaver_dynamic::deferred_wire_name`'s spelling, not this crate's, and
+/// the generated Python runtime is pinned to it across a crate boundary, so
+/// qualifying all four is its own batch. Here the skip note carries the
+/// repository id as its subject, so the identity is not lost.
+pub(crate) fn abstract_name(registry: &Registry, id: &str) -> String {
+    if let Some(TypeCode::AbstractInterface { name, .. }) = registry.typecode(id) {
+        return name.clone();
+    }
+    let qualified = registry.qualified_name(id).unwrap_or(id);
+    qualified.rsplit("::").next().unwrap_or(qualified).to_owned()
+}
+
 fn interface_representable(registry: &Registry, id: &str) -> Result<(), String> {
     let Some(entry) = registry.interface(id) else {
         return Ok(());
@@ -586,7 +620,7 @@ fn interface_representable(registry: &Registry, id: &str) -> Result<(), String> 
     // dispatch to; every operation it declares may be perfectly representable,
     // which is why checking only the members cleared it.
     if entry.abstract_interface {
-        return Err(deferred_abstract(registry.qualified_name(id).unwrap_or(id)));
+        return Err(deferred_abstract(&abstract_name(registry, id)));
     }
     // Inherited members too: both halves generate the resolved set, so the
     // representability check has to cover the resolved set or it would clear an

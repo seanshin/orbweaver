@@ -303,6 +303,11 @@ pub struct LexError {
     pub span: Span,
 }
 
+/// The words a fixed-point literal's diagnostics open with, so that
+/// [`LexError::rule`] and every site that raises one agree by construction
+/// rather than by a retyped prefix.
+pub(crate) const FIXED_LITERAL_SUBJECT: &str = "fixed-point literal";
+
 impl LexError {
     /// The rule a lexical failure files under, for the consumers that key on
     /// one.
@@ -316,10 +321,20 @@ impl LexError {
     ///
     /// Derived from the message rather than carried on the struct so that the
     /// twenty existing construction sites keep saying nothing about a rule
-    /// they have no opinion on.
+    /// they have no opinion on — but derived from a **constant the sites also
+    /// build with**, not from a fragment retyped here.
+    ///
+    /// It was a retyped fragment until 2026-08-24, and one of the three
+    /// fixed-point sites had already fallen outside it: `"malformed
+    /// fixed-point literal {text:?}"` does not start with the prefix, so it
+    /// filed under `parse` and lost the hint written for it — `orbweaver-forge`
+    /// keys `fixed-literal` to a hint whose own comment cites
+    /// `corpus/negative/n22` and whose text ("`{text}` is not a fixed-point
+    /// literal…") is exactly what a malformed one needs. Nothing was red:
+    /// no test asserts what `rule()` returns for any message.
     #[must_use]
     pub fn rule(&self) -> &'static str {
-        if self.message.starts_with("fixed-point literal") { "fixed-literal" } else { "parse" }
+        if self.message.starts_with(FIXED_LITERAL_SUBJECT) { "fixed-literal" } else { "parse" }
     }
 }
 
@@ -857,7 +872,7 @@ impl<'a> Lexer<'a> {
                 // `1e3d` is a float literal wearing a `d`.
                 return Err(LexError {
                     message: format!(
-                        "fixed-point literal {text:?} may not carry an exponent: IDL's \
+                        "{FIXED_LITERAL_SUBJECT} {text:?} may not carry an exponent: IDL's \
                          `fixed_pt_literal` is digits, a point and more digits. Write the \
                          digits out, or drop the `d` and let it be a `double`."
                     ),
@@ -865,13 +880,13 @@ impl<'a> Lexer<'a> {
                 });
             }
             let lit = FixedLit::parse(cleaned).ok_or_else(|| LexError {
-                message: format!("malformed fixed-point literal {text:?}"),
+                message: format!("{FIXED_LITERAL_SUBJECT} {text:?} is malformed"),
                 span: self.here(start, sl, sc),
             })?;
             if lit.digits() > FIXED_MAX_DIGITS {
                 return Err(LexError {
                     message: format!(
-                        "fixed-point literal {text:?} has {} significant digits: a `fixed` \
+                        "{FIXED_LITERAL_SUBJECT} {text:?} has {} significant digits: a `fixed` \
                          carries at most {FIXED_MAX_DIGITS} (CORBA 3.4 §7.11.3). Drop digits \
                          until it fits — rounding it here would change the value silently.",
                         lit.digits()
@@ -1000,6 +1015,40 @@ mod tests {
 
     fn toks(src: &str) -> Vec<Tok> {
         Lexer::new(src).tokenize().unwrap().into_iter().map(|t| t.tok).collect()
+    }
+
+    /// Every way a fixed-point literal can be refused files under
+    /// `fixed-literal`, so the hint written for it actually reaches it.
+    ///
+    /// **Three shapes, not two.** `rule()` classifies by the subject the sites
+    /// build with, and until 2026-08-24 it classified by a retyped prefix that
+    /// one of the three did not carry: `"malformed fixed-point literal …"`
+    /// filed under `parse`, so a literal too long for the parse to hold — 40
+    /// digits and up, where `u128` gives out before the 31-digit rule is even
+    /// reached — got the generic diagnostic and none of the hint
+    /// `orbweaver-forge` keys to `fixed-literal`, whose text is exactly what
+    /// that literal needs. Nothing was red, because nothing asserted what
+    /// `rule()` returns for any message at all.
+    ///
+    /// *세 가지 모양이며 둘이 아니다. 셋 중 하나가 손으로 옮겨 적은 접두사 밖에
+    /// 있었고, 그래서 자기 앞으로 쓰인 힌트를 받지 못했다.*
+    #[test]
+    fn every_fixed_literal_refusal_files_under_the_fixed_literal_rule() {
+        let long = "1".repeat(40);
+        for src in [
+            "const fixed A = 1e3d;",                              // an exponent
+            &format!("const fixed A = {long}d;"),                 // too long to parse at all
+            "const fixed A = 12345678901234567890123456789012d;", // 32 significant digits
+        ] {
+            let err = Lexer::new(src).tokenize().expect_err(&format!("{src} must be refused"));
+            assert_eq!(err.rule(), "fixed-literal", "{src}: {}", err.message);
+        }
+
+        // And the classification is not "anything that mentions a literal":
+        // an ordinary lexical failure still files under `parse`, or the hint
+        // would fire on inputs it was not written for.
+        let err = Lexer::new("module m { \"unterminated").tokenize().expect_err("must be refused");
+        assert_eq!(err.rule(), "parse", "{}", err.message);
     }
 
     #[test]

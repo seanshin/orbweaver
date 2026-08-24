@@ -99,6 +99,12 @@ struct Sets {
     python_skipped: Vec<(String, String)>,
 }
 
+/// The subject-independent part of a head, taken by calling it with a sentinel.
+fn marker(head: fn(&str) -> String) -> String {
+    const SENTINEL: &str = "\u{0}";
+    head(SENTINEL).replace(SENTINEL, "")
+}
+
 fn sets(src: &str) -> Sets {
     let spec = orbweaver_idl::check(src).expect("checks out");
     let mut registry = Registry::new();
@@ -111,10 +117,19 @@ fn sets(src: &str) -> Sets {
     let rule_native: BTreeSet<String> =
         uses.iter().filter(|d| d.family() == "natives").map(|d| d.declaration.clone()).collect();
 
+    // The classifier asks the crate that owns the two heads what they say,
+    // rather than keeping a fragment of one. It matched the literal `"4.4"`
+    // until 2026-08-24, and a native was in this set only because the
+    // generator's tail names the section in order to deny it — so the
+    // equality below rested on wording that sentence is free to change. It
+    // would have failed loudly rather than silently, which is the only reason
+    // it is a smaller finding than its twin in `orbweaver-test`.
+    let deferred_marker = marker(orbweaver_dynamic::deferred_wire_head);
+    let native_marker = marker(orbweaver_dynamic::unmarshallable_wire_head);
     let qualified = |skipped: &[(String, String)]| -> BTreeSet<String> {
         skipped
             .iter()
-            .filter(|(_, why)| why.contains("4.4"))
+            .filter(|(_, why)| why.contains(&deferred_marker) || why.contains(&native_marker))
             .map(|(id, _)| {
                 registry.qualified_name(id).unwrap_or_else(|| panic!("{id} has no name")).to_owned()
             })

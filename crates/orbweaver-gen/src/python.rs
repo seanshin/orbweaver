@@ -296,7 +296,7 @@ fn interface_crossable(registry: &Registry, id: &str) -> Result<(), String> {
     // Same argument as `crate::interface_representable`: the declaration is
     // refused before its members are looked at.
     if entry.abstract_interface {
-        return Err(crate::deferred_abstract(registry.qualified_name(id).unwrap_or(id)));
+        return Err(crate::deferred_abstract(&crate::abstract_name(registry, id)));
     }
     let (operations, attributes) = resolved_members(registry, id);
     for (name, sig) in &operations {

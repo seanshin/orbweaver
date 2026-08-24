@@ -219,6 +219,40 @@ decisions being approved and work landing.
   D003's approval overwrote the head of its own PROPOSED block and left the
   tail, so the file said APPROVED in English and 제안 in Korean four lines
   apart — and every document that had copied it copied the English half.
+- **A sentence many layers say is a fact, and `pub(crate)` is how a fact
+  escapes its home.** A refusal, a limit, a diagnostic head that more than one
+  layer must give in the same words belongs to one function, and that function
+  has to be reachable from every layer that owes it — including the ones in
+  other crates. Measured 2026-08-24: the two heads for the four constructs the
+  wire cannot carry were `pub(crate)` in `orbweaver-dynamic`, so
+  **twelve literals in two other crates** wrote them again, and one had gone
+  false — `prop.rs` told a contract-check reader that `from_json` answers
+  `"cannot cross yet"` for a `fixed`, three days after that layer stopped
+  saying it. Nothing was red: the pin that existed was scoped to a crate and
+  the fact is scoped to the workspace. **A pin whose scope is narrower than its
+  fact's is a pin that will go green over the drift.** The gate for this class
+  computes the expected text by calling the same function, so a layer that
+  keeps a literal fails the moment the wording changes rather than at the next
+  reading. *여러 계층이 말하는 문장은 사실이며, `pub(crate)`은 사실이 자기 집을
+  빠져나가는 경로다. 고정의 범위가 사실의 범위보다 좁으면 그 고정은 어긋남 위에서
+  초록으로 남는다.*
+- **A classifier is a sentence too.** Code that decides *which class a thing
+  belongs to* by matching a hand-written substring of a sentence some other
+  function owns is the same defect wearing the counting half's coat, and it
+  fails the same way: silently, when the sentence changes for a good reason.
+  Swept 2026-08-24 across twelve crates — five instances, three of them silent
+  and one **already losing in the product**: `LexError::rule` classified by a
+  retyped prefix that one of its own three construction sites did not carry, so
+  a fixed-point literal too long to parse filed under `parse` and never
+  received the fix hint written for it. Ask the owner: either the owning crate
+  publishes the marker (`orbweaver_cdr::IMPLAUSIBLE_LENGTH`) or the classifier
+  computes it by calling the function that writes the sentence. Where the
+  constant becomes shared there is **nothing left to test** — the drift is
+  impossible rather than detectable — and a negative control there comes back
+  green, which is a reason to record the fact rather than to add a test.
+  *분류자도 문장이다. 소유 크레이트가 표지를 공개하거나, 분류자가 문장을 쓰는 함수를
+  호출해 표지를 계산한다. 상수를 공유하게 되면 남는 테스트는 없다 — 어긋남이 탐지
+  대상이 아니라 불가능해지기 때문이다.*
 
 ### Honesty rules / 정직성 규칙
 

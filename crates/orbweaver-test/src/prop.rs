@@ -608,34 +608,41 @@ fn excerpt(text: &str) -> String {
 
 /// Why a type is not taken across AnyJSON, or `None` when it is.
 ///
-/// The list is the mapping's own: `from_json_at` answers "cannot cross yet"
-/// for exactly `void`, `null`, `fixed` and `Principal`, and `to_json_at` has
-/// no arm for any of them. Kept in one predicate so a test can pin the set of
-/// types it names over the corpus, and so growing the mapping is one edit
-/// here that makes the leg start running.
+/// The list is the mapping's own, and the four constructs the wire cannot
+/// carry take their head from [`orbweaver_dynamic::deferred_wire_head`] and
+/// [`orbweaver_dynamic::unmarshallable_wire_head`] rather than from a literal
+/// here — the tail is this layer's, because "the property did not measure it"
+/// is not what `from_json` tells a peer. What is left to `from_json_at`'s own
+/// `"cannot cross yet"` is `void`, `null` and `Principal`.
+///
+/// It said otherwise until 2026-08-24, and the sentence had gone false: it
+/// quoted `from_json` as answering `"cannot cross yet"` for a `fixed`, which
+/// that layer stopped saying on 2026-08-21 when its deferred arm landed. This
+/// text reaches a contract-check reader, so the stale quote was advice about
+/// another layer's behaviour that the other layer had already contradicted.
+/// Nothing went red: `deferred_sentence_agreement` pins the sentences inside
+/// `orbweaver-dynamic`, and these eight literals were in a different crate.
 fn json_unmapped(tc: &TypeCode) -> Option<String> {
     match tc {
         TypeCode::Alias { aliased, .. } => json_unmapped(aliased),
-        TypeCode::Fixed { .. } => Some(
-            "`fixed` has no AnyJSON form yet (from_json: \"cannot cross yet\"; the wire does \
-             not carry it either, docs/PLAN.md §4.4)"
-                .into(),
-        ),
-        TypeCode::Value { .. } => Some(
-            "a `valuetype` has no AnyJSON form: its state is marshalled inline behind a value \
-             tag, which v1 does not do (docs/PLAN.md §4.4)"
-                .into(),
-        ),
-        TypeCode::AbstractInterface { .. } => Some(
-            "an abstract interface has no AnyJSON form: on the wire it is the union of a value \
-             and a reference, and v1 carries neither form of it (docs/PLAN.md §4.4)"
-                .into(),
-        ),
-        TypeCode::Native { .. } => Some(
-            "a `native` has no AnyJSON form and no CDR form either: it names a type only a \
-             language mapping knows, so there is nothing to cross — not a §4.4 deferral"
-                .into(),
-        ),
+        TypeCode::Fixed { digits, scale } => Some(format!(
+            "{}, so it has no AnyJSON form either",
+            orbweaver_dynamic::deferred_wire_head(&format!("fixed<{digits},{scale}>"))
+        )),
+        TypeCode::Value { name, .. } => Some(format!(
+            "{}, so it has no AnyJSON form either: its state is marshalled inline behind a \
+             value tag",
+            orbweaver_dynamic::deferred_wire_head(&format!("valuetype {name}"))
+        )),
+        TypeCode::AbstractInterface { name, .. } => Some(format!(
+            "{}, so it has no AnyJSON form either: on the wire it is the union of a value and \
+             a reference",
+            orbweaver_dynamic::deferred_wire_head(&format!("abstract interface {name}"))
+        )),
+        TypeCode::Native { name, .. } => Some(format!(
+            "{}, so it has no AnyJSON form either",
+            orbweaver_dynamic::unmarshallable_wire_head(&format!("native {name}"))
+        )),
         TypeCode::Principal => {
             Some("`Principal` has no AnyJSON form (withdrawn from CORBA)".into())
         }
@@ -1209,23 +1216,45 @@ fn value_from_label(disc: &TypeCode, label: &[u8]) -> Option<Value> {
 }
 
 /// Why a type has no generated value, phrased as a limit rather than a fault.
-fn why_unsupported(tc: &TypeCode) -> &'static str {
+///
+/// Returns a `String` rather than a `&'static str` since 2026-08-24: the four
+/// constructs the wire cannot carry name themselves in the sentence, and the
+/// head comes from `orbweaver-dynamic` so this layer cannot drift from the one
+/// a peer meets. The other arms are still fixed text and pay a small
+/// allocation for the uniformity, which is the right side of that trade in a
+/// function that runs once per skipped type in a report.
+fn why_unsupported(tc: &TypeCode) -> String {
     match tc {
         TypeCode::Alias { aliased, .. } => why_unsupported(aliased),
-        TypeCode::Fixed { .. } => "`fixed` parses but v1 does not marshal it (docs/PLAN.md §4.4)",
-        TypeCode::Value { .. } => {
-            "a `valuetype` parses but v1 does not marshal it (docs/PLAN.md §4.4)"
+        TypeCode::Fixed { digits, scale } => {
+            format!(
+                "{}, so the sampler has no value to generate",
+                orbweaver_dynamic::deferred_wire_head(&format!("fixed<{digits},{scale}>"))
+            )
         }
-        TypeCode::AbstractInterface { .. } => {
-            "an abstract interface parses but v1 does not marshal it (docs/PLAN.md §4.4)"
+        TypeCode::Value { name, .. } => {
+            format!(
+                "{}, so the sampler has no value to generate",
+                orbweaver_dynamic::deferred_wire_head(&format!("valuetype {name}"))
+            )
         }
-        TypeCode::Native { .. } => {
-            "a `native` parses and no wire version marshals it — it names a type only a \
-             language mapping knows, so it is not deferred, there is nothing to defer"
+        TypeCode::AbstractInterface { name, .. } => {
+            format!(
+                "{}, so the sampler has no value to generate",
+                orbweaver_dynamic::deferred_wire_head(&format!("abstract interface {name}"))
+            )
         }
-        TypeCode::TypeCode => "a bare `TypeCode` has no `Value` representation in the dynamic path",
-        TypeCode::Principal => "`Principal` is withdrawn from CORBA and is not marshalled",
-        TypeCode::Recursive(_) => "the type is recursive and has no finite expansion",
+        TypeCode::Native { name, .. } => {
+            format!(
+                "{}, so the sampler has no value to generate",
+                orbweaver_dynamic::unmarshallable_wire_head(&format!("native {name}"))
+            )
+        }
+        TypeCode::TypeCode => {
+            "a bare `TypeCode` has no `Value` representation in the dynamic path".into()
+        }
+        TypeCode::Principal => "`Principal` is withdrawn from CORBA and is not marshalled".into(),
+        TypeCode::Recursive(_) => "the type is recursive and has no finite expansion".into(),
         TypeCode::Struct { members, .. } | TypeCode::Except { members, .. } => members
             .iter()
             .find(|m| {
@@ -1233,10 +1262,10 @@ fn why_unsupported(tc: &TypeCode) -> &'static str {
                     .can_sample(&m.tc)
             })
             .map(|m| why_unsupported(&m.tc))
-            .unwrap_or("a member cannot be sampled"),
+            .unwrap_or_else(|| "a member cannot be sampled".into()),
         TypeCode::Array { element, .. } => why_unsupported(element),
-        TypeCode::Union { .. } => "no branch of the union can be sampled",
-        _ => "the sampler has no case for it",
+        TypeCode::Union { .. } => "no branch of the union can be sampled".into(),
+        _ => "the sampler has no case for it".into(),
     }
 }
 
@@ -1695,7 +1724,18 @@ mod tests {
         let rules: Vec<&str> = findings.iter().map(|f| f.rule.as_str()).collect();
         assert_eq!(rules, ["json/unmapped", "prop/unsupported-type"], "{findings:?}");
         assert!(findings.iter().all(|f| f.severity == Severity::Advice), "{findings:?}");
-        assert!(findings[0].message.contains("cannot cross yet"), "{}", findings[0].message);
+        // It asserted `contains("cannot cross yet")` until 2026-08-24 — pinning
+        // the quote that had gone false rather than the fact. `from_json`
+        // stopped answering that for a `fixed` on 2026-08-21; this assertion
+        // is why nothing went red. Now it reads the head from the crate that
+        // owns it, so the pin cannot outlive the wording it names.
+        let head = orbweaver_dynamic::deferred_wire_head("fixed<9,2>");
+        assert!(findings[0].message.contains(&head), "{}", findings[0].message);
+        assert!(
+            !findings[0].message.contains("cannot cross yet"),
+            "the §4.4 families do not go through from_json's generic arm: {}",
+            findings[0].message
+        );
         assert_eq!(measured, Measured::default());
 
         // `void` where a type belongs: the CDR leg runs (void marshals to
