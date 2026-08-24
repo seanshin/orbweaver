@@ -1415,27 +1415,30 @@ print("wrote it back")
     }
 }
 
-/// The two families this runtime refuses at the **type form** rather than at
-/// the value — `fixed` and `native` — each held to the Rust sentence for its
-/// own boundary, by equality, across the crate boundary.
+/// A peer-fed `fixed` or `native` form **reads as a description and refuses
+/// only as a value** — the same division the Rust side applies to the same
+/// document, with the refusal held to the Rust sentence by equality.
 ///
-/// The test above covers the two §4.4 constructs Python has a descriptor for. A
-/// `fixed` and a `native` have none, so `_desc_of` is where a peer-fed document
-/// carrying one stops, and each was writing its own sentence there:
+/// D008's rule is that the description is a value the wire carries; §4.4
+/// defers the instance. The Rust side has answered accordingly since
+/// 2026-08-20: `from_json` on `{"_t": {"kind":"fixed",…}, "_v": …}` parses the
+/// `_t` half and stops at `_v`, with a sentence naming the type. The generated
+/// Python runtime refused the same document **at `_desc_of`** — the `_t` half —
+/// until 2026-08-24, telling a peer their description was not understood,
+/// which is the opposite of the truth and of what the other end of the same
+/// bridge says. One cause for both families (and for `principal`, the third
+/// kind `tc_to_json` writes that this reader had no arm for): the form reader
+/// answered a *value* question it was never asked.
 ///
-/// ```text
-/// fixed   "fixed<9,2> is deferred at wire level (§4.4)"    (a fourth wording
-///                                                           of §4.4's, in the
-///                                                           layer a peer meets)
-/// native  "no AnyJSON value form for a 'native' type"      (names neither the
-///                                                           construct nor any
-///                                                           boundary)
-/// ```
+/// So this test walks the whole division: the form reads to a descriptor,
+/// `_form_of` writes back the very document that arrived, a TypeCode *value*
+/// naming the family crosses whole, and the value legs — direct and through an
+/// `any`, both directions — refuse with the Rust layers' exact sentence, the
+/// refusal's path naming `_v` and never `_t`.
 ///
-/// Both now come from a constant — `_DEFERRED` and `_UNMARSHALLABLE` — and the
-/// assertion is **equality** with what the Rust layers raise for the same
-/// TypeCode, because Python cannot import a Rust constant and a substring check
-/// would let the halves drift into two explanations of one boundary.
+/// The sentences are asserted by **equality** with what the Rust layers raise,
+/// because Python cannot import a Rust constant and a substring check would
+/// let the halves drift into two explanations of one boundary.
 ///
 /// # Why the two constants must not become one
 ///
@@ -1447,7 +1450,7 @@ print("wrote it back")
 /// and §4.4's deferral claim sends the reader to a plan entry that does not
 /// name the construct. Both were live in shipped code on 2026-08-21.
 #[test]
-fn a_peer_fed_form_with_no_descriptor_is_refused_in_the_rust_layers_words() {
+fn a_peer_fed_form_reads_as_a_description_and_refuses_as_a_value() {
     let cases: Vec<(&str, TypeCode)> = vec![
         ("fixed<9,2>", TypeCode::Fixed { digits: 9, scale: 2 }),
         (
@@ -1531,18 +1534,47 @@ forms = json.loads(r'''__FORMS__''')
 wants = json.loads(r'''__WANTS__''')
 assert [f["kind"] for f in forms] == ["fixed", "native"], forms
 
-# Both entry points a peer-fed document can arrive through: a bare type form,
-# and the `any` that carries one.
 seen = []
 for form, want in zip(forms, wants):
-    for call in (lambda: _rt._desc_of(form, ""),
-                 lambda: _rt.from_json("any", {"_t": form, "_v": {}})):
+    # The description reads (D008: the deferral is the value's, not the
+    # TypeCode's) — and writes back the very document that arrived.
+    desc = _rt._desc_of(form, "")
+    assert _rt._form_of(desc, "") == form, (form, _rt._form_of(desc, ""))
+
+    # A TypeCode *value* naming the family crosses whole, both directions.
+    tc = _rt.from_json("typecode", form)
+    assert tc.form == form and _rt.to_json("typecode", tc) == form, form
+    assert _rt._form_of(tc.descriptor(), "") == form, form
+
+    # The value legs refuse, in the Rust layers' words: directly, both
+    # directions, and through the `any` a peer actually sends one in — where
+    # the refusal's path must name `_v`, because `_t` was understood.
+    for call in (lambda: _rt.to_json(desc, {}),
+                 lambda: _rt.from_json(desc, {})):
         try:
             call()
-            raise SystemExit("a form with no descriptor was accepted: %r" % (form,))
+            raise SystemExit("a value with no wire form crossed: %r" % (form,))
         except _rt.MarshalError as e:
             assert e.message == want, (e.message, want)
+    try:
+        _rt.from_json("any", {"_t": form, "_v": {}})
+        raise SystemExit("a value with no wire form crossed an any: %r" % (form,))
+    except _rt.MarshalError as e:
+        assert e.message == want, (e.message, want)
+        assert e.path.endswith("_v"), e.path
     seen.append(want)
+
+# `principal`, the third kind this reader had no arm for: withdrawn from
+# CORBA, so no shared sentence exists to hold it to — the description crosses
+# and the value falls to the generic refusal rather than to a wrong sentence
+# about `_t`.
+p = _rt._desc_of({"kind": "principal"}, "")
+assert _rt._form_of(p, "") == {"kind": "principal"}, p
+try:
+    _rt.from_json(p, None)
+    raise SystemExit("a principal value crossed")
+except _rt.MarshalError as e:
+    assert "principal" in e.message, e.message
 
 # The §4.4 half says the section; the fourth family's says the opposite, and
 # neither may say "yet" about the other's boundary.

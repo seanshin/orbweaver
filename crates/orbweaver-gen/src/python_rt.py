@@ -719,6 +719,10 @@ def to_json(desc, value, path=""):
             if kind == "array" and len(items) != d[2]:
                 raise MarshalError(path, "this array has %d elements, %d given" % (d[2], len(items)))
             return [to_json(d[1], x, _index(path, i)) for i, x in enumerate(items)]
+        if kind == "fixed":
+            raise MarshalError(path, _DEFERRED % ("fixed<%d,%d>" % (d[1], d[2])))
+        if kind == "native":
+            raise MarshalError(path, _UNMARSHALLABLE % ("native " + (NAMES.get(d[1]) or d[1])))
         raise MarshalError(path, "no AnyJSON form for %r" % (kind,))
 
     if isinstance(d, type) and issubclass(d, Enum):
@@ -829,6 +833,14 @@ def from_json(desc, j, path=""):
             if kind == "array" and len(j) != d[2]:
                 raise MarshalError(path, "this array has %d elements, %d given" % (d[2], len(j)))
             return [from_json(d[1], x, _index(path, i)) for i, x in enumerate(j)]
+        if kind == "fixed":
+            # The direction that matters: the document was a peer's, and the
+            # reader has to be told the `_t` half was understood and `_v` is
+            # where v1 stops — `_DEFERRED` is that sentence, equal to the Rust
+            # layers' by `python_target`'s comparison.
+            raise MarshalError(path, _DEFERRED % ("fixed<%d,%d>" % (d[1], d[2])))
+        if kind == "native":
+            raise MarshalError(path, _UNMARSHALLABLE % ("native " + (NAMES.get(d[1]) or d[1])))
         raise MarshalError(path, "no AnyJSON form for %r" % (kind,))
 
     if isinstance(d, type) and issubclass(d, Enum):
@@ -948,23 +960,27 @@ def _desc_of(form, path):
             _synthesise(kind, id, form, path)
         return ("ref", id)
     if kind == "fixed":
-        # The third of §4.4's three, and the one that wrote its own sentence
-        # until 2026-08-21: "fixed<9,2> is deferred at wire level (§4.4)" is a
-        # fourth wording of a fact three layers already agreed on, and it is
-        # this layer — the one a peer-fed document actually meets.
-        raise MarshalError(path, _DEFERRED % ("fixed<%s,%s>"
-                                              % (form.get("digits"), form.get("scale"))))
+        # §4.4 defers the *value*, not the TypeCode (D008): the form reads to
+        # a descriptor like every other kind's, and the value legs refuse with
+        # `_DEFERRED`. This arm raised that refusal itself until 2026-08-24 —
+        # so a peer whose document *described* a fixed was told their `_t`
+        # half was not understood, which is the opposite of what the Rust
+        # side answers for the same document (it reads the description and
+        # stops at `_v`).
+        return ("fixed", _form_field(form, "digits", path, int),
+                _form_field(form, "scale", path, int))
     if kind == "native":
-        # The fourth family. `orbweaver_dynamic::tc_to_json` writes this form,
-        # so a peer-fed document can carry one and this arm is reachable.
-        #
-        # Refused with `_UNMARSHALLABLE` and not with `_DEFERRED`: a native has
-        # no wire form to wait for. Until this arm existed it fell to the line
-        # below and was answered "no AnyJSON value form for a 'native' type",
-        # which names neither the construct nor any boundary — the fifth
-        # wording of one fact, in the fifth layer.
-        raise MarshalError(path, _UNMARSHALLABLE
-                           % ("native " + (_form_field(form, "name", path, str))))
+        # The fourth family, same shape: the description reads — it is a value
+        # the wire carries — and the value legs refuse with `_UNMARSHALLABLE`,
+        # which names the construct and its boundary.
+        id = _form_field(form, "id", path, str)
+        NAMES.setdefault(id, _form_field(form, "name", path, str))
+        return ("native", id)
+    if kind == "principal":
+        # Withdrawn from CORBA, and still a kind `tc_to_json` writes: the
+        # description crosses, the value legs fall to their generic refusal —
+        # the same division of labour the Rust side applies to it.
+        return ("principal",)
     raise MarshalError(path, "no AnyJSON value form for a %r type" % (kind,))
 
 
@@ -1135,6 +1151,12 @@ def _form_of(desc, path, visiting=()):
         if kind == "abstract_interface":
             return {"kind": "abstract_interface", "id": desc[1],
                     "name": NAMES.get(desc[1], "")}
+        if kind == "fixed":
+            return {"kind": "fixed", "digits": desc[1], "scale": desc[2]}
+        if kind == "native":
+            return {"kind": "native", "id": desc[1], "name": NAMES.get(desc[1], "")}
+        if kind == "principal":
+            return {"kind": "principal"}
         if kind == "ref":
             id = desc[1]
             if id in visiting:
