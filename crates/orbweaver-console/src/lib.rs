@@ -82,6 +82,7 @@
 
 pub mod catalog;
 pub mod contract;
+pub mod declarations;
 pub mod html;
 pub mod load;
 pub mod traces;

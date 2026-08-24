@@ -61,6 +61,7 @@ use orbweaver_mcp::interceptor::{CallContext, Chain, STAGE_SCOPES, StageOutcome}
 use orbweaver_mcp::policy::{Approval, Denied, Exposure};
 use orbweaver_registry::{Origin, Registry};
 
+use crate::declarations::{self, DeclarationRow};
 use crate::html::{Markup, page, provenance_footer};
 
 /// What the contract asks of a caller before this operation is reachable, as
@@ -241,6 +242,17 @@ pub struct Catalog {
     pub would_counts: Vec<(String, usize)>,
     /// Every interface in the registry, sorted by repository id.
     pub interfaces: Vec<InterfaceRow>,
+    /// Everything else the loaded contracts declare — constants with their
+    /// folded values, structs, unions, enums, exceptions, typedefs,
+    /// valuetypes, natives — sorted by repository id.
+    ///
+    /// Here because the page is titled *what exists*, and until 2026-08-24 it
+    /// answered that with interfaces alone: 151 of the golden corpus's 208
+    /// registry entries reached no reader surface, and two of its files
+    /// rendered a page that said "the catalog is empty" over 23 declarations.
+    /// See [`crate::declarations`] for the measurement and for the one thing
+    /// this list deliberately does not spell.
+    pub declarations: Vec<DeclarationRow>,
     /// Ids the exposure allowlists that the catalog does not have — a typo, a
     /// stale id, or an id mis-parsed on the way in. An exposure line that
     /// allowlists nothing is a misconfiguration an operator wants to see before
@@ -436,6 +448,12 @@ pub fn build(
             .collect(),
         unknown_exposures: unknown_exposures.collect(),
         unmatched_peers: Vec::new(),
+        // The complement of the loop above, taken from the same `ids()`: what
+        // the interface pass skipped is exactly what this collects, so an
+        // entry cannot fall between them. No gate is asked about a constant —
+        // a constant is not callable and there is nothing to predict — so this
+        // is read straight off the registry rather than off a survey.
+        declarations: declarations::collect(registry),
         interfaces,
     }
 }
@@ -532,8 +550,27 @@ pub fn render_html(catalog: &Catalog) -> String {
         body.push(interface_card(iface));
     }
     if catalog.interfaces.is_empty() {
-        body.push(Markup::labelled("p", "absent", "the catalog is empty"));
+        // Not "the catalog is empty", which is what stood here and which
+        // `corpus/golden/33-const-values.idl` made false: that file declares
+        // 22 constants and a union and no interface at all, so the page said
+        // there was nothing here over 23 things there were.
+        body.push(Markup::labelled(
+            "p",
+            "absent",
+            "no interface is declared — nothing on these contracts is callable",
+        ));
     }
+
+    body.push(Markup::labelled("h2", "", "Declarations"));
+    body.push(Markup::labelled(
+        "p",
+        "note",
+        "What the contracts declare besides interfaces. No gate is asked about any of it: a \
+         constant is not callable, so there is no prediction to render and nothing here is an \
+         exposure decision. A constant's value is the registry's folded value, spelled the way \
+         a §5.3 release note spells it.",
+    ));
+    body.push(declarations::block(&catalog.declarations));
 
     if !catalog.unmatched_peers.is_empty() {
         body.push(Markup::labelled("h2", "", "Peers whose type is not in the catalog"));
@@ -555,6 +592,7 @@ pub fn render_html(catalog: &Catalog) -> String {
 fn header_card(catalog: &Catalog) -> Markup {
     let mut stats = Markup::empty();
     stats.push(stat("", catalog.interfaces.len(), "interfaces"));
+    stats.push(stat("", catalog.declarations.len(), "other declarations"));
     stats.push(stat("stop", catalog.exposed_count(), "exposed"));
     stats.push(stat("warn", catalog.ingested_count(), "ingested"));
     stats.push(stat("warn", catalog.touching_ingested_count(), "touching ingested"));
@@ -811,9 +849,10 @@ pub fn render_text(catalog: &Catalog) -> String {
         catalog.destructive_approved
     ));
     out.push_str(&format!(
-        "{} interfaces, {} exposed, {} ingested, {} touching ingested, {} operations need a \
-         human, {} gated by a scope\n",
+        "{} interfaces, {} other declarations, {} exposed, {} ingested, {} touching ingested, \
+         {} operations need a human, {} gated by a scope\n",
         catalog.interfaces.len(),
+        catalog.declarations.len(),
         catalog.exposed_count(),
         catalog.ingested_count(),
         catalog.touching_ingested_count(),
@@ -878,6 +917,7 @@ pub fn render_text(catalog: &Catalog) -> String {
             out.push('\n');
         }
     }
+    out.push_str(&declarations::render_text(&catalog.declarations));
     if !catalog.unmatched_peers.is_empty() {
         out.push_str("\nPEERS WHOSE TYPE IS NOT IN THE CATALOG\n");
         for peer in &catalog.unmatched_peers {
