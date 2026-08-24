@@ -46,6 +46,44 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **The generated Python runtime reads every description the Rust side
+  writes, and refuses only the value — closing the D008 asymmetry.** The
+  rule is D008's: a TypeCode is a value the wire carries; §4.4 defers the
+  *instance*. The Rust side has answered accordingly since 2026-08-20 — on
+  `{"_t": {"kind":"fixed",…}, "_v": …}` it reads `_t` and stops at `_v` with a
+  sentence naming the type. The Python runtime refused the same document **at
+  `_desc_of`**, the `_t` half, telling a peer their description was not
+  understood — the opposite of the truth and of what the other end of the same
+  bridge says. One cause for all affected kinds: the form reader answered a
+  value question it was never asked. Scoped to the rule, not the keyword —
+  every kind `tc_to_json` writes was enumerated against every kind `_desc_of`
+  reads, which is how `principal` joined the named two: **three kinds
+  (`fixed`, `native`, `principal`), both directions, plus `_form_of`'s
+  write-back**. Now the form reads to a descriptor, `_form_of` returns the
+  very document that arrived, a TypeCode *value* naming the family crosses
+  whole, and the value legs refuse — directly and through an `any` — with
+  `_DEFERRED`/`_UNMARSHALLABLE`, already held equal to the Rust sentences by
+  `python_target`'s cross-crate comparison; the refusal's path names `_v`,
+  never `_t` (`principal`, withdrawn from CORBA, has no shared sentence and
+  falls to the generic value refusal on both sides). The rewritten test walks
+  the whole division; its negative control — the old `_desc_of` arm put back —
+  goes red at `python_target.rs:913`.
+
+  **생성된 Python 런타임이 Rust 쪽이 쓰는 모든 기술을 읽고, 값만 거부한다 —
+  D008 비대칭 해소.** 규칙은 D008의 것: TypeCode는 와이어가 나르는 값이고
+  §4.4가 미루는 것은 *인스턴스*다. Rust 쪽은 2026-08-20부터 그렇게 답해왔다 —
+  같은 문서에서 `_t`를 읽고 타입을 이름한 문장으로 `_v`에서 멈춘다. Python
+  런타임은 같은 문서를 `_desc_of`, 즉 `_t` 절반에서 거부해 상대에게 *기술이
+  이해되지 않았다*고 말했다 — 진실의 반대이고, 같은 다리 반대편의 답과도
+  반대다. 원인 하나: form 리더가 묻지 않은 값 질문에 답했다. 키워드가 아니라
+  규칙으로 범위 설정 — `tc_to_json`이 쓰는 모든 kind를 `_desc_of`가 읽는 모든
+  kind와 대조해 `principal`이 합류했다: **세 kind, 양방향, `_form_of` 역방향
+  포함**. 이제 form은 기술자로 읽히고, `_form_of`는 도착한 그 문서를 돌려주며,
+  값 경로만 — 직접으로도 `any`를 통해서도 — Rust 문장과 등식으로 묶인
+  `_DEFERRED`/`_UNMARSHALLABLE`로 거부하고, 오류 경로는 `_t`가 아니라 `_v`를
+  이름한다. 재작성된 테스트의 부정 대조군(옛 `_desc_of` arm 복원)은
+  `python_target.rs:913`에서 빨갛다.
+
 - **A refusal's head is published, and every classifier that retyped a
   sentence now asks the function that writes it.** Two batches with one shape.
   First, scope: the four wire-refusal heads in `orbweaver-dynamic`
