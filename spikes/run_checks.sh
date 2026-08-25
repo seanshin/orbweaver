@@ -417,7 +417,7 @@ hr "generated code is linted, not merely compiled"
 # `Self::default()` and produced E0034: the generated crate did not compile at
 # all. Neither was visible to a build-only check, which is why this step exists.
 gl_out=$(cargo test -q -p orbweaver-gen --test emitted_current 2>&1)
-if printf '%s' "$gl_out" | grep -q "test result: ok"; then
+if grep -q "test result: ok" <<<"$gl_out"; then
   echo "  ok   the blessed emitted corpus still matches, lints included"
 else
   echo "  FAIL generated code no longer matches its blessed form"
@@ -473,8 +473,8 @@ hr "§5.3 — a breaking change inside an included header reaches the gate"
 ev_fail=0
 ev_out=$(cargo run -q --bin idl-diff -- \
          corpus/evolution/v1/ledger.idl corpus/evolution/v2/ledger.idl 2>&1); ev_rc=$?
-if [ "$ev_rc" -eq 1 ] && printf '%s' "$ev_out" | grep -q "amount_minor" \
-   && printf '%s' "$ev_out" | grep -q "restamp"; then
+if [ "$ev_rc" -eq 1 ] && grep -q "amount_minor" <<<"$ev_out" \
+   && grep -q "restamp" <<<"$ev_out"; then
   echo "  ok   both header-only breaking changes are named and the release is refused"
 else
   echo "  FAIL a breaking change in a shared header does not reach the differ (exit $ev_rc)"
@@ -494,7 +494,7 @@ ev_orphan=$(mktemp -d "${TMPDIR:-/tmp}/ow-orphan-XXXXXX")
 cp corpus/evolution/v1/ledger.idl "$ev_orphan/"
 ev2=$(cargo run -q --bin idl-diff -- \
       "$ev_orphan/ledger.idl" corpus/evolution/v2/ledger.idl 2>&1); ev2_rc=$?
-if [ "$ev2_rc" -eq 2 ] && printf '%s' "$ev2" | grep -q "common.idl"; then
+if [ "$ev2_rc" -eq 2 ] && grep -q "common.idl" <<<"$ev2"; then
   echo "  ok   an unresolvable include is reported as unmeasured, not as a verdict"
 else
   echo "  FAIL a missing header produced a release verdict (exit $ev2_rc)"; ev_fail=1
@@ -644,7 +644,7 @@ pull_fail=0
 for pull_profile in "" "--release"; do
   for _ in 1 2 3; do
     pull_out=$(cargo test -q -p orbweaver-giop $pull_profile --test event_pull_model 2>&1)
-    if [ $? -ne 0 ] || ! printf '%s' "$pull_out" | grep -q "test result: ok\."; then
+    if [ $? -ne 0 ] || ! grep -q "test result: ok\." <<<"$pull_out"; then
       pull_fail=$((pull_fail+1))
       printf '%s\n' "$pull_out" | tail -6 | sed 's/^/       /'
     fi
@@ -805,14 +805,14 @@ hr "ssliop feature — the D002 dependency promise"
 ssl_fail=0
 # A default build must carry no cryptography dependency at all.
 deft=$(cargo tree -p orbweaver-giop 2>/dev/null)
-if printf '%s' "$deft" | grep -qiE "rustls|aws-lc"; then
+if grep -qiE "rustls|aws-lc" <<<"$deft"; then
   echo "  FAIL the default build pulls a TLS/crypto crate; NOTICE and D002 are wrong"; ssl_fail=1
 else
   echo "  ok   default cargo tree carries no rustls/aws-lc, as NOTICE states"
 fi
 # And the feature must actually deliver what D002 approved.
 feat=$(cargo tree -p orbweaver-giop --features ssliop 2>/dev/null)
-if printf '%s' "$feat" | grep -q "rustls" && printf '%s' "$feat" | grep -q "aws-lc-rs"; then
+if grep -q "rustls" <<<"$feat" && grep -q "aws-lc-rs" <<<"$feat"; then
   echo "  ok   --features ssliop pulls rustls with the aws-lc-rs provider D002 names"
 else
   echo "  FAIL --features ssliop does not resolve to rustls + aws-lc-rs"; ssl_fail=1
@@ -897,7 +897,7 @@ dout=$(bash spikes/differential.sh 2>&1); drc=$?
 printf '%s\n' "$dout"
 if [ "$drc" -ne 0 ]; then fail_total=$((fail_total+1)); fi
 # An absent oracle is unmeasured, not passing, and the verdict has to say so.
-if printf '%s' "$dout" | grep -q "SKIPPED"; then skipped=$((skipped+1)); fi
+if grep -q "SKIPPED" <<<"$dout"; then skipped=$((skipped+1)); fi
 
 # ── Assumption C ─────────────────────────────────────────────────────────────
 hr "assumption C — IDL 4 @annotation acceptance in a deployed compiler"
@@ -923,7 +923,7 @@ if start_server; then
   # failure — that bug cost a debugging cycle here already.
   interop=$(cargo run -q --bin spike-interop -- spikes/echo.ior 2>&1)
   printf '%s\n' "$interop" > /tmp/orbweaver-a.log
-  if printf '%s' "$interop" | grep -q "assumption A: PASS"; then
+  if grep -q "assumption A: PASS" <<<"$interop"; then
     echo "  ok   both byte orders interoperated"
   else
     echo "  FAIL see /tmp/orbweaver-a.log"
@@ -1023,14 +1023,14 @@ if [ "$frag_up" -eq 0 ]; then
 else
   ffail=0
   out=$(python3 spikes/reverse_client.py spikes/server.ior 2>&1)
-  if printf '%s' "$out" | grep -q "failures: 0"; then
+  if grep -q "failures: 0" <<<"$out"; then
     echo "  ok   omniORB reassembled our fragments (250 KB at a 4 KB threshold)"
   else
     echo "  FAIL omniORB could not reassemble our fragments"; ffail=1
   fi
   if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
     out=$(cd "$ROOT/spikes/jacorb" && "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Client ../server.ior 2>&1)
-    if printf '%s' "$out" | grep -q "failures: 0"; then
+    if grep -q "failures: 0" <<<"$out"; then
       echo "  ok   JacORB reassembled our fragments — a second, independent reader"
     else
       echo "  FAIL JacORB could not reassemble our fragments"; ffail=1
@@ -1049,7 +1049,7 @@ fkill spike-server
 hr "object model — references, identity, LOCATION_FORWARD"
 if start_rust_server; then
   out=$(python3 spikes/object_client.py spikes/server.ior 2>&1)
-  if printf '%s' "$out" | grep -q "failures: 0"; then
+  if grep -q "failures: 0" <<<"$out"; then
     echo "  ok   _is_a answered from the inheritance graph, no network lookup"
     echo "  ok   an object reference survives as a value and is callable"
   else
@@ -1114,7 +1114,7 @@ permout=$(cargo test -q -p orbweaver-gen --test object_identity -- \
 case "$permout" in
   *"test result: ok. 2 passed"*)
     echo "  ok   status 4 at 1.2, 3 below, 3 from the temporary servant — raw off the wire, both byte orders"
-    if printf '%s' "$permout" | grep -q "UNMEASURED: omniORB"; then
+    if grep -q "UNMEASURED: omniORB" <<<"$permout"; then
       echo "  SKIPPED  omniORB half — fixture absent"; skipped=$((skipped+1))
     else
       echo "  ok   omniORB followed a LOCATION_FORWARD_PERM from a generated skeleton, five calls answered by the new object"
@@ -1221,7 +1221,7 @@ hr "type registry — TypeCode derived from IDL vs the peer's"
 # same description from the same IDL.
 if start_server_omni_echo 2>/dev/null || start_server; then
   rc=$(cargo run -q --bin registry-check -- spikes/echo.ior spikes/echo.idl spike::Ragged 2>/dev/null)
-  if printf '%s' "$rc" | grep -q "registry: PASS"; then
+  if grep -q "registry: PASS" <<<"$rc"; then
     echo "  ok   omniORB agrees with the TypeCode we derived for spike::Ragged"
   else
     echo "  FAIL omniORB disagrees with our derived TypeCode"
@@ -1244,7 +1244,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   done
   if [ "$jr" -eq 1 ]; then
     rc=$(cargo run -q --bin registry-check -- spikes/jacorb.ior spikes/echo.idl spike::Ragged 2>/dev/null)
-    if printf '%s' "$rc" | grep -q "registry: PASS"; then
+    if grep -q "registry: PASS" <<<"$rc"; then
       echo "  ok   JacORB agrees too — two independent derivations of one IDL type"
     else
       echo "  FAIL JacORB disagrees with our derived TypeCode"; fail_total=$((fail_total+1))
@@ -1302,12 +1302,12 @@ else
     echo "  FAIL could not bind a name into the naming service"; fail_total=$((fail_total+1))
   else
     nm=$(cargo run -q --bin spike-naming 2>&1)
-    if printf '%s' "$nm" | grep -q "naming: PASS"; then
+    if grep -q "naming: PASS" <<<"$nm"; then
       printf '%s\n' "$nm" | grep "^  ok" | sed 's/^/  /'
       # The default in corbaloc::host is GIOP 1.0, so this path only works
       # because of the version negotiation from batch 1. Assert it rather than
       # let a silent upgrade to 1.2 hide a regression.
-      if printf '%s' "$nm" | grep -q "GIOP 1.0"; then
+      if grep -q "GIOP 1.0" <<<"$nm"; then
         echo "  ok   naming service contacted at GIOP 1.0, as corbaloc defaults require"
       else
         echo "  FAIL expected GIOP 1.0 for a corbaloc URL with no version"; fail_total=$((fail_total+1))
@@ -1343,7 +1343,7 @@ else
   jfail=0
   if start_rust_server; then
     out=$(cd "$ROOT/spikes/jacorb" && "$JH/bin/java" -cp "$JCP" Client ../server.ior 2>&1)
-    if printf '%s' "$out" | grep -q "failures: 0"; then
+    if grep -q "failures: 0" <<<"$out"; then
       echo "  ok   JacORB client -> our server, 5/5"
     else
       echo "  FAIL JacORB client -> our server"; printf '%s' "$out" | grep FAIL | head -3 | sed 's/^/       /'
@@ -1379,7 +1379,7 @@ else
   done
   if [ "$jup" -eq 1 ]; then
     out=$(cargo run -q --bin spike-interop -- spikes/jacorb.ior 2>&1)
-    if printf '%s' "$out" | grep -q "assumption A: PASS"; then
+    if grep -q "assumption A: PASS" <<<"$out"; then
       echo "  ok   our client -> JacORB server, 20/20 both byte orders"
       cs=$(printf '%s' "$out" | grep -m1 "negotiated char codeset" | sed 's/.*: //')
       echo "  ok   codeset negotiated with a second peer: $cs"
@@ -1545,7 +1545,7 @@ fi
 # fell through a bare `continue`: golden 15's TreeSeq was `[]` on every valued
 # case and None on 22 of 32, while the summary line still said "32 cases".
 # It is a `prop/unmeasured` finding now (1b6b4c8). Captured then matched.
-if printf '%s\n' "$cc_out" | grep -q "prop/unmeasured"; then
+if grep -q "prop/unmeasured" <<<"$cc_out"; then
   echo "  FAIL a property case produced no value and therefore ran nothing"
   printf '%s\n' "$cc_out" | grep "prop/unmeasured" | head -3 | sed 's/^/       /'
   fail_total=$((fail_total+1))
@@ -1557,7 +1557,7 @@ fi
 # `//@ sidl_version: N` and an unknown one is a Warning at S3 and S7. Golden
 # must be v1 (marker or none); the positive probe runs the checker over a
 # scratch copy declaring 2 and requires the finding — unmeasured is not passing.
-if printf '%s\n' "$cc_out" | grep -q "unknown-sidl-version"; then
+if grep -q "unknown-sidl-version" <<<"$cc_out"; then
   echo "  FAIL a golden contract declares a SIDL version this checker does not read"
   fail_total=$((fail_total+1))
 else
@@ -1565,7 +1565,7 @@ else
   sed 's|^//@ sidl_version: 1|//@ sidl_version: 2|' corpus/golden/19-realistic-service.idl > "$sv_tmp/v2.idl"
   sv_out=$(cargo run -q -p orbweaver-test --bin contract-check -- "$sv_tmp/v2.idl" 2>&1)
   rm -rf "$sv_tmp"
-  if printf '%s\n' "$sv_out" | grep -q "unknown-sidl-version"; then
+  if grep -q "unknown-sidl-version" <<<"$sv_out"; then
     echo "  ok   every golden contract is SIDL v1 (marker or none; golden 19 declares it), and a v2 marker is refused to be understood"
   else
     echo "  FAIL the SIDL version check did not fire on a v2 marker (unmeasured is not passing)"
@@ -1613,7 +1613,7 @@ fi
 # Reported with its reach, because a fuzz that bounces off the header check
 # every time is green and worthless and the exit code cannot tell you which.
 wf_out=$(cargo run -q --release -p orbweaver-test --bin wire-fuzz -- --cases 20000 2>&1)
-if printf '%s' "$wf_out" | grep -q "wire-fuzz: PASS"; then
+if grep -q "wire-fuzz: PASS" <<<"$wf_out"; then
   echo "  ok   $(printf '%s' "$wf_out" | head -1 | sed 's/^wire-fuzz: //')"
   printf '%s' "$wf_out" | sed -n '2,3p' | sed 's/^  /  ok   /'
   # A target that reached nothing is green and worthless, and only a reader of
@@ -1622,7 +1622,7 @@ if printf '%s' "$wf_out" | grep -q "wire-fuzz: PASS"; then
   # warns — correctly — that a release build cannot observe arithmetic
   # overflow. The first version of this check read that note as a missing
   # target and turned a correct run red.
-  if printf '%s' "$wf_out" | grep -q "were reached; the target"; then
+  if grep -q "were reached; the target" <<<"$wf_out"; then
     printf '%s' "$wf_out" | grep "were reached; the target" | sed 's/^ */       /'
     echo "  FAIL a fuzz target reached nothing; its green result measures nothing"
     fail_total=$((fail_total+1))
@@ -1645,7 +1645,7 @@ dyn_fail=0
 if start_server; then
   dv=$(cargo run -q --bin spike-dynamic -- spikes/echo.ior spikes/echo.idl \
        IDL:spike/Echo:1.0 2>&1)
-  if printf '%s' "$dv" | grep -q "dynamic invocation: PASS"; then
+  if grep -q "dynamic invocation: PASS" <<<"$dv"; then
     echo "  ok   omniORB answered 8 dynamically built calls, both byte orders"
     echo "  ok   wrong arguments are refused locally, before anything is sent"
     echo "  ok   a refused call leaves the connection usable"
@@ -1671,7 +1671,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   if [ "$jd" -eq 1 ]; then
     dv=$(cargo run -q --bin spike-dynamic -- spikes/jacorb.ior spikes/echo.idl \
          IDL:spike/Echo:1.0 2>&1)
-    if printf '%s' "$dv" | grep -q "dynamic invocation: PASS"; then
+    if grep -q "dynamic invocation: PASS" <<<"$dv"; then
       echo "  ok   JacORB answered them too — a second, independent decoder"
     else
       echo "  FAIL a dynamically built call did not work against JacORB"
@@ -1699,7 +1699,7 @@ mcp_fail=0
 if start_server; then
   mv=$(cargo run -q --bin spike-mcp -- spikes/echo.ior spikes/echo.idl \
        IDL:spike/Echo:1.0 2>&1)
-  if printf '%s' "$mv" | grep -q "MCP bridge: PASS"; then
+  if grep -q "MCP bridge: PASS" <<<"$mv"; then
     echo "  ok   default-deny: an un-allowlisted catalog is invisible"
     echo "  ok   search -> describe -> invoke, entirely in JSON, nothing generated"
     echo "  ok   a returned object reference crosses as a handle and can be passed back"
@@ -1725,7 +1725,7 @@ stdio_fail=0
 if start_server; then
   cargo build -q --bin orbweaver-mcp-server --bin spike-dump 2>/dev/null
   mout=$(python3 spikes/mcp_session.py spikes/echo.ior spikes/echo.idl 2>&1)
-  if printf '%s' "$mout" | grep -q "mcp session: PASS"; then
+  if grep -q "mcp session: PASS" <<<"$mout"; then
     printf '%s\n' "$mout" | grep "^  ok" | head -11
   else
     echo "  FAIL the stdio transport did not behave"
@@ -1746,7 +1746,7 @@ hr "search baseline — frozen queries against the lexical index"
 sb=$(cargo run -q -p orbweaver-mcp --bin search-bench -- \
      corpus/queries/search-v1.tsv corpus/golden/*.idl spikes/echo.idl 2>&1)
 sb_rc=$?
-if [ "$sb_rc" -eq 0 ] && printf '%s' "$sb" | grep -q "search-bench: PASS"; then
+if [ "$sb_rc" -eq 0 ] && grep -q "search-bench: PASS" <<<"$sb"; then
   printf '%s' "$sb" | grep "search-bench: PASS" | sed 's/^/  ok   /'
 else
   echo "  FAIL the frozen search baseline did not hold"
@@ -1757,7 +1757,7 @@ fi
 # stays frozen above so the two numbers keep meaning different things.
 sb2=$(cargo run -q -p orbweaver-mcp --bin search-bench -- \
       corpus/queries/search-v2.tsv corpus/golden/*.idl spikes/echo.idl 2>&1)
-if [ $? -eq 0 ] && printf '%s' "$sb2" | grep -q "search-bench: PASS"; then
+if [ $? -eq 0 ] && grep -q "search-bench: PASS" <<<"$sb2"; then
   printf '%s' "$sb2" | grep "search-bench: PASS" | sed 's/^/  ok   v2 /'
 else
   echo "  FAIL the widened search set did not hold"
@@ -1802,7 +1802,7 @@ hr "wire hardening — LocateRequest send, both peers, all three versions"
 loc_fail=0
 if start_server; then
   lv=$(cargo run -q --bin spike-locate -- spikes/echo.ior 2>&1)
-  if printf '%s' "$lv" | grep -q "locate: PASS"; then
+  if grep -q "locate: PASS" <<<"$lv"; then
     echo "  ok   omniORB: OBJECT_HERE for the real key, UNKNOWN for a corrupted one, GIOP 1.0/1.1/1.2"
   else
     echo "  FAIL locate against omniORB"
@@ -1825,7 +1825,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   done
   if [ "$jl" -eq 1 ]; then
     lv=$(cargo run -q --bin spike-locate -- spikes/jacorb.ior 2>&1)
-    if printf '%s' "$lv" | grep -q "locate: PASS"; then
+    if grep -q "locate: PASS" <<<"$lv"; then
       echo "  ok   JacORB agrees on all six answers — a second, independent locate responder"
     else
       echo "  FAIL locate against JacORB"
@@ -1851,7 +1851,7 @@ hr "wire hardening — multi-profile failover, dead first profile"
 fo_fail=0
 if start_server; then
   fv=$(cargo run -q --bin spike-failover -- spikes/echo.ior 2>&1)
-  if printf '%s' "$fv" | grep -q "failover: PASS"; then
+  if grep -q "failover: PASS" <<<"$fv"; then
     echo "  ok   omniORB: a dead first profile does not cost the call; exhaustion counts endpoints"
   else
     echo "  FAIL failover against omniORB"
@@ -1874,7 +1874,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   done
   if [ "$jf" -eq 1 ]; then
     fv=$(cargo run -q --bin spike-failover -- spikes/jacorb.ior 2>&1)
-    if printf '%s' "$fv" | grep -q "failover: PASS"; then
+    if grep -q "failover: PASS" <<<"$fv"; then
       echo "  ok   JacORB: same behaviour from the second, independent peer"
     else
       echo "  FAIL failover against JacORB"
@@ -1900,7 +1900,7 @@ hr "wire hardening — CancelRequest against both peers"
 can_fail=0
 if start_server; then
   cv=$(cargo run -q --bin spike-cancel -- spikes/echo.ior 2>&1)
-  if printf '%s' "$cv" | grep -q "cancel: PASS"; then
+  if grep -q "cancel: PASS" <<<"$cv"; then
     echo "  ok   omniORB: cancel ignored at 1.2, refused cleanly at 1.0/1.1, never desynchronized"
   else
     echo "  FAIL cancel against omniORB"
@@ -1923,7 +1923,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   done
   if [ "$jc" -eq 1 ]; then
     cv=$(cargo run -q --bin spike-cancel -- spikes/jacorb.ior 2>&1)
-    if printf '%s' "$cv" | grep -q "cancel: PASS"; then
+    if grep -q "cancel: PASS" <<<"$cv"; then
       echo "  ok   JacORB: coherent too — the second peer's cancel policy measured"
     else
       echo "  FAIL cancel against JacORB"
@@ -1948,7 +1948,7 @@ hr "naming server — our client, then an independent ORB, against OUR server"
 ns_fail=0
 NS_IOR=/tmp/orbweaver-names.ior
 ns=$(cargo run -q --bin spike-names -- "$NS_IOR" 2>&1)
-if printf '%s' "$ns" | grep -q "naming-server: PASS"; then
+if grep -q "naming-server: PASS" <<<"$ns"; then
   echo "  ok   our client against our server: bind/resolve/unbind/AlreadyBound/NotFound/nested"
 else
   echo "  FAIL naming server self-consistency"
@@ -1982,13 +1982,13 @@ hr "expert service — registry, policy and residency through GIOP"
 # an offer store that lags the state machine returns an empty decision list
 # under memory pressure and nothing fails.
 ex=$(cargo run -q --bin spike-experts 2>&1)
-if printf '%s' "$ex" | grep -q "expert-service: PASS"; then
+if grep -q "expert-service: PASS" <<<"$ex"; then
   echo "  ok   register/heartbeat/oneway prefetch/guarded evict/policy, one control loop"
   # D010 A2 (2026-08-19): a router ordering by latency_p50 refuses to pick when
   # every candidate is unmeasured, and names the unmeasured one when some are.
   # Negative control: with "unknown sorts last" restored, the spike picked
   # expert-math with no measurement at all (agent measurement, in 06ea90e).
-  if printf '%s' "$ex" | grep -q "only unmeasured candidates: the router refuses"; then
+  if grep -q "only unmeasured candidates: the router refuses" <<<"$ex"; then
     echo "  ok   ORDER BY latency_p50 over unmeasured experts is refused, not ranked"
   else
     echo "  FAIL the router picked, or did not say it refused, over unmeasured experts"
@@ -2011,7 +2011,7 @@ hr "§5.3 — an approval is a record that replays"
 # "a decision with no approver is not on record". No corpus file may carry an
 # approvals store — a committed approval would be a decision nobody made.
 ap_out=$(cargo test -q -p orbweaver-registry --test approval_replay 2>&1)
-if printf '%s' "$ap_out" | grep -q "^test result: ok"; then
+if grep -q "^test result: ok" <<<"$ap_out"; then
   echo "  ok   an approval replays byte-identically, invalidates on an edited byte, and refuses a nameless row"
 else
   echo "  FAIL the approval store's replay property"; printf '%s\n' "$ap_out" | grep -A3 panicked | head -6 | sed 's/^/       /'
@@ -2031,7 +2031,7 @@ hr "§5.3 — moe v1.1 is additive, and the in-place edit is still refused"
 mv_fail=0
 mv_out=$(cargo run -q --bin idl-diff -- corpus/evolution/moe/v1.0/moe.idl \
          corpus/golden/22-moe-control-plane.idl 2>&1); mv_rc=$?
-if [ "$mv_rc" -eq 0 ] && printf '%s' "$mv_out" | grep -q "MeasuredCapability"; then
+if [ "$mv_rc" -eq 0 ] && grep -q "MeasuredCapability" <<<"$mv_out"; then
   echo "  ok   moe v1.0 -> golden 22 is additive (exit 0) and names MeasuredCapability"
 else
   echo "  FAIL golden 22 is no longer an additive revision of moe v1.0 (exit $mv_rc)"
@@ -2039,8 +2039,8 @@ else
 fi
 mv_ctl=$(cargo run -q --bin idl-diff -- corpus/evolution/moe/v1.0/moe.idl \
          corpus/evolution/moe/v1.1-in-place/moe.idl 2>&1); mv_ctl_rc=$?
-if [ "$mv_ctl_rc" -eq 1 ] && printf '%s' "$mv_ctl" | grep -q "latency_p50_ms" \
-   && printf '%s' "$mv_ctl" | grep -q "specialization"; then
+if [ "$mv_ctl_rc" -eq 1 ] && grep -q "latency_p50_ms" <<<"$mv_ctl" \
+   && grep -q "specialization" <<<"$mv_ctl"; then
   echo "  ok   the in-place edit is still refused with both members named (exit 1)"
 else
   echo "  FAIL the negative control passed the gate (exit $mv_ctl_rc)"; mv_fail=1
@@ -2050,15 +2050,15 @@ fi
 # the default retyped must name BOTH — the positional differ named one.
 ud_out=$(cargo run -q --bin idl-diff -- corpus/evolution/union-default/v1.0/payload.idl \
          corpus/evolution/union-default/v1.0-default-first/payload.idl 2>&1); ud_rc=$?
-if [ "$ud_rc" -eq 0 ] && printf '%s' "$ud_out" | grep -q "no change"; then
+if [ "$ud_rc" -eq 0 ] && grep -q "no change" <<<"$ud_out"; then
   echo "  ok   a union's default written first is the same release (exit 0)"
 else
   echo "  FAIL member order of a union read as a change (exit $ud_rc)"; mv_fail=1
 fi
 ud_ctl=$(cargo run -q --bin idl-diff -- corpus/evolution/union-default/v1.0/payload.idl \
          corpus/evolution/union-default/v1.1-retyped-default/payload.idl 2>&1); ud_ctl_rc=$?
-if [ "$ud_ctl_rc" -eq 1 ] && printf '%s' "$ud_ctl" | grep -q 'default member "text" changed type' \
-   && printf '%s' "$ud_ctl" | grep -q 'union case(s) added: \["extra"\]'; then
+if [ "$ud_ctl_rc" -eq 1 ] && grep -q 'default member "text" changed type' <<<"$ud_ctl" \
+   && grep -q 'union case(s) added: \["extra"\]' <<<"$ud_ctl"; then
   echo "  ok   the retyped default behind an inserted case is named, not only the case (exit 1)"
 else
   echo "  FAIL the retyped default is not named (exit $ud_ctl_rc)"; mv_fail=1
@@ -2189,7 +2189,7 @@ hr "service coverage — what the five servants actually serve"
 # it passed a deliberately broken servant. It now reads the claim out of the
 # rows already measured.
 cov=$(./spikes/service_sweep.sh --raw 2>&1)
-if printf '%s' "$cov" | grep -q "service-sweep: PASS"; then
+if grep -q "service-sweep: PASS" <<<"$cov"; then
   printf '%s' "$cov" | grep '^TOTAL' | sed 's/^/  ok   /'
   # docs/SERVICES-COVERAGE.md §8 is generated from these same rows, so the
   # document is checked against the wire rather than transcribed from it —
@@ -2303,7 +2303,7 @@ fi
 # manifest drives the gate, so a case is added by adding a row.
 hr "corpus/include — resolution, prefix scope across a file boundary, guards, cycles"
 inc=$(cargo test -q -p orbweaver-idl --test include_corpus 2>&1)
-if printf '%s' "$inc" | grep -q "^test result: ok"; then
+if grep -q "^test result: ok" <<<"$inc"; then
   echo "  ok   $(printf '%s' "$inc" | grep -oE '[0-9]+ passed' | head -1) over \
 $(awk 'NF && $1 !~ /^#/' corpus/include/cases.tsv | wc -l | tr -d ' ') manifest case(s)"
 else
@@ -2340,7 +2340,7 @@ hr "registered-contract diff — an undeclared breaking change is refused"
 # while a rename that keeps every scope is invisible to C. Neither subsumes
 # the other, which is why both landed.
 rd=$(cargo test -q -p orbweaver-forge --test registered_diff 2>&1)
-if printf '%s' "$rd" | grep -q "^test result: ok"; then
+if grep -q "^test result: ok" <<<"$rd"; then
   echo "  ok   $(printf '%s' "$rd" | grep -oE '[0-9]+ passed' | head -1) — refuses a breaking
        regeneration, silent on an additive one, and silent when nothing is registered"
 else
@@ -2376,7 +2376,7 @@ sd_out=$(cargo run -q -p orbweaver-mcp --bin orbweaver-mcp-server -- \
   --token-scope 'gate:operate' --dry-run 2>"$SD/err")
 sd_code=$?
 sd_err=$(cat "$SD/err" 2>/dev/null)
-if [ "$sd_code" -eq 3 ] && printf '%s' "$sd_err" | grep -q "open_barrier"; then
+if [ "$sd_code" -eq 3 ] && grep -q "open_barrier" <<<"$sd_err"; then
   echo "  ok   a scope no issued token can satisfy exits 3 and names the operation that goes dark"
 else
   echo "  FAIL a drifted scope was not reported as an outage (exit $sd_code)"
@@ -2408,10 +2408,10 @@ hr "NAT rewriting — the address a container publishes is not the one it bound"
 # outside cannot dial it. The spike constructs both real failures — refused and
 # timed out — because loopback alone cannot show this one.
 nat=$(./spikes/nat_rewrite.sh 2>&1)
-if printf '%s' "$nat" | grep -q "nat rewriting: PASS"; then
+if grep -q "nat rewriting: PASS" <<<"$nat"; then
   echo "  ok   unrewritten IOR fails to dial, rewritten one completes; key, version and"
   echo "       an undecodable profile all survive untouched"
-  if printf '%s' "$nat" | grep -q "unmeasured (skipped): [1-9]"; then
+  if grep -q "unmeasured (skipped): [1-9]" <<<"$nat"; then
     echo "  SKIPPED  the container probe has never run here — no docker, and it is"
     echo "           counted rather than read as evidence"
     skipped=$((skipped+1))
@@ -2424,7 +2424,7 @@ if printf '%s' "$nat" | grep -q "nat rewriting: PASS"; then
   # a real routing domain was unmeasured when it had been).
   if [ "${ORBWEAVER_NAT_VM:-0}" = "1" ] && command -v multipass >/dev/null 2>&1; then
     natvm=$(./spikes/nat/vm/run.sh 2>&1)
-    if printf '%s' "$natvm" | grep -q "PASS"; then
+    if grep -q "PASS" <<<"$natvm"; then
       echo "  ok   a real second host: the naive IOR is refused, the rewritten one answers (multipass VM)"
     else
       echo "  FAIL the second-host probe did not hold"; printf '%s' "$natvm" | tail -3 | sed 's/^/       /'
@@ -2561,7 +2561,7 @@ hr "multiplexing — several requests in flight, replies correlated by id"
 # reads one request per connection.
 mx_fail=0
 mx=$(cargo run -q --bin spike-mux 2>&1)
-if printf '%s' "$mx" | grep -q "mux: PASS"; then
+if grep -q "mux: PASS" <<<"$mx"; then
   echo "  ok   self-test: pipelining, tombstones, and a refusal below GIOP 1.2"
 else
   echo "  FAIL mux self-test"; printf '%s' "$mx" | grep -i fail | head -3 | sed 's/^/       /'
@@ -2569,7 +2569,7 @@ else
 fi
 if start_server; then
   mxp=$(cargo run -q --bin spike-mux -- spikes/echo.ior 12 1.2 2>&1)
-  if printf '%s' "$mxp" | grep -q "mux: PASS"; then
+  if grep -q "mux: PASS" <<<"$mxp"; then
     echo "  ok   omniORB at 1.2: $(printf '%s' "$mxp" | grep -o 'out-of-order [0-9]*' | head -1 | sed 's/^/replies /')"
     printf '%s' "$mxp" | grep -E 'FRAGMENTS|UNMEASURED' | head -2 | sed 's/^/       /'
   else
@@ -2596,7 +2596,7 @@ for cd_run in $(seq 1 "$cd_runs"); do
   # and was a build-cache one. The lint gate is CI's job; this group's job is
   # the repeat count.
   cd_out=$(cargo test -q -p orbweaver-giop -p orbweaver-registry -p orbweaver-object 2>&1)
-  if printf '%s' "$cd_out" | grep -q "^test result: FAILED"; then
+  if grep -q "^test result: FAILED" <<<"$cd_out"; then
     echo "  FAIL run $cd_run of $cd_runs"
     printf '%s' "$cd_out" | grep -A3 "^failures:" | head -6 | sed 's/^/       /'
     cd_failures=$((cd_failures+1))
@@ -2618,7 +2618,7 @@ hr "concurrency — many clients at once, and a cap that says no out loud"
 # passes on a fast serial server and is therefore not a check.
 cc_fail=0
 cy=$(cargo run -q --bin spike-concurrent 2>&1)
-if printf '%s' "$cy" | grep -q "concurrency: PASS"; then
+if grep -q "concurrency: PASS" <<<"$cy"; then
   echo "  ok   $(printf '%s' "$cy" | grep 'measured overlap' | sed 's/^ *//')"
   echo "  ok   $(printf '%s' "$cy" | grep 'cap behaviour' | sed 's/^ *//') — over the cap gets §9.4.7's goodbye"
 else
@@ -2638,7 +2638,7 @@ hr "tenant service — LifeCycle and Property with the tenant in every key"
 # reference" and a servant that pretended otherwise would be lying about the
 # design rather than enforcing it.
 tn=$(cargo run -q --bin spike-tenants 2>&1)
-if printf '%s' "$tn" | grep -q "tenant-service: PASS"; then
+if grep -q "tenant-service: PASS" <<<"$tn"; then
   echo "  ok   two tenants, $(printf '%s' "$tn" | grep -c '  ok    ') checks: minting, refusals, retire, policy, per-tenant audit"
 else
   echo "  FAIL tenant service"
@@ -2656,7 +2656,7 @@ hr "interface repository — our registry read by omniORB's own IR client"
 ifr_fail=0
 IFR_IOR=/tmp/orbweaver-ifr.ior
 ifr=$(cargo run -q --bin spike-ifr -- "$IFR_IOR" 2>&1)
-if printf '%s' "$ifr" | grep -q "ifr-facade: PASS"; then
+if grep -q "ifr-facade: PASS" <<<"$ifr"; then
   echo "  ok   our client against our facade: lookup_id, describe_interface, is_a, refusals"
 else
   echo "  FAIL IFR facade self-consistency"
@@ -2705,7 +2705,7 @@ hr "remote IFR ingestion — a contract taken off the wire"
 # place immediately, since JacORB's base_interfaces are Java class names and
 # its version field is ":1.0", both of which our client refuses to guess from.
 ing=$(cargo run -q --bin spike-ingest 2>&1)
-if printf '%s' "$ing" | grep -q "ingest: PASS"; then
+if grep -q "ingest: PASS" <<<"$ing"; then
   echo "  ok   self-consistency: the walk, the refusals, and a call built from"
   echo "       ingested metadata with no .idl file opened"
 else
@@ -2724,7 +2724,7 @@ hr "event channel — our supplier and consumer, then omniORB's consumer"
 ev_fail=0
 EV_IOR=/tmp/orbweaver-events.ior
 ev=$(cargo run -q --bin spike-events -- "$EV_IOR" 2>&1)
-if printf '%s' "$ev" | grep -q "event-channel: PASS"; then
+if grep -q "event-channel: PASS" <<<"$ev"; then
   echo "  ok   our client against our channel: connect both sides, 20 in order, dead consumer disconnected"
   ev_drop=$(printf '%s' "$ev" | grep 'drop report' | sed 's/^ *//')
   echo "  ok   $ev_drop"
@@ -2790,7 +2790,7 @@ hr "identity propagation — what a real target says about security"
 id_fail=0
 if start_server; then
   csi=$(cargo run -q --bin spike-dump -- spikes/echo.ior 2>/dev/null | grep '^csiv2')
-  if printf '%s' "$csi" | grep -q "advertises no mechanism list"; then
+  if grep -q "advertises no mechanism list" <<<"$csi"; then
     echo "  ok   omniORB 4.3.4 advertises no CSIv2: the bridge is the only enforcement point"
   else
     echo "  note omniORB advertises: $csi"
@@ -2809,7 +2809,7 @@ if start_server; then
     *) echo "  FAIL the catalog page carries no peer record for spikes/echo.ior"; id_fail=1 ;;
   esac
   ssl=$(cargo run -q --bin spike-dump -- spikes/echo.ior 2>/dev/null | grep '^ssliop')
-  if printf '%s' "$ssl" | grep -q "no TAG_SSL_SEC_TRANS"; then
+  if grep -q "no TAG_SSL_SEC_TRANS" <<<"$ssl"; then
     echo "  ok   and no TAG_SSL_SEC_TRANS either — TLS work (D002) starts from a measured baseline"
   else
     echo "  note omniORB ssliop: $ssl"
@@ -2830,7 +2830,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   done
   if [ "$ji" -eq 1 ]; then
     csi=$(cargo run -q --bin spike-dump -- spikes/jacorb.ior 2>/dev/null | grep '^csiv2')
-    if printf '%s' "$csi" | grep -q "advertises no mechanism list"; then
+    if grep -q "advertises no mechanism list" <<<"$csi"; then
       echo "  ok   JacORB 3.9 advertises none either — two peers, same answer"
     else
       echo "  note JacORB advertises: $csi"
@@ -2843,7 +2843,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
       *) echo "  FAIL the catalog page carries no peer record for spikes/jacorb.ior"; id_fail=1 ;;
     esac
     nc=$(cargo test -q -p orbweaver-console --test peer_record 2>&1)
-    if printf '%s' "$nc" | grep -q '^test result: ok'; then
+    if grep -q '^test result: ok' <<<"$nc"; then
       echo "  ok   negative control: a fabricated mechanism list reads enforced-by=target, both byte orders"
     else
       echo "  FAIL negative control for the peer record"; id_fail=1
@@ -2864,7 +2864,7 @@ fi
 # (`ORBWEAVER_IDP_URL`). When both are present this line becomes the
 # measurement; until then the deliberately-empty verifier stays empty, and a
 # verifier wrong in the accepting direction would interoperate perfectly.
-if [ -n "${ORBWEAVER_IDP_URL:-}" ] && ! printf '%s' "$csi" | grep -q "advertises no mechanism list"; then
+if [ -n "${ORBWEAVER_IDP_URL:-}" ] && ! grep -q "advertises no mechanism list" <<<"$csi"; then
   echo "  FAIL an identity provider and a CSIv2 peer are configured and nothing here measures them yet (D010 B2)"
   fail_total=$((fail_total+1))
 else
@@ -2910,7 +2910,7 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
     if python3 -c 'import omniORB' >/dev/null 2>&1; then
       skel=$(cargo test -q -p orbweaver-gen --test skeleton_wire -- --nocapture \
              omniorb_python_drives_the_generated_skeleton 2>&1)
-      if printf '%s' "$skel" | grep -q "^OK$"; then
+      if grep -q "^OK$" <<<"$skel"; then
         echo "  ok   omniORB's python client drove a GENERATED skeleton: narrow, attributes,"
         echo "       a oneway then a twoway on one connection, both user exceptions by class"
       else
@@ -2929,8 +2929,8 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
     if python3 -c 'import omniORB' >/dev/null 2>&1; then
       flt=$(cargo test -q -p orbweaver-gen --test servant_faults -- --nocapture \
             omniorb_python 2>&1)
-      if printf '%s' "$flt" | grep -q "CORBA.NO_PERMISSION" \
-         && printf '%s' "$flt" | grep -q "COMPLETED_NO"; then
+      if grep -q "CORBA.NO_PERMISSION" <<<"$flt" \
+         && grep -q "COMPLETED_NO" <<<"$flt"; then
         echo "  ok   omniORB caught a servant's system exceptions by class, and read"
         echo "       did_not_run() as COMPLETED_NO — §4.11.4's ordinal, retry-safe"
       else
@@ -2947,7 +2947,7 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
     # bound the generator dropped was invisible to the oracle above — which is
     # how it survived until D006 measured it while arguing about something else.
     bo=$(cargo test -q -p orbweaver-gen --test bounds_oracle 2>&1)
-    if printf '%s' "$bo" | grep -q "^test result: ok"; then
+    if grep -q "^test result: ok" <<<"$bo"; then
       n_bo=$(printf '%s' "$bo" | grep -o '^test result: ok. [0-9]*' | grep -o '[0-9]*$')
       echo "  ok   static and dynamic refuse alike: $n_bo bound case(s), both byte orders,"
       echo "       encode and decode, stub and skeleton, argument and reply direction"
@@ -2961,7 +2961,7 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
     # an over-bound argument refused by the stub's probe before the guard hears
     # of it (pinned, not moved).
     gs=$(cargo test -q -p orbweaver-gen --test guarded_stub 2>&1)
-    if printf '%s' "$gs" | grep -q "^test result: ok"; then
+    if grep -q "^test result: ok" <<<"$gs"; then
       echo "  ok   a real generated stub through the guard: the content seat sees its payload, the ledger does not"
     else
       echo "  FAIL guarded_stub — the static path's content seat or ledger property"
@@ -2972,7 +2972,7 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
     # against the dynamic path's. No fixture — ours on one end, the reference
     # implementation on the other.
     ora=$(cargo test -q -p orbweaver-gen --test skeleton_oracle -- --nocapture 2>&1)
-    if printf '%s' "$ora" | grep -q "FAILED"; then
+    if grep -q "FAILED" <<<"$ora"; then
       echo "  FAIL a generated skeleton's replies are not the dynamic path's bytes"
       printf '%s\n' "$ora" | grep -A4 "disagree" | head -8 | sed 's/^/       /'
       gen_fail=1
@@ -2984,7 +2984,7 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
     fi
     if start_server; then
       so=$("$ROOT/target/debug/static-oracle" spikes/echo.ior spikes/echo.idl 2>&1)
-      if printf '%s' "$so" | grep -q "static generation: PASS"; then
+      if grep -q "static generation: PASS" <<<"$so"; then
         echo "  ok   static bytes equal dynamic bytes: Ragged, wstring, any, sequence, both orders"
         echo "  ok   the generated stub calls omniORB: 10/10 cases, both byte orders"
         echo "  ok   I1: the same stub through the guard — exposure, ai_authz scope and audit bind it"
@@ -3021,7 +3021,7 @@ if start_evolution_server; then
   out=$(cargo run -q --bin spike-evolution -- \
         spikes/evolution_v1.idl spikes/evolution_v2.idl spikes/evolution_v1b.idl \
         spikes/evolution.ior 2>&1)
-  if printf '%s' "$out" | grep -q "contract evolution: PASS"; then
+  if grep -q "contract evolution: PASS" <<<"$out"; then
     echo "  ok   the swapped struct members are flagged BREAKING before release"
     echo "  ok   omniORB answered the swapped call with the WRONG member, no exception"
     echo "  ok   an added operation on an un-updated server gives BAD_OPERATION"
@@ -3036,7 +3036,7 @@ fi
 # The other half of "server-first": the additive release must serve both.
 if start_evolution_server --updated; then
   out=$(cargo run -q --bin spike-evolution -- --updated spikes/evolution.ior 2>&1)
-  if printf '%s' "$out" | grep -q "contract evolution: PASS"; then
+  if grep -q "contract evolution: PASS" <<<"$out"; then
     echo "  ok   after the additive release, old and new clients are both served"
   else
     echo "  FAIL the additive release did not behave as 'compatible' predicts"

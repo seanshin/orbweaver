@@ -159,12 +159,24 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   one is exactly when SIGPIPE fires. **The licence boundary this file calls
   non-negotiable had a gate that could not go red.** A short producer fits the
   64 KB pipe buffer and never sees SIGPIPE, which is why hand-checking it
-  always looked fine. Capture to a variable, then match with a herestring
-  (`grep -q … <<<"$out"`), and **read the producer's own exit status first** —
-  a producer that could not run at all is an unmeasured check, which is a
-  failure, never a pass. *두 가지 방식으로 거짓말한다 — SIGPIPE와 `pipefail`.
-  이 하네스의 첫 세 게이트가 그렇게 침묵했고, 그중 하나가 타협 불가라고 적힌
-  라이선스 경계다.*
+  always looked fine. Capture to a variable, then match with a **herestring**
+  (`grep -q … <<<"$out"`) — never `printf … | grep -q`, which this file called
+  the sanctioned form and which **has the same defect**: capturing the output
+  first saves the *data*, and `grep -q` still exits early, still SIGPIPEs the
+  `printf`, and `pipefail` still turns that into "no match". Swept the same
+  day: **76 of them in this harness**, and the one that mattered was the
+  concurrent-dispatch group's own `printf '%s' "$cd_out" | grep -q "^test
+  result: FAILED"` over three crates' test output — non-deterministically, by
+  where in the output the failure fell. A group whose whole argument is *"five
+  runs, because one green run is not evidence"* could not see a failing run
+  when the failure came early. Also **read the producer's own exit status
+  first** — a producer that could not run at all is an unmeasured check, which
+  is a failure and never a pass. A `grep` without `-q` reads its whole input,
+  never SIGPIPEs, and is safe in a pipeline; only the early-exit forms (`-q`,
+  `-m1`, `head`) are the hazard. *두 가지 방식으로 거짓말한다 — SIGPIPE와
+  `pipefail`. 변수로 캡처해도 파이프면 똑같이 거짓말한다; herestring을 쓴다.
+  "다섯 번 도는 이유는 한 번의 초록이 증거가 아니기 때문"이라던 그룹이 바로 그
+  형태 때문에 실패한 실행을 못 보고 있었다.*
 - **Never edit a script while it is running.** `bash` reads a script
   incrementally, so an edit that shifts byte offsets can make a running shell
   resume at the wrong place. Done 2026-08-25 — three gate repairs written into
