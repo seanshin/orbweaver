@@ -248,6 +248,30 @@ pub struct Evidence {
     pub params: Vec<String>,
     /// Repository ids in the raises clause.
     pub raises: Vec<String>,
+    /// The precondition a person authored on this operation
+    /// ([`crate::annotate::AI_PRECOND`]), if the contract carries one.
+    ///
+    /// The one field here that is **not** derived from the signature, which is
+    /// why it is not folded into [`Evidence::to_line`]: that line is the
+    /// computed listing a proposal's own evidence text is checked against, and
+    /// an authored sentence is a different kind of fact from a rendered type.
+    /// The subject keeps the two apart all the way to the prompt.
+    pub precond: Option<String>,
+    /// The worked example a person authored on this operation
+    /// ([`crate::annotate::AI_EXAMPLE`]), if the contract carries one.
+    ///
+    /// Never inferred — D025 §7 — so this is either a person's sentence or
+    /// nothing at all.
+    pub example: Option<String>,
+}
+
+/// The authored value of `key` on an operation, trimmed, empty read as absent.
+///
+/// An annotation whose value is blank is a key somebody started writing and
+/// did not finish; rendering it would put an empty `[authored]` line in front
+/// of a signature and teach the producer that authored text can say nothing.
+fn authored(annotations: &BTreeMap<String, String>, key: &str) -> Option<String> {
+    annotations.get(key).map(|s| s.trim()).filter(|s| !s.is_empty()).map(ToOwned::to_owned)
 }
 
 impl Evidence {
@@ -269,6 +293,8 @@ impl Evidence {
                 .map(|p| format!("{} {} {}", direction(p.direction), render_type(&p.tc), p.name))
                 .collect(),
             raises: sig.raises.clone(),
+            precond: authored(&sig.annotations, crate::annotate::AI_PRECOND),
+            example: authored(&sig.annotations, crate::annotate::AI_EXAMPLE),
         }
     }
 
@@ -533,6 +559,11 @@ pub struct SubjectOp {
     pub evidence: String,
     /// Whether the name says nothing about effect; see [`Evidence::is_silent`].
     pub silent: bool,
+    /// The authored precondition, carried separately from `evidence` because
+    /// it is a person's sentence and not a derived one. See [`Evidence::precond`].
+    pub precond: Option<String>,
+    /// The authored worked example. See [`Evidence::example`].
+    pub example: Option<String>,
 }
 
 /// One ingested interface, rendered as the evidence a model may read.
@@ -563,11 +594,31 @@ impl Subject {
                     self.operations
                         .iter()
                         .map(|e| {
-                            Json::Object(BTreeMap::from([
+                            let mut o = BTreeMap::from([
                                 ("name".into(), Json::String(e.name.clone())),
                                 ("evidence".into(), Json::String(e.evidence.clone())),
                                 ("silent".into(), Json::Bool(e.silent)),
-                            ]))
+                            ]);
+                            // Absent rather than null: an operation with no
+                            // authored text writes the object it always wrote,
+                            // so every subject artifact recorded before
+                            // 2026-08-25 is still byte-identical to what this
+                            // produces today. A key that appears as `null`
+                            // everywhere would have re-graded every stored
+                            // batch as "changed" while nothing about it had.
+                            if let Some(p) = &e.precond {
+                                o.insert(
+                                    crate::annotate::AI_PRECOND.into(),
+                                    Json::String(p.clone()),
+                                );
+                            }
+                            if let Some(x) = &e.example {
+                                o.insert(
+                                    crate::annotate::AI_EXAMPLE.into(),
+                                    Json::String(x.clone()),
+                                );
+                            }
+                            Json::Object(o)
                         })
                         .collect(),
                 ),
@@ -576,14 +627,63 @@ impl Subject {
     }
 
     /// The subject as prompt text — the whole of what a producer is shown.
+    ///
+    /// # Where the two authored keys go, and why the order is the decision
+    ///
+    /// `ai_precond` is printed **above** the signature it belongs to;
+    /// `ai_example` **below** it. That is not symmetry for its own sake:
+    ///
+    /// - **A precondition read after the signature is advice; read before it,
+    ///   it is a constraint.** By the time a reader has taken in
+    ///   `settle(in string id) -> void`, it has already composed the call it is
+    ///   going to make, and a sentence arriving afterwards has to argue against
+    ///   a decision instead of shaping one. Above the line it is a guard the
+    ///   signature is read *through*.
+    /// - **An example is illegible before the shape it instantiates.** Put
+    ///   above, it is a literal with nothing to be a literal *of*; put below,
+    ///   every name in it has just been bound by the line before.
+    ///
+    /// It is also where SIDL itself puts them. `//@ ai_precond:` is written on
+    /// the line above the operation in the source, so a producer that is later
+    /// shown one of these contracts sees the same thing in the same place.
+    ///
+    /// # Why they are marked, and why the header changes when they appear
+    ///
+    /// Every other line here is derived from a signature by [`Evidence::of`],
+    /// and this module's whole discipline is that a claim never gets to look
+    /// like a fact. These two lines are the reverse case — the only text on the
+    /// page a *person* wrote — and they are marked `[authored]` so the producer
+    /// can tell without being told twice. D025 §7 forbids inferring into either
+    /// slot, which is what makes the marker safe to trust: nothing that reaches
+    /// it came from a model.
+    ///
+    /// And the header sentence is conditional for the same reason. *"No IDL
+    /// file, no comments and no source exist for it"* stops being true the
+    /// moment one operation carries a hand-written precondition, and a prompt
+    /// whose first paragraph is false about its own contents is exactly the
+    /// defect `render_type`'s `<unnamed type>` placeholder exists to prevent,
+    /// one paragraph higher up.
     pub fn to_prompt(&self) -> String {
+        let authored = self.operations.iter().any(|e| e.precond.is_some() || e.example.is_some());
+        let preamble = if authored {
+            "No IDL file and no source exist for it. Everything below is derived from the \
+             signatures, except the lines marked [authored] — those a person wrote about this \
+             contract, and they are facts rather than guesses."
+        } else {
+            "No IDL file, no comments and no source exist for it. Everything known is below."
+        };
         let mut out = format!(
-            "INGESTED INTERFACE {}\nDescribed to us by: {}\nNo IDL file, no comments and no source \
-             exist for it. Everything known is below.\n\nOPERATIONS\n",
+            "INGESTED INTERFACE {}\nDescribed to us by: {}\n{preamble}\n\nOPERATIONS\n",
             self.id, self.source
         );
         for e in &self.operations {
+            if let Some(p) = &e.precond {
+                out.push_str(&format!("  [authored] requires: {p}\n"));
+            }
             out.push_str(&format!("  {}\n", e.evidence));
+            if let Some(x) = &e.example {
+                out.push_str(&format!("      [authored] for example: {x}\n"));
+            }
         }
         out
     }
@@ -607,10 +707,19 @@ impl Subject {
             .map(|o| {
                 let name =
                     o.get("name").and_then(Json::as_str).ok_or("an operation has no name")?;
+                let text = |key: &str| {
+                    o.get(key)
+                        .and_then(Json::as_str)
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(ToOwned::to_owned)
+                };
                 Ok(SubjectOp {
                     name: name.to_owned(),
                     evidence: o.get("evidence").and_then(Json::as_str).unwrap_or("").to_owned(),
                     silent: matches!(o.get("silent"), Some(Json::Bool(true))),
+                    precond: text(crate::annotate::AI_PRECOND),
+                    example: text(crate::annotate::AI_EXAMPLE),
                 })
             })
             .collect::<Result<Vec<SubjectOp>, String>>()?;
@@ -653,7 +762,13 @@ pub fn subjects(registry: &Registry) -> Vec<Subject> {
                 .into_iter()
                 .map(|(name, sig)| {
                     let e = Evidence::of(&name, &sig);
-                    SubjectOp { name, evidence: e.to_line(), silent: e.is_silent() }
+                    SubjectOp {
+                        name,
+                        evidence: e.to_line(),
+                        silent: e.is_silent(),
+                        precond: e.precond,
+                        example: e.example,
+                    }
                 })
                 .collect(),
         });
@@ -1081,6 +1196,12 @@ pub fn gate(subject: &str, output: &str) -> Report {
 }
 
 /// Every character a proposal is allowed to quote.
+///
+/// The authored precondition and example are in here because they are on the
+/// page: `si/evidence-not-in-subject` asks whether a quoted term was *shown to
+/// the producer*, and a rule that answered "no" about a sentence the prompt had
+/// just printed would refuse the best-evidenced proposal in the batch — the one
+/// resting on the only text here a person wrote.
 fn subject_haystack(subject: &Subject) -> String {
     let mut s = format!("{} {} ", subject.id, subject.source);
     for e in &subject.operations {
@@ -1088,6 +1209,10 @@ fn subject_haystack(subject: &Subject) -> String {
         s.push(' ');
         s.push_str(&e.evidence);
         s.push(' ');
+        for authored in [&e.precond, &e.example].into_iter().flatten() {
+            s.push_str(authored);
+            s.push(' ');
+        }
     }
     s.to_ascii_lowercase()
 }
@@ -2314,5 +2439,138 @@ mod tests {
     fn a_fenced_proposal_is_still_read() {
         let fenced = format!("```json\n{}\n```", proposal_json("unknown"));
         assert!(Proposal::parse(&fenced).is_ok());
+    }
+
+    // ── the two keys that were vocabulary and nothing else ───────────────────
+
+    /// A registry whose `get_track` carries a hand-written precondition and a
+    /// hand-written example, and whose other two operations carry neither.
+    fn registry_with_authored_keys() -> Registry {
+        let mut iface = InterfaceEntry::default();
+        iface.operations.insert("delete_track".into(), sig(false, TypeCode::Void, vec![]));
+        let mut got = sig(false, TypeCode::String(0), vec![]);
+        got.annotations.insert(
+            crate::annotate::AI_PRECOND.to_owned(),
+            "the track id must already be known to this manager".to_owned(),
+        );
+        got.annotations.insert(
+            crate::annotate::AI_EXAMPLE.to_owned(),
+            "get_track(41) answers \"MV Aurora\"".to_owned(),
+        );
+        iface.operations.insert("get_track".into(), got);
+        iface.operations.insert("process".into(), sig(false, TypeCode::Long, vec![]));
+        let mut r = Registry::new();
+        r.define_ingested(
+            "IDL:tms/TrackManager:1.0".into(),
+            Entry::Interface(iface),
+            "ifr://legacy",
+        )
+        .expect("registers");
+        r
+    }
+
+    /// D025 §2: both keys were in the known-key list and **no consumer read
+    /// either**, so writing one changed nothing anywhere. This is the consumer.
+    ///
+    /// It asserts placement and not merely presence, because placement is the
+    /// decision `to_prompt`'s comment argues for: the precondition above the
+    /// signature it constrains, the example below the signature it
+    /// instantiates. A test that only asked "does the text appear" would stay
+    /// green through the one change that would undo the point.
+    #[test]
+    fn an_authored_precondition_and_example_reach_the_prompt_and_in_that_order() {
+        let text = subjects(&registry_with_authored_keys())[0].to_prompt();
+        let line = |needle: &str| {
+            text.lines()
+                .position(|l| l.contains(needle))
+                .unwrap_or_else(|| panic!("no line contains {needle:?} in:\n{text}"))
+        };
+
+        let precond = line("must already be known to this manager");
+        let signature = line("get_track()");
+        let example = line("answers \"MV Aurora\"");
+        assert!(precond < signature, "a precondition read after the signature is advice:\n{text}");
+        assert!(
+            signature < example,
+            "an example above its signature has nothing to be an example of:\n{text}"
+        );
+
+        // Marked, because these are the only lines here a person wrote.
+        assert!(text.contains("[authored] requires: the track id"), "{text}");
+        assert!(text.contains("[authored] for example: get_track(41)"), "{text}");
+        // And the header no longer claims no comments exist for this interface,
+        // because two of them are printed directly below it.
+        assert!(!text.contains("no comments"), "the preamble contradicts the page:\n{text}");
+
+        // The round trip carries them, so a gate run over artifacts on disk
+        // decides with exactly the facts the producer was shown.
+        let s = &subjects(&registry_with_authored_keys())[0];
+        assert_eq!(&Subject::parse(&s.to_json().to_string()).expect("re-parses"), s);
+    }
+
+    /// The other half, and the one that keeps this from having rewritten every
+    /// prompt in the project by accident.
+    ///
+    /// Pinned as **byte equality against the literal text** rather than as a
+    /// set of `contains` assertions: a subject with no authored key is the
+    /// overwhelming majority of subjects — ingestion produces an empty
+    /// annotation map by construction — and "still contains what it used to"
+    /// would pass over an added blank line, a changed preamble or a new
+    /// trailing marker. This string is what `to_prompt` produced before the two
+    /// keys had a reader.
+    #[test]
+    fn an_operation_with_neither_key_renders_exactly_as_it_did_before() {
+        let text = subjects(&ingested_registry())[0].to_prompt();
+        assert_eq!(
+            text,
+            "INGESTED INTERFACE IDL:tms/TrackManager:1.0\n\
+             Described to us by: ifr://legacy\n\
+             No IDL file, no comments and no source exist for it. Everything known is below.\n\
+             \n\
+             OPERATIONS\n  \
+             delete_track() -> void [name contains \"delete\"]\n  \
+             get_track() -> string [name contains \"get\"]\n  \
+             process() -> long [the name says nothing about effect]\n"
+        );
+
+        // And the artifact too: an operation with neither key writes the same
+        // three JSON members it always wrote, so no recorded batch is re-graded
+        // as changed by a change that did not touch it.
+        let json = subjects(&ingested_registry())[0].to_json().to_string();
+        assert!(!json.contains(crate::annotate::AI_PRECOND), "{json}");
+        assert!(!json.contains(crate::annotate::AI_EXAMPLE), "{json}");
+    }
+
+    /// A key somebody started writing and did not finish is not authored text.
+    /// Without this, an empty value prints `[authored] requires:` above a
+    /// signature and teaches the producer that a marked fact can say nothing.
+    #[test]
+    fn a_blank_authored_value_is_read_as_absent() {
+        let mut iface = InterfaceEntry::default();
+        let mut op = sig(false, TypeCode::Void, vec![]);
+        op.annotations.insert(crate::annotate::AI_PRECOND.to_owned(), "   ".to_owned());
+        iface.operations.insert("delete_track".into(), op);
+        let mut r = Registry::new();
+        r.define_ingested(
+            "IDL:tms/TrackManager:1.0".into(),
+            Entry::Interface(iface),
+            "ifr://legacy",
+        )
+        .expect("registers");
+        let text = subjects(&r)[0].to_prompt();
+        assert!(!text.contains("[authored]"), "{text}");
+        assert!(text.contains("no comments"), "the preamble is true again:\n{text}");
+    }
+
+    /// The authored text is quotable evidence. `si/evidence-not-in-subject`
+    /// asks whether a term was on the page the producer read, and these two
+    /// lines are on it — a proposal resting on the only hand-written fact in
+    /// the subject must not be the one the gate refuses.
+    #[test]
+    fn a_proposal_may_quote_the_authored_text_it_was_shown() {
+        let subject = &subjects(&registry_with_authored_keys())[0];
+        let hay = subject_haystack(subject);
+        assert!(hay.contains("already be known to this manager"), "{hay}");
+        assert!(hay.contains("mv aurora"), "{hay}");
     }
 }

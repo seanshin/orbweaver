@@ -226,6 +226,26 @@ Also:
   well leaves a client that lost its connection with no correct move at all.
 ";
 
+/// The key a contract's author states a **precondition** under: what must be
+/// true before the call, in the author's own words.
+///
+/// Named as a constant because it now has a reader — [`crate::infer::Subject`]
+/// renders it into the prompt a producer is shown — and CLAUDE.md's rule about
+/// a sentence many layers say applies to a key name exactly as it applies to a
+/// refusal: the moment two layers spell it, one of them can misspell it in
+/// silence. Until 2026-08-25 the key had no reader at all and the literal in
+/// [`VOCABULARY`] was the whole of its existence.
+pub const AI_PRECOND: &str = "ai_precond";
+
+/// The key a contract's author states a **worked example** under.
+///
+/// Same reason as [`AI_PRECOND`] for being a constant, and one more of its
+/// own: D025 §7 forbids inferring into this slot, so every value that ever
+/// appears under it was typed by a person. A key that may only ever hold
+/// authored text is a key whose name must not drift from the checker that
+/// admits it.
+pub const AI_EXAMPLE: &str = "ai_example";
+
 /// Every `ai_*` key SIDL v1 defines (§2.2).
 ///
 /// Mirrored from `orbweaver-test`'s `contract::VOCABULARY`, which is the S7
@@ -240,8 +260,8 @@ pub const VOCABULARY: [&str; 8] = [
     "ai_effect",
     "ai_idempotent",
     "ai_pii",
-    "ai_example",
-    "ai_precond",
+    AI_EXAMPLE,
+    AI_PRECOND,
     "ai_authz",
 ];
 

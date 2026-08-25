@@ -35,7 +35,19 @@ module gc27 {
   };
 
   interface Ledger {
+    // The two preconditions below say only what the typedefs above already
+    // declare, and they are worth writing anyway for one measured reason: a
+    // bound survives the type and does not survive every *rendering* of it.
+    // `orbweaver-forge`'s `infer::render_type` prints `sequence<Tag>` for
+    // `TagSeq` and `string` for `Tag`, so a reader shown the signature alone —
+    // an agent composing a call against the ingested shape — is shown a
+    // contract with no bounds in it at all. The header above notes that a
+    // violating value has no bytes; these lines are where a caller finds that
+    // out before it writes one.
+    //@ ai_precond: key is at most 8 characters, entry.label at most 8, entry.payload at most 6 octets and entry.wide at most 4 characters — every one a declared bound, and a value over it cannot be marshalled at all
+    //@ ai_example: key "ledger-1" is exactly at the 8-character bound and is accepted; "ledger-01" is nine characters and has no encoding
     Record keep(in Tag key, in Record entry) raises (TooBig);
+    //@ ai_precond: batch itself is unbounded, but each element is a Blob and so is at most 6 octets
     TagSeq digest(in BlobSeq batch);
     attribute Tag title;
   };
