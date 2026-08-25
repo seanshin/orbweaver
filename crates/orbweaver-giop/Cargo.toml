@@ -84,3 +84,11 @@ path = "src/bin/spike_mux.rs"
 [[bin]]
 name = "spike-half-reply"
 path = "src/bin/spike_half_reply.rs"
+
+# Dials IIOP over TLS for `spikes/ssliop.sh` part B. Behind `ssliop` because
+# it is the only binary that needs the TLS stack; without the feature the
+# runner reports its fifteen cases UNMEASURED and exits 3, which is not a pass.
+[[bin]]
+name = "spike-ssliop"
+path = "src/bin/spike_ssliop.rs"
+required-features = ["ssliop"]
