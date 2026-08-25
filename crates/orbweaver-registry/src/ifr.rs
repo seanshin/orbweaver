@@ -223,9 +223,19 @@ const KEY_INFIX: &str = "/ifr/";
 
 /// `CORBA::DefinitionKind` ordinals, in the specification's declaration order.
 ///
-/// Only the values this facade can produce are named; the rest of the enum
-/// (components, homes, events) describes IDL constructs the registry does not
-/// hold.
+/// Only the values this facade produces are named. The rest of the enum is two
+/// different things, and this doc said only the first until 2026-08-25: the
+/// components, homes and events, which describe IDL constructs the registry
+/// genuinely does not hold — and `dk_Value` and `dk_Native`, which describe
+/// constructs it *does* hold and has held since 2026-08-20 (74b5662) and
+/// 2026-08-21 (22637a8). Those two are absent because `RepositoryServer`'s
+/// `def_kind` does not answer them, not because there is nothing to answer
+/// about; see its own note.
+///
+/// The ordinals here were confirmed by name against omniORB — it printed
+/// `dk_Interface` and `dk_Repository` as named enumerators for our replies
+/// (module docs, 2026-08-13). Any ordinal added to this enum owes the same
+/// measurement rather than a count off the specification's list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 #[allow(missing_docs)]
@@ -350,8 +360,15 @@ pub struct OperationDescription {
     pub result: TypeCode,
     /// [`OP_NORMAL`] or [`OP_ONEWAY`].
     pub mode: u32,
-    /// `ContextIdSeq`. Always empty: the IDL `context` clause is not parsed,
-    /// and inventing identifiers would be worse than reporting none.
+    /// `ContextIdSeq`. Always empty, and inventing identifiers would be worse
+    /// than reporting none.
+    ///
+    /// This said the `context` clause "is not parsed", which reads as a grammar
+    /// gap and is not one: `orbweaver_idl::parse` accepts `context (...)` and
+    /// *discards* it — the identifiers never reach the AST, so there is nothing
+    /// here to report. The consequence is the same and the sentence was not: a
+    /// reader checking it finds `eat_kw("context")` in the parser and concludes
+    /// this comment is wrong about the whole claim rather than about one word.
     pub contexts: Vec<String>,
     /// Parameters in declaration order.
     pub parameters: Vec<ParameterDescription>,
@@ -752,10 +769,35 @@ impl RepositoryServer {
 
     /// `IRObject::_get_def_kind` for a registry entry.
     ///
-    /// `valuetype` and `native` are the honest gap: the registry stores both
-    /// as an object-reference `TypeCode` because v1 marshals neither
-    /// (PLAN §4.4), so the facade cannot tell them apart and reports
-    /// `dk_none` rather than guessing one of them.
+    /// A `valuetype` and a `native` answer `dk_none`, and the reason changed
+    /// underneath this function without the sentence moving. It read: *"the
+    /// registry stores both as an object-reference `TypeCode` because v1
+    /// marshals neither (PLAN §4.4), so the facade cannot tell them apart"* —
+    /// true when it was written, false from 74b5662 (2026-08-20, a valuetype is
+    /// `TypeCode::Value`) and 22637a8 (2026-08-21, a native is
+    /// `TypeCode::Native`). The registry has told them apart for four days while
+    /// this said it could not, and nothing was red because the wire answer —
+    /// `dk_none` — is the same either way. **A catch-all arm is how a classifier
+    /// absorbs a distinction without mentioning it**: `_ =>` took the new
+    /// variants the moment they existed, so the two that can be an entry are
+    /// written out below and a third will have to be too.
+    ///
+    /// What is true now is smaller and worth stating plainly: this facade does
+    /// not *name* `dk_Value` or `dk_Native`, so it has no ordinal to answer
+    /// with. Naming them is a wire change and owes the measurement every ordinal
+    /// here already has (the module docs' omniORB session, which printed ours
+    /// back as named enumerators); reasoning one off the specification's
+    /// declaration order and shipping it is the move this project keeps
+    /// recording as the one that costs a release. Until then `dk_none` is
+    /// honest — the facade is saying it has no kind for this, which it does
+    /// not — and it is a gap, not a decision.
+    ///
+    /// An abstract interface is **not** in that gap and this note said it was
+    /// until the sweep looked: it is an `Entry::Interface` like any other and
+    /// answers `dk_Interface` from the arm above. `TypeCode::AbstractInterface`
+    /// is a shape a *member* has, never one an entry does. Whether
+    /// `dk_AbstractInterface` would be the better answer is a question about the
+    /// specification, not about this drift.
     fn def_kind(&self, id: &str) -> DefinitionKind {
         match self.registry.get(id) {
             Some(Entry::Interface(_)) => DefinitionKind::Interface,
@@ -766,6 +808,14 @@ impl RepositoryServer {
                 TypeCode::Enum { .. } => DefinitionKind::Enum,
                 TypeCode::Alias { .. } => DefinitionKind::Alias,
                 TypeCode::Except { .. } => DefinitionKind::Exception,
+                // Distinguishable since 2026-08-20/21, and unanswerable here
+                // for want of an ordinal this facade has measured. Written out
+                // rather than left to the catch-all so the gap is visible at
+                // the place it happens. An abstract interface is not in this
+                // list: it is an `Entry::Interface` like any other and answers
+                // `dk_Interface` above, `TypeCode::AbstractInterface` being a
+                // shape a *member* has and not one an entry does.
+                TypeCode::Value { .. } | TypeCode::Native { .. } => DefinitionKind::None,
                 _ => DefinitionKind::None,
             },
             None => DefinitionKind::None,
@@ -1403,6 +1453,49 @@ mod tests {
         );
     }
 
+    /// A `valuetype` and a `native` are two things the registry has told apart
+    /// since 74b5662 and 22637a8, and two things `def_kind` still answers
+    /// `dk_none` for — and its doc comment said the opposite for four days,
+    /// green, because the wire answer is the same either way.
+    ///
+    /// Both halves are asserted here, which is the point. The registry's half
+    /// so a regression to `TypeCode::ObjRef` is red in the facade as well as in
+    /// `valuetype_shape_from_a_peer.rs`; the facade's half so that naming an
+    /// ordinal for either — a wire change owing a peer measurement — cannot
+    /// land without this failing and the note above `def_kind` being read.
+    /// A catch-all arm absorbed three new `TypeCode` variants silently; this is
+    /// the sentence it absorbed them out of.
+    #[test]
+    fn a_valuetype_and_a_native_are_told_apart_and_still_answer_dk_none() {
+        let registry = registry_from_idl(
+            "module gk {
+               valuetype Money { public long units; };
+               native Handle;
+               abstract interface Describable { string describe(); };
+               struct Holder { long bits; };
+             };",
+        )
+        .expect("loads");
+
+        // The registry's half: three distinct answers where there was one.
+        assert!(matches!(
+            registry.get("IDL:gk/Money:1.0"),
+            Some(Entry::Type(TypeCode::Value { .. }))
+        ));
+        assert!(matches!(
+            registry.get("IDL:gk/Handle:1.0"),
+            Some(Entry::Type(TypeCode::Native { .. }))
+        ));
+
+        // The facade's half: no ordinal, so no kind — and an abstract
+        // interface is an interface here, not a third `Entry::Type`.
+        let server = RepositoryServer::new("127.0.0.1", 0, ROOT.to_vec(), registry);
+        assert_eq!(server.def_kind("IDL:gk/Money:1.0"), DefinitionKind::None, "no dk_Value here");
+        assert_eq!(server.def_kind("IDL:gk/Handle:1.0"), DefinitionKind::None, "no dk_Native here");
+        assert_eq!(server.def_kind("IDL:gk/Describable:1.0"), DefinitionKind::Interface);
+        assert_eq!(server.def_kind("IDL:gk/Holder:1.0"), DefinitionKind::Struct);
+    }
+
     // ── refusal shapes, over the wire ───────────────────────────────────────
 
     fn expect_system(err: Error, id: &str, ctx: &str) {
@@ -1575,7 +1668,14 @@ mod tests {
         let missing = decode_object_reference(&mut reply.body().unwrap()).unwrap();
         assert!(missing.is_nil(), "an unknown id is a nil reference, not an exception");
 
-        // One connection at a time: hang up before dialing the InterfaceDef.
+        // Hanging up before dialing the InterfaceDef is a habit, not a
+        // requirement: this said "one connection at a time", which was the
+        // server's limit until stream E lifted it (2814dce) — the module docs
+        // and `Served` both record that it is gone, and this line kept
+        // asserting it. `concurrent_clients_walk_the_repository_at_once` below
+        // dials several at once and is the proof. Left sequential because this
+        // test has nothing to learn from overlapping, which is the only reason
+        // there is.
         drop(repo);
         let mut def = Connection::connect(&found, T).unwrap();
 

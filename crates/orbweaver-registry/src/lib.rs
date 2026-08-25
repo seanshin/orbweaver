@@ -117,10 +117,20 @@ pub enum Entry {
 /// a reason, not as a plausible wrong number. It is `None` in exactly three
 /// cases: an operand the folder cannot evaluate (an unresolved name, a name
 /// that is neither a constant nor an enumerator, a form the folder does not
-/// implement), an operation that has no answer (division or modulo by zero,
-/// an overflowing negation), and a result outside the declared type's range
-/// (`const octet O = 300`), which is an IDL error the checker reports and this
-/// module refuses to launder into a truncated byte.
+/// implement), an operation that has no answer, and a result outside the
+/// declared type's range (`const octet O = 300`), which is an IDL error the
+/// checker reports and this module refuses to launder into a truncated byte.
+///
+/// The **count** is unchanged and the middle case's examples were stale. They
+/// read "division or modulo by zero, an overflowing negation" — the integer
+/// folder's three — while the decimal folder landed on 2026-08-21 with two more
+/// of exactly that kind: `1.0d / 3.0d`, which has no exact decimal and no IDL
+/// rule saying what scale to round it to, so `fixed_op` has no division arm at
+/// all; and a decimal product past `i128`, which is checked rather than wrapped.
+/// Both are held by `const_values.rs`'s
+/// `a_fixed_expression_that_cannot_be_exact_has_no_value`, which has been green
+/// over an example list that did not mention either — a test can pin the
+/// behaviour and still not pin the sentence describing it.
 ///
 /// A value that folded is exactly what the declared type says: the coercion
 /// runs before storage, so a consumer never has to ask whether an `Int` under a
@@ -1589,16 +1599,40 @@ impl Builder<'_> {
             }
             // A declaration writes `fixed<d,s>`; a constant writes bare `fixed`
             // and CORBA 3.4 §7.4.1.4.2 takes its digits and scale from the
-            // *value*. We cannot compute those: the lexer folds `9.9d` to
-            // `Tok::Float(9.9)` and the decimal text is gone by the time a
-            // `ConstExpr` exists, so any pair here would be a guess about a
-            // binary approximation. `0, 0` is this function's existing marker
-            // for a bound it could not evaluate (the `unwrap_or(0)` beside it),
-            // and it is the honest answer for the same reason: nothing is
-            // claimed. Nothing downstream reads it — §4.4 defers `fixed`, so no
-            // fixed TypeCode is marshalled, `coerce` has no arm for one so the
-            // entry stores no value, and both emitters skip a valueless
-            // constant. Recorded rather than invented.
+            // *value*. `0, 0` is this function's existing marker for a bound it
+            // could not evaluate (the `unwrap_or(0)` beside it), and it is what
+            // a bare `fixed` gets: this function is handed a `TypeSpec` and the
+            // value is folded elsewhere, by `const_value`, so the pair is not
+            // computable *here* — recorded rather than invented.
+            //
+            // Every other reason this comment gave was true when it was written
+            // and false by 2026-08-25, which is why it is worth writing down
+            // what it said. It said the decimal was unrecoverable — "the lexer
+            // folds `9.9d` to `Tok::Float(9.9)`" — and 9a27659 gave the lexer a
+            // `Tok::Fixed(FixedLit)` and the AST a `ConstExpr::Fixed`, so the
+            // digits survive intact. It said `coerce` had no arm for a fixed so
+            // the entry stored no value; `coerce` has had one since the same
+            // commit and the entry stores the exact decimal. It said both
+            // emitters skip a valueless constant; both now skip it *with the
+            // value in the refusal* — `orbweaver-gen` quotes `as_decimal()` and
+            // says the value is exact in the registry. And it said no fixed
+            // TypeCode is marshalled, which confuses the two claims the
+            // `valuetype` arm above is careful to separate: §4.4 defers the
+            // *value's* wire form, not the type's description, and
+            // `orbweaver_giop::typecode` has always encoded and decoded a
+            // `tk_fixed`'s digits and scale.
+            //
+            // So the pair is no longer unread by construction. Three layers
+            // render it — `orbweaver_dynamic::type_name` as `fixed<d,s>`,
+            // `anyjson` as two numbers, `orbweaver_gen::deferred_fixed` into a
+            // refusal a person reads. Whether a *constant's* `0, 0` reaches any
+            // of them is not something this crate can assert from here, and it
+            // is not asserted: the const arms of both emitters take the value
+            // and ignore this TypeCode. Folding the pair out of the value is a
+            // change with a peer to measure against, not a comment.
+            //
+            // Nothing was red for any of it. A comment is a sentence about what
+            // another function does, and no compiler reads one.
             TypeSpec::Fixed { bounds } => TypeCode::Fixed {
                 digits: bounds.as_ref().and_then(|(d, _)| const_u32(d)).unwrap_or(0) as u16,
                 scale: bounds.as_ref().and_then(|(_, s)| const_u32(s)).unwrap_or(0) as i16,
@@ -1689,9 +1723,15 @@ fn int_op(op: &str, a: i128, b: i128) -> Option<i128> {
     }
 }
 
-/// Floating arithmetic. The bitwise operators are integer-only in IDL, so they
-/// have no float arm at all rather than a coerced one.
-/// `+`, `-` and `*` on two decimals, **exactly**, or `None`.
+/// Decimal arithmetic: `+`, `-` and `*` on two decimals, **exactly**, or `None`.
+///
+/// This doc comment opened *"Floating arithmetic. The bitwise operators are
+/// integer-only in IDL"* until 2026-08-25, which is [`float_op`]'s sentence and
+/// not this function's — 9a27659 inserted `fixed_op` directly above `float_op`
+/// and the head stayed where it was, so the decimal folder was documented as
+/// the binary one and `float_op` was left with no documentation at all. A
+/// comment that describes the function *below* it compiles exactly as well as
+/// one that describes the function it is attached to.
 ///
 /// Addition and subtraction line the two scales up first; multiplication adds
 /// them. Every step is checked, so an expression whose result needs more than
@@ -1720,6 +1760,10 @@ fn fixed_op(op: &str, a: i128, sa: u16, b: i128, sb: u16) -> Option<ConstValue> 
     Some(ConstValue::Fixed { unscaled, scale })
 }
 
+/// Floating arithmetic. The bitwise operators are integer-only in IDL, so they
+/// have no float arm at all rather than a coerced one — and unlike [`fixed_op`]
+/// this one *does* divide, because a binary float has an answer for every pair
+/// and the question of what to round to does not arise.
 fn float_op(op: &str, a: f64, b: f64) -> Option<f64> {
     let v = match op {
         "+" => a + b,
@@ -2243,6 +2287,37 @@ mod tests {
         // The rest of the operator table the parser can produce.
         assert_eq!(r.const_value("IDL:m/SHIFTED:1.0"), Some(&ConstValue::Int(19)), "1 << 4 | 3");
         assert_eq!(r.const_value("IDL:m/INVERTED:1.0"), Some(&ConstValue::Int(-1)));
+    }
+
+    /// The two halves of a bare `fixed` constant, asserted together, because
+    /// the comment on `type_of`'s `TypeSpec::Fixed` arm asserted both in prose
+    /// and had gone false on one of them for four days.
+    ///
+    /// The *value* is the exact decimal the source wrote — through the lexer,
+    /// the AST and `coerce`, none of which had a decimal in them before
+    /// 9a27659. The *TypeCode* is still the `0, 0` marker, because
+    /// `fixed_pt_const_type` is the bare keyword and digits and scale come from
+    /// the value, which `type_of` is not handed.
+    ///
+    /// One test rather than two, on purpose: closing the second half — folding
+    /// the pair out of the folded value — is a change with a peer to measure
+    /// against, and it cannot land without this going red and the note beside
+    /// the arm being read. That is the whole repair for a comment nothing
+    /// compiles.
+    #[test]
+    fn a_bare_fixed_constant_has_an_exact_value_and_an_unevaluated_typecode() {
+        let r = load("module gf { const fixed TAX = 9.9d; };");
+        assert_eq!(
+            r.const_value("IDL:gf/TAX:1.0"),
+            Some(&ConstValue::Fixed { unscaled: 99, scale: 1 }),
+            "the decimal survives the lexer, the AST and `coerce`"
+        );
+        let Some(Entry::Const { tc, .. }) = r.get("IDL:gf/TAX:1.0") else { panic!("no constant") };
+        assert_eq!(
+            *tc,
+            TypeCode::Fixed { digits: 0, scale: 0 },
+            "a bare `fixed` has no bounds to read and `type_of` has no value to derive them from"
+        );
     }
 
     /// What the registry does with an expression it cannot evaluate: it stores
