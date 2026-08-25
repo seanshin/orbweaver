@@ -46,6 +46,81 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **Four gates were reporting green over what they had never read.** One
+  class, found four ways in one day, each by running a gate rather than
+  reading it.
+  - **The bilingual decision gate had never compared eleven of thirteen
+    Korean halves** — `승인됨` is not a key (`승인` is) and D001's marker leads
+    with a date, so `bilingual_halves()` captured a token it could not map and
+    dropped it silently. **D003 was among the eleven**: the file whose split
+    halves are the reason the check exists. It printed `13 decisions, 0
+    drifted status claim(s)` over them. Five more parsers in `spikes/` dropped
+    input the same way — `coverage_tables.py` compared a document it had
+    regenerated from the same short read (a whole service could vanish and the
+    line still said *says what the wire says*), `records_keep_up.py` discarded
+    git's exit code so a failed `git log` printed `0 commit(s) behind`, and
+    `service_sweep.py` dropped declaration lines it could not match, so an
+    operation was neither probed nor counted as unmeasured. Repaired in
+    CLAUDE.md's order: count what you could not classify, make it fatal only
+    where the script is already a gate, widen a parser only against real input.
+  - **The harness's own first three gates could not go red** — a pipeline into
+    `grep -q` under `set -o pipefail`. `cargo test --workspace | grep -q
+    "^error"` printed `ok` over a red workspace; the **licence boundary this
+    project calls non-negotiable** could not report a forbidden dependency,
+    because finding one is exactly when `grep -q` SIGPIPEs the producer.
+  - **The same defect in the form this file had called sanctioned**, 76 times.
+    Capturing to a variable saves the data and not the branch: the
+    concurrent-dispatch group's own `printf '%s' "$cd_out" | grep -q "^test
+    result: FAILED"` inverted **non-deterministically**, by where in three
+    crates' output the failure fell — a group whose whole argument is *"five
+    runs, because one green run is not evidence"* could not see a failing run
+    when the failure came early. All 76 are herestrings now.
+  - **`cargo fmt --check` lived only in CI**, so "landed through the harness"
+    never included formatting — measured when a push whose local harness said
+    *all measured checks green* went red on CI, in a wave where every agent
+    had been required to run it and the coordinator who wrote the requirement
+    had not.
+
+  **게이트 넷이 한 번도 읽지 않은 것 위에서 초록을 보고하고 있었다.** 한
+  계급, 하루에 네 가지 방식으로 발견, 전부 게이트를 읽지 않고 실행해서.
+  이중언어 결정 게이트는 열셋 중 **열한 개의 한국어 반쪽을 비교한 적이
+  없었고**, 그중에 **D003** — 이 검사가 존재하는 이유인 파일 — 이 있었다.
+  하네스 자신의 첫 세 게이트는 `pipefail` 때문에 **빨개질 수 없었고**, 그중
+  하나가 타협 불가라고 적힌 라이선스 경계다. 같은 결함이 이 파일이 권장
+  형태라 부르던 모양으로 **76곳** 더 있었다 — 변수로 캡처하는 것은 데이터를
+  구할 뿐 분기를 구하지 않는다. 그리고 포맷 검사는 **CI에만** 있어서 하네스를
+  통과했다는 문장이 포맷을 포함한 적이 없었다.
+
+- **The console's "what exists" page was drawing 57 of 208 entries.** Measured
+  over every golden file by kind: 151 declarations (72.6%) reached no reader
+  surface — 39 constants, 47 structs, 35 typedefs, 11 exceptions, 8 unions, 7
+  enums, 3 valuetypes, 1 native — because `Entry::Interface` was the only
+  variant the crate reached. Two golden files declare no interface, so the
+  page said **"the catalog is empty"** in those words over 22 constants and a
+  union; on the thirteen-contract estate it was 12 interfaces drawn and 38
+  declarations hidden, eight of them the exceptions a caller has to handle.
+  The batch was handed the word *constants*; the rule is *the catalogue shows
+  what a contract declares*, so the test is a **partition** — every id the
+  registry holds is an interface row or a declaration row, over every golden
+  file — rather than a check that constants are present, which would have gone
+  green with seven kinds still missing.
+
+  **콘솔의 "무엇이 있는가" 페이지가 208개 중 57개를 그리고 있었다.** 선언
+  151개(72.6%)가 어떤 독자 표면에도 닿지 않았다. 인터페이스를 선언하지 않는
+  골든 파일 둘에서는 상수 22개와 union 하나 위에서 **"카탈로그가 비어 있다"**고
+  말했다. 배치는 "상수"라는 단어를 받았지만 규칙은 *카탈로그는 계약이 선언한
+  것을 보여준다*이므로, 테스트는 상수 확인이 아니라 **분할**이다.
+
+- **`repair_prompt` sent every whole-file finding to line zero.** The line-0
+  sentinel had three private readers and two of them rendered the raw fields,
+  so a finding about a file as a whole — every `evolution/*`, `registry`,
+  `released-unreadable` — was rendered `line 0, column 0` in the one string an
+  agent is told to act on. `Finding::position()` is now the sentinel's single
+  reader; a whole-file finding renders its source identifier and no position.
+
+  **`repair_prompt`이 파일 전체에 대한 진단을 전부 0행으로 보냈다.** 센티널을
+  읽는 사적 리더가 셋이었고 둘이 원시 필드를 렌더했다. 이제 리더는 하나다.
+
 - **A refusal's subject carries the repository id, and the subject's spelling
   has one home per language.** The commissioning defect (2026-08-24, recorded
   as its own batch): a simple name is ambiguous — two modules declaring

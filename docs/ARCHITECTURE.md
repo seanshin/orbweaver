@@ -10,6 +10,16 @@ Where the built thing disagrees with the plan, the built thing is what is here.
 `COMPONENTS.md`는 측정 원장이며, 어느 쪽도 *구조*를 말하지 않는다. 여기가 구조다.
 설계가 아니라 코드에서 옮겨 적었고, 지어진 것이 계획과 다르면 지어진 것을 적었다.
 
+[`FLOWS.md`](FLOWS.md) draws the same shape as diagrams — the crate graph, the
+client and server paths, the agent path, and where
+[`decisions/D019`](decisions/D019-the-orb-has-no-object.md)'s ORB object
+attaches. It states no facts of its own and links back here for every claim, so
+that a picture cannot drift from the prose it illustrates.
+
+*[`FLOWS.md`](FLOWS.md)가 같은 구조를 다이어그램으로 그린다. 자기 사실은 말하지
+않고 모든 주장을 이 문서로 링크한다 — 그림이 자기가 설명하는 산문에서 어긋나지
+못하도록.*
+
 ---
 
 ## 1. The crate graph, and the one rule that shapes it / 크레이트 그래프
