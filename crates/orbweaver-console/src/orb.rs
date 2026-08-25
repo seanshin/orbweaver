@@ -634,6 +634,7 @@ fn channel_fields(c: &ChannelStats) -> Vec<(&'static str, u64)> {
         push_failures,
         pull_failures,
         disconnected_for_failure,
+        pull_rounds_cancelled,
         queued,
         consumers_connected,
         pull_consumers_connected,
@@ -654,6 +655,7 @@ fn channel_fields(c: &ChannelStats) -> Vec<(&'static str, u64)> {
         ("push_failures", *push_failures),
         ("pull_failures", *pull_failures),
         ("disconnected_for_failure", *disconnected_for_failure),
+        ("pull_rounds_cancelled", *pull_rounds_cancelled),
         ("queued", *queued as u64),
         ("consumers_connected", *consumers_connected as u64),
         ("pull_consumers_connected", *pull_consumers_connected as u64),
@@ -865,6 +867,8 @@ fn read_channels(root: &Json, out: &mut Vec<String>) -> Option<Vec<Channel>> {
             push_failures: number(item, &at, "push_failures", out).unwrap_or_default(),
             pull_failures: number(item, &at, "pull_failures", out).unwrap_or_default(),
             disconnected_for_failure: number(item, &at, "disconnected_for_failure", out)
+                .unwrap_or_default(),
+            pull_rounds_cancelled: number(item, &at, "pull_rounds_cancelled", out)
                 .unwrap_or_default(),
             queued: number(item, &at, "queued", out).unwrap_or_default() as usize,
             consumers_connected: number(item, &at, "consumers_connected", out).unwrap_or_default()
@@ -1302,6 +1306,7 @@ mod tests {
             push_failures: 2,
             pull_failures: 0,
             disconnected_for_failure: 0,
+            pull_rounds_cancelled: 0,
             queued: 4,
             consumers_connected: 2,
             pull_consumers_connected: 1,

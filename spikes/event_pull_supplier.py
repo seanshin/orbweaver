@@ -123,9 +123,10 @@ def main(argv):
     # Published for the teardown below. `main` has seven return paths and the
     # channel starts asking at the line above, so every one of them from here
     # on has to stop it asking — a `finally` around one of them would leave the
-    # other six aborting. See `stop_being_a_supplier`.
-    global _CONNECTED_PROXY  # noqa: PLW0603 — a fixture, and the alternative is six call sites
-    _CONNECTED_PROXY = proxy
+    # other six aborting. See `stop_being_a_supplier`, which needs the ORB and
+    # the servant too: the disconnect is only the first half of stopping.
+    global _TEARDOWN  # noqa: PLW0603 — a fixture, and the alternative is six call sites
+    _TEARDOWN = (proxy, orb, supplier)
 
     # A sleeping, deadline-bounded wait. A loop with no sleep is the Phase 0
     # wait loop that finishes in microseconds and does not wait at all.
@@ -168,8 +169,8 @@ def main(argv):
     return 0
 
 
-def stop_being_a_supplier(proxy):
-    """Tell the channel to stop asking, before this interpreter goes away.
+def stop_being_a_supplier(proxy, orb, supplier):
+    """Stop the channel asking, then outlast the one round that may still come.
 
     Measured 2026-08-25 on CI (Linux; it had never fired on macOS): the script
     printed `PASS` and every value matched, then exited **134** — SIGABRT. Our
@@ -181,22 +182,61 @@ def stop_being_a_supplier(proxy):
 
     **The measurement was sound and the process still died**, which is exactly
     why this group reads the exit code instead of grepping for `PASS`: a group
-    that matched the word would have been green over an aborting fixture. The
-    repair is the protocol's own: `disconnect_pull_consumer` is what a supplier
-    that is going away is supposed to say, and saying it also exercises the
-    third of the three operations this fixture exists to measure.
+    that matched the word would have been green over an aborting fixture.
+
+    The first repair was `disconnect_pull_consumer` alone, and it was
+    incomplete for a reason the Rust side hit in the same week from the other
+    direction: **a disconnect returning does not mean the asking has stopped.**
+    The channel's stated guarantee (`event_server.rs`, "Pulling *from* a
+    supplier", point 4) is that after the disconnect returns at most *one* more
+    `try_pull` can arrive — a round already past its commit point — and that it
+    lands within the channel's outbound timeout. A disconnect that waited for
+    it would be the channel blocking a servant on a peer that is free to be the
+    caller, which is a worse property than one stray call; so the wait belongs
+    here, at the end that is going away.
+
+    So: disconnect, sit out that bound while still serving normally, and only
+    then shut the ORB down — with ``wait_for_completion``, so a request being
+    dispatched at that moment finishes before the interpreter starts clearing
+    the globals it needs. After the shutdown a late call is refused at the
+    socket, which the channel counts as one failed `try_pull` and this process
+    does not see at all.
     """
     try:
         proxy.disconnect_pull_consumer()
     except Exception as exc:  # noqa: BLE001 — reported; teardown must not mask a result
         print("note teardown: disconnect_pull_consumer raised", exc)
 
+    # The bound, plus slack. `DEFAULT_PUSH_TIMEOUT` is 2s and is what bounds a
+    # committed round; sleeping it out is the only instrument a peer has, since
+    # `wait_source_idle` is in the channel's process and not this one. A
+    # sleeping, deadline-bounded loop — the harness rule — and it reports what
+    # it saw rather than assuming it saw nothing.
+    asked = supplier.try_pull_calls
+    deadline = time.time() + 2.5
+    while time.time() < deadline:
+        time.sleep(0.1)
+    late = supplier.try_pull_calls - asked
+    if late > 1:
+        print("FAIL the channel asked %d more times after disconnect_pull_consumer "
+              "returned; the guarantee is at most one" % late)
+        return 1
+    if late:
+        print("note teardown: one round committed before the disconnect landed, as documented")
 
-#: The channel's `ProxyPullConsumer` once connected, or `None`.
-_CONNECTED_PROXY = None
+    try:
+        orb.shutdown(True)
+        orb.destroy()
+    except Exception as exc:  # noqa: BLE001 — reported; teardown must not mask a result
+        print("note teardown: ORB shutdown raised", exc)
+    return 0
+
+
+#: `(proxy, orb, supplier)` once the channel has been given a supplier, or `None`.
+_TEARDOWN = None
 
 if __name__ == "__main__":
     rc = main(sys.argv)
-    if _CONNECTED_PROXY is not None:
-        stop_being_a_supplier(_CONNECTED_PROXY)
+    if _TEARDOWN is not None:
+        rc = stop_being_a_supplier(*_TEARDOWN) or rc
     sys.exit(rc)
