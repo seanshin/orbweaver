@@ -38,6 +38,7 @@ pub mod mux;
 pub mod naming;
 pub mod naming_server;
 pub mod nat;
+pub mod orb;
 pub mod pool;
 pub mod server;
 pub mod ssliop;

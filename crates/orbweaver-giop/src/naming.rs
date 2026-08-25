@@ -145,25 +145,68 @@ impl ObjectUrl {
     ///
     /// Every address becomes a profile, so the existing multi-profile handling
     /// covers a comma-separated list without a second mechanism.
+    ///
+    /// # Why `corbaloc:rir:` is still `None` here, and where it is answered
+    ///
+    /// The `None` below used to be the end of the road: nothing in the
+    /// workspace could turn a well-known name into a reference, so this
+    /// function was *the place the case failed*. It is not any more —
+    /// [`crate::orb::Orb::resolve_url`] answers all three forms — and the
+    /// choice between putting the table here and putting it there was made
+    /// deliberately, so here is the reason.
+    ///
+    /// **The caller resolves first; this function does not gain the table.**
+    /// The answer to `corbaloc:rir:NameService` is not in the URL — that is the
+    /// entire difference between the three variants, and it is why
+    /// [`ObjectUrl::Corbaloc`] and [`ObjectUrl::Corbaname`] work: they carry an
+    /// address. Handing a table to this function would make a pure conversion
+    /// depend on ORB state that every one of its callers would then have to
+    /// obtain and thread through. A table parameter would also put a lookup
+    /// behind a name that says *convert*.
+    ///
+    /// **The call sites, counted 2026-08-25 rather than remembered.** Outside
+    /// tests there are exactly two, both in this file, and both already handle
+    /// the `None`: [`NamingContext::from_url`] and [`corbaloc_to_ior_string`].
+    /// One test `.expect()`s it — `tests/codesets_on_the_wire.rs:185`, on an
+    /// addressed URL. D019 §8 attributes six `.unwrap()`s in [`crate::nat`] to
+    /// this function; those are on `nat::RawIor::to_ior`, a different function
+    /// with a different signature that never sees an [`ObjectUrl`]. Nothing
+    /// that passes a `rir:` URL today exists, so nothing can begin to panic on
+    /// a case that used to answer `None`.
+    ///
+    /// So the `Option` stays, and it stops meaning *"unanswerable"*: it means
+    /// *"this form's answer belongs to the ORB, ask [`crate::orb::Orb`]"*. This
+    /// function remains where the case is **recognised**; it is no longer where
+    /// the case **ends**.
     pub fn to_ior(&self, type_id: &str) -> Option<Ior> {
-        let (addresses, object_key) = match self {
-            ObjectUrl::Corbaloc { addresses, object_key } => (addresses, object_key),
-            ObjectUrl::Corbaname { addresses, object_key, .. } => (addresses, object_key),
-            ObjectUrl::InitialReference(_) => return None,
-        };
-        Some(Ior {
-            type_id: type_id.to_owned(),
-            profiles: addresses
-                .iter()
-                .map(|a| IiopProfile {
-                    version: a.version,
-                    host: a.host.clone(),
-                    port: a.port,
-                    object_key: object_key.clone(),
-                    components: Vec::new(),
-                })
-                .collect(),
-        })
+        match self {
+            ObjectUrl::Corbaloc { addresses, object_key }
+            | ObjectUrl::Corbaname { addresses, object_key, .. } => {
+                Some(addressed_ior(addresses, object_key, type_id))
+            }
+            ObjectUrl::InitialReference(_) => None,
+        }
+    }
+}
+
+/// Builds the multi-profile IOR an addressed URL denotes.
+///
+/// Shared by [`ObjectUrl::to_ior`] and [`crate::orb::Orb::resolve_url`] so that
+/// the two entry points cannot construct different references from the same
+/// URL — the ORB's extra form is an extra *case*, never a second conversion.
+pub(crate) fn addressed_ior(addresses: &[IiopAddress], object_key: &[u8], type_id: &str) -> Ior {
+    Ior {
+        type_id: type_id.to_owned(),
+        profiles: addresses
+            .iter()
+            .map(|a| IiopProfile {
+                version: a.version,
+                host: a.host.clone(),
+                port: a.port,
+                object_key: object_key.to_vec(),
+                components: Vec::new(),
+            })
+            .collect(),
     }
 }
 
@@ -486,10 +529,14 @@ impl NamingContext {
     }
 
     /// Connects to the naming context a `corbaloc:`/`corbaname:` URL addresses.
+    ///
+    /// A `corbaloc:rir:` URL addresses nothing dialable, so it is refused here
+    /// rather than guessed at: resolve it through
+    /// [`crate::orb::Orb::resolve_url`] first and connect to what comes back.
     pub fn from_url(url: &ObjectUrl, timeout: Duration) -> Result<Self> {
-        let ior = url
-            .to_ior(NAMING_CONTEXT_EXT_ID)
-            .ok_or(Error::BadIor("corbaloc:rir: needs a local resolver, not a connection"))?;
+        let ior = url.to_ior(NAMING_CONTEXT_EXT_ID).ok_or(Error::BadIor(
+            "corbaloc:rir: names an initial reference; resolve it through the ORB's table first",
+        ))?;
         Self::connect(&ior, timeout)
     }
 
@@ -756,6 +803,17 @@ mod tests {
         }
     }
 
+    /// # Three forms, and a peer that accepts one of them
+    ///
+    /// Measured against omniORB 2026-08-25: it reads `corbaloc:rir:/NameService`
+    /// and refuses both `corbaloc:rir:NameService` and the bare
+    /// `corbaloc:rir:` with `BAD_PARAM(BadURIOther)`. §7.6.10.3's grammar puts
+    /// the `/` before the key string, so omniORB is reading the grammar
+    /// strictly and this parser is the lenient one — the safe direction, since
+    /// the leniency only ever widens what we can *read* and [`to_url`] emits no
+    /// `rir:` URL at all (it refuses one, for the reason recorded there). The
+    /// leniency is deliberate and pinned here rather than left to be
+    /// rediscovered as a divergence.
     #[test]
     fn rir_resolves_locally_and_defaults_to_nameservice() {
         assert_eq!(loc("corbaloc:rir:"), ObjectUrl::InitialReference("NameService".into()));
@@ -764,7 +822,9 @@ mod tests {
             loc("corbaloc:rir:/InterfaceRepository"),
             ObjectUrl::InitialReference("InterfaceRepository".into())
         );
-        // It addresses nothing dialable, so it must not produce an IOR.
+        // It addresses nothing dialable, so *this* function must not produce
+        // an IOR — the answer is the ORB's table, not the URL's contents. See
+        // `to_ior`'s docs and `crate::orb::Orb::resolve_url`.
         assert!(loc("corbaloc:rir:").to_ior("IDL:x:1.0").is_none());
     }
 
