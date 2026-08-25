@@ -77,7 +77,35 @@ against, which is why the figure above carries its date and is not restated as
 today's. **This record pass did not run the full sweep** — it needs the
 fixtures and the machine-wide lock — so the whole-estate number is
 **unmeasured here and is reported as such rather than carried forward as a
-pass.** `SERVICES-COVERAGE` §5 and §8 are the rows that need it.
+pass.** `SERVICES-COVERAGE` §5 and §8 are the rows that need it. *(Both were
+regenerated from the wire later the same day — `coverage_tables.py --check`
+exits 0 over 113 rows and 238 sweep lines.)*
+
+**The supplier side of pull now states what a disconnect guarantees** (2026-08-25).
+`disconnect_pull_consumer` returning did not mean the channel had stopped
+asking: the source thread snapshots a round, releases the state lock — a
+network call cannot be made holding it — and only then invokes, so a round
+snapshotted first still asked, across a window containing a whole connect
+timeout. The loop now has a commit point taken under that same lock with **no
+I/O between it and the request going out**, which makes the bound sayable:
+after `disconnect_pull_consumer` or `stop` returns, **at most one further
+`try_pull` reaches that supplier, within the outbound timeout** — later rounds
+are cancelled and counted in `ChannelStats::pull_rounds_cancelled`. The
+predicate is one function serving both callers and compares the supplier IOR
+rather than a flag. Held by a deterministic seam rather than by repetition:
+with the commit point removed the pin fails **20 of 20 runs**, with it **0 of
+20** — the defect itself never reproduced on macOS in 20 serial runs, 5
+concurrent whole-suite runs, or with the poll forced to 200 µs, and was found
+by CI on Linux.
+
+*pull 공급자 쪽은 이제 disconnect가 무엇을 보장하는지 말한다(2026-08-25).
+`disconnect_pull_consumer`가 반환해도 채널이 묻기를 멈춘 것은 아니었다 — 소스
+스레드는 라운드를 스냅샷하고 상태 락을 놓은 뒤에 호출한다. 이제 같은 락 아래
+**커밋 포인트**가 있고 그것과 요청 발신 사이에 I/O가 없으므로 한계를 서술할 수
+있다: disconnect나 stop이 반환한 뒤 그 공급자에 도달할 수 있는 `try_pull`은
+**아웃바운드 타임아웃 안의 하나뿐**이며, 이후 라운드는 취소되어 계수된다. 반복이
+아니라 결정적 이음매가 고정한다 — 커밋 포인트를 빼면 **20/20 실패**, 두면
+**0/20**. 결함 자체는 macOS에서 재현되지 않았고 리눅스 CI가 찾았다.*
 
 Known and unfixed, from that sweep: `_get_version` answers `BAD_OPERATION`
 while `_set_version` answers `NO_PERMISSION`, which is backwards by `ifr.rs`'s

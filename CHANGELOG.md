@@ -777,6 +777,66 @@ records what changed and, where it matters, what it changes on the wire.
   **아무것도 재지 않았고**, 출력을 읽었기 때문에만 드러났다. 여섯 번째는 **행(hang)**
   이었고 정직한 증상 그대로 기록했다.
 
+- **A disconnect that had returned was not a disconnect that had stopped.**
+  `ProxyPullConsumer::disconnect_pull_consumer` set `connected = false` under
+  the state lock, but the source thread snapshots its round, **releases the
+  lock** — it must, a network call cannot be made holding it — and only then
+  invokes. A round that had snapshotted first still asked. The window contained
+  a whole connect timeout, so "one more" was a bound in principle and not one
+  anybody had stated.
+
+  Two failures were this one defect from opposite sides: a CI test asserting
+  *a disconnected proxy is not asked* saw `left: 2 right: 1`, and
+  `spikes/event_pull_supplier.py` printed `PASS` and then **aborted with
+  SIGABRT** because a late `try_pull` landed while CPython was tearing down and
+  a servant raising a non-CORBA exception makes omniORB call `FATAL: exception
+  not rethrown`.
+
+  The source loop now has a **commit point** — `source_still_wanted`, taken
+  under the state lock with **no I/O between it and the request going out**;
+  `disconnect_pull_consumer` and `ChannelHandle::stop` take that same lock. The
+  guarantee is now stated rather than hoped for: once either has returned, the
+  only `try_pull` that can still reach that supplier is one whose commit point
+  had already been passed, and one source thread runs one round at a time, so
+  that is **at most one further call, landing within the outbound timeout** —
+  never a stream and never a second one. Later rounds are cancelled where they
+  stand and counted in the new `ChannelStats::pull_rounds_cancelled`. One
+  predicate serves both callers, because *"the channel no longer wants this
+  round"* is one fact; it compares the supplier IOR and not only the flag, so a
+  disconnect-then-reconnect-elsewhere is never asked a question meant for the
+  old peer. `ChannelHandle::wait_source_idle` makes the escape clause
+  observable in process; a peer over the wire has the time bound and nothing
+  else.
+
+  Rejected, with the reason recorded at the arm that owes it: making the
+  disconnect *wait* for the in-flight round. The thread it would wait for is
+  blocked in an outbound call to the very supplier whose process is free to be
+  the one calling the disconnect, so a servant would be held for an outbound
+  timeout by the peer it is answering.
+
+  **The control is deterministic, which the bug was not** — it never reproduced
+  on macOS in 20 serial runs, 5 concurrent whole-suite runs, or with the poll
+  forced to 200 µs. A test seam holds a round after it is taken and before the
+  commit point, with nothing on the wire: with the commit point deleted the
+  assertion fails **20 of 20 runs**, and with it **0 of 20**. The test helper
+  was controlled too — pointed at a supplier still being polled it reports
+  `left: 20 right: 5`, so it is not vacuous — and the fixture's teardown,
+  removed, prints *"the channel asked 26 more times after
+  `disconnect_pull_consumer` returned; the guarantee is at most one"*. **The
+  SIGABRT itself is still "not reproduced in 5 runs on macOS"**: its mechanism
+  is diagnosed and its cause closed at the source, and that is a different
+  claim from having watched it stop.
+
+  *반환한 disconnect가 멈춘 disconnect는 아니었다. 소스 스레드는 라운드를
+  스냅샷하고 **락을 놓은 뒤** 호출한다 — 네트워크 호출을 락 안에서 할 수는 없다.
+  CI 테스트 실패와 픽스처의 SIGABRT는 반대편에서 본 같은 결함이었다. 이제 소스
+  루프에 **커밋 포인트**가 있다: 상태 락 아래서 잡히고 요청이 나가기까지 **I/O가
+  없다**. 보장은 이제 서술된다 — 커밋 포인트를 이미 지난 호출 **하나만**, 아웃바운드
+  타임아웃 안에. 술어 하나가 두 호출자를 섬기고 플래그가 아니라 IOR을 비교한다.
+  대조군은 결정적이다(버그는 아니었다): 커밋 포인트를 지우면 **20/20 실패**, 두면
+  **0/20**. SIGABRT 자체는 여전히 "macOS 5회 재현 안 됨"이며, 기전이 진단되고
+  원인이 닫힌 것과 멈추는 것을 지켜본 것은 다른 주장이다.*
+
 - **Both emitters kept their own list of what the wire cannot carry, and both
   disagreed with the type mapper.** `orbweaver-gen`'s `rust_type` ends in
   `other => Err(..)` — it refuses what it has no arm for — while the walker
