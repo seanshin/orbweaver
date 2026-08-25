@@ -1,11 +1,26 @@
 # D027 — The shortest honest way in: making the ORB easy to use without making it lie
 
-**STATUS: PROPOSED** — drafted 2026-08-26 on a request to plan how the ORB
-becomes easier to use. Every figure below was measured that day. Not
-self-approvable: §4 proposes a rule that constrains what every future public
-API may do, and §3 refuses a shape most ORBs ship.
+**STATUS: APPROVED 2026-08-26** — drafted that day on a request to plan how the
+ORB becomes easier to use; every figure below was measured the same day, and
+the owner approved it with the phrase *승인, 진행*. It was not self-approvable:
+§4 constrains what every future public API may do, and §3 refuses a shape most
+ORBs ship.
 
-**상태: 제안** — 2026-08-26, ORB를 더 쉽게 쓰는 방법을 기획하라는 요청에서 작성.
+**상태: 승인 2026-08-26** — ORB를 더 쉽게 쓰는 방법을 기획하라는 요청에서 작성,
+같은 날 소유자가 *승인, 진행* 으로 승인.
+
+> **What the approval covers, and the order it lands in.** §4's rule and §5's
+> four batches. **E4 alone can start immediately** — it touches `spikes/` only.
+> **E1, E2 and E3 all write against step 4's one-way API and therefore wait for
+> it**, which is not a scheduling preference: D019 step 4 is rewriting
+> `orbweaver-giop` and `orbweaver-object` as this is approved, and an example
+> or an error message written against the surface it is replacing would be
+> obsolete before it landed. §2 is the reason the whole document is timed this
+> way and the reason waiting is the cheap option.
+>
+> *승인 범위는 §4의 규칙과 §5의 네 배치다. **E4만 즉시 시작**한다. E1·E2·E3은
+> 전부 4단계의 일방향 API를 상대로 쓰이므로 그것을 기다린다 — 일정 선호가 아니라,
+> 지금 교체되고 있는 표면에 대고 쓴 예제는 착지 전에 낡기 때문이다.*
 
 ---
 
