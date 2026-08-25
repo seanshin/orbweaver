@@ -1654,17 +1654,23 @@ for form, want in zip(forms, wants):
         assert e.path.endswith("_v"), e.path
     seen.append(want)
 
-# `principal`, the third kind this reader had no arm for: withdrawn from
-# CORBA, so no shared sentence exists to hold it to — the description crosses
-# and the value falls to the generic refusal rather than to a wrong sentence
-# about `_t`.
+# `principal`, the fifth family — and it now has a shared sentence to be held
+# to, which is what this block was waiting for. It said so in as many words
+# ("withdrawn from CORBA, so no shared sentence exists to hold it to") and
+# checked only that the word appeared somewhere in the refusal, so this
+# runtime's actual answer — "no AnyJSON form for 'principal'", a hole in the
+# runtime rather than the boundary the type has — passed it.
 p = _rt._desc_of({"kind": "principal"}, "")
 assert _rt._form_of(p, "") == {"kind": "principal"}, p
-try:
-    _rt.from_json(p, None)
-    raise SystemExit("a principal value crossed")
-except _rt.MarshalError as e:
-    assert "principal" in e.message, e.message
+for call in (lambda: _rt.to_json(p, None), lambda: _rt.from_json(p, None)):
+    try:
+        call()
+        raise SystemExit("a principal value crossed")
+    except _rt.MarshalError as e:
+        assert e.message == _rt._WITHDRAWN % _rt._PRINCIPAL, e.message
+assert _rt._WITHDRAWN not in (_rt._DEFERRED, _rt._UNMARSHALLABLE), "three families, three strings"
+assert "yet" not in _rt._WITHDRAWN % _rt._PRINCIPAL, _rt._WITHDRAWN
+print("withdrawn:", _rt._WITHDRAWN % _rt._PRINCIPAL)
 
 # The §4.4 half says the section; the fourth family's says the opposite, and
 # neither may say "yet" about the other's boundary.
@@ -1684,6 +1690,15 @@ print("refused:", seen[1])
         out.contains("refused: native Handle (IDL:witness/Handle:1.0) has no wire form at all"),
         "{out}"
     );
+    // The fifth family across the crate boundary, by **equality** with the
+    // Rust sentence rather than by both halves containing a word.
+    //
+    // It has no `forms`/`wants` entry above because a `Principal` has no
+    // `TypeCode` a peer builds from parts — `tk_Principal` is a primitive kind
+    // with no id and no members — so the subject is fixed on both sides and
+    // the comparison is of the whole sentence against the whole sentence.
+    let want = orbweaver_dynamic::withdrawn_wire_sentence(&orbweaver_dynamic::principal_subject());
+    assert!(out.contains(&format!("withdrawn: {want}")), "python vs rust:\nwant {want}\ngot {out}");
 }
 
 /// A union's Python surface: `_d`/`_v`, the named branch accessors, and the

@@ -1,15 +1,19 @@
 //! One sentence per family, whichever layer a reader happens to hit — **and
-//! two families, not one**.
+//! three families, not one**.
 //!
 //! `docs/PLAN.md` §4.4 defers `valuetype`, abstract interfaces and `fixed` from
 //! the v1 wire. `native X;` is a fourth construct the wire cannot carry and it
 //! is **not** deferred: §4.4's three have a wire form the specification defines
 //! and this version has not implemented, and a native has none to implement, in
-//! v1 or in any later version. Five layers refuse an *instance* of one of the
-//! four: the CDR path (`orbweaver_dynamic::encode`/`decode`), the AnyJSON path
+//! v1 or in any later version. `::CORBA::Principal` is a fifth and is neither:
+//! GIOP 1.0 carried one in every request header and CORBA 3.0 removed the type,
+//! so the wire form existed and was **withdrawn**. Five layers refuse an
+//! *instance* of one of the five: the CDR path
+//! (`orbweaver_dynamic::encode`/`decode`), the AnyJSON path
 //! (`anyjson::to_json`/`from_json`), the dynamic navigator's starting value
 //! (`dynany::default_value`), and the generated Python runtime
-//! (`crates/orbweaver-gen/src/python_rt.py`, `_DEFERRED` and `_UNMARSHALLABLE`).
+//! (`crates/orbweaver-gen/src/python_rt.py`, `_DEFERRED`, `_UNMARSHALLABLE`
+//! and `_WITHDRAWN`).
 //!
 //! Two of the three §4.4 layers named the section until 2026-08-21; the AnyJSON
 //! layer said `"tk_value cannot cross yet"` and `"Struct([…]) is not a value of
@@ -37,13 +41,18 @@
 //! reader who meets it concludes the type is unreachable and stops sending the
 //! description too.
 //!
-//! **Deferred versus never.** The two families' tails say opposite things and
-//! swapping them is a lie in either direction: §4.4's says the description
-//! still crosses and the value is waiting on this project, a native's says
-//! there is nothing to wait for and the fix is to change the contract. So the
-//! native sentence must not contain the §4.4 deferral head, and must not
-//! contain the word **"yet"** — those are the two ways a reader is told
-//! something false. Both are asserted below, beside the equalities.
+//! **Deferred versus never versus withdrawn.** The three families' tails say
+//! different things and swapping any two is a lie: §4.4's says the description
+//! still crosses and the value is waiting on this project; a native's says
+//! there is nothing to wait for because there was never a wire form, and the
+//! fix is to declare in IDL what the language type holds; a withdrawn type's
+//! says there is nothing to wait for because the specification took the wire
+//! form away, and the fix is to find where the OMG moved the thing you wanted.
+//! So neither of the last two may contain the §4.4 deferral head, and neither
+//! may contain the word **"yet"** — those are the two ways a reader is told
+//! something false, and both were live in shipped code for *each* of those two
+//! families, five days apart, in the same two layers. Asserted below, beside
+//! the equalities.
 
 use orbweaver_cdr::{Decoder, Encoder, Endian};
 use orbweaver_dynamic::anyjson::{LocalReferences, from_json, tc_from_json, tc_to_json, to_json};
@@ -59,9 +68,15 @@ enum Boundary {
     Deferred,
     /// No wire form to implement, in this version or any later one.
     Never,
+    /// A wire form the specification defined and then **removed**. Not
+    /// [`Boundary::Deferred`] — nothing is coming — and not [`Boundary::Never`]
+    /// — conformant ORBs marshalled one for a decade. The distinction is what
+    /// a contract author does next: a native means "you modelled a language
+    /// type", a withdrawn one means "the OMG moved this".
+    Withdrawn,
 }
 
-/// The four families, each with the words a refusal has to name it by and the
+/// The five constructs, each with the words a refusal has to name it by and the
 /// boundary it hits.
 fn families() -> Vec<(TypeCode, &'static str, Boundary)> {
     vec![
@@ -94,8 +109,18 @@ fn families() -> Vec<(TypeCode, &'static str, Boundary)> {
             "native Handle (IDL:m/Handle:1.0)",
             Boundary::Never,
         ),
+        // The fifth. No constructor arguments, because there is nothing to
+        // vary: `tk_Principal` is a primitive kind with no name, no id and no
+        // members, which is also why its subject is a fixed string rather than
+        // something built from a `TypeCode`'s parts.
+        (TypeCode::Principal, PRINCIPAL, Boundary::Withdrawn),
     ]
 }
+
+/// The fifth family's subject, spelled here rather than imported for the reason
+/// the heads below are: a change to `orbweaver_dynamic::principal_subject` is a
+/// change this test has to be told about.
+const PRINCIPAL: &str = "predeclared type ::CORBA::Principal (IDL:omg.org/CORBA/Principal:1.0)";
 
 /// The §4.4 head, built here from its parts rather than imported, so that
 /// changing the wording in `lib.rs` is a change this test has to be told about.
@@ -130,10 +155,40 @@ fn never_sentence(what: &str) -> String {
     )
 }
 
+/// The fifth family's head, written out for the reason the other two are.
+///
+/// It names no section at all — see [`withdrawn_sentence`] for where the
+/// denial goes and why it is in the tail rather than here.
+fn withdrawn_head(what: &str) -> String {
+    format!(
+        "{what} was withdrawn from CORBA: GIOP 1.0 carried one in every request header, GIOP 1.1 \
+         dropped that field and CORBA 3.0 removed the type — so this version marshals no value \
+         for one, and no later version will"
+    )
+}
+
+/// The whole sentence a peer-fed `Principal` is refused with.
+///
+/// Two tails, and both are load-bearing. D008's asymmetry is the first —
+/// `tc_to_json` writes `{"kind":"principal"}` and `tc_from_json` reads it back,
+/// so the description crosses whole and only the value stops. The denial is the
+/// second: a reader who met §4.4 in this project's other refusals will search
+/// for it, and finding nothing is not the same as being told the section does
+/// not apply.
+fn withdrawn_sentence(what: &str) -> String {
+    format!(
+        "{}; the TypeCode describing it reads, the value behind it does not. This is not one of \
+         docs/PLAN.md §4.4's deferrals: those wait on this project, and a type the specification \
+         has removed waits on nobody",
+        withdrawn_head(what)
+    )
+}
+
 fn head(what: &str, b: Boundary) -> String {
     match b {
         Boundary::Deferred => deferred_head(what),
         Boundary::Never => never_head(what),
+        Boundary::Withdrawn => withdrawn_head(what),
     }
 }
 
@@ -141,6 +196,7 @@ fn sentence(what: &str, b: Boundary) -> String {
     match b {
         Boundary::Deferred => deferred_sentence(what),
         Boundary::Never => never_sentence(what),
+        Boundary::Withdrawn => withdrawn_sentence(what),
     }
 }
 
@@ -244,8 +300,10 @@ fn refusals_agree_across_the_layers() {
                 ),
                 // A native's two directions are the same fact — neither will
                 // ever be implemented — so the write direction keeps no tail of
-                // its own and the whole sentence is equal.
-                Boundary::Never => {
+                // its own and the whole sentence is equal. A withdrawn type is
+                // the same shape for a different reason: the specification
+                // removed both directions at once.
+                Boundary::Never | Boundary::Withdrawn => {
                     assert_eq!(err.message, sentence(what, boundary), "encode({what}, {endian:?})")
                 }
             }
@@ -263,10 +321,20 @@ fn refusals_agree_across_the_layers() {
 /// construct and never will. A sentence that merely *mentions* §4.4 is fine and
 /// necessary; what must not appear is §4.4's **deferral claim**, which is what
 /// `deferred_head` spells.
+///
+/// # And the fifth family, held to the same two prohibitions
+///
+/// `Principal` is swept by this test as of 2026-08-26, and it is the case that
+/// shows the two prohibitions are about the *reader* rather than about
+/// `native`. Both falsehoods were live in shipped code for this construct too,
+/// in the same two layers: `from_json` answered `"principal cannot cross yet"`
+/// and `decode` `"cannot decode principal yet"` — found by asking what the
+/// fifth family says, not by asking what a `Principal` says, because nobody was
+/// going to grep for a sentence that had no home.
 #[test]
-fn a_native_is_never_described_as_deferred_and_never_says_yet() {
+fn a_type_with_no_later_version_is_never_called_deferred_and_never_says_yet() {
     for (tc, what, boundary) in families() {
-        if boundary != Boundary::Never {
+        if boundary == Boundary::Deferred {
             continue;
         }
         let sentences = {
@@ -287,27 +355,37 @@ fn a_native_is_never_described_as_deferred_and_never_says_yet() {
                 .expect_err("no form")
                 .message,
                 default_value(&tc).expect_err("no starting value").message,
-                never_sentence(what),
-                never_head(what),
+                sentence(what, boundary),
+                head(what, boundary),
             ]
         };
         for s in &sentences {
             assert!(s.contains(what), "a refusal must name the construct: {s}");
             assert!(
                 !s.contains(&deferred_head(what)),
-                "a native must not carry §4.4's deferral claim: {s}"
+                "{boundary:?}: this must not carry §4.4's deferral claim: {s}"
             );
-            assert!(!s.contains("yet"), "a native is not waiting on an implementation: {s}");
-            assert_ne!(s, &deferred_sentence(what), "the two families' sentences are not one");
+            assert!(
+                !s.contains("yet"),
+                "{boundary:?}: this is not waiting on an implementation: {s}"
+            );
+            assert_ne!(s, &deferred_sentence(what), "the families' sentences are not one");
         }
         // And the denial is said out loud rather than merely omitted: a reader
         // who searched for §4.4 because another layer named it has to find the
         // sentence that says the section does not apply.
+        let whole = sentence(what, boundary);
         assert!(
-            never_sentence(what).contains("this is not one of docs/PLAN.md §4.4's deferrals"),
-            "{}",
-            never_sentence(what)
+            whole.to_lowercase().contains("this is not one of docs/plan.md §4.4's deferrals"),
+            "{whole}"
         );
+        // The heads are three sentences, not one with variations. Swapping any
+        // two reads as correct and tells the contract author to do the wrong
+        // thing next.
+        assert_ne!(head(what, boundary), deferred_head(what));
+        if boundary == Boundary::Withdrawn {
+            assert_ne!(head(what, boundary), never_head(what), "a withdrawn type is not a native");
+        }
     }
 }
 

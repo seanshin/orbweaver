@@ -1,16 +1,43 @@
 //! One home for a wire refusal — **across crates**, which is where the pin
 //! that already existed stopped.
 //!
-//! Four constructs cannot go on this wire, and they are two families rather
+//! Five constructs cannot go on this wire, and they are three families rather
 //! than one: `docs/PLAN.md` §4.4 defers `valuetype`, abstract interfaces and
 //! `fixed` — a wire form the specification defines that this version has not
 //! implemented — while `native X;` has no wire form to implement, in v1 or in
-//! any later version. `orbweaver-dynamic` owns one head per family
+//! any later version, and `::CORBA::Principal` had one that the specification
+//! **took back** (GIOP 1.0 carried it in every request header; CORBA 3.0
+//! removed the type). `orbweaver-dynamic` owns one head per family
 //! ([`orbweaver_dynamic::deferred_wire_head`],
-//! [`orbweaver_dynamic::unmarshallable_wire_head`]) and every layer's tail is
+//! [`orbweaver_dynamic::unmarshallable_wire_head`],
+//! [`orbweaver_dynamic::withdrawn_wire_head`]) and every layer's tail is
 //! its own, because "the property did not measure it", "the generator skipped
 //! it" and "your document stops here" are three different things to say about
 //! one fact.
+//!
+//! # The fifth family, and why this file needed a second kind of assertion
+//!
+//! The `Principal` family landed on 2026-08-26, and it arrived through a hole
+//! this file could not see. Every test below classifies a sentence *first* —
+//! "is this one about a wire family?" — and only then demands it read a
+//! published head. Until that day no head existed for a `Principal`, so every
+//! layer that met one wrote its own sentence, and none of those sentences
+//! looked like a wire refusal to the classifier: `orbweaver-gen` said `"no
+//! static mapping for Principal"`, its Python half `"no AnyJSON form for
+//! Principal"`, `prop.rs` two more. **A classifier keyed on the sentences that
+//! exist cannot see a family whose sentence does not exist yet**, and that is
+//! not a defect in the classifier — it is the reason a rule about wording needs
+//! a second rule about coverage.
+//!
+//! So [`every_layer_that_meets_one_reads_a_head`] asserts the other direction:
+//! over a fixture whose every declaration reaches one family, every skip both
+//! emitters report **must** read a head. Nothing is classified; the fixture is
+//! the classification. It is the assertion that goes red the day a sixth
+//! construct the wire cannot carry gets an arm in the type mapper and no head
+//! of its own.
+//!
+//! *분류 후 단언은 아직 존재하지 않는 문장을 볼 수 없다. 그래서 반대 방향의
+//! 단언이 하나 더 있다 — 고정된 픽스처의 모든 스킵은 공표된 머리를 읽어야 한다.*
 //!
 //! # Why this file is in `orbweaver-test` and not beside the heads
 //!
@@ -37,7 +64,7 @@
 
 use std::collections::BTreeSet;
 
-use orbweaver_dynamic::{deferred_wire_head, unmarshallable_wire_head};
+use orbweaver_dynamic::{deferred_wire_head, unmarshallable_wire_head, withdrawn_wire_head};
 use orbweaver_gen::emit;
 use orbweaver_giop::typecode::TypeCode;
 use orbweaver_registry::Registry;
@@ -77,6 +104,19 @@ const FAMILIES: &[(&str, &str)] = &[
              interface Broker { Handle acquire(); };
            };"#,
     ),
+    // The fifth, and the only one with no `declaration` line: nothing declares
+    // `::CORBA::Principal`, the front end predeclares it. So the fixture
+    // reaches it the three ways a contract can — a member, a return, a typedef
+    // — and the "bare declaration" row of the shape above is absent because
+    // there is no such row to write.
+    (
+        "principal",
+        r#"module w5 {
+             typedef ::CORBA::Principal Caller;
+             struct Held { ::CORBA::Principal who; };
+             interface Broker { ::CORBA::Principal whoami(); };
+           };"#,
+    ),
 ];
 
 fn registry_of(src: &str) -> Registry {
@@ -93,7 +133,10 @@ fn required_head(tc: &TypeCode) -> Option<String> {
     if let Some(what) = orbweaver_dynamic::deferred_wire_name(tc) {
         return Some(deferred_wire_head(&what));
     }
-    orbweaver_dynamic::unmarshallable_wire_name(tc).map(|what| unmarshallable_wire_head(&what))
+    if let Some(what) = orbweaver_dynamic::unmarshallable_wire_name(tc) {
+        return Some(unmarshallable_wire_head(&what));
+    }
+    orbweaver_dynamic::withdrawn_wire_name(tc).map(|what| withdrawn_wire_head(&what))
 }
 
 /// Every head the two families can produce over the fixtures above, as whole
@@ -137,11 +180,46 @@ fn collect_heads(tc: &TypeCode, out: &mut BTreeSet<String>, depth: usize) {
     }
 }
 
-/// A sentence that talks about one of the four must open with that family's
+/// The subject-independent part of a head — what every sentence built from it
+/// shares, whatever construct it is about. Taken by calling the head with a
+/// sentinel, so it is the function's wording and not a copy of it.
+fn marker(head: fn(&str) -> String) -> String {
+    const SENTINEL: &str = "\u{0}";
+    head(SENTINEL).replace(SENTINEL, "")
+}
+
+/// A sentence that talks about one of the five must contain that family's
 /// head. Anything else — a constant with no `const` form, a recursive type, a
 /// sampler gap — is not this rule's business and is left alone.
+///
+/// # What this classifier can and cannot see
+///
+/// The three computed markers catch the drift that actually happens: a layer
+/// that keeps the head's *wording* and rebuilds the **subject** its own way.
+/// That is the 2026-08-25 defect (`abstract interface Describable` versus
+/// `abstract interface gc20::Describable` — one fact, two spellings, a reader
+/// grepping either finding half the layers), and it is invisible to a check
+/// that only asks whether both mention §4.4.
+///
+/// The two literals beside them are kept, not replaced: they catch a stray that
+/// names the section in wording of its own, which no marker can match.
+///
+/// What none of the five can see is a sentence with **nothing in common with
+/// any head** — which is precisely the state every `Principal` refusal was in
+/// until the fifth head existed. That gap is covered by
+/// [`every_layer_that_meets_one_reads_a_head`], which classifies by fixture
+/// rather than by sentence, and this comment is here so the next person does
+/// not tighten the classifier and believe the gap closed.
 fn is_about_a_wire_family(sentence: &str) -> bool {
-    sentence.contains("§4.4") || sentence.contains("no wire form at all")
+    sentence.contains("§4.4")
+        || sentence.contains("no wire form at all")
+        || [
+            marker(deferred_wire_head),
+            marker(unmarshallable_wire_head),
+            marker(withdrawn_wire_head),
+        ]
+        .iter()
+        .any(|m| sentence.contains(m.as_str()))
 }
 
 /// Where the force comes from: `heads` is **computed** by calling the same
@@ -174,6 +252,52 @@ fn the_generator_does_not_write_its_own_wire_refusal() {
         }
         for (id, why) in &orbweaver_gen::python::emit_python(&registry, "g").skipped {
             assert_reads_a_head(&format!("orbweaver-gen (python, {id})"), family, why, &heads);
+        }
+    }
+}
+
+/// **Every** skip either emitter reports over a fixture whose whole content
+/// reaches one family reads a published head — no classification, because the
+/// fixture is the classification.
+///
+/// This is the assertion the file was missing, and the shape of what it missed
+/// is worth keeping. `the_generator_does_not_write_its_own_wire_refusal` above
+/// asks each sentence whether it is about a wire family *before* demanding a
+/// head, so a family with no head yet answers "no" to that question in every
+/// layer at once and the whole file goes quiet about it. Measured 2026-08-26:
+/// five `gp34` declarations were skipped by both emitters with `"no static
+/// mapping for Principal"` and `"no AnyJSON form for Principal"`, S4 named none
+/// of them, and `deferred_wire_agreement`'s two sets agreed **because both were
+/// empty**. Three gates green over one construct the wire cannot carry.
+///
+/// A fixture that reaches nothing else cannot answer "no" that way: every skip
+/// in it is caused by the family, so every skip owes a head. The day a sixth
+/// construct gets an arm in the type mapper and no head of its own, this test
+/// is what says so — provided its fixture is added to `FAMILIES`, which is the
+/// one thing still done by hand and is why the list is at the top of the file
+/// where it can be seen.
+#[test]
+fn every_layer_that_meets_one_reads_a_head() {
+    for (family, src) in FAMILIES {
+        let registry = registry_of(src);
+        let heads = heads_over(&registry);
+        assert!(!heads.is_empty(), "{family}: the fixture reaches no wire family");
+        for (target, skipped) in [
+            ("rust", emit(&registry, "g").skipped),
+            ("python", orbweaver_gen::python::emit_python(&registry, "g").skipped),
+        ] {
+            assert!(
+                !skipped.is_empty(),
+                "{family}: the {target} emitter skipped nothing, so this fixture measures nothing"
+            );
+            for (id, why) in &skipped {
+                assert!(
+                    heads.iter().any(|h| why.contains(h.as_str())),
+                    "{target} skips {id} for a {family} without reading a published head:\n  \
+                     {why}\nit must contain one of:\n{}",
+                    heads.iter().map(|h| format!("  {h}\n")).collect::<String>()
+                );
+            }
         }
     }
 }
@@ -237,17 +361,41 @@ fn a_native_is_counted_though_its_sentence_names_no_section() {
     );
 }
 
-/// The two heads are different sentences and must stay different: swapping
-/// them is the one substitution that reads as correct and tells the reader the
+/// The three heads are different sentences and must stay different: swapping
+/// any two is the substitution that reads as correct and tells the reader the
 /// opposite of the truth about whether to wait for a later version.
+///
+/// The third is not a spare copy of the second. Both say "no later version
+/// carries this", and they say it for opposite reasons a contract author has to
+/// act on differently: a `native` never had a wire form, so the fix is to
+/// declare in IDL what the language type actually contains, while a `Principal`
+/// **had** one — every GIOP 1.0 request header carried it — so the author is
+/// not being told they modelled something wrong, they are being told the
+/// specification moved caller identity somewhere else.
 #[test]
-fn the_two_families_do_not_share_a_head() {
+fn the_three_families_do_not_share_a_head() {
     let deferred = deferred_wire_head("X");
     let native = unmarshallable_wire_head("X");
+    let withdrawn = withdrawn_wire_head("X");
     assert_ne!(deferred, native);
+    assert_ne!(deferred, withdrawn);
+    assert_ne!(native, withdrawn);
     assert!(
         deferred.contains("§4.4"),
         "the deferred head must name the section it defers under: {deferred}"
     );
     assert!(!native.contains("yet"), "a native's head must not promise a later version: {native}");
+    assert!(
+        !withdrawn.contains("yet"),
+        "a withdrawn type's head must not promise a later version: {withdrawn}"
+    );
+    // The one thing the third head must *not* borrow from the first. §4.4 is
+    // the list of what this project owes; a type the OMG removed is not on it,
+    // and a head that named the section would send the reader to a plan entry
+    // that will never mention `Principal`. The *sentence* names it — to deny
+    // it — and that denial is pinned in `orbweaver-dynamic`'s own tests.
+    assert!(
+        !withdrawn.contains("§4.4"),
+        "a withdrawn type is not deferred under any section: {withdrawn}"
+    );
 }

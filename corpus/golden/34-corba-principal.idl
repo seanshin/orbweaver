@@ -42,13 +42,34 @@
 // refuses it by name, and both emitters skip the declaration rather than
 // serving a member that writes nothing.
 //
-// What this file does **not** yet pin: S4 does not warn on it the way it warns
-// on a native or a valuetype. Making it a fifth family means one published
-// refusal head in `orbweaver-dynamic` and both emitters using it, because
-// `crates/orbweaver-gen/tests/deferred_wire_agreement.rs` holds S4's set and
-// the emitters' §4.4 skips equal — three crates, one change. Recorded here
-// rather than half-done, so the gap is a sentence somebody can act on instead
-// of a silence.
+// **The fifth family landed 2026-08-26** and this paragraph is what commissioned
+// it, so it says what changed rather than being deleted. It used to read: *"S4
+// does not warn on it the way it warns on a native or a valuetype. Making it a
+// fifth family means one published refusal head in `orbweaver-dynamic` and both
+// emitters using it… three crates, one change."* That is what was done —
+// `orbweaver_dynamic::withdrawn_wire_head` is the head, both emitters call it
+// through `withdrawn_principal`, and this file's five unservable declarations
+// are now five `wire/deferred-type` warnings with a position and a fix.
+//
+// What the paragraph got wrong is worth more than what it got right. It scoped
+// the work to S4 and the emitters, and the batch that did it found **two live
+// falsehoods in shipped code** that nobody was looking for: `from_json`
+// answered a peer `"principal cannot cross yet"` and `decode` answered
+// `"cannot decode principal yet"`. "Yet" promises a release in which the type
+// comes back; CORBA 3.0 removed it. Those are the same two sentences the
+// `native` family was repaired for on 2026-08-21, in the same two layers, over
+// a different `TypeCode` — and they survived that sweep because a sweep scoped
+// to a keyword fixes a keyword. Three gates were green over this file while
+// they were live, and `deferred_wire_agreement`'s two sets agreed **because
+// both were empty**: the rule named nothing here, the emitters' catch-all
+// sentences carried no published head, and the filter that reads the heads
+// could not see them.
+//
+// The wording chosen for the fifth head says withdrawal rather than deferral or
+// absence, because those are three different instructions to a contract author,
+// and this family is the only one whose fix can name a *replacement*: caller
+// identity moved into a CSIv2 service context (`orbweaver_giop::csiv2`'s
+// `IdentityToken`), so S4 says where it went instead of only that it left.
 module gp34 {
   // ── unservable: reaches ::CORBA::Principal ──────────────────────────────
   // as a member, which is the shape that produced the `void`

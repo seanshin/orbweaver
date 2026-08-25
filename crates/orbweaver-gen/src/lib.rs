@@ -319,7 +319,21 @@ pub(crate) fn rust_type(tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
         TypeCode::Value { name, id, .. } => return Err(deferred_value(name, id)),
         TypeCode::AbstractInterface { name, id, .. } => return Err(deferred_abstract(name, id)),
         TypeCode::Native { name, id, .. } => return Err(unmarshallable_native(name, id)),
-        other => return Err(format!("no static mapping for {other:?}")),
+        TypeCode::Principal => return Err(withdrawn_principal()),
+        // No catch-all, and the compiler is what removed it: `TypeCode::Principal`
+        // was the last variant `other => "no static mapping for {other:?}"` was
+        // still answering for, so giving it an arm made that line unreachable
+        // and `-D warnings` said so.
+        //
+        // It is deleted rather than kept for safety, which is the same argument
+        // `orbweaver_dynamic::describe` and `dynany::default_within` are
+        // exhaustive for. A catch-all here answers for a construct nobody has
+        // thought about — with a sentence naming no boundary and no fix — and
+        // `representable` asks this function at every node, so that sentence
+        // would propagate to every container reaching it. Exhaustive, a
+        // thirty-fifth `TypeCode` variant fails to compile in this file on the
+        // day it is added, which is when somebody can still decide what the
+        // generator should say about it.
     })
 }
 
@@ -379,6 +393,32 @@ pub(crate) fn unmarshallable_native(name: &str, id: &str) -> String {
          refuses the declaration; its Python back end ignores it and leaves a dangling type \
          mapping)",
         orbweaver_dynamic::unmarshallable_wire_head(&orbweaver_dynamic::native_subject(name, id))
+    )
+}
+
+/// The same, for `::CORBA::Principal` — the fifth family, and the one both
+/// emitters refused out of their own catch-all until 2026-08-26.
+///
+/// What that cost is worth stating, because it is not the same defect the
+/// cascade batch fixed the day before. That one was a *hole*: the walker
+/// cleared what the mapper refused, so a container naming a `Principal` was
+/// emitted and the generated crate did not compile. This one is a *sentence*:
+/// once the walker asked the mapper at every node the skip was correct, and the
+/// reason a reader got for it was `"no static mapping for Principal"` in Rust
+/// and `"no AnyJSON form for Principal"` in Python — two strings, neither of
+/// them naming a boundary, neither greppable against the four families' skips
+/// beside them in the same report, and neither seen by
+/// `tests/deferred_wire_agreement.rs`, which reads the *heads* to tell a wire
+/// refusal from an ordinary skip. A refusal that no gate can classify is a
+/// refusal that drifts.
+///
+/// The tail is this emitter's own, as the other four families' tails are:
+/// what a *generator* did instead of serving the declaration.
+pub(crate) fn withdrawn_principal() -> String {
+    format!(
+        "{}. The declaration is skipped rather than served: a member of it would marshal zero \
+         bytes, and every field after it would be read at the wrong offset",
+        orbweaver_dynamic::withdrawn_wire_head(&orbweaver_dynamic::principal_subject())
     )
 }
 

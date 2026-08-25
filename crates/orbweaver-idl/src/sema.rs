@@ -168,8 +168,12 @@ impl Analysis {
 
 /// Analyses a parsed specification.
 pub fn analyse(spec: &Spec) -> Analysis {
-    let mut a =
-        Analyser { scopes: vec![Scope::default()], diagnostics: Vec::new(), deferred: Vec::new() };
+    let mut a = Analyser {
+        scopes: vec![Scope::default()],
+        diagnostics: Vec::new(),
+        deferred: Vec::new(),
+        corba_scope: 0,
+    };
     a.install_corba_module();
     a.collect_definitions(0, &spec.definitions);
     a.resolve_deferred();
@@ -224,6 +228,13 @@ struct Analyser {
     scopes: Vec<Scope>,
     diagnostics: Vec<Diagnostic>,
     deferred: Vec<Deferred>,
+    /// The scope [`Analyser::install_corba_module`] created, so a use of a
+    /// predeclared name can be told from a use of a user's own name that
+    /// happens to be spelled the same. Nothing else may compare the *string*
+    /// `"CORBA::Principal"`: that is a classifier written against a spelling,
+    /// and a contract is free to declare its own `Principal` (the registry
+    /// pins that it keeps what the author wrote).
+    corba_scope: usize,
 }
 
 impl Analyser {
@@ -240,6 +251,7 @@ impl Analyser {
     /// *is* legal has to resolve to something.
     fn install_corba_module(&mut self) {
         let corba = self.push_scope(0, "CORBA");
+        self.corba_scope = corba;
         for &(name, kind) in PREDECLARED_CORBA {
             self.scopes[corba].symbols.insert(
                 name.to_lowercase(),
@@ -1127,13 +1139,28 @@ impl Analyser {
 
 // ── what the wire cannot carry (docs/PLAN.md §4.4, and one thing it omits) ───
 //
-// **This rule's set is four families, and §4.4 names three.** The fourth is
+// **This rule's set is five families, and §4.4 names three.** The fourth is
 // `native X;`, and the sentence that separates it from the other three is the
 // whole reason it is worth writing down: §4.4 *defers* `valuetype`, abstract
 // interfaces and `fixed` — each has a wire form the specification defines and
 // this version does not implement — while a `native` has no wire form to
 // implement, in v1 or in any later version. A native names a type only the
 // language mapping knows; there is nothing to marshal.
+//
+// The fifth is `::CORBA::Principal`, added 2026-08-26, and it is a third
+// answer rather than a second copy of the fourth: the wire **did** carry one.
+// GIOP 1.0 put a `Principal` in every request header, GIOP 1.1 dropped the
+// field, CORBA 3.0 removed the type. So it is not deferred (nothing is coming)
+// and it is not never-marshallable (peers marshalled one for a decade) — the
+// specification took it back, and a contract author is owed that distinction
+// because it changes what they do next. See [`PRINCIPAL_CONSTRUCT`].
+//
+// It was the one family with **no `Definition` to hang a cause on**: nothing
+// declares the name, the front end predeclares it, so it could never become a
+// `WireDecl` and this rule stayed silent while both emitters skipped five
+// declarations of `corpus/golden/34` out of their own catch-alls. Three gates
+// were green over it, and one of them — `deferred_wire_agreement` — was green
+// *because both of its sets were empty*.
 //
 // It was missing here for exactly that reason, inverted: because §4.4 did not
 // name it, this rule did not name it, so the generator could not refuse it
@@ -1180,6 +1207,19 @@ impl Analyser {
 /// construction, so the two cannot drift apart.
 pub const DEFERRED_WIRE_RULE: &str = crate::rules::WIRE_DEFERRED_TYPE;
 
+/// How [`DeferredWireUse::construct`] spells the fifth family.
+///
+/// A *kind* phrase and not the name, for the reason the other four are kind
+/// phrases: [`DeferredWireUse::reason`] reads "member "sender" is
+/// "CORBA::Principal", which is a withdrawn CORBA type", and putting the name
+/// in both halves would say it twice and explain it once.
+///
+/// Public because it is what [`DeferredWireUse::family`] classifies on, and a
+/// consumer that wants the fifth family's findings must be able to ask without
+/// retyping the phrase — the same reason `orbweaver-dynamic` publishes its
+/// heads. Prefer `family() == "withdrawn types"` to comparing this directly.
+pub const PRINCIPAL_CONSTRUCT: &str = "withdrawn CORBA type";
+
 /// One declaration the v1 wire cannot carry, and why.
 ///
 /// A declaration is here either because it *is* one of the deferred
@@ -1199,7 +1239,10 @@ pub struct DeferredWireUse {
     /// What kind of declaration it is: `struct`, `interface`, `typedef`, …
     pub kind: &'static str,
     /// The construct at the root of the reason, as written: `fixed<9,2>`,
-    /// `valuetype`, `abstract valuetype`, `abstract interface`, `ValueBase`.
+    /// `valuetype`, `abstract valuetype`, `abstract interface`, `ValueBase`,
+    /// `native` — or [`PRINCIPAL_CONSTRUCT`], the one entry that is a kind
+    /// phrase rather than something the author wrote, because nothing in a
+    /// contract declares a `Principal`.
     pub construct: String,
     /// The path from the declaration to the construct, in prose, starting
     /// after the declaration's name: *"member "total" is "gc21::Amount", which
@@ -1213,11 +1256,25 @@ pub struct DeferredWireUse {
 impl DeferredWireUse {
     /// The finding as prose, in the shape S4's other rules take.
     ///
-    /// Two sentences, because the set is two things: three constructs §4.4
-    /// *defers*, and one — `native` — it does not mention because there is
-    /// nothing to defer. Saying "§4.4 defers natives" would be false, and a
-    /// gate that says a false thing gets bypassed.
+    /// Three sentences, because the set is three things: three constructs §4.4
+    /// *defers*; one — `native` — it does not mention because there is nothing
+    /// to defer; and one — `::CORBA::Principal` — it does not mention because
+    /// the wire form it had was taken away rather than never written. Saying
+    /// "§4.4 defers natives" would be false, and a gate that says a false thing
+    /// gets bypassed; saying it about a `Principal` would be false twice, since
+    /// it also implies a release in which the type comes back.
     pub fn message(&self) -> String {
+        if self.family() == "withdrawn types" {
+            return format!(
+                "{} {:?} cannot go on the wire: {}. `::CORBA::Principal` is what is left of the \
+                 GIOP 1.0 request header field — GIOP 1.1 dropped the field and CORBA 3.0 \
+                 removed the type — so no version of this wire marshals a value for one. This \
+                 is not one of docs/PLAN.md §4.4's three deferrals: nothing here is waiting to \
+                 be implemented. The generator skips the declaration and the dynamic path \
+                 cannot marshal it",
+                self.kind, self.declaration, self.reason,
+            );
+        }
         if self.family() == "natives" {
             return format!(
                 "{} {:?} cannot go on the wire at all: {}, which names a type only a language \
@@ -1240,6 +1297,22 @@ impl DeferredWireUse {
     /// The concrete edit, per construct family.
     pub fn fix(&self) -> String {
         match self.family() {
+            // The one fix in this list that can point at a *replacement*
+            // rather than only at a redesign: caller identity did not
+            // disappear with `Principal`, it moved out of the request header
+            // and into a service context, where CSIv2 carries it as an
+            // `IdentityToken` (`orbweaver_giop::csiv2`). A contract that says
+            // `::CORBA::Principal who` almost always means "the caller", and
+            // sending the caller as an ordinary member is a different design
+            // from having the ORB assert one — so both halves are named.
+            "withdrawn types" => "say what actually crosses: a `string` (or a struct) the \
+                                  caller fills in, if the identity is data this operation \
+                                  takes; or nothing at all, if it is the *caller's* identity \
+                                  you want — that travels in a CSIv2 service context as an \
+                                  `IdentityToken`, not as a parameter. `::CORBA::Principal` \
+                                  is the remains of the GIOP 1.0 request header field and no \
+                                  release brings it back"
+                .into(),
             "natives" => "declare the type in IDL — a struct, a typedef, or an `interface` if \
                           it is an object — so the contract says what crosses; a `native` \
                           names a type only the language mapping knows, and no wire version \
@@ -1263,9 +1336,13 @@ impl DeferredWireUse {
 
     /// The family the construct belongs to, for the message and the fix.
     ///
-    /// Three of the four are §4.4's; `"natives"` is not, and
-    /// [`DeferredWireUse::message`] branches on exactly this answer so the
-    /// difference is said rather than glossed.
+    /// Three of the five are §4.4's; `"natives"` and `"withdrawn types"` are
+    /// not, and they are not each other either.
+    /// [`DeferredWireUse::message`] branches on exactly this answer so each
+    /// difference is said rather than glossed: §4.4's three wait on this
+    /// project, a `native` has nothing to wait for because there is no wire
+    /// form to implement, and `::CORBA::Principal` has nothing to wait for
+    /// because the specification took the wire form away.
     pub fn family(&self) -> &'static str {
         if self.construct.starts_with("fixed") {
             "fixed"
@@ -1273,6 +1350,8 @@ impl DeferredWireUse {
             "abstract interfaces"
         } else if self.construct == "native" {
             "natives"
+        } else if self.construct == PRINCIPAL_CONSTRUCT {
+            "withdrawn types"
         } else {
             "valuetypes"
         }
@@ -1556,20 +1635,23 @@ impl Analyser {
             // would be a false refusal. Asserted, not left to the shape of
             // the code.
             //
-            // For `::CORBA::Principal` it is **not** right, and this comment
+            // For `::CORBA::Principal` it was **not** right, and this comment
             // asserted it anyway — one sentence covering two names, half of it
-            // false, with nothing compiling either half. `Principal` was
-            // withdrawn from CORBA and has no wire form this version writes;
-            // the registry answers `TypeCode::Principal` (since 2026-08-25) and
-            // every marshalling layer refuses it by name, so a contract using
-            // it is refused at generation rather than served with a member that
-            // writes zero bytes. It is still not named by this rule, so S4 does
-            // not warn on it: making it a fifth family means giving the refusal
-            // one published head in `orbweaver-dynamic` and teaching both
-            // emitters to use it, and `crates/orbweaver-gen/tests/
-            // deferred_wire_agreement.rs` holds those two sets equal — so that
-            // is one change across three crates, not a line here.
-            // Recorded rather than half-done. See `corpus/golden/34`.
+            // false, with nothing compiling either half.
+            //
+            // It is right again as of 2026-08-26, by a different route than
+            // this arm: `Principal` is now the fifth family, and a *use* of it
+            // is recorded as a direct cause by [`Analyser::wire_type`] rather
+            // than by anything reaching here. That is forced by the shape — the
+            // name has no `Definition` — and it is also the correct reading:
+            // `Principal` is not a native that happens to be predeclared, it is
+            // a type CORBA removed, and `SymbolKind::Native` is only how this
+            // front end spells "predeclared, no body" (omniidl spells it the
+            // same way, in a preamble it calls `<built in>`).
+            //
+            // So this arm keeps its original scope — a `native` **written in
+            // the contract** — and the predeclared pair keeps its own answers:
+            // `TypeCode` marshals, `Principal` does not.
             Definition::Native(_) => {
                 decl.kind = "native";
                 decl.direct = Some((None, "native".into()));
@@ -1604,6 +1686,27 @@ impl Analyser {
             }
             TypeSpec::ValueBase if first => decl.direct = Some((at(), "ValueBase".into())),
             TypeSpec::Sequence { element, .. } => self.wire_type(scope, site, element, decl),
+            // The fifth family, and the only one of the five with **no
+            // declaration anywhere to hang a cause on**: nothing declares
+            // `::CORBA::Principal`, the front end predeclares it
+            // ([`PREDECLARED_CORBA`]), so it can never become a `WireDecl` and
+            // can never acquire a cause of its own for a later pass to reach
+            // through. A use of it is therefore *direct*, exactly as writing
+            // `fixed<9,2>` at this site would be — which is also why the
+            // closure below still cascades correctly: `struct Manifest {
+            // Envelope sealed; }` reaches it through `Envelope`'s cause like
+            // any other hop.
+            //
+            // `ValueBase` above is the same shape in the other spelling — a
+            // keyword with no declaration — and had a `TypeSpec` variant of
+            // its own to match on. This one is an ordinary scoped name, so it
+            // is told apart by *what it resolves to* rather than by how it is
+            // spelled: a contract that declares its own `Principal` keeps it
+            // (`orbweaver-registry` pins that), and matching the string
+            // `"CORBA::Principal"` here would refuse theirs too.
+            TypeSpec::Named(n) if first && self.predeclared_principal(scope, n) => {
+                decl.direct = Some((at(), PRINCIPAL_CONSTRUCT.to_owned()));
+            }
             TypeSpec::Named(n) => {
                 if let Some((target, by_value)) = self.wire_target(scope, n) {
                     decl.refs.push((site.to_owned(), target, by_value));
@@ -1611,6 +1714,23 @@ impl Analyser {
             }
             _ => {}
         }
+    }
+
+    /// Whether `n` names the **predeclared** `::CORBA::Principal` — the one
+    /// [`PREDECLARED_CORBA`] installs — rather than a `Principal` the contract
+    /// declared for itself.
+    ///
+    /// Asked by identity, not by spelling: the symbol has to have been found in
+    /// the scope [`Analyser::install_corba_module`] created, and it has to be
+    /// the synthesised entry (no source span, since nothing wrote it). A
+    /// contract is free to declare `typedef string Principal;` — or to reopen
+    /// `module CORBA` — and what it declared is what it gets.
+    fn predeclared_principal(&self, scope: usize, n: &ScopedName) -> bool {
+        let Some((container, sym)) = self.find(scope, n) else { return false };
+        container == self.corba_scope
+            && sym.name == "Principal"
+            && sym.kind == SymbolKind::Native
+            && sym.span == Span::empty()
     }
 
     /// The qualified name of what `n` refers to, if it is something a value

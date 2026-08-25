@@ -885,6 +885,56 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **Two shipped layers told a peer to wait for a release that cannot come, for
+  a type CORBA removed in 2002.** `anyjson::from_json` answered a peer-fed
+  document naming a `Principal` with `"principal cannot cross yet"`, and the
+  CDR read direction answered `"cannot decode principal yet"`. Those are the
+  *same two sentences in the same two layers* that were repaired for `native`
+  on 2026-08-21; they survived that sweep because the sweep was scoped to a
+  keyword, and a batch scoped to a keyword fixes a keyword. `::CORBA::Principal`
+  is now a **fifth refusal family** with one published head
+  (`orbweaver_dynamic::withdrawn_wire_head`), and its wording says *withdrawn*
+  rather than *deferred* or *never marshallable* because those are three
+  different instructions to a contract author: §4.4's three wait on this
+  project, a `native` never had a wire form, and a `Principal` had one that
+  GIOP 1.1 dropped and CORBA 3.0 removed. Five layers in `orbweaver-dynamic`,
+  both emitters (`withdrawn_principal`), the generated Python runtime
+  (`_WITHDRAWN`, held equal to the Rust sentence across the crate boundary by
+  `python_target`) and `orbweaver-test`'s two property limits all read that
+  head; the type mappers became **exhaustive over `TypeCode`** in the process,
+  so both `no static mapping for …` catch-alls are gone and a thirty-fifth
+  variant fails to compile rather than acquiring a sentence that names no
+  boundary. **S4 warns for the first time**: `wire/deferred-type` names the
+  five `corpus/golden/34` declarations with a position and a fix that says
+  where caller identity actually went (a CSIv2 `IdentityToken` in a service
+  context) — the only fix in that rule's set that can name a replacement
+  rather than a redesign. `contract-check` over that file went from
+  `0 declaration(s) the wire cannot carry … 0 unmeasured` to `5 … 3
+  unmeasured`. Three gates had been green over it, and the way
+  `deferred_wire_agreement` was green is the lesson: it compares the rule's set
+  with the emitters' set **through one filter that reads the published heads**,
+  and a family with no published head is invisible to both sides at once — two
+  empty sets are equal. The fix for that class is not a better filter but an
+  assertion that classifies by *fixture* instead of by sentence
+  (`one_home_for_a_wire_refusal::every_layer_that_meets_one_reads_a_head`).
+
+  **CORBA가 2002년에 제거한 타입을 두고, 배포된 두 계층이 피어에게 오지 않을
+  릴리스를 기다리라고 말하고 있었다.** `from_json`은 `"principal cannot cross
+  yet"`, CDR 읽기는 `"cannot decode principal yet"`이라고 답했다. 2026-08-21에
+  `native`에 대해 고친 *같은 두 계층의 같은 두 문장*이며, 그 정리가 키워드에
+  맞춰져 있었기 때문에 살아남았다 — 키워드에 맞춘 배치는 키워드를 고칠 뿐이다.
+  이제 `::CORBA::Principal`은 공표된 머리 하나를 가진 **다섯 번째 거부 계열**이고,
+  그 문장은 *미뤄짐*이나 *애초에 없음*이 아니라 **철회**를 말한다 — 셋은 계약
+  작성자에게 서로 다른 지시이기 때문이다. `orbweaver-dynamic`의 다섯 계층, 두
+  에미터, 생성된 파이썬 런타임(`_WITHDRAWN`), 속성 검사의 두 한계 문장이 모두 그
+  머리를 읽는다. 그 과정에서 두 타입 매퍼가 `TypeCode`에 대해 **전수적**이 되어
+  catch-all이 사라졌다. **S4가 처음으로 경고한다** — 위치와, 호출자 신원이 어디로
+  갔는지(CSIv2 서비스 컨텍스트의 `IdentityToken`)를 말하는 수정 힌트와 함께.
+  세 게이트가 초록이었고, `deferred_wire_agreement`가 초록이던 방식이 교훈이다:
+  **공표된 머리를 읽는 하나의 필터**로 양쪽 집합을 계산하므로, 머리가 없는 계열은
+  양쪽에서 동시에 보이지 않는다 — 빈 집합 둘은 서로 같다. 이 부류의 해법은 더
+  촘촘한 필터가 아니라 문장이 아닌 *픽스처*로 분류하는 단언이다.
+
 - **Both emitters kept a second list of what the wire cannot carry, and the
   two lists disagreed.** `orbweaver-gen`'s type mapper ends in a catch-all that
   *refuses* anything it has no arm for; the cascade that decides whether a skip

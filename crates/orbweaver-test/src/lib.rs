@@ -186,7 +186,7 @@ fn head_marker(head: fn(&str) -> String) -> String {
 /// whose sentence reads one of `orbweaver-dynamic`'s two heads, counted once
 /// per type.
 ///
-/// **Two families, and the classifier has to know that.** It filtered on the
+/// **Three families, and the classifier has to know that.** It filtered on the
 /// literal `"§4.4"` until 2026-08-24, so the four `native` declarations were in
 /// the set only because their sentence mentioned the section in order to say it
 /// does *not* apply. The day that wording moved into the shared head — which
@@ -194,6 +194,15 @@ fn head_marker(head: fn(&str) -> String) -> String {
 /// with nothing else changed, and the label above it still read "§4.4 and
 /// natives". A classifier is a sentence too: it asks the crate that owns the
 /// heads what they say, rather than keeping a fragment of one.
+///
+/// The third marker landed 2026-08-26 with the `Principal` family, and it is
+/// the case that shows asking-the-owner is not the whole rule: this function
+/// asked correctly and still could not see a `Principal`, because until that
+/// day no head owned that sentence and `prop.rs` wrote two of its own. **A
+/// classifier that asks the owner is exactly as complete as the owner's list
+/// is** — so a family arriving without a published head is invisible here, and
+/// the thing that catches *that* is a fixture-shaped assertion
+/// (`tests/one_home_for_a_wire_refusal.rs`), not a better filter.
 ///
 /// Advice, still, and deliberately: the sweep cannot round-trip a `fixed`, so
 /// there is no defect to report and no severity to raise. What was missing was
@@ -207,12 +216,15 @@ fn head_marker(head: fn(&str) -> String) -> String {
 pub fn deferred_wire_gaps(report: &Report) -> std::collections::BTreeSet<String> {
     let deferred = head_marker(orbweaver_dynamic::deferred_wire_head);
     let native = head_marker(orbweaver_dynamic::unmarshallable_wire_head);
+    let withdrawn = head_marker(orbweaver_dynamic::withdrawn_wire_head);
     report
         .findings
         .iter()
         .filter(|f| {
             matches!(f.rule.as_str(), "prop/unsupported-type" | "json/unmapped")
-                && (f.message.contains(&deferred) || f.message.contains(&native))
+                && (f.message.contains(&deferred)
+                    || f.message.contains(&native)
+                    || f.message.contains(&withdrawn))
         })
         .map(|f| f.source.clone())
         .collect()

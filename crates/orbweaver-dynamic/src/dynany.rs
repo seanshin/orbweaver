@@ -347,19 +347,16 @@ fn default_within(tc: &TypeCode, open: &mut Vec<TypeCode>, path: &str) -> Result
     // two. A `native` is not deferred by §4.4 and `Principal` is not in §4.4 at
     // all; both were sent to a plan entry that does not name them. The head now
     // comes from the one place that owns it — [`crate::deferred_wire_head`] for
-    // §4.4's three, [`crate::unmarshallable_wire_head`] for a native — and this
-    // closure only says what a *navigator* could not do.
+    // §4.4's three, [`crate::unmarshallable_wire_head`] for a native,
+    // [`crate::withdrawn_wire_head`] for a `Principal` — and this closure only
+    // says what a *navigator* could not do.
     const NO_START: &str = ", so there is nothing to start a value of it at";
     let cannot_start = |head: String| Error { path: path.to_string(), message: head + NO_START };
-    let unsupported = |what: &str| Error {
-        path: path.to_string(),
-        message: format!("{what} has no value in the dynamic path{NO_START}"),
-    };
-    // §4.4's three and the fourth family, each named by the function that owns
-    // its head. Called from the arms below rather than before the match,
-    // because the match is exhaustive over `TypeCode` and that exhaustiveness
-    // is what makes a *fifth* unmarshallable construct go red here instead of
-    // silently acquiring a default value.
+    // §4.4's three, the fourth family and the fifth, each named by the function
+    // that owns its head. Called from the arms below rather than before the
+    // match, because the match is exhaustive over `TypeCode` and that
+    // exhaustiveness is what makes a *sixth* unmarshallable construct go red
+    // here instead of silently acquiring a default value.
     let deferred = |tc: &TypeCode| {
         cannot_start(crate::deferred_wire_head(
             &crate::deferred_wire_name(tc).expect("§4.4 names this construct"),
@@ -368,6 +365,11 @@ fn default_within(tc: &TypeCode, open: &mut Vec<TypeCode>, path: &str) -> Result
     let unmarshallable = |tc: &TypeCode| {
         cannot_start(crate::unmarshallable_wire_head(
             &crate::unmarshallable_wire_name(tc).expect("no wire version carries this construct"),
+        ))
+    };
+    let withdrawn = |tc: &TypeCode| {
+        cannot_start(crate::withdrawn_wire_head(
+            &crate::withdrawn_wire_name(tc).expect("the specification withdrew this construct"),
         ))
     };
     Ok(match &node {
@@ -477,11 +479,13 @@ fn default_within(tc: &TypeCode, open: &mut Vec<TypeCode>, path: &str) -> Result
         // class: legal, silent, and about a different type. Its head is not
         // §4.4's, and until now this arm said it was.
         TypeCode::Native { .. } => return Err(unmarshallable(&node)),
-        // `Principal` keeps the closure above to itself. It is not deferred
-        // and it is not a native — it was withdrawn from CORBA — so neither
-        // head applies. It is the other of the two arms that used to be sent
-        // to §4.4 for a boundary it never hit.
-        TypeCode::Principal => return Err(unsupported("`Principal`")),
+        // And the fifth. It is not deferred and it is not a native — it was
+        // withdrawn from CORBA — and for a day this arm answered that in a
+        // sentence of its own, because the fifth family had no published head
+        // to read. It has one now ([`crate::withdrawn_wire_head`]), so this
+        // layer contributes only the tail every one of the five shares here:
+        // what a *navigator* could not do.
+        TypeCode::Principal => return Err(withdrawn(&node)),
         // open_type followed both; arriving here would mean it had not.
         TypeCode::Recursive(_) | TypeCode::Alias { .. } => {
             return Err(Error {
