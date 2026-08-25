@@ -191,9 +191,18 @@ impl<'a> Path<'a> {
     }
 
     /// The enclosing type `id` names, innermost first.
+    ///
+    /// The id comes from [`TypeCode::repository_id`], which owns that fact.
+    /// This crate kept a private `type_id_of` until 2026-08-25 — a second home
+    /// for one fact, and it had already drifted: it answered `None` for a
+    /// [`TypeCode::Recursive`], where the owner answers the id the marker
+    /// carries. Harmless, because `open` is pushed only from `entering` and
+    /// nothing enters a marker, so the arm that differed was never asked. A
+    /// difference nobody can reach is still a difference nobody is holding to
+    /// anything.
     fn resolve(&self, id: &str) -> Option<&'a TypeCode> {
         if let Some(tc) = self.open
-            && type_id_of(tc) == Some(id)
+            && tc.repository_id() == Some(id)
         {
             return Some(tc);
         }
@@ -510,6 +519,23 @@ pub fn unmarshallable_wire_sentence(what: &str) -> String {
     )
 }
 
+/// How a type is named inside this crate's own diagnostics — "expected a value
+/// of type …", "… has no component 3", "cannot decode … yet".
+///
+/// **Exhaustive over `TypeCode` on purpose**, for the reason
+/// [`dynany::default_within`] is: the tail used to be
+/// `other => match other.kind() { Some(k) => …, None => "an indirection" }`,
+/// which is a catch-all that answers for a variant nobody has thought about.
+/// A thirty-fourth construct — the ones this project has met so far arrive
+/// with **no** `TcKind`, as `Native` and `Recursive` did — would have been
+/// named `an indirection` in a refusal a peer reads, and nothing would have
+/// been red. The lowercase kind spellings are kept exactly as `kind()`
+/// produced them (`ulonglong`, not `unsigned long long`) because they are what
+/// `deferred_sentence_agreement` and `dynany`'s tests already pin; the only
+/// text that changed is the marker's, which now names the id it points at
+/// instead of describing its own shape.
+///
+/// [`dynany::default_within`]: crate::dynany
 fn describe(tc: &TypeCode) -> String {
     match tc {
         TypeCode::Struct { name, .. }
@@ -530,10 +556,38 @@ fn describe(tc: &TypeCode) -> String {
         TypeCode::String(n) => format!("string<{n}>"),
         TypeCode::WString(0) => "wstring".into(),
         TypeCode::WString(n) => format!("wstring<{n}>"),
-        other => match other.kind() {
-            Some(k) => format!("{k:?}").to_lowercase(),
-            None => "an indirection".into(),
-        },
+        TypeCode::Null => "null".into(),
+        TypeCode::Void => "void".into(),
+        TypeCode::Boolean => "boolean".into(),
+        TypeCode::Octet => "octet".into(),
+        TypeCode::Char => "char".into(),
+        TypeCode::WChar => "wchar".into(),
+        TypeCode::Short => "short".into(),
+        TypeCode::UShort => "ushort".into(),
+        TypeCode::Long => "long".into(),
+        TypeCode::ULong => "ulong".into(),
+        TypeCode::LongLong => "longlong".into(),
+        TypeCode::ULongLong => "ulonglong".into(),
+        TypeCode::Float => "float".into(),
+        TypeCode::Double => "double".into(),
+        TypeCode::LongDouble => "longdouble".into(),
+        TypeCode::Any => "any".into(),
+        TypeCode::TypeCode => "typecode".into(),
+        TypeCode::Principal => "principal".into(),
+        // Digits and scale are a `fixed`'s whole identity, and
+        // [`fixed_subject`] is where that spelling lives — but the CDR path's
+        // refusal for one is pinned, word for word and deliberately, by
+        // `deferred_sentence_agreement`'s
+        // `the_cdr_path_does_not_yet_name_the_section_for_fixed`, which names
+        // the day it should go red. Naming it better here is that day's work,
+        // not this one's.
+        TypeCode::Fixed { .. } => "fixed".into(),
+        // Unreachable from `encode_at` and `decode_at`, which resolve a marker
+        // before they could ask; reachable from a caller that hands a fragment
+        // straight in. It used to answer "an indirection" — a phrase that
+        // names no construct, and one this crate has already met in a real
+        // diagnostic (see [`Path::open`]).
+        TypeCode::Recursive(id) => format!("an indirection to {id}"),
     }
 }
 
@@ -566,23 +620,6 @@ fn kind_of(v: &Value) -> &'static str {
 
 fn cdr<T>(p: &Path<'_>, r: std::result::Result<T, orbweaver_cdr::Error>) -> Result<T> {
     r.map_err(|e| Error { path: p.render(), message: e.to_string() })
-}
-
-/// The repository id of a constructed type, which is what a
-/// [`TypeCode::Recursive`] marker names.
-fn type_id_of(tc: &TypeCode) -> Option<&str> {
-    match tc {
-        TypeCode::Struct { id, .. }
-        | TypeCode::Except { id, .. }
-        | TypeCode::Union { id, .. }
-        | TypeCode::Alias { id, .. }
-        | TypeCode::Enum { id, .. }
-        | TypeCode::ObjRef { id, .. }
-        | TypeCode::Value { id, .. }
-        | TypeCode::AbstractInterface { id, .. }
-        | TypeCode::Native { id, .. } => Some(id),
-        _ => None,
-    }
 }
 
 /// How deep a chain of constructed types either direction will follow.

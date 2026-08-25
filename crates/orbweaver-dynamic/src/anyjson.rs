@@ -306,9 +306,14 @@ fn to_json_at(tc: &TypeCode, v: &Value, h: &mut dyn References, at: &Path<'_>) -
         // 2026-08-21 it was the only one of the three that did not say which
         // rule refused: a `valuetype` fell through to "Struct([…]) is not a
         // value of IDL:m/Money:1.0" and a `fixed` to "… is not a value of
-        // <anonymous>", because `type_name` has no name for a type with no
+        // <anonymous>", because `type_name` had no name for a type with no
         // repository id. Both are true sentences about the wrong problem, and
         // both invite the reader to fix their document.
+        //
+        // That day's repair was this guard and not `type_name`, so the second
+        // half of the diagnosis stayed live for seven other variants until
+        // 2026-08-25 — see [`type_name`], which is now exhaustive and has no
+        // `<anonymous>` left to give.
         //
         // Placed *after* every real arm and before the mismatch arm so that
         // the D008 asymmetry stays legible in the code as well as in the
@@ -657,11 +662,48 @@ fn members_json(ms: &[Member]) -> Json {
 }
 
 /// A `TypeCode` as an AnyJSON document.
+///
+/// **Exhaustive over `TypeCode` on purpose**, which is the whole of its
+/// safety. Its tail used to be
+/// `other => Json::String(short_name(other).unwrap_or("void").to_owned())`
+/// under the comment *"Every remaining variant has a short name and returned
+/// above"* — true of all thirty-three variants the day it was written, and a
+/// silent lie the day a thirty-fourth arrives: the description of a construct
+/// nobody had thought about would have **crossed the wire as the string
+/// `"void"`**, which is the exact silent wrong answer the `Value`, `Native`
+/// and `AbstractInterface` arms below were each added to prevent, one
+/// after-the-fact discovery at a time. The model is
+/// [`crate::dynany::default_value`]'s: let the compiler carry the fact, so the
+/// thirty-fourth construct is a build error here rather than a document a peer
+/// misreads.
 pub fn tc_to_json(tc: &TypeCode) -> Json {
-    if let Some(short) = short_name(tc) {
-        return Json::String(short.to_owned());
-    }
     match tc {
+        // The types whose whole identity fits in a name. Asked of
+        // [`short_name`] rather than retyped, because [`named_type`] is that
+        // table's inverse and `short_name_and_named_type_are_inverses` holds
+        // the pair — a nineteenth string written out here would be outside
+        // that pin.
+        TypeCode::Boolean
+        | TypeCode::Octet
+        | TypeCode::Char
+        | TypeCode::WChar
+        | TypeCode::Short
+        | TypeCode::UShort
+        | TypeCode::Long
+        | TypeCode::ULong
+        | TypeCode::LongLong
+        | TypeCode::ULongLong
+        | TypeCode::Float
+        | TypeCode::Double
+        | TypeCode::LongDouble
+        | TypeCode::String(0)
+        | TypeCode::WString(0)
+        | TypeCode::Any
+        | TypeCode::TypeCode
+        | TypeCode::Void
+        | TypeCode::Null => Json::String(
+            short_name(tc).expect("every variant listed here has a short name").to_owned(),
+        ),
         TypeCode::String(bound) => {
             obj([("kind", Json::String("string".into())), ("bound", number(bound))])
         }
@@ -783,8 +825,6 @@ pub fn tc_to_json(tc: &TypeCode) -> Json {
             obj([("kind", Json::String("recursive".into())), ("id", Json::String(id.clone()))])
         }
         TypeCode::Principal => obj([("kind", Json::String("principal".into()))]),
-        // Every remaining variant has a short name and returned above.
-        other => Json::String(short_name(other).unwrap_or("void").to_owned()),
     }
 }
 
@@ -1031,29 +1071,88 @@ fn unbase64(j: &Json, p: &str) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// The `_t` tag for an `any`.
+/// The subject of this layer's two remaining refusals: `"{v:?} is not a value
+/// of {}"` on the way out, and `"{} cannot cross yet"` on the way in.
 ///
-/// Only primitives for now, and the decoder says so rather than guessing: a
-/// constructed type needs a repository id looked up in the registry, and the
-/// registry is not a parameter here yet.
+/// **Exhaustive over `TypeCode` on purpose**, and the reason is measured
+/// rather than anticipated. Its tail was
+/// `other => other.repository_id().unwrap_or("<anonymous>")` — fifteen
+/// primitives named, everything else asked for a repository id, and a type
+/// that has none answered with a word that names nothing. Every one of
+/// `sequence`, `array`, `any`, `typecode`, `void`, `null` and `Principal`
+/// carries no id, so a peer-fed document naming one was refused
+/// **`"<anonymous>" cannot cross yet`**, and a value of the wrong shape for a
+/// `sequence<long>` was refused `"Long(1) is not a value of <anonymous>"`.
+///
+/// This class had already been seen once, in this file, and closed the wrong
+/// way: a `fixed` answered `"… is not a value of <anonymous>"` until
+/// 2026-08-21, and the repair was the deferred-family guard *above* the
+/// mismatch arm (see the comment there). That took the one witness out of
+/// reach and left the function, so the same sentence stayed live for seven
+/// other variants for four more days. **A guard that stops one caller
+/// reaching a defect is not a fix for the defect.**
+///
+/// Nothing here is retyped: the names come from [`short_name`], the bounded
+/// spellings from the same shapes `crate::describe` uses, and the four wire
+/// families from the `*_subject` functions that own them — those four arms are
+/// unreachable through this function today, because both directions guard on
+/// [`crate::deferred_wire_name`] and [`crate::unmarshallable_wire_name`]
+/// before the mismatch arm, and they are written out because the compiler
+/// wants an answer and the honest answer is the one the owner gives.
 fn type_name(tc: &TypeCode) -> String {
-    match resolved(tc) {
-        TypeCode::Boolean => "boolean".into(),
-        TypeCode::Octet => "octet".into(),
-        TypeCode::Char => "char".into(),
-        TypeCode::WChar => "wchar".into(),
-        TypeCode::Short => "short".into(),
-        TypeCode::UShort => "unsigned short".into(),
-        TypeCode::Long => "long".into(),
-        TypeCode::ULong => "unsigned long".into(),
-        TypeCode::LongLong => "long long".into(),
-        TypeCode::ULongLong => "unsigned long long".into(),
-        TypeCode::Float => "float".into(),
-        TypeCode::Double => "double".into(),
-        TypeCode::LongDouble => "long double".into(),
-        TypeCode::String(_) => "string".into(),
-        TypeCode::WString(_) => "wstring".into(),
-        other => other.repository_id().unwrap_or("<anonymous>").to_owned(),
+    let tc = resolved(tc);
+    match tc {
+        TypeCode::Boolean
+        | TypeCode::Octet
+        | TypeCode::Char
+        | TypeCode::WChar
+        | TypeCode::Short
+        | TypeCode::UShort
+        | TypeCode::Long
+        | TypeCode::ULong
+        | TypeCode::LongLong
+        | TypeCode::ULongLong
+        | TypeCode::Float
+        | TypeCode::Double
+        | TypeCode::LongDouble
+        | TypeCode::String(0)
+        | TypeCode::WString(0)
+        | TypeCode::Any
+        | TypeCode::TypeCode
+        | TypeCode::Void
+        | TypeCode::Null => {
+            short_name(tc).expect("every variant listed here has a short name").to_owned()
+        }
+        // The bound is part of the type on the wire even though v1 spells both
+        // `string`, which is the distinction D008 exists for; a refusal that
+        // dropped it would name a type the sender does not have.
+        TypeCode::String(bound) => format!("string<{bound}>"),
+        TypeCode::WString(bound) => format!("wstring<{bound}>"),
+        TypeCode::Principal => "principal".into(),
+        TypeCode::Sequence { element, bound: 0 } => format!("sequence<{}>", type_name(element)),
+        TypeCode::Sequence { element, bound } => {
+            format!("sequence<{}, {bound}>", type_name(element))
+        }
+        TypeCode::Array { element, length } => format!("{}[{length}]", type_name(element)),
+        // A repository id is the identity of everything that has one, and it
+        // is what this layer said before for exactly these variants.
+        TypeCode::ObjRef { id, .. }
+        | TypeCode::Struct { id, .. }
+        | TypeCode::Union { id, .. }
+        | TypeCode::Enum { id, .. }
+        | TypeCode::Except { id, .. }
+        // `resolved` above strips these two, so neither arm is reached; the id
+        // is still the right answer if one ever is.
+        | TypeCode::Alias { id, .. }
+        | TypeCode::Recursive(id) => id.clone(),
+        // The four the wire cannot carry. Guarded before the mismatch arm in
+        // both directions, so a reader meets the family's own sentence rather
+        // than these — and the subjects come from the functions that own them
+        // so that a spelling change lands here too.
+        TypeCode::Fixed { digits, scale } => crate::fixed_subject(*digits, *scale),
+        TypeCode::Value { name, id, .. } => crate::valuetype_subject(name, id),
+        TypeCode::AbstractInterface { name, id } => crate::abstract_interface_subject(name, id),
+        TypeCode::Native { name, id } => crate::native_subject(name, id),
     }
 }
 

@@ -65,7 +65,7 @@
 use orbweaver_cdr::{Decoder, Endian};
 use orbweaver_giop::typecode::TypeCode;
 
-use crate::{Error, MAX_NESTING, Result, Value, check_within, describe, resolved, type_id_of};
+use crate::{Error, MAX_NESTING, Result, Value, check_within, describe, resolved};
 
 /// What a component is called inside its parent.
 ///
@@ -151,7 +151,9 @@ fn open_type(mut t: TypeCode, open: &mut Vec<TypeCode>, path: &str) -> Result<Ty
                 let target = open
                     .iter()
                     .rev()
-                    .find(|o| type_id_of(o) == Some(id.as_str()))
+                    // The owner of the id, not a local copy of it — see
+                    // `crate::Path::resolve` for the copy this replaced.
+                    .find(|o| o.repository_id() == Some(id.as_str()))
                     .cloned()
                     .ok_or_else(|| Error {
                         path: path.to_string(),
