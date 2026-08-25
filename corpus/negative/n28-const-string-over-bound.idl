@@ -1,0 +1,21 @@
+// n28 — a bounded string constant longer than its own bound.
+//
+// `string<3>` is three characters and the value is four. The check is on the
+// character count, not on the byte count, which is the same choice the wide
+// forms make.
+//
+// omniidl 4.3.4, measured 2026-08-25:
+//   Length of bounded string constant exceeds bound
+//
+// **The second shape sharing `const-value-range` with n20's out-of-range
+// integer** (n27 is the first). The hint keyed there offers *"widen the
+// type — `short` to `long`, `long` to `long long`, or the signed form to the
+// unsigned one"*, none of which is an edit for a string: the answer is to widen
+// the *bound* or shorten the value, which is what the message already says and
+// the hint contradicts by omission.
+//
+// 경계 있는 문자열 상수는 자기 경계를 넘을 수 없다. 정수 범위 초과와 같은 규칙에
+// 접수되므로, 정수를 보고 쓰인 힌트가 붙는다.
+module n28 {
+  const string<3> TAG = "abcd";
+};

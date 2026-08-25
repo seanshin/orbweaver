@@ -656,7 +656,7 @@ impl Ctx<'_> {
             let lineno = n as u32 + 1;
             if let Some((_, why)) = refused.iter().find(|(l, _)| *l == lineno) {
                 let span = self.span_at(self.out_line, 1);
-                self.note(span, why.clone(), "unsupported-directive", true);
+                self.note(span, why.clone(), crate::rules::UNSUPPORTED_DIRECTIVE, true);
             }
             let stripped = line.strip_suffix('\n').unwrap_or(line);
             let Some(body) = directive_body(stripped, &mut in_block) else {
@@ -688,7 +688,7 @@ impl Ctx<'_> {
                         "`#include{rest}` names no file. Write `#include \"x.idl\"` for a file \
                          beside this one, or `#include <x.idl>` for one on the include path."
                     ),
-                    "include-malformed",
+                    crate::rules::INCLUDE_MALFORMED,
                     true,
                 );
                 continue;
@@ -718,7 +718,7 @@ impl Ctx<'_> {
                 self.note(
                     span,
                     format!("`#include \"{name}\"` resolves to no file. {where_it_looked}"),
-                    "include-not-found",
+                    crate::rules::INCLUDE_NOT_FOUND,
                     true,
                 );
                 return;
@@ -747,7 +747,7 @@ impl Ctx<'_> {
                      declarations depends on which file is compiled first.",
                     chain.join(" -> ")
                 ),
-                "include-cycle",
+                crate::rules::INCLUDE_CYCLE,
                 false,
             );
             return;
@@ -771,7 +771,7 @@ impl Ctx<'_> {
                          in it as a duplicate. Add a guard.",
                         path.display()
                     ),
-                    "include-unguarded-repeat",
+                    crate::rules::INCLUDE_UNGUARDED_REPEAT,
                     false,
                 );
             }
@@ -789,7 +789,7 @@ impl Ctx<'_> {
                         "`#include \"{name}\"` found {} but cannot read it: {e}",
                         path.display()
                     ),
-                    "include-unreadable",
+                    crate::rules::INCLUDE_UNREADABLE,
                     true,
                 );
                 return;

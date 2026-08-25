@@ -259,7 +259,11 @@ impl Parser {
     }
 
     fn err<T>(&self, message: impl Into<String>) -> Result<T> {
-        Err(ParseError { message: message.into(), span: self.peek().span, rule: "parse" })
+        Err(ParseError {
+            message: message.into(),
+            span: self.peek().span,
+            rule: crate::rules::PARSE,
+        })
     }
 
     fn expect_punct(&mut self, p: &str) -> Result<()> {
@@ -284,7 +288,7 @@ impl Parser {
                              write '_{text}' to use it as an identifier, or choose another name"
                         ),
                         span: t.span,
-                        rule: "reserved-word",
+                        rule: crate::rules::RESERVED_WORD,
                     });
                 }
                 Ok(Named { text, span: t.span })
@@ -292,7 +296,7 @@ impl Parser {
             other => Err(ParseError {
                 message: format!("expected an identifier, found {other}"),
                 span: t.span,
-                rule: "parse",
+                rule: crate::rules::PARSE,
             }),
         }
     }
@@ -375,7 +379,7 @@ impl Parser {
                  a pragma must come after the declaration it names"
             ),
             span,
-            rule: "pragma-unknown-name",
+            rule: crate::rules::PRAGMA_UNKNOWN_NAME,
         };
         if absolute {
             return self.declared.get(&tail).cloned().ok_or_else(miss);
@@ -946,7 +950,7 @@ impl Parser {
                      so a fixed-point type reaches a signature only through a name. Declare \
                      `typedef fixed<d,s> Amount;` outside the interface and write `Amount` here."
                 ),
-                "anonymous-type-in-signature",
+                crate::rules::ANONYMOUS_TYPE_IN_SIGNATURE,
             ),
             TypeSpec::Sequence { .. } => (
                 format!(
@@ -954,14 +958,14 @@ impl Parser {
                      sequence_type, so a sequence reaches a signature only through a name. \
                      Declare `typedef sequence<T> Ts;` outside the interface and write `Ts` here."
                 ),
-                "anonymous-type-in-signature",
+                crate::rules::ANONYMOUS_TYPE_IN_SIGNATURE,
             ),
             TypeSpec::Void if pos != Signature::Return => (
                 format!(
                     "'void' cannot be {what} type: only an operation's return may be void. \
                      Name the type the value actually has."
                 ),
-                "void-in-signature",
+                crate::rules::VOID_IN_SIGNATURE,
             ),
             _ => return Ok(ty),
         };
@@ -1025,7 +1029,7 @@ impl Parser {
                           that."
                     .to_owned(),
                 span: span_over(start, self.prev_span()),
-                rule: "not-a-const-type",
+                rule: crate::rules::NOT_A_CONST_TYPE,
             });
         }
         let ty = self.type_spec()?;
@@ -1046,7 +1050,7 @@ impl Parser {
                  type that can hold a literal."
             ),
             span,
-            rule: "not-a-const-type",
+            rule: crate::rules::NOT_A_CONST_TYPE,
         })
     }
 
@@ -1266,7 +1270,7 @@ impl Parser {
             other => Err(ParseError {
                 message: format!("expected a constant expression, found {other}"),
                 span: t.span,
-                rule: "parse",
+                rule: crate::rules::PARSE,
             }),
         }
     }

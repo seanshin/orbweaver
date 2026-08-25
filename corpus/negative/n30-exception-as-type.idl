@@ -1,0 +1,27 @@
+// n30 — an exception used as the type of a member.
+//
+// `type_spec` reaches a constructed type through `struct_type`, `union_type`
+// and `enum_type`. `except_dcl` is none of the three: an exception is raised,
+// never declared as the type of anything.
+//
+// omniidl 4.3.4, measured 2026-08-25:
+//   'Denied' is not a type   ('Denied' declared here)
+//
+// **We accepted this file until 2026-08-25.** `SymbolKind::is_type` listed
+// `Exception` among the kinds a name may be referred to as, so this validated
+// clean here and was refused by the oracle — lax in the direction a
+// differential cannot catch without a file to run, and there was no file. It
+// was found while writing n25, by asking which kinds a `not-a-type` case could
+// be written from; the answer named one the analyser did not agree was wrong.
+//
+// The neighbour that keeps this honest is `raises`: a `raises` clause names an
+// exception and is now asked only that the name resolve. That an exception is
+// what it resolves to is a rule nobody has written — recorded here rather than
+// smuggled in under `not-a-type`, which is a rule about types.
+//
+// 예외는 타입이 아니다. `raises`에서 이름이 해석되는지는 보지만, 그것이 예외인지
+// 확인하는 규칙은 아직 없다 — 없다고 적어 둔다.
+module n30 {
+  exception Denied { string reason; };
+  struct Outcome { Denied refusal; };
+};

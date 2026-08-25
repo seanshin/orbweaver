@@ -1,0 +1,22 @@
+// n26 — a union with two `default:` branches.
+//
+// CORBA 3.4 §7.4.1.4.4: at most one default. The rule and its fix hint have
+// both existed since unions landed, and **no corpus file produced it** until
+// 2026-08-25 — `n07` covers a repeated *label*, which is the neighbouring rule
+// and a different diagnosis.
+//
+// omniidl 4.3.4, measured 2026-08-25:
+//   Error in union 'Reading': 1 repeated union label
+//
+// (The oracle counts the second `default` as a repeated label rather than as a
+// second default; the refusal is what agrees, not the wording.)
+//
+// 유니온의 `default:`는 하나뿐이다. n07은 라벨 중복이고 이것은 기본 분기 중복으로,
+// 서로 다른 진단이다.
+module n26 {
+  union Reading switch (long) {
+    case 1: long sample;
+    default: long fallback;
+    default: long spare;
+  };
+};

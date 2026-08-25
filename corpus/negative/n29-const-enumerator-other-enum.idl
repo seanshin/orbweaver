@@ -1,0 +1,25 @@
+// n29 — an enumerated constant initialised with another enum's enumerator.
+//
+// Enumerators live in the enclosing scope rather than inside their enum, so
+// `PEAR` is visible where `Colour` is and resolves perfectly well; what it does
+// not do is belong to `Colour`. Each enumerator carries the enum it was
+// declared in, which is how this is told from the legal `const Colour CHOICE =
+// RED;` in corpus/golden/31.
+//
+// omniidl 4.3.4, measured 2026-08-25:
+//   Enumerator 'n29::PEAR' does not belong to enum 'n29::Colour'
+//   (Enumerator 'n29::PEAR' declared in 'n29::Fruit' here)
+//
+// **The second shape sharing `const-value-type` with n19's wrong-class
+// literal.** The hint keyed there is a tour of the literal forms — `5.0` for a
+// `double`, `'a'` for a `char`, `L"s"` for a `wstring` — and the value here is
+// not a literal at all, so a generator reading it is being pointed away from
+// the edit. The rule split and the hint belong together, in `orbweaver-forge`.
+//
+// 열거자는 자기 열거형의 상수만 초기화한다. 잘못된 클래스의 리터럴과 같은 규칙에
+// 접수되므로, 리터럴을 보고 쓰인 힌트가 붙는다.
+module n29 {
+  enum Colour { RED, GREEN };
+  enum Fruit { PEAR, PLUM };
+  const Colour CHOICE = PEAR;
+};

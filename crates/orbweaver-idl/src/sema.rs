@@ -67,6 +67,19 @@ pub enum SymbolKind {
 
 impl SymbolKind {
     /// Whether the symbol can be referred to as a type.
+    ///
+    /// **An exception is not one.** `type_spec` reaches a constructed type
+    /// through `struct_type`, `union_type` and `enum_type`, and `except_dcl` is
+    /// none of the three: an exception is raised, never declared as the type of
+    /// anything. omniidl 4.3.4 agrees — `exception E {}; struct S { E field; };`
+    /// is *'E' is not a type* — and this listed it as one until 2026-08-25, so
+    /// that file validated clean here and was refused by the oracle. It was
+    /// found by sweeping the kinds a `not-a-type` corpus file could be written
+    /// from, because the corpus had no file for `not-a-type` at all and nothing
+    /// had ever asked. `corpus/negative/n30`.
+    ///
+    /// *예외는 타입이 아니다. 발생시키는 것이지 무엇의 타입으로 선언하는 것이
+    /// 아니다.*
     fn is_type(self) -> bool {
         matches!(
             self,
@@ -75,7 +88,6 @@ impl SymbolKind {
                 | SymbolKind::Struct
                 | SymbolKind::Union
                 | SymbolKind::Enum
-                | SymbolKind::Exception
                 | SymbolKind::Typedef
                 | SymbolKind::Native
         )
@@ -245,7 +257,7 @@ impl Analyser {
                          name is what callers depend on"
                     ),
                     span,
-                    rule: "identifier-case-clash",
+                    rule: crate::rules::IDENTIFIER_CASE_CLASH,
                 });
             }
             Some(_) => {}
@@ -270,7 +282,7 @@ impl Analyser {
                         name.text
                     ),
                     span: name.span,
-                    rule: "enclosing-scope-clash",
+                    rule: crate::rules::ENCLOSING_SCOPE_CLASH,
                 });
                 return;
             }
@@ -304,7 +316,7 @@ impl Analyser {
                         name.text, prev.kind, prev.name
                     ),
                     span: name.span,
-                    rule: "inherited-clash",
+                    rule: crate::rules::INHERITED_CLASH,
                 });
                 return;
             }
@@ -319,7 +331,7 @@ impl Analyser {
                     if prev_line > 0 { format!(" at line {prev_line}") } else { String::new() }
                 ),
                 span: name.span,
-                rule: "duplicate-declaration",
+                rule: crate::rules::DUPLICATE_DECLARATION,
             });
             return;
         }
@@ -555,7 +567,15 @@ impl Analyser {
                 self.type_spec(scope, &op.returns);
                 self.declare(scope, &op.name, SymbolKind::Operation, None);
                 for r in &op.raises {
-                    self.reference(scope, r, true);
+                    // A `raises` clause names an exception, and an exception is
+                    // deliberately not a type (see [`SymbolKind::is_type`]), so
+                    // this asks only that the name resolve. Checking that what
+                    // it resolved to *is* an exception is a rule nobody has
+                    // written; it would need a diagnosis of its own and a hint
+                    // of its own, and inventing one here would put a second
+                    // diagnosis under `not-a-type` — which is the shape this
+                    // batch exists to stop. Recorded rather than smuggled in.
+                    self.reference(scope, r, false);
                 }
 
                 // Parameters get a scope of their own. Establishing that took
@@ -742,7 +762,7 @@ impl Analyser {
                           `long double` literal to write. Use `double`."
                     .to_owned(),
                 span,
-                rule: "not-a-const-type",
+                rule: crate::rules::NOT_A_CONST_TYPE,
             });
             return;
         }
@@ -759,7 +779,7 @@ impl Analyser {
                     c.name.text
                 ),
                 span,
-                rule: "const-value-range",
+                rule: crate::rules::CONST_VALUE_RANGE,
             });
             return;
         }
@@ -778,7 +798,7 @@ impl Analyser {
                     want.class().how_to_write(),
                 ),
                 span,
-                rule: "const-value-type",
+                rule: crate::rules::CONST_VALUE_TYPE,
             });
             return;
         }
@@ -796,7 +816,7 @@ impl Analyser {
                                  every consumer a number nobody wrote."
                             ),
                             span,
-                            rule: "const-value-range",
+                            rule: crate::rules::CONST_VALUE_RANGE,
                         });
                     }
                 }
@@ -812,7 +832,7 @@ impl Analyser {
                         from
                     ),
                     span,
-                    rule: "const-value-type",
+                    rule: crate::rules::CONST_VALUE_TYPE,
                 });
             }
             (ConstFold::Str(s), TypeSpec::String(Some(b)))
@@ -827,7 +847,7 @@ impl Analyser {
                                  Widen the bound, or shorten the value."
                             ),
                             span,
-                            rule: "const-value-range",
+                            rule: crate::rules::CONST_VALUE_RANGE,
                         });
                     }
                 }
@@ -848,7 +868,7 @@ impl Analyser {
                             u.name.text, prev.line
                         ),
                         span: c.member.names.first().map_or(u.name.span, |n| n.span),
-                        rule: "duplicate-union-default",
+                        rule: crate::rules::DUPLICATE_UNION_DEFAULT,
                     });
                 } else {
                     default_at = Some(c.member.names.first().map_or(u.name.span, |n| n.span));
@@ -865,7 +885,7 @@ impl Analyser {
                             u.name.text, prev.line
                         ),
                         span,
-                        rule: "duplicate-union-label",
+                        rule: crate::rules::DUPLICATE_UNION_LABEL,
                     });
                 } else {
                     seen.insert(key, span);
@@ -936,7 +956,7 @@ impl Analyser {
                                 sym.kind
                             ),
                             span: d.name.span,
-                            rule: "not-a-type",
+                            rule: crate::rules::NOT_A_TYPE,
                         });
                     }
                 }
@@ -973,12 +993,20 @@ impl Analyser {
                                  `#include` that reaches that file";
         if n.parts.len() == 1 && !n.absolute {
             if matches!(n.last(), "TypeCode" | "Object" | "ValueBase") {
+                // Still `unknown-name`, and it should not be: the hint keyed to
+                // that rule says *qualify it with its module* and prints
+                // `Module::TypeCode`, which is the opposite of the edit the
+                // message beside it names. Splitting the rule is the fix and it
+                // cannot land here alone — `orbweaver-forge`'s corpus test
+                // requires a hint for every negative file's first finding, so
+                // the split and the hint land together, in that crate.
+                // `corpus/negative/n05`.
                 return (
-                    "unknown-name",
+                    crate::rules::UNKNOWN_NAME,
                     format!(" — write '::CORBA::{}' to reach the predefined one", n.last()),
                 );
             }
-            return ("unknown-name", format!(" — {ELSEWHERE}"));
+            return (crate::rules::UNKNOWN_NAME, format!(" — {ELSEWHERE}"));
         }
         let (failed, container) = self.first_unresolved_part(scope, n);
         let where_it_looked = match container {
@@ -986,7 +1014,10 @@ impl Analyser {
             Some(_) => "is not declared at global scope".to_owned(),
             None => "is not in scope here".to_owned(),
         };
-        ("unknown-scoped-name", format!(" — {:?} {where_it_looked}; {ELSEWHERE}", n.parts[failed]))
+        (
+            crate::rules::UNKNOWN_SCOPED_NAME,
+            format!(" — {:?} {where_it_looked}; {ELSEWHERE}", n.parts[failed]),
+        )
     }
 
     /// Which component of a scoped name stopped resolving, and the qualified
@@ -1117,7 +1148,11 @@ impl Analyser {
 /// `wire/`, not `sidl/`: S4's existing prefix for exactly this class was
 /// `wire/valuetype`, and the SIDL prefix names the annotation vocabulary,
 /// which this is not about.
-pub const DEFERRED_WIRE_RULE: &str = "wire/deferred-type";
+///
+/// The name itself lives in [`crate::rules`] with every other rule id, and this
+/// is the alias the §4.4 machinery was already written against — equal by
+/// construction, so the two cannot drift apart.
+pub const DEFERRED_WIRE_RULE: &str = crate::rules::WIRE_DEFERRED_TYPE;
 
 /// One declaration the v1 wire cannot carry, and why.
 ///

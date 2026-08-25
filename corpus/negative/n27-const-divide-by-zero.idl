@@ -1,0 +1,24 @@
+// n27 — a constant whose initialiser divides by zero.
+//
+// The expression has no value, so the constant has none either. Reported by
+// looking for the divisor rather than inferred from a fold that returned
+// `None`, because a fold returns `None` for a dozen reasons and "did not
+// evaluate" is not a diagnosis.
+//
+// omniidl 4.3.4, measured 2026-08-25:
+//   Divide by zero
+//
+// **This is one of the three shapes that share `const-value-range` with the
+// out-of-range integer of n20, and the hint is written for that one.** What a
+// generator is handed here is *"widen the type — `short` to `long` … or write a
+// value inside the range the message names"*, and there is no range in the
+// message and no type that would hold this. The corpus had no file for the
+// shape, so the false hint had never been printed. Splitting the rule is the
+// fix and it lands in `orbweaver-forge`, with the hint; this file is what makes
+// it measurable either way.
+//
+// 값이 아예 없는 경우이며, 범위를 벗어난 값과 같은 규칙에 접수된다. 그래서
+// n20을 보고 쓰인 힌트가 그대로 붙는다.
+module n27 {
+  const long RATE = 10 / 0;
+};

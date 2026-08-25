@@ -1,0 +1,27 @@
+// n23 — a fixed-point literal with more significant digits than a `fixed` has.
+//
+// CORBA 3.4 §7.11.3 caps a `fixed` at 31 significant digits; this one has 32.
+// Split out of n22 on 2026-08-25: lexing reports one failure per file, so a
+// second bad literal written beside the first is never reached and the claim
+// that it was refused is a claim nothing checked.
+//
+// omniidl 4.3.4, measured 2026-08-25:
+//   Fixed point constant has too many digits
+//
+// **We are stricter than the oracle, deliberately, and only on one side.**
+// omniidl rejects 32 *integer* digits — as here — and silently truncates 32
+// *fractional* digits to 31: `0.1234…9012d` dumps back as `0.1234…901d`,
+// measured 2026-08-21. Silently dropping a digit from a constant is the exact
+// failure that batch existed to close, so both are refused here and the
+// divergence is recorded in corpus/divergences.tsv.
+//
+// Our refusal files under `fixed-literal`, not under the generic `parse` rule,
+// which is not a detail: `orbweaver-forge` keys the fix hint for a malformed
+// fixed-point literal to `fixed-literal`, and this exact shape spent a while
+// filing under `parse` and never receiving it.
+//
+// 유효숫자는 31자리가 상한이다. 어휘 실패는 파일당 하나만 보고되므로 n22에서
+// 분리했다.
+module n23 {
+  const fixed TOO_MANY = 12345678901234567890123456789012d;
+};

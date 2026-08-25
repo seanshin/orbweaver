@@ -1,0 +1,21 @@
+// n24 — a derived interface redeclaring a name it already inherits.
+//
+// CORBA 3.4 §7.19.1: the names of a base interface are visible in the derived
+// one, so declaring over them collides exactly as two declarations in one
+// scope do. The rule has been in `sema` since the inheritance work landed and
+// **no corpus file produced it** until 2026-08-25 — which meant the fix hint
+// `orbweaver-forge` writes for `inherited-clash` had never once been executed.
+// The same gap that `corpus/golden/28-target-keywords.idl` closed for keyword
+// escaping: a rule that only unit tests reach is a rule whose *product*
+// surface nobody has looked at.
+//
+// omniidl 4.3.4, measured 2026-08-25:
+//   Declaration of operation 'ping' clashes with inherited operation 'ping'
+//   ('ping' declared in n24::Base here)
+//
+// 상속한 이름 위에 다시 선언할 수 없다. 이 규칙을 내는 코퍼스 파일이 없었고,
+// 그래서 이 규칙에 걸린 수정 힌트는 한 번도 실행된 적이 없었다.
+module n24 {
+  interface Base { void ping(); };
+  interface Derived : Base { long ping(); };
+};
