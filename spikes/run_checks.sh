@@ -61,6 +61,13 @@ printf 'pid %s in %s at %s\n' "$$" "$ROOT" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >"
 hr() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 need() { command -v "$1" >/dev/null 2>&1 || { echo "missing tool: $1"; exit 2; }; }
 
+# Whether something is listening, without needing lsof. The probe used to be
+# `lsof -nP -iTCP:2809`, which is absent on a stock CI runner — so the check
+# could not tell "nothing is listening" from "I cannot look", and reported the
+# first. bash's /dev/tcp needs no package. Two groups need it, so it lives here
+# rather than inside whichever one happened to want it first.
+port_open() { (exec 3<>/dev/tcp/127.0.0.1/"$1") >/dev/null 2>&1; }
+
 # ── Kill this run's fixtures, and only this run's ────────────────────────────
 # `pkill -f echo_server.py` matches by command line, which is every checkout on
 # the machine. The lock above stops two harnesses colliding; this stops a
@@ -1341,11 +1348,12 @@ fkill omniNames
 fkill register_name
 sleep 0.5
 rm -rf /tmp/orbweaver-names && mkdir -p /tmp/orbweaver-names
-# Whether something is listening, without needing lsof. The probe used to be
-# `lsof -nP -iTCP:2809`, which is absent on a stock CI runner — so the check
-# could not tell "nothing is listening" from "I cannot look", and reported the
-# first. bash's /dev/tcp needs no package.
-port_open() { (exec 3<>/dev/tcp/127.0.0.1/"$1") >/dev/null 2>&1; }
+# `port_open` is defined with the other helpers at the top of this file. It was
+# defined *here*, inside this group, and the ORB group below then used it from
+# two hundred lines away — so a group that ran on its own, or a reordering of
+# these two, got `port_open: command not found` and reported **"omniNames did
+# not start"**, which is a misdiagnosis rather than a failure. Found by running
+# the ORB group standalone; nothing in a whole-harness run would have shown it.
 if ! command -v omniNames >/dev/null 2>&1; then
   echo "  SKIPPED  omniNames is not installed — naming is unmeasured, not passing"
   skipped=$((skipped+1))
@@ -1397,6 +1405,191 @@ else
 fi
 fkill register_name
 fkill omniNames
+
+# ── D019: the ORB object — a table, a URL with no address, three refusals ───
+hr "ORB initial references — corbaloc:rir: out of OUR table to a foreign servant"
+# `rir` means *resolve initial references*, and CORBA 3.4 §8.5.2 is explicit
+# that the mechanism is **local**: *"a simplified, local version of the Naming
+# Service."* So handing `corbaloc:rir:NameService` to omniORB's client measures
+# **omniORB's** table, however green it comes back, and says nothing about ours.
+# The direction that measures ours is the other one, and it is leg A: our `Orb`
+# is told where NameService is, resolves a URL carrying **no address at all**
+# out of its own table, dials what comes back, and a foreign servant — omniNames
+# in a separate process — answers a real call. `spike-rir` had existed and run
+# nowhere; D019 calls this the ORB's whole point.
+#
+# Legs B/C/D are the three states an operator has to be able to tell apart,
+# because the fixes differ: register the service, or fix the spelling. Leg E is
+# the same three states asked of the peer, which is where the claim
+# `orbweaver-console`'s RESOLUTION_NOTE cites came from — it was a date in a doc
+# comment with no gate under it until now.
+rir_fail=0
+fkill omniNames
+fkill register_name
+sleep 0.5
+rm -rf /tmp/orbweaver-rir-names && mkdir -p /tmp/orbweaver-rir-names
+if ! command -v omniNames >/dev/null 2>&1; then
+  # D010 §2: a counted SKIPPED naming its fixture, never a note and never an ok.
+  echo "  SKIPPED  omniNames is not installed (fixture: omniNames on 2809, plus"
+  echo "           spikes/register_name.py) — the ORB's initial-references table is"
+  echo "           unmeasured, not passing"
+  skipped=$((skipped+1))
+else
+  ( omniNames -start 2809 -logdir /tmp/orbweaver-rir-names \
+      >/tmp/orbweaver-rir-names/out.log 2>&1 & )
+  rir_up=0
+  for _ in $(seq 1 60); do
+    port_open 2809 && { rir_up=1; break; }
+    sleep 0.2
+  done
+  if [ "$rir_up" -eq 1 ]; then
+    ( cd "$ROOT/spikes" && exec python3 register_name.py >/tmp/orbweaver-rir-reg.log 2>&1 & )
+    rir_reg=0
+    for _ in $(seq 1 100); do
+      grep -qs READY /tmp/orbweaver-rir-reg.log && { rir_reg=1; break; }
+      sleep 0.1
+    done
+  else
+    rir_reg=0
+  fi
+
+  # An unmeasured check is a failure, never a pass — and the fixture is checked
+  # here so that every exit 1 below means "the claim was refuted" rather than
+  # "nothing was listening". That is the distinction `spikes/ssliop.sh` makes
+  # with its exit 3, made on this side because `spike-rir` has only 0 and 1.
+  if [ "$rir_up" -ne 1 ]; then
+    echo "  FAIL omniNames did not start on 2809 — the ORB table is UNMEASURED, not passing"
+    if [ -s /tmp/orbweaver-rir-names/out.log ]; then
+      tail -8 /tmp/orbweaver-rir-names/out.log | sed 's/^/       | /'
+    else
+      echo "       it wrote nothing at all"
+    fi
+    rir_fail=1
+  elif [ "$rir_reg" -ne 1 ]; then
+    echo "  FAIL nothing could be bound into the naming service — the ORB table is"
+    echo "       UNMEASURED, not passing"
+    tail -6 /tmp/orbweaver-rir-reg.log 2>/dev/null | sed 's/^/       | /'
+    rir_fail=1
+  else
+    # ── A. our table, a URL with no address, and a foreign servant answering ──
+    rir_out=$(cargo run -q -p orbweaver-giop --bin spike-rir 2>&1); rir_rc=$?
+    # 9 is a FLOOR on the checks spike-rir counted, not today's figure: a binary
+    # whose body stopped early can still exit 0, and `ok` lines are what it has
+    # to show for the run.
+    rir_oks=$(grep -c '^  ok   ' <<<"$rir_out")
+    if [ "$rir_rc" -ne 0 ]; then
+      echo "  FAIL our ORB could not bootstrap through its own table (exit $rir_rc) — the"
+      echo "       fixture was verified up first, so this is a refuted claim and not an"
+      echo "       unmeasured one"
+      tail -8 <<<"$rir_out" | sed 's/^/       | /'
+      rir_fail=1
+    elif [ "$rir_oks" -lt 9 ]; then
+      echo "  FAIL spike-rir exited 0 over $rir_oks checks (floor 9) — it measured less than it has"
+      rir_fail=1
+    else
+      echo "  ok   our Orb resolved corbaloc:rir:NameService out of its OWN table — a URL with"
+      echo "       no address — dialled it, and omniNames answered ping() -> 42, $rir_oks checks"
+    fi
+
+    # ── B. an empty table refuses; §8.5.2 forbids answering with a nil ──
+    emp_out=$(cargo run -q -p orbweaver-giop --bin spike-rir -- --empty-table 2>&1); emp_rc=$?
+    emp_say=$(grep '^rir: FAIL' <<<"$emp_out")
+    if [ "$emp_rc" -eq 0 ]; then
+      echo "  FAIL an ORB with nothing in its table RESOLVED corbaloc:rir:NameService —"
+      echo "       §8.5.2 forbids both answering with a nil reference and inventing one"
+      rir_fail=1
+    elif ! grep -q '"NameService"' <<<"$emp_say"; then
+      echo "  FAIL the empty table's refusal did not name the ObjectId it refused, so it"
+      echo "       is correct and useless: | ${emp_say:-(no refusal line at all)}"
+      rir_fail=1
+    else
+      echo "  ok   an empty table refuses corbaloc:rir:NameService BY NAME rather than"
+      echo "       answering the nil reference §8.5.2 rules out"
+    fi
+
+    # ── C/D. reserved-and-unbound vs never-defined, told apart from outside ──
+    # Both refusals, so neither can be read off an exit code. They are compared
+    # instead — down the SAME code path, differing only in the ObjectId, so the
+    # only thing that can make the sentences differ is the distinction itself.
+    #
+    # And the comparison does NOT retype a substring of the sentence
+    # `InvalidName` owns: a classifier built from a hand-copied phrase goes
+    # green the day the wording improves, which this project has now measured
+    # five times. It blanks every quoted string — the ObjectIds, which the
+    # harness itself supplied — and requires what is left to still DIFFER. If
+    # the reserved/not-reserved clause were dropped, the two lines would become
+    # one sentence and this goes red without knowing a word of it.
+    #
+    # The first draft of this leg compared `--empty-table` against
+    # `--peer corbaloc:rir:NoSuchService`, and its negative control killed it:
+    # those are two different code paths inside spike-rir, so their refusals
+    # carry different prefixes and differed no matter what — green while
+    # measuring nothing, found by the control and not by review.
+    resv_out=$(cargo run -q -p orbweaver-giop --bin spike-rir -- \
+                 --peer corbaloc:rir:NameService 2>&1); resv_rc=$?
+    typo_out=$(cargo run -q -p orbweaver-giop --bin spike-rir -- \
+                 --peer corbaloc:rir:NoSuchService 2>&1); typo_rc=$?
+    resv_say=$(grep '^rir: FAIL' <<<"$resv_out")
+    typo_say=$(grep '^rir: FAIL' <<<"$typo_out")
+    resv_blank=$(sed 's/"[^"]*"/"<id>"/g' <<<"$resv_say")
+    typo_blank=$(sed 's/"[^"]*"/"<id>"/g' <<<"$typo_say")
+    if [ "$resv_rc" -eq 0 ] || [ "$typo_rc" -eq 0 ]; then
+      echo "  FAIL an unregistered ObjectId was RESOLVED (reserved exit $resv_rc,"
+      echo "       never-defined exit $typo_rc)"
+      rir_fail=1
+    elif ! grep -q '"NameService"' <<<"$resv_say" \
+      || ! grep -q '"NoSuchService"' <<<"$typo_say"; then
+      echo "  FAIL a refusal did not name the ObjectId it refused:"
+      echo "       | ${resv_say:-(the reserved run printed no refusal line)}"
+      echo "       | ${typo_say:-(the never-defined run printed no refusal line)}"
+      rir_fail=1
+    elif [ "$resv_blank" = "$typo_blank" ]; then
+      echo "  FAIL a RESERVED ObjectId with nothing bound and an ObjectId nobody ever"
+      echo "       defined got the SAME refusal — a missing registration and a typo need"
+      echo "       different fixes, and an operator cannot tell which they have:"
+      echo "       | $resv_blank"
+      rir_fail=1
+    else
+      echo "  ok   three states, three answers: a registered id resolves; a RESERVED id with"
+      echo "       nothing bound and an id nobody defined are both refused, by name, and"
+      echo "       NOT in the same words"
+    fi
+
+    # ── E. the same three states asked of the peer, re-taken live ──
+    if ! python3 -c "import CORBA, omniORB" >/dev/null 2>&1; then
+      echo "  SKIPPED  omniORBpy absent (fixture: spikes/rir_peer.py needs it) — the peer half"
+      echo "           of the three-state claim is unmeasured, not passing"
+      skipped=$((skipped+1))
+    else
+      rp_out=$(python3 spikes/rir_peer.py 2>&1); rp_rc=$?
+      rp_legs=$(sed -n 's/^rir-peer: every leg answered as expected (\([0-9][0-9]*\) legs)$/\1/p' <<<"$rp_out")
+      case "$rp_rc" in
+        0)
+          if [ -z "$rp_legs" ] || [ "$rp_legs" -lt 9 ]; then
+            echo "  FAIL the rir peer exited 0 over ${rp_legs:-no} legs (floor 9) — it measured"
+            echo "       less than it has"
+            rir_fail=1
+          else
+            echo "  ok   omniORB makes the same three-way distinction, re-taken live, $rp_legs legs:"
+            echo "       registered resolves and reaches a live servant; reserved-and-unbound is"
+            echo "       NO_RESOURCES; never-reserved is BAD_PARAM by URL and InvalidName by §8.5.2"
+          fi ;;
+        3)
+          echo "  FAIL the rir peer measured NOTHING (exit 3) — omniORBpy imported but no leg"
+          echo "       reached the peer, so no claim was refuted and there is no defect to chase"
+          tail -3 <<<"$rp_out" | sed 's/^/       | /'
+          rir_fail=1 ;;
+        *)
+          echo "  FAIL omniORB no longer answers the three states as recorded (exit $rp_rc)"
+          tail -10 <<<"$rp_out" | sed 's/^/       | /'
+          rir_fail=1 ;;
+      esac
+    fi
+  fi
+fi
+fkill register_name
+fkill omniNames
+[ "$rir_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
 # ── Second peer: JacORB, both directions ─────────────────────────────────────
 hr "second peer — JacORB client -> our server (independent implementation)"
