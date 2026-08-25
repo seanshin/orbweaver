@@ -172,6 +172,27 @@ start_rust_server() {
   return 1
 }
 
+# ── Formatting ───────────────────────────────────────────────────────────────
+# CI has checked this since the first workflow and this file never did, so
+# "landed through the harness" did not include formatting — and on 2026-08-25
+# that difference cost a red CI on a push whose local harness had said
+# `all measured checks green`. Every agent in that day's wave was *required*
+# to run `cargo fmt --check`; the coordinator, who wrote the requirement, did
+# not run it on the batch he was landing himself.
+#
+# The rule this file already states about SKIPPED groups applies to gates too:
+# a check that lives only in CI is a check this verdict does not cover, and a
+# verdict that does not say so reads as coverage.
+hr "formatting"
+fmt_out=$(cargo fmt --all --check 2>&1); fmt_rc=$?
+if [ "$fmt_rc" -eq 0 ]; then
+  echo "  ok   cargo fmt --all --check"
+else
+  echo "  FAIL cargo fmt --all --check (exit $fmt_rc)"
+  grep -E "^Diff in " <<<"$fmt_out" | head -8 | sed 's/^/    | /'
+  fail_total=$((fail_total+1))
+fi
+
 # ── Unit tests ───────────────────────────────────────────────────────────────
 hr "unit tests (CDR + GIOP)"
 # Captured, then matched — and the producer's own exit status is read first.

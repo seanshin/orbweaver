@@ -222,7 +222,9 @@ pub fn descriptor(tc: &TypeCode) -> Result<String, String> {
         // peer sends a value, and the bridge would have agreed with it,
         // because both halves were reading the same wrong registry.
         TypeCode::Value { name, id, .. } => return Err(crate::deferred_value(name, id)),
-        TypeCode::AbstractInterface { name, id, .. } => return Err(crate::deferred_abstract(name, id)),
+        TypeCode::AbstractInterface { name, id, .. } => {
+            return Err(crate::deferred_abstract(name, id));
+        }
         // Same argument, one step stronger: `("objref", id)` was what the
         // registry's `ObjRef` produced here, and there is no descriptor a
         // native could honestly have — omniORB's own Python back end ignores

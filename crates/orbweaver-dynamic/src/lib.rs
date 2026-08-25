@@ -401,11 +401,7 @@ pub fn fixed_subject(digits: u16, scale: i16) -> String {
 /// (found 2026-08-24 while unifying the two spellings `orbweaver-gen`'s two
 /// abstract-interface call sites had grown; recorded then as its own batch).
 fn construct_subject(kind: &str, name: &str, id: &str) -> String {
-    if name.is_empty() {
-        format!("{kind} {id}")
-    } else {
-        format!("{kind} {name} ({id})")
-    }
+    if name.is_empty() { format!("{kind} {id}") } else { format!("{kind} {name} ({id})") }
 }
 
 /// The head every §4.4 refusal shares, whichever layer raises it.
