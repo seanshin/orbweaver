@@ -314,6 +314,52 @@ fn an_inferred_scope_enforces_nothing_at_the_policy_gate() {
     assert!(why.contains("delete_all"), "{why}");
 }
 
+/// [`infer::UNGATING`] is a copy of a set that lives in another crate, and this
+/// runs the gate rather than reading it.
+///
+/// The set's home is `orbweaver-mcp`'s `policy::is_harmless`, which is
+/// **private**, so no constant can be shared and no comment can be compiled.
+/// Until 2026-08-25 the copy's only pin was against `annotate`'s copy — two
+/// literals in one crate agreeing with each other — while the doc beside both
+/// of them named a `policy::destructive_effect` that had been gone since
+/// 2026-08-14. A pin whose scope is narrower than its fact's stays green over
+/// the drift, and the fact here is workspace-scoped, so the pin has to cross
+/// the boundary the only way a private predicate leaves one: through what the
+/// gate *does*.
+///
+/// The asymmetry S3i is built on is exactly this — an ungating value removes
+/// the approval requirement — so if a value ever left the set, an inference
+/// would still be forbidden to propose it for a reason that had stopped being
+/// true, and nothing else would notice.
+#[test]
+fn the_ungating_set_is_what_the_gate_lets_through() {
+    let exposure = Exposure::nothing().allow_interface("IDL:gate/I:1.0");
+    let with_effect = |effect: &str| {
+        let idl =
+            format!("module gate {{ interface I {{ //@ ai_effect: {effect}\n void f(); }}; }};");
+        let spec = orbweaver_idl::check(&idl).expect("the fixture IDL is valid");
+        let mut r = Registry::new();
+        r.load(&spec).expect("loads");
+        exposure.check_call(&r, "IDL:gate/I:1.0", "f", CallApproval::default(), None)
+    };
+
+    for value in infer::UNGATING {
+        assert!(
+            with_effect(value).is_ok(),
+            "`{value}` is in UNGATING because the gate needs no approval for it — and the gate \
+             now asks for one, so the asymmetry S3i refuses to propose it under has changed"
+        );
+    }
+    // The other half, or the assertion above would pass over a gate that had
+    // stopped refusing anything at all.
+    for value in ["destructive", "moves_money"] {
+        assert!(
+            matches!(with_effect(value), Err(Denied::NeedsApproval { .. })),
+            "`{value}` is not ungating and must still need a human"
+        );
+    }
+}
+
 /// An approval is a human act with a name on it, and it is the only thing that
 /// moves a value into a key the gate reads.
 #[test]
