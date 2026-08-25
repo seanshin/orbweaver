@@ -279,6 +279,38 @@ impl Poa {
     /// A transient key includes the incarnation, so a reference from a previous
     /// run is recognisably stale instead of silently reaching whatever occupies
     /// that id now — which would be the worst kind of correct-looking bug.
+    ///
+    /// # The unstated invariant, and it is not enforced here
+    ///
+    /// A key is `name` `/` \[`incarnation` `/`\] `id`, concatenated, and
+    /// **nothing constrains the components**. So the relationship between a POA
+    /// and the keys it mints has an integrity rule nobody wrote down: *no POA
+    /// name may be a `/`-delimited prefix of another POA's name plus an object
+    /// id.* Measured 2026-08-25 and left as it is (D023 R1 changes no
+    /// behaviour): with [`Lifespan::Persistent`], `Poa::new("Root")` with the
+    /// id `POA/x` and `Poa::new("Root/POA")` with the id `x` mint the **same
+    /// bytes**, and each POA's [`Poa::parse_key`] accepts the other's key —
+    /// [`Poa::name`] calls itself "the POA's name, which prefixes every object
+    /// key it mints" without saying that a prefix must be unambiguous.
+    /// `two_poas_whose_names_are_prefixes_mint_the_same_object_key` pins the
+    /// persistent case as measured. Whether the incarnation makes the transient
+    /// case immune is **unmeasured** — it does not obviously, since an object id
+    /// may contain the hex an incarnation would.
+    ///
+    /// [`tenant_service::is_key_safe`](crate::tenant_service) enforces exactly
+    /// this rule for the other key space in this crate — every string that
+    /// becomes part of a tenant key is refused if it is empty or contains `/` —
+    /// and **neither names the other**, which is how one key space came to have
+    /// the rule and the other to have only the habit. No caller in this
+    /// workspace puts a `/` in a POA name or an object id today, so no fix is
+    /// applied here: refusing one would change behaviour for
+    /// [`ObjectId::from_name`]'s one data-driven caller (`residency::reconcile`
+    /// mints ids from expert ids), and escaping the separator would change
+    /// every key already minted, including persistent ones already handed out.
+    ///
+    /// *POA와 그 키 사이의 관계에도 무결성 규칙이 있으나 적혀 있지 않았다:
+    /// 한 POA의 이름이 다른 POA의 이름 + 객체 id의 접두사가 되어서는 안 된다.
+    /// 같은 크레이트의 다른 키 공간은 이 규칙을 강제하고, 서로를 이름하지 않는다.*
     pub fn object_key(&self, id: &ObjectId) -> Vec<u8> {
         let mut key = Vec::new();
         key.extend_from_slice(self.name.as_bytes());
@@ -551,6 +583,33 @@ mod tests {
         let other = Poa::new("OtherPOA", "IDL:m/I:1.0").with_lifespan(Lifespan::Persistent);
         let id = ObjectId::from_name("x");
         assert_eq!(mine.parse_key(&other.object_key(&id)), None);
+    }
+
+    /// **A finding, pinned as measured and not endorsed** — the companion to
+    /// the test above, which shows a key from *another* POA being refused.
+    ///
+    /// A POA name and an object id are concatenated with `/` and neither is
+    /// constrained, so two POAs whose names are prefixes of one another mint
+    /// the identical key and each accepts the other's. `Poa::object_key`'s docs
+    /// state the invariant this violates and why no fix is applied inside a
+    /// naming batch. Enforcing it turns this test red, which is the signal
+    /// wanted: `tenant_service::is_key_safe` already enforces the same rule for
+    /// the other key space in this crate.
+    #[test]
+    fn two_poas_whose_names_are_prefixes_mint_the_same_object_key() {
+        let outer = Poa::new("Root", "IDL:m/I:1.0").with_lifespan(Lifespan::Persistent);
+        let inner = Poa::new("Root/POA", "IDL:m/I:1.0").with_lifespan(Lifespan::Persistent);
+        let (nested, plain) = (ObjectId::from_name("POA/x"), ObjectId::from_name("x"));
+
+        assert_eq!(
+            outer.object_key(&nested),
+            inner.object_key(&plain),
+            "measured: two POAs mint the identical object key"
+        );
+        // And each adopts the other's reference, which is the consequence that
+        // matters: a request lands on whichever POA is asked first.
+        assert_eq!(inner.parse_key(&outer.object_key(&nested)), Some(plain));
+        assert_eq!(outer.parse_key(&inner.object_key(&ObjectId::from_name("x"))), Some(nested));
     }
 
     #[test]

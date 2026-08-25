@@ -137,6 +137,157 @@
 //! adding a second isolation mechanism would repeat the mistake that chapter
 //! names.
 //!
+//! # The three relationships a manifest holds
+//!
+//! Three of [`Manifest`]'s six members are not data *about* the model — they
+//! **name other objects**: `base_model`, `experts` and `policy_domain`. The
+//! standard has a service for exactly this — `CosRelationship`, whose whole
+//! subject is roles, cardinality and referential integrity — and this module
+//! implements none of it. What it does implement is three particular
+//! relationships with three particular integrity rules, enforced by code and,
+//! until D023 R1, written down nowhere at all. They are written down *here*
+//! because this is where they are enforced: a rule whose home is somebody
+//! else's document drifts from the code on the next change, silently, because
+//! nothing compiles a sentence.
+//!
+//! Each is a **string**, never a reference, so a holder of a manifest can read
+//! all three names and reach none of the objects — see *What nothing checks*.
+//!
+//! ## `base_model` — model → the shared base (N:1, immutable)
+//!
+//! - **Role.** A `ComposedModel` names the one `::moe::Expert` it is a delta
+//!   over. The inverse role — *which models are over this base* — exists in no
+//!   direction: `bases` is a set of keys and carries no back-pointer.
+//! - **Cardinality.** Exactly one, never empty (`is_key_safe` refuses both an
+//!   empty string and one containing `/`). Many models, of many tenants, name
+//!   the same base; that sharing is the design, and the module docs on `base()`
+//!   are where its consequences are argued.
+//! - **Who creates it.** `create`, from the manifest, and it **mints the
+//!   target if absent** (`bases.insert`) — as does `provision_expert`. So this
+//!   relationship cannot dangle: `base()` has no dangling answer to give.
+//! - **Who changes it.** *Nobody.* No operation of corpus/golden/23 re-points a
+//!   model's base — not `bind_expert`, not `set_policy`, not `deploy`. A
+//!   different base is a different model, and `create` is how one is made.
+//! - **Integrity.** `bind_expert` refuses (`BAD_PARAM`) an expert whose own
+//!   `base_model` differs from the model's: an adapter delta over another base
+//!   is meaningless, and composing one would be a silent correctness failure.
+//!
+//! ## `experts` — model → its own adapters (1:N, append-only)
+//!
+//! - **Role.** A `ComposedModel` names the tenant's own `EnterpriseExpert`s by
+//!   capability id. Each named expert lives in *this* tenant's key space, which
+//!   is why the shared base — whose key names no tenant — is inert as an
+//!   argument here.
+//! - **Cardinality.** Zero or more; empty at creation is legal and common.
+//!   Intended to be a set: `bind_expert` refuses a repeat. `create` does not —
+//!   see *What nothing checks*.
+//! - **Who creates links.** Two paths with **two different rules**, which is
+//!   the fact this section exists to state. `create` **materialises** every
+//!   capability the manifest names into a hollow `EnterpriseExpert` (cost
+//!   `0.0`, empty delta, the model's own base) rather than refusing an unknown
+//!   one: a manifest is a declaration of intent, the adapter bytes arrive out
+//!   of band, and refusing would make the order of two unrelated deployment
+//!   steps load bearing. `bind_expert` **requires the target to exist already**
+//!   and answers `OBJECT_NOT_EXIST` otherwise.
+//! - **Who changes it.** `bind_expert`, on the *model's* key, under
+//!   `ai_authz: moe.enterprise.compose`. It only ever **appends**: the contract
+//!   declares no unbind, so a composition is monotone for the life of the
+//!   object.
+//! - **Integrity, on the `bind_expert` path.** Same tenant (`NO_PERMISSION`,
+//!   checked before existence so a refusal discloses nothing), right kind
+//!   (`BAD_PARAM`), served (`OBJECT_NOT_EXIST`), same base (`BAD_PARAM`), not
+//!   already bound (`BAD_PARAM`).
+//!
+//! ## `policy_domain` — model → its governing domain (N:1, replaceable)
+//!
+//! - **Role.** A `ComposedModel` names the one `PolicyDomain` that governs it:
+//!   the domain is what `authorize` and `check_residency` are asked of, and
+//!   what every audit line this model produces is labelled with.
+//! - **Cardinality.** Exactly one, never empty. Many of a tenant's models may
+//!   name one domain, and re-pointing one model leaves the others alone.
+//! - **Who creates it.** `create` **mints the domain if absent**, taking its
+//!   region from the manifest, and refuses (`BAD_PARAM`) if it exists with a
+//!   *different* region — a domain governs one region, and two answers to
+//!   `check_residency` would depend on which manifest was read last.
+//! - **Who changes it.** `set_policy`, on the model's key, under
+//!   `ai_authz: moe.enterprise.policy.write`. It **replaces, never mints**: an
+//!   unserved domain is `OBJECT_NOT_EXIST`, and a domain whose region the
+//!   model's manifest does not claim is `BAD_PARAM`.
+//! - **What replacing does not do.** The domain left behind is not destroyed.
+//!   Nothing in this contract destroys a `PolicyDomain` or an
+//!   `EnterpriseExpert`; `retire` takes out the model and nothing it points at.
+//!
+//! ## Why the two mutators differ, which is itself a relationship rule
+//!
+//! `bind_expert` appends to a set that starts empty and has no maximum;
+//! `set_policy` replaces a member that is always exactly one. That difference
+//! in **cardinality** is why they are two operations with two `ai_authz`
+//! scopes rather than one `update`: appending an adapter can never remove a
+//! governor, and re-pointing a governor can never smuggle an adapter in. The
+//! scopes already differed and the reason was already enforced; what was
+//! missing is the sentence saying the reason is the cardinality.
+//!
+//! ## What nothing checks
+//!
+//! 1. **Nothing on the wire navigates any of the three.** `get_manifest` hands
+//!    back six strings; no operation corpus/golden/23 declares turns a
+//!    capability id or a domain name into a reference. So the only way to
+//!    obtain the argument `bind_expert` and `set_policy` require is out of band
+//!    ([`TenantService::expert_reference`], [`TenantService::policy_reference`],
+//!    [`TenantService::provision_expert`]). This is `COMPONENTS.md`'s gap row —
+//!    *`bind_expert`/`set_policy` take references no operation of the contract
+//!    returns* — stated from the relationship end: **the relationships have no
+//!    inverse role and no navigation operation**, which is the half
+//!    `CosRelationship` would have carried.
+//! 2. **`create` does not apply `bind_expert`'s two integrity checks.**
+//!    Measured 2026-08-25 and reported as a **finding**, deliberately not
+//!    repaired: D023 §6 says R1 changes no behaviour. A manifest may name the
+//!    same capability **twice**, which `bind_expert` refuses as a repeat; and a
+//!    manifest may name a capability whose `EnterpriseExpert` already exists
+//!    **over a different base**, which `bind_expert` refuses as a foreign base
+//!    — `or_insert_with` keeps the existing object, so the model ends up
+//!    composed from an adapter its own base does not match. Both are pinned
+//!    below as *measurements of today's behaviour, not endorsements of it*:
+//!    making the two paths agree turns those tests red, which is the signal
+//!    wanted rather than an obstacle to it.
+//! 3. **Dangling is impossible rather than detected.** Not because anything
+//!    looks for it: `create` materialises its targets, `bind_expert` and
+//!    `set_policy` require theirs to be served, and no operation destroys a
+//!    target. The graph only grows, so there is no moment at which a
+//!    referential-integrity check would have anything to find.
+//!
+//! ## `clone_model` over all three — CosLifeCycle's own question
+//!
+//! `CosCompoundLifeCycle` defines `copy`/`move` **over a relationship graph**,
+//! with a traversal criterion per role — *deep* (copy the target too),
+//! *shallow* (drop the link), or *reference* (keep pointing at the same
+//! target). `clone_model` is that operation, and the criterion it applies was
+//! behaviour nobody had written down. Measured:
+//!
+//! - **`base_model` — reference.** The string is copied; `create`'s
+//!   `bases.insert` is idempotent, so the clone and the source hand back the
+//!   *same* `base()` reference. The base is neither followed nor copied.
+//! - **`experts` — reference.** The ids are copied verbatim, and `create`'s
+//!   materialisation loop then finds every key already present, so
+//!   `or_insert_with` does nothing: **no adapter is duplicated**, and the clone
+//!   composes the source's own expert objects, deltas and all.
+//! - **`policy_domain` — reference.** The domain already exists with the region
+//!   the copied manifest claims, so the region check passes and the clone joins
+//!   the source's domain rather than getting one of its own.
+//!
+//! All three roles are therefore traversed with **reference** semantics and
+//! none with *deep* or *shallow*. `version` is the one member replaced, a
+//! duplicate is `BAD_PARAM` through the same gate as `create`, the serial is
+//! fresh, and the clone is **not** deployed. The compact form of that whole
+//! paragraph — and what the test asserts, because it is the form a mistake
+//! cannot slip past — is that [`TenantService::served`] grows by **exactly
+//! one**.
+//!
+//! *매니페스트가 쥔 세 개의 참조는 관계이며, 관계에는 역할·다중도·무결성 규칙이
+//! 있다. 셋 다 규칙은 이미 강제되고 있었고 적혀 있지 않았을 뿐이다. `create`와
+//! `bind_expert`의 규칙이 다르다는 것은 **발견**이며 이 배치에서 고치지 않는다.
+//! `clone_model`은 셋 모두를 **참조**로 따라간다 — 깊은 복사도 절단도 아니다.*
+//!
 //! # Marshalling: by hand, against the declared layout
 //!
 //! Same trade as [`crate::expert_service`], for the same reason, and pinned
@@ -291,15 +442,22 @@ pub struct Manifest {
     /// for the model repeats it, and the two must agree; `create` refuses
     /// otherwise.
     pub tenant_id: String,
-    /// `string base_model` — names the shared base, which is *not* owned by
-    /// this tenant. See the module docs on `base()`.
+    /// `string base_model` — **a relationship**: names the shared base, which
+    /// is *not* owned by this tenant. N:1, immutable, mints its own target.
+    /// Its role, cardinality and integrity rule live in one place, the module
+    /// docs' *three relationships* section; see also the docs on `base()`.
     pub base_model: String,
-    /// `sequence< ::moe::CapabilityId> experts` — the tenant's own adapters,
-    /// by capability id. Empty at creation is legal and common; `bind_expert`
-    /// is what grows it.
+    /// `sequence< ::moe::CapabilityId> experts` — **a relationship**: the
+    /// tenant's own adapters, by capability id. 1:N and append-only. Empty at
+    /// creation is legal and common; `create` materialises what it names and
+    /// `bind_expert` is what grows it afterwards, under two rules that differ.
+    /// Module docs, *three relationships*.
     pub experts: Vec<String>,
-    /// `string policy_domain` — names the `PolicyDomain` governing this model.
-    /// `set_policy` changes it, which is why it carries its own scope.
+    /// `string policy_domain` — **a relationship**: names the `PolicyDomain`
+    /// governing this model. Exactly one, replaceable. `set_policy` changes it,
+    /// which is why it carries its own scope — the reason is the cardinality,
+    /// and the module docs' *three relationships* section is where that is
+    /// argued.
     pub policy_domain: String,
     /// `string version` — unique within a tenant; `clone_model` exists to make
     /// a second one.
@@ -1222,6 +1380,21 @@ impl TenantService {
         self.state.read(|s| s.nodes.get(node).cloned())
     }
 
+    /// `(base_model, cost, delta length)` of a tenant's expert object.
+    ///
+    /// The same accessor pattern as the two above, and for the same reason.
+    /// It exists because the `experts` relationship's create-path rule — a
+    /// capability the manifest names is *materialised hollow*, not refused —
+    /// is a statement about the target's contents, and the wire has no
+    /// operation that returns all three (`describe` gives the cost,
+    /// `adapter_delta` the bytes, and nothing at all gives the base).
+    #[cfg(test)]
+    fn expert_shape(&self, tenant: &str, capability: &str) -> Option<(String, f32, usize)> {
+        let key = self.keys.expert_key(tenant, capability);
+        self.state
+            .read(|s| s.experts.get(&key).map(|e| (e.base_model.clone(), e.cost, e.delta.len())))
+    }
+
     // ── the wire operations, each one lock section deep ─────────────────────
     //
     // This layer exists so that **taking the lock happens in exactly one place
@@ -2073,6 +2246,198 @@ mod tests {
         );
     }
 
+    // ── the three relationships (D023 R1) ───────────────────────────────────
+    //
+    // One test per rule written down in the module docs' *three relationships*
+    // section, each shaped so that the rule being different makes it red. Where
+    // a rule cannot be observed through any surface the tests reach, it is said
+    // so in the doc comment rather than covered by something adjacent.
+
+    /// `base_model`: N:1, **minted by `create`** so it can never dangle, and
+    /// **re-pointed by nothing**. The second half is the one no document had:
+    /// the two operations that do change a manifest leave the base alone, so a
+    /// model's base is fixed for the life of the object.
+    ///
+    /// The integrity rule on the other side — `bind_expert` refuses an adapter
+    /// over a different base — is already covered by
+    /// `bind_expert_refuses_a_foreign_base_and_a_repeat` and not repeated here.
+    #[test]
+    fn the_base_model_relationship_is_minted_by_create_and_repointed_by_nothing() {
+        let svc = TenantService::new("127.0.0.1", 4002, "MoE");
+        svc.provision_factory("acme").unwrap();
+        assert!(svc.shared_base_reference("llama-70b").is_none(), "nobody has named it yet");
+
+        let model = key_of(&svc.create("acme", manifest("acme", "1.0", "eu-west")).unwrap());
+        let base = svc
+            .shared_base_reference("llama-70b")
+            .expect("create mints the base its manifest names");
+
+        svc.provision_expert("acme", "math", "llama-70b", 1.5, b"d").unwrap();
+        let math = svc.expert_reference("acme", "math").unwrap();
+        svc.bind_expert("acme", &model, Some(math)).unwrap();
+        let domain = svc.policy_reference("acme", "acme-default").unwrap();
+        svc.set_policy("acme", &model, Some(domain)).unwrap();
+
+        assert_eq!(
+            svc.manifest_at(&model).unwrap().base_model,
+            "llama-70b",
+            "neither mutator of the manifest re-points the base"
+        );
+        assert_eq!(key_of(&svc.shared_base_reference("llama-70b").unwrap()), key_of(&base));
+    }
+
+    /// `experts` has **two link-creating paths with two different rules**, and
+    /// they disagree about a target that does not exist. `create` materialises
+    /// the capability into a hollow adapter — the model's own base, no cost, no
+    /// delta — because the bytes arrive out of band; `bind_expert` refuses one
+    /// that is not served. Either rule alone is defensible and neither was
+    /// written down.
+    #[test]
+    fn create_materialises_an_expert_the_manifest_names_and_bind_expert_refuses_an_absent_one() {
+        let svc = TenantService::new("127.0.0.1", 4002, "MoE");
+        svc.provision_factory("acme").unwrap();
+        let mut m = manifest("acme", "1.0", "eu-west");
+        m.experts = vec!["vision".into()];
+        let model = key_of(&svc.create("acme", m).unwrap());
+
+        assert!(svc.expert_reference("acme", "vision").is_some(), "materialised, not refused");
+        assert_eq!(
+            svc.expert_shape("acme", "vision"),
+            Some(("llama-70b".to_owned(), 0.0, 0)),
+            "and hollow: the model's base, no cost, no delta"
+        );
+        assert_eq!(svc.manifest_at(&model).unwrap().experts, vec!["vision".to_owned()]);
+
+        let absent = svc.ior_for(ENTERPRISE_EXPERT_ID, &svc.keys.expert_key("acme", "audio"));
+        assert_eq!(
+            svc.bind_expert("acme", &model, Some(absent)).unwrap_err().id,
+            OBJECT_NOT_EXIST,
+            "the other path requires its target to exist already"
+        );
+        assert_eq!(
+            svc.manifest_at(&model).unwrap().experts,
+            vec!["vision".to_owned()],
+            "and a refused bind does not grow the sequence"
+        );
+    }
+
+    /// **A finding, pinned as measured and not endorsed.**
+    ///
+    /// `bind_expert` enforces two integrity rules on the `experts` relationship
+    /// that `create` does not: no repeat, and no adapter over a foreign base.
+    /// D023 §6 forbids repairing that inside a naming batch, so this records
+    /// what the two paths do today, 2026-08-25. **Making them agree turns this
+    /// test red, which is the reason to write it rather than an obstacle to
+    /// doing so** — a rule enforced on one of two paths is exactly the shape
+    /// that stays invisible until somebody measures both.
+    #[test]
+    fn the_create_path_does_not_apply_bind_experts_two_integrity_rules() {
+        let svc = TenantService::new("127.0.0.1", 4002, "MoE");
+        svc.provision_factory("acme").unwrap();
+
+        // (a) A repeat. `bind_expert` answers BAD_PARAM to a second bind of one
+        // capability; `create` accepts the multiset and the manifest keeps it.
+        let mut twice = manifest("acme", "1.0", "eu-west");
+        twice.experts = vec!["math".into(), "math".into()];
+        let model = key_of(&svc.create("acme", twice).unwrap());
+        assert_eq!(
+            svc.manifest_at(&model).unwrap().experts,
+            vec!["math".to_owned(), "math".to_owned()],
+            "measured: create does not deduplicate what bind_expert refuses"
+        );
+
+        // (b) A foreign base. The adapter exists over `mistral-8x7b` and the
+        // manifest names it beside a `llama-70b` base — the exact pairing
+        // `bind_expert_refuses_a_foreign_base_and_a_repeat` refuses. Here
+        // `or_insert_with` keeps the existing object, so the model is composed
+        // from an adapter its own base does not match.
+        svc.provision_expert("acme", "vision", "mistral-8x7b", 1.0, b"v").unwrap();
+        let mut foreign = manifest("acme", "2.0", "eu-west");
+        foreign.experts = vec!["vision".into()];
+        let other = key_of(&svc.create("acme", foreign).unwrap());
+        assert_eq!(svc.manifest_at(&other).unwrap().base_model, "llama-70b");
+        assert_eq!(
+            svc.expert_shape("acme", "vision").map(|(base, _, _)| base),
+            Some("mistral-8x7b".to_owned()),
+            "measured: create composed an adapter trained over another base"
+        );
+    }
+
+    /// `policy_domain`: exactly one, **minted by `create`**, **replaced by
+    /// `set_policy`**, and the domain left behind is not destroyed — nothing in
+    /// this contract destroys a relationship target. The asymmetry with
+    /// `bind_expert` is the point: one appends, one replaces, which is why they
+    /// are two operations with two scopes.
+    #[test]
+    fn set_policy_replaces_a_domain_create_minted_and_destroys_nothing() {
+        let svc = TenantService::new("127.0.0.1", 4002, "MoE");
+        svc.provision_factory("acme").unwrap();
+        assert!(svc.policy_reference("acme", "acme-default").is_none());
+
+        let model = key_of(&svc.create("acme", manifest("acme", "1.0", "eu-west")).unwrap());
+        let first = svc.policy_reference("acme", "acme-default").expect("create mints the domain");
+        assert_eq!(
+            svc.policy_region("acme", "acme-default").as_deref(),
+            Some("eu-west"),
+            "with the manifest's region, which is what it will be asked about"
+        );
+
+        // `set_policy` never mints: an unserved domain is gone, not created.
+        let absent = svc.ior_for(POLICY_DOMAIN_ID, &svc.keys.policy_key("acme", "acme-spare"));
+        assert_eq!(svc.set_policy("acme", &model, Some(absent)).unwrap_err().id, OBJECT_NOT_EXIST);
+        assert!(svc.policy_reference("acme", "acme-spare").is_none(), "and still does not exist");
+
+        // A second domain, minted the only way there is, then adopted.
+        let mut second = manifest("acme", "2.0", "eu-west");
+        second.policy_domain = "acme-spare".into();
+        svc.create("acme", second).unwrap();
+        let spare = svc.policy_reference("acme", "acme-spare").unwrap();
+        svc.set_policy("acme", &model, Some(spare)).unwrap();
+        assert_eq!(svc.manifest_at(&model).unwrap().policy_domain, "acme-spare", "replaced");
+        assert_eq!(
+            svc.policy_reference("acme", "acme-default").map(|r| key_of(&r)),
+            Some(key_of(&first)),
+            "and the governor left behind still exists: replacing destroys nothing"
+        );
+    }
+
+    /// CosCompoundLifeCycle's own question, answered by measurement:
+    /// `clone_model` traverses **all three roles with `reference` semantics** —
+    /// it copies the names and shares every target, never *deep* and never
+    /// *shallow*. The compact form of that, and the one a mistake cannot slip
+    /// past, is that exactly one new object exists afterwards.
+    #[test]
+    fn clone_model_traverses_all_three_relationships_by_reference() {
+        let (svc, _, _, model_a, _) = two_tenants();
+        let math = svc.expert_reference("acme", "math").unwrap();
+        svc.bind_expert("acme", &model_a, Some(math.clone())).unwrap();
+        let source = svc.manifest_at(&model_a).unwrap();
+        let before = svc.served();
+
+        let src = svc.ior_for(COMPOSED_MODEL_ID, &model_a);
+        let clone = key_of(&svc.clone_model("acme", Some(src), "1.1").unwrap());
+        let copy = svc.manifest_at(&clone).unwrap();
+
+        assert_eq!(copy.base_model, source.base_model, "the base name came across");
+        assert_eq!(copy.experts, source.experts, "so did the capability ids");
+        assert_eq!(copy.policy_domain, source.policy_domain, "and the domain name");
+        assert_eq!(copy.residency_region, source.residency_region);
+        assert_ne!(copy.version, source.version, "version is the one member replaced");
+
+        // Every target is the same object, not a copy of one.
+        assert_eq!(key_of(&svc.expert_reference("acme", "math").unwrap()), key_of(&math));
+        assert_eq!(
+            svc.expert_shape("acme", "math"),
+            Some(("llama-70b".to_owned(), 1.5, b"acme-delta".len())),
+            "the adapter was shared, not duplicated with its delta"
+        );
+        assert_eq!(
+            svc.served(),
+            before + 1,
+            "one new object — the model — and nothing it points at"
+        );
+    }
+
     // ── served over the wire ────────────────────────────────────────────────
 
     struct Served {
@@ -2298,6 +2663,42 @@ mod tests {
             orbweaver_giop::server::BAD_OPERATION,
             "a ModelFactory operation on a model"
         );
+        served.shutdown(c);
+    }
+
+    /// `COMPONENTS.md`'s gap row, stated from the relationship end: the three
+    /// names a manifest holds have **no inverse role and no navigation
+    /// operation**. Over the wire a client reads six strings and cannot turn
+    /// any of them into the reference `bind_expert` and `set_policy` demand —
+    /// the only producers are out of band, which is what the gap row means by
+    /// *references no operation of the contract returns*.
+    #[test]
+    fn no_operation_of_the_contract_navigates_a_models_relationships() {
+        let (svc, factory_a, _, model_a, _) = two_tenants();
+        let math = svc.expert_reference("acme", "math").unwrap();
+        svc.bind_expert("acme", &model_a, Some(math)).unwrap();
+        let (served, port) = Served::start(svc);
+        let mut model =
+            Ior { type_id: COMPOSED_MODEL_ID.to_owned(), profiles: factory_a.profiles.clone() };
+        model.profiles[0].port = port;
+        model.profiles[0].object_key = model_a;
+
+        let mut c = Connection::connect(&model, T).unwrap();
+        let m = Manifest::read_from(&mut c.invoke_nullary("get_manifest").unwrap().body().unwrap())
+            .unwrap();
+        assert_eq!(m.experts, vec!["math".to_owned()], "the ids are readable");
+        assert_eq!(m.policy_domain, "acme-default");
+        assert_eq!(m.base_model, "llama-70b");
+
+        // And unresolvable: every shape a navigation operation could take is an
+        // operation this interface does not declare.
+        for op in ["get_experts", "experts", "get_policy", "get_policy_domain", "get_base"] {
+            assert_eq!(
+                exception_id(c.invoke_nullary(op)),
+                orbweaver_giop::server::BAD_OPERATION,
+                "{op} would be the navigation the contract does not have"
+            );
+        }
         served.shutdown(c);
     }
 
