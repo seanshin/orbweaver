@@ -223,32 +223,57 @@ const KEY_INFIX: &str = "/ifr/";
 
 /// `CORBA::DefinitionKind` ordinals, in the specification's declaration order.
 ///
-/// Only the values this facade produces are named. The rest of the enum is two
-/// different things, and this doc said only the first until 2026-08-25: the
-/// components, homes and events, which describe IDL constructs the registry
-/// genuinely does not hold — and `dk_Value` and `dk_Native`, which describe
-/// constructs it *does* hold and has held since 2026-08-20 (74b5662) and
-/// 2026-08-21 (22637a8). Those two are absent because `RepositoryServer`'s
-/// `def_kind` does not answer them, not because there is nothing to answer
-/// about; see its own note.
+/// **Every ordinal here was read back by name from a peer, and the list stops
+/// exactly where that measurement stops.** `CORBA — Part 1: Interfaces, v3.4`
+/// §14.5.1 "Supporting Type Definitions", in chapter 14 "The Interface
+/// Repository", declares 36 enumerators, `dk_none` (0) through `dk_Event` (35);
+/// omniORB 4.3.4's own `omniORB.ir_idl` stubs declare **25**, `dk_none` (0)
+/// through `dk_AbstractInterface` (24) — the CORBA 3.0 list — measured
+/// 2026-08-25 by asking a client we did not write to name each ordinal our
+/// facade wrote for a probe contract (clause (a) of the licensing boundary: a
+/// separate process over TCP). So 0..24 are named below, and 25..35 are not:
+/// answering `dk_LocalInterface` to that peer would raise `MARSHAL` in *its*
+/// stub, and an ordinal nothing can name is a claim no measurement backs.
+/// `corpus/services/ir-subset.idl` declares the full 36 for the opposite
+/// reason — a *decoder* must accept what a conformant sender may write.
 ///
-/// The ordinals here were confirmed by name against omniORB — it printed
-/// `dk_Interface` and `dk_Repository` as named enumerators for our replies
-/// (module docs, 2026-08-13). Any ordinal added to this enum owes the same
-/// measurement rather than a count off the specification's list.
+/// This doc used to say "only the values this facade produces are named", which
+/// was the sentence that let `dk_Value` and `dk_Native` stay absent while the
+/// registry had held both since 2026-08-20 (74b5662) and 2026-08-21 (22637a8).
+/// A list scoped to what a function currently answers cannot tell you the
+/// function is answering wrongly.
+///
+/// Adding an ordinal above 24 owes a peer that can name it, not a count off the
+/// specification's list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 #[allow(missing_docs)]
 pub enum DefinitionKind {
     None = 0,
+    All = 1,
+    Attribute = 2,
     Constant = 3,
     Exception = 4,
     Interface = 5,
+    Module = 6,
+    Operation = 7,
+    Typedef = 8,
     Alias = 9,
     Struct = 10,
     Union = 11,
     Enum = 12,
+    Primitive = 13,
+    String = 14,
+    Sequence = 15,
+    Array = 16,
     Repository = 17,
+    Wstring = 18,
+    Fixed = 19,
+    Value = 20,
+    ValueBox = 21,
+    ValueMember = 22,
+    Native = 23,
+    AbstractInterface = 24,
 }
 
 /// `OperationMode::OP_NORMAL`.
@@ -729,12 +754,22 @@ impl RepositoryServer {
     ///
     /// The type id advertised is `InterfaceDef` for an interface and the
     /// weaker `Contained` for anything else, so a client that narrows locally
-    /// narrows to something we actually serve.
+    /// narrows to something we actually serve. An **abstract** interface is
+    /// still an `InterfaceDef` here even though [`Self::def_kind`] now
+    /// distinguishes it: `AbstractInterfaceDef` derives from `InterfaceDef` in
+    /// the IR IDL, so the weaker id is the true one to advertise for a facade
+    /// that serves the `InterfaceDef` operations and no `AbstractInterfaceDef`
+    /// ones.
+    ///
+    /// Written out rather than left to `Some(_)`: the two non-interface entry
+    /// kinds are named so that a third one is a build error here too.
     pub fn entry_ior(&self, id: &str) -> Ior {
         match self.registry.get(id) {
             None => nil_ref(),
             Some(Entry::Interface(_)) => self.ior_for(INTERFACE_DEF_ID, self.entry_key(id)),
-            Some(_) => self.ior_for(CONTAINED_ID, self.entry_key(id)),
+            Some(Entry::Type(_) | Entry::Const { .. }) => {
+                self.ior_for(CONTAINED_ID, self.entry_key(id))
+            }
         }
     }
 
@@ -769,56 +804,147 @@ impl RepositoryServer {
 
     /// `IRObject::_get_def_kind` for a registry entry.
     ///
-    /// A `valuetype` and a `native` answer `dk_none`, and the reason changed
-    /// underneath this function without the sentence moving. It read: *"the
+    /// # The sentence that was false for five days
+    ///
+    /// This note read, over a `_ => DefinitionKind::None` catch-all: *"the
     /// registry stores both as an object-reference `TypeCode` because v1
     /// marshals neither (PLAN §4.4), so the facade cannot tell them apart"* —
-    /// true when it was written, false from 74b5662 (2026-08-20, a valuetype is
-    /// `TypeCode::Value`) and 22637a8 (2026-08-21, a native is
-    /// `TypeCode::Native`). The registry has told them apart for four days while
-    /// this said it could not, and nothing was red because the wire answer —
-    /// `dk_none` — is the same either way. **A catch-all arm is how a classifier
-    /// absorbs a distinction without mentioning it**: `_ =>` took the new
-    /// variants the moment they existed, so the two that can be an entry are
-    /// written out below and a third will have to be too.
+    /// true when written, **false from 74b5662 (2026-08-20**, a valuetype became
+    /// `TypeCode::Value`) **and 22637a8 (2026-08-21**, a native became
+    /// `TypeCode::Native`). It asserted the opposite of the code for five days,
+    /// and nothing went red because the *answer* was `dk_none` either way: the
+    /// catch-all took both new variants the moment they existed and the
+    /// registry's new distinction never reached the wire. A rewrite on
+    /// 2026-08-25 replaced the false reason with a true one — "this facade does
+    /// not name `dk_Value`, so it has no ordinal to answer with" — which was
+    /// honest and still left a conformant client told **`dk_none`: no such
+    /// definition, for a definition that exists** (D016 §5 B1, D018 §3.1).
     ///
-    /// What is true now is smaller and worth stating plainly: this facade does
-    /// not *name* `dk_Value` or `dk_Native`, so it has no ordinal to answer
-    /// with. Naming them is a wire change and owes the measurement every ordinal
-    /// here already has (the module docs' omniORB session, which printed ours
-    /// back as named enumerators); reasoning one off the specification's
-    /// declaration order and shipping it is the move this project keeps
-    /// recording as the one that costs a release. Until then `dk_none` is
-    /// honest — the facade is saying it has no kind for this, which it does
-    /// not — and it is a gap, not a decision.
+    /// # What it answers now, and what measured it
     ///
-    /// An abstract interface is **not** in that gap and this note said it was
-    /// until the sweep looked: it is an `Entry::Interface` like any other and
-    /// answers `dk_Interface` from the arm above. `TypeCode::AbstractInterface`
-    /// is a shape a *member* has, never one an entry does. Whether
-    /// `dk_AbstractInterface` would be the better answer is a question about the
-    /// specification, not about this drift.
+    /// The ordinals were read back by name from omniORB 4.3.4's own
+    /// `omniORB.ir_idl` client against this servant on 2026-08-25 — see
+    /// [`DefinitionKind`], which stops where that measurement stops.
+    ///
+    /// # Why the match is exhaustive
+    ///
+    /// **A catch-all over `TypeCode` is how a classifier absorbs a distinction
+    /// without mentioning it.** The three variants added in August were not
+    /// forgotten; they were *swallowed*, silently, by an arm written before they
+    /// existed. So there is no `_` arm here: a new `TypeCode` variant is a build
+    /// error in this function, and whoever adds one has to say what an entry of
+    /// that shape is. Every arm below is a verdict — an ordinal, or `None` with
+    /// the reason true of that variant and no other.
+    ///
+    /// `TypeCode::Recursive` is the only `None`, and its reason is not a gap:
+    /// it is not a definition at all but a **reference back to one being
+    /// described**, so there is nothing under this id to have a kind. Resolving
+    /// it would re-enter the entry the caller is already inside.
+    ///
+    /// # An abstract interface answers `dk_AbstractInterface` from `bases`
+    ///
+    /// It is an [`Entry::Interface`] like any other — `TypeCode::AbstractInterface`
+    /// is a shape a *member* has, not one an entry does — so the distinction
+    /// comes from [`InterfaceEntry::abstract_interface`], which the registry has
+    /// recorded all along and this facade was not reading. An interface ingested
+    /// from a peer is `false` there ("not known to be abstract", which is all a
+    /// remote IFR can tell us) and so answers `dk_Interface`, which is the
+    /// honest answer for what we know.
+    ///
+    /// [`InterfaceEntry::abstract_interface`]: crate::InterfaceEntry::abstract_interface
     fn def_kind(&self, id: &str) -> DefinitionKind {
         match self.registry.get(id) {
-            Some(Entry::Interface(_)) => DefinitionKind::Interface,
+            Some(Entry::Interface(i)) => {
+                if i.abstract_interface {
+                    DefinitionKind::AbstractInterface
+                } else {
+                    DefinitionKind::Interface
+                }
+            }
             Some(Entry::Const { .. }) => DefinitionKind::Constant,
-            Some(Entry::Type(tc)) => match tc {
-                TypeCode::Struct { .. } => DefinitionKind::Struct,
-                TypeCode::Union { .. } => DefinitionKind::Union,
-                TypeCode::Enum { .. } => DefinitionKind::Enum,
-                TypeCode::Alias { .. } => DefinitionKind::Alias,
-                TypeCode::Except { .. } => DefinitionKind::Exception,
-                // Distinguishable since 2026-08-20/21, and unanswerable here
-                // for want of an ordinal this facade has measured. Written out
-                // rather than left to the catch-all so the gap is visible at
-                // the place it happens. An abstract interface is not in this
-                // list: it is an `Entry::Interface` like any other and answers
-                // `dk_Interface` above, `TypeCode::AbstractInterface` being a
-                // shape a *member* has and not one an entry does.
-                TypeCode::Value { .. } | TypeCode::Native { .. } => DefinitionKind::None,
-                _ => DefinitionKind::None,
-            },
+            Some(Entry::Type(tc)) => Self::kind_of_type(tc),
             None => DefinitionKind::None,
+        }
+    }
+
+    /// The `DefinitionKind` for an [`Entry::Type`]'s `TypeCode`, exhaustively.
+    ///
+    /// Split out from [`Self::def_kind`] so the exhaustiveness is over one enum
+    /// and reads as a table. See that function for why there is no `_` arm.
+    ///
+    /// The primitive and anonymous-type arms answer the ordinal the
+    /// specification gives them (§14.5.14–§14.5.19: `dk_Primitive`,
+    /// `dk_String`, `dk_Wstring`, `dk_Sequence`, `dk_Array`, `dk_Fixed`)
+    /// rather than `dk_none`. No loader
+    /// in this workspace registers one under a repository id — a
+    /// `typedef sequence<long> S` is an `Alias` whose *aliased* type is the
+    /// sequence — but [`Registry::define_ingested`] is public and takes any
+    /// `Entry::Type`, and "nothing constructs this today" is the reason that
+    /// produced the defect this function is repairing. A kind that is right if
+    /// it ever happens costs one arm; a `dk_none` that is wrong if it ever
+    /// happens costs a wire diagnosis.
+    ///
+    /// [`Registry::define_ingested`]: crate::Registry::define_ingested
+    fn kind_of_type(tc: &TypeCode) -> DefinitionKind {
+        match tc {
+            // §14.5.14 `PrimitiveDef` covers every basic type, `void` and
+            // `null` included; `pk_any`, `pk_TypeCode` and `pk_Principal` are
+            // `PrimitiveKind`s in the same table.
+            TypeCode::Null
+            | TypeCode::Void
+            | TypeCode::Short
+            | TypeCode::Long
+            | TypeCode::UShort
+            | TypeCode::ULong
+            | TypeCode::Float
+            | TypeCode::Double
+            | TypeCode::Boolean
+            | TypeCode::Char
+            | TypeCode::Octet
+            | TypeCode::Any
+            | TypeCode::TypeCode
+            | TypeCode::Principal
+            | TypeCode::LongLong
+            | TypeCode::ULongLong
+            | TypeCode::LongDouble
+            | TypeCode::WChar => DefinitionKind::Primitive,
+            // **The bound decides the kind, and the specification is explicit
+            // about it.** §14.5.15: *"A `StringDef` represents an IDL bounded
+            // string type. The unbounded string type is represented as a
+            // `PrimitiveDef`"* — §14.5.14 lists `pk_string` and `pk_wstring`
+            // among the primitive kinds. Zero is unbounded in this `TypeCode`,
+            // so `string` is `dk_Primitive` and `string<40>` is `dk_String`.
+            // Answering `dk_String` for both would have been the same class of
+            // wrong-but-plausible as the catch-all above.
+            TypeCode::String(0) => DefinitionKind::Primitive,
+            TypeCode::String(_) => DefinitionKind::String,
+            TypeCode::WString(0) => DefinitionKind::Primitive,
+            TypeCode::WString(_) => DefinitionKind::Wstring,
+            TypeCode::Fixed { .. } => DefinitionKind::Fixed,
+            TypeCode::Sequence { .. } => DefinitionKind::Sequence,
+            TypeCode::Array { .. } => DefinitionKind::Array,
+            // An `ObjRef` entry names a specific interface — it carries a
+            // repository id — so it is an `InterfaceDef`, the shape
+            // `Registry::define_ingested` produces for an interface a peer
+            // mentioned but did not describe. The *anonymous* `Object` type is
+            // `pk_objref` on a `PrimitiveDef` (§14.5.14) and is never an entry
+            // here, which is why this arm does not branch on the id.
+            TypeCode::ObjRef { .. } => DefinitionKind::Interface,
+            TypeCode::Struct { .. } => DefinitionKind::Struct,
+            TypeCode::Union { .. } => DefinitionKind::Union,
+            TypeCode::Enum { .. } => DefinitionKind::Enum,
+            TypeCode::Alias { .. } => DefinitionKind::Alias,
+            TypeCode::Except { .. } => DefinitionKind::Exception,
+            // The three the catch-all used to take. Held distinctly by the
+            // registry since 2026-08-20/21; answered on the wire since
+            // 2026-08-25.
+            TypeCode::Value { .. } => DefinitionKind::Value,
+            TypeCode::Native { .. } => DefinitionKind::Native,
+            TypeCode::AbstractInterface { .. } => DefinitionKind::AbstractInterface,
+            // Not a definition: a reference back to one still being described.
+            // The only `None` here, and the reason is true of this variant and
+            // of nothing else in the enum.
+            TypeCode::Recursive(_) => DefinitionKind::None,
         }
     }
 
@@ -968,6 +1094,14 @@ impl RepositoryServer {
 
     /// Every repository id `_is_a` answers `true` for, given what the
     /// addressed object is.
+    ///
+    /// A constant is a `Contained` but **not** an `IDLType`: `ConstantDef` has
+    /// a type, it is not one. That is the one place this list narrows, and it
+    /// is written as its own arm rather than as a `_` — the arm used to be
+    /// `_ =>` and covered `None` as well, which cannot occur here because
+    /// [`Self::target`] refuses a key with no entry before this is reached. A
+    /// catch-all that quietly covers an unreachable case is where the next
+    /// `Entry` variant would have landed without a word.
     fn is_a_ids(&self, target: &Target<'_>) -> Vec<&'static str> {
         match target {
             Target::Repository => vec![REPOSITORY_ID, CONTAINER_ID, IR_OBJECT_ID, OBJECT_ID],
@@ -981,7 +1115,7 @@ impl RepositoryServer {
                     OBJECT_ID,
                 ],
                 Some(Entry::Type(_)) => vec![CONTAINED_ID, IDL_TYPE_ID, IR_OBJECT_ID, OBJECT_ID],
-                _ => vec![CONTAINED_ID, IR_OBJECT_ID, OBJECT_ID],
+                Some(Entry::Const { .. }) | None => vec![CONTAINED_ID, IR_OBJECT_ID, OBJECT_ID],
             },
         }
     }
@@ -1453,25 +1587,27 @@ mod tests {
         );
     }
 
-    /// A `valuetype` and a `native` are two things the registry has told apart
-    /// since 74b5662 and 22637a8, and two things `def_kind` still answers
-    /// `dk_none` for — and its doc comment said the opposite for four days,
-    /// green, because the wire answer is the same either way.
+    /// A `valuetype`, a `native` and an `abstract interface` get the kind they
+    /// are, and the ordinals are the ones omniORB named back.
     ///
-    /// Both halves are asserted here, which is the point. The registry's half
-    /// so a regression to `TypeCode::ObjRef` is red in the facade as well as in
-    /// `valuetype_shape_from_a_peer.rs`; the facade's half so that naming an
-    /// ordinal for either — a wire change owing a peer measurement — cannot
-    /// land without this failing and the note above `def_kind` being read.
-    /// A catch-all arm absorbed three new `TypeCode` variants silently; this is
-    /// the sentence it absorbed them out of.
+    /// Both halves are asserted, which is the point. The registry's half so a
+    /// regression to `TypeCode::ObjRef` is red in the facade as well as in
+    /// `valuetype_shape_from_a_peer.rs`; the facade's half so that losing an
+    /// ordinal again — the state this replaced, where all three answered
+    /// `dk_none` and a conformant client was told a definition that exists does
+    /// not — cannot land quietly.
+    ///
+    /// This test was called `..._and_still_answer_dk_none` until 2026-08-25 and
+    /// asserted exactly that, over a doc comment which had asserted the
+    /// opposite for five days. Both are repaired here.
     #[test]
-    fn a_valuetype_and_a_native_are_told_apart_and_still_answer_dk_none() {
+    fn a_valuetype_a_native_and_an_abstract_interface_get_the_kind_they_are() {
         let registry = registry_from_idl(
             "module gk {
                valuetype Money { public long units; };
                native Handle;
                abstract interface Describable { string describe(); };
+               interface Plain { void touch(); };
                struct Holder { long bits; };
              };",
         )
@@ -1487,13 +1623,140 @@ mod tests {
             Some(Entry::Type(TypeCode::Native { .. }))
         ));
 
-        // The facade's half: no ordinal, so no kind — and an abstract
-        // interface is an interface here, not a third `Entry::Type`.
+        // The facade's half. `dk_Value` 20, `dk_Native` 23,
+        // `dk_AbstractInterface` 24 — read back by name from omniORB 4.3.4's
+        // own IR client, 2026-08-25.
         let server = RepositoryServer::new("127.0.0.1", 0, ROOT.to_vec(), registry);
-        assert_eq!(server.def_kind("IDL:gk/Money:1.0"), DefinitionKind::None, "no dk_Value here");
-        assert_eq!(server.def_kind("IDL:gk/Handle:1.0"), DefinitionKind::None, "no dk_Native here");
-        assert_eq!(server.def_kind("IDL:gk/Describable:1.0"), DefinitionKind::Interface);
+        assert_eq!(server.def_kind("IDL:gk/Money:1.0"), DefinitionKind::Value);
+        assert_eq!(server.def_kind("IDL:gk/Handle:1.0"), DefinitionKind::Native);
+        assert_eq!(
+            server.def_kind("IDL:gk/Describable:1.0"),
+            DefinitionKind::AbstractInterface,
+            "an abstract interface is an Entry::Interface; the distinction is \
+             InterfaceEntry::abstract_interface, which this facade did not read"
+        );
+        assert_eq!(server.def_kind("IDL:gk/Plain:1.0"), DefinitionKind::Interface);
         assert_eq!(server.def_kind("IDL:gk/Holder:1.0"), DefinitionKind::Struct);
+        assert_eq!(server.def_kind("IDL:gk/Nope:1.0"), DefinitionKind::None, "absent is dk_none");
+    }
+
+    /// Every `TypeCode` variant has a verdict, and the verdict is written here
+    /// as well as in the function.
+    ///
+    /// The value of this test is not the arms it agrees with — it is that
+    /// adding a variant to `TypeCode` breaks the build in `kind_of_type` (no
+    /// `_` arm) *and* leaves this table visibly short. The three variants added
+    /// in August were absorbed by a catch-all with nothing red; a table that
+    /// must be extended by hand is the record of the decision.
+    #[test]
+    fn every_typecode_variant_has_a_definition_kind() {
+        use DefinitionKind as K;
+        let obj = || TypeCode::ObjRef { id: "IDL:m/I:1.0".into(), name: "I".into() };
+        let cases: Vec<(TypeCode, K)> = vec![
+            (TypeCode::Null, K::Primitive),
+            (TypeCode::Void, K::Primitive),
+            (TypeCode::Short, K::Primitive),
+            (TypeCode::Long, K::Primitive),
+            (TypeCode::UShort, K::Primitive),
+            (TypeCode::ULong, K::Primitive),
+            (TypeCode::Float, K::Primitive),
+            (TypeCode::Double, K::Primitive),
+            (TypeCode::Boolean, K::Primitive),
+            (TypeCode::Char, K::Primitive),
+            (TypeCode::Octet, K::Primitive),
+            (TypeCode::Any, K::Primitive),
+            (TypeCode::TypeCode, K::Primitive),
+            (TypeCode::Principal, K::Primitive),
+            (TypeCode::LongLong, K::Primitive),
+            (TypeCode::ULongLong, K::Primitive),
+            (TypeCode::LongDouble, K::Primitive),
+            (TypeCode::WChar, K::Primitive),
+            // §14.5.15: unbounded is a PrimitiveDef, bounded is a StringDef.
+            (TypeCode::String(0), K::Primitive),
+            (TypeCode::String(40), K::String),
+            (TypeCode::WString(0), K::Primitive),
+            (TypeCode::WString(40), K::Wstring),
+            (TypeCode::Fixed { digits: 5, scale: 2 }, K::Fixed),
+            (obj(), K::Interface),
+            (
+                TypeCode::Struct { id: "IDL:m/S:1.0".into(), name: "S".into(), members: vec![] },
+                K::Struct,
+            ),
+            (
+                TypeCode::Union {
+                    id: "IDL:m/U:1.0".into(),
+                    name: "U".into(),
+                    discriminator: Box::new(TypeCode::Long),
+                    default_index: -1,
+                    cases: vec![],
+                },
+                K::Union,
+            ),
+            (
+                TypeCode::Enum { id: "IDL:m/E:1.0".into(), name: "E".into(), members: vec![] },
+                K::Enum,
+            ),
+            (TypeCode::Sequence { element: Box::new(TypeCode::Long), bound: 0 }, K::Sequence),
+            (TypeCode::Array { element: Box::new(TypeCode::Long), length: 2 }, K::Array),
+            (
+                TypeCode::Alias {
+                    id: "IDL:m/A:1.0".into(),
+                    name: "A".into(),
+                    aliased: Box::new(TypeCode::Long),
+                },
+                K::Alias,
+            ),
+            (
+                TypeCode::Except { id: "IDL:m/X:1.0".into(), name: "X".into(), members: vec![] },
+                K::Exception,
+            ),
+            (
+                TypeCode::Value {
+                    id: "IDL:m/V:1.0".into(),
+                    name: "V".into(),
+                    modifier: 0,
+                    base: None,
+                    members: vec![],
+                },
+                K::Value,
+            ),
+            (
+                TypeCode::AbstractInterface { id: "IDL:m/D:1.0".into(), name: "D".into() },
+                K::AbstractInterface,
+            ),
+            (TypeCode::Native { id: "IDL:m/N:1.0".into(), name: "N".into() }, K::Native),
+            (TypeCode::Recursive("IDL:m/R:1.0".into()), K::None),
+        ];
+        // 33 variants, 35 rows: `String` and `WString` each get two, because
+        // the bound decides the kind (§14.5.15).
+        assert_eq!(cases.len(), 35, "TypeCode has 33 variants; every one gets a verdict");
+        let mut registry = Registry::new();
+        let mut probes = Vec::new();
+        for (n, (tc, want)) in cases.into_iter().enumerate() {
+            let id = format!("IDL:probe/T{n}:1.0");
+            registry
+                .define_ingested(id.clone(), Entry::Type(tc.clone()), "the verdict table")
+                .expect("registers");
+            probes.push((id, tc, want));
+        }
+        // Collected rather than asserted one at a time: a catch-all takes
+        // *several* variants at once, and a table that stops at the first
+        // disagreement reports one of them and hides the rest — which is how
+        // this class stays looking like a one-variant oversight.
+        let server = RepositoryServer::new("127.0.0.1", 0, ROOT.to_vec(), registry);
+        let wrong: Vec<String> = probes
+            .iter()
+            .filter(|(id, _, want)| server.def_kind(id) != *want)
+            .map(|(id, tc, want)| {
+                format!("  {tc:?}\n    want {want:?}, got {:?}", server.def_kind(id))
+            })
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "{} variants get the wrong kind:\n{}",
+            wrong.len(),
+            wrong.join("\n")
+        );
     }
 
     // ── refusal shapes, over the wire ───────────────────────────────────────

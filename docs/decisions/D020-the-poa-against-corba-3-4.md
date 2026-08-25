@@ -73,7 +73,7 @@ error §8 said to expect, caught by doing what §8 required.
 | 2 | **Lifespan** §15.3.8.2 | **`TRANSIENT`** · `PERSISTENT` | `Lifespan::{Transient,Persistent}`, and `incarnation` makes a transient key from an earlier run refuse | **yes** — the one policy we named, **and we default to the same value** |
 | 3 | **Object Id Uniqueness** §15.3.8.3 | **`UNIQUE_ID`** · `MULTIPLE_ID` | not modelled: the map has no servant, so "one servant, many ids" has no shape to be true or false in | **n/a by design** — say so |
 | 4 | **Id Assignment** §15.3.8.4 | **`SYSTEM_ID`** · `USER_ID` | **both, on the same POA**: `activate(id)` is USER_ID and `activate_new()` is SYSTEM_ID | **no — and it is a divergence** |
-| 5 | **Servant Retention** §15.3.8.5 | **`RETAIN`** · `NON_RETAIN` | the map retains **ids**, never servants. `AskLocator` is `NON_RETAIN`-shaped; `Reject` is `RETAIN`-shaped over an id-only map | **no** |
+| 5 | **Servant Retention** §15.3.8.5 | **`RETAIN`** · `NON_RETAIN` | **`RETAIN`** — corrected by Stage A, see below | **no** — behaves as the default |
 | 6 | **Request Processing** §15.3.8.6 | **`USE_ACTIVE_OBJECT_MAP_ONLY`** · `USE_DEFAULT_SERVANT` · `USE_SERVANT_MANAGER` | `UnknownIdPolicy::Reject` ≈ the first, `AskLocator` ≈ the third with a `ServantLocator`. `USE_DEFAULT_SERVANT` has no analogue | **partly** |
 | 7 | **Implicit Activation** §15.3.8.7 | `IMPLICIT_ACTIVATION` · **`NO_IMPLICIT_ACTIVATION`** | nothing activates implicitly; a servant is reached only through an id already in the map or through the locator | **no** — behaves as the default |
 
@@ -85,6 +85,30 @@ Two things the verification changed beyond the numbers:
 - **`IMPLICIT_ACTIVATION` requires `SYSTEM_ID` *and* `RETAIN`** (§15.3.8.7,
   verbatim). That is a policy interaction, and it is the kind of constraint a
   `Policies` type can carry and a hand-written adapter cannot.
+
+> **Corrected 2026-08-25 by Stage A, which measured what this table read off a
+> name.** Row 5 above first said we were `NON_RETAIN`-shaped, and the reason
+> given was that `AskLocator` uses a `ServantLocator` — which is the
+> specification's `NON_RETAIN` half. That is reading a policy off an
+> identifier. Measured instead: `dispatch_target` **inserts the located id into
+> `active`**, and the *next* request for that key is served with **no locator
+> passed at all**. That is `RETAIN` with a `ServantActivator` (§15.3.8.6's
+> "RETAIN and USE_SERVANT_MANAGER" combination), wearing a name borrowed from
+> the other half.
+>
+> Stage A found a second thing the table could not: **`USE_SERVANT_MANAGER`
+> with no manager registered diverges.** §15.3.8.6 says `OBJ_ADAPTER` with
+> minor code 4; `AskLocator` with no locator answers `Target::Unknown` and so
+> `OBJECT_NOT_EXIST`. Recorded at the site, not fixed — it is a wire-visible
+> answer and belongs to a batch that can measure it against a peer.
+>
+> Both corrections come from the same place: **the table was written from the
+> code's vocabulary and the code's vocabulary had drifted from the
+> specification's.** That is the argument for §6 Stage A being first — writing
+> the seven down is what forced the reading.
+>
+> *두 정정 모두 같은 데서 나왔다 — 이 표는 코드의 어휘로 쓰였고, 코드의 어휘가
+> 명세의 어휘에서 이미 어긋나 있었다. 일곱을 적어보는 일이 그 독해를 강제했다.*
 
 **Item 4 is the finding.** A POA that answers to both id-assignment models is
 not a POA the specification describes, and nothing today prevents a caller from
@@ -202,6 +226,47 @@ hierarchy.
 delegating to today's methods. The hierarchy (`create_POA`, `find_POA`,
 `the_parent`) **waits for a trigger** — it earns its place when something needs
 more than one adapter, and `PLAN-DEFERRED`'s shape is where that reason goes.
+
+### Stage A — landed 2026-08-25 / 착지
+
+The seven are written down. `crates/orbweaver-object/src/policy.rs` gives each
+policy a Rust enum with the specification's value names, a `Policy` trait
+carrying `NAME` / `SECTION` / `STANCE` / `SPEC_DEFAULT`, and `Default` held to
+the spec's default by a test — **so the table is compiled rather than prose**.
+`Poa::policies()` reports; nothing is stored and nothing is configurable.
+`Policies::spec_violations()` compiles the constraints §15.3.8 states *between*
+policies, including §15.3.8.7's verbatim requirement that `IMPLICIT_ACTIVATION`
+also requires `SYSTEM_ID` and `RETAIN`.
+
+**Five of seven claims carry a behavioural test in the same test as the
+claim.** Two do not, and say so in their own doc comments rather than being
+covered by a test that would pass whatever they said: §15.3.8.1 (Thread) is not
+observable from this crate — the concurrency is `orbweaver_giop::Server`'s —
+and §15.3.8.3 (Object Id Uniqueness) is not observable *in principle*, being a
+policy about servants in a map that holds none.
+
+Ten negative controls, each applied alone and reverted. The one worth reading:
+making `dispatch_target` consult the locator under `Reject` as well took the
+new test red **while the other 98 tests in the crate passed** — that gap is
+exactly what the new test closes, and it is the reason a `policies()` that
+reported strings nobody checked against behaviour would have been the
+green-while-measuring-nothing class in a new coat.
+
+Workspace 1570 → 1585 passed, 0 failed. No signature changed, no behaviour
+changed.
+
+**Stage A's sweep also found what Stage B inherits.** `crates/orbweaver-object`
+carries 81 implicit choices; two are id-assignment facts and belong to Stage B:
+the `obj{n}` generator shares a namespace with caller-chosen ids like
+`ObjectId::from_name("obj1")`, and — unstated anywhere — **a POA name must not
+contain `/` and no two POA names may be prefixes of one another**, or
+`Poa::new("Root")` with id `POA/x` and `Poa::new("Root/POA")` with id `x` mint
+**the identical object key**. `tenant_service::is_key_safe` enforces exactly
+that rule for the other key space and neither names the other.
+
+*Stage A의 스윕이 Stage B가 물려받을 것도 찾았다: 자동 id가 호출자 id와
+네임스페이스를 공유하고, **POA 이름 둘이 서로의 접두사이면 동일한 객체 키가
+만들어진다** — 어디에도 적혀 있지 않다.*
 
 ## 7. Compatibility, stated as a rule / 호환성 규칙
 
