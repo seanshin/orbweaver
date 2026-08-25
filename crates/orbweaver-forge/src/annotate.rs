@@ -357,8 +357,12 @@ pub fn sidl_version_findings(spec: &Spec) -> Vec<Finding> {
 
 /// `ai_effect` values the MCP policy gate treats as needing no approval.
 ///
-/// Mirrored from `orbweaver-mcp`'s `policy::destructive_effect` by way of
-/// `orbweaver-test`'s `contract::UNGATED_EFFECTS`.
+/// Mirrored from `orbweaver-mcp`'s `policy::is_harmless` — the predicate
+/// `policy::effect_refusal` asks before it lets a call through — by way of
+/// `orbweaver-test`'s `contract::UNGATED_EFFECTS`. It named a
+/// `policy::destructive_effect` until 2026-08-25; see
+/// [`crate::infer::UNGATING`], which is pinned against the gate's own
+/// behaviour rather than against this sentence.
 pub const UNGATED_EFFECTS: [&str; 4] = ["read_only", "readonly", "idempotent", "safe"];
 
 /// The subset of [`UNGATED_EFFECTS`] claiming the operation *only reads*.

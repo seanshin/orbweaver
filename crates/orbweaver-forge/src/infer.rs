@@ -32,7 +32,7 @@
 //!    `inferred_desc` — beside [`MARK_EVIDENCE`] and [`MARK_STATUS`]. The
 //!    registry carries unknown keys through to every consumer, so the mark
 //!    travels wherever the annotation travels; and `policy::required_scopes`
-//!    and `policy::destructive_effect` read `ai_authz` and `ai_effect`, so an
+//!    and `policy::effect_refusal` read `ai_authz` and `ai_effect`, so an
 //!    inference enforces exactly nothing until a human moves it. That is not a
 //!    weakness of the scheme, it *is* the scheme: [`Provenance`] is answerable
 //!    from the annotation map alone, which a two-value `ai_effect` string could
@@ -43,7 +43,7 @@
 //!    `safe` are refused ([`RULES`], `si/ungating-claim`). The asymmetry is the
 //!    argument: a wrong `destructive` costs a human an approval click, and a
 //!    wrong `read_only` **removes** the approval gate on an operation that
-//!    moves money — `destructive_effect` returns `None` for it and the call
+//!    moves money — `policy::effect_refusal` returns `None` for it and the call
 //!    goes through. Since the evidence is a name, and a name cannot say whether
 //!    an operation writes, only one of those two errors may be reachable.
 //!
@@ -152,8 +152,21 @@ pub const GATE_KEYS: [&str; 3] = ["ai_effect", "ai_authz", "ai_desc"];
 /// be inferred.
 ///
 /// Mirrored from [`crate::annotate::UNGATED_EFFECTS`], which mirrors
-/// `orbweaver-mcp`'s `policy::destructive_effect`. The test
-/// `the_ungating_set_is_the_policy_gates_ungated_set` pins the copy.
+/// `orbweaver-mcp`'s `policy::is_harmless` — the private predicate
+/// `policy::effect_refusal` asks before it returns `None`. The test
+/// `the_ungating_set_is_the_policy_gates_ungated_set` pins the local copy
+/// against `annotate`'s, and `the_ungating_set_is_what_the_gate_lets_through`
+/// pins it against the gate itself, over the crate boundary and through the
+/// public API — because `is_harmless` is private, so the only honest way to
+/// check what it holds is to run it.
+///
+/// Both doc comments named a `policy::destructive_effect` until 2026-08-25.
+/// That function was **removed on 2026-08-14** (8cbf5ce, "absence is not
+/// permission") and split into `effect_refusal` and `is_harmless`. What the
+/// sentence *described* stayed true for eleven days, which is why nothing
+/// noticed; what it *named* was gone, so a reader following it found nothing.
+/// A comment is a sentence about another crate's code and no compiler reads
+/// one — hence the behavioural pin below, which does.
 pub const UNGATING: [&str; 4] = ["read_only", "readonly", "idempotent", "safe"];
 
 /// The whole `inferred_effect` vocabulary: one gating value, and the honest
@@ -305,8 +318,55 @@ fn direction(d: ParamDirection) -> &'static str {
 }
 
 /// A compact rendering of a `TypeCode`, for a human and for a prompt.
+///
+/// # Every variant carries a verdict, and the match is exhaustive on purpose
+///
+/// This function ended in `_ => "<unnamed type>"` until 2026-08-25, under a
+/// comment claiming *"everything left is something v1 does not marshal or does
+/// not name"*. **Half of that was false, and the false half reached a reader.**
+/// Two of the nine variants the catch-all swallowed are marshalled by v1 in
+/// both directions:
+///
+/// - `long double` — `orbweaver_dynamic` has `TypeCode::LongDouble` arms in the
+///   value path and in AnyJSON, and `orbweaver_gen`'s `rust_type` maps it to
+///   `orbweaver_gen::rt::LongDouble`.
+/// - `::CORBA::TypeCode` — and this one is worse, because it was *deliberately
+///   rescued*: `orbweaver_registry`'s `is_corba_typecode` exists to stop the
+///   predeclared name falling through to `void`, on the argument that a silent
+///   `void` is not a cosmetic default — `describe_interface`, the operation the
+///   Interface Repository facade exists for, returns one. This renderer then
+///   called the type that fix rescued `<unnamed type>`.
+///
+/// Both feed the operation signature in the **prompt a model and a human
+/// read** ([`Evidence::to_line`], [`Subject::to_prompt`]), so
+/// `long double price()` and `::CORBA::TypeCode describe()` both arrived as
+/// `<unnamed type> op(...)`.
+///
+/// The half worth keeping is the *reason* for a placeholder: **a prompt that
+/// invents a type name teaches the producer to quote one back** — `si/quote-only`
+/// checks a proposal against [`subject_haystack`], so an invented name would be
+/// quotable text. That reason is true of exactly three variants, the three no
+/// declaration can produce, and of nothing else. Each of those three says why
+/// *it* has no name rather than sharing one sentence with eight others.
+///
+/// So there is no catch-all. Exhaustiveness is what makes a thirty-fourth
+/// `TypeCode` variant go **red here** rather than silently acquiring
+/// `<unnamed type>` — the argument `orbweaver_dynamic::dynany::default_within`
+/// makes for the same shape, where the wrong answer was a default value rather
+/// than a name.
+///
+/// # What this function deliberately does not say
+///
+/// Whether the v1 wire carries the type. That fact has a home — S4 reports it
+/// as `wire/deferred-type` and the refusal sentence belongs to
+/// `orbweaver_dynamic::deferred_wire_head` and its unmarshallable counterpart —
+/// and restating it in a signature line would be one more place for it to drift
+/// from. What this function borrows from that home is the four constructs'
+/// **spelling**, by calling the functions that own it, so a refusal a reader
+/// meets later reads back the same string this prompt showed them.
 fn render_type(tc: &TypeCode) -> String {
     match tc {
+        // ── the base types, spelled as IDL spells them ───────────────────────
         TypeCode::Void => "void".into(),
         TypeCode::Short => "short".into(),
         TypeCode::Long => "long".into(),
@@ -316,15 +376,27 @@ fn render_type(tc: &TypeCode) -> String {
         TypeCode::ULongLong => "unsigned long long".into(),
         TypeCode::Float => "float".into(),
         TypeCode::Double => "double".into(),
+        // `long double`, not `longdouble`: this function renders IDL, and its
+        // neighbours two lines up already write `unsigned long` and `long long`
+        // with the space. (D016 §4 A2 records seven private namers for this
+        // type across the workspace that do not agree with each other, and
+        // plans one `TypeCode::idl_name()` owned by `orbweaver-giop` to replace
+        // them. Not measured here — this arm is the IDL spelling and says so.)
+        TypeCode::LongDouble => "long double".into(),
         TypeCode::Boolean => "boolean".into(),
         TypeCode::Char => "char".into(),
         TypeCode::WChar => "wchar".into(),
         TypeCode::Octet => "octet".into(),
         TypeCode::Any => "any".into(),
+        // The qualified spelling CLAUDE.md requires and the front end
+        // predeclares the name under; anything shorter is a name the reader
+        // cannot write back into a contract.
+        TypeCode::TypeCode => "::CORBA::TypeCode".into(),
         TypeCode::String(0) => "string".into(),
         TypeCode::String(n) => format!("string<{n}>"),
         TypeCode::WString(0) => "wstring".into(),
         TypeCode::WString(n) => format!("wstring<{n}>"),
+        // ── the constructed types, which carry the name the contract wrote ───
         TypeCode::Sequence { element, .. } => format!("sequence<{}>", render_type(element)),
         TypeCode::Array { element, length } => format!("{}[{length}]", render_type(element)),
         TypeCode::ObjRef { name, .. } if name.is_empty() => "Object".into(),
@@ -334,22 +406,113 @@ fn render_type(tc: &TypeCode) -> String {
         | TypeCode::Enum { name, .. }
         | TypeCode::Alias { name, .. }
         | TypeCode::Except { name, .. } => name.clone(),
-        // Everything left is something v1 does not marshal or does not name.
-        // Rendered as a placeholder rather than guessed at: a prompt that
-        // invents a type name teaches the producer to quote one back.
-        _ => "<unnamed type>".to_owned(),
+        // ── the four the v1 wire refuses, spelled by the layer that refuses ──
+        //
+        // Named, not hidden. A reader who cannot call `balance()` needs to know
+        // it returns `valuetype Money (IDL:m/Money:1.0)`, and the string is the
+        // one the marshaller and both emitters will refuse it by — the id is in
+        // it because two modules can declare `Describable` and a reader of two
+        // refusals could not otherwise tell one type from two.
+        TypeCode::Fixed { digits, scale } => orbweaver_dynamic::fixed_subject(*digits, *scale),
+        TypeCode::Value { name, id, .. } => orbweaver_dynamic::valuetype_subject(name, id),
+        TypeCode::AbstractInterface { name, id } => {
+            orbweaver_dynamic::abstract_interface_subject(name, id)
+        }
+        TypeCode::Native { name, id } => orbweaver_dynamic::native_subject(name, id),
+        // ── the three no declaration produces: a placeholder, each with the
+        //    reason that is true of it ─────────────────────────────────────────
+        //
+        // `tk_null` is the empty TypeCode — the content type of an `any` nobody
+        // filled in, and a valuetype's absent base. No IDL names it, so there is
+        // no name to give and nothing for a reader to look up.
+        TypeCode::Null => "<tk_null: the empty TypeCode, which no declaration writes>".into(),
+        // `Principal` was withdrawn from CORBA; no contract can declare one and
+        // no `#include` will bring it back. It can only arrive from a peer, and
+        // "go and ask the peer" is the whole of the advice.
+        TypeCode::Principal => {
+            "<Principal: withdrawn from CORBA, so no contract declares one>".into()
+        }
+        // An indirection that pointed at a `TypeCode` still being decoded. It is
+        // not a type, it is a marker naming one — so it renders the id it names
+        // rather than a name, which is the actionable half and all there is.
+        TypeCode::Recursive(id) => format!("<recursion back to {id}, which has no finite form>"),
     }
 }
 
 /// Whether a type is, or contains, a live object reference.
+///
+/// Exhaustive for [`render_type`]'s reason and with a sharper consequence: the
+/// answer becomes [`Evidence::hands_out_reference`], a caution a reader weighs
+/// *against* a call, so a variant that quietly answered `false` **removed** a
+/// caution rather than adding one.
+///
+/// It ended in `_ => false` until 2026-08-25, and that arm was wrong for five
+/// variants. A `struct`, `union`, `exception` or `valuetype` whose *member* is
+/// an object reference hands one out exactly as a bare return does — `Object
+/// get_root()` was marked and `struct Handle { Object it; } get_root()` was
+/// not — and an abstract interface is a reference half the time by
+/// construction: on the wire it is the union of a value and a reference.
+///
+/// Two answers are `false` for a stated reason rather than by default:
+///
+/// - **`any`** carries its content type as a *runtime value*. Whether it holds
+///   a reference is not knowable from a signature, and marking every `any`
+///   would make the caution mean "somewhere, perhaps" wherever it appeared.
+/// - **a recursion marker** names a type this walk is already inside. Every
+///   member reachable through it is a member of that enclosing type, which the
+///   walk visits directly, so following it would add nothing and would not
+///   terminate.
 fn is_reference(tc: &TypeCode) -> bool {
     match tc {
         TypeCode::ObjRef { .. } => true,
+        // Half of an abstract interface *is* a reference (CORBA 3.4 Part 1
+        // §7.9.2), and which half is a per-value decision the signature cannot
+        // see. The caution is the honest answer.
+        TypeCode::AbstractInterface { .. } => true,
         TypeCode::Sequence { element, .. } | TypeCode::Array { element, .. } => {
             is_reference(element)
         }
         TypeCode::Alias { aliased, .. } => is_reference(aliased),
-        _ => false,
+        TypeCode::Struct { members, .. } | TypeCode::Except { members, .. } => {
+            members.iter().any(|m| is_reference(&m.tc))
+        }
+        TypeCode::Union { discriminator, cases, .. } => {
+            is_reference(discriminator) || cases.iter().any(|c| is_reference(&c.tc))
+        }
+        // The state of a valuetype goes on the wire inline, members and all, so
+        // a reference among them travels with it. That v1 declines to marshal
+        // the value is a different question, answered elsewhere and not by
+        // pretending the reference is absent.
+        TypeCode::Value { base, members, .. } => {
+            base.as_deref().is_some_and(is_reference) || members.iter().any(|m| is_reference(&m.tc))
+        }
+        // A native names a type only a language mapping knows: no CDR encoding
+        // at all, so nothing crosses and no address is handed out.
+        TypeCode::Native { .. } => false,
+        // See the two stated reasons above.
+        TypeCode::Any | TypeCode::Recursive(_) => false,
+        // Everything below is a leaf carrying bits, not an address.
+        TypeCode::Null
+        | TypeCode::Void
+        | TypeCode::Short
+        | TypeCode::Long
+        | TypeCode::UShort
+        | TypeCode::ULong
+        | TypeCode::LongLong
+        | TypeCode::ULongLong
+        | TypeCode::Float
+        | TypeCode::Double
+        | TypeCode::LongDouble
+        | TypeCode::Boolean
+        | TypeCode::Char
+        | TypeCode::WChar
+        | TypeCode::Octet
+        | TypeCode::TypeCode
+        | TypeCode::Principal
+        | TypeCode::String(_)
+        | TypeCode::WString(_)
+        | TypeCode::Fixed { .. }
+        | TypeCode::Enum { .. } => false,
     }
 }
 
@@ -1478,6 +1641,7 @@ pub fn exposure_refusal(registry: &Registry, id: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orbweaver_giop::typecode::{Member, UnionCase, ValueMember};
     use orbweaver_registry::{Entry, InterfaceEntry, OperationSig, ParamSig};
 
     fn sig(oneway: bool, returns: TypeCode, params: Vec<ParamSig>) -> OperationSig {
@@ -1853,6 +2017,291 @@ mod tests {
         assert!(e.to_line().contains("says nothing about effect"));
         assert!(!Evidence::of("delete_track", &sig(false, TypeCode::Void, vec![])).is_silent());
         assert!(!Evidence::of("get_track", &sig(false, TypeCode::Long, vec![])).is_silent());
+    }
+
+    // ── the renderer: one verdict per variant ────────────────────────────────
+
+    /// The number of `TypeCode` variants as of 2026-08-25.
+    ///
+    /// A floor would prove nothing here: the property is *every* variant has a
+    /// verdict, so the figure has to be the count, and [`variant_tag`] is what
+    /// keeps it honest — a thirty-fourth variant fails to compile there and in
+    /// [`render_type`] itself before this number can go stale.
+    const TYPECODE_VARIANTS: usize = 33;
+
+    /// A tag per variant, exhaustively, so the table below cannot silently stop
+    /// covering one. No `_` arm, on purpose — this is half the negative control.
+    fn variant_tag(tc: &TypeCode) -> &'static str {
+        match tc {
+            TypeCode::Null => "Null",
+            TypeCode::Void => "Void",
+            TypeCode::Short => "Short",
+            TypeCode::Long => "Long",
+            TypeCode::UShort => "UShort",
+            TypeCode::ULong => "ULong",
+            TypeCode::Float => "Float",
+            TypeCode::Double => "Double",
+            TypeCode::Boolean => "Boolean",
+            TypeCode::Char => "Char",
+            TypeCode::Octet => "Octet",
+            TypeCode::Any => "Any",
+            TypeCode::TypeCode => "TypeCode",
+            TypeCode::Principal => "Principal",
+            TypeCode::LongLong => "LongLong",
+            TypeCode::ULongLong => "ULongLong",
+            TypeCode::LongDouble => "LongDouble",
+            TypeCode::WChar => "WChar",
+            TypeCode::String(_) => "String",
+            TypeCode::WString(_) => "WString",
+            TypeCode::Fixed { .. } => "Fixed",
+            TypeCode::ObjRef { .. } => "ObjRef",
+            TypeCode::Struct { .. } => "Struct",
+            TypeCode::Union { .. } => "Union",
+            TypeCode::Enum { .. } => "Enum",
+            TypeCode::Sequence { .. } => "Sequence",
+            TypeCode::Array { .. } => "Array",
+            TypeCode::Alias { .. } => "Alias",
+            TypeCode::Except { .. } => "Except",
+            TypeCode::Value { .. } => "Value",
+            TypeCode::AbstractInterface { .. } => "AbstractInterface",
+            TypeCode::Native { .. } => "Native",
+            TypeCode::Recursive(_) => "Recursive",
+        }
+    }
+
+    fn member(name: &str, tc: TypeCode) -> Member {
+        Member { name: name.to_owned(), tc }
+    }
+
+    /// One instance of every `TypeCode` variant, beside the string a prompt is
+    /// allowed to show for it.
+    fn every_variant() -> Vec<(TypeCode, &'static str)> {
+        vec![
+            (TypeCode::Null, "<tk_null: the empty TypeCode, which no declaration writes>"),
+            (TypeCode::Void, "void"),
+            (TypeCode::Short, "short"),
+            (TypeCode::Long, "long"),
+            (TypeCode::UShort, "unsigned short"),
+            (TypeCode::ULong, "unsigned long"),
+            (TypeCode::Float, "float"),
+            (TypeCode::Double, "double"),
+            (TypeCode::Boolean, "boolean"),
+            (TypeCode::Char, "char"),
+            (TypeCode::Octet, "octet"),
+            (TypeCode::Any, "any"),
+            (TypeCode::TypeCode, "::CORBA::TypeCode"),
+            (TypeCode::Principal, "<Principal: withdrawn from CORBA, so no contract declares one>"),
+            (TypeCode::LongLong, "long long"),
+            (TypeCode::ULongLong, "unsigned long long"),
+            (TypeCode::LongDouble, "long double"),
+            (TypeCode::WChar, "wchar"),
+            (TypeCode::String(0), "string"),
+            (TypeCode::WString(64), "wstring<64>"),
+            (TypeCode::Fixed { digits: 9, scale: 2 }, "fixed<9,2>"),
+            (TypeCode::ObjRef { id: "IDL:m/I:1.0".into(), name: "I".into() }, "I"),
+            (
+                TypeCode::Struct {
+                    id: "IDL:m/Track:1.0".into(),
+                    name: "Track".into(),
+                    members: vec![member("label", TypeCode::String(0))],
+                },
+                "Track",
+            ),
+            (
+                TypeCode::Union {
+                    id: "IDL:m/U:1.0".into(),
+                    name: "U".into(),
+                    discriminator: Box::new(TypeCode::Long),
+                    default_index: -1,
+                    cases: vec![UnionCase {
+                        label: vec![0, 0, 0, 1],
+                        name: "a".into(),
+                        tc: TypeCode::Long,
+                    }],
+                },
+                "U",
+            ),
+            (
+                TypeCode::Enum {
+                    id: "IDL:m/E:1.0".into(),
+                    name: "E".into(),
+                    members: vec!["ONE".into()],
+                },
+                "E",
+            ),
+            (TypeCode::Sequence { element: Box::new(TypeCode::Long), bound: 0 }, "sequence<long>"),
+            (TypeCode::Array { element: Box::new(TypeCode::Octet), length: 16 }, "octet[16]"),
+            (
+                TypeCode::Alias {
+                    id: "IDL:m/Id:1.0".into(),
+                    name: "Id".into(),
+                    aliased: Box::new(TypeCode::String(0)),
+                },
+                "Id",
+            ),
+            (
+                TypeCode::Except {
+                    id: "IDL:m/Bad:1.0".into(),
+                    name: "Bad".into(),
+                    members: Vec::new(),
+                },
+                "Bad",
+            ),
+            (
+                TypeCode::Value {
+                    id: "IDL:m/Money:1.0".into(),
+                    name: "Money".into(),
+                    modifier: 0,
+                    base: None,
+                    members: vec![ValueMember {
+                        name: "amount".into(),
+                        tc: TypeCode::Double,
+                        visibility: 1,
+                    }],
+                },
+                "valuetype Money (IDL:m/Money:1.0)",
+            ),
+            (
+                TypeCode::AbstractInterface {
+                    id: "IDL:m/Describable:1.0".into(),
+                    name: "Describable".into(),
+                },
+                "abstract interface Describable (IDL:m/Describable:1.0)",
+            ),
+            (
+                TypeCode::Native { id: "IDL:m/Handle:1.0".into(), name: "Handle".into() },
+                "native Handle (IDL:m/Handle:1.0)",
+            ),
+            (
+                TypeCode::Recursive("IDL:m/Node:1.0".into()),
+                "<recursion back to IDL:m/Node:1.0, which has no finite form>",
+            ),
+        ]
+    }
+
+    /// The batch's whole claim: **every** variant has a verdict a reader can
+    /// act on, and the ones that do not have a name say why *they* have none.
+    ///
+    /// This is what `_ => "<unnamed type>"` made unwritable. `LongDouble` and
+    /// `TypeCode` are the two the catch-all was hiding that the v1 wire
+    /// marshals in both directions, and `::CORBA::TypeCode` is the type
+    /// `orbweaver-registry` was deliberately fixed to stop calling `void`.
+    #[test]
+    fn every_typecode_variant_is_rendered_by_a_verdict_of_its_own() {
+        let table = every_variant();
+        let tags: BTreeSet<&str> = table.iter().map(|(tc, _)| variant_tag(tc)).collect();
+        assert_eq!(
+            tags.len(),
+            TYPECODE_VARIANTS,
+            "the table must carry one instance of every variant; missing {:?}",
+            TYPECODE_VARIANTS - tags.len()
+        );
+        for (tc, want) in &table {
+            assert_eq!(&render_type(tc), want, "{} renders wrong", variant_tag(tc));
+        }
+    }
+
+    /// The placeholder set is closed, and it is exactly the three variants no
+    /// declaration can produce.
+    ///
+    /// The good half of the retired comment — *a prompt that invents a type
+    /// name teaches the producer to quote one back* — is a reason for a
+    /// placeholder and was never a reason to hide a supported type behind one.
+    #[test]
+    fn only_the_three_undeclarable_variants_render_as_a_placeholder() {
+        let placeheld: Vec<&str> = every_variant()
+            .iter()
+            .filter(|(_, want)| want.starts_with('<'))
+            .map(|(tc, _)| variant_tag(tc))
+            .collect();
+        assert_eq!(placeheld, ["Null", "Principal", "Recursive"]);
+        assert!(
+            !every_variant().iter().any(|(_, want)| want.contains("unnamed type")),
+            "no variant may go back to the one sentence that covered nine"
+        );
+    }
+
+    /// Where it showed: the operation signature line a model and a human read.
+    #[test]
+    fn the_two_marshalled_types_reach_the_prompt_named() {
+        let price = Evidence::of("price", &sig(false, TypeCode::LongDouble, vec![]));
+        assert!(price.to_line().starts_with("price() -> long double"), "{}", price.to_line());
+        let describe = Evidence::of(
+            "describe",
+            &sig(
+                false,
+                TypeCode::TypeCode,
+                vec![ParamSig {
+                    name: "of".into(),
+                    tc: TypeCode::TypeCode,
+                    direction: ParamDirection::In,
+                    annotations: BTreeMap::new(),
+                }],
+            ),
+        );
+        assert!(
+            describe
+                .to_line()
+                .starts_with("describe(in ::CORBA::TypeCode of) -> ::CORBA::TypeCode"),
+            "{}",
+            describe.to_line()
+        );
+    }
+
+    /// The bounded forms keep their bound; the unbounded ones keep their bare
+    /// keyword. Two arms guarded by a literal `0`, which an exhaustive match
+    /// does not check for.
+    #[test]
+    fn a_bound_is_rendered_and_an_absent_bound_is_not() {
+        assert_eq!(render_type(&TypeCode::String(0)), "string");
+        assert_eq!(render_type(&TypeCode::String(32)), "string<32>");
+        assert_eq!(render_type(&TypeCode::WString(0)), "wstring");
+        assert_eq!(render_type(&TypeCode::WString(8)), "wstring<8>");
+        assert_eq!(
+            render_type(&TypeCode::ObjRef {
+                id: "IDL:CORBA/Object:1.0".into(),
+                name: String::new()
+            }),
+            "Object",
+            "a peer-built reference with no simple name is still `Object`"
+        );
+    }
+
+    // ── the caution: a reference inside a constructed type is still one ──────
+
+    /// `is_reference` ended in `_ => false`, so a reference reached the caller
+    /// unmarked whenever it travelled inside a struct, a union, an exception or
+    /// a valuetype's state — the direction that **removes** a caution.
+    #[test]
+    fn a_reference_inside_a_constructed_type_is_still_handed_out() {
+        let obj = || TypeCode::ObjRef { id: "IDL:m/I:1.0".into(), name: "I".into() };
+        let handle = TypeCode::Struct {
+            id: "IDL:m/Handle:1.0".into(),
+            name: "Handle".into(),
+            members: vec![member("id", TypeCode::String(0)), member("it", obj())],
+        };
+        assert!(Evidence::of("get_root", &sig(false, handle.clone(), vec![])).hands_out_reference);
+        // And through one more layer, which is how a real contract carries it.
+        assert!(
+            Evidence::of(
+                "list_roots",
+                &sig(false, TypeCode::Sequence { element: Box::new(handle), bound: 0 }, vec![]),
+            )
+            .hands_out_reference
+        );
+        // The two stated `false` answers, so neither drifts into a guess.
+        assert!(!is_reference(&TypeCode::Any), "an `any`'s content type is a runtime value");
+        assert!(
+            !is_reference(&TypeCode::Recursive("IDL:m/Node:1.0".into())),
+            "the enclosing type's own members are walked directly"
+        );
+        assert!(
+            is_reference(&TypeCode::AbstractInterface {
+                id: "IDL:m/D:1.0".into(),
+                name: "D".into(),
+            }),
+            "on the wire it is the union of a value and a reference"
+        );
     }
 
     #[test]
