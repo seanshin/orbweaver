@@ -130,6 +130,27 @@ leave every cross-implementation check inventing its own again. AnyJSON already
 crosses that boundary and is measured doing so, which makes it the candidate to
 beat rather than an obvious answer; say why whatever is chosen wins.
 
+**And that is not a convenience — it is the point, added 2026-08-26.** A peer
+check today hands *the same literal* to both ends from inside one script. When
+our servant and omniORB's client agree, part of that agreement is an artifact
+of a single author having typed the value twice in one file, and the project
+already knows what that costs: *"a convention both ends apply cannot be refuted
+by a round trip."* Twelve wire changes in v0.5.0 were found only because a
+peer's bytes were recorded with provenance rather than agreed on.
+
+**So the seed is loaded independently at both ends, from one file neither end
+authored at the moment of the test.** Our ORB is populated from it through the
+Rust loader; omniORB is populated from **the same bytes** through a Python
+loader that uses omniORB's own stubs and shares no code with ours. What the
+comparison then measures is two implementations reading one stated population —
+which is what "interoperable" was supposed to mean and is a strictly stronger
+claim than today's.
+
+*시드는 **양 끝에서 독립적으로**, 테스트 시점에 어느 쪽도 저작하지 않은 한 파일에서
+적재된다. 우리 ORB는 Rust 로더로, omniORB는 **같은 바이트**를 우리와 코드를 전혀
+공유하지 않는 파이썬 로더로. 그때 비교가 재는 것은 하나의 진술된 모집단을 읽는 두
+구현이며, 그것이 "상호운용"이 뜻해야 했던 바다.*
+
 **The first job of the seed is not new coverage.** It is to answer, for the
 five fixtures counted in §1, whether their populations already disagree.
 Migrating them is where the finding is: *"the same"* `PolicyDomain` in two
@@ -138,6 +159,54 @@ files is a claim nobody has checked.
 **Oracle.** Every migrated fixture produces byte-identical output before and
 after, or the difference is explained. That is the same discipline the emitted
 stubs are re-blessed under.
+
+### S1b — the same population, loaded into omniORB by omniORB (`spikes/`)
+
+The other half of S1, and the reason S1's format constraint is not negotiable.
+A Python loader that reads `corpus/state/` and populates **omniORB's** side —
+binding the naming graph into omniNames, registering offers, attaching event
+consumers — using omniORB's own stubs and **sharing no code with the Rust
+loader**. Two readers, one file.
+
+**Three things become measurable that are not measurable today**, and they are
+the deliverable rather than the loader:
+
+1. **A named population crossed the wire intact.** Not *"a value we sent came
+   back"* but *"this stated set of offers, with these properties, is what the
+   other end sees."* Today no test can say that sentence because no test has a
+   population to name.
+2. **Ordering, ranking and fan-out become checkable.** A trader ranking three
+   offers invented inline proves the ranker runs. The same ranker over a stated
+   population with a stated expected order proves it ranks *correctly*, and is
+   the first thing that would catch a preference-expression regression.
+3. **A divergence gets a subject.** When the two ends disagree, today the
+   question is *"which of these two scripts is wrong"*. With one population the
+   question is *"which implementation read it differently"*, which is the
+   question `corpus/divergences.tsv` was invented to answer for the front ends
+   and has no equivalent for the wire.
+
+**The licence boundary decides the shape here and must be stated first.**
+omniORB is a **fixture, never a dependency**: the loader runs it as a separate
+process over TCP and reads what it prints. Nothing is linked, vendored or
+copied, `cargo tree` stays clean, and the loader lives in `spikes/` where every
+other peer script lives. Where a service needs IDL that only omniORB ships —
+`CosTrading` is the live example, named today by the trading batch — the
+prerequisite is **a first-party contract written from the OMG specification**,
+not their file. That is a separate batch and it owes
+`differential.sh --require omniidl,jacorb_idl --record`.
+
+**What must not happen.** The loader must not become the *only* way omniORB is
+populated: the existing peer scripts prove things about ad-hoc values and
+several of them are the project's best measurements. S1b adds a population that
+can be named; it does not retire the ones that cannot.
+
+*같은 파일을 omniORB 쪽에 적재하는 파이썬 로더 — omniORB 자신의 스텁으로, 우리
+로더와 **코드를 전혀 공유하지 않고**. 산출물은 로더가 아니라 오늘 잴 수 없는 세
+가지다: **이름 붙은 모집단이 온전히 건너갔다**는 문장, 순서·순위·팬아웃의 정합성,
+그리고 **불일치에 주체가 생기는 것** — "두 스크립트 중 어느 쪽이 틀렸나"가 아니라
+"어느 구현이 다르게 읽었나". omniORB는 픽스처이지 의존성이 아니다: 별도 프로세스로
+돌리고 출력을 읽을 뿐이며, omniORB만 싣고 있는 IDL이 필요한 곳에서는 그들의 파일이
+아니라 **OMG 명세에서 쓴 1차 저작 계약**이 선행 조건이다.*
 
 ### S2 — the environment is reconstructable (`spikes/`, `.github/`)
 
