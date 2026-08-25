@@ -606,23 +606,58 @@ fn server_fields(s: &ServerCounters) -> Vec<(&'static str, u64)> {
     ]
 }
 
+/// Every counter of [`ChannelStats`], in the order a reader wants them.
+///
+/// **Destructured with no `..`, and that is the point.** This list is what the
+/// page renders; a counter missing from it is a counter the operator does not
+/// see, and nothing about that is red — the page still renders, still adds up,
+/// and quietly answers a question with one fewer number than it was asked.
+/// Binding every field by name makes the compiler ask the author of the next
+/// counter where it goes. That author is in another crate, which is exactly
+/// the distance over which this kind of omission survives: `pull_failures`,
+/// `pull_suppliers_connected` and `sourced` arrived on 2026-08-25 and only the
+/// struct literal below failed to build — this function would have compiled
+/// unchanged and shown fifteen of eighteen counters.
 fn channel_fields(c: &ChannelStats) -> Vec<(&'static str, u64)> {
+    let ChannelStats {
+        accepted,
+        fanned_out,
+        delivered,
+        pulled,
+        sourced,
+        dropped,
+        dropped_overflow,
+        unrelayable,
+        dropped_on_disconnect,
+        dropped_on_failure_disconnect,
+        dropped_at_stop,
+        push_failures,
+        pull_failures,
+        disconnected_for_failure,
+        queued,
+        consumers_connected,
+        pull_consumers_connected,
+        pull_suppliers_connected,
+    } = c;
     vec![
-        ("accepted", c.accepted),
-        ("fanned_out", c.fanned_out),
-        ("delivered", c.delivered),
-        ("pulled", c.pulled),
-        ("dropped", c.dropped),
-        ("dropped_overflow", c.dropped_overflow),
-        ("unrelayable", c.unrelayable),
-        ("dropped_on_disconnect", c.dropped_on_disconnect),
-        ("dropped_on_failure_disconnect", c.dropped_on_failure_disconnect),
-        ("dropped_at_stop", c.dropped_at_stop),
-        ("push_failures", c.push_failures),
-        ("disconnected_for_failure", c.disconnected_for_failure),
-        ("queued", c.queued as u64),
-        ("consumers_connected", c.consumers_connected as u64),
-        ("pull_consumers_connected", c.pull_consumers_connected as u64),
+        ("accepted", *accepted),
+        ("fanned_out", *fanned_out),
+        ("delivered", *delivered),
+        ("pulled", *pulled),
+        ("sourced", *sourced),
+        ("dropped", *dropped),
+        ("dropped_overflow", *dropped_overflow),
+        ("unrelayable", *unrelayable),
+        ("dropped_on_disconnect", *dropped_on_disconnect),
+        ("dropped_on_failure_disconnect", *dropped_on_failure_disconnect),
+        ("dropped_at_stop", *dropped_at_stop),
+        ("push_failures", *push_failures),
+        ("pull_failures", *pull_failures),
+        ("disconnected_for_failure", *disconnected_for_failure),
+        ("queued", *queued as u64),
+        ("consumers_connected", *consumers_connected as u64),
+        ("pull_consumers_connected", *pull_consumers_connected as u64),
+        ("pull_suppliers_connected", *pull_suppliers_connected as u64),
     ]
 }
 
@@ -826,13 +861,17 @@ fn read_channels(root: &Json, out: &mut Vec<String>) -> Option<Vec<Channel>> {
             dropped_on_failure_disconnect: number(item, &at, "dropped_on_failure_disconnect", out)
                 .unwrap_or_default(),
             dropped_at_stop: number(item, &at, "dropped_at_stop", out).unwrap_or_default(),
+            sourced: number(item, &at, "sourced", out).unwrap_or_default(),
             push_failures: number(item, &at, "push_failures", out).unwrap_or_default(),
+            pull_failures: number(item, &at, "pull_failures", out).unwrap_or_default(),
             disconnected_for_failure: number(item, &at, "disconnected_for_failure", out)
                 .unwrap_or_default(),
             queued: number(item, &at, "queued", out).unwrap_or_default() as usize,
             consumers_connected: number(item, &at, "consumers_connected", out).unwrap_or_default()
                 as usize,
             pull_consumers_connected: number(item, &at, "pull_consumers_connected", out)
+                .unwrap_or_default() as usize,
+            pull_suppliers_connected: number(item, &at, "pull_suppliers_connected", out)
                 .unwrap_or_default() as usize,
         };
         if refuse_partial(out, before, &at) {
@@ -1259,11 +1298,14 @@ mod tests {
             dropped_on_failure_disconnect: 0,
             dropped_at_stop: 1,
             pulled: 0,
+            sourced: 0,
             push_failures: 2,
+            pull_failures: 0,
             disconnected_for_failure: 0,
             queued: 4,
             consumers_connected: 2,
             pull_consumers_connected: 1,
+            pull_suppliers_connected: 0,
         }
     }
 
