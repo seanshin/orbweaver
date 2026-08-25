@@ -32,10 +32,12 @@
 
 #![deny(missing_docs)]
 
+pub mod lookup;
 pub mod policy;
 pub mod preference;
 pub mod query;
 pub mod replay;
+pub mod service_type;
 
 use std::collections::{BTreeMap, BTreeSet};
 

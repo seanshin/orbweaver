@@ -9,6 +9,12 @@ rust-version.workspace = true
 
 [dependencies]
 orbweaver-cdr = { path = "../orbweaver-cdr" }
+# The `CosTrading::Lookup` servant (`trading_server`) serves a decision engine
+# it does not contain: everything `query` decides lives in `orbweaver-trading`,
+# where it is testable without a socket. `orbweaver-trading` depends on
+# nothing, so this direction is the cycle-free one — and it has to be this
+# direction, because `orbweaver-registry` depends on *us*.
+orbweaver-trading = { path = "../orbweaver-trading" }
 # See NOTICE and docs/decisions/D001: data we cannot originate.
 encoding_rs = { version = "0.8", optional = true }
 # See NOTICE and docs/decisions/D002: logic whose failure modes our oracles
@@ -68,6 +74,10 @@ path = "src/bin/spike_cancel.rs"
 [[bin]]
 name = "spike-events"
 path = "src/bin/spike_events.rs"
+
+[[bin]]
+name = "spike-trading"
+path = "src/bin/spike_trading.rs"
 
 [[bin]]
 name = "spike-concurrent"
