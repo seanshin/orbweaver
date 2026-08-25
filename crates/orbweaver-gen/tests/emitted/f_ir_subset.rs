@@ -13,9 +13,9 @@
 
 /// IDL module `CORBA`.
 pub mod CORBA {
-    use orbweaver_gen::rt::{self, Cdr};
+    use ::orbweaver_gen::rt::{self as __rt, Cdr as __Cdr};
     /// IDL typedef `IDL:omg.org/CORBA/AttrDescriptionSeq:1.0`.
-    pub type AttrDescriptionSeq = Vec<crate::emitted::f_ir_subset::CORBA::AttributeDescription>;
+    pub type AttrDescriptionSeq = ::std::vec::Vec<crate::emitted::f_ir_subset::CORBA::AttributeDescription>;
 
     /// IDL struct `IDL:omg.org/CORBA/AttributeDescription:1.0`.
     #[derive(Debug, Clone, PartialEq)]
@@ -29,28 +29,28 @@ pub mod CORBA {
         /// IDL member `version`, marshalled fourth.
         pub version: crate::emitted::f_ir_subset::CORBA::VersionSpec,
         /// IDL member `type`, marshalled fifth.
-        pub r#type: orbweaver_gen::rt::TypeCodeVal,
+        pub r#type: __rt::TypeCodeVal,
         /// IDL member `mode`, marshalled sixth.
         pub mode: crate::emitted::f_ir_subset::CORBA::AttributeMode,
     }
-    impl Cdr for AttributeDescription {
-        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-            self.name.put(e)?;
-            self.id.put(e)?;
-            self.defined_in.put(e)?;
-            self.version.put(e)?;
-            self.r#type.put(e)?;
-            self.mode.put(e)?;
+    impl __Cdr for AttributeDescription {
+        fn put(&self, __e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
+            self.name.put(__e)?;
+            self.id.put(__e)?;
+            self.defined_in.put(__e)?;
+            self.version.put(__e)?;
+            self.r#type.put(__e)?;
+            self.mode.put(__e)?;
             Ok(())
         }
-        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+        fn get(__d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
             Ok(Self {
-                name: Cdr::get(d)?,
-                id: Cdr::get(d)?,
-                defined_in: Cdr::get(d)?,
-                version: Cdr::get(d)?,
-                r#type: Cdr::get(d)?,
-                mode: Cdr::get(d)?,
+                name: __Cdr::get(__d)?,
+                id: __Cdr::get(__d)?,
+                defined_in: __Cdr::get(__d)?,
+                version: __Cdr::get(__d)?,
+                r#type: __Cdr::get(__d)?,
+                mode: __Cdr::get(__d)?,
             })
         }
     }
@@ -63,16 +63,16 @@ pub mod CORBA {
         /// IDL enumerator `ATTR_READONLY`; ordinal 1 on the wire.
         ATTR_READONLY = 1,
     }
-    impl Cdr for AttributeMode {
-        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-            e.put_u32(*self as u32);
+    impl __Cdr for AttributeMode {
+        fn put(&self, __e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
+            __e.put_u32(*self as u32);
             Ok(())
         }
-        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
-            Ok(match d.get_u32()? {
+        fn get(__d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
+            Ok(match __d.get_u32()? {
                 0 => Self::ATTR_NORMAL,
                 1 => Self::ATTR_READONLY,
-                _ => return Err(rt::GiopError::Decode("ordinal outside AttributeMode; the sender may be built against a newer contract")),
+                _ => return Err(__rt::GiopError::Decode("ordinal outside AttributeMode; the sender may be built against a newer contract")),
             })
         }
     }
@@ -88,61 +88,61 @@ pub mod CORBA {
     /// `Connection` inside the trust boundary, or over the guarded
     /// wrapper at it — a stub hard-wired to the transport would be the
     /// §4.7 bypass in compiled form.
-    pub struct ContainedClient<C: rt::Invoker> {
+    pub struct ContainedClient<C: __rt::Invoker> {
         /// What calls travel over.
         pub conn: C,
     }
-    impl<C: rt::Invoker> ContainedClient<C> {
+    impl<C: __rt::Invoker> ContainedClient<C> {
         /// A stub over an open invoker.
-        pub fn new(conn: C) -> Self { Self { conn } }
+        pub fn new(__conn: C) -> Self { Self { conn: __conn } }
         /// The fully scoped IDL name, leading colons included
         ///
         /// `_get_absolute_name` on the wire.
-        pub fn absolute_name(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::ScopedName, rt::GiopError> {
+        pub fn absolute_name(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::ScopedName, __rt::GiopError> {
             let __reply = self.conn.invoke("_get_absolute_name", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// Which kind of IDL construct this object describes
         ///
         /// `_get_def_kind` on the wire.
-        pub fn def_kind(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, rt::GiopError> {
+        pub fn def_kind(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, __rt::GiopError> {
             let __reply = self.conn.invoke("_get_def_kind", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// The repository id this definition is registered under
         ///
         /// `_get_id` on the wire.
-        pub fn id(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::RepositoryId, rt::GiopError> {
+        pub fn id(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::RepositoryId, __rt::GiopError> {
             let __reply = self.conn.invoke("_get_id", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// The unqualified IDL name of this definition
         ///
         /// `_get_name` on the wire.
-        pub fn name(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::Identifier, rt::GiopError> {
+        pub fn name(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::Identifier, __rt::GiopError> {
             let __reply = self.conn.invoke("_get_name", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// The version part of the repository id, e.g. 1.0
         ///
         /// `_get_version` on the wire.
-        pub fn version(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, rt::GiopError> {
+        pub fn version(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, __rt::GiopError> {
             let __reply = self.conn.invoke("_get_version", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
     }
@@ -152,7 +152,7 @@ pub mod CORBA {
     /// `System` is always here, whatever the contract declares: an unknown
     /// key is `OBJECT_NOT_EXIST`, a refused call is `NO_PERMISSION`, a
     /// temporary refusal is `TRANSIENT`, and IDL has no way to declare any
-    /// of them. Build one with `rt::raise::*`, which does not produce a
+    /// of them. Build one with `orbweaver_gen::rt::raise::*`, which does not produce a
     /// `SystemException` until the completion status is stated — the field
     /// that tells the caller whether a retry is safe, and the one thing a
     /// generator cannot know for a servant.
@@ -164,14 +164,14 @@ pub mod CORBA {
     pub enum ContainedFault {
         /// A CORBA system exception, with the completion status the
         /// servant chose. Travels as a `SystemException` reply.
-        System(rt::SystemException),
+        System(__rt::SystemException),
     }
-    impl From<rt::SystemException> for ContainedFault {
-        fn from(__ex: rt::SystemException) -> Self {
+    impl ::std::convert::From<__rt::SystemException> for ContainedFault {
+        fn from(__ex: __rt::SystemException) -> Self {
             Self::System(__ex)
         }
     }
-    impl PartialEq for ContainedFault {
+    impl ::std::cmp::PartialEq for ContainedFault {
         fn eq(&self, __other: &Self) -> bool {
             match (self, __other) {
                 (Self::System(__a), Self::System(__b)) => {
@@ -185,7 +185,7 @@ pub mod CORBA {
     impl ContainedFault {
         /// The repository id of the user exception this fault carries, or
         /// `None` for a system exception, which carries its own.
-        pub fn user_id(&self) -> Option<&'static str> {
+        pub fn user_id(&self) -> ::std::option::Option<&'static str> {
             match self {
                 Self::System(_) => None,
             }
@@ -198,7 +198,7 @@ pub mod CORBA {
         /// dispatcher hands it to the server to encode instead. That is also why
         /// nothing may be written before the fault is known — the whole buffer
         /// travels under one status.
-        pub fn write(&self, __out: &mut rt::Encoder) -> Result<rt::DispatchBody, rt::SystemException> {
+        pub fn write(&self, __out: &mut __rt::Encoder) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let _ = __out;
             match self {
                 Self::System(__ex) => Err(__ex.clone()),
@@ -214,7 +214,7 @@ pub mod CORBA {
     /// root ++ "/Contained/" ++ <oid>    the object named <oid>
     /// ```
     ///
-    /// `root` is the key the `rt::Server` was bound with. The derivation is
+    /// `root` is the key the `orbweaver_gen::rt::Server` was bound with. The derivation is
     /// reversible, so no table of minted keys exists: a reference survives a
     /// restart, and a client cannot make the process grow by looking things
     /// up. The oid is the *whole* remainder after the prefix, so it may
@@ -228,14 +228,14 @@ pub mod CORBA {
     /// # Minting
     ///
     /// `reference` and `ior` answer with a real IIOP profile, built by
-    /// `rt::ObjectHome` — the servant never assembles one, which is why the
+    /// `orbweaver_gen::rt::ObjectHome` — the servant never assembles one, which is why the
     /// GIOP version and profile shape are still decided in exactly one
     /// place. `nil` is the nil reference (§9.3.6), the truthful answer when
     /// there is no such object.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct ContainedRefs {
-        home: rt::ObjectHome,
-        infix: String,
+        home: __rt::ObjectHome,
+        infix: ::std::string::String,
     }
     impl ContainedRefs {
         /// The repository id minted references advertise.
@@ -243,42 +243,42 @@ pub mod CORBA {
         /// What separates the root key from the oid.
         pub const KEY_INFIX: &'static str = "/Contained/";
         /// The scheme rooted at `home`, with the generated infix.
-        pub fn new(home: rt::ObjectHome) -> Self {
-            Self { home, infix: Self::KEY_INFIX.to_owned() }
+        pub fn new(__home: __rt::ObjectHome) -> Self {
+            Self { home: __home, infix: Self::KEY_INFIX.to_owned() }
         }
         /// The same, with a key space this interface shares with another.
         ///
         /// Two skeletons given the same infix must disagree about `knows`
-        /// for every key, or `rt::Servants` will hand a request to
+        /// for every key, or `orbweaver_gen::rt::Servants` will hand a request to
         /// whichever was added first. Sharing a key space is a claim that
         /// the two answer for disjoint sets of objects.
-        pub fn with_infix(home: rt::ObjectHome, infix: impl Into<String>) -> Self {
-            Self { home, infix: infix.into() }
+        pub fn with_infix(__home: __rt::ObjectHome, __infix: impl ::std::convert::Into<::std::string::String>) -> Self {
+            Self { home: __home, infix: __infix.into() }
         }
         /// Where these objects are published.
-        pub fn home(&self) -> &rt::ObjectHome { &self.home }
+        pub fn home(&self) -> &__rt::ObjectHome { &self.home }
         /// The infix in use, generated or overridden.
         pub fn infix(&self) -> &str { &self.infix }
         /// The default object's key, which is also every other key's prefix.
         pub fn root_key(&self) -> &[u8] { self.home.root_key() }
         /// The object key for `oid`; the empty oid is the root key.
-        pub fn key_of(&self, oid: &str) -> Vec<u8> {
-            self.home.key_of(&self.infix, oid)
+        pub fn key_of(&self, __oid: &str) -> ::std::vec::Vec<u8> {
+            self.home.key_of(&self.infix, __oid)
         }
         /// The oid a key addresses, or `None` if it is not one of ours.
-        pub fn oid_of<'a>(&self, key: &'a [u8]) -> Option<&'a str> {
-            self.home.oid_of(&self.infix, key)
+        pub fn oid_of<'a>(&self, __key: &'a [u8]) -> ::std::option::Option<&'a str> {
+            self.home.oid_of(&self.infix, __key)
         }
         /// A reference to `oid`, in the form an operation returns.
-        pub fn reference(&self, oid: &str) -> rt::ObjRef {
-            self.home.reference(Self::TYPE_ID, self.key_of(oid))
+        pub fn reference(&self, __oid: &str) -> __rt::ObjRef {
+            self.home.reference(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The same reference, in the form `LOCATION_FORWARD` carries.
-        pub fn ior(&self, oid: &str) -> rt::Ior {
-            self.home.ior(Self::TYPE_ID, self.key_of(oid))
+        pub fn ior(&self, __oid: &str) -> __rt::Ior {
+            self.home.ior(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The nil reference: there is no such object.
-        pub fn nil() -> rt::ObjRef { rt::ObjectHome::nil() }
+        pub fn nil() -> __rt::ObjRef { __rt::ObjectHome::nil() }
     }
     /// Which `IDL:omg.org/CORBA/Contained:1.0` a call is addressed to.
     ///
@@ -297,8 +297,8 @@ pub mod CORBA {
     }
     impl<'a> ContainedTarget<'a> {
         /// The identity `oid` under `refs`.
-        pub fn new(oid: &'a str, refs: &'a ContainedRefs) -> Self {
-            Self { oid, refs }
+        pub fn new(__oid: &'a str, __refs: &'a ContainedRefs) -> Self {
+            Self { oid: __oid, refs: __refs }
         }
         /// Which object this is. The empty oid is the default object,
         /// addressed by the bare root key the server was bound with.
@@ -308,11 +308,11 @@ pub mod CORBA {
         /// The key scheme, for minting references into other key spaces.
         pub fn refs(&self) -> &'a ContainedRefs { self.refs }
         /// The raw object key this call arrived on.
-        pub fn key(&self) -> Vec<u8> { self.refs.key_of(self.oid) }
+        pub fn key(&self) -> ::std::vec::Vec<u8> { self.refs.key_of(self.oid) }
         /// A reference to *this* object, for handing back one's own address.
-        pub fn reference(&self) -> rt::ObjRef { self.refs.reference(self.oid) }
+        pub fn reference(&self) -> __rt::ObjRef { self.refs.reference(self.oid) }
         /// A reference to another object of this interface.
-        pub fn sibling(&self, oid: &str) -> rt::ObjRef { self.refs.reference(oid) }
+        pub fn sibling(&self, __oid: &str) -> __rt::ObjRef { self.refs.reference(__oid) }
     }
     /// Anything the repository holds under a name
     ///
@@ -321,10 +321,10 @@ pub mod CORBA {
     /// One method per operation and per attribute accessor, taking decoded
     /// Rust arguments. Nothing here mentions GIOP: the wire is entirely the
     /// business of `ContainedSkeleton`, which adapts this trait to
-    /// `rt::Dispatch`.
+    /// `orbweaver_gen::rt::Dispatch`.
     ///
     /// Every method may fail with a `ContainedFault`: a declared user exception,
-    /// or a system exception built with `rt::raise::*` — the vocabulary
+    /// or a system exception built with `orbweaver_gen::rt::raise::*` — the vocabulary
     /// (`OBJECT_NOT_EXIST`, `NO_PERMISSION`, `BAD_PARAM`, `TRANSIENT`) that
     /// no contract declares and every servant needs.
     ///
@@ -348,7 +348,7 @@ pub mod CORBA {
     pub trait ContainedServant {
         /// Whether this servant answers for the object `__at` names.
         ///
-        /// **Required, with no default.** `rt::Dispatch::knows` defaults to
+        /// **Required, with no default.** `orbweaver_gen::rt::Dispatch::knows` defaults to
         /// accepting everything, which is right for a process with one object and
         /// is exactly what stopped a generated skeleton from ever holding more
         /// than one: an unknown key was served as if it were the only object.
@@ -358,7 +358,7 @@ pub mod CORBA {
         ///
         /// A single-object servant writes `__at.is_default()`. A `false` here
         /// becomes `OBJECT_NOT_EXIST` for a request and `UNKNOWN_OBJECT` for a
-        /// `LocateRequest`, and is also how `rt::Servants` picks between
+        /// `LocateRequest`, and is also how `orbweaver_gen::rt::Servants` picks between
         /// skeletons sharing one key space.
         fn knows(&self, __at: &ContainedTarget<'_>) -> bool;
         /// Where this request should be sent instead, if anywhere.
@@ -383,14 +383,14 @@ pub mod CORBA {
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
         /// the address. This hook is the *temporary* forward; an object that has
         /// moved for good says so through `redirect`, below.
-        fn forward(&mut self, __at: &ContainedTarget<'_>) -> Option<rt::Ior> {
+        fn forward(&mut self, __at: &ContainedTarget<'_>) -> ::std::option::Option<__rt::Ior> {
             let _ = __at;
             None
         }
         /// Where this request should be sent instead, and whether for good.
         ///
-        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
-        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// The method the runtime actually asks. `orbweaver_gen::rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `orbweaver_gen::rt::Forward::Permanent` is a
         /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
         /// the temporary form, its reply-status enumeration having no other),
         /// and is the one thing a servant can say that lets a client replace the
@@ -399,29 +399,29 @@ pub mod CORBA {
         /// Defaults to `forward` wrapped as temporary, so a servant that
         /// overrides only `forward` behaves as it always did. Override this one
         /// to say *permanent*; there is no reason to override both.
-        fn redirect(&mut self, __at: &ContainedTarget<'_>) -> Option<rt::Forward> {
-            self.forward(__at).map(rt::Forward::Temporary)
+        fn redirect(&mut self, __at: &ContainedTarget<'_>) -> ::std::option::Option<__rt::Forward> {
+            self.forward(__at).map(__rt::Forward::Temporary)
         }
         /// The fully scoped IDL name, leading colons included
         ///
         /// `_get_absolute_name` on the wire.
-        fn absolute_name(&mut self, __at: &ContainedTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::ScopedName, ContainedFault>;
+        fn absolute_name(&mut self, __at: &ContainedTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::ScopedName, ContainedFault>;
         /// Which kind of IDL construct this object describes
         ///
         /// `_get_def_kind` on the wire.
-        fn def_kind(&mut self, __at: &ContainedTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, ContainedFault>;
+        fn def_kind(&mut self, __at: &ContainedTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, ContainedFault>;
         /// The repository id this definition is registered under
         ///
         /// `_get_id` on the wire.
-        fn id(&mut self, __at: &ContainedTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::RepositoryId, ContainedFault>;
+        fn id(&mut self, __at: &ContainedTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::RepositoryId, ContainedFault>;
         /// The unqualified IDL name of this definition
         ///
         /// `_get_name` on the wire.
-        fn name(&mut self, __at: &ContainedTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::Identifier, ContainedFault>;
+        fn name(&mut self, __at: &ContainedTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::Identifier, ContainedFault>;
         /// The version part of the repository id, e.g. 1.0
         ///
         /// `_get_version` on the wire.
-        fn version(&mut self, __at: &ContainedTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, ContainedFault>;
+        fn version(&mut self, __at: &ContainedTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, ContainedFault>;
     }
     /// One object of `IDL:omg.org/CORBA/Contained:1.0`, for a servant that keeps a value per object.
     ///
@@ -440,23 +440,23 @@ pub mod CORBA {
         /// The fully scoped IDL name, leading colons included
         ///
         /// `_get_absolute_name` on the wire.
-        fn absolute_name(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::ScopedName, ContainedFault>;
+        fn absolute_name(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::ScopedName, ContainedFault>;
         /// Which kind of IDL construct this object describes
         ///
         /// `_get_def_kind` on the wire.
-        fn def_kind(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, ContainedFault>;
+        fn def_kind(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, ContainedFault>;
         /// The repository id this definition is registered under
         ///
         /// `_get_id` on the wire.
-        fn id(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::RepositoryId, ContainedFault>;
+        fn id(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::RepositoryId, ContainedFault>;
         /// The unqualified IDL name of this definition
         ///
         /// `_get_name` on the wire.
-        fn name(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::Identifier, ContainedFault>;
+        fn name(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::Identifier, ContainedFault>;
         /// The version part of the repository id, e.g. 1.0
         ///
         /// `_get_version` on the wire.
-        fn version(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, ContainedFault>;
+        fn version(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, ContainedFault>;
     }
     /// A map from oid to one `ContainedObject`, serving `IDL:omg.org/CORBA/Contained:1.0`.
     ///
@@ -470,34 +470,34 @@ pub mod CORBA {
     /// bare root key addresses. A one-object process inserts exactly that.
     #[derive(Debug, Clone)]
     pub struct ContainedObjects<S: ContainedObject> {
-        objects: std::collections::BTreeMap<String, S>,
+        objects: ::std::collections::BTreeMap<::std::string::String, S>,
     }
-    impl<S: ContainedObject> Default for ContainedObjects<S> {
+    impl<S: ContainedObject> ::std::default::Default for ContainedObjects<S> {
         fn default() -> Self {
-            Self { objects: std::collections::BTreeMap::new() }
+            Self { objects: ::std::collections::BTreeMap::new() }
         }
     }
     impl<S: ContainedObject> ContainedObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { <Self as std::default::Default>::default() }
+        pub fn new() -> Self { <Self as ::std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
-        pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
-            self.objects.insert(oid.into(), object)
+        pub fn insert(&mut self, __oid: impl ::std::convert::Into<::std::string::String>, __object: S) -> ::std::option::Option<S> {
+            self.objects.insert(__oid.into(), __object)
         }
         /// Removes an object, after which its key is `OBJECT_NOT_EXIST`.
-        pub fn remove(&mut self, oid: &str) -> Option<S> {
-            self.objects.remove(oid)
+        pub fn remove(&mut self, __oid: &str) -> ::std::option::Option<S> {
+            self.objects.remove(__oid)
         }
         /// The object under `oid`, if there is one.
-        pub fn get(&self, oid: &str) -> Option<&S> { self.objects.get(oid) }
+        pub fn get(&self, __oid: &str) -> ::std::option::Option<&S> { self.objects.get(__oid) }
         /// The object under `oid`, mutably.
-        pub fn get_mut(&mut self, oid: &str) -> Option<&mut S> {
-            self.objects.get_mut(oid)
+        pub fn get_mut(&mut self, __oid: &str) -> ::std::option::Option<&mut S> {
+            self.objects.get_mut(__oid)
         }
         /// Every oid held, in sorted order.
-        pub fn oids(&self) -> impl Iterator<Item = &str> {
-            self.objects.keys().map(String::as_str)
+        pub fn oids(&self) -> impl ::std::iter::Iterator<Item = &str> {
+            self.objects.keys().map(::std::string::String::as_str)
         }
         /// How many objects are held.
         pub fn len(&self) -> usize { self.objects.len() }
@@ -508,41 +508,41 @@ pub mod CORBA {
         fn knows(&self, __at: &ContainedTarget<'_>) -> bool {
             self.objects.contains_key(__at.oid())
         }
-        fn absolute_name(&mut self, __at: &ContainedTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::ScopedName, ContainedFault> {
+        fn absolute_name(&mut self, __at: &ContainedTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::ScopedName, ContainedFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.absolute_name(),
-                None => Err(ContainedFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ContainedFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn def_kind(&mut self, __at: &ContainedTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, ContainedFault> {
+        fn def_kind(&mut self, __at: &ContainedTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, ContainedFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.def_kind(),
-                None => Err(ContainedFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ContainedFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn id(&mut self, __at: &ContainedTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::RepositoryId, ContainedFault> {
+        fn id(&mut self, __at: &ContainedTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::RepositoryId, ContainedFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.id(),
-                None => Err(ContainedFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ContainedFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn name(&mut self, __at: &ContainedTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::Identifier, ContainedFault> {
+        fn name(&mut self, __at: &ContainedTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::Identifier, ContainedFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.name(),
-                None => Err(ContainedFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ContainedFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn version(&mut self, __at: &ContainedTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, ContainedFault> {
+        fn version(&mut self, __at: &ContainedTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, ContainedFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.version(),
-                None => Err(ContainedFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ContainedFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
     }
     /// Serves `IDL:omg.org/CORBA/Contained:1.0`: decodes the request, calls the servant, encodes the reply.
     ///
-    /// Hand it to `rt::Server::serve` in place of a hand-written
-    /// `rt::Dispatch`. What it answers, beyond the contract's own
+    /// Hand it to `orbweaver_gen::rt::Server::serve` in place of a hand-written
+    /// `orbweaver_gen::rt::Dispatch`. What it answers, beyond the contract's own
     /// operations:
     ///
     /// * `_is_a`, from the inheritance chain the registry resolved, because
@@ -573,48 +573,48 @@ pub mod CORBA {
     impl<S: ContainedServant> ContainedSkeleton<S> {
         /// A skeleton serving `servant`'s objects under `refs`.
         ///
-        /// `refs` must be rooted at the key the `rt::Server` was bound
+        /// `refs` must be rooted at the key the `orbweaver_gen::rt::Server` was bound
         /// with, or nothing this skeleton parses will match what arrives.
-        pub fn new(refs: ContainedRefs, servant: S) -> Self {
-            Self { servant, refs }
+        pub fn new(__refs: ContainedRefs, __servant: S) -> Self {
+            Self { servant: __servant, refs: __refs }
         }
         /// The key scheme in force, for minting references to these objects.
         pub fn refs(&self) -> &ContainedRefs { &self.refs }
     }
-    impl<S: ContainedServant> rt::Dispatch for ContainedSkeleton<S> {
+    impl<S: ContainedServant> __rt::Dispatch for ContainedSkeleton<S> {
         fn knows(&self, __object_key: &[u8]) -> bool {
             match self.refs.oid_of(__object_key) {
                 Some(__oid) => self.servant.knows(&ContainedTarget::new(__oid, &self.refs)),
                 None => false,
             }
         }
-        fn forward(&mut self, __req: &rt::Request) -> Option<rt::Ior> {
+        fn forward(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Ior> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = ContainedTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
         }
-        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+        fn redirect(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Forward> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = ContainedTarget::new(__oid, &self.refs);
             self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<rt::DispatchBody, rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let __oid = self
                 .refs
                 .oid_of(&__req.object_key)
-                .ok_or_else(rt::SystemException::object_not_exist)?;
+                .ok_or_else(__rt::SystemException::object_not_exist)?;
             let __at = ContainedTarget::new(__oid, &self.refs);
-            let mut __args = __req.body().map_err(|_| rt::SystemException::marshal())?;
+            let mut __args = __req.body().map_err(|_| __rt::SystemException::marshal())?;
             match __req.operation.as_str() {
                 "_get_absolute_name" => {
                     match self.servant.absolute_name(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -622,8 +622,8 @@ pub mod CORBA {
                 "_get_def_kind" => {
                     match self.servant.def_kind(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -631,8 +631,8 @@ pub mod CORBA {
                 "_get_id" => {
                     match self.servant.id(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -640,8 +640,8 @@ pub mod CORBA {
                 "_get_name" => {
                     match self.servant.name(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -649,38 +649,38 @@ pub mod CORBA {
                 "_get_version" => {
                     match self.servant.version(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "_is_a" => {
-                    let __id: String = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let __id: ::std::string::String = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     let __answer = matches!(__id.as_str(),
                         "IDL:omg.org/CORBA/Contained:1.0" |
                         "IDL:omg.org/CORBA/IRObject:1.0" |
-                        rt::OBJECT_ID);
-                    __answer.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                        __rt::OBJECT_ID);
+                    __answer.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
                 "_non_existent" => {
-                    false.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                    false.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
-                _ => Err(rt::SystemException::bad_operation()),
+                _ => Err(__rt::SystemException::bad_operation()),
             }
         }
         fn dispatch(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<(), rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<(), __rt::SystemException> {
             match self.dispatch_body(__req, __out)? {
-                rt::DispatchBody::Return => Ok(()),
-                rt::DispatchBody::UserException => {
-                    Err(rt::SystemException::unknown_user_exception())
+                __rt::DispatchBody::Return => Ok(()),
+                __rt::DispatchBody::UserException => {
+                    Err(__rt::SystemException::unknown_user_exception())
                 }
             }
         }
@@ -697,39 +697,39 @@ pub mod CORBA {
     /// `Connection` inside the trust boundary, or over the guarded
     /// wrapper at it — a stub hard-wired to the transport would be the
     /// §4.7 bypass in compiled form.
-    pub struct ContainerClient<C: rt::Invoker> {
+    pub struct ContainerClient<C: __rt::Invoker> {
         /// What calls travel over.
         pub conn: C,
     }
-    impl<C: rt::Invoker> ContainerClient<C> {
+    impl<C: __rt::Invoker> ContainerClient<C> {
         /// A stub over an open invoker.
-        pub fn new(conn: C) -> Self { Self { conn } }
+        pub fn new(__conn: C) -> Self { Self { conn: __conn } }
         /// Adds a module to the repository; refused on a read-only facade
         ///
         /// `create_module` on the wire.
-        pub fn create_module(&mut self, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> Result<orbweaver_gen::rt::ObjRef, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn create_module(&mut self, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> ::std::result::Result<__rt::ObjRef, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             new_id.put(&mut __probe)?;
             new_name.put(&mut __probe)?;
             new_version.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("create_module", |__e| {
                 let _ = new_id.put(__e);
                 let _ = new_name.put(__e);
                 let _ = new_version.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// Which kind of IDL construct this object describes
         ///
         /// `_get_def_kind` on the wire.
-        pub fn def_kind(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, rt::GiopError> {
+        pub fn def_kind(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, __rt::GiopError> {
             let __reply = self.conn.invoke("_get_def_kind", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
     }
@@ -739,7 +739,7 @@ pub mod CORBA {
     /// `System` is always here, whatever the contract declares: an unknown
     /// key is `OBJECT_NOT_EXIST`, a refused call is `NO_PERMISSION`, a
     /// temporary refusal is `TRANSIENT`, and IDL has no way to declare any
-    /// of them. Build one with `rt::raise::*`, which does not produce a
+    /// of them. Build one with `orbweaver_gen::rt::raise::*`, which does not produce a
     /// `SystemException` until the completion status is stated — the field
     /// that tells the caller whether a retry is safe, and the one thing a
     /// generator cannot know for a servant.
@@ -751,14 +751,14 @@ pub mod CORBA {
     pub enum ContainerFault {
         /// A CORBA system exception, with the completion status the
         /// servant chose. Travels as a `SystemException` reply.
-        System(rt::SystemException),
+        System(__rt::SystemException),
     }
-    impl From<rt::SystemException> for ContainerFault {
-        fn from(__ex: rt::SystemException) -> Self {
+    impl ::std::convert::From<__rt::SystemException> for ContainerFault {
+        fn from(__ex: __rt::SystemException) -> Self {
             Self::System(__ex)
         }
     }
-    impl PartialEq for ContainerFault {
+    impl ::std::cmp::PartialEq for ContainerFault {
         fn eq(&self, __other: &Self) -> bool {
             match (self, __other) {
                 (Self::System(__a), Self::System(__b)) => {
@@ -772,7 +772,7 @@ pub mod CORBA {
     impl ContainerFault {
         /// The repository id of the user exception this fault carries, or
         /// `None` for a system exception, which carries its own.
-        pub fn user_id(&self) -> Option<&'static str> {
+        pub fn user_id(&self) -> ::std::option::Option<&'static str> {
             match self {
                 Self::System(_) => None,
             }
@@ -785,7 +785,7 @@ pub mod CORBA {
         /// dispatcher hands it to the server to encode instead. That is also why
         /// nothing may be written before the fault is known — the whole buffer
         /// travels under one status.
-        pub fn write(&self, __out: &mut rt::Encoder) -> Result<rt::DispatchBody, rt::SystemException> {
+        pub fn write(&self, __out: &mut __rt::Encoder) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let _ = __out;
             match self {
                 Self::System(__ex) => Err(__ex.clone()),
@@ -801,7 +801,7 @@ pub mod CORBA {
     /// root ++ "/Container/" ++ <oid>    the object named <oid>
     /// ```
     ///
-    /// `root` is the key the `rt::Server` was bound with. The derivation is
+    /// `root` is the key the `orbweaver_gen::rt::Server` was bound with. The derivation is
     /// reversible, so no table of minted keys exists: a reference survives a
     /// restart, and a client cannot make the process grow by looking things
     /// up. The oid is the *whole* remainder after the prefix, so it may
@@ -815,14 +815,14 @@ pub mod CORBA {
     /// # Minting
     ///
     /// `reference` and `ior` answer with a real IIOP profile, built by
-    /// `rt::ObjectHome` — the servant never assembles one, which is why the
+    /// `orbweaver_gen::rt::ObjectHome` — the servant never assembles one, which is why the
     /// GIOP version and profile shape are still decided in exactly one
     /// place. `nil` is the nil reference (§9.3.6), the truthful answer when
     /// there is no such object.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct ContainerRefs {
-        home: rt::ObjectHome,
-        infix: String,
+        home: __rt::ObjectHome,
+        infix: ::std::string::String,
     }
     impl ContainerRefs {
         /// The repository id minted references advertise.
@@ -830,42 +830,42 @@ pub mod CORBA {
         /// What separates the root key from the oid.
         pub const KEY_INFIX: &'static str = "/Container/";
         /// The scheme rooted at `home`, with the generated infix.
-        pub fn new(home: rt::ObjectHome) -> Self {
-            Self { home, infix: Self::KEY_INFIX.to_owned() }
+        pub fn new(__home: __rt::ObjectHome) -> Self {
+            Self { home: __home, infix: Self::KEY_INFIX.to_owned() }
         }
         /// The same, with a key space this interface shares with another.
         ///
         /// Two skeletons given the same infix must disagree about `knows`
-        /// for every key, or `rt::Servants` will hand a request to
+        /// for every key, or `orbweaver_gen::rt::Servants` will hand a request to
         /// whichever was added first. Sharing a key space is a claim that
         /// the two answer for disjoint sets of objects.
-        pub fn with_infix(home: rt::ObjectHome, infix: impl Into<String>) -> Self {
-            Self { home, infix: infix.into() }
+        pub fn with_infix(__home: __rt::ObjectHome, __infix: impl ::std::convert::Into<::std::string::String>) -> Self {
+            Self { home: __home, infix: __infix.into() }
         }
         /// Where these objects are published.
-        pub fn home(&self) -> &rt::ObjectHome { &self.home }
+        pub fn home(&self) -> &__rt::ObjectHome { &self.home }
         /// The infix in use, generated or overridden.
         pub fn infix(&self) -> &str { &self.infix }
         /// The default object's key, which is also every other key's prefix.
         pub fn root_key(&self) -> &[u8] { self.home.root_key() }
         /// The object key for `oid`; the empty oid is the root key.
-        pub fn key_of(&self, oid: &str) -> Vec<u8> {
-            self.home.key_of(&self.infix, oid)
+        pub fn key_of(&self, __oid: &str) -> ::std::vec::Vec<u8> {
+            self.home.key_of(&self.infix, __oid)
         }
         /// The oid a key addresses, or `None` if it is not one of ours.
-        pub fn oid_of<'a>(&self, key: &'a [u8]) -> Option<&'a str> {
-            self.home.oid_of(&self.infix, key)
+        pub fn oid_of<'a>(&self, __key: &'a [u8]) -> ::std::option::Option<&'a str> {
+            self.home.oid_of(&self.infix, __key)
         }
         /// A reference to `oid`, in the form an operation returns.
-        pub fn reference(&self, oid: &str) -> rt::ObjRef {
-            self.home.reference(Self::TYPE_ID, self.key_of(oid))
+        pub fn reference(&self, __oid: &str) -> __rt::ObjRef {
+            self.home.reference(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The same reference, in the form `LOCATION_FORWARD` carries.
-        pub fn ior(&self, oid: &str) -> rt::Ior {
-            self.home.ior(Self::TYPE_ID, self.key_of(oid))
+        pub fn ior(&self, __oid: &str) -> __rt::Ior {
+            self.home.ior(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The nil reference: there is no such object.
-        pub fn nil() -> rt::ObjRef { rt::ObjectHome::nil() }
+        pub fn nil() -> __rt::ObjRef { __rt::ObjectHome::nil() }
     }
     /// Which `IDL:omg.org/CORBA/Container:1.0` a call is addressed to.
     ///
@@ -884,8 +884,8 @@ pub mod CORBA {
     }
     impl<'a> ContainerTarget<'a> {
         /// The identity `oid` under `refs`.
-        pub fn new(oid: &'a str, refs: &'a ContainerRefs) -> Self {
-            Self { oid, refs }
+        pub fn new(__oid: &'a str, __refs: &'a ContainerRefs) -> Self {
+            Self { oid: __oid, refs: __refs }
         }
         /// Which object this is. The empty oid is the default object,
         /// addressed by the bare root key the server was bound with.
@@ -895,11 +895,11 @@ pub mod CORBA {
         /// The key scheme, for minting references into other key spaces.
         pub fn refs(&self) -> &'a ContainerRefs { self.refs }
         /// The raw object key this call arrived on.
-        pub fn key(&self) -> Vec<u8> { self.refs.key_of(self.oid) }
+        pub fn key(&self) -> ::std::vec::Vec<u8> { self.refs.key_of(self.oid) }
         /// A reference to *this* object, for handing back one's own address.
-        pub fn reference(&self) -> rt::ObjRef { self.refs.reference(self.oid) }
+        pub fn reference(&self) -> __rt::ObjRef { self.refs.reference(self.oid) }
         /// A reference to another object of this interface.
-        pub fn sibling(&self, oid: &str) -> rt::ObjRef { self.refs.reference(oid) }
+        pub fn sibling(&self, __oid: &str) -> __rt::ObjRef { self.refs.reference(__oid) }
     }
     /// A definition that can hold other definitions
     ///
@@ -908,10 +908,10 @@ pub mod CORBA {
     /// One method per operation and per attribute accessor, taking decoded
     /// Rust arguments. Nothing here mentions GIOP: the wire is entirely the
     /// business of `ContainerSkeleton`, which adapts this trait to
-    /// `rt::Dispatch`.
+    /// `orbweaver_gen::rt::Dispatch`.
     ///
     /// Every method may fail with a `ContainerFault`: a declared user exception,
-    /// or a system exception built with `rt::raise::*` — the vocabulary
+    /// or a system exception built with `orbweaver_gen::rt::raise::*` — the vocabulary
     /// (`OBJECT_NOT_EXIST`, `NO_PERMISSION`, `BAD_PARAM`, `TRANSIENT`) that
     /// no contract declares and every servant needs.
     ///
@@ -935,7 +935,7 @@ pub mod CORBA {
     pub trait ContainerServant {
         /// Whether this servant answers for the object `__at` names.
         ///
-        /// **Required, with no default.** `rt::Dispatch::knows` defaults to
+        /// **Required, with no default.** `orbweaver_gen::rt::Dispatch::knows` defaults to
         /// accepting everything, which is right for a process with one object and
         /// is exactly what stopped a generated skeleton from ever holding more
         /// than one: an unknown key was served as if it were the only object.
@@ -945,7 +945,7 @@ pub mod CORBA {
         ///
         /// A single-object servant writes `__at.is_default()`. A `false` here
         /// becomes `OBJECT_NOT_EXIST` for a request and `UNKNOWN_OBJECT` for a
-        /// `LocateRequest`, and is also how `rt::Servants` picks between
+        /// `LocateRequest`, and is also how `orbweaver_gen::rt::Servants` picks between
         /// skeletons sharing one key space.
         fn knows(&self, __at: &ContainerTarget<'_>) -> bool;
         /// Where this request should be sent instead, if anywhere.
@@ -970,14 +970,14 @@ pub mod CORBA {
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
         /// the address. This hook is the *temporary* forward; an object that has
         /// moved for good says so through `redirect`, below.
-        fn forward(&mut self, __at: &ContainerTarget<'_>) -> Option<rt::Ior> {
+        fn forward(&mut self, __at: &ContainerTarget<'_>) -> ::std::option::Option<__rt::Ior> {
             let _ = __at;
             None
         }
         /// Where this request should be sent instead, and whether for good.
         ///
-        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
-        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// The method the runtime actually asks. `orbweaver_gen::rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `orbweaver_gen::rt::Forward::Permanent` is a
         /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
         /// the temporary form, its reply-status enumeration having no other),
         /// and is the one thing a servant can say that lets a client replace the
@@ -986,17 +986,17 @@ pub mod CORBA {
         /// Defaults to `forward` wrapped as temporary, so a servant that
         /// overrides only `forward` behaves as it always did. Override this one
         /// to say *permanent*; there is no reason to override both.
-        fn redirect(&mut self, __at: &ContainerTarget<'_>) -> Option<rt::Forward> {
-            self.forward(__at).map(rt::Forward::Temporary)
+        fn redirect(&mut self, __at: &ContainerTarget<'_>) -> ::std::option::Option<__rt::Forward> {
+            self.forward(__at).map(__rt::Forward::Temporary)
         }
         /// Adds a module to the repository; refused on a read-only facade
         ///
         /// `create_module` on the wire.
-        fn create_module(&mut self, __at: &ContainerTarget<'_>, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> Result<orbweaver_gen::rt::ObjRef, ContainerFault>;
+        fn create_module(&mut self, __at: &ContainerTarget<'_>, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> ::std::result::Result<__rt::ObjRef, ContainerFault>;
         /// Which kind of IDL construct this object describes
         ///
         /// `_get_def_kind` on the wire.
-        fn def_kind(&mut self, __at: &ContainerTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, ContainerFault>;
+        fn def_kind(&mut self, __at: &ContainerTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, ContainerFault>;
     }
     /// One object of `IDL:omg.org/CORBA/Container:1.0`, for a servant that keeps a value per object.
     ///
@@ -1015,11 +1015,11 @@ pub mod CORBA {
         /// Adds a module to the repository; refused on a read-only facade
         ///
         /// `create_module` on the wire.
-        fn create_module(&mut self, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> Result<orbweaver_gen::rt::ObjRef, ContainerFault>;
+        fn create_module(&mut self, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> ::std::result::Result<__rt::ObjRef, ContainerFault>;
         /// Which kind of IDL construct this object describes
         ///
         /// `_get_def_kind` on the wire.
-        fn def_kind(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, ContainerFault>;
+        fn def_kind(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, ContainerFault>;
     }
     /// A map from oid to one `ContainerObject`, serving `IDL:omg.org/CORBA/Container:1.0`.
     ///
@@ -1033,34 +1033,34 @@ pub mod CORBA {
     /// bare root key addresses. A one-object process inserts exactly that.
     #[derive(Debug, Clone)]
     pub struct ContainerObjects<S: ContainerObject> {
-        objects: std::collections::BTreeMap<String, S>,
+        objects: ::std::collections::BTreeMap<::std::string::String, S>,
     }
-    impl<S: ContainerObject> Default for ContainerObjects<S> {
+    impl<S: ContainerObject> ::std::default::Default for ContainerObjects<S> {
         fn default() -> Self {
-            Self { objects: std::collections::BTreeMap::new() }
+            Self { objects: ::std::collections::BTreeMap::new() }
         }
     }
     impl<S: ContainerObject> ContainerObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { <Self as std::default::Default>::default() }
+        pub fn new() -> Self { <Self as ::std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
-        pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
-            self.objects.insert(oid.into(), object)
+        pub fn insert(&mut self, __oid: impl ::std::convert::Into<::std::string::String>, __object: S) -> ::std::option::Option<S> {
+            self.objects.insert(__oid.into(), __object)
         }
         /// Removes an object, after which its key is `OBJECT_NOT_EXIST`.
-        pub fn remove(&mut self, oid: &str) -> Option<S> {
-            self.objects.remove(oid)
+        pub fn remove(&mut self, __oid: &str) -> ::std::option::Option<S> {
+            self.objects.remove(__oid)
         }
         /// The object under `oid`, if there is one.
-        pub fn get(&self, oid: &str) -> Option<&S> { self.objects.get(oid) }
+        pub fn get(&self, __oid: &str) -> ::std::option::Option<&S> { self.objects.get(__oid) }
         /// The object under `oid`, mutably.
-        pub fn get_mut(&mut self, oid: &str) -> Option<&mut S> {
-            self.objects.get_mut(oid)
+        pub fn get_mut(&mut self, __oid: &str) -> ::std::option::Option<&mut S> {
+            self.objects.get_mut(__oid)
         }
         /// Every oid held, in sorted order.
-        pub fn oids(&self) -> impl Iterator<Item = &str> {
-            self.objects.keys().map(String::as_str)
+        pub fn oids(&self) -> impl ::std::iter::Iterator<Item = &str> {
+            self.objects.keys().map(::std::string::String::as_str)
         }
         /// How many objects are held.
         pub fn len(&self) -> usize { self.objects.len() }
@@ -1071,23 +1071,23 @@ pub mod CORBA {
         fn knows(&self, __at: &ContainerTarget<'_>) -> bool {
             self.objects.contains_key(__at.oid())
         }
-        fn create_module(&mut self, __at: &ContainerTarget<'_>, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> Result<orbweaver_gen::rt::ObjRef, ContainerFault> {
+        fn create_module(&mut self, __at: &ContainerTarget<'_>, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> ::std::result::Result<__rt::ObjRef, ContainerFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.create_module(new_id, new_name, new_version),
-                None => Err(ContainerFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ContainerFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn def_kind(&mut self, __at: &ContainerTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, ContainerFault> {
+        fn def_kind(&mut self, __at: &ContainerTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, ContainerFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.def_kind(),
-                None => Err(ContainerFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ContainerFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
     }
     /// Serves `IDL:omg.org/CORBA/Container:1.0`: decodes the request, calls the servant, encodes the reply.
     ///
-    /// Hand it to `rt::Server::serve` in place of a hand-written
-    /// `rt::Dispatch`. What it answers, beyond the contract's own
+    /// Hand it to `orbweaver_gen::rt::Server::serve` in place of a hand-written
+    /// `orbweaver_gen::rt::Dispatch`. What it answers, beyond the contract's own
     /// operations:
     ///
     /// * `_is_a`, from the inheritance chain the registry resolved, because
@@ -1118,54 +1118,54 @@ pub mod CORBA {
     impl<S: ContainerServant> ContainerSkeleton<S> {
         /// A skeleton serving `servant`'s objects under `refs`.
         ///
-        /// `refs` must be rooted at the key the `rt::Server` was bound
+        /// `refs` must be rooted at the key the `orbweaver_gen::rt::Server` was bound
         /// with, or nothing this skeleton parses will match what arrives.
-        pub fn new(refs: ContainerRefs, servant: S) -> Self {
-            Self { servant, refs }
+        pub fn new(__refs: ContainerRefs, __servant: S) -> Self {
+            Self { servant: __servant, refs: __refs }
         }
         /// The key scheme in force, for minting references to these objects.
         pub fn refs(&self) -> &ContainerRefs { &self.refs }
     }
-    impl<S: ContainerServant> rt::Dispatch for ContainerSkeleton<S> {
+    impl<S: ContainerServant> __rt::Dispatch for ContainerSkeleton<S> {
         fn knows(&self, __object_key: &[u8]) -> bool {
             match self.refs.oid_of(__object_key) {
                 Some(__oid) => self.servant.knows(&ContainerTarget::new(__oid, &self.refs)),
                 None => false,
             }
         }
-        fn forward(&mut self, __req: &rt::Request) -> Option<rt::Ior> {
+        fn forward(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Ior> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = ContainerTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
         }
-        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+        fn redirect(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Forward> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = ContainerTarget::new(__oid, &self.refs);
             self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<rt::DispatchBody, rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let __oid = self
                 .refs
                 .oid_of(&__req.object_key)
-                .ok_or_else(rt::SystemException::object_not_exist)?;
+                .ok_or_else(__rt::SystemException::object_not_exist)?;
             let __at = ContainerTarget::new(__oid, &self.refs);
-            let mut __args = __req.body().map_err(|_| rt::SystemException::marshal())?;
+            let mut __args = __req.body().map_err(|_| __rt::SystemException::marshal())?;
             match __req.operation.as_str() {
                 "create_module" => {
-                    let new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let new_name: crate::emitted::f_ir_subset::CORBA::Identifier = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let new_name: crate::emitted::f_ir_subset::CORBA::Identifier = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.create_module(&__at, new_id, new_name, new_version) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -1173,45 +1173,45 @@ pub mod CORBA {
                 "_get_def_kind" => {
                     match self.servant.def_kind(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "_is_a" => {
-                    let __id: String = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let __id: ::std::string::String = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     let __answer = matches!(__id.as_str(),
                         "IDL:omg.org/CORBA/Container:1.0" |
                         "IDL:omg.org/CORBA/IRObject:1.0" |
-                        rt::OBJECT_ID);
-                    __answer.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                        __rt::OBJECT_ID);
+                    __answer.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
                 "_non_existent" => {
-                    false.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                    false.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
-                _ => Err(rt::SystemException::bad_operation()),
+                _ => Err(__rt::SystemException::bad_operation()),
             }
         }
         fn dispatch(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<(), rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<(), __rt::SystemException> {
             match self.dispatch_body(__req, __out)? {
-                rt::DispatchBody::Return => Ok(()),
-                rt::DispatchBody::UserException => {
-                    Err(rt::SystemException::unknown_user_exception())
+                __rt::DispatchBody::Return => Ok(()),
+                __rt::DispatchBody::UserException => {
+                    Err(__rt::SystemException::unknown_user_exception())
                 }
             }
         }
     }
 
     /// IDL typedef `IDL:omg.org/CORBA/ContextIdSeq:1.0`.
-    pub type ContextIdSeq = Vec<crate::emitted::f_ir_subset::CORBA::ContextIdentifier>;
+    pub type ContextIdSeq = ::std::vec::Vec<crate::emitted::f_ir_subset::CORBA::ContextIdentifier>;
 
     /// IDL typedef `IDL:omg.org/CORBA/ContextIdentifier:1.0`.
     pub type ContextIdentifier = crate::emitted::f_ir_subset::CORBA::Identifier;
@@ -1256,13 +1256,13 @@ pub mod CORBA {
         /// IDL enumerator `dk_Repository`; ordinal 17 on the wire.
         dk_Repository = 17,
     }
-    impl Cdr for DefinitionKind {
-        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-            e.put_u32(*self as u32);
+    impl __Cdr for DefinitionKind {
+        fn put(&self, __e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
+            __e.put_u32(*self as u32);
             Ok(())
         }
-        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
-            Ok(match d.get_u32()? {
+        fn get(__d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
+            Ok(match __d.get_u32()? {
                 0 => Self::dk_none,
                 1 => Self::dk_all,
                 2 => Self::dk_Attribute,
@@ -1281,13 +1281,13 @@ pub mod CORBA {
                 15 => Self::dk_Sequence,
                 16 => Self::dk_Array,
                 17 => Self::dk_Repository,
-                _ => return Err(rt::GiopError::Decode("ordinal outside DefinitionKind; the sender may be built against a newer contract")),
+                _ => return Err(__rt::GiopError::Decode("ordinal outside DefinitionKind; the sender may be built against a newer contract")),
             })
         }
     }
 
     /// IDL typedef `IDL:omg.org/CORBA/ExcDescriptionSeq:1.0`.
-    pub type ExcDescriptionSeq = Vec<crate::emitted::f_ir_subset::CORBA::ExceptionDescription>;
+    pub type ExcDescriptionSeq = ::std::vec::Vec<crate::emitted::f_ir_subset::CORBA::ExceptionDescription>;
 
     /// IDL struct `IDL:omg.org/CORBA/ExceptionDescription:1.0`.
     #[derive(Debug, Clone, PartialEq)]
@@ -1301,24 +1301,24 @@ pub mod CORBA {
         /// IDL member `version`, marshalled fourth.
         pub version: crate::emitted::f_ir_subset::CORBA::VersionSpec,
         /// IDL member `type`, marshalled fifth.
-        pub r#type: orbweaver_gen::rt::TypeCodeVal,
+        pub r#type: __rt::TypeCodeVal,
     }
-    impl Cdr for ExceptionDescription {
-        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-            self.name.put(e)?;
-            self.id.put(e)?;
-            self.defined_in.put(e)?;
-            self.version.put(e)?;
-            self.r#type.put(e)?;
+    impl __Cdr for ExceptionDescription {
+        fn put(&self, __e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
+            self.name.put(__e)?;
+            self.id.put(__e)?;
+            self.defined_in.put(__e)?;
+            self.version.put(__e)?;
+            self.r#type.put(__e)?;
             Ok(())
         }
-        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+        fn get(__d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
             Ok(Self {
-                name: Cdr::get(d)?,
-                id: Cdr::get(d)?,
-                defined_in: Cdr::get(d)?,
-                version: Cdr::get(d)?,
-                r#type: Cdr::get(d)?,
+                name: __Cdr::get(__d)?,
+                id: __Cdr::get(__d)?,
+                defined_in: __Cdr::get(__d)?,
+                version: __Cdr::get(__d)?,
+                r#type: __Cdr::get(__d)?,
             })
         }
     }
@@ -1334,21 +1334,21 @@ pub mod CORBA {
     /// `Connection` inside the trust boundary, or over the guarded
     /// wrapper at it — a stub hard-wired to the transport would be the
     /// §4.7 bypass in compiled form.
-    pub struct IDLTypeClient<C: rt::Invoker> {
+    pub struct IDLTypeClient<C: __rt::Invoker> {
         /// What calls travel over.
         pub conn: C,
     }
-    impl<C: rt::Invoker> IDLTypeClient<C> {
+    impl<C: __rt::Invoker> IDLTypeClient<C> {
         /// A stub over an open invoker.
-        pub fn new(conn: C) -> Self { Self { conn } }
+        pub fn new(__conn: C) -> Self { Self { conn: __conn } }
         /// Which kind of IDL construct this object describes
         ///
         /// `_get_def_kind` on the wire.
-        pub fn def_kind(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, rt::GiopError> {
+        pub fn def_kind(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, __rt::GiopError> {
             let __reply = self.conn.invoke("_get_def_kind", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
     }
@@ -1358,7 +1358,7 @@ pub mod CORBA {
     /// `System` is always here, whatever the contract declares: an unknown
     /// key is `OBJECT_NOT_EXIST`, a refused call is `NO_PERMISSION`, a
     /// temporary refusal is `TRANSIENT`, and IDL has no way to declare any
-    /// of them. Build one with `rt::raise::*`, which does not produce a
+    /// of them. Build one with `orbweaver_gen::rt::raise::*`, which does not produce a
     /// `SystemException` until the completion status is stated — the field
     /// that tells the caller whether a retry is safe, and the one thing a
     /// generator cannot know for a servant.
@@ -1370,14 +1370,14 @@ pub mod CORBA {
     pub enum IDLTypeFault {
         /// A CORBA system exception, with the completion status the
         /// servant chose. Travels as a `SystemException` reply.
-        System(rt::SystemException),
+        System(__rt::SystemException),
     }
-    impl From<rt::SystemException> for IDLTypeFault {
-        fn from(__ex: rt::SystemException) -> Self {
+    impl ::std::convert::From<__rt::SystemException> for IDLTypeFault {
+        fn from(__ex: __rt::SystemException) -> Self {
             Self::System(__ex)
         }
     }
-    impl PartialEq for IDLTypeFault {
+    impl ::std::cmp::PartialEq for IDLTypeFault {
         fn eq(&self, __other: &Self) -> bool {
             match (self, __other) {
                 (Self::System(__a), Self::System(__b)) => {
@@ -1391,7 +1391,7 @@ pub mod CORBA {
     impl IDLTypeFault {
         /// The repository id of the user exception this fault carries, or
         /// `None` for a system exception, which carries its own.
-        pub fn user_id(&self) -> Option<&'static str> {
+        pub fn user_id(&self) -> ::std::option::Option<&'static str> {
             match self {
                 Self::System(_) => None,
             }
@@ -1404,7 +1404,7 @@ pub mod CORBA {
         /// dispatcher hands it to the server to encode instead. That is also why
         /// nothing may be written before the fault is known — the whole buffer
         /// travels under one status.
-        pub fn write(&self, __out: &mut rt::Encoder) -> Result<rt::DispatchBody, rt::SystemException> {
+        pub fn write(&self, __out: &mut __rt::Encoder) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let _ = __out;
             match self {
                 Self::System(__ex) => Err(__ex.clone()),
@@ -1420,7 +1420,7 @@ pub mod CORBA {
     /// root ++ "/IDLType/" ++ <oid>    the object named <oid>
     /// ```
     ///
-    /// `root` is the key the `rt::Server` was bound with. The derivation is
+    /// `root` is the key the `orbweaver_gen::rt::Server` was bound with. The derivation is
     /// reversible, so no table of minted keys exists: a reference survives a
     /// restart, and a client cannot make the process grow by looking things
     /// up. The oid is the *whole* remainder after the prefix, so it may
@@ -1434,14 +1434,14 @@ pub mod CORBA {
     /// # Minting
     ///
     /// `reference` and `ior` answer with a real IIOP profile, built by
-    /// `rt::ObjectHome` — the servant never assembles one, which is why the
+    /// `orbweaver_gen::rt::ObjectHome` — the servant never assembles one, which is why the
     /// GIOP version and profile shape are still decided in exactly one
     /// place. `nil` is the nil reference (§9.3.6), the truthful answer when
     /// there is no such object.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct IDLTypeRefs {
-        home: rt::ObjectHome,
-        infix: String,
+        home: __rt::ObjectHome,
+        infix: ::std::string::String,
     }
     impl IDLTypeRefs {
         /// The repository id minted references advertise.
@@ -1449,42 +1449,42 @@ pub mod CORBA {
         /// What separates the root key from the oid.
         pub const KEY_INFIX: &'static str = "/IDLType/";
         /// The scheme rooted at `home`, with the generated infix.
-        pub fn new(home: rt::ObjectHome) -> Self {
-            Self { home, infix: Self::KEY_INFIX.to_owned() }
+        pub fn new(__home: __rt::ObjectHome) -> Self {
+            Self { home: __home, infix: Self::KEY_INFIX.to_owned() }
         }
         /// The same, with a key space this interface shares with another.
         ///
         /// Two skeletons given the same infix must disagree about `knows`
-        /// for every key, or `rt::Servants` will hand a request to
+        /// for every key, or `orbweaver_gen::rt::Servants` will hand a request to
         /// whichever was added first. Sharing a key space is a claim that
         /// the two answer for disjoint sets of objects.
-        pub fn with_infix(home: rt::ObjectHome, infix: impl Into<String>) -> Self {
-            Self { home, infix: infix.into() }
+        pub fn with_infix(__home: __rt::ObjectHome, __infix: impl ::std::convert::Into<::std::string::String>) -> Self {
+            Self { home: __home, infix: __infix.into() }
         }
         /// Where these objects are published.
-        pub fn home(&self) -> &rt::ObjectHome { &self.home }
+        pub fn home(&self) -> &__rt::ObjectHome { &self.home }
         /// The infix in use, generated or overridden.
         pub fn infix(&self) -> &str { &self.infix }
         /// The default object's key, which is also every other key's prefix.
         pub fn root_key(&self) -> &[u8] { self.home.root_key() }
         /// The object key for `oid`; the empty oid is the root key.
-        pub fn key_of(&self, oid: &str) -> Vec<u8> {
-            self.home.key_of(&self.infix, oid)
+        pub fn key_of(&self, __oid: &str) -> ::std::vec::Vec<u8> {
+            self.home.key_of(&self.infix, __oid)
         }
         /// The oid a key addresses, or `None` if it is not one of ours.
-        pub fn oid_of<'a>(&self, key: &'a [u8]) -> Option<&'a str> {
-            self.home.oid_of(&self.infix, key)
+        pub fn oid_of<'a>(&self, __key: &'a [u8]) -> ::std::option::Option<&'a str> {
+            self.home.oid_of(&self.infix, __key)
         }
         /// A reference to `oid`, in the form an operation returns.
-        pub fn reference(&self, oid: &str) -> rt::ObjRef {
-            self.home.reference(Self::TYPE_ID, self.key_of(oid))
+        pub fn reference(&self, __oid: &str) -> __rt::ObjRef {
+            self.home.reference(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The same reference, in the form `LOCATION_FORWARD` carries.
-        pub fn ior(&self, oid: &str) -> rt::Ior {
-            self.home.ior(Self::TYPE_ID, self.key_of(oid))
+        pub fn ior(&self, __oid: &str) -> __rt::Ior {
+            self.home.ior(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The nil reference: there is no such object.
-        pub fn nil() -> rt::ObjRef { rt::ObjectHome::nil() }
+        pub fn nil() -> __rt::ObjRef { __rt::ObjectHome::nil() }
     }
     /// Which `IDL:omg.org/CORBA/IDLType:1.0` a call is addressed to.
     ///
@@ -1503,8 +1503,8 @@ pub mod CORBA {
     }
     impl<'a> IDLTypeTarget<'a> {
         /// The identity `oid` under `refs`.
-        pub fn new(oid: &'a str, refs: &'a IDLTypeRefs) -> Self {
-            Self { oid, refs }
+        pub fn new(__oid: &'a str, __refs: &'a IDLTypeRefs) -> Self {
+            Self { oid: __oid, refs: __refs }
         }
         /// Which object this is. The empty oid is the default object,
         /// addressed by the bare root key the server was bound with.
@@ -1514,11 +1514,11 @@ pub mod CORBA {
         /// The key scheme, for minting references into other key spaces.
         pub fn refs(&self) -> &'a IDLTypeRefs { self.refs }
         /// The raw object key this call arrived on.
-        pub fn key(&self) -> Vec<u8> { self.refs.key_of(self.oid) }
+        pub fn key(&self) -> ::std::vec::Vec<u8> { self.refs.key_of(self.oid) }
         /// A reference to *this* object, for handing back one's own address.
-        pub fn reference(&self) -> rt::ObjRef { self.refs.reference(self.oid) }
+        pub fn reference(&self) -> __rt::ObjRef { self.refs.reference(self.oid) }
         /// A reference to another object of this interface.
-        pub fn sibling(&self, oid: &str) -> rt::ObjRef { self.refs.reference(oid) }
+        pub fn sibling(&self, __oid: &str) -> __rt::ObjRef { self.refs.reference(__oid) }
     }
     /// A definition that has a type, which every type definition is
     ///
@@ -1527,10 +1527,10 @@ pub mod CORBA {
     /// One method per operation and per attribute accessor, taking decoded
     /// Rust arguments. Nothing here mentions GIOP: the wire is entirely the
     /// business of `IDLTypeSkeleton`, which adapts this trait to
-    /// `rt::Dispatch`.
+    /// `orbweaver_gen::rt::Dispatch`.
     ///
     /// Every method may fail with a `IDLTypeFault`: a declared user exception,
-    /// or a system exception built with `rt::raise::*` — the vocabulary
+    /// or a system exception built with `orbweaver_gen::rt::raise::*` — the vocabulary
     /// (`OBJECT_NOT_EXIST`, `NO_PERMISSION`, `BAD_PARAM`, `TRANSIENT`) that
     /// no contract declares and every servant needs.
     ///
@@ -1554,7 +1554,7 @@ pub mod CORBA {
     pub trait IDLTypeServant {
         /// Whether this servant answers for the object `__at` names.
         ///
-        /// **Required, with no default.** `rt::Dispatch::knows` defaults to
+        /// **Required, with no default.** `orbweaver_gen::rt::Dispatch::knows` defaults to
         /// accepting everything, which is right for a process with one object and
         /// is exactly what stopped a generated skeleton from ever holding more
         /// than one: an unknown key was served as if it were the only object.
@@ -1564,7 +1564,7 @@ pub mod CORBA {
         ///
         /// A single-object servant writes `__at.is_default()`. A `false` here
         /// becomes `OBJECT_NOT_EXIST` for a request and `UNKNOWN_OBJECT` for a
-        /// `LocateRequest`, and is also how `rt::Servants` picks between
+        /// `LocateRequest`, and is also how `orbweaver_gen::rt::Servants` picks between
         /// skeletons sharing one key space.
         fn knows(&self, __at: &IDLTypeTarget<'_>) -> bool;
         /// Where this request should be sent instead, if anywhere.
@@ -1589,14 +1589,14 @@ pub mod CORBA {
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
         /// the address. This hook is the *temporary* forward; an object that has
         /// moved for good says so through `redirect`, below.
-        fn forward(&mut self, __at: &IDLTypeTarget<'_>) -> Option<rt::Ior> {
+        fn forward(&mut self, __at: &IDLTypeTarget<'_>) -> ::std::option::Option<__rt::Ior> {
             let _ = __at;
             None
         }
         /// Where this request should be sent instead, and whether for good.
         ///
-        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
-        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// The method the runtime actually asks. `orbweaver_gen::rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `orbweaver_gen::rt::Forward::Permanent` is a
         /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
         /// the temporary form, its reply-status enumeration having no other),
         /// and is the one thing a servant can say that lets a client replace the
@@ -1605,13 +1605,13 @@ pub mod CORBA {
         /// Defaults to `forward` wrapped as temporary, so a servant that
         /// overrides only `forward` behaves as it always did. Override this one
         /// to say *permanent*; there is no reason to override both.
-        fn redirect(&mut self, __at: &IDLTypeTarget<'_>) -> Option<rt::Forward> {
-            self.forward(__at).map(rt::Forward::Temporary)
+        fn redirect(&mut self, __at: &IDLTypeTarget<'_>) -> ::std::option::Option<__rt::Forward> {
+            self.forward(__at).map(__rt::Forward::Temporary)
         }
         /// Which kind of IDL construct this object describes
         ///
         /// `_get_def_kind` on the wire.
-        fn def_kind(&mut self, __at: &IDLTypeTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, IDLTypeFault>;
+        fn def_kind(&mut self, __at: &IDLTypeTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, IDLTypeFault>;
     }
     /// One object of `IDL:omg.org/CORBA/IDLType:1.0`, for a servant that keeps a value per object.
     ///
@@ -1630,7 +1630,7 @@ pub mod CORBA {
         /// Which kind of IDL construct this object describes
         ///
         /// `_get_def_kind` on the wire.
-        fn def_kind(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, IDLTypeFault>;
+        fn def_kind(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, IDLTypeFault>;
     }
     /// A map from oid to one `IDLTypeObject`, serving `IDL:omg.org/CORBA/IDLType:1.0`.
     ///
@@ -1644,34 +1644,34 @@ pub mod CORBA {
     /// bare root key addresses. A one-object process inserts exactly that.
     #[derive(Debug, Clone)]
     pub struct IDLTypeObjects<S: IDLTypeObject> {
-        objects: std::collections::BTreeMap<String, S>,
+        objects: ::std::collections::BTreeMap<::std::string::String, S>,
     }
-    impl<S: IDLTypeObject> Default for IDLTypeObjects<S> {
+    impl<S: IDLTypeObject> ::std::default::Default for IDLTypeObjects<S> {
         fn default() -> Self {
-            Self { objects: std::collections::BTreeMap::new() }
+            Self { objects: ::std::collections::BTreeMap::new() }
         }
     }
     impl<S: IDLTypeObject> IDLTypeObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { <Self as std::default::Default>::default() }
+        pub fn new() -> Self { <Self as ::std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
-        pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
-            self.objects.insert(oid.into(), object)
+        pub fn insert(&mut self, __oid: impl ::std::convert::Into<::std::string::String>, __object: S) -> ::std::option::Option<S> {
+            self.objects.insert(__oid.into(), __object)
         }
         /// Removes an object, after which its key is `OBJECT_NOT_EXIST`.
-        pub fn remove(&mut self, oid: &str) -> Option<S> {
-            self.objects.remove(oid)
+        pub fn remove(&mut self, __oid: &str) -> ::std::option::Option<S> {
+            self.objects.remove(__oid)
         }
         /// The object under `oid`, if there is one.
-        pub fn get(&self, oid: &str) -> Option<&S> { self.objects.get(oid) }
+        pub fn get(&self, __oid: &str) -> ::std::option::Option<&S> { self.objects.get(__oid) }
         /// The object under `oid`, mutably.
-        pub fn get_mut(&mut self, oid: &str) -> Option<&mut S> {
-            self.objects.get_mut(oid)
+        pub fn get_mut(&mut self, __oid: &str) -> ::std::option::Option<&mut S> {
+            self.objects.get_mut(__oid)
         }
         /// Every oid held, in sorted order.
-        pub fn oids(&self) -> impl Iterator<Item = &str> {
-            self.objects.keys().map(String::as_str)
+        pub fn oids(&self) -> impl ::std::iter::Iterator<Item = &str> {
+            self.objects.keys().map(::std::string::String::as_str)
         }
         /// How many objects are held.
         pub fn len(&self) -> usize { self.objects.len() }
@@ -1682,17 +1682,17 @@ pub mod CORBA {
         fn knows(&self, __at: &IDLTypeTarget<'_>) -> bool {
             self.objects.contains_key(__at.oid())
         }
-        fn def_kind(&mut self, __at: &IDLTypeTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, IDLTypeFault> {
+        fn def_kind(&mut self, __at: &IDLTypeTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, IDLTypeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.def_kind(),
-                None => Err(IDLTypeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(IDLTypeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
     }
     /// Serves `IDL:omg.org/CORBA/IDLType:1.0`: decodes the request, calls the servant, encodes the reply.
     ///
-    /// Hand it to `rt::Server::serve` in place of a hand-written
-    /// `rt::Dispatch`. What it answers, beyond the contract's own
+    /// Hand it to `orbweaver_gen::rt::Server::serve` in place of a hand-written
+    /// `orbweaver_gen::rt::Dispatch`. What it answers, beyond the contract's own
     /// operations:
     ///
     /// * `_is_a`, from the inheritance chain the registry resolved, because
@@ -1723,78 +1723,78 @@ pub mod CORBA {
     impl<S: IDLTypeServant> IDLTypeSkeleton<S> {
         /// A skeleton serving `servant`'s objects under `refs`.
         ///
-        /// `refs` must be rooted at the key the `rt::Server` was bound
+        /// `refs` must be rooted at the key the `orbweaver_gen::rt::Server` was bound
         /// with, or nothing this skeleton parses will match what arrives.
-        pub fn new(refs: IDLTypeRefs, servant: S) -> Self {
-            Self { servant, refs }
+        pub fn new(__refs: IDLTypeRefs, __servant: S) -> Self {
+            Self { servant: __servant, refs: __refs }
         }
         /// The key scheme in force, for minting references to these objects.
         pub fn refs(&self) -> &IDLTypeRefs { &self.refs }
     }
-    impl<S: IDLTypeServant> rt::Dispatch for IDLTypeSkeleton<S> {
+    impl<S: IDLTypeServant> __rt::Dispatch for IDLTypeSkeleton<S> {
         fn knows(&self, __object_key: &[u8]) -> bool {
             match self.refs.oid_of(__object_key) {
                 Some(__oid) => self.servant.knows(&IDLTypeTarget::new(__oid, &self.refs)),
                 None => false,
             }
         }
-        fn forward(&mut self, __req: &rt::Request) -> Option<rt::Ior> {
+        fn forward(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Ior> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = IDLTypeTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
         }
-        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+        fn redirect(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Forward> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = IDLTypeTarget::new(__oid, &self.refs);
             self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<rt::DispatchBody, rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let __oid = self
                 .refs
                 .oid_of(&__req.object_key)
-                .ok_or_else(rt::SystemException::object_not_exist)?;
+                .ok_or_else(__rt::SystemException::object_not_exist)?;
             let __at = IDLTypeTarget::new(__oid, &self.refs);
-            let mut __args = __req.body().map_err(|_| rt::SystemException::marshal())?;
+            let mut __args = __req.body().map_err(|_| __rt::SystemException::marshal())?;
             match __req.operation.as_str() {
                 "_get_def_kind" => {
                     match self.servant.def_kind(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "_is_a" => {
-                    let __id: String = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let __id: ::std::string::String = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     let __answer = matches!(__id.as_str(),
                         "IDL:omg.org/CORBA/IDLType:1.0" |
                         "IDL:omg.org/CORBA/IRObject:1.0" |
-                        rt::OBJECT_ID);
-                    __answer.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                        __rt::OBJECT_ID);
+                    __answer.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
                 "_non_existent" => {
-                    false.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                    false.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
-                _ => Err(rt::SystemException::bad_operation()),
+                _ => Err(__rt::SystemException::bad_operation()),
             }
         }
         fn dispatch(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<(), rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<(), __rt::SystemException> {
             match self.dispatch_body(__req, __out)? {
-                rt::DispatchBody::Return => Ok(()),
-                rt::DispatchBody::UserException => {
-                    Err(rt::SystemException::unknown_user_exception())
+                __rt::DispatchBody::Return => Ok(()),
+                __rt::DispatchBody::UserException => {
+                    Err(__rt::SystemException::unknown_user_exception())
                 }
             }
         }
@@ -1811,21 +1811,21 @@ pub mod CORBA {
     /// `Connection` inside the trust boundary, or over the guarded
     /// wrapper at it — a stub hard-wired to the transport would be the
     /// §4.7 bypass in compiled form.
-    pub struct IRObjectClient<C: rt::Invoker> {
+    pub struct IRObjectClient<C: __rt::Invoker> {
         /// What calls travel over.
         pub conn: C,
     }
-    impl<C: rt::Invoker> IRObjectClient<C> {
+    impl<C: __rt::Invoker> IRObjectClient<C> {
         /// A stub over an open invoker.
-        pub fn new(conn: C) -> Self { Self { conn } }
+        pub fn new(__conn: C) -> Self { Self { conn: __conn } }
         /// Which kind of IDL construct this object describes
         ///
         /// `_get_def_kind` on the wire.
-        pub fn def_kind(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, rt::GiopError> {
+        pub fn def_kind(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, __rt::GiopError> {
             let __reply = self.conn.invoke("_get_def_kind", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
     }
@@ -1835,7 +1835,7 @@ pub mod CORBA {
     /// `System` is always here, whatever the contract declares: an unknown
     /// key is `OBJECT_NOT_EXIST`, a refused call is `NO_PERMISSION`, a
     /// temporary refusal is `TRANSIENT`, and IDL has no way to declare any
-    /// of them. Build one with `rt::raise::*`, which does not produce a
+    /// of them. Build one with `orbweaver_gen::rt::raise::*`, which does not produce a
     /// `SystemException` until the completion status is stated — the field
     /// that tells the caller whether a retry is safe, and the one thing a
     /// generator cannot know for a servant.
@@ -1847,14 +1847,14 @@ pub mod CORBA {
     pub enum IRObjectFault {
         /// A CORBA system exception, with the completion status the
         /// servant chose. Travels as a `SystemException` reply.
-        System(rt::SystemException),
+        System(__rt::SystemException),
     }
-    impl From<rt::SystemException> for IRObjectFault {
-        fn from(__ex: rt::SystemException) -> Self {
+    impl ::std::convert::From<__rt::SystemException> for IRObjectFault {
+        fn from(__ex: __rt::SystemException) -> Self {
             Self::System(__ex)
         }
     }
-    impl PartialEq for IRObjectFault {
+    impl ::std::cmp::PartialEq for IRObjectFault {
         fn eq(&self, __other: &Self) -> bool {
             match (self, __other) {
                 (Self::System(__a), Self::System(__b)) => {
@@ -1868,7 +1868,7 @@ pub mod CORBA {
     impl IRObjectFault {
         /// The repository id of the user exception this fault carries, or
         /// `None` for a system exception, which carries its own.
-        pub fn user_id(&self) -> Option<&'static str> {
+        pub fn user_id(&self) -> ::std::option::Option<&'static str> {
             match self {
                 Self::System(_) => None,
             }
@@ -1881,7 +1881,7 @@ pub mod CORBA {
         /// dispatcher hands it to the server to encode instead. That is also why
         /// nothing may be written before the fault is known — the whole buffer
         /// travels under one status.
-        pub fn write(&self, __out: &mut rt::Encoder) -> Result<rt::DispatchBody, rt::SystemException> {
+        pub fn write(&self, __out: &mut __rt::Encoder) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let _ = __out;
             match self {
                 Self::System(__ex) => Err(__ex.clone()),
@@ -1897,7 +1897,7 @@ pub mod CORBA {
     /// root ++ "/IRObject/" ++ <oid>    the object named <oid>
     /// ```
     ///
-    /// `root` is the key the `rt::Server` was bound with. The derivation is
+    /// `root` is the key the `orbweaver_gen::rt::Server` was bound with. The derivation is
     /// reversible, so no table of minted keys exists: a reference survives a
     /// restart, and a client cannot make the process grow by looking things
     /// up. The oid is the *whole* remainder after the prefix, so it may
@@ -1911,14 +1911,14 @@ pub mod CORBA {
     /// # Minting
     ///
     /// `reference` and `ior` answer with a real IIOP profile, built by
-    /// `rt::ObjectHome` — the servant never assembles one, which is why the
+    /// `orbweaver_gen::rt::ObjectHome` — the servant never assembles one, which is why the
     /// GIOP version and profile shape are still decided in exactly one
     /// place. `nil` is the nil reference (§9.3.6), the truthful answer when
     /// there is no such object.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct IRObjectRefs {
-        home: rt::ObjectHome,
-        infix: String,
+        home: __rt::ObjectHome,
+        infix: ::std::string::String,
     }
     impl IRObjectRefs {
         /// The repository id minted references advertise.
@@ -1926,42 +1926,42 @@ pub mod CORBA {
         /// What separates the root key from the oid.
         pub const KEY_INFIX: &'static str = "/IRObject/";
         /// The scheme rooted at `home`, with the generated infix.
-        pub fn new(home: rt::ObjectHome) -> Self {
-            Self { home, infix: Self::KEY_INFIX.to_owned() }
+        pub fn new(__home: __rt::ObjectHome) -> Self {
+            Self { home: __home, infix: Self::KEY_INFIX.to_owned() }
         }
         /// The same, with a key space this interface shares with another.
         ///
         /// Two skeletons given the same infix must disagree about `knows`
-        /// for every key, or `rt::Servants` will hand a request to
+        /// for every key, or `orbweaver_gen::rt::Servants` will hand a request to
         /// whichever was added first. Sharing a key space is a claim that
         /// the two answer for disjoint sets of objects.
-        pub fn with_infix(home: rt::ObjectHome, infix: impl Into<String>) -> Self {
-            Self { home, infix: infix.into() }
+        pub fn with_infix(__home: __rt::ObjectHome, __infix: impl ::std::convert::Into<::std::string::String>) -> Self {
+            Self { home: __home, infix: __infix.into() }
         }
         /// Where these objects are published.
-        pub fn home(&self) -> &rt::ObjectHome { &self.home }
+        pub fn home(&self) -> &__rt::ObjectHome { &self.home }
         /// The infix in use, generated or overridden.
         pub fn infix(&self) -> &str { &self.infix }
         /// The default object's key, which is also every other key's prefix.
         pub fn root_key(&self) -> &[u8] { self.home.root_key() }
         /// The object key for `oid`; the empty oid is the root key.
-        pub fn key_of(&self, oid: &str) -> Vec<u8> {
-            self.home.key_of(&self.infix, oid)
+        pub fn key_of(&self, __oid: &str) -> ::std::vec::Vec<u8> {
+            self.home.key_of(&self.infix, __oid)
         }
         /// The oid a key addresses, or `None` if it is not one of ours.
-        pub fn oid_of<'a>(&self, key: &'a [u8]) -> Option<&'a str> {
-            self.home.oid_of(&self.infix, key)
+        pub fn oid_of<'a>(&self, __key: &'a [u8]) -> ::std::option::Option<&'a str> {
+            self.home.oid_of(&self.infix, __key)
         }
         /// A reference to `oid`, in the form an operation returns.
-        pub fn reference(&self, oid: &str) -> rt::ObjRef {
-            self.home.reference(Self::TYPE_ID, self.key_of(oid))
+        pub fn reference(&self, __oid: &str) -> __rt::ObjRef {
+            self.home.reference(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The same reference, in the form `LOCATION_FORWARD` carries.
-        pub fn ior(&self, oid: &str) -> rt::Ior {
-            self.home.ior(Self::TYPE_ID, self.key_of(oid))
+        pub fn ior(&self, __oid: &str) -> __rt::Ior {
+            self.home.ior(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The nil reference: there is no such object.
-        pub fn nil() -> rt::ObjRef { rt::ObjectHome::nil() }
+        pub fn nil() -> __rt::ObjRef { __rt::ObjectHome::nil() }
     }
     /// Which `IDL:omg.org/CORBA/IRObject:1.0` a call is addressed to.
     ///
@@ -1980,8 +1980,8 @@ pub mod CORBA {
     }
     impl<'a> IRObjectTarget<'a> {
         /// The identity `oid` under `refs`.
-        pub fn new(oid: &'a str, refs: &'a IRObjectRefs) -> Self {
-            Self { oid, refs }
+        pub fn new(__oid: &'a str, __refs: &'a IRObjectRefs) -> Self {
+            Self { oid: __oid, refs: __refs }
         }
         /// Which object this is. The empty oid is the default object,
         /// addressed by the bare root key the server was bound with.
@@ -1991,11 +1991,11 @@ pub mod CORBA {
         /// The key scheme, for minting references into other key spaces.
         pub fn refs(&self) -> &'a IRObjectRefs { self.refs }
         /// The raw object key this call arrived on.
-        pub fn key(&self) -> Vec<u8> { self.refs.key_of(self.oid) }
+        pub fn key(&self) -> ::std::vec::Vec<u8> { self.refs.key_of(self.oid) }
         /// A reference to *this* object, for handing back one's own address.
-        pub fn reference(&self) -> rt::ObjRef { self.refs.reference(self.oid) }
+        pub fn reference(&self) -> __rt::ObjRef { self.refs.reference(self.oid) }
         /// A reference to another object of this interface.
-        pub fn sibling(&self, oid: &str) -> rt::ObjRef { self.refs.reference(oid) }
+        pub fn sibling(&self, __oid: &str) -> __rt::ObjRef { self.refs.reference(__oid) }
     }
     /// The root of the Interface Repository hierarchy
     ///
@@ -2004,10 +2004,10 @@ pub mod CORBA {
     /// One method per operation and per attribute accessor, taking decoded
     /// Rust arguments. Nothing here mentions GIOP: the wire is entirely the
     /// business of `IRObjectSkeleton`, which adapts this trait to
-    /// `rt::Dispatch`.
+    /// `orbweaver_gen::rt::Dispatch`.
     ///
     /// Every method may fail with a `IRObjectFault`: a declared user exception,
-    /// or a system exception built with `rt::raise::*` — the vocabulary
+    /// or a system exception built with `orbweaver_gen::rt::raise::*` — the vocabulary
     /// (`OBJECT_NOT_EXIST`, `NO_PERMISSION`, `BAD_PARAM`, `TRANSIENT`) that
     /// no contract declares and every servant needs.
     ///
@@ -2031,7 +2031,7 @@ pub mod CORBA {
     pub trait IRObjectServant {
         /// Whether this servant answers for the object `__at` names.
         ///
-        /// **Required, with no default.** `rt::Dispatch::knows` defaults to
+        /// **Required, with no default.** `orbweaver_gen::rt::Dispatch::knows` defaults to
         /// accepting everything, which is right for a process with one object and
         /// is exactly what stopped a generated skeleton from ever holding more
         /// than one: an unknown key was served as if it were the only object.
@@ -2041,7 +2041,7 @@ pub mod CORBA {
         ///
         /// A single-object servant writes `__at.is_default()`. A `false` here
         /// becomes `OBJECT_NOT_EXIST` for a request and `UNKNOWN_OBJECT` for a
-        /// `LocateRequest`, and is also how `rt::Servants` picks between
+        /// `LocateRequest`, and is also how `orbweaver_gen::rt::Servants` picks between
         /// skeletons sharing one key space.
         fn knows(&self, __at: &IRObjectTarget<'_>) -> bool;
         /// Where this request should be sent instead, if anywhere.
@@ -2066,14 +2066,14 @@ pub mod CORBA {
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
         /// the address. This hook is the *temporary* forward; an object that has
         /// moved for good says so through `redirect`, below.
-        fn forward(&mut self, __at: &IRObjectTarget<'_>) -> Option<rt::Ior> {
+        fn forward(&mut self, __at: &IRObjectTarget<'_>) -> ::std::option::Option<__rt::Ior> {
             let _ = __at;
             None
         }
         /// Where this request should be sent instead, and whether for good.
         ///
-        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
-        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// The method the runtime actually asks. `orbweaver_gen::rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `orbweaver_gen::rt::Forward::Permanent` is a
         /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
         /// the temporary form, its reply-status enumeration having no other),
         /// and is the one thing a servant can say that lets a client replace the
@@ -2082,13 +2082,13 @@ pub mod CORBA {
         /// Defaults to `forward` wrapped as temporary, so a servant that
         /// overrides only `forward` behaves as it always did. Override this one
         /// to say *permanent*; there is no reason to override both.
-        fn redirect(&mut self, __at: &IRObjectTarget<'_>) -> Option<rt::Forward> {
-            self.forward(__at).map(rt::Forward::Temporary)
+        fn redirect(&mut self, __at: &IRObjectTarget<'_>) -> ::std::option::Option<__rt::Forward> {
+            self.forward(__at).map(__rt::Forward::Temporary)
         }
         /// Which kind of IDL construct this object describes
         ///
         /// `_get_def_kind` on the wire.
-        fn def_kind(&mut self, __at: &IRObjectTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, IRObjectFault>;
+        fn def_kind(&mut self, __at: &IRObjectTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, IRObjectFault>;
     }
     /// One object of `IDL:omg.org/CORBA/IRObject:1.0`, for a servant that keeps a value per object.
     ///
@@ -2107,7 +2107,7 @@ pub mod CORBA {
         /// Which kind of IDL construct this object describes
         ///
         /// `_get_def_kind` on the wire.
-        fn def_kind(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, IRObjectFault>;
+        fn def_kind(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, IRObjectFault>;
     }
     /// A map from oid to one `IRObjectObject`, serving `IDL:omg.org/CORBA/IRObject:1.0`.
     ///
@@ -2121,34 +2121,34 @@ pub mod CORBA {
     /// bare root key addresses. A one-object process inserts exactly that.
     #[derive(Debug, Clone)]
     pub struct IRObjectObjects<S: IRObjectObject> {
-        objects: std::collections::BTreeMap<String, S>,
+        objects: ::std::collections::BTreeMap<::std::string::String, S>,
     }
-    impl<S: IRObjectObject> Default for IRObjectObjects<S> {
+    impl<S: IRObjectObject> ::std::default::Default for IRObjectObjects<S> {
         fn default() -> Self {
-            Self { objects: std::collections::BTreeMap::new() }
+            Self { objects: ::std::collections::BTreeMap::new() }
         }
     }
     impl<S: IRObjectObject> IRObjectObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { <Self as std::default::Default>::default() }
+        pub fn new() -> Self { <Self as ::std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
-        pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
-            self.objects.insert(oid.into(), object)
+        pub fn insert(&mut self, __oid: impl ::std::convert::Into<::std::string::String>, __object: S) -> ::std::option::Option<S> {
+            self.objects.insert(__oid.into(), __object)
         }
         /// Removes an object, after which its key is `OBJECT_NOT_EXIST`.
-        pub fn remove(&mut self, oid: &str) -> Option<S> {
-            self.objects.remove(oid)
+        pub fn remove(&mut self, __oid: &str) -> ::std::option::Option<S> {
+            self.objects.remove(__oid)
         }
         /// The object under `oid`, if there is one.
-        pub fn get(&self, oid: &str) -> Option<&S> { self.objects.get(oid) }
+        pub fn get(&self, __oid: &str) -> ::std::option::Option<&S> { self.objects.get(__oid) }
         /// The object under `oid`, mutably.
-        pub fn get_mut(&mut self, oid: &str) -> Option<&mut S> {
-            self.objects.get_mut(oid)
+        pub fn get_mut(&mut self, __oid: &str) -> ::std::option::Option<&mut S> {
+            self.objects.get_mut(__oid)
         }
         /// Every oid held, in sorted order.
-        pub fn oids(&self) -> impl Iterator<Item = &str> {
-            self.objects.keys().map(String::as_str)
+        pub fn oids(&self) -> impl ::std::iter::Iterator<Item = &str> {
+            self.objects.keys().map(::std::string::String::as_str)
         }
         /// How many objects are held.
         pub fn len(&self) -> usize { self.objects.len() }
@@ -2159,17 +2159,17 @@ pub mod CORBA {
         fn knows(&self, __at: &IRObjectTarget<'_>) -> bool {
             self.objects.contains_key(__at.oid())
         }
-        fn def_kind(&mut self, __at: &IRObjectTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, IRObjectFault> {
+        fn def_kind(&mut self, __at: &IRObjectTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, IRObjectFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.def_kind(),
-                None => Err(IRObjectFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(IRObjectFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
     }
     /// Serves `IDL:omg.org/CORBA/IRObject:1.0`: decodes the request, calls the servant, encodes the reply.
     ///
-    /// Hand it to `rt::Server::serve` in place of a hand-written
-    /// `rt::Dispatch`. What it answers, beyond the contract's own
+    /// Hand it to `orbweaver_gen::rt::Server::serve` in place of a hand-written
+    /// `orbweaver_gen::rt::Dispatch`. What it answers, beyond the contract's own
     /// operations:
     ///
     /// * `_is_a`, from the inheritance chain the registry resolved, because
@@ -2200,84 +2200,84 @@ pub mod CORBA {
     impl<S: IRObjectServant> IRObjectSkeleton<S> {
         /// A skeleton serving `servant`'s objects under `refs`.
         ///
-        /// `refs` must be rooted at the key the `rt::Server` was bound
+        /// `refs` must be rooted at the key the `orbweaver_gen::rt::Server` was bound
         /// with, or nothing this skeleton parses will match what arrives.
-        pub fn new(refs: IRObjectRefs, servant: S) -> Self {
-            Self { servant, refs }
+        pub fn new(__refs: IRObjectRefs, __servant: S) -> Self {
+            Self { servant: __servant, refs: __refs }
         }
         /// The key scheme in force, for minting references to these objects.
         pub fn refs(&self) -> &IRObjectRefs { &self.refs }
     }
-    impl<S: IRObjectServant> rt::Dispatch for IRObjectSkeleton<S> {
+    impl<S: IRObjectServant> __rt::Dispatch for IRObjectSkeleton<S> {
         fn knows(&self, __object_key: &[u8]) -> bool {
             match self.refs.oid_of(__object_key) {
                 Some(__oid) => self.servant.knows(&IRObjectTarget::new(__oid, &self.refs)),
                 None => false,
             }
         }
-        fn forward(&mut self, __req: &rt::Request) -> Option<rt::Ior> {
+        fn forward(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Ior> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = IRObjectTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
         }
-        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+        fn redirect(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Forward> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = IRObjectTarget::new(__oid, &self.refs);
             self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<rt::DispatchBody, rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let __oid = self
                 .refs
                 .oid_of(&__req.object_key)
-                .ok_or_else(rt::SystemException::object_not_exist)?;
+                .ok_or_else(__rt::SystemException::object_not_exist)?;
             let __at = IRObjectTarget::new(__oid, &self.refs);
-            let mut __args = __req.body().map_err(|_| rt::SystemException::marshal())?;
+            let mut __args = __req.body().map_err(|_| __rt::SystemException::marshal())?;
             match __req.operation.as_str() {
                 "_get_def_kind" => {
                     match self.servant.def_kind(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "_is_a" => {
-                    let __id: String = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let __id: ::std::string::String = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     let __answer = matches!(__id.as_str(),
                         "IDL:omg.org/CORBA/IRObject:1.0" |
-                        rt::OBJECT_ID);
-                    __answer.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                        __rt::OBJECT_ID);
+                    __answer.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
                 "_non_existent" => {
-                    false.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                    false.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
-                _ => Err(rt::SystemException::bad_operation()),
+                _ => Err(__rt::SystemException::bad_operation()),
             }
         }
         fn dispatch(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<(), rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<(), __rt::SystemException> {
             match self.dispatch_body(__req, __out)? {
-                rt::DispatchBody::Return => Ok(()),
-                rt::DispatchBody::UserException => {
-                    Err(rt::SystemException::unknown_user_exception())
+                __rt::DispatchBody::Return => Ok(()),
+                __rt::DispatchBody::UserException => {
+                    Err(__rt::SystemException::unknown_user_exception())
                 }
             }
         }
     }
 
     /// IDL typedef `IDL:omg.org/CORBA/Identifier:1.0`.
-    pub type Identifier = String;
+    pub type Identifier = ::std::string::String;
 
     /// The repository's description of one IDL interface
     ///
@@ -2290,113 +2290,113 @@ pub mod CORBA {
     /// `Connection` inside the trust boundary, or over the guarded
     /// wrapper at it — a stub hard-wired to the transport would be the
     /// §4.7 bypass in compiled form.
-    pub struct InterfaceDefClient<C: rt::Invoker> {
+    pub struct InterfaceDefClient<C: __rt::Invoker> {
         /// What calls travel over.
         pub conn: C,
     }
-    impl<C: rt::Invoker> InterfaceDefClient<C> {
+    impl<C: __rt::Invoker> InterfaceDefClient<C> {
         /// A stub over an open invoker.
-        pub fn new(conn: C) -> Self { Self { conn } }
+        pub fn new(__conn: C) -> Self { Self { conn: __conn } }
         /// Adds a module to the repository; refused on a read-only facade
         ///
         /// `create_module` on the wire.
-        pub fn create_module(&mut self, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> Result<orbweaver_gen::rt::ObjRef, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn create_module(&mut self, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> ::std::result::Result<__rt::ObjRef, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             new_id.put(&mut __probe)?;
             new_name.put(&mut __probe)?;
             new_version.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("create_module", |__e| {
                 let _ = new_id.put(__e);
                 let _ = new_name.put(__e);
                 let _ = new_version.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// Describes this interface in one reply, inherited members included
         ///
         /// `describe_interface` on the wire.
-        pub fn describe_interface(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::InterfaceDef::FullInterfaceDescription, rt::GiopError> {
+        pub fn describe_interface(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::InterfaceDef::FullInterfaceDescription, __rt::GiopError> {
             let __reply = self.conn.invoke("describe_interface", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// Whether the interface described here derives from a given id
         ///
         /// `is_a` on the wire.
-        pub fn is_a(&mut self, derived_from: crate::emitted::f_ir_subset::CORBA::RepositoryId) -> Result<bool, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn is_a(&mut self, derived_from: crate::emitted::f_ir_subset::CORBA::RepositoryId) -> ::std::result::Result<bool, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             derived_from.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("is_a", |__e| {
                 let _ = derived_from.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// The fully scoped IDL name, leading colons included
         ///
         /// `_get_absolute_name` on the wire.
-        pub fn absolute_name(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::ScopedName, rt::GiopError> {
+        pub fn absolute_name(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::ScopedName, __rt::GiopError> {
             let __reply = self.conn.invoke("_get_absolute_name", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// References to the interfaces this one directly derives from
         ///
         /// `_get_base_interfaces` on the wire.
-        pub fn base_interfaces(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::InterfaceDefSeq, rt::GiopError> {
+        pub fn base_interfaces(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::InterfaceDefSeq, __rt::GiopError> {
             let __reply = self.conn.invoke("_get_base_interfaces", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// Which kind of IDL construct this object describes
         ///
         /// `_get_def_kind` on the wire.
-        pub fn def_kind(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, rt::GiopError> {
+        pub fn def_kind(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, __rt::GiopError> {
             let __reply = self.conn.invoke("_get_def_kind", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// The repository id this definition is registered under
         ///
         /// `_get_id` on the wire.
-        pub fn id(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::RepositoryId, rt::GiopError> {
+        pub fn id(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::RepositoryId, __rt::GiopError> {
             let __reply = self.conn.invoke("_get_id", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// The unqualified IDL name of this definition
         ///
         /// `_get_name` on the wire.
-        pub fn name(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::Identifier, rt::GiopError> {
+        pub fn name(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::Identifier, __rt::GiopError> {
             let __reply = self.conn.invoke("_get_name", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// The version part of the repository id, e.g. 1.0
         ///
         /// `_get_version` on the wire.
-        pub fn version(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, rt::GiopError> {
+        pub fn version(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, __rt::GiopError> {
             let __reply = self.conn.invoke("_get_version", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
     }
@@ -2406,7 +2406,7 @@ pub mod CORBA {
     /// `System` is always here, whatever the contract declares: an unknown
     /// key is `OBJECT_NOT_EXIST`, a refused call is `NO_PERMISSION`, a
     /// temporary refusal is `TRANSIENT`, and IDL has no way to declare any
-    /// of them. Build one with `rt::raise::*`, which does not produce a
+    /// of them. Build one with `orbweaver_gen::rt::raise::*`, which does not produce a
     /// `SystemException` until the completion status is stated — the field
     /// that tells the caller whether a retry is safe, and the one thing a
     /// generator cannot know for a servant.
@@ -2418,14 +2418,14 @@ pub mod CORBA {
     pub enum InterfaceDefFault {
         /// A CORBA system exception, with the completion status the
         /// servant chose. Travels as a `SystemException` reply.
-        System(rt::SystemException),
+        System(__rt::SystemException),
     }
-    impl From<rt::SystemException> for InterfaceDefFault {
-        fn from(__ex: rt::SystemException) -> Self {
+    impl ::std::convert::From<__rt::SystemException> for InterfaceDefFault {
+        fn from(__ex: __rt::SystemException) -> Self {
             Self::System(__ex)
         }
     }
-    impl PartialEq for InterfaceDefFault {
+    impl ::std::cmp::PartialEq for InterfaceDefFault {
         fn eq(&self, __other: &Self) -> bool {
             match (self, __other) {
                 (Self::System(__a), Self::System(__b)) => {
@@ -2439,7 +2439,7 @@ pub mod CORBA {
     impl InterfaceDefFault {
         /// The repository id of the user exception this fault carries, or
         /// `None` for a system exception, which carries its own.
-        pub fn user_id(&self) -> Option<&'static str> {
+        pub fn user_id(&self) -> ::std::option::Option<&'static str> {
             match self {
                 Self::System(_) => None,
             }
@@ -2452,7 +2452,7 @@ pub mod CORBA {
         /// dispatcher hands it to the server to encode instead. That is also why
         /// nothing may be written before the fault is known — the whole buffer
         /// travels under one status.
-        pub fn write(&self, __out: &mut rt::Encoder) -> Result<rt::DispatchBody, rt::SystemException> {
+        pub fn write(&self, __out: &mut __rt::Encoder) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let _ = __out;
             match self {
                 Self::System(__ex) => Err(__ex.clone()),
@@ -2468,7 +2468,7 @@ pub mod CORBA {
     /// root ++ "/InterfaceDef/" ++ <oid>    the object named <oid>
     /// ```
     ///
-    /// `root` is the key the `rt::Server` was bound with. The derivation is
+    /// `root` is the key the `orbweaver_gen::rt::Server` was bound with. The derivation is
     /// reversible, so no table of minted keys exists: a reference survives a
     /// restart, and a client cannot make the process grow by looking things
     /// up. The oid is the *whole* remainder after the prefix, so it may
@@ -2482,14 +2482,14 @@ pub mod CORBA {
     /// # Minting
     ///
     /// `reference` and `ior` answer with a real IIOP profile, built by
-    /// `rt::ObjectHome` — the servant never assembles one, which is why the
+    /// `orbweaver_gen::rt::ObjectHome` — the servant never assembles one, which is why the
     /// GIOP version and profile shape are still decided in exactly one
     /// place. `nil` is the nil reference (§9.3.6), the truthful answer when
     /// there is no such object.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct InterfaceDefRefs {
-        home: rt::ObjectHome,
-        infix: String,
+        home: __rt::ObjectHome,
+        infix: ::std::string::String,
     }
     impl InterfaceDefRefs {
         /// The repository id minted references advertise.
@@ -2497,42 +2497,42 @@ pub mod CORBA {
         /// What separates the root key from the oid.
         pub const KEY_INFIX: &'static str = "/InterfaceDef/";
         /// The scheme rooted at `home`, with the generated infix.
-        pub fn new(home: rt::ObjectHome) -> Self {
-            Self { home, infix: Self::KEY_INFIX.to_owned() }
+        pub fn new(__home: __rt::ObjectHome) -> Self {
+            Self { home: __home, infix: Self::KEY_INFIX.to_owned() }
         }
         /// The same, with a key space this interface shares with another.
         ///
         /// Two skeletons given the same infix must disagree about `knows`
-        /// for every key, or `rt::Servants` will hand a request to
+        /// for every key, or `orbweaver_gen::rt::Servants` will hand a request to
         /// whichever was added first. Sharing a key space is a claim that
         /// the two answer for disjoint sets of objects.
-        pub fn with_infix(home: rt::ObjectHome, infix: impl Into<String>) -> Self {
-            Self { home, infix: infix.into() }
+        pub fn with_infix(__home: __rt::ObjectHome, __infix: impl ::std::convert::Into<::std::string::String>) -> Self {
+            Self { home: __home, infix: __infix.into() }
         }
         /// Where these objects are published.
-        pub fn home(&self) -> &rt::ObjectHome { &self.home }
+        pub fn home(&self) -> &__rt::ObjectHome { &self.home }
         /// The infix in use, generated or overridden.
         pub fn infix(&self) -> &str { &self.infix }
         /// The default object's key, which is also every other key's prefix.
         pub fn root_key(&self) -> &[u8] { self.home.root_key() }
         /// The object key for `oid`; the empty oid is the root key.
-        pub fn key_of(&self, oid: &str) -> Vec<u8> {
-            self.home.key_of(&self.infix, oid)
+        pub fn key_of(&self, __oid: &str) -> ::std::vec::Vec<u8> {
+            self.home.key_of(&self.infix, __oid)
         }
         /// The oid a key addresses, or `None` if it is not one of ours.
-        pub fn oid_of<'a>(&self, key: &'a [u8]) -> Option<&'a str> {
-            self.home.oid_of(&self.infix, key)
+        pub fn oid_of<'a>(&self, __key: &'a [u8]) -> ::std::option::Option<&'a str> {
+            self.home.oid_of(&self.infix, __key)
         }
         /// A reference to `oid`, in the form an operation returns.
-        pub fn reference(&self, oid: &str) -> rt::ObjRef {
-            self.home.reference(Self::TYPE_ID, self.key_of(oid))
+        pub fn reference(&self, __oid: &str) -> __rt::ObjRef {
+            self.home.reference(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The same reference, in the form `LOCATION_FORWARD` carries.
-        pub fn ior(&self, oid: &str) -> rt::Ior {
-            self.home.ior(Self::TYPE_ID, self.key_of(oid))
+        pub fn ior(&self, __oid: &str) -> __rt::Ior {
+            self.home.ior(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The nil reference: there is no such object.
-        pub fn nil() -> rt::ObjRef { rt::ObjectHome::nil() }
+        pub fn nil() -> __rt::ObjRef { __rt::ObjectHome::nil() }
     }
     /// Which `IDL:omg.org/CORBA/InterfaceDef:1.0` a call is addressed to.
     ///
@@ -2551,8 +2551,8 @@ pub mod CORBA {
     }
     impl<'a> InterfaceDefTarget<'a> {
         /// The identity `oid` under `refs`.
-        pub fn new(oid: &'a str, refs: &'a InterfaceDefRefs) -> Self {
-            Self { oid, refs }
+        pub fn new(__oid: &'a str, __refs: &'a InterfaceDefRefs) -> Self {
+            Self { oid: __oid, refs: __refs }
         }
         /// Which object this is. The empty oid is the default object,
         /// addressed by the bare root key the server was bound with.
@@ -2562,11 +2562,11 @@ pub mod CORBA {
         /// The key scheme, for minting references into other key spaces.
         pub fn refs(&self) -> &'a InterfaceDefRefs { self.refs }
         /// The raw object key this call arrived on.
-        pub fn key(&self) -> Vec<u8> { self.refs.key_of(self.oid) }
+        pub fn key(&self) -> ::std::vec::Vec<u8> { self.refs.key_of(self.oid) }
         /// A reference to *this* object, for handing back one's own address.
-        pub fn reference(&self) -> rt::ObjRef { self.refs.reference(self.oid) }
+        pub fn reference(&self) -> __rt::ObjRef { self.refs.reference(self.oid) }
         /// A reference to another object of this interface.
-        pub fn sibling(&self, oid: &str) -> rt::ObjRef { self.refs.reference(oid) }
+        pub fn sibling(&self, __oid: &str) -> __rt::ObjRef { self.refs.reference(__oid) }
     }
     /// The repository's description of one IDL interface
     ///
@@ -2575,10 +2575,10 @@ pub mod CORBA {
     /// One method per operation and per attribute accessor, taking decoded
     /// Rust arguments. Nothing here mentions GIOP: the wire is entirely the
     /// business of `InterfaceDefSkeleton`, which adapts this trait to
-    /// `rt::Dispatch`.
+    /// `orbweaver_gen::rt::Dispatch`.
     ///
     /// Every method may fail with a `InterfaceDefFault`: a declared user exception,
-    /// or a system exception built with `rt::raise::*` — the vocabulary
+    /// or a system exception built with `orbweaver_gen::rt::raise::*` — the vocabulary
     /// (`OBJECT_NOT_EXIST`, `NO_PERMISSION`, `BAD_PARAM`, `TRANSIENT`) that
     /// no contract declares and every servant needs.
     ///
@@ -2602,7 +2602,7 @@ pub mod CORBA {
     pub trait InterfaceDefServant {
         /// Whether this servant answers for the object `__at` names.
         ///
-        /// **Required, with no default.** `rt::Dispatch::knows` defaults to
+        /// **Required, with no default.** `orbweaver_gen::rt::Dispatch::knows` defaults to
         /// accepting everything, which is right for a process with one object and
         /// is exactly what stopped a generated skeleton from ever holding more
         /// than one: an unknown key was served as if it were the only object.
@@ -2612,7 +2612,7 @@ pub mod CORBA {
         ///
         /// A single-object servant writes `__at.is_default()`. A `false` here
         /// becomes `OBJECT_NOT_EXIST` for a request and `UNKNOWN_OBJECT` for a
-        /// `LocateRequest`, and is also how `rt::Servants` picks between
+        /// `LocateRequest`, and is also how `orbweaver_gen::rt::Servants` picks between
         /// skeletons sharing one key space.
         fn knows(&self, __at: &InterfaceDefTarget<'_>) -> bool;
         /// Where this request should be sent instead, if anywhere.
@@ -2637,14 +2637,14 @@ pub mod CORBA {
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
         /// the address. This hook is the *temporary* forward; an object that has
         /// moved for good says so through `redirect`, below.
-        fn forward(&mut self, __at: &InterfaceDefTarget<'_>) -> Option<rt::Ior> {
+        fn forward(&mut self, __at: &InterfaceDefTarget<'_>) -> ::std::option::Option<__rt::Ior> {
             let _ = __at;
             None
         }
         /// Where this request should be sent instead, and whether for good.
         ///
-        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
-        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// The method the runtime actually asks. `orbweaver_gen::rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `orbweaver_gen::rt::Forward::Permanent` is a
         /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
         /// the temporary form, its reply-status enumeration having no other),
         /// and is the one thing a servant can say that lets a client replace the
@@ -2653,45 +2653,45 @@ pub mod CORBA {
         /// Defaults to `forward` wrapped as temporary, so a servant that
         /// overrides only `forward` behaves as it always did. Override this one
         /// to say *permanent*; there is no reason to override both.
-        fn redirect(&mut self, __at: &InterfaceDefTarget<'_>) -> Option<rt::Forward> {
-            self.forward(__at).map(rt::Forward::Temporary)
+        fn redirect(&mut self, __at: &InterfaceDefTarget<'_>) -> ::std::option::Option<__rt::Forward> {
+            self.forward(__at).map(__rt::Forward::Temporary)
         }
         /// Adds a module to the repository; refused on a read-only facade
         ///
         /// `create_module` on the wire.
-        fn create_module(&mut self, __at: &InterfaceDefTarget<'_>, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> Result<orbweaver_gen::rt::ObjRef, InterfaceDefFault>;
+        fn create_module(&mut self, __at: &InterfaceDefTarget<'_>, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> ::std::result::Result<__rt::ObjRef, InterfaceDefFault>;
         /// Describes this interface in one reply, inherited members included
         ///
         /// `describe_interface` on the wire.
-        fn describe_interface(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::InterfaceDef::FullInterfaceDescription, InterfaceDefFault>;
+        fn describe_interface(&mut self, __at: &InterfaceDefTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::InterfaceDef::FullInterfaceDescription, InterfaceDefFault>;
         /// Whether the interface described here derives from a given id
         ///
         /// `is_a` on the wire.
-        fn is_a(&mut self, __at: &InterfaceDefTarget<'_>, derived_from: crate::emitted::f_ir_subset::CORBA::RepositoryId) -> Result<bool, InterfaceDefFault>;
+        fn is_a(&mut self, __at: &InterfaceDefTarget<'_>, derived_from: crate::emitted::f_ir_subset::CORBA::RepositoryId) -> ::std::result::Result<bool, InterfaceDefFault>;
         /// The fully scoped IDL name, leading colons included
         ///
         /// `_get_absolute_name` on the wire.
-        fn absolute_name(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::ScopedName, InterfaceDefFault>;
+        fn absolute_name(&mut self, __at: &InterfaceDefTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::ScopedName, InterfaceDefFault>;
         /// References to the interfaces this one directly derives from
         ///
         /// `_get_base_interfaces` on the wire.
-        fn base_interfaces(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::InterfaceDefSeq, InterfaceDefFault>;
+        fn base_interfaces(&mut self, __at: &InterfaceDefTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::InterfaceDefSeq, InterfaceDefFault>;
         /// Which kind of IDL construct this object describes
         ///
         /// `_get_def_kind` on the wire.
-        fn def_kind(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, InterfaceDefFault>;
+        fn def_kind(&mut self, __at: &InterfaceDefTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, InterfaceDefFault>;
         /// The repository id this definition is registered under
         ///
         /// `_get_id` on the wire.
-        fn id(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::RepositoryId, InterfaceDefFault>;
+        fn id(&mut self, __at: &InterfaceDefTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::RepositoryId, InterfaceDefFault>;
         /// The unqualified IDL name of this definition
         ///
         /// `_get_name` on the wire.
-        fn name(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::Identifier, InterfaceDefFault>;
+        fn name(&mut self, __at: &InterfaceDefTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::Identifier, InterfaceDefFault>;
         /// The version part of the repository id, e.g. 1.0
         ///
         /// `_get_version` on the wire.
-        fn version(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, InterfaceDefFault>;
+        fn version(&mut self, __at: &InterfaceDefTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, InterfaceDefFault>;
     }
     /// One object of `IDL:omg.org/CORBA/InterfaceDef:1.0`, for a servant that keeps a value per object.
     ///
@@ -2710,39 +2710,39 @@ pub mod CORBA {
         /// Adds a module to the repository; refused on a read-only facade
         ///
         /// `create_module` on the wire.
-        fn create_module(&mut self, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> Result<orbweaver_gen::rt::ObjRef, InterfaceDefFault>;
+        fn create_module(&mut self, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> ::std::result::Result<__rt::ObjRef, InterfaceDefFault>;
         /// Describes this interface in one reply, inherited members included
         ///
         /// `describe_interface` on the wire.
-        fn describe_interface(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::InterfaceDef::FullInterfaceDescription, InterfaceDefFault>;
+        fn describe_interface(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::InterfaceDef::FullInterfaceDescription, InterfaceDefFault>;
         /// Whether the interface described here derives from a given id
         ///
         /// `is_a` on the wire.
-        fn is_a(&mut self, derived_from: crate::emitted::f_ir_subset::CORBA::RepositoryId) -> Result<bool, InterfaceDefFault>;
+        fn is_a(&mut self, derived_from: crate::emitted::f_ir_subset::CORBA::RepositoryId) -> ::std::result::Result<bool, InterfaceDefFault>;
         /// The fully scoped IDL name, leading colons included
         ///
         /// `_get_absolute_name` on the wire.
-        fn absolute_name(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::ScopedName, InterfaceDefFault>;
+        fn absolute_name(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::ScopedName, InterfaceDefFault>;
         /// References to the interfaces this one directly derives from
         ///
         /// `_get_base_interfaces` on the wire.
-        fn base_interfaces(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::InterfaceDefSeq, InterfaceDefFault>;
+        fn base_interfaces(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::InterfaceDefSeq, InterfaceDefFault>;
         /// Which kind of IDL construct this object describes
         ///
         /// `_get_def_kind` on the wire.
-        fn def_kind(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, InterfaceDefFault>;
+        fn def_kind(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, InterfaceDefFault>;
         /// The repository id this definition is registered under
         ///
         /// `_get_id` on the wire.
-        fn id(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::RepositoryId, InterfaceDefFault>;
+        fn id(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::RepositoryId, InterfaceDefFault>;
         /// The unqualified IDL name of this definition
         ///
         /// `_get_name` on the wire.
-        fn name(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::Identifier, InterfaceDefFault>;
+        fn name(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::Identifier, InterfaceDefFault>;
         /// The version part of the repository id, e.g. 1.0
         ///
         /// `_get_version` on the wire.
-        fn version(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, InterfaceDefFault>;
+        fn version(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, InterfaceDefFault>;
     }
     /// A map from oid to one `InterfaceDefObject`, serving `IDL:omg.org/CORBA/InterfaceDef:1.0`.
     ///
@@ -2756,34 +2756,34 @@ pub mod CORBA {
     /// bare root key addresses. A one-object process inserts exactly that.
     #[derive(Debug, Clone)]
     pub struct InterfaceDefObjects<S: InterfaceDefObject> {
-        objects: std::collections::BTreeMap<String, S>,
+        objects: ::std::collections::BTreeMap<::std::string::String, S>,
     }
-    impl<S: InterfaceDefObject> Default for InterfaceDefObjects<S> {
+    impl<S: InterfaceDefObject> ::std::default::Default for InterfaceDefObjects<S> {
         fn default() -> Self {
-            Self { objects: std::collections::BTreeMap::new() }
+            Self { objects: ::std::collections::BTreeMap::new() }
         }
     }
     impl<S: InterfaceDefObject> InterfaceDefObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { <Self as std::default::Default>::default() }
+        pub fn new() -> Self { <Self as ::std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
-        pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
-            self.objects.insert(oid.into(), object)
+        pub fn insert(&mut self, __oid: impl ::std::convert::Into<::std::string::String>, __object: S) -> ::std::option::Option<S> {
+            self.objects.insert(__oid.into(), __object)
         }
         /// Removes an object, after which its key is `OBJECT_NOT_EXIST`.
-        pub fn remove(&mut self, oid: &str) -> Option<S> {
-            self.objects.remove(oid)
+        pub fn remove(&mut self, __oid: &str) -> ::std::option::Option<S> {
+            self.objects.remove(__oid)
         }
         /// The object under `oid`, if there is one.
-        pub fn get(&self, oid: &str) -> Option<&S> { self.objects.get(oid) }
+        pub fn get(&self, __oid: &str) -> ::std::option::Option<&S> { self.objects.get(__oid) }
         /// The object under `oid`, mutably.
-        pub fn get_mut(&mut self, oid: &str) -> Option<&mut S> {
-            self.objects.get_mut(oid)
+        pub fn get_mut(&mut self, __oid: &str) -> ::std::option::Option<&mut S> {
+            self.objects.get_mut(__oid)
         }
         /// Every oid held, in sorted order.
-        pub fn oids(&self) -> impl Iterator<Item = &str> {
-            self.objects.keys().map(String::as_str)
+        pub fn oids(&self) -> impl ::std::iter::Iterator<Item = &str> {
+            self.objects.keys().map(::std::string::String::as_str)
         }
         /// How many objects are held.
         pub fn len(&self) -> usize { self.objects.len() }
@@ -2794,65 +2794,65 @@ pub mod CORBA {
         fn knows(&self, __at: &InterfaceDefTarget<'_>) -> bool {
             self.objects.contains_key(__at.oid())
         }
-        fn create_module(&mut self, __at: &InterfaceDefTarget<'_>, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> Result<orbweaver_gen::rt::ObjRef, InterfaceDefFault> {
+        fn create_module(&mut self, __at: &InterfaceDefTarget<'_>, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> ::std::result::Result<__rt::ObjRef, InterfaceDefFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.create_module(new_id, new_name, new_version),
-                None => Err(InterfaceDefFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(InterfaceDefFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn describe_interface(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::InterfaceDef::FullInterfaceDescription, InterfaceDefFault> {
+        fn describe_interface(&mut self, __at: &InterfaceDefTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::InterfaceDef::FullInterfaceDescription, InterfaceDefFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.describe_interface(),
-                None => Err(InterfaceDefFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(InterfaceDefFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn is_a(&mut self, __at: &InterfaceDefTarget<'_>, derived_from: crate::emitted::f_ir_subset::CORBA::RepositoryId) -> Result<bool, InterfaceDefFault> {
+        fn is_a(&mut self, __at: &InterfaceDefTarget<'_>, derived_from: crate::emitted::f_ir_subset::CORBA::RepositoryId) -> ::std::result::Result<bool, InterfaceDefFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.is_a(derived_from),
-                None => Err(InterfaceDefFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(InterfaceDefFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn absolute_name(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::ScopedName, InterfaceDefFault> {
+        fn absolute_name(&mut self, __at: &InterfaceDefTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::ScopedName, InterfaceDefFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.absolute_name(),
-                None => Err(InterfaceDefFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(InterfaceDefFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn base_interfaces(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::InterfaceDefSeq, InterfaceDefFault> {
+        fn base_interfaces(&mut self, __at: &InterfaceDefTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::InterfaceDefSeq, InterfaceDefFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.base_interfaces(),
-                None => Err(InterfaceDefFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(InterfaceDefFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn def_kind(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, InterfaceDefFault> {
+        fn def_kind(&mut self, __at: &InterfaceDefTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, InterfaceDefFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.def_kind(),
-                None => Err(InterfaceDefFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(InterfaceDefFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn id(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::RepositoryId, InterfaceDefFault> {
+        fn id(&mut self, __at: &InterfaceDefTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::RepositoryId, InterfaceDefFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.id(),
-                None => Err(InterfaceDefFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(InterfaceDefFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn name(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::Identifier, InterfaceDefFault> {
+        fn name(&mut self, __at: &InterfaceDefTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::Identifier, InterfaceDefFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.name(),
-                None => Err(InterfaceDefFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(InterfaceDefFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn version(&mut self, __at: &InterfaceDefTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, InterfaceDefFault> {
+        fn version(&mut self, __at: &InterfaceDefTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::VersionSpec, InterfaceDefFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.version(),
-                None => Err(InterfaceDefFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(InterfaceDefFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
     }
     /// Serves `IDL:omg.org/CORBA/InterfaceDef:1.0`: decodes the request, calls the servant, encodes the reply.
     ///
-    /// Hand it to `rt::Server::serve` in place of a hand-written
-    /// `rt::Dispatch`. What it answers, beyond the contract's own
+    /// Hand it to `orbweaver_gen::rt::Server::serve` in place of a hand-written
+    /// `orbweaver_gen::rt::Dispatch`. What it answers, beyond the contract's own
     /// operations:
     ///
     /// * `_is_a`, from the inheritance chain the registry resolved, because
@@ -2883,54 +2883,54 @@ pub mod CORBA {
     impl<S: InterfaceDefServant> InterfaceDefSkeleton<S> {
         /// A skeleton serving `servant`'s objects under `refs`.
         ///
-        /// `refs` must be rooted at the key the `rt::Server` was bound
+        /// `refs` must be rooted at the key the `orbweaver_gen::rt::Server` was bound
         /// with, or nothing this skeleton parses will match what arrives.
-        pub fn new(refs: InterfaceDefRefs, servant: S) -> Self {
-            Self { servant, refs }
+        pub fn new(__refs: InterfaceDefRefs, __servant: S) -> Self {
+            Self { servant: __servant, refs: __refs }
         }
         /// The key scheme in force, for minting references to these objects.
         pub fn refs(&self) -> &InterfaceDefRefs { &self.refs }
     }
-    impl<S: InterfaceDefServant> rt::Dispatch for InterfaceDefSkeleton<S> {
+    impl<S: InterfaceDefServant> __rt::Dispatch for InterfaceDefSkeleton<S> {
         fn knows(&self, __object_key: &[u8]) -> bool {
             match self.refs.oid_of(__object_key) {
                 Some(__oid) => self.servant.knows(&InterfaceDefTarget::new(__oid, &self.refs)),
                 None => false,
             }
         }
-        fn forward(&mut self, __req: &rt::Request) -> Option<rt::Ior> {
+        fn forward(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Ior> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = InterfaceDefTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
         }
-        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+        fn redirect(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Forward> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = InterfaceDefTarget::new(__oid, &self.refs);
             self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<rt::DispatchBody, rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let __oid = self
                 .refs
                 .oid_of(&__req.object_key)
-                .ok_or_else(rt::SystemException::object_not_exist)?;
+                .ok_or_else(__rt::SystemException::object_not_exist)?;
             let __at = InterfaceDefTarget::new(__oid, &self.refs);
-            let mut __args = __req.body().map_err(|_| rt::SystemException::marshal())?;
+            let mut __args = __req.body().map_err(|_| __rt::SystemException::marshal())?;
             match __req.operation.as_str() {
                 "create_module" => {
-                    let new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let new_name: crate::emitted::f_ir_subset::CORBA::Identifier = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let new_name: crate::emitted::f_ir_subset::CORBA::Identifier = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.create_module(&__at, new_id, new_name, new_version) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -2938,19 +2938,19 @@ pub mod CORBA {
                 "describe_interface" => {
                     match self.servant.describe_interface(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "is_a" => {
-                    let derived_from: crate::emitted::f_ir_subset::CORBA::RepositoryId = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let derived_from: crate::emitted::f_ir_subset::CORBA::RepositoryId = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.is_a(&__at, derived_from) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -2958,8 +2958,8 @@ pub mod CORBA {
                 "_get_absolute_name" => {
                     match self.servant.absolute_name(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -2967,8 +2967,8 @@ pub mod CORBA {
                 "_get_base_interfaces" => {
                     match self.servant.base_interfaces(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -2976,8 +2976,8 @@ pub mod CORBA {
                 "_get_def_kind" => {
                     match self.servant.def_kind(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -2985,8 +2985,8 @@ pub mod CORBA {
                 "_get_id" => {
                     match self.servant.id(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -2994,8 +2994,8 @@ pub mod CORBA {
                 "_get_name" => {
                     match self.servant.name(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -3003,48 +3003,48 @@ pub mod CORBA {
                 "_get_version" => {
                     match self.servant.version(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "_is_a" => {
-                    let __id: String = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let __id: ::std::string::String = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     let __answer = matches!(__id.as_str(),
                         "IDL:omg.org/CORBA/Contained:1.0" |
                         "IDL:omg.org/CORBA/Container:1.0" |
                         "IDL:omg.org/CORBA/IDLType:1.0" |
                         "IDL:omg.org/CORBA/IRObject:1.0" |
                         "IDL:omg.org/CORBA/InterfaceDef:1.0" |
-                        rt::OBJECT_ID);
-                    __answer.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                        __rt::OBJECT_ID);
+                    __answer.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
                 "_non_existent" => {
-                    false.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                    false.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
-                _ => Err(rt::SystemException::bad_operation()),
+                _ => Err(__rt::SystemException::bad_operation()),
             }
         }
         fn dispatch(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<(), rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<(), __rt::SystemException> {
             match self.dispatch_body(__req, __out)? {
-                rt::DispatchBody::Return => Ok(()),
-                rt::DispatchBody::UserException => {
-                    Err(rt::SystemException::unknown_user_exception())
+                __rt::DispatchBody::Return => Ok(()),
+                __rt::DispatchBody::UserException => {
+                    Err(__rt::SystemException::unknown_user_exception())
                 }
             }
         }
     }
 
     /// IDL typedef `IDL:omg.org/CORBA/InterfaceDefSeq:1.0`.
-    pub type InterfaceDefSeq = Vec<orbweaver_gen::rt::ObjRef>;
+    pub type InterfaceDefSeq = ::std::vec::Vec<__rt::ObjRef>;
 
     /// A module reference; declared so create_module has a return type
     ///
@@ -3057,13 +3057,13 @@ pub mod CORBA {
     /// `Connection` inside the trust boundary, or over the guarded
     /// wrapper at it — a stub hard-wired to the transport would be the
     /// §4.7 bypass in compiled form.
-    pub struct ModuleDefClient<C: rt::Invoker> {
+    pub struct ModuleDefClient<C: __rt::Invoker> {
         /// What calls travel over.
         pub conn: C,
     }
-    impl<C: rt::Invoker> ModuleDefClient<C> {
+    impl<C: __rt::Invoker> ModuleDefClient<C> {
         /// A stub over an open invoker.
-        pub fn new(conn: C) -> Self { Self { conn } }
+        pub fn new(__conn: C) -> Self { Self { conn: __conn } }
     }
     
     /// Everything a servant for `IDL:omg.org/CORBA/ModuleDef:1.0` can fail with.
@@ -3071,7 +3071,7 @@ pub mod CORBA {
     /// `System` is always here, whatever the contract declares: an unknown
     /// key is `OBJECT_NOT_EXIST`, a refused call is `NO_PERMISSION`, a
     /// temporary refusal is `TRANSIENT`, and IDL has no way to declare any
-    /// of them. Build one with `rt::raise::*`, which does not produce a
+    /// of them. Build one with `orbweaver_gen::rt::raise::*`, which does not produce a
     /// `SystemException` until the completion status is stated — the field
     /// that tells the caller whether a retry is safe, and the one thing a
     /// generator cannot know for a servant.
@@ -3083,14 +3083,14 @@ pub mod CORBA {
     pub enum ModuleDefFault {
         /// A CORBA system exception, with the completion status the
         /// servant chose. Travels as a `SystemException` reply.
-        System(rt::SystemException),
+        System(__rt::SystemException),
     }
-    impl From<rt::SystemException> for ModuleDefFault {
-        fn from(__ex: rt::SystemException) -> Self {
+    impl ::std::convert::From<__rt::SystemException> for ModuleDefFault {
+        fn from(__ex: __rt::SystemException) -> Self {
             Self::System(__ex)
         }
     }
-    impl PartialEq for ModuleDefFault {
+    impl ::std::cmp::PartialEq for ModuleDefFault {
         fn eq(&self, __other: &Self) -> bool {
             match (self, __other) {
                 (Self::System(__a), Self::System(__b)) => {
@@ -3104,7 +3104,7 @@ pub mod CORBA {
     impl ModuleDefFault {
         /// The repository id of the user exception this fault carries, or
         /// `None` for a system exception, which carries its own.
-        pub fn user_id(&self) -> Option<&'static str> {
+        pub fn user_id(&self) -> ::std::option::Option<&'static str> {
             match self {
                 Self::System(_) => None,
             }
@@ -3117,7 +3117,7 @@ pub mod CORBA {
         /// dispatcher hands it to the server to encode instead. That is also why
         /// nothing may be written before the fault is known — the whole buffer
         /// travels under one status.
-        pub fn write(&self, __out: &mut rt::Encoder) -> Result<rt::DispatchBody, rt::SystemException> {
+        pub fn write(&self, __out: &mut __rt::Encoder) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let _ = __out;
             match self {
                 Self::System(__ex) => Err(__ex.clone()),
@@ -3133,7 +3133,7 @@ pub mod CORBA {
     /// root ++ "/ModuleDef/" ++ <oid>    the object named <oid>
     /// ```
     ///
-    /// `root` is the key the `rt::Server` was bound with. The derivation is
+    /// `root` is the key the `orbweaver_gen::rt::Server` was bound with. The derivation is
     /// reversible, so no table of minted keys exists: a reference survives a
     /// restart, and a client cannot make the process grow by looking things
     /// up. The oid is the *whole* remainder after the prefix, so it may
@@ -3147,14 +3147,14 @@ pub mod CORBA {
     /// # Minting
     ///
     /// `reference` and `ior` answer with a real IIOP profile, built by
-    /// `rt::ObjectHome` — the servant never assembles one, which is why the
+    /// `orbweaver_gen::rt::ObjectHome` — the servant never assembles one, which is why the
     /// GIOP version and profile shape are still decided in exactly one
     /// place. `nil` is the nil reference (§9.3.6), the truthful answer when
     /// there is no such object.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct ModuleDefRefs {
-        home: rt::ObjectHome,
-        infix: String,
+        home: __rt::ObjectHome,
+        infix: ::std::string::String,
     }
     impl ModuleDefRefs {
         /// The repository id minted references advertise.
@@ -3162,42 +3162,42 @@ pub mod CORBA {
         /// What separates the root key from the oid.
         pub const KEY_INFIX: &'static str = "/ModuleDef/";
         /// The scheme rooted at `home`, with the generated infix.
-        pub fn new(home: rt::ObjectHome) -> Self {
-            Self { home, infix: Self::KEY_INFIX.to_owned() }
+        pub fn new(__home: __rt::ObjectHome) -> Self {
+            Self { home: __home, infix: Self::KEY_INFIX.to_owned() }
         }
         /// The same, with a key space this interface shares with another.
         ///
         /// Two skeletons given the same infix must disagree about `knows`
-        /// for every key, or `rt::Servants` will hand a request to
+        /// for every key, or `orbweaver_gen::rt::Servants` will hand a request to
         /// whichever was added first. Sharing a key space is a claim that
         /// the two answer for disjoint sets of objects.
-        pub fn with_infix(home: rt::ObjectHome, infix: impl Into<String>) -> Self {
-            Self { home, infix: infix.into() }
+        pub fn with_infix(__home: __rt::ObjectHome, __infix: impl ::std::convert::Into<::std::string::String>) -> Self {
+            Self { home: __home, infix: __infix.into() }
         }
         /// Where these objects are published.
-        pub fn home(&self) -> &rt::ObjectHome { &self.home }
+        pub fn home(&self) -> &__rt::ObjectHome { &self.home }
         /// The infix in use, generated or overridden.
         pub fn infix(&self) -> &str { &self.infix }
         /// The default object's key, which is also every other key's prefix.
         pub fn root_key(&self) -> &[u8] { self.home.root_key() }
         /// The object key for `oid`; the empty oid is the root key.
-        pub fn key_of(&self, oid: &str) -> Vec<u8> {
-            self.home.key_of(&self.infix, oid)
+        pub fn key_of(&self, __oid: &str) -> ::std::vec::Vec<u8> {
+            self.home.key_of(&self.infix, __oid)
         }
         /// The oid a key addresses, or `None` if it is not one of ours.
-        pub fn oid_of<'a>(&self, key: &'a [u8]) -> Option<&'a str> {
-            self.home.oid_of(&self.infix, key)
+        pub fn oid_of<'a>(&self, __key: &'a [u8]) -> ::std::option::Option<&'a str> {
+            self.home.oid_of(&self.infix, __key)
         }
         /// A reference to `oid`, in the form an operation returns.
-        pub fn reference(&self, oid: &str) -> rt::ObjRef {
-            self.home.reference(Self::TYPE_ID, self.key_of(oid))
+        pub fn reference(&self, __oid: &str) -> __rt::ObjRef {
+            self.home.reference(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The same reference, in the form `LOCATION_FORWARD` carries.
-        pub fn ior(&self, oid: &str) -> rt::Ior {
-            self.home.ior(Self::TYPE_ID, self.key_of(oid))
+        pub fn ior(&self, __oid: &str) -> __rt::Ior {
+            self.home.ior(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The nil reference: there is no such object.
-        pub fn nil() -> rt::ObjRef { rt::ObjectHome::nil() }
+        pub fn nil() -> __rt::ObjRef { __rt::ObjectHome::nil() }
     }
     /// Which `IDL:omg.org/CORBA/ModuleDef:1.0` a call is addressed to.
     ///
@@ -3216,8 +3216,8 @@ pub mod CORBA {
     }
     impl<'a> ModuleDefTarget<'a> {
         /// The identity `oid` under `refs`.
-        pub fn new(oid: &'a str, refs: &'a ModuleDefRefs) -> Self {
-            Self { oid, refs }
+        pub fn new(__oid: &'a str, __refs: &'a ModuleDefRefs) -> Self {
+            Self { oid: __oid, refs: __refs }
         }
         /// Which object this is. The empty oid is the default object,
         /// addressed by the bare root key the server was bound with.
@@ -3227,11 +3227,11 @@ pub mod CORBA {
         /// The key scheme, for minting references into other key spaces.
         pub fn refs(&self) -> &'a ModuleDefRefs { self.refs }
         /// The raw object key this call arrived on.
-        pub fn key(&self) -> Vec<u8> { self.refs.key_of(self.oid) }
+        pub fn key(&self) -> ::std::vec::Vec<u8> { self.refs.key_of(self.oid) }
         /// A reference to *this* object, for handing back one's own address.
-        pub fn reference(&self) -> rt::ObjRef { self.refs.reference(self.oid) }
+        pub fn reference(&self) -> __rt::ObjRef { self.refs.reference(self.oid) }
         /// A reference to another object of this interface.
-        pub fn sibling(&self, oid: &str) -> rt::ObjRef { self.refs.reference(oid) }
+        pub fn sibling(&self, __oid: &str) -> __rt::ObjRef { self.refs.reference(__oid) }
     }
     /// A module reference; declared so create_module has a return type
     ///
@@ -3240,10 +3240,10 @@ pub mod CORBA {
     /// One method per operation and per attribute accessor, taking decoded
     /// Rust arguments. Nothing here mentions GIOP: the wire is entirely the
     /// business of `ModuleDefSkeleton`, which adapts this trait to
-    /// `rt::Dispatch`.
+    /// `orbweaver_gen::rt::Dispatch`.
     ///
     /// Every method may fail with a `ModuleDefFault`: a declared user exception,
-    /// or a system exception built with `rt::raise::*` — the vocabulary
+    /// or a system exception built with `orbweaver_gen::rt::raise::*` — the vocabulary
     /// (`OBJECT_NOT_EXIST`, `NO_PERMISSION`, `BAD_PARAM`, `TRANSIENT`) that
     /// no contract declares and every servant needs.
     ///
@@ -3267,7 +3267,7 @@ pub mod CORBA {
     pub trait ModuleDefServant {
         /// Whether this servant answers for the object `__at` names.
         ///
-        /// **Required, with no default.** `rt::Dispatch::knows` defaults to
+        /// **Required, with no default.** `orbweaver_gen::rt::Dispatch::knows` defaults to
         /// accepting everything, which is right for a process with one object and
         /// is exactly what stopped a generated skeleton from ever holding more
         /// than one: an unknown key was served as if it were the only object.
@@ -3277,7 +3277,7 @@ pub mod CORBA {
         ///
         /// A single-object servant writes `__at.is_default()`. A `false` here
         /// becomes `OBJECT_NOT_EXIST` for a request and `UNKNOWN_OBJECT` for a
-        /// `LocateRequest`, and is also how `rt::Servants` picks between
+        /// `LocateRequest`, and is also how `orbweaver_gen::rt::Servants` picks between
         /// skeletons sharing one key space.
         fn knows(&self, __at: &ModuleDefTarget<'_>) -> bool;
         /// Where this request should be sent instead, if anywhere.
@@ -3302,14 +3302,14 @@ pub mod CORBA {
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
         /// the address. This hook is the *temporary* forward; an object that has
         /// moved for good says so through `redirect`, below.
-        fn forward(&mut self, __at: &ModuleDefTarget<'_>) -> Option<rt::Ior> {
+        fn forward(&mut self, __at: &ModuleDefTarget<'_>) -> ::std::option::Option<__rt::Ior> {
             let _ = __at;
             None
         }
         /// Where this request should be sent instead, and whether for good.
         ///
-        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
-        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// The method the runtime actually asks. `orbweaver_gen::rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `orbweaver_gen::rt::Forward::Permanent` is a
         /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
         /// the temporary form, its reply-status enumeration having no other),
         /// and is the one thing a servant can say that lets a client replace the
@@ -3318,8 +3318,8 @@ pub mod CORBA {
         /// Defaults to `forward` wrapped as temporary, so a servant that
         /// overrides only `forward` behaves as it always did. Override this one
         /// to say *permanent*; there is no reason to override both.
-        fn redirect(&mut self, __at: &ModuleDefTarget<'_>) -> Option<rt::Forward> {
-            self.forward(__at).map(rt::Forward::Temporary)
+        fn redirect(&mut self, __at: &ModuleDefTarget<'_>) -> ::std::option::Option<__rt::Forward> {
+            self.forward(__at).map(__rt::Forward::Temporary)
         }
     }
     /// One object of `IDL:omg.org/CORBA/ModuleDef:1.0`, for a servant that keeps a value per object.
@@ -3349,34 +3349,34 @@ pub mod CORBA {
     /// bare root key addresses. A one-object process inserts exactly that.
     #[derive(Debug, Clone)]
     pub struct ModuleDefObjects<S: ModuleDefObject> {
-        objects: std::collections::BTreeMap<String, S>,
+        objects: ::std::collections::BTreeMap<::std::string::String, S>,
     }
-    impl<S: ModuleDefObject> Default for ModuleDefObjects<S> {
+    impl<S: ModuleDefObject> ::std::default::Default for ModuleDefObjects<S> {
         fn default() -> Self {
-            Self { objects: std::collections::BTreeMap::new() }
+            Self { objects: ::std::collections::BTreeMap::new() }
         }
     }
     impl<S: ModuleDefObject> ModuleDefObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { <Self as std::default::Default>::default() }
+        pub fn new() -> Self { <Self as ::std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
-        pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
-            self.objects.insert(oid.into(), object)
+        pub fn insert(&mut self, __oid: impl ::std::convert::Into<::std::string::String>, __object: S) -> ::std::option::Option<S> {
+            self.objects.insert(__oid.into(), __object)
         }
         /// Removes an object, after which its key is `OBJECT_NOT_EXIST`.
-        pub fn remove(&mut self, oid: &str) -> Option<S> {
-            self.objects.remove(oid)
+        pub fn remove(&mut self, __oid: &str) -> ::std::option::Option<S> {
+            self.objects.remove(__oid)
         }
         /// The object under `oid`, if there is one.
-        pub fn get(&self, oid: &str) -> Option<&S> { self.objects.get(oid) }
+        pub fn get(&self, __oid: &str) -> ::std::option::Option<&S> { self.objects.get(__oid) }
         /// The object under `oid`, mutably.
-        pub fn get_mut(&mut self, oid: &str) -> Option<&mut S> {
-            self.objects.get_mut(oid)
+        pub fn get_mut(&mut self, __oid: &str) -> ::std::option::Option<&mut S> {
+            self.objects.get_mut(__oid)
         }
         /// Every oid held, in sorted order.
-        pub fn oids(&self) -> impl Iterator<Item = &str> {
-            self.objects.keys().map(String::as_str)
+        pub fn oids(&self) -> impl ::std::iter::Iterator<Item = &str> {
+            self.objects.keys().map(::std::string::String::as_str)
         }
         /// How many objects are held.
         pub fn len(&self) -> usize { self.objects.len() }
@@ -3390,8 +3390,8 @@ pub mod CORBA {
     }
     /// Serves `IDL:omg.org/CORBA/ModuleDef:1.0`: decodes the request, calls the servant, encodes the reply.
     ///
-    /// Hand it to `rt::Server::serve` in place of a hand-written
-    /// `rt::Dispatch`. What it answers, beyond the contract's own
+    /// Hand it to `orbweaver_gen::rt::Server::serve` in place of a hand-written
+    /// `orbweaver_gen::rt::Dispatch`. What it answers, beyond the contract's own
     /// operations:
     ///
     /// * `_is_a`, from the inheritance chain the registry resolved, because
@@ -3422,75 +3422,75 @@ pub mod CORBA {
     impl<S: ModuleDefServant> ModuleDefSkeleton<S> {
         /// A skeleton serving `servant`'s objects under `refs`.
         ///
-        /// `refs` must be rooted at the key the `rt::Server` was bound
+        /// `refs` must be rooted at the key the `orbweaver_gen::rt::Server` was bound
         /// with, or nothing this skeleton parses will match what arrives.
-        pub fn new(refs: ModuleDefRefs, servant: S) -> Self {
-            Self { servant, refs }
+        pub fn new(__refs: ModuleDefRefs, __servant: S) -> Self {
+            Self { servant: __servant, refs: __refs }
         }
         /// The key scheme in force, for minting references to these objects.
         pub fn refs(&self) -> &ModuleDefRefs { &self.refs }
     }
-    impl<S: ModuleDefServant> rt::Dispatch for ModuleDefSkeleton<S> {
+    impl<S: ModuleDefServant> __rt::Dispatch for ModuleDefSkeleton<S> {
         fn knows(&self, __object_key: &[u8]) -> bool {
             match self.refs.oid_of(__object_key) {
                 Some(__oid) => self.servant.knows(&ModuleDefTarget::new(__oid, &self.refs)),
                 None => false,
             }
         }
-        fn forward(&mut self, __req: &rt::Request) -> Option<rt::Ior> {
+        fn forward(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Ior> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = ModuleDefTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
         }
-        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+        fn redirect(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Forward> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = ModuleDefTarget::new(__oid, &self.refs);
             self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<rt::DispatchBody, rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let __oid = self
                 .refs
                 .oid_of(&__req.object_key)
-                .ok_or_else(rt::SystemException::object_not_exist)?;
+                .ok_or_else(__rt::SystemException::object_not_exist)?;
             let __at = ModuleDefTarget::new(__oid, &self.refs);
-            let mut __args = __req.body().map_err(|_| rt::SystemException::marshal())?;
+            let mut __args = __req.body().map_err(|_| __rt::SystemException::marshal())?;
             match __req.operation.as_str() {
                 "_is_a" => {
-                    let __id: String = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let __id: ::std::string::String = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     let __answer = matches!(__id.as_str(),
                         "IDL:omg.org/CORBA/ModuleDef:1.0" |
-                        rt::OBJECT_ID);
-                    __answer.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                        __rt::OBJECT_ID);
+                    __answer.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
                 "_non_existent" => {
-                    false.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                    false.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
-                _ => Err(rt::SystemException::bad_operation()),
+                _ => Err(__rt::SystemException::bad_operation()),
             }
         }
         fn dispatch(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<(), rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<(), __rt::SystemException> {
             match self.dispatch_body(__req, __out)? {
-                rt::DispatchBody::Return => Ok(()),
-                rt::DispatchBody::UserException => {
-                    Err(rt::SystemException::unknown_user_exception())
+                __rt::DispatchBody::Return => Ok(()),
+                __rt::DispatchBody::UserException => {
+                    Err(__rt::SystemException::unknown_user_exception())
                 }
             }
         }
     }
 
     /// IDL typedef `IDL:omg.org/CORBA/OpDescriptionSeq:1.0`.
-    pub type OpDescriptionSeq = Vec<crate::emitted::f_ir_subset::CORBA::OperationDescription>;
+    pub type OpDescriptionSeq = ::std::vec::Vec<crate::emitted::f_ir_subset::CORBA::OperationDescription>;
 
     /// IDL struct `IDL:omg.org/CORBA/OperationDescription:1.0`.
     #[derive(Debug, Clone, PartialEq)]
@@ -3504,7 +3504,7 @@ pub mod CORBA {
         /// IDL member `version`, marshalled fourth.
         pub version: crate::emitted::f_ir_subset::CORBA::VersionSpec,
         /// IDL member `result`, marshalled fifth.
-        pub result: orbweaver_gen::rt::TypeCodeVal,
+        pub result: __rt::TypeCodeVal,
         /// IDL member `mode`, marshalled sixth.
         pub mode: crate::emitted::f_ir_subset::CORBA::OperationMode,
         /// IDL member `contexts`, marshalled seventh.
@@ -3514,30 +3514,30 @@ pub mod CORBA {
         /// IDL member `exceptions`, marshalled ninth.
         pub exceptions: crate::emitted::f_ir_subset::CORBA::ExcDescriptionSeq,
     }
-    impl Cdr for OperationDescription {
-        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-            self.name.put(e)?;
-            self.id.put(e)?;
-            self.defined_in.put(e)?;
-            self.version.put(e)?;
-            self.result.put(e)?;
-            self.mode.put(e)?;
-            self.contexts.put(e)?;
-            self.parameters.put(e)?;
-            self.exceptions.put(e)?;
+    impl __Cdr for OperationDescription {
+        fn put(&self, __e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
+            self.name.put(__e)?;
+            self.id.put(__e)?;
+            self.defined_in.put(__e)?;
+            self.version.put(__e)?;
+            self.result.put(__e)?;
+            self.mode.put(__e)?;
+            self.contexts.put(__e)?;
+            self.parameters.put(__e)?;
+            self.exceptions.put(__e)?;
             Ok(())
         }
-        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+        fn get(__d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
             Ok(Self {
-                name: Cdr::get(d)?,
-                id: Cdr::get(d)?,
-                defined_in: Cdr::get(d)?,
-                version: Cdr::get(d)?,
-                result: Cdr::get(d)?,
-                mode: Cdr::get(d)?,
-                contexts: Cdr::get(d)?,
-                parameters: Cdr::get(d)?,
-                exceptions: Cdr::get(d)?,
+                name: __Cdr::get(__d)?,
+                id: __Cdr::get(__d)?,
+                defined_in: __Cdr::get(__d)?,
+                version: __Cdr::get(__d)?,
+                result: __Cdr::get(__d)?,
+                mode: __Cdr::get(__d)?,
+                contexts: __Cdr::get(__d)?,
+                parameters: __Cdr::get(__d)?,
+                exceptions: __Cdr::get(__d)?,
             })
         }
     }
@@ -3550,22 +3550,22 @@ pub mod CORBA {
         /// IDL enumerator `OP_ONEWAY`; ordinal 1 on the wire.
         OP_ONEWAY = 1,
     }
-    impl Cdr for OperationMode {
-        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-            e.put_u32(*self as u32);
+    impl __Cdr for OperationMode {
+        fn put(&self, __e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
+            __e.put_u32(*self as u32);
             Ok(())
         }
-        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
-            Ok(match d.get_u32()? {
+        fn get(__d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
+            Ok(match __d.get_u32()? {
                 0 => Self::OP_NORMAL,
                 1 => Self::OP_ONEWAY,
-                _ => return Err(rt::GiopError::Decode("ordinal outside OperationMode; the sender may be built against a newer contract")),
+                _ => return Err(__rt::GiopError::Decode("ordinal outside OperationMode; the sender may be built against a newer contract")),
             })
         }
     }
 
     /// IDL typedef `IDL:omg.org/CORBA/ParDescriptionSeq:1.0`.
-    pub type ParDescriptionSeq = Vec<crate::emitted::f_ir_subset::CORBA::ParameterDescription>;
+    pub type ParDescriptionSeq = ::std::vec::Vec<crate::emitted::f_ir_subset::CORBA::ParameterDescription>;
 
     /// IDL struct `IDL:omg.org/CORBA/ParameterDescription:1.0`.
     #[derive(Debug, Clone, PartialEq)]
@@ -3573,26 +3573,26 @@ pub mod CORBA {
         /// IDL member `name`, marshalled first.
         pub name: crate::emitted::f_ir_subset::CORBA::Identifier,
         /// IDL member `type`, marshalled second.
-        pub r#type: orbweaver_gen::rt::TypeCodeVal,
+        pub r#type: __rt::TypeCodeVal,
         /// IDL member `type_def`, marshalled third.
-        pub type_def: orbweaver_gen::rt::ObjRef,
+        pub type_def: __rt::ObjRef,
         /// IDL member `mode`, marshalled fourth.
         pub mode: crate::emitted::f_ir_subset::CORBA::ParameterMode,
     }
-    impl Cdr for ParameterDescription {
-        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-            self.name.put(e)?;
-            self.r#type.put(e)?;
-            self.type_def.put(e)?;
-            self.mode.put(e)?;
+    impl __Cdr for ParameterDescription {
+        fn put(&self, __e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
+            self.name.put(__e)?;
+            self.r#type.put(__e)?;
+            self.type_def.put(__e)?;
+            self.mode.put(__e)?;
             Ok(())
         }
-        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+        fn get(__d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
             Ok(Self {
-                name: Cdr::get(d)?,
-                r#type: Cdr::get(d)?,
-                type_def: Cdr::get(d)?,
-                mode: Cdr::get(d)?,
+                name: __Cdr::get(__d)?,
+                r#type: __Cdr::get(__d)?,
+                type_def: __Cdr::get(__d)?,
+                mode: __Cdr::get(__d)?,
             })
         }
     }
@@ -3607,17 +3607,17 @@ pub mod CORBA {
         /// IDL enumerator `PARAM_INOUT`; ordinal 2 on the wire.
         PARAM_INOUT = 2,
     }
-    impl Cdr for ParameterMode {
-        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-            e.put_u32(*self as u32);
+    impl __Cdr for ParameterMode {
+        fn put(&self, __e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
+            __e.put_u32(*self as u32);
             Ok(())
         }
-        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
-            Ok(match d.get_u32()? {
+        fn get(__d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
+            Ok(match __d.get_u32()? {
                 0 => Self::PARAM_IN,
                 1 => Self::PARAM_OUT,
                 2 => Self::PARAM_INOUT,
-                _ => return Err(rt::GiopError::Decode("ordinal outside ParameterMode; the sender may be built against a newer contract")),
+                _ => return Err(__rt::GiopError::Decode("ordinal outside ParameterMode; the sender may be built against a newer contract")),
             })
         }
     }
@@ -3633,53 +3633,53 @@ pub mod CORBA {
     /// `Connection` inside the trust boundary, or over the guarded
     /// wrapper at it — a stub hard-wired to the transport would be the
     /// §4.7 bypass in compiled form.
-    pub struct RepositoryClient<C: rt::Invoker> {
+    pub struct RepositoryClient<C: __rt::Invoker> {
         /// What calls travel over.
         pub conn: C,
     }
-    impl<C: rt::Invoker> RepositoryClient<C> {
+    impl<C: __rt::Invoker> RepositoryClient<C> {
         /// A stub over an open invoker.
-        pub fn new(conn: C) -> Self { Self { conn } }
+        pub fn new(__conn: C) -> Self { Self { conn: __conn } }
         /// Adds a module to the repository; refused on a read-only facade
         ///
         /// `create_module` on the wire.
-        pub fn create_module(&mut self, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> Result<orbweaver_gen::rt::ObjRef, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn create_module(&mut self, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> ::std::result::Result<__rt::ObjRef, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             new_id.put(&mut __probe)?;
             new_name.put(&mut __probe)?;
             new_version.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("create_module", |__e| {
                 let _ = new_id.put(__e);
                 let _ = new_name.put(__e);
                 let _ = new_version.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// The definition registered under a repository id, or nil
         ///
         /// `lookup_id` on the wire.
-        pub fn lookup_id(&mut self, search_id: crate::emitted::f_ir_subset::CORBA::RepositoryId) -> Result<orbweaver_gen::rt::ObjRef, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn lookup_id(&mut self, search_id: crate::emitted::f_ir_subset::CORBA::RepositoryId) -> ::std::result::Result<__rt::ObjRef, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             search_id.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("lookup_id", |__e| {
                 let _ = search_id.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// Which kind of IDL construct this object describes
         ///
         /// `_get_def_kind` on the wire.
-        pub fn def_kind(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, rt::GiopError> {
+        pub fn def_kind(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, __rt::GiopError> {
             let __reply = self.conn.invoke("_get_def_kind", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
     }
@@ -3689,7 +3689,7 @@ pub mod CORBA {
     /// `System` is always here, whatever the contract declares: an unknown
     /// key is `OBJECT_NOT_EXIST`, a refused call is `NO_PERMISSION`, a
     /// temporary refusal is `TRANSIENT`, and IDL has no way to declare any
-    /// of them. Build one with `rt::raise::*`, which does not produce a
+    /// of them. Build one with `orbweaver_gen::rt::raise::*`, which does not produce a
     /// `SystemException` until the completion status is stated — the field
     /// that tells the caller whether a retry is safe, and the one thing a
     /// generator cannot know for a servant.
@@ -3701,14 +3701,14 @@ pub mod CORBA {
     pub enum RepositoryFault {
         /// A CORBA system exception, with the completion status the
         /// servant chose. Travels as a `SystemException` reply.
-        System(rt::SystemException),
+        System(__rt::SystemException),
     }
-    impl From<rt::SystemException> for RepositoryFault {
-        fn from(__ex: rt::SystemException) -> Self {
+    impl ::std::convert::From<__rt::SystemException> for RepositoryFault {
+        fn from(__ex: __rt::SystemException) -> Self {
             Self::System(__ex)
         }
     }
-    impl PartialEq for RepositoryFault {
+    impl ::std::cmp::PartialEq for RepositoryFault {
         fn eq(&self, __other: &Self) -> bool {
             match (self, __other) {
                 (Self::System(__a), Self::System(__b)) => {
@@ -3722,7 +3722,7 @@ pub mod CORBA {
     impl RepositoryFault {
         /// The repository id of the user exception this fault carries, or
         /// `None` for a system exception, which carries its own.
-        pub fn user_id(&self) -> Option<&'static str> {
+        pub fn user_id(&self) -> ::std::option::Option<&'static str> {
             match self {
                 Self::System(_) => None,
             }
@@ -3735,7 +3735,7 @@ pub mod CORBA {
         /// dispatcher hands it to the server to encode instead. That is also why
         /// nothing may be written before the fault is known — the whole buffer
         /// travels under one status.
-        pub fn write(&self, __out: &mut rt::Encoder) -> Result<rt::DispatchBody, rt::SystemException> {
+        pub fn write(&self, __out: &mut __rt::Encoder) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let _ = __out;
             match self {
                 Self::System(__ex) => Err(__ex.clone()),
@@ -3751,7 +3751,7 @@ pub mod CORBA {
     /// root ++ "/Repository/" ++ <oid>    the object named <oid>
     /// ```
     ///
-    /// `root` is the key the `rt::Server` was bound with. The derivation is
+    /// `root` is the key the `orbweaver_gen::rt::Server` was bound with. The derivation is
     /// reversible, so no table of minted keys exists: a reference survives a
     /// restart, and a client cannot make the process grow by looking things
     /// up. The oid is the *whole* remainder after the prefix, so it may
@@ -3765,14 +3765,14 @@ pub mod CORBA {
     /// # Minting
     ///
     /// `reference` and `ior` answer with a real IIOP profile, built by
-    /// `rt::ObjectHome` — the servant never assembles one, which is why the
+    /// `orbweaver_gen::rt::ObjectHome` — the servant never assembles one, which is why the
     /// GIOP version and profile shape are still decided in exactly one
     /// place. `nil` is the nil reference (§9.3.6), the truthful answer when
     /// there is no such object.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct RepositoryRefs {
-        home: rt::ObjectHome,
-        infix: String,
+        home: __rt::ObjectHome,
+        infix: ::std::string::String,
     }
     impl RepositoryRefs {
         /// The repository id minted references advertise.
@@ -3780,42 +3780,42 @@ pub mod CORBA {
         /// What separates the root key from the oid.
         pub const KEY_INFIX: &'static str = "/Repository/";
         /// The scheme rooted at `home`, with the generated infix.
-        pub fn new(home: rt::ObjectHome) -> Self {
-            Self { home, infix: Self::KEY_INFIX.to_owned() }
+        pub fn new(__home: __rt::ObjectHome) -> Self {
+            Self { home: __home, infix: Self::KEY_INFIX.to_owned() }
         }
         /// The same, with a key space this interface shares with another.
         ///
         /// Two skeletons given the same infix must disagree about `knows`
-        /// for every key, or `rt::Servants` will hand a request to
+        /// for every key, or `orbweaver_gen::rt::Servants` will hand a request to
         /// whichever was added first. Sharing a key space is a claim that
         /// the two answer for disjoint sets of objects.
-        pub fn with_infix(home: rt::ObjectHome, infix: impl Into<String>) -> Self {
-            Self { home, infix: infix.into() }
+        pub fn with_infix(__home: __rt::ObjectHome, __infix: impl ::std::convert::Into<::std::string::String>) -> Self {
+            Self { home: __home, infix: __infix.into() }
         }
         /// Where these objects are published.
-        pub fn home(&self) -> &rt::ObjectHome { &self.home }
+        pub fn home(&self) -> &__rt::ObjectHome { &self.home }
         /// The infix in use, generated or overridden.
         pub fn infix(&self) -> &str { &self.infix }
         /// The default object's key, which is also every other key's prefix.
         pub fn root_key(&self) -> &[u8] { self.home.root_key() }
         /// The object key for `oid`; the empty oid is the root key.
-        pub fn key_of(&self, oid: &str) -> Vec<u8> {
-            self.home.key_of(&self.infix, oid)
+        pub fn key_of(&self, __oid: &str) -> ::std::vec::Vec<u8> {
+            self.home.key_of(&self.infix, __oid)
         }
         /// The oid a key addresses, or `None` if it is not one of ours.
-        pub fn oid_of<'a>(&self, key: &'a [u8]) -> Option<&'a str> {
-            self.home.oid_of(&self.infix, key)
+        pub fn oid_of<'a>(&self, __key: &'a [u8]) -> ::std::option::Option<&'a str> {
+            self.home.oid_of(&self.infix, __key)
         }
         /// A reference to `oid`, in the form an operation returns.
-        pub fn reference(&self, oid: &str) -> rt::ObjRef {
-            self.home.reference(Self::TYPE_ID, self.key_of(oid))
+        pub fn reference(&self, __oid: &str) -> __rt::ObjRef {
+            self.home.reference(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The same reference, in the form `LOCATION_FORWARD` carries.
-        pub fn ior(&self, oid: &str) -> rt::Ior {
-            self.home.ior(Self::TYPE_ID, self.key_of(oid))
+        pub fn ior(&self, __oid: &str) -> __rt::Ior {
+            self.home.ior(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The nil reference: there is no such object.
-        pub fn nil() -> rt::ObjRef { rt::ObjectHome::nil() }
+        pub fn nil() -> __rt::ObjRef { __rt::ObjectHome::nil() }
     }
     /// Which `IDL:omg.org/CORBA/Repository:1.0` a call is addressed to.
     ///
@@ -3834,8 +3834,8 @@ pub mod CORBA {
     }
     impl<'a> RepositoryTarget<'a> {
         /// The identity `oid` under `refs`.
-        pub fn new(oid: &'a str, refs: &'a RepositoryRefs) -> Self {
-            Self { oid, refs }
+        pub fn new(__oid: &'a str, __refs: &'a RepositoryRefs) -> Self {
+            Self { oid: __oid, refs: __refs }
         }
         /// Which object this is. The empty oid is the default object,
         /// addressed by the bare root key the server was bound with.
@@ -3845,11 +3845,11 @@ pub mod CORBA {
         /// The key scheme, for minting references into other key spaces.
         pub fn refs(&self) -> &'a RepositoryRefs { self.refs }
         /// The raw object key this call arrived on.
-        pub fn key(&self) -> Vec<u8> { self.refs.key_of(self.oid) }
+        pub fn key(&self) -> ::std::vec::Vec<u8> { self.refs.key_of(self.oid) }
         /// A reference to *this* object, for handing back one's own address.
-        pub fn reference(&self) -> rt::ObjRef { self.refs.reference(self.oid) }
+        pub fn reference(&self) -> __rt::ObjRef { self.refs.reference(self.oid) }
         /// A reference to another object of this interface.
-        pub fn sibling(&self, oid: &str) -> rt::ObjRef { self.refs.reference(oid) }
+        pub fn sibling(&self, __oid: &str) -> __rt::ObjRef { self.refs.reference(__oid) }
     }
     /// The repository itself, the object a client starts from
     ///
@@ -3858,10 +3858,10 @@ pub mod CORBA {
     /// One method per operation and per attribute accessor, taking decoded
     /// Rust arguments. Nothing here mentions GIOP: the wire is entirely the
     /// business of `RepositorySkeleton`, which adapts this trait to
-    /// `rt::Dispatch`.
+    /// `orbweaver_gen::rt::Dispatch`.
     ///
     /// Every method may fail with a `RepositoryFault`: a declared user exception,
-    /// or a system exception built with `rt::raise::*` — the vocabulary
+    /// or a system exception built with `orbweaver_gen::rt::raise::*` — the vocabulary
     /// (`OBJECT_NOT_EXIST`, `NO_PERMISSION`, `BAD_PARAM`, `TRANSIENT`) that
     /// no contract declares and every servant needs.
     ///
@@ -3885,7 +3885,7 @@ pub mod CORBA {
     pub trait RepositoryServant {
         /// Whether this servant answers for the object `__at` names.
         ///
-        /// **Required, with no default.** `rt::Dispatch::knows` defaults to
+        /// **Required, with no default.** `orbweaver_gen::rt::Dispatch::knows` defaults to
         /// accepting everything, which is right for a process with one object and
         /// is exactly what stopped a generated skeleton from ever holding more
         /// than one: an unknown key was served as if it were the only object.
@@ -3895,7 +3895,7 @@ pub mod CORBA {
         ///
         /// A single-object servant writes `__at.is_default()`. A `false` here
         /// becomes `OBJECT_NOT_EXIST` for a request and `UNKNOWN_OBJECT` for a
-        /// `LocateRequest`, and is also how `rt::Servants` picks between
+        /// `LocateRequest`, and is also how `orbweaver_gen::rt::Servants` picks between
         /// skeletons sharing one key space.
         fn knows(&self, __at: &RepositoryTarget<'_>) -> bool;
         /// Where this request should be sent instead, if anywhere.
@@ -3920,14 +3920,14 @@ pub mod CORBA {
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
         /// the address. This hook is the *temporary* forward; an object that has
         /// moved for good says so through `redirect`, below.
-        fn forward(&mut self, __at: &RepositoryTarget<'_>) -> Option<rt::Ior> {
+        fn forward(&mut self, __at: &RepositoryTarget<'_>) -> ::std::option::Option<__rt::Ior> {
             let _ = __at;
             None
         }
         /// Where this request should be sent instead, and whether for good.
         ///
-        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
-        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// The method the runtime actually asks. `orbweaver_gen::rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `orbweaver_gen::rt::Forward::Permanent` is a
         /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
         /// the temporary form, its reply-status enumeration having no other),
         /// and is the one thing a servant can say that lets a client replace the
@@ -3936,21 +3936,21 @@ pub mod CORBA {
         /// Defaults to `forward` wrapped as temporary, so a servant that
         /// overrides only `forward` behaves as it always did. Override this one
         /// to say *permanent*; there is no reason to override both.
-        fn redirect(&mut self, __at: &RepositoryTarget<'_>) -> Option<rt::Forward> {
-            self.forward(__at).map(rt::Forward::Temporary)
+        fn redirect(&mut self, __at: &RepositoryTarget<'_>) -> ::std::option::Option<__rt::Forward> {
+            self.forward(__at).map(__rt::Forward::Temporary)
         }
         /// Adds a module to the repository; refused on a read-only facade
         ///
         /// `create_module` on the wire.
-        fn create_module(&mut self, __at: &RepositoryTarget<'_>, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> Result<orbweaver_gen::rt::ObjRef, RepositoryFault>;
+        fn create_module(&mut self, __at: &RepositoryTarget<'_>, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> ::std::result::Result<__rt::ObjRef, RepositoryFault>;
         /// The definition registered under a repository id, or nil
         ///
         /// `lookup_id` on the wire.
-        fn lookup_id(&mut self, __at: &RepositoryTarget<'_>, search_id: crate::emitted::f_ir_subset::CORBA::RepositoryId) -> Result<orbweaver_gen::rt::ObjRef, RepositoryFault>;
+        fn lookup_id(&mut self, __at: &RepositoryTarget<'_>, search_id: crate::emitted::f_ir_subset::CORBA::RepositoryId) -> ::std::result::Result<__rt::ObjRef, RepositoryFault>;
         /// Which kind of IDL construct this object describes
         ///
         /// `_get_def_kind` on the wire.
-        fn def_kind(&mut self, __at: &RepositoryTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, RepositoryFault>;
+        fn def_kind(&mut self, __at: &RepositoryTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, RepositoryFault>;
     }
     /// One object of `IDL:omg.org/CORBA/Repository:1.0`, for a servant that keeps a value per object.
     ///
@@ -3969,15 +3969,15 @@ pub mod CORBA {
         /// Adds a module to the repository; refused on a read-only facade
         ///
         /// `create_module` on the wire.
-        fn create_module(&mut self, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> Result<orbweaver_gen::rt::ObjRef, RepositoryFault>;
+        fn create_module(&mut self, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> ::std::result::Result<__rt::ObjRef, RepositoryFault>;
         /// The definition registered under a repository id, or nil
         ///
         /// `lookup_id` on the wire.
-        fn lookup_id(&mut self, search_id: crate::emitted::f_ir_subset::CORBA::RepositoryId) -> Result<orbweaver_gen::rt::ObjRef, RepositoryFault>;
+        fn lookup_id(&mut self, search_id: crate::emitted::f_ir_subset::CORBA::RepositoryId) -> ::std::result::Result<__rt::ObjRef, RepositoryFault>;
         /// Which kind of IDL construct this object describes
         ///
         /// `_get_def_kind` on the wire.
-        fn def_kind(&mut self) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, RepositoryFault>;
+        fn def_kind(&mut self) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, RepositoryFault>;
     }
     /// A map from oid to one `RepositoryObject`, serving `IDL:omg.org/CORBA/Repository:1.0`.
     ///
@@ -3991,34 +3991,34 @@ pub mod CORBA {
     /// bare root key addresses. A one-object process inserts exactly that.
     #[derive(Debug, Clone)]
     pub struct RepositoryObjects<S: RepositoryObject> {
-        objects: std::collections::BTreeMap<String, S>,
+        objects: ::std::collections::BTreeMap<::std::string::String, S>,
     }
-    impl<S: RepositoryObject> Default for RepositoryObjects<S> {
+    impl<S: RepositoryObject> ::std::default::Default for RepositoryObjects<S> {
         fn default() -> Self {
-            Self { objects: std::collections::BTreeMap::new() }
+            Self { objects: ::std::collections::BTreeMap::new() }
         }
     }
     impl<S: RepositoryObject> RepositoryObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { <Self as std::default::Default>::default() }
+        pub fn new() -> Self { <Self as ::std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
-        pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
-            self.objects.insert(oid.into(), object)
+        pub fn insert(&mut self, __oid: impl ::std::convert::Into<::std::string::String>, __object: S) -> ::std::option::Option<S> {
+            self.objects.insert(__oid.into(), __object)
         }
         /// Removes an object, after which its key is `OBJECT_NOT_EXIST`.
-        pub fn remove(&mut self, oid: &str) -> Option<S> {
-            self.objects.remove(oid)
+        pub fn remove(&mut self, __oid: &str) -> ::std::option::Option<S> {
+            self.objects.remove(__oid)
         }
         /// The object under `oid`, if there is one.
-        pub fn get(&self, oid: &str) -> Option<&S> { self.objects.get(oid) }
+        pub fn get(&self, __oid: &str) -> ::std::option::Option<&S> { self.objects.get(__oid) }
         /// The object under `oid`, mutably.
-        pub fn get_mut(&mut self, oid: &str) -> Option<&mut S> {
-            self.objects.get_mut(oid)
+        pub fn get_mut(&mut self, __oid: &str) -> ::std::option::Option<&mut S> {
+            self.objects.get_mut(__oid)
         }
         /// Every oid held, in sorted order.
-        pub fn oids(&self) -> impl Iterator<Item = &str> {
-            self.objects.keys().map(String::as_str)
+        pub fn oids(&self) -> impl ::std::iter::Iterator<Item = &str> {
+            self.objects.keys().map(::std::string::String::as_str)
         }
         /// How many objects are held.
         pub fn len(&self) -> usize { self.objects.len() }
@@ -4029,29 +4029,29 @@ pub mod CORBA {
         fn knows(&self, __at: &RepositoryTarget<'_>) -> bool {
             self.objects.contains_key(__at.oid())
         }
-        fn create_module(&mut self, __at: &RepositoryTarget<'_>, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> Result<orbweaver_gen::rt::ObjRef, RepositoryFault> {
+        fn create_module(&mut self, __at: &RepositoryTarget<'_>, new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId, new_name: crate::emitted::f_ir_subset::CORBA::Identifier, new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec) -> ::std::result::Result<__rt::ObjRef, RepositoryFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.create_module(new_id, new_name, new_version),
-                None => Err(RepositoryFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(RepositoryFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn lookup_id(&mut self, __at: &RepositoryTarget<'_>, search_id: crate::emitted::f_ir_subset::CORBA::RepositoryId) -> Result<orbweaver_gen::rt::ObjRef, RepositoryFault> {
+        fn lookup_id(&mut self, __at: &RepositoryTarget<'_>, search_id: crate::emitted::f_ir_subset::CORBA::RepositoryId) -> ::std::result::Result<__rt::ObjRef, RepositoryFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.lookup_id(search_id),
-                None => Err(RepositoryFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(RepositoryFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn def_kind(&mut self, __at: &RepositoryTarget<'_>) -> Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, RepositoryFault> {
+        fn def_kind(&mut self, __at: &RepositoryTarget<'_>) -> ::std::result::Result<crate::emitted::f_ir_subset::CORBA::DefinitionKind, RepositoryFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.def_kind(),
-                None => Err(RepositoryFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(RepositoryFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
     }
     /// Serves `IDL:omg.org/CORBA/Repository:1.0`: decodes the request, calls the servant, encodes the reply.
     ///
-    /// Hand it to `rt::Server::serve` in place of a hand-written
-    /// `rt::Dispatch`. What it answers, beyond the contract's own
+    /// Hand it to `orbweaver_gen::rt::Server::serve` in place of a hand-written
+    /// `orbweaver_gen::rt::Dispatch`. What it answers, beyond the contract's own
     /// operations:
     ///
     /// * `_is_a`, from the inheritance chain the registry resolved, because
@@ -4082,65 +4082,65 @@ pub mod CORBA {
     impl<S: RepositoryServant> RepositorySkeleton<S> {
         /// A skeleton serving `servant`'s objects under `refs`.
         ///
-        /// `refs` must be rooted at the key the `rt::Server` was bound
+        /// `refs` must be rooted at the key the `orbweaver_gen::rt::Server` was bound
         /// with, or nothing this skeleton parses will match what arrives.
-        pub fn new(refs: RepositoryRefs, servant: S) -> Self {
-            Self { servant, refs }
+        pub fn new(__refs: RepositoryRefs, __servant: S) -> Self {
+            Self { servant: __servant, refs: __refs }
         }
         /// The key scheme in force, for minting references to these objects.
         pub fn refs(&self) -> &RepositoryRefs { &self.refs }
     }
-    impl<S: RepositoryServant> rt::Dispatch for RepositorySkeleton<S> {
+    impl<S: RepositoryServant> __rt::Dispatch for RepositorySkeleton<S> {
         fn knows(&self, __object_key: &[u8]) -> bool {
             match self.refs.oid_of(__object_key) {
                 Some(__oid) => self.servant.knows(&RepositoryTarget::new(__oid, &self.refs)),
                 None => false,
             }
         }
-        fn forward(&mut self, __req: &rt::Request) -> Option<rt::Ior> {
+        fn forward(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Ior> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = RepositoryTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
         }
-        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+        fn redirect(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Forward> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = RepositoryTarget::new(__oid, &self.refs);
             self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<rt::DispatchBody, rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let __oid = self
                 .refs
                 .oid_of(&__req.object_key)
-                .ok_or_else(rt::SystemException::object_not_exist)?;
+                .ok_or_else(__rt::SystemException::object_not_exist)?;
             let __at = RepositoryTarget::new(__oid, &self.refs);
-            let mut __args = __req.body().map_err(|_| rt::SystemException::marshal())?;
+            let mut __args = __req.body().map_err(|_| __rt::SystemException::marshal())?;
             match __req.operation.as_str() {
                 "create_module" => {
-                    let new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let new_name: crate::emitted::f_ir_subset::CORBA::Identifier = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let new_id: crate::emitted::f_ir_subset::CORBA::RepositoryId = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let new_name: crate::emitted::f_ir_subset::CORBA::Identifier = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let new_version: crate::emitted::f_ir_subset::CORBA::VersionSpec = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.create_module(&__at, new_id, new_name, new_version) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "lookup_id" => {
-                    let search_id: crate::emitted::f_ir_subset::CORBA::RepositoryId = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let search_id: crate::emitted::f_ir_subset::CORBA::RepositoryId = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.lookup_id(&__at, search_id) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -4148,59 +4148,59 @@ pub mod CORBA {
                 "_get_def_kind" => {
                     match self.servant.def_kind(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "_is_a" => {
-                    let __id: String = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let __id: ::std::string::String = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     let __answer = matches!(__id.as_str(),
                         "IDL:omg.org/CORBA/Container:1.0" |
                         "IDL:omg.org/CORBA/IRObject:1.0" |
                         "IDL:omg.org/CORBA/Repository:1.0" |
-                        rt::OBJECT_ID);
-                    __answer.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                        __rt::OBJECT_ID);
+                    __answer.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
                 "_non_existent" => {
-                    false.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                    false.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
-                _ => Err(rt::SystemException::bad_operation()),
+                _ => Err(__rt::SystemException::bad_operation()),
             }
         }
         fn dispatch(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<(), rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<(), __rt::SystemException> {
             match self.dispatch_body(__req, __out)? {
-                rt::DispatchBody::Return => Ok(()),
-                rt::DispatchBody::UserException => {
-                    Err(rt::SystemException::unknown_user_exception())
+                __rt::DispatchBody::Return => Ok(()),
+                __rt::DispatchBody::UserException => {
+                    Err(__rt::SystemException::unknown_user_exception())
                 }
             }
         }
     }
 
     /// IDL typedef `IDL:omg.org/CORBA/RepositoryId:1.0`.
-    pub type RepositoryId = String;
+    pub type RepositoryId = ::std::string::String;
 
     /// IDL typedef `IDL:omg.org/CORBA/RepositoryIdSeq:1.0`.
-    pub type RepositoryIdSeq = Vec<crate::emitted::f_ir_subset::CORBA::RepositoryId>;
+    pub type RepositoryIdSeq = ::std::vec::Vec<crate::emitted::f_ir_subset::CORBA::RepositoryId>;
 
     /// IDL typedef `IDL:omg.org/CORBA/ScopedName:1.0`.
-    pub type ScopedName = String;
+    pub type ScopedName = ::std::string::String;
 
     /// IDL typedef `IDL:omg.org/CORBA/VersionSpec:1.0`.
-    pub type VersionSpec = String;
+    pub type VersionSpec = ::std::string::String;
 
     /// IDL module `InterfaceDef`.
     pub mod InterfaceDef {
-        use orbweaver_gen::rt::{self, Cdr};
+        use ::orbweaver_gen::rt::{self as __rt, Cdr as __Cdr};
         /// IDL struct `IDL:omg.org/CORBA/InterfaceDef/FullInterfaceDescription:1.0`.
         #[derive(Debug, Clone, PartialEq)]
         pub struct FullInterfaceDescription {
@@ -4219,30 +4219,30 @@ pub mod CORBA {
             /// IDL member `base_interfaces`, marshalled seventh.
             pub base_interfaces: crate::emitted::f_ir_subset::CORBA::RepositoryIdSeq,
             /// IDL member `type`, marshalled eighth.
-            pub r#type: orbweaver_gen::rt::TypeCodeVal,
+            pub r#type: __rt::TypeCodeVal,
         }
-        impl Cdr for FullInterfaceDescription {
-            fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-                self.name.put(e)?;
-                self.id.put(e)?;
-                self.defined_in.put(e)?;
-                self.version.put(e)?;
-                self.operations.put(e)?;
-                self.attributes.put(e)?;
-                self.base_interfaces.put(e)?;
-                self.r#type.put(e)?;
+        impl __Cdr for FullInterfaceDescription {
+            fn put(&self, __e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
+                self.name.put(__e)?;
+                self.id.put(__e)?;
+                self.defined_in.put(__e)?;
+                self.version.put(__e)?;
+                self.operations.put(__e)?;
+                self.attributes.put(__e)?;
+                self.base_interfaces.put(__e)?;
+                self.r#type.put(__e)?;
                 Ok(())
             }
-            fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+            fn get(__d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
                 Ok(Self {
-                    name: Cdr::get(d)?,
-                    id: Cdr::get(d)?,
-                    defined_in: Cdr::get(d)?,
-                    version: Cdr::get(d)?,
-                    operations: Cdr::get(d)?,
-                    attributes: Cdr::get(d)?,
-                    base_interfaces: Cdr::get(d)?,
-                    r#type: Cdr::get(d)?,
+                    name: __Cdr::get(__d)?,
+                    id: __Cdr::get(__d)?,
+                    defined_in: __Cdr::get(__d)?,
+                    version: __Cdr::get(__d)?,
+                    operations: __Cdr::get(__d)?,
+                    attributes: __Cdr::get(__d)?,
+                    base_interfaces: __Cdr::get(__d)?,
+                    r#type: __Cdr::get(__d)?,
                 })
             }
         }

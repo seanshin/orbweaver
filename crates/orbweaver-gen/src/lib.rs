@@ -58,6 +58,28 @@
 //! keyword list, which was missing `yield` and would have emitted
 //! `fn yield(&mut self)` for a legal IDL contract. `corpus/golden/28-target-
 //! keywords.idl` exists so that neither comes back.
+//!
+//! # Whose name is whose
+//!
+//! A generated file holds two kinds of name and they must not be able to
+//! collide, because a collision is silent until a consumer's contract happens
+//! to use the word:
+//!
+//! * **The contract's**, spelled by [`ident`] here and by
+//!   [`python::python_name`] there — one function per target, called at every
+//!   site that writes a name *and* at every site that looks one up. Where Rust
+//!   will not let the contract's name stand (`Self`; the prelude constructors
+//!   a pattern matches instead of binding; a primitive the emitted code writes
+//!   bare), that function moves it.
+//! * **The generator's**, reached through a path the contract cannot bind:
+//!   `__rt`/`__Cdr`, whose leading underscores no IDL identifier can spell,
+//!   an absolute `::std::…`, or a `__`-prefixed local.
+//!
+//! Measured 2026-08-25 across 2793 probes — 147 identifiers in 19 positions,
+//! compiling the Rust and importing the Python — the two kinds could collide
+//! in six ways and did in 92 of them. `tests/one_spelling_for_an_identifier.rs`
+//! is the pin, and it scans the *whole corpus* rather than one probe, because
+//! the half that stays fallible is an emitter writing a bare name tomorrow.
 
 #![deny(missing_docs)]
 
@@ -101,10 +123,64 @@ const KEYWORDS: &[&str] = &[
     "priv", "try", "typeof", "unsized", "virtual", "yield",
 ];
 
+/// Keywords a raw identifier cannot spell at all.
+///
+/// `r#self` is not a raw identifier, it is an error, and `r#Self` likewise —
+/// which is why these get a suffix rather than a prefix. `Self` belongs here
+/// and was missing until 2026-08-25, so `pub struct Self {`, `pub mod Self {`,
+/// `pub const Self: i32`, `Self = 0,` and `pub type Self = …` were all emitted
+/// for a legal contract, in **fifteen of nineteen** measured positions. The
+/// list this was measured against is Rust's, not a guess: every keyword,
+/// reserved word included, in every position this generator emits.
+const CANNOT_BE_RAW: &[&str] = &["self", "super", "crate", "Self"];
+
+/// Names Rust will not let a *binding* carry, whatever it is escaped with.
+///
+/// These are the prelude's unit and tuple constructors, and the rule that
+/// catches them is about patterns: a function parameter, and the `let` a
+/// skeleton decodes an argument into, are patterns, and a pattern spelling a
+/// constructor matches the constructor instead of binding a name
+/// (`E0530`/`E0532` for the tuple ones, a type mismatch for `None`). `r#Ok` is
+/// no help — it resolves to exactly the same `Ok` — and neither is qualifying
+/// what the *generator* writes, because the offending name is the contract's
+/// own. So the emitted name moves, and it is the only class here where that is
+/// true. A constant is the one item kind that can bind one of these at module
+/// scope, which is why `const long Ok = 1;` beside any interface stopped the
+/// crate compiling while `struct Ok` never did.
+const CANNOT_BE_A_BINDING: &[&str] = &["Ok", "Err", "Some", "None"];
+
+/// The primitive type names the emitted code writes bare.
+///
+/// A contract item of one of these names shadows the primitive **inside its own
+/// module**, which is where every generated member and signature is: measured,
+/// `struct i32 { long a; }` emits `pub a: i32` naming the struct and rustc
+/// answers `recursive type has infinite size`; `typedef sequence<long> i32`
+/// emits a type alias whose expansion is a cycle. Spelling them
+/// `::std::primitive::i32` would work and would put the qualification in the
+/// one place a reader looks most — every member line — so the name moves
+/// instead. The set is closed: Rust does not gain primitives, so this list
+/// cannot fall behind the emitter the way a list of library paths would, and
+/// that is exactly why the library paths are qualified rather than listed here.
+const PRIMITIVES: &[&str] =
+    &["bool", "u8", "u16", "u32", "u64", "usize", "i16", "i32", "i64", "f32", "f64", "str"];
+
+/// One IDL identifier as one Rust identifier — the only place that decides.
+///
+/// Every site in this crate that *writes* a name into generated Rust calls
+/// this, and so does every site that *looks one up*. That is not tidiness: a
+/// second spelling of the rule is a second answer, and the day the two disagree
+/// nothing is red — the generated file compiles and the caller looks up a name
+/// that is not there. The Python target has the same single function
+/// ([`python::python_name`]) for the same reason, and it is public because the
+/// oracle that drives generated code needs the same answer the emitter gave.
 pub(crate) fn ident(name: &str) -> String {
-    // `self`/`super`/`crate` cannot be raw identifiers; suffix those instead.
     match name {
-        "self" | "super" | "crate" => format!("{name}_"),
+        n if CANNOT_BE_RAW.contains(&n)
+            || CANNOT_BE_A_BINDING.contains(&n)
+            || PRIMITIVES.contains(&n) =>
+        {
+            format!("{n}_")
+        }
         n if KEYWORDS.contains(&n) => format!("r#{n}"),
         n => n.to_owned(),
     }
@@ -204,7 +280,7 @@ pub(crate) fn rust_type(tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
     Ok(match tc {
         TypeCode::Boolean => "bool".into(),
         TypeCode::Octet | TypeCode::Char => "u8".into(),
-        TypeCode::WChar => "orbweaver_gen::rt::WChar".into(),
+        TypeCode::WChar => "__rt::WChar".into(),
         TypeCode::Short => "i16".into(),
         TypeCode::UShort => "u16".into(),
         TypeCode::Long => "i32".into(),
@@ -213,20 +289,22 @@ pub(crate) fn rust_type(tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
         TypeCode::ULongLong => "u64".into(),
         TypeCode::Float => "f32".into(),
         TypeCode::Double => "f64".into(),
-        TypeCode::LongDouble => "orbweaver_gen::rt::LongDouble".into(),
-        TypeCode::String(0) => "String".into(),
-        TypeCode::String(bound) => format!("orbweaver_gen::rt::Bounded<String, {bound}>"),
-        TypeCode::WString(0) => "orbweaver_gen::rt::WString".into(),
+        TypeCode::LongDouble => "__rt::LongDouble".into(),
+        TypeCode::String(0) => "::std::string::String".into(),
+        TypeCode::String(bound) => format!("__rt::Bounded<::std::string::String, {bound}>"),
+        TypeCode::WString(0) => "__rt::WString".into(),
         TypeCode::WString(bound) => {
-            format!("orbweaver_gen::rt::Bounded<orbweaver_gen::rt::WString, {bound}>")
+            format!("__rt::Bounded<__rt::WString, {bound}>")
         }
-        TypeCode::Any => "orbweaver_gen::rt::AnyVal".into(),
-        TypeCode::TypeCode => "orbweaver_gen::rt::TypeCodeVal".into(),
+        TypeCode::Any => "__rt::AnyVal".into(),
+        TypeCode::TypeCode => "__rt::TypeCodeVal".into(),
         TypeCode::Void | TypeCode::Null => "()".into(),
-        TypeCode::ObjRef { .. } => "orbweaver_gen::rt::ObjRef".into(),
-        TypeCode::Sequence { element, bound: 0 } => format!("Vec<{}>", rust_type(element, cx)?),
+        TypeCode::ObjRef { .. } => "__rt::ObjRef".into(),
+        TypeCode::Sequence { element, bound: 0 } => {
+            format!("::std::vec::Vec<{}>", rust_type(element, cx)?)
+        }
         TypeCode::Sequence { element, bound } => {
-            format!("orbweaver_gen::rt::Bounded<Vec<{}>, {bound}>", rust_type(element, cx)?)
+            format!("__rt::Bounded<::std::vec::Vec<{}>, {bound}>", rust_type(element, cx)?)
         }
         TypeCode::Array { element, length } => {
             format!("[{}; {length}]", rust_type(element, cx)?)
@@ -751,9 +829,45 @@ pub fn emit(registry: &Registry, root: &str) -> Generated {
     if !out.skipped.is_empty() {
         let _ = writeln!(src);
     }
+    // The file scope needs the runtime too, and did not have it: an IDL
+    // declaration outside any `module` lands here, and `impl __Cdr for TopS`
+    // with no import at all does not compile. Every corpus file happens to open
+    // a module, which is the whole reason nothing was red.
+    if needs_runtime(by_module.get(&Vec::new())) {
+        let _ = writeln!(src, "{RUNTIME_IMPORT}");
+        let _ = writeln!(src);
+    }
     write_modules(&mut src, &by_module, &[], 0);
     out.source = src;
     out
+}
+
+/// How generated code reaches the runtime, under names IDL cannot spell.
+///
+/// An IDL identifier cannot begin with an underscore — a leading one is the
+/// *escape* that names the identifier without it — so `__rt` and `__Cdr` are
+/// two names no contract can bind, and the plain `rt` and `Cdr` this used to
+/// import are two names a contract binds by declaring `module rt` or
+/// `struct Cdr`. Both did: measured 2026-08-25, `rt`, `Cdr` and the crate name
+/// `orbweaver_gen` between them broke sixteen probes with `E0255` (the import
+/// redefined), `E0659` (ambiguous crate name) and `E0574`.
+///
+/// The leading `::` is the other half: `::orbweaver_gen` is the extern prelude
+/// and never a top-level module of the generated crate, so `module
+/// orbweaver_gen { … }` cannot make the import ambiguous either.
+///
+/// This is the strongest form of the fix available and the reason it is
+/// preferred to a list: after it, an emitter that writes a bare `rt::` does not
+/// compile, because there is no `rt` in scope any more.
+const RUNTIME_IMPORT: &str = "use ::orbweaver_gen::rt::{self as __rt, Cdr as __Cdr};";
+
+/// Whether anything at one module path names the runtime.
+///
+/// A constant is the first item kind that touches neither, so a module of
+/// nothing but constants — or of nothing but child modules — would carry an
+/// unused import, and generated code is built with `-D warnings`.
+fn needs_runtime(items: Option<&Vec<String>>) -> bool {
+    items.is_some_and(|items| items.iter().any(|i| i.contains("__rt::") || i.contains("__Cdr")))
 }
 
 fn write_modules(
@@ -785,16 +899,10 @@ fn write_modules(
         next.push(child.clone());
         let _ = writeln!(src, "{pad}/// IDL module `{child}`.");
         let _ = writeln!(src, "{pad}pub mod {} {{", ident(child));
-        // Only when something in this module actually names it. A constant is
-        // the first item kind that touches neither `rt` nor `Cdr`, so a module
-        // holding nothing but constants — or nothing but child modules, which
-        // was always possible and never happened to occur — would have carried
-        // an unused import, and generated code is built with `-D warnings`.
-        if by_module
-            .get(&next)
-            .is_some_and(|items| items.iter().any(|i| i.contains("rt::") || i.contains("Cdr")))
-        {
-            let _ = writeln!(src, "{pad}    use orbweaver_gen::rt::{{self, Cdr}};");
+        // A `use` does not reach into a nested module, so every module that
+        // names the runtime imports it again.
+        if needs_runtime(by_module.get(&next)) {
+            let _ = writeln!(src, "{pad}    {RUNTIME_IMPORT}");
         }
         write_modules(src, by_module, &next, depth + 1);
         let _ = writeln!(src, "{pad}}}");
@@ -814,24 +922,28 @@ fn emit_type(id: &str, tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
                 let _ = writeln!(s, "    pub {}: {},", ident(&m.name), rust_type(&m.tc, cx)?);
             }
             let _ = writeln!(s, "}}");
-            let (ep, dp) = if members.is_empty() { ("_e", "_d") } else { ("e", "d") };
-            let _ = writeln!(s, "impl Cdr for {} {{", ident(name));
+            // `__`-prefixed, so a contract constant named `e` or `d` cannot be
+            // what these resolve to; still `_`-prefixed when there is nothing
+            // to marshal, so an empty struct raises no unused-variable warning.
+            let (ep, dp) =
+                if members.is_empty() { ("__unused_e", "__unused_d") } else { ("__e", "__d") };
+            let _ = writeln!(s, "impl __Cdr for {} {{", ident(name));
             let _ = writeln!(
                 s,
-                "    fn put(&self, {ep}: &mut rt::Encoder) -> Result<(), rt::GiopError> {{"
+                "    fn put(&self, {ep}: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {{"
             );
             for m in members {
-                let _ = writeln!(s, "        self.{}.put(e)?;", ident(&m.name));
+                let _ = writeln!(s, "        self.{}.put(__e)?;", ident(&m.name));
             }
             let _ = writeln!(s, "        Ok(())");
             let _ = writeln!(s, "    }}");
             let _ = writeln!(
                 s,
-                "    fn get({dp}: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {{"
+                "    fn get({dp}: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {{"
             );
             let _ = writeln!(s, "        Ok(Self {{");
             for m in members {
-                let _ = writeln!(s, "            {}: Cdr::get(d)?,", ident(&m.name));
+                let _ = writeln!(s, "            {}: __Cdr::get(__d)?,", ident(&m.name));
             }
             let _ = writeln!(s, "        }})");
             let _ = writeln!(s, "    }}");
@@ -848,25 +960,27 @@ fn emit_type(id: &str, tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
                 let _ = writeln!(s, "    {} = {i},", ident(m));
             }
             let _ = writeln!(s, "}}");
-            let _ = writeln!(s, "impl Cdr for {} {{", ident(name));
+            let _ = writeln!(s, "impl __Cdr for {} {{", ident(name));
             let _ = writeln!(
                 s,
-                "    fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {{"
+                "    fn put(&self, __e: &mut __rt::Encoder) \
+         -> ::std::result::Result<(), __rt::GiopError> {{"
             );
-            let _ = writeln!(s, "        e.put_u32(*self as u32);");
+            let _ = writeln!(s, "        __e.put_u32(*self as u32);");
             let _ = writeln!(s, "        Ok(())");
             let _ = writeln!(s, "    }}");
             let _ = writeln!(
                 s,
-                "    fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {{"
+                "    fn get(__d: &mut __rt::Decoder<'_>) \
+         -> ::std::result::Result<Self, __rt::GiopError> {{"
             );
-            let _ = writeln!(s, "        Ok(match d.get_u32()? {{");
+            let _ = writeln!(s, "        Ok(match __d.get_u32()? {{");
             for (i, m) in members.iter().enumerate() {
                 let _ = writeln!(s, "            {i} => Self::{},", ident(m));
             }
             let _ = writeln!(
                 s,
-                "            _ => return Err(rt::GiopError::Decode(\"ordinal outside {name}; \
+                "            _ => return Err(__rt::GiopError::Decode(\"ordinal outside {name}; \
                  the sender may be built against a newer contract\")),"
             );
             let _ = writeln!(s, "        }})");
@@ -886,7 +1000,7 @@ fn emit_type(id: &str, tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
         // given a body in this file; the type alias keeps references to it
         // compilable.
         TypeCode::ObjRef { name, .. } => Ok(format!(
-            "/// IDL interface `{id}` (reference type).\npub type {}Ref = rt::ObjRef;",
+            "/// IDL interface `{id}` (reference type).\npub type {}Ref = __rt::ObjRef;",
             ident(name)
         )),
         other => Err(match rust_type(other, cx) {
@@ -988,7 +1102,7 @@ fn const_form(tc: &TypeCode, v: &ConstValue, cx: &Cx<'_>) -> Result<Form, String
                 .ok()
                 .and_then(char::from_u32)
                 .ok_or_else(|| format!("{i} is not a code point"))?;
-            plain(rust_type(tc, cx)?, format!("orbweaver_gen::rt::WChar({})", char_literal(c)))
+            plain(rust_type(tc, cx)?, format!("__rt::WChar({})", char_literal(c)))
         }
         (TypeCode::Enum { id, .. }, ConstValue::Enum { member, .. }) => {
             plain(rust_type(tc, cx)?, format!("{}::{}", rust_path(id, cx), ident(member)))
@@ -1112,6 +1226,18 @@ fn emit_union(
     }
     let exhaustive = matches!(disc_tc, TypeCode::Boolean) && branches.len() == 2;
     let has_default = branches.iter().any(|b| b.is_default);
+    // The escape arm's name is *minted*, not taken from the contract, and it
+    // lands in the same namespace the contract's branch names land in: a union
+    // with a member called `Unlisted_` declared the variant twice and the crate
+    // did not compile (`E0428`, measured 2026-08-25). A minted name yields to
+    // the contract's, because the contract's is the one a reader asked for.
+    let unlisted = {
+        let mut n = "Unlisted_".to_owned();
+        while branches.iter().any(|b| ident(b.member) == n) {
+            n.push('_');
+        }
+        n
+    };
 
     let mut s = String::new();
     let _ = writeln!(s, "/// IDL union `{id}`. The discriminator travels first.");
@@ -1156,36 +1282,47 @@ fn emit_union(
     if !has_default && !exhaustive {
         let _ = writeln!(s, "    /// A discriminator matching no case: legal, and the value");
         let _ = writeln!(s, "    /// is the discriminator alone.");
-        let _ = writeln!(s, "    Unlisted_({}),", disc.ty);
+        let _ = writeln!(s, "    {unlisted}({}),", disc.ty);
     }
     let _ = writeln!(s, "}}");
 
-    let _ = writeln!(s, "impl Cdr for {} {{", ident(name));
-    let _ = writeln!(s, "    fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {{");
+    let _ = writeln!(s, "impl __Cdr for {} {{", ident(name));
+    let _ = writeln!(
+        s,
+        "    fn put(&self, __e: &mut __rt::Encoder) \
+         -> ::std::result::Result<(), __rt::GiopError> {{"
+    );
     let _ = writeln!(s, "        match self {{");
     for b in &branches {
         if b.is_default || b.labels.len() > 1 {
-            let _ = writeln!(s, "            Self::{} {{ d, v }} => {{", ident(b.member));
-            let _ = writeln!(s, "                e.{}(*d);", disc.put);
-            let _ = writeln!(s, "                v.put(e)?;");
+            // `d: __d, v: __v` rather than the field shorthand: a shorthand
+            // field pattern is a binding, and a contract constant named `d`
+            // turns it into a constant pattern instead.
+            let _ = writeln!(s, "            Self::{} {{ d: __d, v: __v }} => {{", ident(b.member));
+            let _ = writeln!(s, "                __e.{}(*__d);", disc.put);
+            let _ = writeln!(s, "                __v.put(__e)?;");
             let _ = writeln!(s, "            }}");
         } else {
-            let _ = writeln!(s, "            Self::{}(v) => {{", ident(b.member));
-            let _ = writeln!(s, "                e.{}({});", disc.put, b.labels[0]);
-            let _ = writeln!(s, "                v.put(e)?;");
+            let _ = writeln!(s, "            Self::{}(__v) => {{", ident(b.member));
+            let _ = writeln!(s, "                __e.{}({});", disc.put, b.labels[0]);
+            let _ = writeln!(s, "                __v.put(__e)?;");
             let _ = writeln!(s, "            }}");
         }
     }
     if !has_default && !exhaustive {
-        let _ = writeln!(s, "            Self::Unlisted_(d) => e.{}(*d),", disc.put);
+        let _ = writeln!(s, "            Self::{unlisted}(__d) => __e.{}(*__d),", disc.put);
     }
     let _ = writeln!(s, "        }}");
     let _ = writeln!(s, "        Ok(())");
     let _ = writeln!(s, "    }}");
 
-    let _ = writeln!(s, "    fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {{");
-    let _ = writeln!(s, "        let disc = d.{}()?;", disc.get);
-    let _ = writeln!(s, "        Ok(match disc {{");
+    let _ = writeln!(
+        s,
+        "    fn get(__d: &mut __rt::Decoder<'_>) \
+         -> ::std::result::Result<Self, __rt::GiopError> {{"
+    );
+    let _ = writeln!(s, "        let __disc = __d.{}()?;", disc.get);
+    let _ = writeln!(s, "        Ok(match __disc {{");
     for b in &branches {
         if b.is_default {
             continue;
@@ -1194,21 +1331,22 @@ fn emit_union(
         if b.labels.len() > 1 {
             let _ = writeln!(
                 s,
-                "            {pat} => Self::{} {{ d: disc, v: Cdr::get(d)? }},",
+                "            {pat} => Self::{} {{ d: __disc, v: __Cdr::get(__d)? }},",
                 ident(b.member)
             );
         } else {
-            let _ = writeln!(s, "            {pat} => Self::{}(Cdr::get(d)?),", ident(b.member));
+            let _ =
+                writeln!(s, "            {pat} => Self::{}(__Cdr::get(__d)?),", ident(b.member));
         }
     }
     if let Some(b) = branches.iter().find(|b| b.is_default) {
         let _ = writeln!(
             s,
-            "            _ => Self::{} {{ d: disc, v: Cdr::get(d)? }},",
+            "            _ => Self::{} {{ d: __disc, v: __Cdr::get(__d)? }},",
             ident(b.member)
         );
     } else if !exhaustive {
-        let _ = writeln!(s, "            _ => Self::Unlisted_(disc),");
+        let _ = writeln!(s, "            _ => Self::{unlisted}(__disc),");
     }
     let _ = writeln!(s, "        }})");
     let _ = writeln!(s, "    }}");
@@ -1236,13 +1374,13 @@ fn emit_interface(registry: &Registry, id: &str, cx: &Cx<'_>) -> Result<String, 
     let _ = writeln!(s, "/// `Connection` inside the trust boundary, or over the guarded");
     let _ = writeln!(s, "/// wrapper at it — a stub hard-wired to the transport would be the");
     let _ = writeln!(s, "/// §4.7 bypass in compiled form.");
-    let _ = writeln!(s, "pub struct {}Client<C: rt::Invoker> {{", ident(&name));
+    let _ = writeln!(s, "pub struct {}Client<C: __rt::Invoker> {{", ident(&name));
     let _ = writeln!(s, "    /// What calls travel over.");
     let _ = writeln!(s, "    pub conn: C,");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "impl<C: rt::Invoker> {}Client<C> {{", ident(&name));
+    let _ = writeln!(s, "impl<C: __rt::Invoker> {}Client<C> {{", ident(&name));
     let _ = writeln!(s, "    /// A stub over an open invoker.");
-    let _ = writeln!(s, "    pub fn new(conn: C) -> Self {{ Self {{ conn }} }}");
+    let _ = writeln!(s, "    pub fn new(__conn: C) -> Self {{ Self {{ conn: __conn }} }}");
 
     // Operations and attributes, inherited ones included: a stub less capable
     // than the dynamic invoker would fail the oracle before it failed a user.
@@ -1280,18 +1418,18 @@ fn emit_operation(
     }
     let _ = writeln!(
         s,
-        "    pub fn {}(&mut self{params}) -> Result<{ret_ty}, rt::GiopError> {{",
+        "    pub fn {}(&mut self{params}) -> ::std::result::Result<{ret_ty}, __rt::GiopError> {{",
         ident(rust_name)
     );
     // Marshal into a probe first, so a bad argument is a local error rather
     // than a half-written message — the same rule the dynamic invoker follows.
     // No arguments, nothing that can fail, no probe.
     if !ins.is_empty() {
-        let _ = writeln!(s, "        let mut __probe = rt::Encoder::new(self.conn.endian());");
+        let _ = writeln!(s, "        let mut __probe = __rt::Encoder::new(self.conn.endian());");
         for (p, _) in ins {
             let _ = writeln!(s, "        {p}.put(&mut __probe)?;");
         }
-        let _ = writeln!(s, "        __probe.finish().map_err(rt::GiopError::Cdr)?;");
+        let _ = writeln!(s, "        __probe.finish().map_err(__rt::GiopError::Cdr)?;");
     }
     // __e starts with an underscore, so an argless operation whose closure
     // never touches it raises no unused-variable warning — one spelling serves.
@@ -1315,7 +1453,7 @@ fn emit_operation(
         let _ = writeln!(s, "        let mut __body = __reply.body()?;");
     }
     for i in 0..shape.rets.len() {
-        let _ = writeln!(s, "        let __r{i} = Cdr::get(&mut __body)?;");
+        let _ = writeln!(s, "        let __r{i} = __Cdr::get(&mut __body)?;");
         reads.push(format!("__r{i}"));
     }
     match reads.len() {
@@ -1384,7 +1522,10 @@ mod tests {
         );
         assert!(g.source.contains("one(i32)"), "{}", g.source);
         let s_branch = g.source.split("s {").nth(1).expect("the multi-label branch");
-        assert!(s_branch.contains("d: i32,") && s_branch.contains("v: String,"), "{s_branch}");
+        assert!(
+            s_branch.contains("d: i32,") && s_branch.contains("v: ::std::string::String,"),
+            "{s_branch}"
+        );
         let b_branch = g.source.split("b {").nth(1).expect("the default branch");
         assert!(b_branch.contains("d: i32,") && b_branch.contains("v: bool,"), "{b_branch}");
         assert!(g.source.contains("2i32 | 3i32 =>"), "{}", g.source);
@@ -1408,7 +1549,11 @@ mod tests {
         assert_eq!(g.source.matches("misc {").count(), 3, "declared once, put once, got once");
         assert!(!g.source.contains("misc(i16)"), "{}", g.source);
         assert!(g.source.contains("also selected by 5i16 or 6i16"), "{}", g.source);
-        assert!(g.source.contains("_ => Self::misc { d: disc, v: Cdr::get(d)? }"), "{}", g.source);
+        assert!(
+            g.source.contains("_ => Self::misc { d: __disc, v: __Cdr::get(__d)? }"),
+            "{}",
+            g.source
+        );
         assert!(!g.source.contains("5i16 =>") && !g.source.contains("6i16 =>"), "{}", g.source);
     }
 
@@ -1486,7 +1631,7 @@ mod tests {
             "pub const FALLBACK: crate::g::m::Colour = crate::g::m::Colour::BLUE;",
             "pub const MASK: u8 = 240;",
             "pub const TAB: u8 = 9;",
-            "pub const HAN: orbweaver_gen::rt::WChar = orbweaver_gen::rt::WChar('한');",
+            "pub const HAN: __rt::WChar = __rt::WChar('한');",
             "pub const RATIO: f32 = 0.5;",
             "pub const BIG: u64 = 4294967296;",
             "pub const QUOTED: &str = \"say \\\"hi\\\"\";",
@@ -1546,6 +1691,48 @@ mod tests {
         assert!(derived.contains("fn own"), "{derived}");
     }
 
+    /// The three reasons a name moves, each answered by the same function.
+    ///
+    /// A raw identifier is the right escape for a keyword and the wrong one
+    /// for everything else here: `r#Self` is not a raw identifier at all, and
+    /// `r#Ok` resolves to exactly the `Ok` a pattern would have matched. Those
+    /// two classes therefore *move* the name, and a contract type named for a
+    /// primitive moves for a third reason — it shadows the primitive inside
+    /// its own module, which is where every emitted member sits.
+    #[test]
+    fn one_function_answers_for_every_reason_a_rust_name_has_to_move() {
+        // Spelled out rather than looped over the three lists. A test that
+        // iterates the list it is pinning goes green the moment a name is
+        // *removed* from that list, which is precisely the defect here —
+        // `Self` was in neither list — and the negative control for this test
+        // caught it doing exactly that on the first run.
+        assert_eq!(ident("Self"), "Self_");
+        assert_eq!(ident("self"), "self_");
+        assert_eq!(ident("super"), "super_");
+        assert_eq!(ident("crate"), "crate_");
+        assert_eq!(ident("Ok"), "Ok_");
+        assert_eq!(ident("Err"), "Err_");
+        assert_eq!(ident("Some"), "Some_");
+        assert_eq!(ident("None"), "None_");
+        assert_eq!(ident("i32"), "i32_");
+        assert_eq!(ident("bool"), "bool_");
+        assert_eq!(ident("str"), "str_");
+        assert_eq!(ident("usize"), "usize_");
+        // Escaped, because `r#` is what a keyword needs and the name survives.
+        assert_eq!(ident("loop"), "r#loop");
+        assert_eq!(ident("yield"), "r#yield");
+        assert_eq!(ident("type"), "r#type");
+        // And an ordinary name is untouched, which is the whole point.
+        assert_eq!(ident("balance"), "balance");
+        assert_eq!(ident("Account"), "Account");
+        // Every name in each list is answered for, so a list that grows keeps
+        // its meaning even though the cases above are what pins today's.
+        for moved in CANNOT_BE_RAW.iter().chain(CANNOT_BE_A_BINDING.iter()).chain(PRIMITIVES.iter())
+        {
+            assert_eq!(&ident(moved), &format!("{moved}_"));
+        }
+    }
+
     /// IDL escapes a keyword with a leading underscore (`_loop` names the
     /// identifier `loop`); Rust escapes with `r#`. A name legal on one side
     /// and reserved on the other must survive the crossing.
@@ -1553,7 +1740,7 @@ mod tests {
     fn keywords_are_escaped_rather_than_emitted_raw() {
         let g = generate("module m { struct S { long _loop; }; };");
         assert!(g.source.contains("pub r#loop: i32"), "{}", g.source);
-        assert!(g.source.contains("self.r#loop.put(e)?"), "{}", g.source);
+        assert!(g.source.contains("self.r#loop.put(__e)?"), "{}", g.source);
     }
 
     /// `corpus/services/` holds whole services rather than type coverage, and

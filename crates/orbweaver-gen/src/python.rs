@@ -429,10 +429,17 @@ pub fn emit_python(registry: &Registry, package: &str) -> PythonPackage {
             .map(|m| m[path.len()].clone())
             .collect();
         let items = by_module.get(path).cloned().unwrap_or_default();
+        // The directory is the module's *Python* name, because that is what
+        // the parent's `from . import …` asks for. It used to be the raw IDL
+        // name while the import was escaped, so a module named for a Python
+        // keyword wrote `lambda/` and imported `_lambda`: the package did not
+        // import at all, for all 37 escaped names, and only in this position —
+        // one function, two sites, one of them not calling it.
         let file = if path.is_empty() {
             "__init__.py".to_owned()
         } else {
-            format!("{}/__init__.py", path.join("/"))
+            let dirs: Vec<String> = path.iter().map(|s| py_ident(s)).collect();
+            format!("{}/__init__.py", dirs.join("/"))
         };
         out.files.insert(file, module_file(package, path, &children, &items, &out.skipped));
     }
@@ -662,7 +669,15 @@ fn emit_type(id: &str, tc: &TypeCode) -> Result<String, String> {
             for (_, member, _, _) in &branches {
                 let py = py_ident(member);
                 let _ = writeln!(s);
-                let _ = writeln!(s, "    @property");
+                // `_rt.property`, not the builtin by its bare name: a class
+                // body is a scope the *contract* writes into, so a branch
+                // named `property` bound the name before the next branch's
+                // decorator ran and Python answered `'property' object is not
+                // callable`. A module-level item named `property` does it from
+                // one scope further out. `_rt` is the one name in a generated
+                // module that no IDL identifier can spell, since a leading
+                // underscore is IDL's escape rather than a character.
+                let _ = writeln!(s, "    @_rt.property");
                 let _ = writeln!(s, "    def {py}(self):");
                 let _ = writeln!(s, "        return self._branch({})", py_str(member));
                 let _ = writeln!(s);
@@ -931,7 +946,12 @@ fn emit_interface(registry: &Registry, id: &str, cx: &Cx<'_>) -> Result<String, 
     }
     let name = cx.path_of(id).last().cloned().unwrap_or_default();
     let mut s = String::new();
-    let _ = writeln!(s, "class {}(object):", py_ident(&name));
+    // No base class rather than `(object)`: the base is looked up in the module
+    // the contract writes into, and `const long object = 1;` beside an
+    // interface made the class statement call an `int` — `TypeError: int
+    // expected at most 2 arguments, got 3`, measured 2026-08-25. Python 3 gives
+    // the same class either way.
+    let _ = writeln!(s, "class {}:", py_ident(&name));
     docstring(
         &mut s,
         "    ",
