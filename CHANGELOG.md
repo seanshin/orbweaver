@@ -10,6 +10,509 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+### ⚠ Wire behaviour changed / 와이어 동작 변경
+
+- **`::CORBA::Principal` was recorded as `void` and marshalled zero bytes.**
+  The name is predeclared by `sema.rs` and the registry answered
+  `TypeCode::Void` for it, so a member, parameter, return or sequence element
+  the author had typed put **nothing** on the wire — and a peer that writes a
+  Principal there hands us octets every field after it is then mis-parsed
+  from. Nothing was red: `sidl-validate` rejected 0, `contract-check` saw a
+  `void`, both emitters produced the member (`pub who: ()`, `("who","who",
+  "void")`), and the §5.3 differ told the only lie anyone would have read —
+  *"not declared in this unit; a missing `#include`"* — about a name its own
+  front end declares. It is now `TypeCode::Principal`, refused **by name** at
+  generation and in the dynamic path, and `idl-diff` calls the member's type
+  change BREAKING. This was the same defect fixed for `::CORBA::TypeCode` and
+  left in its neighbour: a fix scoped to the keyword that reported it fixed a
+  keyword. `orbweaver_idl::sema::PREDECLARED_CORBA` now publishes the table and
+  the registry sweeps all four rows — two answered, two refused at parse
+  (`object` and `valuebase` are lexer keywords, so `::CORBA::Object` and
+  `::CORBA::ValueBase` cannot be written at all). Every marshalling layer had
+  already refused `Principal` by name; **none of those arms was reachable from
+  a contract until now.** `corpus/golden/34-corba-principal.idl`, kept golden
+  because `omniidl -b dump` accepts the file.
+
+  **`::CORBA::Principal`이 `void`로 기록되어 0바이트를 마샬링하고 있었다.** 전단이
+  선언하는 이름을 레지스트리가 `TypeCode::Void`로 답했으므로, 작성자가 적은 멤버가
+  와이어에 **아무것도** 싣지 않았다. 아무것도 빨갛지 않았다 — 두 에미터 모두
+  멤버를 생성했고, §5.3 차이기는 자기 전단이 선언하는 이름을 두고 *"이 단위에
+  선언되지 않음"* 이라는, 읽을 사람이 있는 유일한 거짓을 말했다. 이제
+  `TypeCode::Principal`이고 생성과 동적 경로 양쪽에서 **이름으로** 거부된다.
+  이것은 `::CORBA::TypeCode`에 대해 고치고 이웃에 남겨둔 같은 결함이다 — 보고한
+  키워드에 맞춘 수정은 키워드 하나를 고쳤을 뿐이다. 마샬링 계층들은 이미
+  `Principal`을 이름으로 거부하고 있었으나, **지금까지 어떤 계약도 그 팔에
+  도달할 수 없었다.**
+
+- **`_get_def_kind` told a conformant IFR client that three definitions it
+  holds do not exist.** `ifr::RepositoryServer::def_kind` ended in
+  `_ => DefinitionKind::None`, so `IRObject::_get_def_kind` answered `dk_none`
+  — *no such definition* — for a `valuetype` and a `native`, and answered
+  `dk_Interface` for an `abstract interface` with nothing looking at whether it
+  was abstract. The doc comment above that arm asserted the opposite of the
+  code and had been **false for five days**: it said the registry cannot tell
+  them apart, which stopped being true when a valuetype became `TypeCode::Value`
+  and a native `TypeCode::Native`. Nothing went red, because the catch-all took
+  both new variants the moment they existed, so the registry's new distinction
+  never reached the wire. Measured against omniORB 4.3.4's own `omniORB.ir_idl`
+  client over TCP: `dk_none → dk_Value (20)`, `dk_none → dk_Native (23)`,
+  `dk_Interface → dk_AbstractInterface (24)`, with six controls unmoved.
+  `def_kind` is now exhaustive over all 33 `TypeCode` variants with no `_` arm;
+  `TypeCode::Recursive` is the only `dk_none` and carries the reason true of it
+  alone. `ifr::DefinitionKind` names 0..24 and stops where the measurement
+  stops — the peer's own enumeration carries 25 members — while
+  `corpus/services/ir-subset.idl` declares all 36 of §14.5.1 for the opposite
+  reason: a decoder must accept what a conformant sender may write.
+
+  **`_get_def_kind`가 적합한 IFR 클라이언트에게 레지스트리가 가진 정의 셋이 없다고
+  답했다.** 포괄 팔 `_ => DefinitionKind::None` 때문에 `valuetype`과 `native`가
+  `dk_none`을, `abstract interface`가 `dk_Interface`를 받았다. 그 위의 주석은
+  코드의 반대를 주장했고 **닷새 동안 거짓**이었다 — 포괄 팔이 새 변형 둘을
+  생기는 즉시 삼켰으므로 레지스트리의 새 구분이 와이어에 닿은 적이 없고, 답은
+  어느 쪽이든 `dk_none`이라 아무것도 빨갛지 않았다. omniORB 4.3.4 자신의
+  `omniORB.ir_idl` 클라이언트로 측정했다. 이제 33개 변형 전부에 판정이 있고 `_`
+  팔은 없다.
+
+- **The Interface Repository's browse half answers instead of `NO_IMPLEMENT`:
+  9 of 44 served → 19 of 44, 25 refused `NO_PERMISSION`, 0 deferred.**
+  `SERVICES-COVERAGE` §5's ten `NO_IMPLEMENT` operations were not ten decisions
+  but one — `Container::contents`, `lookup`, `lookup_name`,
+  `describe_contents`, `Contained::describe`, `_get_defined_in`,
+  `_get_containing_repository`, `Repository::get_canonical_typecode`,
+  `get_primitive` and `IDLType::_get_type` are the walk that lets a client
+  browse rather than look one entry up by an id it already had to know, and
+  nine are unusable without the tenth. Three objects had to be minted first:
+  `ModuleDef` (derived from the scopes entries sit in, the segment count taken
+  from the **qualified name** and never the id path, so `IDL:acme.com/bank/`
+  `Money:1.0` yields `IDL:acme.com/bank:1.0` and not a module that does not
+  exist), `OperationDef`/`AttributeDef` (`member_id` is now the one home for a
+  derivation `describe_interface` already did, `member_for` its inverse, so a
+  member reachable by a description is reachable by a key), and `PrimitiveDef`
+  (§14.5.14 gives it no repository id, so its key carries `pk:<kind>`).
+  omniORB's own IR client walks the whole repository — every leg answered, the
+  `any`s extracting as the structs §14.5 names. **The peer found two defects an
+  in-tree test had not**: `lookup("gc10")` on a top-level module answered nil
+  because `Registry::load` removes a module's qualified name from `by_name`
+  after walking into it, and the first probe's gate asserted `dk_Module < dk_all`
+  at a root where every object is a module — a gate that could only ever be red.
+
+  **IFR의 브라우즈 절반이 `NO_IMPLEMENT` 대신 답한다: 44개 중 9 → 19 서빙, 25
+  거부, 유예 0.** 열 개의 `NO_IMPLEMENT`는 열 개의 결정이 아니라 하나였다 —
+  아이디를 이미 알고 있어야 하나를 조회하는 대신 저장소를 걸을 수 있게 하는
+  절반이며, 아홉은 열 번째 없이 쓸 수 없다. `ModuleDef`·`OperationDef`/
+  `AttributeDef`·`PrimitiveDef`를 먼저 만들어야 했다. omniORB 자신의 IR
+  클라이언트가 저장소 전체를 걸었고, **피어가 사내 테스트가 찾지 못한 결함 둘을
+  찾았다.**
+
+- **The event channel's pull-supplier side answers instead of `NO_IMPLEMENT`:
+  CosEvent goes from 14 of 18 served to 17 of 18.** `obtain_pull_consumer`,
+  `connect_pull_supplier` and `disconnect_pull_consumer` left `is_deferred`,
+  which now holds `destroy` alone. They carried **both** blocked models at
+  once, so the 2×2 of supplier/consumer models is complete: push/push and
+  push/pull were served, pull/push and pull/pull are new, and
+  `all_four_models_carry_the_event_they_were_given` creates each pair over the
+  wire and asserts an event crosses it. The channel asks with **`try_pull`,
+  never `pull`**: `pull` is specified to block until the supplier has
+  something and the source round is shared, so one silent supplier would be
+  every other supplier's outage. The price is an interval the channel has to
+  invent — `DEFAULT_SOURCE_POLL` 100 ms, moved by `set_source_poll` — and a
+  round that finds an event does not sleep, so a backlog drains at socket
+  speed. `ChannelStats` gains `sourced` (so `accepted - sourced` is what
+  suppliers pushed in), `pull_failures` kept apart from `push_failures` — one
+  number is what the channel could not send, the other what it could not fetch
+  — and the `pull_suppliers_connected` gauge. **No drop cause joined the
+  split**: a `ProxyPullConsumer` holds no queue, so there is nothing to drop.
+  A supplier answering the user exception `Disconnected` is released
+  immediately and **not** counted as a failure; it did not fail, it said it was
+  finished. Oracle is an omniORBpy `CosEventComm::PullSupplier` that our
+  channel dials and invokes, both byte orders.
+
+  **이벤트 채널의 pull 공급자 쪽이 `NO_IMPLEMENT` 대신 답한다: CosEvent 18개 중
+  14 → 17 서빙.** 세 연산이 `is_deferred`를 떠났고 이제 `destroy`만 남았다. 그 셋이
+  막힌 두 모델을 한꺼번에 지고 있었으므로 공급자/소비자 2×2가 완성된다.
+  채널은 **`pull`이 아니라 `try_pull`로** 묻는다 — `pull`은 블록하도록 규정되어
+  있고 소스 라운드는 공유되므로, 말 없는 공급자 하나가 다른 모든 공급자의 장애가
+  된다. `Disconnected`를 답한 공급자는 즉시 해제되고 실패로 세지 **않는다** —
+  실패한 것이 아니라 끝났다고 말한 것이다. 오라클은 omniORBpy 공급자다.
+
+- **Generated code moves an identifier wherever a contract could shadow one.**
+  Six causes over both emitters, measured by **2793 probes** — 147 identifiers
+  × 19 positions, every emitted Rust crate compiled out of workspace and every
+  emitted Python package imported. First pass **Rust 92 failures / 2793
+  (96.7%), Python 39 / 2793 (98.6%)**; after, 0 and 0, in two rounds. The rule
+  the batch was scoped to is *every identifier the generator emits is spelled
+  by one function, every site that looks one up calls the same function, and
+  everything the generated code does not itself define is reached by a path no
+  contract can bind* — four of the six causes are not in the list of five
+  defects it was handed. **Escaping moves the name** where the offender is the
+  contract's own and no qualification reaches it (`r#Self` is not a raw
+  identifier; `r#Ok` resolves to the same `Ok` a pattern matches): `ident`
+  gains `CANNOT_BE_RAW`, `CANNOT_BE_A_BINDING` and `PRIMITIVES`.
+  **Qualification moves the reference** where the offender is the generator's,
+  because a list of library paths inside `ident` would be a second home for a
+  fact `skeleton.rs` owns — so the site writes `::std::result::Result`, the
+  runtime imports as `__rt`/`__Cdr`, and every hand-written binding is
+  `__`-prefixed. An IDL identifier cannot begin with an underscore, so `__rt`
+  is unshadowable and a bare `rt::` written tomorrow no longer compiles.
+  Also fixed on the way and unrelated to any keyword: **a declaration outside
+  any `module` emitted a file with no runtime import at all** — every corpus
+  file opens a module, which is the whole reason nothing was red.
+
+  **생성된 코드는 계약이 가릴 수 있는 식별자를 옮긴다.** 두 에미터에 걸쳐 여섯
+  원인, **2793개 탐침**(식별자 147 × 위치 19)으로 측정. 1차 통과 Rust 96.7%,
+  Python 98.6% → 두 라운드 뒤 각각 0 실패. 규칙은 *생성기가 내보내는 모든
+  식별자는 하나의 함수가 적고, 찾는 쪽도 같은 함수를 부르며, 생성된 코드가 스스로
+  정의하지 않은 것은 계약이 붙잡을 수 없는 경로로 가리킨다* 이며, 여섯 원인 중
+  넷은 건네받은 다섯 결함 목록에 없었다. 도중에 함께 고침: **어떤 `module`에도
+  들어 있지 않은 선언이 런타임 임포트가 전혀 없는 파일을 내보내고 있었다** —
+  모든 코퍼스 파일이 모듈을 열기 때문에 아무것도 빨갛지 않았다.
+
+### Added / 추가
+
+- **The ORB has an object.** Three steps of D019, landed in order because each
+  is specified in terms of the one before.
+
+  **Step 1 — the initial references table.** `naming.rs` has parsed
+  `corbaloc:rir:NameService` since Phase 1 and thirty lines later
+  `ObjectUrl::to_ior` answered `InitialReference(_) => return None`.
+  `Corbaloc` and `Corbaname` both worked because the caller supplied an
+  address; `InitialReference` is exactly the case where no address is given and
+  the ORB is supposed to know, and **nothing in the workspace knew**. Not
+  deferred with a reason — there was no reason, anywhere. CORBA 3.4 §8.5.2
+  fixes four things this did not get to choose: the sixteen reserved
+  `ObjectId`s are OMG's (transcribed as `orb::RESERVED_OBJECT_IDS`);
+  `list_initial_services` sits beside `resolve_initial_references` in the same
+  sub clause, and a table that resolves but cannot be listed leaves a client
+  guessing names; **the refusal is `InvalidName`, never a nil reference**, so
+  `None` was not merely unhelpful but the one answer the sub clause forbids;
+  and the namespace is flat by the specification's own sentence.
+  `register_initial_reference` is §16.10.1, with both its `InvalidName`
+  conditions on the method. **`to_ior` does not gain the table** — the answer
+  to `corbaloc:rir:` is not in the URL, which is the entire difference between
+  the three variants, and a lookup behind a name that says *convert* would make
+  a pure conversion depend on ORB state every caller must then thread through.
+  Its `Option` stops meaning *unanswerable* and starts meaning *this form's
+  answer belongs to the ORB*.
+
+  **Step 2 — `string_to_object` / `object_to_string` (§8.2.2).** `Ior::parse`
+  read `IOR:`, `ObjectUrl::parse` read `corbaloc:`/`corbaname:`, and the table
+  read `corbaloc:rir:` — three entry points in two modules, and **the caller
+  had to already know which one it was holding**, which is the one thing a
+  stringified reference exists to remove. They delegate; nothing outside
+  `orb.rs` changed behaviour. §8.5.2's *"the application is responsible for
+  narrowing"* is why a URL comes back with an **empty `type_id`** rather than
+  one this function invented — an invented id is a claim the caller cannot
+  check and would carry onto the wire.
+
+  **Step 3 — `OrbConfig` and `-ORB` arguments (§8.5.1).** Seven limits a
+  network operator reaches for first — `DEFAULT_MAX_MESSAGE_SIZE`,
+  `DEFAULT_FRAGMENT_THRESHOLD`, `MAX_FRAGMENTS`, `MAX_FORWARD_HOPS`,
+  `FOLLOW_TIMEOUT`, `DEFAULT_MAX_CONNECTIONS`, `STOP_POLL` — and **not one
+  could be reached from outside the process**, so D015's acceptance sentence
+  *"without editing Rust, without a rebuild"* was still false one layer below
+  where that batch made it true. The syntax is the specification's and so is
+  half the behaviour: `from_orb_args` returns `(config, surviving_args)`
+  because §8.5.1 requires the ORB to remove what it consumed, and an
+  unrecognised `-ORB…` is a **refusal, not a shrug** — §8.5.1 says `BAD_PARAM`,
+  which hands over the *refused whole* property by standard. §8.5.3.2 fixes
+  `-ORBInitRef <ObjectID>=<ObjectURL>` exactly, including the exclusion that is
+  easy to miss and is implemented: a `rir` URL would tell the table to resolve
+  a name out of itself. Four standard arguments this ORB does not implement —
+  `-ORBid`, `-ORBServerId`, `-ORBListenEndpoints`, `-ORBDefaultInitRef` — are
+  refused **by name with their reason and sub clause**, because "unrecognised"
+  is a poor thing to say to an operator who typed a real argument. Every
+  setting is an `Option`, so *no configuration changes nothing* is a property
+  of the type; a `0` is refused for every cap and every duration, because a
+  zero message ceiling refuses every message and a `0` in a configuration is
+  almost always an absence that passed through a layer without this type.
+  `Orb::with_config` builds the table **to one side** and moves it in only once
+  every entry has been read, so one bad URL leaves no half-populated ORB.
+
+  **ORB에 객체가 생겼다.** D019 세 단계. **1단계** — 초기 참조 테이블. 파서는
+  Phase 1부터 `corbaloc:rir:`를 읽었고 서른 줄 아래에서 `to_ior`가 `None`을
+  답했다. 이유를 적고 유예한 것이 아니라, 어디에도 이유가 없었다. §8.5.2가 네
+  가지를 정해 주었다 — 예약 아이디 열여섯은 OMG의 것, `list_initial_services`는
+  같은 절에 있고, **거부는 `InvalidName`이지 nil 참조가 아니며**(그러므로 `None`은
+  절이 금지하는 바로 그 답이었다), 이름공간은 평평하다. **2단계** —
+  `string_to_object`/`object_to_string`. 진입점 셋에 두 모듈, 그리고 **호출자가
+  자기가 무엇을 들고 있는지 이미 알아야 했다** — 문자열화된 참조가 없애려고
+  존재하는 바로 그것이다. **3단계** — `OrbConfig`와 `-ORB` 인자. 운영자가 가장
+  먼저 손대는 일곱 한계 중 **하나도 프로세스 밖에서 닿을 수 없었다.** 문법도
+  동작의 절반도 규격의 것이며, 인식되지 않는 `-ORB…`는 **어깨를 으쓱하는 것이
+  아니라 거부**다.
+
+- **The trading service's two languages.** D022 T1 and T2, engine only — no
+  wire surface, no new crate, `cargo tree -p orbweaver-trading` still prints
+  one line.
+
+  **T1 grows the §4.3 constraint subset**: `OR`, `NOT`, parentheses and
+  `EXIST`, with precedence written down rather than implied and `AND`/`OR`
+  chains parsed flat, so a fifty-thousand-conjunct query costs a loop instead
+  of fifty thousand stack frames. The finding is that **`AND`/`OR` cannot tell
+  three-valued logic from two, and `NOT` can**: with monotone connectives only,
+  an expression is `Yes` exactly when it is true with every unknown replaced by
+  false, so for the whole grammar as it stood "three-valued matching" and "a
+  field nobody recorded does not match" returned the *same* offers. `NOT`
+  breaks that in the dangerous direction — under *missing means false*,
+  `NOT specialization == 'math'` **returns the expert nobody ever described**,
+  the original bug `Truth` was built to prevent arriving through the new
+  operator. Here it stays `Unknown`, lands in `Selection::unanswerable`, and
+  `EXIST` turns a gap the report could only *name* into one a query can close.
+  The three-valued tables are **chosen, not cited**: they are Kleene's strong
+  logic, which is also SQL's; TCL is a separate OMG document and the copy of
+  Part 1 available carries no TCL grammar, so no normative text is quoted for
+  this behaviour.
+
+  **T2 adds the preference expression** — `MAX`, `MIN`, `WITH`, `RANDOM`,
+  `FIRST` — as its own module, because `CosTrading::Lookup::query` takes
+  constraint and preference as two parameters of two grammars. Five semantics
+  were decided here with their reasons and **none is quoted from a text nobody
+  read**. `MAX`/`MIN` take a bare numeric field and refuse `residency` and the
+  text fields by name even though they have a total order, because reading
+  "the largest value of a number" as "the last enumerator" would be this engine
+  deciding what a standard word means. `WITH` over an unanswerable offer places
+  it in **neither** group and goes to `Selection::unranked`, which makes the
+  consequence worth stating plainly: **the constraint decides membership and
+  the preference decides order, and their gaps land in different places.**
+  `RANDOM` is a seeded permutation with the seed in the text, because `replay`
+  reproduces a trace bit for bit and an unseeded shuffle would end that in the
+  place easiest not to notice — `shuffle_key` is written out rather than
+  reached for, since `DefaultHasher` is explicitly not stable across Rust
+  releases. **`RANDOM` alone is refused**, and an empty preference is refused
+  rather than defaulted to `FIRST`, because inventing a documented default
+  would be a semantic nobody could check. `MAX f`/`MIN f` are `ORDER BY f
+  DESC`/`ASC` **exactly**, pinned offer-for-offer over seven pairs including
+  the gapped field; a query carrying both is refused by name rather than having
+  one win.
+
+  **트레이딩 서비스의 두 언어.** D022 T1·T2, 엔진 한정. T1은 `OR`·`NOT`·괄호·
+  `EXIST`를 더한다. 발견은 **`AND`/`OR`는 3치 논리와 2치를 구별하지 못하고 `NOT`은
+  한다**는 것 — 단조 결합자만으로는 "미기록은 거짓"과 결과가 같았고, `NOT`이
+  그것을 위험한 방향으로 깬다(*아무도 기술한 적 없는 전문가를 반환한다*). 3치 표는
+  **인용이 아니라 선택**이며, 읽지 않은 문서를 인용하지 않는다. T2는 선호 표현식을
+  더한다. **제약은 소속을, 선호는 순서를 정하며 각자의 공백은 다른 곳에 떨어진다.**
+  `RANDOM`은 씨앗이 본문에 있는 재현 가능한 순열이고, 씨앗 없는 `RANDOM`과 빈
+  선호는 거부된다.
+
+- **The console's read half of administration.** D024 §6 item 1: three
+  commands — `services`, `config`, `stats` — as **subcommands of
+  `orbweaver-console`, not a second `orbctl` binary**. The deciding argument is
+  `tests/escaping.rs`, which asserts *structurally* that no page carries an
+  element this crate did not write, over an allowlist of eighteen literal tags;
+  a second binary would have duplicated `Output`, the `--html`/`--text`
+  contract and the usage text, and would have sat outside that proof until
+  somebody remembered to extend it. Nothing here ends a channel, deactivates a
+  POA, drops a connection or registers anything. **What an operator cannot see
+  is said in words**: `PoolStats`, `ServerStats` and `ChannelStats` live inside
+  a running process and D024 §7 refuses a wire interface for administration
+  until a caller model exists, so `orb::Snapshot` is the input in both honest
+  forms — live, for a caller inside the process, and a file that process
+  writes. **Nothing in this workspace writes one yet**, so today an operator can
+  point this at a snapshot and cannot point it at a running server, and learns
+  that from the tool's own refusal rather than from an empty page. **The
+  sixteen reserved `ObjectId`s are deliberately not in this crate**: the
+  snapshot's *writer* states reservedness per id, because the writer is the
+  ORB, and where the writer said nothing the row renders `not stated` — a third
+  state and not a `no`, which is behavioural rather than cosmetic, since
+  omniORB answers `NO_RESOURCES` for a reserved id with nothing bound and
+  `BAD_PARAM` for a name it never heard of. The seven ORB values are read from
+  the constants that own them and every one says **compiled default**. The drop
+  split is never re-summed: five causes, five rows, and the reconciliation is
+  `ChannelStats::split_adds_up()` *called*, not re-implemented.
+
+  **콘솔이 운영의 읽기 절반을 갖는다.** D024 §6-1: `services`·`config`·`stats`를
+  **두 번째 바이너리가 아니라 `orbweaver-console`의 하위 명령**으로. 결정 근거는
+  `tests/escaping.rs`다 — 두 번째 바이너리는 누군가 기억해 확장할 때까지 그 증명
+  밖에 앉아 있었을 것이다. **아직 이 워크스페이스의 무엇도 스냅샷을 쓰지 않으므로**
+  오늘 운영자는 실행 중인 서버를 가리킬 수 없고, 그것을 빈 페이지가 아니라 도구
+  자신의 거부에서 배운다. **예약 아이디 열여섯은 의도적으로 이 크레이트에 없다** —
+  쓰는 쪽이 ORB이므로 예약 여부도 쓰는 쪽이 말하고, 말하지 않은 자리는 `not
+  stated`라는 셋째 상태로 그려진다.
+
+- **A deployment's numbers have a home that is not a source file.**
+  `orbweaver-mcp` gains `--config <policy.json>`, **named and never
+  discovered** — a file this process found on its own could start applying to a
+  deployment nobody changed. Parsed with `orbweaver_dynamic::json`, so no
+  dependency and the workspace third-party set is unchanged. The rule it was
+  scoped to is not "the TTL, the quota and the exposure" but *a number or a
+  policy only a deployment can know has one home*, so the neighbours were
+  re-measured and that **changed the count in both directions**: of twenty-one
+  hard-coded values, **seven moved** and fourteen stayed with the reason
+  written where they live. Verified before building rather than after — and
+  D015 §3.1 was wrong in three different ways. *How long* was **worse than
+  stated**: `CapabilityTable::with_ttl` is a *consuming* builder while a
+  `Bridge` builds its own table and shares it with every `Guarded` it issues,
+  so the one door that existed could not reach the one table that matters — the
+  policy was not merely unwired, it was unreachable by construction. *How
+  often* was **half-stated**: `--quota` had installed the seat from the command
+  line since the ledger batch, so the operator had somewhere to put the number,
+  just not a file. *Who may call what* was **one word narrower** than stated:
+  exposure was already populated from `argv`, so it needed a restart, never a
+  rebuild. Three properties, each the reason for the next: **absent is not
+  zero** (every setting is an `Option` and no default is restated in the new
+  module — it references the constants that own them); **default-deny cannot be
+  widened by an absence** (a missing, empty or absent `expose` leaves the
+  allowlist where the command line put it); **refused whole or applied whole**
+  (a key no setting is named by stops the process naming the file, the key and
+  what was expected, because `handles.ttl_second` is a setting an operator
+  believes is in force, and ignoring it is the harness's silent skip arriving
+  through a config file).
+
+  **배포만 아는 수치의 집은 소스 파일이 아니다.** `--config <policy.json>` — 이름을
+  주어야 하고 스스로 찾지 않는다. 규칙을 "TTL·쿼터·노출"이 아니라 *배포만 알 수
+  있는 수치는 집이 하나다*로 잡아 이웃을 다시 측정했고, 그 결과가 **개수를 양쪽으로
+  바꿨다**: 스물하나 중 일곱이 옮겨가고 열넷은 이유와 함께 남았다. D015 §3.1은 세
+  가지로 틀려 있었다 — 하나는 명시된 것보다 나빴고(구조적으로 도달 불가), 하나는
+  절반만 맞았으며, 하나는 한 단어만큼 좁았다.
+
+- **A refused call now says what would make it legitimate.** `Denied::remedy()`
+  gives each of the twelve refusals an agent can receive a next step — which id
+  is not allowlisted, which scope the contract asked for, which annotation is
+  missing, who may approve — and **nothing in it is inferred, discovered or
+  guessed**: every clause is built from a field the refusal was already
+  carrying when it was raised. It is **a second sentence and not a field, and
+  that is a decision about reach**: every reader of a refusal in this crate
+  already takes it as prose through one rendering, so a field would have taught
+  exactly the readers somebody rewrote to ask for it and silently not the
+  others — a fact with two homes. **The rule the batch could not break is
+  written at the site**: a remedy names an act belonging to somebody who is not
+  the caller, and never a route the agent can take by itself.
+  `REMEDY_ACTORS`/`REMEDY_FORBIDDEN` are published beside `remedy()` and read
+  by the tests rather than retyped. The apparent exception is a renewing
+  budget, where waiting *is* legitimate — that gate bounds a rate and not a
+  permission. `remedy()` returns `String` with an exhaustive match and no `_`
+  arm, and that is the codification: a rule about diagnostics that lives only
+  in a document is a rule the next variant's author will not read.
+  `EffectUnstated`'s `Display` lost its own second sentence, because two copies
+  of one sentence is how a sentence goes false in one of them.
+
+  **거부된 호출이 무엇이면 정당해지는지 말한다.** 에이전트가 받을 수 있는 거부
+  열둘 각각에 다음 걸음이 붙는다. **추론·발견·추측은 하나도 없다** — 모든 절은
+  거부가 제기될 때 이미 들고 있던 필드에서 만들어진다. **필드가 아니라 두 번째
+  문장이며 그것은 도달 범위에 대한 결정이다.** 깨뜨릴 수 없는 규칙은 현장에 적혀
+  있다 — 구제책은 호출자가 아닌 누군가의 행위를 이름하고, 에이전트가 스스로 갈 수
+  있는 경로는 결코 이름하지 않는다. `_` 팔 없는 전수 매치가 그 성문화다.
+
+- **The POA's seven policies are written down, cited, with the honest word for
+  each.** D020 Stage A. `crates/orbweaver-object` cited CORBA 3.4 **zero times**
+  while being the half of CORBA a server author meets, and a POA has the seven
+  policies of §15.3.8 whether or not anyone names them — so not naming them did
+  not make the choices absent, it left seven facts with no home. **No signature
+  changes and no behaviour changes**; `Poa::policies()` computes its answer from
+  fields that already existed. Two corrections came out of writing it down.
+  **Servant Retention is RETAIN, not NON_RETAIN**: D020 §3 read it off the name
+  `ServantLocator`, which is the specification's NON_RETAIN half, but
+  `dispatch_target` inserts the located id into `active` and it survives the
+  request, so the next request is served with no locator passed at all — that
+  is RETAIN with a `ServantActivator` under a name borrowed from the other
+  half. And **`USE_SERVANT_MANAGER` with no manager diverges** (§15.3.8.6 says
+  `OBJ_ADAPTER` minor 4; we answer `OBJECT_NOT_EXIST`), recorded in the doc
+  comment and deliberately not fixed, because Stage A changes no behaviour.
+  `IdAssignmentPolicy::Either` is **ours, not the specification's** — §15.3.8.4
+  makes it a per-POA choice and one adapter here answers to both models — named
+  in the type and documented as the backward-compatible mode a new POA should
+  not want. `Policies::spec_violations()` compiles the three constraints
+  §15.3.8 states *between* policies; it reports and refuses nothing, and it
+  went red twice under the controls, on combinations it was written for. **Two
+  claims have no behavioural test and say so in their own documentation rather
+  than being covered by a test that would pass whatever they said**: Thread
+  (§15.3.8.1) is not observable from this crate, and Object Id Uniqueness
+  (§15.3.8.3) is not observable *in principle* — a policy about servants, in a
+  map that holds none.
+
+  **POA의 일곱 정책이 인용과 함께, 각자에 맞는 정직한 단어로 적혔다.** D020 A단계.
+  이 크레이트는 서버 작성자가 만나는 CORBA의 절반이면서 CORBA 3.4를 **한 번도**
+  인용하지 않았다. 아무도 이름하지 않아도 정책은 있으므로, 이름하지 않은 것은
+  선택을 없앤 것이 아니라 사실 일곱을 집 없이 둔 것이다. **시그니처도 동작도
+  바뀌지 않는다.** 적으면서 둘이 교정되었다 — 잔류 정책은 NON_RETAIN이 아니라
+  RETAIN이었고, 매니저 없는 `USE_SERVANT_MANAGER`는 규격과 어긋난다(기록만, 수정
+  없음). **행동 테스트가 없는 두 주장은 무엇을 말하든 통과할 테스트로 덮는 대신
+  자기 문서에 그렇게 적는다.**
+
+- **`ai_example` and `ai_precond` reach a reader.** Both were in SIDL's
+  known-key list — so writing one tripped no `unknown key` — with **no consumer
+  anywhere in `crates/` and no user anywhere in `corpus/`**: the contract
+  language had a slot for a worked example and a slot for a precondition, the
+  two things a prompt most needs and a type contract least carries, and both
+  were empty and unread. `Subject::to_prompt()` renders an authored
+  precondition **above** the signature it constrains and an authored example
+  **below** the one it instantiates, and **where in the prompt is the whole
+  decision**: a precondition read after the signature is advice about a call
+  the reader has already composed; read before it, it is a guard the signature
+  is read through. An example is the opposite — above the line it is a literal
+  with nothing to be a literal of. Both are marked `[authored]`, because they
+  are the only text on that page a person wrote and D025 §7 forbids inferring
+  into either slot, which is what makes the marker safe to trust. The preamble
+  is conditional for the same reason: *"No IDL file, no comments and no source
+  exist for it"* stops being true the moment one operation carries a
+  hand-written precondition. Eight corpus operations gain one, hand-written —
+  and `27-bounds`'s pair is not a restatement of its typedefs, because
+  `render_type` prints `sequence<Tag>` for `TagSeq` and `string` for a
+  `string<8>`, so a reader shown the rendered signature is shown a contract
+  with no bounds in it at all.
+
+  **`ai_example`과 `ai_precond`가 독자에게 닿는다.** 둘 다 알려진 키 목록에 있어
+  적어도 `unknown key`가 나지 않았고, **`crates/` 어디에도 소비자가, `corpus/`
+  어디에도 사용자가 없었다.** `Subject::to_prompt()`가 전제조건을 시그니처 **위에**,
+  예시를 **아래에** 그린다 — **프롬프트의 어디인가가 결정 전부다.** 시그니처 뒤에
+  읽는 전제조건은 이미 구성한 호출에 대한 조언이고, 앞에 읽으면 시그니처를 통과해
+  읽는 가드다. 예시는 그 반대다. 둘 다 `[authored]`로 표시되며, D025 §7이 두 칸에
+  대한 추론을 금지하는 것이 그 표시를 믿을 수 있게 만든다.
+
+- **Every IDL rule id is a documented constant with one construction site.**
+  `orbweaver_idl::rules` names each rule id, says which single diagnosis it
+  names, and publishes `ALL`; every site in `lex`/`parse`/`sema`/`include` uses
+  one, and a test scans this crate's own source and fails on a site that spells
+  an id itself. `ALL` is what lets a consumer's hint table be checked against
+  the rules that exist at all — the comparison nobody could make before.
+  `tests/negative_corpus_rules.rs` is the table: the rule every file in
+  `corpus/negative/` files under, every file rejected, the table and the
+  directory holding the same files, and every rule in `ALL` either reaching a
+  file or **named with the reason it does not**.
+
+  **모든 IDL 규칙 아이디가 문서화된 상수이며 구축 지점은 하나다.** `ALL`은 소비자의
+  힌트 표를 *존재하는 규칙 전체*와 대조할 수 있게 하며, 그 대조는 이전에 아무도 할
+  수 없었다. 음성 코퍼스의 규칙 표가 함께 착지한다.
+
+- **A server stops being a channel.** `EventChannelServer` held one
+  `Arc<Shared>` and three fixed keys, so a *process* was a channel. It now
+  holds a map from a channel name to that same `Arc<Shared>` and those same
+  three keys, and every operation is answered through the channel its object
+  key routed to — **no new state and no new wire surface**; what a second
+  channel needed was a map and a rule about keys. **No factory, and why**:
+  `CosEventChannelAdmin` declares none — the factory in the standard is
+  `CosNotifyChannelAdmin::EventChannelFactory`, which belongs to CosNotification
+  and is deferred — so creation is a Rust API and a deployment decision exactly
+  as `Poa` creation is, and an Orbweaver-specific factory interface is refused
+  as a fifth wire surface nobody asked for. **The key rule carries its proof in
+  its own doc comment**, because two names that mint the same object key are
+  two channels that are one channel and the symptom is silent: a supplier
+  pushing into one is fanned out to the other's consumers with every counter
+  agreeing. A name must be non-empty, contain no `/`, and not be a segment this
+  module mints for itself. Routing is exact membership, never a prefix match —
+  a prefix match would make the naming rule a suggestion, since `base/x/pps1`
+  begins with `base` too. **Two outbound threads per channel, not per server**:
+  channels are the unit a slow peer can wedge, so one shared delivery thread
+  would make one channel's dead consumer every other channel's latency — the
+  failure this module is built around avoiding, one level up. A channel created
+  *after* delivery started spawns its own pair there and then, because a
+  channel with no outbound threads is invisibly wrong: it answers every
+  operation and reports rising `accepted`, looking exactly like a channel whose
+  consumers are all slow. `total_stats()` answers the one question a *process*
+  is asked — did anything here lose an event — and **states its limit where it
+  lives**: it cannot say *which* channel, and nothing divides by the channel
+  count to guess. A server built the old way is a server with one channel whose
+  keys are its `base_key` verbatim, and `spike-events` is byte-for-byte
+  unchanged across the commit.
+
+  **서버가 채널이기를 그만둔다.** 프로세스 하나가 곧 채널이었다. 이제 채널 이름에서
+  같은 `Arc<Shared>`로 가는 지도를 들고, 모든 연산은 객체 키가 라우팅한 채널을 통해
+  답해진다 — **새 상태도 새 와이어 표면도 없다.** 표준의 팩토리는 CosNotification의
+  것이라 유예 중이므로 생성은 `Poa` 생성과 똑같이 Rust API이자 배포의 결정이다.
+  **키 규칙은 자기 주석에 증명을 달고 있다** — 같은 키를 만드는 두 이름은 하나인 두
+  채널이고 증상이 조용하기 때문이다. 라우팅은 접두사 일치가 아니라 정확한 소속이며,
+  **송출 스레드는 서버당이 아니라 채널당 둘**이다.
+
 ### Measured / 측정
 
 - **Two references to one object cost one request each — and that is what
@@ -43,6 +546,236 @@ records what changed and, where it matters, what it changes on the wire.
   D013(제안)은 **짓지 않기**를 권고하고, 방아쇠가 당겨질 때의 모양으로 약한 참조
   지도를 기록하며, 순진한 지도를 "틀린 문자열" 버그로 만드는 `pool::Key` 코드셋
   함정을 적는다.
+
+- **The peer a `CloseConnection` mid-reply needed is not an ORB, and no defect
+  was found.** D010 §4 B5's second half said `InterruptedMidReassembly`'s shape
+  *"needs a peer to shut down between two writes of one reply, and neither
+  fixture exposes that window"*. **Both halves of that are true and the
+  conclusion is wrong**: the peer this needs is a socket, and a socket needs
+  nothing that is missing here. B5 was the only class-B row whose fixture was
+  buildable — B1 wants an API key, B2 an identity provider, B4 docker and a
+  second host, B6 TAO. Two peers, answering different questions: sixteen
+  in-process peers whose bytes are built from §9.4 and **not from this crate's
+  encoders**, for the reason `fragment_reception.rs` gives — an encoder and a
+  decoder that share a bug agree with each other — and sixteen more from a
+  separate process in another language, stdlib only, no ORB imported, which
+  adds the one thing an in-process peer cannot: **the id the client says was
+  cut is checked against the id the peer says it cut, by two processes
+  separately.** The in-process arm varies every axis the existing measurement
+  holds constant, and the first is the one this project has a rule about — *the
+  reply's byte order, chosen independently of the request's*, because GIOP sets
+  the order per message and a peer that echoes the request (which is what every
+  scripted peer in the tree does) leaves one of the two orders unmeasured on
+  any one machine, and the request id that decides which caller hears what is
+  read out of *the reply's* header. **MEASURED: the claim holds in all 32
+  cases, both byte orders.** The caller whose reply had begun hears
+  `InterruptedMidReassembly` naming its own request id and is **not** told it
+  may re-send; the other caller multiplexed on the same connection hears
+  `ConnectionClosed` and **is**. **No defect was found, so nothing was fixed**
+  — `mux.rs`'s module doc carried the stale sentence *"Still not observed from
+  a peer…"* and now carries what was measured instead. Reported and **not
+  diagnosed**: one case in ~450 failed with `Connection refused` against a peer
+  that had demonstrably bound, listened and published its port, and it has not
+  reproduced in 608 subsequent cases; `SO_REUSEADDR` was the obvious suspect
+  and was **measured innocent** (0 refusals in 6000 cycles with it, 487 failed
+  *binds* in 3000 without it, so removing it is strictly worse). What changed
+  is that the runner can no longer report it as a refutation — exit 3 is *"nothing
+  was measured"* as distinct from 1, *"the claim did not hold"*, because
+  collapsing them would point a false diagnosis at the code under test on a run
+  where nothing happened.
+
+  **한 답신의 두 쓰기 사이에 끊는 피어는 ORB가 아니라 소켓이며, 결함은 발견되지
+  않았다.** D010 §4 B5 후반의 전제 두 쪽은 참이고 결론이 틀렸다. 질문이 다른 피어 둘
+  — 이 크레이트의 인코더가 아니라 §9.4에서 바이트를 만든 인프로세스 피어 열여섯과,
+  다른 언어·다른 프로세스의 표준 라이브러리 소켓 피어 열여섯(**클라이언트가 끊겼다고
+  말한 아이디와 피어가 끊었다고 말한 아이디를 두 프로세스가 따로 대조한다**).
+  **32건 전부, 두 바이트 순서 모두에서 주장이 성립한다.** **결함이 없었으므로 아무것도
+  고치지 않았다.** 재현되지 않은 이상 1건은 진단되지 않았다고 기록하며,
+  `SO_REUSEADDR`는 측정으로 무죄가 밝혀졌다.
+
+- **The SSL peer neither ORB can be is a socket — and it now runs, 21 of 21,
+  exit 0.** `run_checks.sh` has printed `SKIPPED no SSL peer` for the life of
+  the project and D010 §4 B3 files SSLIOP peer proof as blocked on *"an omniORB
+  build with SSL, or JacORB's SSL transport configured"*. The premise is true —
+  `from omniORB import sslTP` still raises `ImportError` here — **and the
+  conclusion does not follow**, for the same reason it did not for B5. SSLIOP
+  is not a protocol an ORB implements on top of IIOP: the Security Service's
+  chapter defines unmodified GIOP over a TLS connection plus one component
+  saying where the TLS listener is — no handshake of its own, no negotiation,
+  no framing. So what it needs is **a peer that speaks IIOP over TLS, not an
+  ORB that does**, and Python's `ssl` is in the standard library while the
+  certificates have been in `spikes/tls/` since 2026-08-13.
+  `spikes/ssliop_peer.py` builds every GIOP and IOR octet by hand from §7.6.9,
+  §9.4 and the SSLIOP chapter; it reports what it observed and **judges
+  nothing**, and the runner, which knows the trust configuration, judges. Part
+  A reads octets our encoder did not write, over both IOR byte orders and both
+  component byte orders **independently** — an encapsulation restarts alignment
+  and carries its own order octet, so a little-endian component inside a
+  big-endian IOR is a shape a deployment produces and our own encoder never
+  does. Part B is a real cross-implementation handshake, rustls to OpenSSL,
+  negotiating TLS_AES_256_GCM_SHA384. And five refusals, which are what a
+  security-shaped claim owes: an unsigned certificate refused **and named**; a
+  plaintext peer at the advertised SSL port refused, with the peer's own
+  account as the evidence — it saw a TLS ClientHello arrive in cleartext, so
+  the client attempted TLS and **did not downgrade**; an advertisement pointing
+  at a dead port does not fall back to the live cleartext listener beside it;
+  no advertisement is not a licence to dial cleartext; and an unreadable
+  advertisement is not an absent one. **The measurement was itself unmeasured
+  for two commits and said so**: the part B driver had nowhere cargo would
+  build it, so `ssliop.sh` counted its fifteen cases UNMEASURED and exited
+  **3** — nothing measured, as distinct from 1, the claim did not hold. Four
+  lines of `Cargo.toml` and a move to
+  `crates/orbweaver-giop/src/bin/spike_ssliop.rs` closed it; no `pub` was
+  missing, the file was simply somewhere cargo does not look. Licence boundary
+  re-measured because `Cargo.toml` changed: `cargo tree --workspace` runs and
+  names no fixture.
+
+  **어느 ORB도 될 수 없는 SSL 피어는 소켓이며, 이제 21건 중 21건, exit 0으로
+  돈다.** 전제(여기 omniORBpy에 sslTP가 없다)는 참이고 **결론은 따라 나오지 않는다**.
+  SSLIOP은 IIOP 위의 별도 프로토콜이 아니라 TLS 위의 평범한 GIOP와 리스너 위치를
+  말하는 컴포넌트 하나이므로, 필요한 것은 **IIOP를 TLS로 말하는 피어이지 그렇게 하는
+  ORB가 아니다.** 피어는 관찰만 하고 **판정하지 않으며**, 신뢰 설정을 아는 러너가
+  판정한다. IOR 바이트 순서와 컴포넌트 바이트 순서를 **독립적으로** 돌린다. 거부 다섯
+  건이 보안 성격의 주장이 치러야 할 값이다. **측정 자체가 두 커밋 동안 미측정이었고
+  그렇게 말했다** — 드라이버를 카고가 보는 자리로 옮기기 전까지 15건이 UNMEASURED,
+  exit **3**(측정 없음)이었지 1(반증)이 아니었다.
+
+- **`string_to_object` against omniORB found three places we had guessed, and a
+  test written from our side could have found none of them.** §8.2.2 promises
+  that `string_to_object(object_to_string(obj))` names the same object *"even
+  if the two operations are performed on different ORBs"* — which is why the
+  oracle is a peer: a convention both halves of this crate share cannot be
+  refuted by our own round trip. **(1) `corbaname:` with a name in it — the
+  peer proved us wrong.** Part 2 §7.6.10.5 says such a URL denotes the object
+  *bound under that name*, not the naming context holding it, and omniORB
+  **dials**. Routing our existing code through unchanged would have returned
+  **the naming context**, because `ObjectUrl::to_ior` ignores the `name` field
+  entirely — the wrong object, silently, and the one answer this operation must
+  never give. It is refused by name instead, citing §7.6.10.5 and pointing at
+  the two-step a caller can see; dialling inside a conversion is real new
+  behaviour with a timeout to choose. omniORB draws the line in the same place.
+  **(2) A second `corbaloc:` address is a lost fallback.** We build one profile
+  per address; omniORB builds one profile at IIOP 1.0 and folds the rest into
+  `TAG_ALTERNATE_IIOP_ADDRESS` components. Both are legal. But
+  `parse_iiop_profile` reads components only `if minor >= 1`, because §7.6.2
+  gives `ProfileBody_1_0` no components field — so **we silently drop
+  omniORB's alternate address, and failover never happens** for any reference
+  omniORB produced this way. **Not fixed**: reading components after a 1.0
+  profile body changes how every reference from every peer is parsed, which is
+  a wire-behaviour batch with its own peer measurement. It is **pinned**
+  instead, so the day it is fixed the assertion goes red and the divergence
+  record has to be updated rather than quietly rotting. **(3) Two refusal
+  classes were guessed and corrected by the run**: `IOR:zzz` is `MARSHAL`, not
+  `BAD_PARAM`, and `corbaloc:rir:/TradingService` is `NO_RESOURCES`, not
+  `BAD_PARAM` — the same reserved-versus-invented line drawn in step 1, now
+  confirmed by a second implementation drawing it too. **The census is a
+  weaker claim than proposed and it is the measured one**: 179 sites spell a
+  conversion by hand and **nothing in Rust dispatches on the form today**, so
+  `string_to_object` removes no existing duplication — it removes the *need*
+  for the next one.
+
+  **`string_to_object`을 omniORB에 대어 우리가 짐작하던 세 자리를 찾았고, 우리 쪽에서
+  쓴 테스트로는 하나도 찾을 수 없었다.** §8.2.2의 약속이 **다른 ORB 사이에서도**
+  성립한다고 말하기 때문에 오라클은 피어다. (1) 이름이 붙은 `corbaname:`은 그 이름에
+  묶인 객체를 뜻하는데 기존 코드를 그대로 태웠으면 **네이밍 컨텍스트**를 조용히
+  돌려줬을 것이다 — 이 연산이 절대 주면 안 되는 답. (2) 두 번째 `corbaloc:` 주소는
+  잃어버린 폴백이다 — omniORB가 만든 참조에서 대체 주소를 조용히 버리고 있다.
+  **수정하지 않고 고정했다.** (3) 거부 분류 둘은 짐작이었고 실행이 교정했다.
+  **인구 조사는 제안보다 약한 주장이며 그것이 측정된 주장이다** — 179곳 어디도 형식에
+  따라 분기하지 않으므로, 이것은 있던 중복을 없애는 것이 아니라 다음 중복의 *필요*를
+  없앤다.
+
+- **A null result with a reason: the frozen benchmark cannot see the two SIDL
+  keys that now reach a reader.** `Subject::to_prompt` has exactly one caller,
+  the S3i path, and `corpus/requirements/{inputs,inputs-v2}` is driven through
+  three other prompts entirely — `Subject::parse` fails on IDL, so the stage is
+  **never even constructed** on that path. That is checkable rather than
+  arguable, so it was checked: a capture stub in place of the producer recorded
+  the exact prompt and input the pipeline handed each item over the whole
+  frozen set, on both arms — 46 S1 items, 20 S3 items, **92 prompt/input pairs
+  per arm** — and `diff -r before after` found **no differences, exit 0**. Zero
+  bytes of what the frozen benchmark shows a producer changed. Pass rates are
+  therefore identical **by construction**, and no model was called to produce a
+  number that could not have been attributed to anything. *An inert key that
+  has been measured inert is a different thing from one nobody looked at.*
+  **The instrument was controlled too**, since a diff that finds nothing is the
+  shape a broken diff also has: one word appended to the S3 prompt made 20 of
+  20 differ, `diff -rq` exit 1. **What a real measurement would take, stated so
+  it is not mistaken for done: there is no frozen S3i benchmark at all**, and
+  the nearest thing is unannotated by design so its two arms would also be
+  identical. It needs a frozen set of ingested interfaces where M of N
+  operations carry authored keys from their real contracts, then two runs
+  against a live producer with the rendering on and off, compared on the gate
+  pass rate and `Proposal::unknown_rate()`. Cost: 2N model calls plus repair
+  rounds — and when it is run, one model family generating and evaluating makes
+  that number **indicative**, said in the same breath as the number.
+
+  **이유 있는 영(null) 결과: 얼어붙은 벤치마크는 독자에게 닿게 된 SIDL 키 둘을 볼 수
+  없다.** `Subject::to_prompt`의 호출자는 S3i 경로 하나뿐이고 얼어붙은 요구사항 집합은
+  다른 세 프롬프트로만 돈다 — 그 경로에서 이 단계는 **생성되지조차 않는다.** 논증이
+  아니라 확인 가능한 사안이므로 확인했다: 양쪽 팔에서 **92쌍**을 포착해 `diff -r` →
+  **차이 없음, exit 0.** 통과율은 **구성상** 동일하며, 무엇에도 귀속시킬 수 없는 수치를
+  만들려고 모델을 부르지 않았다. 아무것도 못 찾는 diff는 고장 난 diff와 모양이 같으므로
+  **계측기도 대조했다**(한 단어를 넣자 20/20이 달라졌다). **진짜 측정에 필요한 것을,
+  끝난 일로 오해되지 않게 적는다 — 얼어붙은 S3i 벤치마크는 아예 없다.**
+
+- **Three instructions were re-measured and found wrong, in the batches they
+  were handed to.** *"Six sites in `nat.rs` do `.unwrap()`"* on
+  `ObjectUrl::to_ior` — they do not: those are a different function of the same
+  name, with no arguments and a `Result` return, and all six are in that
+  module's own test code. `ObjectUrl::to_ior` has **exactly two non-test call
+  sites, both already handling the `None`**, so nothing that passes a `rir:`
+  URL exists and nothing could begin to panic; the count is now written on the
+  function with the date it was taken. The proposed oracle for `corbaloc:rir:`
+  had **the direction backwards** — handing the URL to omniORB's client
+  measures *omniORB's* table, since §8.5.2's whole point is that `rir` is
+  local, and it was confirmed live that omniORB resolves it out of its own
+  configuration and never asks the far end anything; the direction that
+  measures ours is the reverse. And a `csiv2.rs` literal named as a number to
+  sweep is **the specification's** — an `IOP::ServiceId` — so a configuration
+  key for it would be a way to address a service context nobody reads; the
+  verdict is recorded in the module docs so the next reader does not spend the
+  same half hour. Separately, SIDL's vocabulary is **eight keys, not nine**:
+  the key listed as the ninth is the test suite's canonical example of a key
+  **outside** the vocabulary, chosen precisely because nothing reads it, and
+  the type four lines above the paragraph declares the count.
+
+  **지시 셋을 다시 재어 틀렸음을 확인했다 — 그 지시를 받은 배치 안에서.**
+  "`nat.rs`의 여섯 곳"은 같은 이름의 다른 함수였고 전부 그 모듈의 테스트 코드였다.
+  `corbaloc:rir:`의 오라클 방향은 **거꾸로**였다 — 그렇게 하면 omniORB의 표를 잰다.
+  그리고 훑으라고 지목된 상수 하나는 **규격의 것**이었다. 또한 SIDL 어휘는 아홉이
+  아니라 **여덟**이며, 아홉 번째로 적힌 키는 어휘 **바깥**의 정전(正典) 예시다.
+
+- **Five negative controls came back green, and each one is the finding.** A
+  control that passes is not a formality; it is a measurement of the check.
+  (1) A test pinning a keyword list **iterated the very list it was pinning**,
+  so removing a name removed the case — rewritten to spell the names out; the
+  same class as a gate that measures nothing. (2) A `FIRST` ordering mutated to
+  `Ordering::Greater` passed, **not because the test measures nothing** but
+  because an always-`Greater` comparator is not a total order at all and
+  `sort_by` over three elements leaves them alone — *a mutation that is not a
+  valid ordering is not a negative control for an ordering*; two valid
+  replacements were both red. (3) A console value retyped **at the same value**
+  came back green: the test pins agreement, not provenance, and what makes the
+  drift impossible rather than detectable is reading the constant. (4) An
+  equivalence test stayed green under a control that broke absence, because
+  both runs gained the same line — *equivalence and absence are two pins and
+  the batch needs both*. (5) A relationship batch's whole first round of
+  controls **measured nothing and said so only because its output was read**:
+  the controls ran with unqualified `--exact` names, so all 91 tests filtered
+  out and every mutation "passed" with exit 0; the harness now counts selected
+  tests and marks any control that did not run exactly one as UNMEASURED. A
+  sixth was a **hang** — a `Delivery::drop` stopping only the default channel
+  blocked joining another channel's threads and was killed at 120 s, recorded
+  as the honest symptom rather than dressed up as an assertion.
+
+  **부정 대조군 다섯이 초록으로 돌아왔고, 각각이 곧 발견이다.** 통과한 대조군은
+  요식이 아니라 **검사 자체에 대한 측정**이다. (1) 목록을 고정하는 테스트가 **바로 그
+  목록을 순회**했다. (2) 전순서가 아닌 변이는 순서에 대한 부정 대조군이 아니다.
+  (3) **같은 값으로** 다시 타이핑한 것은 초록이었다 — 테스트는 출처가 아니라 일치를
+  고정한다. (4) 동치와 부재는 서로 다른 고정이며 둘 다 필요하다. (5) 한 라운드 전체가
+  **아무것도 재지 않았고**, 출력을 읽었기 때문에만 드러났다. 여섯 번째는 **행(hang)**
+  이었고 정직한 증상 그대로 기록했다.
 
 ### Fixed / 수정
 
@@ -485,6 +1218,215 @@ records what changed and, where it matters, what it changes on the wire.
   `ValueBase`가 객체 참조로 마샬링된다 — 어제 닫은 결함이 키워드 하나에 살아남았고,
   S4는 이름을 대는데 와이어 경로의 어떤 층도 거부하지 않는다.
 
+- **Four catch-alls that would answer for a construct nobody has met.** One
+  shape, swept across four crates, and in every case the repair is
+  exhaustiveness carried by the compiler rather than by a comment.
+  - **`anyjson::type_name` named nothing.** It listed fifteen primitives and
+    asked everything else for a repository id, and **seven variants carry
+    none** — `sequence`, `array`, `any`, `typecode`, `void`, `null`,
+    `Principal` — so a **peer-fed** document naming a `void` was answered
+    *"`<anonymous>` cannot cross yet"*, and a value of the wrong shape for a
+    `sequence<long>` was answered *"is not a value of `<anonymous>`"*. Its own
+    doc comment claimed the decoder *"says so rather than guessing"*; it said
+    `<anonymous>`. **This class was diagnosed once already, in this file, and
+    closed the wrong way**: a `fixed` was refused that way until 2026-08-21 and
+    the repair was a guard *above* the mismatch arm rather than the function,
+    which took the one witness out of reach and left the defect live for seven
+    other variants for four more days. **A guard that stops one caller reaching
+    a defect is not a fix for the defect.** The bound is now in the subject
+    (`string<5>`, `sequence<octet, 7>`) because it is in the type.
+  - **`tc_to_json`'s tail was `short_name(other).unwrap_or("void")`** under the
+    comment *"Every remaining variant has a short name and returned above"* —
+    true of all 33 variants the day it was written and a silent lie the day a
+    34th arrives. Measured, not argued: with the repairs stashed, a local
+    interface's *description* crossed the wire as the string `"void"`.
+  - **`describe`'s tail named a 34th variant `an indirection`** — and both
+    constructs this project has actually met late arrive with no `TcKind`, so
+    that is a refusal a peer reads, and *"expected a value of type an
+    indirection"* is a sentence this project has already shipped once.
+  - **`render_type` ended in `_ => "<unnamed type>"`** under a comment claiming
+    everything left *"v1 does not marshal or does not name"*. **Half of that
+    was false and the false half reached a reader**: the catch-all swallowed
+    nine of the 33 variants, two of which the v1 wire marshals in both
+    directions — including the very type another fix had rescued from becoming
+    a silent `void`. It feeds the operation signature line in the S3i subject,
+    the prompt a model and a human read, so `long double price()` arrived as
+    `<unnamed type> op(...)`. All 33 now carry a verdict: 26 unchanged, 2
+    repaired and marshalled, 4 repaired and refused by the wire (spelled by
+    calling the owning crate's `*_subject` functions, so the prompt shows the
+    string the marshaller will refuse it by), and 3 keep a placeholder **with
+    the reason true of it**. Swept for the same shape, `is_reference` had the
+    defect pointing the other way — `_ => false` meant a reference travelling
+    inside a `struct` or `union` was **not** marked, so `Object get_root()` was
+    a caution and `struct Handle { Object it; } get_root()` was not.
+
+  The controls for these are **build** controls, not red tests, because
+  exhaustiveness has no assertion in it by construction: a 34th variant added
+  to the owning crate turns each site into `error[E0004]`. A third home for the
+  naming fact was found and **reported rather than reached into**, with a live
+  wrong answer — a `native` parameter described to an agent as `<recursive>`.
+
+  **아무도 만난 적 없는 구성물을 대신 답했을 포괄 팔 넷.** 한 모양, 네 크레이트.
+  `type_name`은 아무것도 이름하지 않았고(**피어가 보낸** 문서가 `<anonymous>`라는 답을
+  받았다), 그 계급은 **이 파일에서 이미 한 번 진단되고 틀린 방식으로 닫혔다** — 함수가
+  아니라 그 위에 가드를 세워 목격자 하나를 치우고 결함은 일곱 변형에 나흘 더 살려
+  두었다. **한 호출자가 결함에 닿지 못하게 막는 가드는 결함의 수정이 아니다.**
+  `tc_to_json`은 34번째 변형의 *기술*을 문자열 `"void"`로 와이어에 실었을 것이고(측정),
+  `render_type`의 주석은 절반이 거짓이었으며 **그 거짓 절반이 독자에게 닿았다.**
+  대조군은 빨간 테스트가 아니라 **빌드** 대조군이다.
+
+- **`SymbolKind::is_type` counted an exception as a type**, so
+  `struct S { E field; };` validated clean here and omniidl refuses it. Found
+  by asking which kinds a `not-a-type` file could be written from — because
+  there was **no such file**. `raises` now asks only that the name resolve, and
+  that nothing checks it resolves to an *exception* is written down rather than
+  smuggled under a rule about types. Found with it: **a rule id names a class,
+  and a second diagnosis joins it and inherits a hint written about the first**
+  — five instances, two already losing in the product, where the span differs
+  with the diagnosis so a hint written to quote one thing quotes another. And
+  **a hint keyed to a rule no corpus file produces has never been executed** —
+  three rules, the same gap the target-keywords file closed for escaping. All
+  31 negative files are refused by both front ends, measured file by file.
+
+  **`SymbolKind::is_type`가 예외를 타입으로 셌다** — 그래서 여기서는 깨끗이 통과하고
+  omniidl은 거부하는 파일이 있었다. `not-a-type` 파일을 무엇으로 쓸 수 있는지 물어보다
+  발견했다 — **그런 파일이 없었기 때문이다.** 함께 발견: 규칙 아이디 하나에 진단 둘이
+  붙어 **뒤엣것이 앞엣것에 대해 쓰인 힌트를 물려받는다**(5건, 2건은 이미 제품에서
+  지고 있었다), 그리고 **어떤 코퍼스 파일도 만들지 않는 규칙의 힌트는 실행된 적이
+  없다**(3건).
+
+- **Refusals in the constraint language that pointed at nothing, or at the
+  wrong thing.** `unexpected character 'x'` gave a byte position and nothing to
+  fix — half the bar that module's own docs set for every other refusal in it.
+  **A float literal too large to represent parsed to `inf`**, because
+  `f64::from_str` answers `Ok(inf)` rather than an error, so a bound written
+  with four hundred nines **matched everything, silently**, while the counter
+  field next door had always refused its own overflow by name. **A lowercase
+  keyword where a field belongs was reported as an unknown field**: before
+  `NOT` and `EXIST`, every lowercase keyword happened to fall where the parser
+  was already expecting one, so the *"keywords are uppercase"* hint was reached
+  by luck. And **`Selection::unanswerable`'s own sentence went false in both
+  directions the moment the grammar grew** — the criterion it described was the
+  whole truth under a chain of `AND`s and is not under `OR` or `EXIST`; both it
+  and the operator-facing note now state the criterion that is actually
+  computed. Nothing was red, because a sentence is not compiled. Added with
+  the nesting constructs rather than after them: `MAX_DEPTH = 64`, because
+  unbounded nesting over untrusted input is a **stack overflow, which is a
+  crash and not a refusal**, and this parser's whole argument for being
+  first-party is that it refuses with a position.
+
+  **아무 데도, 혹은 엉뚱한 데를 가리키던 제약 언어의 거부들.** 표현 불가능한 부동
+  소수 리터럴이 `inf`로 파싱되어 **모든 것에 맞는 한계가 조용히 만들어졌다.**
+  소문자 키워드 힌트는 **운으로** 닿고 있었다. 그리고 문법이 자라는 순간
+  `Selection::unanswerable`의 문장이 양방향으로 거짓이 되었다 — 문장은 컴파일되지
+  않으므로 아무것도 빨갛지 않았다. 중첩 구성물과 **함께** 깊이 한계를 넣었다.
+
+- **A refusal that named a byte in a string that no longer existed.** `WITH
+  <constraint>` delegates to the constraint parser, whose positions are offsets
+  into whatever text it was given; the obvious fix-up is to parse the substring
+  and add the keyword's length to the returned position, and that is what the
+  first pass did. It was wrong in a way worth writing down, because **some
+  refusals name a *second* position inside their own sentence** — so `WITH
+  (cost == 1` reported *"at byte 15: expected ')' to close the '(' at byte 1"*:
+  one refusal naming two different places for one bracket, and the place it
+  pointed at was a byte of a substring the caller never had. **Nothing about it
+  looks wrong until you count.** The repair is not more arithmetic: the
+  constraint is parsed over *this* text with the keyword blanked to spaces, so
+  every offset is already an offset into what the caller holds and there is
+  nothing left to keep in step — a fact reachable from one place cannot drift
+  from itself.
+
+  **이제 없는 문자열의 바이트를 가리키던 거부.** 부분 문자열을 파싱하고 키워드 길이를
+  더하는 뻔한 보정이 틀렸다 — **어떤 거부는 자기 문장 안에서 *두 번째* 위치를
+  이름하기 때문**이다. 하나의 괄호를 두고 서로 다른 두 곳을 말했고, 가리킨 자리는
+  호출자가 가진 적 없는 부분 문자열의 바이트였다. **세어 보기 전에는 이상해 보이지
+  않는다.** 산술을 더하는 대신 키워드를 공백으로 지우고 *이* 본문에서 파싱한다.
+
+- **Comments asserting what another crate does, and one that had been false for
+  eleven days.** A policy helper named in three sites of one module and one of
+  another was **removed and split in two on 2026-08-14**, while what the
+  comments described stayed true — so nothing was wrong except that they named
+  a symbol that had not existed for eleven days. The set's real home is
+  private, so the copy that mattered got a **behavioural pin through the public
+  API** rather than a fourth sentence. Re-verified and left alone: the three
+  neighbouring claims that are still true, one of them checked as `26 = 26 =
+  26` and honestly recorded as **unpinned**. Also re-blessed here:
+  `spikes/bench/stub.rs`, a checked-in generated stub outside `tests/emitted/`
+  under the same freshness gate, which the identifier batch left stale **on
+  purpose and reported rather than reaching outside its footprint**. Worth
+  recording, because it is the same class one turn later: a decision document
+  carried a row saying that stub had no `redirect` hook, which was **already
+  false when it was written**; repairing that row replaced it with *"the gap is
+  the re-blessing discipline, not a missing hook"* — and the discipline was
+  claimed the same afternoon.
+
+  **다른 크레이트가 무엇을 하는지 주장하는 주석들, 그중 하나는 열하루 동안 거짓.**
+  기술한 내용은 참인 채로 **존재하지 않는 심볼을 이름하고 있었다.** 진짜 집이 비공개라
+  네 번째 문장 대신 **공개 API를 통한 행동 고정**을 붙였다. 여전히 참인 이웃 셋은
+  다시 확인해 두었고, 그중 하나는 **고정되지 않았다고 정직하게 적었다.**
+
+### Known limits / 알려진 한계
+
+- **A `TAG_SSL_SEC_TRANS` component produced by omniORB's or JacORB's own
+  encoder is still unmeasured, and stays named as such.** Everything else B3
+  claims is measured, but a component with the association-option bits and port
+  convention *that* implementation chose is a claim about their encoder and
+  **only they can make it**. A hand-built advertisement is not ours either —
+  the octets come from the specification in another language in another process
+  — which is what makes the rest of the measurement worth having.
+- **A `corbaloc:` reference produced by omniORB loses its alternate
+  addresses.** Components are read only when the profile's minor version is at
+  least 1, and omniORB folds a multi-address `corbaloc:` into
+  `TAG_ALTERNATE_IIOP_ADDRESS` on a **1.0** profile — so failover to the second
+  address never happens. Pinned, not fixed: the fix changes how every
+  reference from every peer is parsed.
+- **`corbaname:` with a name fragment is refused, not resolved.** It denotes
+  the object bound under that name (Part 2 §7.6.10.5), which means dialling
+  inside a conversion — new behaviour with a timeout to choose. The refusal
+  names the name it would have to resolve and points at the two-step a caller
+  can see today.
+- **The Interface Repository answers in repository-id order, not declaration
+  order.** §14.5.4.1 asks for declaration order and `Registry` holds entries in
+  `BTreeMap`s, so it is gone by the time the IDL is loaded. The order given is
+  total, stable and identical in both byte orders, and is **recorded as a
+  divergence rather than faked**. The facade also claims only Repository,
+  ModuleDef and InterfaceDef as containers, though §14.5.10 and §14.5.20 also
+  make a `StructDef` and an `ExceptionDef` ones — because a servant that
+  refused the narrow `_is_a` and then honoured the operation would tell a
+  client two different things about one reference. Widening means widening
+  both, in one commit.
+- **Two POA key spaces, one unstated invariant, deliberately not fixed.**
+  `Poa::object_key` concatenates name, optional incarnation and id with nothing
+  constraining the components, so under `Lifespan::Persistent` a POA named
+  `Root` with id `POA/x` and one named `Root/POA` with id `x` mint the
+  **identical object key**, and each POA's parser accepts the other's — while
+  the same crate enforces exactly that rule for its other key space, and
+  neither names the other. **No fix is behaviour-preserving**: refusing `/`
+  changes behaviour for a data-driven caller that mints ids from expert ids and
+  the minting function has no failure channel, and escaping the separator
+  changes every key already minted, persistent ones included. No caller in this
+  workspace puts a `/` in either today. Documented and pinned as measured.
+- **One creation path does not apply the integrity rules its sibling
+  enforces.** A manifest may name the same capability twice, and may name one
+  whose expert already exists over a different base — both of which the
+  explicit bind refuses with `BAD_PARAM` — so a model can be composed from an
+  adapter its own base does not match. Same rule, two paths, one enforcing it:
+  the shape that stays invisible until somebody measures both paths. **Pinned
+  as measured and explicitly not endorsed** — making the paths agree turns that
+  test red, which is the signal wanted.
+- **`ai_unit` and `ai_idempotent` are read by checkers and by no consumer.** A
+  weaker claim than inert: both are warned about when misapplied, and nothing
+  converts, renders, validates or retries on either — the unit does not reach
+  the stub, the docstring or the bridge, and the retry-safety a contract
+  declares steers nothing. With the two keys that now reach a reader, **the
+  live half of SIDL's eight-key vocabulary is four.**
+- **One sentence still has four homes and the fix is out of one footprint.**
+  The annotate-or-assume advice exists in an S4 fix hint, a guard-chain remedy,
+  a server startup summary and a console legend; the crates do not depend in
+  the direction that would let one publish it, **and the four are not the same
+  string anyway** — one offers three values, another two. Reported rather than
+  reached into; the fix is the owning crate publishing the hint from a function
+  both call.
 
 ---
 
