@@ -825,24 +825,82 @@ if RUSTFLAGS="-D warnings" cargo test -p orbweaver-giop --features ssliop --quie
 else
   echo "  FAIL the ssliop build does not build cleanly or does not test"; ssl_fail=1
 fi
-# D010 B3: SSLIOP against a peer. A class-B row lands as a SKIPPED group
-# naming its fixture. The fixture is omniORBpy's `sslTP` (brew's build ships
-# none — spikes/tls/PEER-STATUS.md) or JacORB's SSL transport configured; the
-# probe is the import itself, captured then matched. If the module IS present
-# somewhere (CI builds omniORBpy from source), the line says so distinctly —
-# an available fixture nobody measures is the thing to notice, not a pass.
+# D010 B3: SSLIOP against a peer. This was a SKIPPED group for the life of the
+# project, on the premise that the fixture is omniORBpy's `sslTP` (brew's build
+# ships none) or JacORB's SSL transport configured. The premise is true and the
+# conclusion does not follow: SSLIOP is unmodified GIOP over TLS plus a
+# `TAG_SSL_SEC_TRANS` component, so the peer it needs is a socket, not an ORB.
+# `spikes/ssliop.sh` is that peer plus the driver — see its header for what it
+# does and does not close.
+#
+# Its exit code is the verdict, and it keeps three answers apart on purpose:
+#   0  every case was measured and held
+#   3  nothing was measured (no cargo, no python3, no certificates, no driver)
+#   1  a case was measured and did not hold
+# 3 and 1 must not collapse into each other. An unmeasured check is a failure
+# and never a pass, but it is also not a refutation, and a group that printed
+# the same line for both would send a reader looking for a wire defect that
+# does not exist. So 3 lands as a counted SKIPPED naming its fixture and 1
+# lands as a FAIL.
+ssliop_out=$(./spikes/ssliop.sh 2>&1); ssliop_rc=$?
+ssliop_verdict=$(sed -n 's/^ssliop: //p' <<<"$ssliop_out" | tail -1)
+# A herestring, never a pipe: `grep -q` SIGPIPEs its producer and `pipefail`
+# turns a failed producer into "no match" (line 9, and CLAUDE.md's rule).
+case "$ssliop_rc" in
+  0)
+    # Exit 0 over zero cases is the green-while-measuring-nothing shape — a
+    # script whose body stopped running still reaches `verdict` with fails=0.
+    # 21 is a FLOOR, not today's figure: it is what the script's own loops
+    # enumerate (6 advertisement cases + 15 transport cases), and adding a
+    # case raises it. Nothing here re-states a measurement.
+    ssliop_cases=$(sed -n 's/^PASS — \([0-9][0-9]*\) cases.*/\1/p' <<<"$ssliop_verdict")
+    if [ -z "$ssliop_cases" ] || [ "$ssliop_cases" -lt 21 ]; then
+      echo "  FAIL spikes/ssliop.sh exited 0 over ${ssliop_cases:-no} cases (floor 21) — it measured less than it has"
+      ssl_fail=1
+    else
+      echo "  ok   B3 peer proof: $ssliop_cases cases against spikes/ssliop_peer.py — GIOP over TLS to"
+      echo "       another process, the advertisement read out of an IOR our encoder did not write,"
+      echo "       both IOR and both component byte orders, and five refusals"
+    fi
+    ;;
+  3)
+    echo "  SKIPPED  spikes/ssliop.sh measured nothing (exit 3): $ssliop_verdict"
+    echo "           its fixture is spikes/ssliop_peer.py, the certificates in spikes/tls/, and a"
+    echo "           build of spike-ssliop; SSLIOP against a peer is unmeasured, not passing (D010 B3)"
+    grep -E '^  FAIL' <<<"$ssliop_out" | tail -4 | sed 's/^/       /'
+    skipped=$((skipped+1))
+    ;;
+  *)
+    # A script that could not be run at all reaches no verdict, and calling
+    # that a refutation would send a reader after a wire defect. Still a
+    # failure — an unmeasured check is never a pass — but a different one.
+    if [ -z "$ssliop_verdict" ]; then
+      echo "  FAIL spikes/ssliop.sh could not be run at all (exit $ssliop_rc) — B3 was NOT measured"
+      printf '%s\n' "$ssliop_out" | tail -3 | sed 's/^/       | /'
+    else
+      echo "  FAIL spikes/ssliop.sh refuted a B3 claim (exit $ssliop_rc): $ssliop_verdict"
+      grep -E '^  FAIL' <<<"$ssliop_out" | tail -6 | sed 's/^/       /'
+    fi
+    ssl_fail=1
+    ;;
+esac
+# The one residue the peer above cannot close, and it is still class B: a
+# `TAG_SSL_SEC_TRANS` component produced by omniORB's or JacORB's OWN encoder,
+# with the association-option bits and port convention that implementation
+# chose. Only they can make that claim, so D010 §2 applies unchanged — a
+# counted SKIPPED naming its fixture, never a `note` and never an `ok`, because
+# the verdict line counts SKIPPED and does not count prose.
+#
 # The probe is the interpreter's exit code, NOT a marker grepped from its
-# output: the first version printed 'sslTP present' and grepped for it, and
-# the ImportError traceback echoes the source line — so the gate matched its
-# own probe text and reported the module present where it is not. The class
-# the session record calls "a grep that caught its own comment", caught by
-# reading the line the harness printed against what the shell said.
+# output: the first version printed 'sslTP present' and grepped for it, and the
+# ImportError traceback echoes the source line — so the gate matched its own
+# probe text and reported the module present where it is not.
 if python3 -c "import omniORB.sslTP" >/dev/null 2>&1; then
-  echo "  SKIPPED  omniORBpy sslTP IS present here and the peer proof is not built yet — build it"
-  echo "           (spikes/tls/PEER-STATUS.md names the shape); unmeasured, not passing (D010 B3)"
+  echo "  SKIPPED  omniORBpy sslTP IS present here, so the one residue — a TAG_SSL_SEC_TRANS from"
+  echo "           THEIR encoder, not ours — could be taken now and is not. Unmeasured (D010 B3)"
 else
-  echo "  SKIPPED  no SSL peer — omniORBpy has no sslTP here and JacORB SSL is not configured;"
-  echo "           SSLIOP against a peer is unmeasured, not passing (D010 B3, spikes/tls/PEER-STATUS.md)"
+  echo "  SKIPPED  no omniORBpy sslTP and no JacORB SSL here, so a TAG_SSL_SEC_TRANS produced by"
+  echo "           THEIR encoder stays unmeasured, not passing (D010 B3, spikes/tls/PEER-STATUS.md)"
 fi
 skipped=$((skipped+1))
 [ "$ssl_fail" -eq 0 ] || fail_total=$((fail_total+1))
@@ -2690,6 +2748,45 @@ except CORBA.NO_PERMISSION:
       skipped=$((skipped+1)) ;;
     *) echo "  FAIL cross-ORB IR client: $(printf '%s' "$ifr_out" | tr '\n' ' ')"; ifr_fail=1 ;;
   esac
+
+  # And the containment walk the one-shot above does not reach: `contents`
+  # with its filter, `describe_contents` and `max_returned_objs`, `lookup` vs
+  # `lookup_name` with its levels, `defined_in` walked back up to the
+  # repository, `get_primitive`/`get_canonical_typecode`, and the write
+  # refusal — every leg driven by omniORB's IR client against the SAME holding
+  # facade, so no second fixture is started and nothing is killed by pattern.
+  #
+  # The verdict is the script's exit code (0 every leg answered, 1 a leg
+  # raised or answered wrong, 2 the narrow failed), never a marker grepped out
+  # of a stream that prints its own expectations — that stream contains the
+  # word FAILURES and the words it compares against.
+  #
+  # Absent stubs are told from a failed walk by their own probe with its own
+  # exit code, before the walk runs, rather than by matching ImportError in
+  # output a traceback could echo for any other reason.
+  if ! python3 -c "import CORBA, omniORB.ir_idl" >/dev/null 2>&1; then
+    echo "  SKIPPED  omniORBpy IR stubs absent (fixture: omniORBpy's omniORB.ir_idl) — the"
+    echo "           containment walk is unmeasured, not passing"
+    skipped=$((skipped+1))
+  else
+    walk_out=$(python3 spikes/ifr_walk_peer.py "$IFR_IOR" 2>&1); walk_rc=$?
+    # 51 is a FLOOR on the legs the script counted, not today's figure: exit 0
+    # over no legs at all is the green-while-measuring-nothing shape, and a
+    # script whose body stopped running still falls off the end with 0.
+    walk_legs=$(sed -n 's/^walk: every leg answered (\([0-9][0-9]*\) legs)$/\1/p' <<<"$walk_out")
+    if [ "$walk_rc" -ne 0 ]; then
+      echo "  FAIL omniORB's IR client could not walk our repository (exit $walk_rc)"
+      printf '%s\n' "$walk_out" | tail -10 | sed 's/^/       | /'
+      ifr_fail=1
+    elif [ -z "$walk_legs" ] || [ "$walk_legs" -lt 51 ]; then
+      echo "  FAIL the walk exited 0 over ${walk_legs:-no} legs (floor 51) — it measured less than it has"
+      ifr_fail=1
+    else
+      echo "  ok   omniORB's IR client walked the repository, $walk_legs legs: contents and its filter,"
+      echo "       describe_contents with max_returned_objs, lookup/lookup_name, defined_in back up"
+      echo "       to the repository, get_primitive, and create_module still refused"
+    fi
+  fi
 else
   echo "  FAIL the holding IFR facade never came up"; ifr_fail=1
 fi
@@ -2779,7 +2876,97 @@ else
 fi
 kill "$EV_PID" >/dev/null 2>&1 || true
 wait "$EV_PID" 2>/dev/null || true
+# `cargo run` forks; killing cargo does not kill the binary it launched, and a
+# leaked channel holds a port and a log for the group below. `fkill` is the
+# process-group-scoped killer defined at the top of this file — it will not
+# touch a spike-events somebody started by hand in another checkout.
+fkill spike-events
 [ "$ev_fail" -eq 0 ] || fail_total=$((fail_total+1))
+
+# ── F7b: the pull model, with omniORB as the SUPPLIER ────────────────────────
+hr "event channel — omniORB is the pull supplier and OUR channel does the asking"
+# `event_consumer.py` above measures the direction where our channel calls an
+# ORB we did not write. This measures the other one: our channel is the
+# *client*, it dials omniORB's `PullSupplier` and invokes `try_pull` on a
+# schedule it owns. A convention both ends apply cannot be refuted by a round
+# trip — our own PullSupplierServant and our own channel were written from one
+# reading of one chapter, so a wrong reading agrees with itself. omniORB read
+# the chapter separately.
+#
+# Both byte orders, because `--source-endian` is what the channel asks in and a
+# supplier replies in the order it was asked in — so this flag, and only this
+# flag, is what puts both orders of a pulled event on the wire. The flag is
+# read at start-up, so it is one fixture per order rather than one fixture and
+# a switch.
+#
+# The fixture is the built binary, not `cargo run`: `cargo run` forks, so the
+# PID this group holds would be cargo's and the channel would outlive the kill.
+pull_fail=0
+if ! python3 -c "import CosEventComm, CosEventComm__POA, CosEventChannelAdmin" >/dev/null 2>&1; then
+  echo "  SKIPPED  omniORBpy CosEventComm/CosEventChannelAdmin stubs absent (fixture:"
+  echo "           spikes/event_pull_supplier.py needs them) — the pull direction is unmeasured,"
+  echo "           not passing"
+  skipped=$((skipped+1))
+elif ! cargo build -q --bin spike-events >/dev/null 2>&1; then
+  echo "  FAIL spike-events did not build, so the pull direction was NOT measured"
+  pull_fail=1
+else
+  PULL_IOR=/tmp/orbweaver-events-pull.ior
+  PULL_LOG=/tmp/orbweaver-events-pull-hold.log
+  for pull_e in big little; do
+    rm -f "$PULL_IOR" "$PULL_LOG"
+    "$ROOT/target/debug/spike-events" "$PULL_IOR" --hold --source-endian "$pull_e" \
+      >"$PULL_LOG" 2>&1 &
+    PULL_PID=$!
+    # A wait loop that sleeps, bounded by a deadline, and that gives up early
+    # when what it waits for has died — a loop without the sleep finishes in
+    # microseconds and does not wait at all (CLAUDE.md, and it cost a phantom
+    # failure here once).
+    pull_up=0
+    for _ in $(seq 1 100); do
+      grep -qs HOLDING "$PULL_LOG" && { pull_up=1; break; }
+      kill -0 "$PULL_PID" 2>/dev/null || break
+      sleep 0.2
+    done
+    # The fixture's own account of the order it will ask in. Without this the
+    # group would loop twice, print "both byte orders", and be green over ONE
+    # order the day `--source-endian` is renamed, dropped or silently ignored —
+    # the loop variable would still say big and little. Measured on the fixture
+    # that predates the pull half: it prints `listening on 127.0.0.1:PORT` with
+    # no endian clause at all, which is exactly the shape this catches.
+    pull_said=$(sed -n 's/.*(asking suppliers \([A-Za-z]*\)-endian).*/\1/p' <<<"$(cat "$PULL_LOG" 2>/dev/null)")
+    pull_want=$(tr '[:lower:]' '[:upper:]' <<<"${pull_e:0:1}")${pull_e:1}
+    if [ "$pull_up" -ne 1 ]; then
+      echo "  FAIL the holding channel (--source-endian $pull_e) never came up within 20s; its log:"
+      tail -6 "$PULL_LOG" 2>/dev/null | sed 's/^/       | /'
+      pull_fail=1
+    elif [ "$pull_said" != "$pull_want" ]; then
+      echo "  FAIL --source-endian $pull_e did not take: the channel says it asks"
+      echo "       '${pull_said:-nothing at all}', so this leg would have measured the other order"
+      pull_fail=1
+    else
+      # The verdict is the peer's exit code. It prints PASS, and it also prints
+      # the word FAIL on several of its own diagnosis lines, so matching text
+      # here would be matching a stream that carries both answers.
+      pull_out=$(python3 spikes/event_pull_supplier.py "$PULL_IOR" 2>&1); pull_rc=$?
+      if [ "$pull_rc" -eq 0 ]; then
+        echo "  ok   --source-endian $pull_e: our channel fetched every event from omniORB's"
+        echo "       PullSupplier with try_pull and never the blocking pull, and both of omniORB's"
+        echo "       consumer models got them in order"
+      else
+        echo "  FAIL --source-endian $pull_e: the pull direction (exit $pull_rc)"
+        printf '%s\n' "$pull_out" | tail -8 | sed 's/^/       | /'
+        pull_fail=1
+      fi
+    fi
+    # PULL_PID is the channel itself, not a `cargo run` that forked it, so this
+    # kill reaches the process holding the port — which is the whole reason the
+    # binary is built above and invoked directly.
+    kill "$PULL_PID" >/dev/null 2>&1 || true
+    wait "$PULL_PID" 2>/dev/null || true
+  done
+fi
+[ "$pull_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
 # ── Identity: what the peers actually advertise ──────────────────────────────
 hr "identity propagation — what a real target says about security"
