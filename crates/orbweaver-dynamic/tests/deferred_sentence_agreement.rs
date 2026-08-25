@@ -77,7 +77,7 @@ fn families() -> Vec<(TypeCode, &'static str, Boundary)> {
                     visibility: 1,
                 }],
             },
-            "valuetype Money",
+            "valuetype Money (IDL:m/Money:1.0)",
             Boundary::Deferred,
         ),
         (
@@ -85,13 +85,13 @@ fn families() -> Vec<(TypeCode, &'static str, Boundary)> {
                 id: "IDL:m/Describable:1.0".into(),
                 name: "Describable".into(),
             },
-            "abstract interface Describable",
+            "abstract interface Describable (IDL:m/Describable:1.0)",
             Boundary::Deferred,
         ),
         (TypeCode::Fixed { digits: 9, scale: 2 }, "fixed<9,2>", Boundary::Deferred),
         (
             TypeCode::Native { id: "IDL:m/Handle:1.0".into(), name: "Handle".into() },
-            "native Handle",
+            "native Handle (IDL:m/Handle:1.0)",
             Boundary::Never,
         ),
     ]

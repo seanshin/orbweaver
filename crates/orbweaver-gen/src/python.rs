@@ -221,13 +221,13 @@ pub fn descriptor(tc: &TypeCode) -> Result<String, String> {
         // wrong: the Python runtime would have marshalled an IOR where the
         // peer sends a value, and the bridge would have agreed with it,
         // because both halves were reading the same wrong registry.
-        TypeCode::Value { name, .. } => return Err(crate::deferred_value(name)),
-        TypeCode::AbstractInterface { name, .. } => return Err(crate::deferred_abstract(name)),
+        TypeCode::Value { name, id, .. } => return Err(crate::deferred_value(name, id)),
+        TypeCode::AbstractInterface { name, id, .. } => return Err(crate::deferred_abstract(name, id)),
         // Same argument, one step stronger: `("objref", id)` was what the
         // registry's `ObjRef` produced here, and there is no descriptor a
         // native could honestly have — omniORB's own Python back end ignores
         // the declaration and leaves the type mapping dangling.
-        TypeCode::Native { name, .. } => return Err(crate::unmarshallable_native(name)),
+        TypeCode::Native { name, id, .. } => return Err(crate::unmarshallable_native(name, id)),
         // D008: a TypeCode is a value, and its AnyJSON form is the structural
         // one. Python holds it as `_rt.TypeCode` — the document, kept whole so
         // relaying it is exact — and `_rt._desc_of` reads that document as a
@@ -296,7 +296,7 @@ fn interface_crossable(registry: &Registry, id: &str) -> Result<(), String> {
     // Same argument as `crate::interface_representable`: the declaration is
     // refused before its members are looked at.
     if entry.abstract_interface {
-        return Err(crate::deferred_abstract(&crate::abstract_name(registry, id)));
+        return Err(crate::deferred_abstract(&crate::abstract_name(registry, id), id));
     }
     let (operations, attributes) = resolved_members(registry, id);
     for (name, sig) in &operations {

@@ -238,9 +238,9 @@ pub(crate) fn rust_type(tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
         | TypeCode::Alias { id, .. } => rust_path(id, cx),
         TypeCode::Recursive(id) => rust_path(id, cx),
         TypeCode::Fixed { digits, scale } => return Err(deferred_fixed(*digits, *scale)),
-        TypeCode::Value { name, .. } => return Err(deferred_value(name)),
-        TypeCode::AbstractInterface { name, .. } => return Err(deferred_abstract(name)),
-        TypeCode::Native { name, .. } => return Err(unmarshallable_native(name)),
+        TypeCode::Value { name, id, .. } => return Err(deferred_value(name, id)),
+        TypeCode::AbstractInterface { name, id, .. } => return Err(deferred_abstract(name, id)),
+        TypeCode::Native { name, id, .. } => return Err(unmarshallable_native(name, id)),
         other => return Err(format!("no static mapping for {other:?}")),
     })
 }
@@ -251,10 +251,10 @@ pub(crate) fn rust_type(tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
 /// It names the wire form and not just the section, because the mistake this
 /// replaced was silent: an object reference *is* a legal thing to emit, so a
 /// reader of the generated code had nothing to be suspicious of.
-pub(crate) fn deferred_value(name: &str) -> String {
+pub(crate) fn deferred_value(name: &str, id: &str) -> String {
     format!(
         "{}: its state is marshalled inline behind a value tag, not as an object reference",
-        orbweaver_dynamic::deferred_wire_head(&format!("valuetype {name}"))
+        orbweaver_dynamic::deferred_wire_head(&orbweaver_dynamic::valuetype_subject(name, id))
     )
 }
 
@@ -266,14 +266,16 @@ pub(crate) fn deferred_value(name: &str) -> String {
 /// copy of the same sentence had, which is what made this worth collapsing
 /// rather than counting.
 pub(crate) fn deferred_fixed(digits: u16, scale: i16) -> String {
-    orbweaver_dynamic::deferred_wire_head(&format!("fixed<{digits},{scale}>"))
+    orbweaver_dynamic::deferred_wire_head(&orbweaver_dynamic::fixed_subject(digits, scale))
 }
 
 /// The same, for an abstract interface.
-pub(crate) fn deferred_abstract(name: &str) -> String {
+pub(crate) fn deferred_abstract(name: &str, id: &str) -> String {
     format!(
         "{}: on the wire it is the union of a value and a reference, not an object reference",
-        orbweaver_dynamic::deferred_wire_head(&format!("abstract interface {name}"))
+        orbweaver_dynamic::deferred_wire_head(&orbweaver_dynamic::abstract_interface_subject(
+            name, id
+        ))
     )
 }
 
@@ -292,13 +294,13 @@ pub(crate) fn deferred_abstract(name: &str) -> String {
 /// The refusal is spelled from the measurement, not from the section: omniORB
 /// refuses `native` outright in its C++ back end and ignores it in its Python
 /// one — see [`orbweaver_giop::TypeCode::Native`].
-pub(crate) fn unmarshallable_native(name: &str) -> String {
+pub(crate) fn unmarshallable_native(name: &str, id: &str) -> String {
     format!(
         "{}. Not deferred like §4.4's three constructs: those have a wire form this version \
          does not implement, and a native has none to implement (omniORB's C++ back end \
          refuses the declaration; its Python back end ignores it and leaves a dangling type \
          mapping)",
-        orbweaver_dynamic::unmarshallable_wire_head(&format!("native {name}"))
+        orbweaver_dynamic::unmarshallable_wire_head(&orbweaver_dynamic::native_subject(name, id))
     )
 }
 
@@ -533,12 +535,12 @@ fn representable(tc: &TypeCode, visiting: &mut Vec<String>) -> Result<(), String
         // They did not, for six phases, because the registry handed this
         // function a `TypeCode::ObjRef` for both and an object reference is
         // representable — the cascade was correct and its input was not.
-        TypeCode::Value { name, .. } => Err(deferred_value(name)),
-        TypeCode::AbstractInterface { name, .. } => Err(deferred_abstract(name)),
+        TypeCode::Value { name, id, .. } => Err(deferred_value(name, id)),
+        TypeCode::AbstractInterface { name, id, .. } => Err(deferred_abstract(name, id)),
         // The fourth thing the wire cannot carry, cascading the same way and
         // for a stronger reason — see [`unmarshallable_native`]. It reached
         // here as a `TypeCode::ObjRef` until 2026-08-21, which is representable.
-        TypeCode::Native { name, .. } => Err(unmarshallable_native(name)),
+        TypeCode::Native { name, id, .. } => Err(unmarshallable_native(name, id)),
         TypeCode::Sequence { element, .. } | TypeCode::Array { element, .. } => {
             representable(element, visiting)
         }
@@ -597,12 +599,11 @@ fn representable(tc: &TypeCode, visiting: &mut Vec<String>) -> Result<(), String
 /// spelling the other three already use and the one a member's `TypeCode`
 /// gives for this construct too.
 ///
-/// **Found and not fixed:** a simple name is ambiguous — two modules declaring
-/// `Describable` produce one string. That is
-/// `orbweaver_dynamic::deferred_wire_name`'s spelling, not this crate's, and
-/// the generated Python runtime is pinned to it across a crate boundary, so
-/// qualifying all four is its own batch. Here the skip note carries the
-/// repository id as its subject, so the identity is not lost.
+/// The ambiguity a simple name alone would leave — two modules declaring
+/// `Describable` producing one string — is carried by the id
+/// `orbweaver_dynamic::abstract_interface_subject` puts in the subject
+/// (2026-08-25, the batch the sentence above commissioned); this function's
+/// job is only the name half of that pair.
 pub(crate) fn abstract_name(registry: &Registry, id: &str) -> String {
     if let Some(TypeCode::AbstractInterface { name, .. }) = registry.typecode(id) {
         return name.clone();
@@ -620,7 +621,7 @@ fn interface_representable(registry: &Registry, id: &str) -> Result<(), String> 
     // dispatch to; every operation it declares may be perfectly representable,
     // which is why checking only the members cleared it.
     if entry.abstract_interface {
-        return Err(deferred_abstract(&abstract_name(registry, id)));
+        return Err(deferred_abstract(&abstract_name(registry, id), id));
     }
     // Inherited members too: both halves generate the resolved set, so the
     // representability check has to cover the resolved set or it would clear an

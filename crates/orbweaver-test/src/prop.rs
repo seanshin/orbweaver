@@ -627,21 +627,27 @@ fn json_unmapped(tc: &TypeCode) -> Option<String> {
         TypeCode::Alias { aliased, .. } => json_unmapped(aliased),
         TypeCode::Fixed { digits, scale } => Some(format!(
             "{}, so it has no AnyJSON form either",
-            orbweaver_dynamic::deferred_wire_head(&format!("fixed<{digits},{scale}>"))
+            orbweaver_dynamic::deferred_wire_head(&orbweaver_dynamic::fixed_subject(*digits, *scale))
         )),
-        TypeCode::Value { name, .. } => Some(format!(
+        TypeCode::Value { name, id, .. } => Some(format!(
             "{}, so it has no AnyJSON form either: its state is marshalled inline behind a \
              value tag",
-            orbweaver_dynamic::deferred_wire_head(&format!("valuetype {name}"))
+            orbweaver_dynamic::deferred_wire_head(&orbweaver_dynamic::valuetype_subject(
+                name, id
+            ))
         )),
-        TypeCode::AbstractInterface { name, .. } => Some(format!(
+        TypeCode::AbstractInterface { name, id } => Some(format!(
             "{}, so it has no AnyJSON form either: on the wire it is the union of a value and \
              a reference",
-            orbweaver_dynamic::deferred_wire_head(&format!("abstract interface {name}"))
+            orbweaver_dynamic::deferred_wire_head(
+                &orbweaver_dynamic::abstract_interface_subject(name, id)
+            )
         )),
-        TypeCode::Native { name, .. } => Some(format!(
+        TypeCode::Native { name, id } => Some(format!(
             "{}, so it has no AnyJSON form either",
-            orbweaver_dynamic::unmarshallable_wire_head(&format!("native {name}"))
+            orbweaver_dynamic::unmarshallable_wire_head(&orbweaver_dynamic::native_subject(
+                name, id
+            ))
         )),
         TypeCode::Principal => {
             Some("`Principal` has no AnyJSON form (withdrawn from CORBA)".into())
@@ -1229,25 +1235,31 @@ fn why_unsupported(tc: &TypeCode) -> String {
         TypeCode::Fixed { digits, scale } => {
             format!(
                 "{}, so the sampler has no value to generate",
-                orbweaver_dynamic::deferred_wire_head(&format!("fixed<{digits},{scale}>"))
+                orbweaver_dynamic::deferred_wire_head(&orbweaver_dynamic::fixed_subject(*digits, *scale))
             )
         }
-        TypeCode::Value { name, .. } => {
+        TypeCode::Value { name, id, .. } => {
             format!(
                 "{}, so the sampler has no value to generate",
-                orbweaver_dynamic::deferred_wire_head(&format!("valuetype {name}"))
+                orbweaver_dynamic::deferred_wire_head(&orbweaver_dynamic::valuetype_subject(
+                    name, id
+                ))
             )
         }
-        TypeCode::AbstractInterface { name, .. } => {
+        TypeCode::AbstractInterface { name, id } => {
             format!(
                 "{}, so the sampler has no value to generate",
-                orbweaver_dynamic::deferred_wire_head(&format!("abstract interface {name}"))
+                orbweaver_dynamic::deferred_wire_head(
+                    &orbweaver_dynamic::abstract_interface_subject(name, id)
+                )
             )
         }
-        TypeCode::Native { name, .. } => {
+        TypeCode::Native { name, id } => {
             format!(
                 "{}, so the sampler has no value to generate",
-                orbweaver_dynamic::unmarshallable_wire_head(&format!("native {name}"))
+                orbweaver_dynamic::unmarshallable_wire_head(
+                    &orbweaver_dynamic::native_subject(name, id)
+                )
             )
         }
         TypeCode::TypeCode => {
@@ -1729,7 +1741,8 @@ mod tests {
         // stopped answering that for a `fixed` on 2026-08-21; this assertion
         // is why nothing went red. Now it reads the head from the crate that
         // owns it, so the pin cannot outlive the wording it names.
-        let head = orbweaver_dynamic::deferred_wire_head("fixed<9,2>");
+        let head =
+            orbweaver_dynamic::deferred_wire_head(&orbweaver_dynamic::fixed_subject(9, 2));
         assert!(findings[0].message.contains(&head), "{}", findings[0].message);
         assert!(
             !findings[0].message.contains("cannot cross yet"),

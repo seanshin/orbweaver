@@ -341,18 +341,71 @@ fn wrong_kind<T>(p: &Path<'_>, tc: &TypeCode, value: &Value) -> Result<T> {
 /// How a construct `docs/PLAN.md` §4.4 defers is named in a refusal, or `None`
 /// for a type the v1 wire does carry.
 ///
-/// The kind word and the type's own name — `valuetype Money`, `abstract
-/// interface Describable`, `fixed<9,2>` — which is the spelling the generated
-/// Python runtime produces from its own `_DEFERRED` format string
+/// The kind word, the type's own name and its repository id — `valuetype
+/// Money (IDL:m/Money:1.0)`, `abstract interface Describable
+/// (IDL:m/Describable:1.0)`, `fixed<9,2>` — which is the spelling the
+/// generated Python runtime produces from its own `_subject` helper
 /// (`crates/orbweaver-gen/src/python_rt.py`). Aliases are followed, because a
 /// `typedef` renames a construct without making the wire able to carry it.
 pub fn deferred_wire_name(tc: &TypeCode) -> Option<String> {
     Some(match resolved(tc) {
-        TypeCode::Value { name, .. } => format!("valuetype {name}"),
-        TypeCode::AbstractInterface { name, .. } => format!("abstract interface {name}"),
-        TypeCode::Fixed { digits, scale } => format!("fixed<{digits},{scale}>"),
+        TypeCode::Value { name, id, .. } => valuetype_subject(name, id),
+        TypeCode::AbstractInterface { name, id } => abstract_interface_subject(name, id),
+        TypeCode::Fixed { digits, scale } => fixed_subject(*digits, *scale),
         _ => return None,
     })
+}
+
+/// How a `valuetype` is spelled as the subject of a refusal.
+///
+/// Published — like the heads above and below — because the spelling is a
+/// workspace-scoped fact: `orbweaver-gen` refuses the same construct from a
+/// registry entry that has no `TypeCode` to hand [`deferred_wire_name`], so
+/// the subject has to be buildable from the parts every layer does hold.
+/// Until 2026-08-25 each such layer formatted its own `format!("valuetype
+/// {name}")`, which is the same defect the heads had at `pub(crate)` — nine
+/// Rust sites and seven Python ones, found by grep, none yet diverged.
+pub fn valuetype_subject(name: &str, id: &str) -> String {
+    construct_subject("valuetype", name, id)
+}
+
+/// How an abstract interface is spelled as the subject of a refusal.
+pub fn abstract_interface_subject(name: &str, id: &str) -> String {
+    construct_subject("abstract interface", name, id)
+}
+
+/// How a `native` is spelled as the subject of a refusal.
+pub fn native_subject(name: &str, id: &str) -> String {
+    construct_subject("native", name, id)
+}
+
+/// How a `fixed` is spelled as the subject of a refusal.
+///
+/// No name and no id — digits and scale *are* a `fixed`'s whole identity — so
+/// it does not go through [`construct_subject`]. Published for the same
+/// reason the other three are: `orbweaver-gen` and `orbweaver-test` each
+/// rebuilt this string locally (three sites, found while giving the other
+/// three subjects one home), and a spelling with three homes drifts on the
+/// next good reason to change it.
+pub fn fixed_subject(digits: u16, scale: i16) -> String {
+    format!("fixed<{digits},{scale}>")
+}
+
+/// The one spelling: kind word, simple name, repository id in parentheses —
+/// or the id alone when the name is empty, which a peer-built `TypeCode` may
+/// be.
+///
+/// The id is in the subject since 2026-08-25 because the simple name is
+/// ambiguous: two modules declaring `Describable` produced one string, so a
+/// reader of two refusals could not tell whether they named one type or two
+/// (found 2026-08-24 while unifying the two spellings `orbweaver-gen`'s two
+/// abstract-interface call sites had grown; recorded then as its own batch).
+fn construct_subject(kind: &str, name: &str, id: &str) -> String {
+    if name.is_empty() {
+        format!("{kind} {id}")
+    } else {
+        format!("{kind} {name} ({id})")
+    }
 }
 
 /// The head every §4.4 refusal shares, whichever layer raises it.
@@ -411,7 +464,7 @@ pub fn deferred_wire_sentence(what: &str) -> String {
 /// wire a way to carry it.
 pub fn unmarshallable_wire_name(tc: &TypeCode) -> Option<String> {
     Some(match resolved(tc) {
-        TypeCode::Native { name, .. } => format!("native {name}"),
+        TypeCode::Native { name, id } => native_subject(name, id),
         _ => return None,
     })
 }
@@ -1148,10 +1201,13 @@ mod tests {
     #[test]
     fn a_native_is_refused_and_the_refusal_says_it_is_not_a_deferral() {
         let handle = TypeCode::Native { id: "IDL:m/Handle:1.0".into(), name: "Handle".into() };
-        let want = unmarshallable_wire_sentence("native Handle");
+        // The subject is asked of the namer, not retyped: this line went red on
+        // 2026-08-25 when the id joined the subject, which is the pin working.
+        let subject = unmarshallable_wire_name(&handle).expect("a native has a subject");
+        let want = unmarshallable_wire_sentence(&subject);
         assert!(!want.contains("yet"), "a native is not waiting on an implementation: {want}");
         assert!(
-            !want.contains(&deferred_wire_head("native Handle")),
+            !want.contains(&deferred_wire_head(&subject)),
             "a native must not carry §4.4's deferral claim: {want}"
         );
         for endian in [Endian::Big, Endian::Little] {

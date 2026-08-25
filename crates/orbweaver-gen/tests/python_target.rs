@@ -1579,7 +1579,7 @@ except _rt.MarshalError as e:
 # The §4.4 half says the section; the fourth family's says the opposite, and
 # neither may say "yet" about the other's boundary.
 assert _rt._DEFERRED % "fixed<9,2>" == seen[0], _rt._DEFERRED
-assert _rt._UNMARSHALLABLE % "native Handle" == seen[1], _rt._UNMARSHALLABLE
+assert _rt._UNMARSHALLABLE % _rt._subject("native", "Handle", "IDL:witness/Handle:1.0") == seen[1], _rt._UNMARSHALLABLE
 assert _rt._UNMARSHALLABLE != _rt._DEFERRED, "the two families are one string"
 assert "yet" not in seen[1], seen[1]
 assert "is not marshalled by the v1 wire" not in seen[1], seen[1]
@@ -1590,7 +1590,10 @@ print("refused:", seen[1])
         "module nodesc_m { interface Nothing {}; };",
         &script.replace("__FORMS__", &forms).replace("__WANTS__", &wants),
     );
-    assert!(out.contains("refused: native Handle has no wire form at all"), "{out}");
+    assert!(
+        out.contains("refused: native Handle (IDL:witness/Handle:1.0) has no wire form at all"),
+        "{out}"
+    );
 }
 
 /// A union's Python surface: `_d`/`_v`, the named branch accessors, and the
