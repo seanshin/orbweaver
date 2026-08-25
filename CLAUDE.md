@@ -325,6 +325,25 @@ decisions being approved and work landing.
   *분류자도 문장이다. 소유 크레이트가 표지를 공개하거나, 분류자가 문장을 쓰는 함수를
   호출해 표지를 계산한다. 상수를 공유하게 되면 남는 테스트는 없다 — 어긋남이 탐지
   대상이 아니라 불가능해지기 때문이다.*
+- **A cascade whose catch-all *clears* what its mapper *refuses* is a hole the
+  shape of the gap between two lists.** `orbweaver-gen`'s `rust_type` ends in
+  `other => Err(..)` and its walker `representable` ended in `_ => Ok(())`, so
+  every construct in the gap was skipped at its declaration and **emitted at
+  every container that named it** — `pub sealed: ...::gp34::Envelope` for an
+  `Envelope` nothing declares. Two lists of "what the wire cannot carry", one
+  per emitter, each maintained by hand against a mapper that already knew.
+  Measured 2026-08-25: the Rust half at least failed to compile; the Python
+  half **was not red at all**, writing `("ref", "IDL:gp34/Envelope:1.0")` for a
+  class its package never defines, which the caller discovers at the first
+  call. Exhaustiveness at the leaf does not survive a walker that is permissive
+  at the node: the walker must **ask the mapper** at every node rather than
+  keep its own list, which makes the gap unrepresentable instead of detectable.
+  Note which half of this was found by a compiler and which by nothing — the
+  target with the weaker type system is where the same defect goes quiet.
+  *매퍼가 거부하는 것을 캐스케이드의 catch-all이 통과시키면, 두 목록 사이 틈
+  모양의 구멍이 생긴다. 잎에서의 전수성은 노드에서 관대한 순회를 견디지 못한다 —
+  순회가 자기 목록을 갖는 대신 **매퍼에게 물어야** 한다. 어느 쪽 절반이 컴파일러에
+  잡혔고 어느 쪽이 아무것에도 안 잡혔는지 보라.*
 
 ### Honesty rules / 정직성 규칙
 
@@ -434,7 +453,19 @@ docs/                       ARCHITECTURE (as built) · PLAN(.ko) · COMPONENTS (
 
 - Documents are maintained in **English and Korean**, kept structurally
   symmetric section by section.
-- Corpus additions go in with the change that motivated them, never later.
+- Corpus additions go in with the change that motivated them, never later —
+  **and with `./spikes/differential.sh --require omniidl,jacorb_idl --record`,
+  which `cargo test --workspace` now insists on.** Measured 2026-08-25: eight
+  files had landed without either front end ever comparing them, and the
+  harness found seven divergences and a golden file whose generated Rust did
+  not compile. The cause was not carelessness — batches are told not to run
+  `run_checks.sh`, because it takes a machine-wide lock, and **nobody named the
+  standalone gate they should have run instead.** A prohibition without its
+  replacement is an instruction to skip the check. So the gate stopped being a
+  command to remember: the differential's verdict is checked-in data
+  (`corpus/differential-results.tsv`) and an oracle-free test compares the
+  corpus against it, which means it runs for everybody rather than for whoever
+  runs the harness. *금지에 대체물이 없으면 검사를 건너뛰라는 지시다.*
 - Rust: `unsafe_code = "forbid"` at the workspace level. Keep it that way —
   wire parsing is the classic memory-safety hazard and that is why the core is
   Rust in the first place.
