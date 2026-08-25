@@ -30,7 +30,7 @@
 //! exist answers the actual question: is there an element here that nobody in
 //! this crate wrote?
 
-use orbweaver_console::{catalog, contract, html, traces};
+use orbweaver_console::{catalog, contract, html, orb, traces};
 use orbweaver_mcp::interceptor::Chain;
 use orbweaver_mcp::policy::{Approval, Exposure};
 use orbweaver_registry::{Entry, InterfaceEntry, Registry};
@@ -272,6 +272,86 @@ fn an_unknown_trace_key_is_named_without_becoming_markup() {
     assert_inert(&traces::render_html(&log), "traces with a hostile extra key");
 }
 
+/// An ObjectId and a stringified IOR are attacker-influenced text.
+///
+/// The id is what a peer or a configuration file asked to have registered, and
+/// the IOR beside it is bytes somebody else minted rendered as a string. Both
+/// land on the page an operator reads to decide what is reachable — the same
+/// reader, the same decision and the same browser as the catalog's.
+#[test]
+fn a_hostile_object_id_and_ior_render_as_text() {
+    let snap = orb::Snapshot::live(
+        PAYLOAD,
+        Some(vec![
+            orb::Service {
+                id: PAYLOAD.to_owned(),
+                ior: Some(format!("IOR:{PAYLOAD}")),
+                reserved: orb::Reserved::Yes,
+            },
+            orb::Service {
+                id: HOSTILE_ID.to_owned(),
+                ior: None,
+                reserved: orb::Reserved::NotStated,
+            },
+        ]),
+        None,
+        None,
+        None,
+    );
+    let page = orb::render_services_html(&snap);
+    assert_inert(&page, "initial references with a hostile id and IOR");
+    // The two facts the page exists to tell are still on it.
+    assert!(page.contains("NO_RESOURCES"), "the unregistered state is still visible");
+    assert!(page.contains("reserved"), "the §8.5.2 answer is still visible");
+}
+
+/// A channel name comes from the deployment's own configuration, and a
+/// configuration file is text somebody typed. So does a setting's value and the
+/// file and key its provenance names — the whole point of the provenance column
+/// is that it quotes a lever back at the operator, and quoting is a way in.
+#[test]
+fn a_hostile_channel_name_and_config_provenance_render_as_text() {
+    let snap = orb::Snapshot::live(
+        PAYLOAD,
+        None,
+        Some(orbweaver_giop::pool::PoolStats::default()),
+        None,
+        Some(vec![orb::Channel {
+            name: PAYLOAD.to_owned(),
+            stats: orbweaver_giop::event_server::ChannelStats::default(),
+        }]),
+    );
+    assert_inert(&orb::render_stats_html(&snap), "counters with a hostile channel name");
+
+    let escaped = PAYLOAD.replace('\\', "\\\\").replace('"', "\\\"");
+    let document = format!(
+        "{{\"config\":[{{\"name\":\"max_connections\",\"value\":\"{escaped}\",\
+         \"source\":{{\"kind\":\"file\",\"file\":\"{escaped}\",\"key\":\"{escaped}\"}}}}]}}"
+    );
+    let snap = orb::Snapshot::read(PAYLOAD, &document).expect("reads");
+    assert!(snap.complaints.is_empty(), "{:?}", snap.complaints);
+    let row = snap.config().into_iter().find(|s| s.name == "max_connections").expect("row");
+    assert_eq!(row.value, PAYLOAD, "the value reaches the renderer raw");
+    assert!(row.source.label().contains(PAYLOAD), "the lever reaches the renderer raw");
+    assert_inert(&orb::render_config_html(&snap), "configuration with a hostile provenance");
+}
+
+/// A complaint quotes the file name and whatever the writer put in a key, so
+/// the diagnostic path is a way in exactly as the trace log's is.
+#[test]
+fn an_unreadable_snapshot_section_reports_without_becoming_markup() {
+    let escaped = PAYLOAD.replace('\\', "\\\\").replace('"', "\\\"");
+    let document = format!(
+        "{{\"config\":[{{\"name\":\"{escaped}\",\"value\":\"x\",\"source\":{{\"kind\":\"compiled\"}}}}],\"services\":7}}"
+    );
+    let snap = orb::Snapshot::read(PAYLOAD, &document).expect("reads");
+    assert_eq!(snap.complaints.len(), 2, "{:?}", snap.complaints);
+    for page in [orb::render_config_html(&snap), orb::render_services_html(&snap)] {
+        assert_inert(&page, "a snapshot whose complaints quote the payload");
+        assert!(page.contains("Not readable"), "the complaint is still shown: {page}");
+    }
+}
+
 /// The oracle has to be able to fail, or every test above is decorative.
 ///
 /// A page that pasted the payload in unescaped is built by hand, and the
@@ -312,10 +392,31 @@ fn a_rendered_page_fetches_nothing() {
     registry
         .define_ingested(HOSTILE_ID.to_owned(), Entry::Interface(InterfaceEntry::default()), "peer")
         .expect("registers");
+    // The ORB pages get a snapshot with a hostile *id* but no `src=` in it:
+    // the payload's `<img src=x …>` is inert on a correct page and still
+    // contains the literal bytes this scan looks for, which is the same
+    // too-strong-oracle trap the module header records.
+    let snap = orb::Snapshot::live(
+        HOSTILE_ID,
+        Some(vec![orb::Service {
+            id: HOSTILE_ID.to_owned(),
+            ior: Some(format!("IOR:{HOSTILE_ID}")),
+            reserved: orb::Reserved::Yes,
+        }]),
+        Some(orbweaver_giop::pool::PoolStats::default()),
+        None,
+        Some(vec![orb::Channel {
+            name: HOSTILE_ID.to_owned(),
+            stats: orbweaver_giop::event_server::ChannelStats::default(),
+        }]),
+    );
     let pages = [
         catalog::render_html(&catalog_of(&registry, Exposure::nothing())),
         contract::render_html(&contract::ContractDiff::new("a", "b", &registry, &Registry::new())),
         traces::render_html(&traces::TraceLog::default()),
+        orb::render_services_html(&snap),
+        orb::render_config_html(&snap),
+        orb::render_stats_html(&snap),
     ];
     for page in pages {
         for outbound in ["src=", "href=", "@import", "http://", "https://", "url("] {

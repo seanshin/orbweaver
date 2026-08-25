@@ -8,7 +8,28 @@
 //! orbweaver-console diff    <released.idl> <proposed.idl> [-I <dir>]...
 //!                           [--approvals <file>] [--html <out.html>] [--text]
 //! orbweaver-console traces  <spans.jsonl>... [--html <out.html>] [--text]
+//! orbweaver-console services <snapshot.json> [--html <out.html>] [--text]
+//! orbweaver-console config  [<snapshot.json>] [--html <out.html>] [--text]
+//! orbweaver-console stats   <snapshot.json> [--html <out.html>] [--text]
 //! ```
+//!
+//! # Why the ORB's read commands are subcommands here and not an `orbctl`
+//!
+//! D024 §4 calls the tool `orbctl` and §6 puts its read half in this crate.
+//! The document names **the capability, not the executable**, and everything
+//! the read half needs is already in this binary: `Output` and its `--html` /
+//! `--text` contract, the usage text, and — the one that decides it — the
+//! escaping proof in `tests/escaping.rs`, which asserts structurally that no
+//! page carries an element this crate did not write. A second binary would
+//! duplicate the first two and would sit *outside* the third until somebody
+//! remembered to extend it, which is how a page gets rendered without that
+//! guarantee. So: three more subcommands, one binary, one allowlist.
+//!
+//! The write half — `-ORBInitRef` from a configuration file, D024 §6 item 2 —
+//! is **not here**, and neither is anything that ends a channel, deactivates a
+//! POA or drops a connection. Those are lifecycle, they are the wire's
+//! `destroy` question (`PLAN-DEFERRED` §11), and an admin CLI doing them
+//! locally would be the same unauthenticated power through a side door.
 //!
 //! `-I` is `sidl-validate`'s flag and means the same thing: another directory
 //! to resolve `#include` against. The quoted form searches the including file's
@@ -34,7 +55,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use orbweaver_console::{catalog, contract, load, traces};
+use orbweaver_console::{catalog, contract, load, orb, traces};
 use orbweaver_giop::Ior;
 use orbweaver_idl::include::SearchPath;
 use orbweaver_mcp::identity::Caller;
@@ -51,6 +72,24 @@ usage:
   orbweaver-console diff    <released.idl> <proposed.idl> [-I <dir>]...
                             [--approvals <file>] [--html <out.html>] [--text]
   orbweaver-console traces  <spans.jsonl>... [--html <out.html>] [--text]
+  orbweaver-console services <snapshot.json> [--html <out.html>] [--text]
+  orbweaver-console config  [<snapshot.json>] [--html <out.html>] [--text]
+  orbweaver-console stats   <snapshot.json> [--html <out.html>] [--text]
+
+services, config and stats are the ORB's read-side administration surface
+(D024 §4). THEY CANNOT REACH A RUNNING SERVER. The state they show lives
+inside the process that holds it, and D024 §7 refuses a wire interface for it
+until the caller model PLAN-DEFERRED §11 is waiting on exists — a remote admin
+interface without one is unauthenticated power. So they read a JSON snapshot
+the holding process wrote (orbweaver_console::orb::Snapshot), or a process
+renders its own state in-process through the library.
+
+NOTHING IN THIS WORKSPACE WRITES A SNAPSHOT YET. Until a server grows one,
+`config` with no file is the only one of the three with something to say: the
+seven ORB numbers as this build compiled them. That is a real answer and not a
+placeholder — every value is read from the constant that owns it.
+
+None of the three writes, registers, deactivates or disconnects anything.
 
 -I adds a directory to resolve #include against, as sidl-validate does. Every
 file is read as a translation unit: what it includes is part of what it says.
@@ -104,6 +143,11 @@ fn run() -> Result<(), String> {
         "catalog" => catalog_command(rest),
         "diff" => diff_command(rest),
         "traces" => traces_command(rest),
+        "services" => {
+            orb_command(rest, "services", orb::render_services_html, orb::render_services_text)
+        }
+        "config" => orb_command(rest, "config", orb::render_config_html, orb::render_config_text),
+        "stats" => orb_command(rest, "stats", orb::render_stats_html, orb::render_stats_text),
         "-h" | "--help" => {
             println!("{USAGE}");
             Ok(())
@@ -236,6 +280,66 @@ fn traces_command(args: Vec<String>) -> Result<(), String> {
     }
 
     out.deliver(|| traces::render_html(&log), || traces::render_text(&log))
+}
+
+/// The three ORB read commands, which differ only in which renderer they call.
+///
+/// One function rather than three, because the argument handling, the "which
+/// snapshot" question and the sentence explaining what cannot be reached are
+/// the same for all three — and a sentence three functions say is a sentence
+/// that will go stale in two of them.
+fn orb_command(
+    args: Vec<String>,
+    what: &str,
+    html: fn(&orb::Snapshot) -> String,
+    text: fn(&orb::Snapshot) -> String,
+) -> Result<(), String> {
+    let mut files: Vec<String> = Vec::new();
+    let mut out = Output { html: None, text: false };
+    let mut it = args.into_iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--html" => out.html = Some(PathBuf::from(need(&mut it, "--html <path>")?)),
+            "--text" => out.text = true,
+            flag if flag.starts_with("--") => return Err(format!("unknown option {flag:?}")),
+            file => files.push(file.to_owned()),
+        }
+    }
+    let snapshot = match files.as_slice() {
+        [] if what == "config" => {
+            // The one honest thing to show with no snapshot: the constants this
+            // build compiled. `services` and `stats` have no such fallback —
+            // an empty registration table would be a claim about a running ORB
+            // that this tool has not looked at.
+            orb::Snapshot { origin: "this build's compiled defaults".into(), ..Default::default() }
+        }
+        [] => {
+            return Err(format!(
+                "{what} needs a snapshot file.\n\nThe ORB state it shows lives inside the process \
+                 that holds it, and this tool cannot reach a running server — D024 §7 refuses a \
+                 wire interface for administration until the caller model PLAN-DEFERRED §11 is \
+                 waiting on exists. Nothing in this workspace writes a snapshot yet; a holding \
+                 process writes one with orbweaver_console::orb::Snapshot::live(..).to_json().\
+                 \n\n{USAGE}"
+            ));
+        }
+        [file] => {
+            let document = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
+            orb::Snapshot::read(file, &document)?
+        }
+        _ => {
+            return Err(format!(
+                "{what} reads one snapshot; two readings of an ORB merged into one page would be \
+                 a page about no moment in particular\n\n{USAGE}"
+            ));
+        }
+    };
+    // The unreadable sections go to stderr as well as onto the page: a
+    // complaint only a reader of the HTML sees is a complaint a script misses.
+    for complaint in &snapshot.complaints {
+        eprintln!("note: {complaint}");
+    }
+    out.deliver(|| html(&snapshot), || text(&snapshot))
 }
 
 fn need(args: &mut impl Iterator<Item = String>, what: &str) -> Result<String, String> {
