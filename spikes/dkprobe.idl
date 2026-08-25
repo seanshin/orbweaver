@@ -1,0 +1,14 @@
+// A probe contract: one definition per DefinitionKind the facade can answer.
+// Not a corpus file — it exists to be served to omniORB's IR client so the
+// ordinal our facade writes comes back as a named enumerator.
+module dkprobe {
+  struct Amount { long units; };
+  enum Colour { RED, GREEN };
+  exception Refused { string why; };
+  typedef sequence<long> Longs;
+  const long LIMIT = 7;
+  interface Ordinary { void touch(); };
+  abstract interface Describable { string describe(); };
+  valuetype Wallet { public long balance; };
+  native Handle;
+};
