@@ -752,14 +752,15 @@ def do_event(sweep, interfaces, ref):
                 [(CORBA_OBJECT_ID, "_is_a"), (CORBA_OBJECT_ID, "_non_existent")],
             )
 
-        # The pull half. `obtain_pull_supplier` is served now, so the sweep
-        # asks for the real object rather than probing a push proxy that never
+        # Both halves of pull. Each `obtain_*` is served now, so the sweep asks
+        # for the real object rather than probing a push proxy that never
         # claimed the interface — which reported the whole interface as
         # *unserved* the moment it started being served, because the sweep was
-        # measuring the wrong object. `obtain_pull_consumer` is still refused,
-        # deliberately, so its interface has no object and the probe against a
-        # push proxy is what stays honest there: an operation nothing can
-        # address is still an operation the channel does not have.
+        # measuring the wrong object. That happened once, to the pull supplier
+        # half on 2026-08-18, and the `elif` fallbacks below are what it left
+        # behind: a probe against a push proxy is the honest answer only while
+        # nothing can be addressed, so each one is reached only when its
+        # `obtain_*` did not hand back a reference.
         pull_supplier = None
         if consumer_admin:
             a = conn.call(consumer_admin.key, "obtain_pull_supplier")
@@ -770,9 +771,17 @@ def do_event(sweep, interfaces, ref):
             sweep_object(sweep, "CosEvent", "ProxyPullSupplier", conn, pull_supplier, pull_sup_ops)
         elif push_supplier:
             sweep_object(sweep, "CosEvent", "ProxyPushSupplier", conn, push_supplier, pull_sup_ops)
-        if push_consumer:
-            pull = resolve(interfaces, "CosEventChannelAdmin::ProxyPullConsumer")
-            sweep_object(sweep, "CosEvent", "ProxyPushConsumer", conn, push_consumer, pull)
+
+        pull_consumer = None
+        if supplier_admin:
+            a = conn.call(supplier_admin.key, "obtain_pull_consumer")
+            sweep.note(f"CosEvent obtain_pull_consumer() -> {a.short()}")
+            pull_consumer = read_objref(a.body) if a.status == NO_EXCEPTION else None
+        pull_con_ops = resolve(interfaces, "CosEventChannelAdmin::ProxyPullConsumer")
+        if pull_consumer:
+            sweep_object(sweep, "CosEvent", "ProxyPullConsumer", conn, pull_consumer, pull_con_ops)
+        elif push_consumer:
+            sweep_object(sweep, "CosEvent", "ProxyPushConsumer", conn, push_consumer, pull_con_ops)
     finally:
         conn.close()
 
