@@ -1344,25 +1344,47 @@ impl ChannelHandle {
 /// servant thread could block on.
 #[derive(Debug)]
 pub struct Delivery {
-    handle: ChannelHandle,
-    thread: Option<std::thread::JoinHandle<()>>,
-    source: Option<std::thread::JoinHandle<()>>,
+    inner: Arc<Inner>,
 }
 
 impl Delivery {
-    /// The same handle the channel exposes, for callers that only kept this.
+    /// A handle to the channel created with the server, for callers that only
+    /// kept this.
     pub fn handle(&self) -> ChannelHandle {
-        self.handle.clone()
+        self.handle_named(&self.inner.default_name).expect("the default channel is never removed")
+    }
+
+    /// A handle to the channel named `name`, or `None` if there is none.
+    pub fn handle_named(&self, name: &str) -> Option<ChannelHandle> {
+        let reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+        reg.channels.get(name).map(|c| ChannelHandle { shared: Arc::clone(&c.shared) })
     }
 }
 
 impl Drop for Delivery {
+    /// Stops **every** channel and joins every thread this server started.
+    ///
+    /// Every channel, because a server is what was started and a server is
+    /// what is being stopped; leaving one channel's threads running after the
+    /// `Delivery` that owns them is gone is exactly the "spike that forgets to
+    /// stop leaves a thread pushing into a torn-down fixture" this type exists
+    /// to prevent, and it would be harder to see with several channels rather
+    /// than easier.
     fn drop(&mut self) {
-        self.handle.stop();
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
+        let (channels, threads) = {
+            let mut reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+            reg.running = None;
+            reg.started.clear();
+            let channels: Vec<Arc<ChannelObjects>> =
+                reg.channels.values().map(Arc::clone).collect();
+            (channels, std::mem::take(&mut reg.threads))
+        };
+        // Outside the registry lock: `stop` takes each channel's own lock, and
+        // a thread being joined may still be taking it too.
+        for objects in channels {
+            ChannelHandle { shared: Arc::clone(&objects.shared) }.stop();
         }
-        if let Some(t) = self.source.take() {
+        for t in threads {
             let _ = t.join();
         }
     }
@@ -1673,13 +1695,231 @@ impl Target {
     }
 }
 
-/// An in-memory CosEvent push channel behind [`crate::server::Server`].
+/// One channel's objects: its own key space and its own [`Shared`] state.
 ///
-/// One instance serves the channel, both admins and every proxy either admin
-/// mints, each as its own object key on this one dispatch — the F6 shape.
+/// A channel is exactly this much — a name, three fixed keys and the state
+/// behind them. Everything that makes a channel work (the bounded queues, the
+/// drop split, the two outbound threads) already lived behind one `Arc<Shared>`
+/// per channel, which is why a server holding several needs no new machinery:
+/// it needs a **map** and a rule about keys.
+#[derive(Debug)]
+struct ChannelObjects {
+    name: String,
+    base: Vec<u8>,
+    consumer_admin: Vec<u8>,
+    supplier_admin: Vec<u8>,
+    shared: Arc<Shared>,
+}
+
+impl ChannelObjects {
+    fn new(name: String, base: Vec<u8>) -> Self {
+        let mut consumer_admin = base.clone();
+        consumer_admin.extend_from_slice(CONSUMER_ADMIN_SUFFIX);
+        let mut supplier_admin = base.clone();
+        supplier_admin.extend_from_slice(SUPPLIER_ADMIN_SUFFIX);
+        ChannelObjects {
+            name,
+            base,
+            consumer_admin,
+            supplier_admin,
+            shared: Arc::new(Shared {
+                state: Mutex::new(ChannelState::new()),
+                wake: Condvar::new(),
+                progress: Condvar::new(),
+            }),
+        }
+    }
+}
+
+/// Why a channel could not be created.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChannelError {
+    /// The name cannot be an object-key segment. See
+    /// [`is_channel_name_safe`] for the rule and the reason.
+    UnsafeName {
+        /// The name as given.
+        name: String,
+        /// Which clause of the rule it broke.
+        why: &'static str,
+    },
+    /// A channel of this name already exists on this server.
+    Duplicate {
+        /// The name as given.
+        name: String,
+    },
+}
+
+impl std::fmt::Display for ChannelError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ChannelError::UnsafeName { name, why } => {
+                write!(f, "the channel name {name:?} cannot be an object-key segment: {why}")
+            }
+            ChannelError::Duplicate { name } => {
+                write!(f, "this server already serves a channel named {name:?}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ChannelError {}
+
+/// The object-key segments this module mints for itself, which a channel name
+/// may therefore not be.
+const RESERVED_SEGMENTS: [&str; 2] = ["consumerAdmin", "supplierAdmin"];
+/// The proxy tags [`EventChannelServer::mint_on`] prefixes a number with.
+const PROXY_TAGS: [&str; 4] = ["pps", "pls", "ppc", "plc"];
+
+/// Whether `name` may be a channel name on an [`EventChannelServer`].
+///
+/// # Why a rule is needed at all
+///
+/// Every object this servant answers for is addressed by a key, and with one
+/// channel per server the keys could be built with no thought: `base`, then
+/// `base + "/consumerAdmin"`, then `base + "/pps1"` and so on. With several
+/// channels in one server the name enters the key, and **two names that mint
+/// the same key are two channels that are one channel** — a supplier pushing
+/// into one would be fanned out to the other's consumers, silently, with every
+/// counter agreeing.
+///
+/// # The rule, and why it is enough
+///
+/// A name must be non-empty, contain no `/`, and not be a segment this module
+/// mints for itself — `consumerAdmin`, `supplierAdmin`, or one of the four
+/// proxy tags followed by digits.
+///
+/// That is sufficient, and here is the whole argument. Every key of the
+/// channel named *N* is either `prefix(N)` or `prefix(N) + "/" + s` where `s`
+/// contains no `/`; `prefix` is the server's `base_key` for the channel
+/// created with the server and `base_key + "/" + N` for every other. Two
+/// distinct names give two distinct prefixes, since the name is the whole of
+/// what follows `base_key + "/"` and contains no `/` to blur the boundary. A
+/// created channel's prefix can equal another channel's *minted* key only if
+/// the name equals a minted segment, which the reserved clause forbids; and it
+/// can equal the server-created channel's prefix only if the name is empty,
+/// which the first clause forbids. So the key spaces are disjoint.
+///
+/// The reserved clause is the one that is easy to leave out and impossible to
+/// notice missing: without it a channel named `consumerAdmin` would answer to
+/// the *first* channel's `ConsumerAdmin` key, and which of the two a request
+/// reached would depend on map iteration order.
+pub fn is_channel_name_safe(name: &str) -> bool {
+    why_unsafe(name).is_none()
+}
+
+/// The clause `name` breaks, or `None` if it breaks none.
+fn why_unsafe(name: &str) -> Option<&'static str> {
+    if name.is_empty() {
+        return Some("a name must not be empty");
+    }
+    if name.contains('/') {
+        return Some("a name must not contain '/', which separates key segments");
+    }
+    if RESERVED_SEGMENTS.contains(&name) {
+        return Some("that is an admin key this module mints for every channel");
+    }
+    for tag in PROXY_TAGS {
+        if let Some(rest) = name.strip_prefix(tag)
+            && !rest.is_empty()
+            && rest.bytes().all(|b| b.is_ascii_digit())
+        {
+            return Some("that is a proxy key this module mints");
+        }
+    }
+    None
+}
+
+/// Everything an [`EventChannelServer`] holds, behind one `Arc` so a
+/// [`Delivery`] can outlive the borrow that started it.
+#[derive(Debug)]
+struct Inner {
+    host: String,
+    port: u16,
+    /// The channel created with the server: the one `channel_ior`, `handle`
+    /// and `channel_key` answer for, and the one whose keys are `base_key`
+    /// verbatim so a server built the old way is byte-identical.
+    default_name: String,
+    /// That channel's key, kept out of the map as well as in it.
+    ///
+    /// Not a duplicate to be tidied away: it is what lets `channel_key` keep
+    /// returning a `&[u8]` — the signature every existing caller was written
+    /// against — where a lookup behind the registry mutex could only return an
+    /// owned copy. It is written once, at construction, and the default
+    /// channel is never removed, so the two cannot disagree.
+    default_base: Vec<u8>,
+    registry: Mutex<Registry>,
+}
+
+/// The channels, and the threads serving them.
+#[derive(Debug)]
+struct Registry {
+    channels: BTreeMap<String, Arc<ChannelObjects>>,
+    /// `Some(timeout)` once delivery has been started, so a channel created
+    /// afterwards starts its own threads rather than sitting inert — the
+    /// failure a reader would never see, because a channel with no threads
+    /// accepts and queues exactly like one whose consumers are all slow.
+    running: Option<Duration>,
+    /// Channels whose two outbound threads are running.
+    started: std::collections::BTreeSet<String>,
+    /// Every thread started for this server, joined by [`Delivery`]'s `Drop`.
+    threads: Vec<std::thread::JoinHandle<()>>,
+}
+
+/// Starts one channel's two outbound threads and records them for joining.
+///
+/// Named rather than inlined because it is called from two places that must
+/// not diverge — `start_delivery_with` and `create_channel` — and a channel
+/// that got only one of the two threads would behave exactly like a channel
+/// whose peers were all slow.
+fn spawn_outbound(reg: &mut Registry, objects: &Arc<ChannelObjects>, timeout: Duration) {
+    let shared = Arc::clone(&objects.shared);
+    let delivery = std::thread::Builder::new()
+        .name(format!("orbweaver-event-delivery/{}", objects.name))
+        .spawn(move || delivery_loop(shared, timeout))
+        .expect("spawning the event delivery thread");
+    let shared = Arc::clone(&objects.shared);
+    let source = std::thread::Builder::new()
+        .name(format!("orbweaver-event-source/{}", objects.name))
+        .spawn(move || source_loop(shared, timeout))
+        .expect("spawning the event source thread");
+    reg.threads.push(delivery);
+    reg.threads.push(source);
+    reg.started.insert(objects.name.clone());
+}
+
+/// An in-memory CosEvent channel server behind [`crate::server::Server`].
+///
+/// One instance serves **one or more channels**, each with its own
+/// `EventChannel`, both admins and every proxy either admin mints, each as its
+/// own object key on this one dispatch — the F6 shape, once per channel.
 /// `host` and `port` are what go into minted references and are the caller's
 /// to publish correctly (Phase 0 assumption D: the bind address and the
 /// publishable address differ behind NAT).
+///
+/// # Several channels, and no new wire surface
+///
+/// `CosEventChannelAdmin` declares **no factory** — the factory in the
+/// standard is `CosNotifyChannelAdmin::EventChannelFactory`, which belongs to
+/// CosNotification and is deferred (`PLAN-DEFERRED` §1, D021 §3). So creation
+/// is a Rust API and a deployment decision, exactly as `Poa` creation is:
+/// [`EventChannelServer::create_channel`]. Inventing an Orbweaver-specific
+/// factory interface would be a fifth wire surface nobody asked for.
+///
+/// **A server built the old way is a server with one channel**, whose keys are
+/// the `base_key` it was given, byte for byte — absent is not zero, the rule
+/// the MCP `--config` batch proved and D020 Stage A applies. Every reference
+/// it publishes and every key it answers to is unchanged, which is what makes
+/// this compatible rather than merely similar.
+///
+/// # Where a fact about a channel lives
+///
+/// Each channel keeps its own [`ChannelStats`], because each has its own
+/// queues and its own peers; there is no shared counter and no cross-channel
+/// arithmetic anywhere in the servant. [`EventChannelServer::total_stats`]
+/// exists for the one question a *process* is asked — "did anything here lose
+/// an event?" — and it is a sum, so it can say that and cannot say which
+/// channel, the same shape as this module's existing "channel-wide, not per
+/// consumer" limit one level up.
 ///
 /// # Sharing: the lock was already here
 ///
@@ -1701,79 +1941,192 @@ impl Target {
 /// [`SharedDispatch`]: crate::server::SharedDispatch
 #[derive(Debug)]
 pub struct EventChannelServer {
-    host: String,
-    port: u16,
-    base: Vec<u8>,
-    consumer_admin: Vec<u8>,
-    supplier_admin: Vec<u8>,
-    shared: Arc<Shared>,
+    inner: Arc<Inner>,
 }
 
 impl EventChannelServer {
-    /// A channel rooted at `base_key`, minting references that point at
-    /// `host:port`. No delivery thread runs until
+    /// A server with **one** channel, rooted at `base_key` and minting
+    /// references that point at `host:port`. No outbound thread runs until
     /// [`EventChannelServer::start_delivery`] is called — a channel with no
     /// delivery thread accepts and queues, which is what the queue-accounting
     /// tests need.
+    ///
+    /// The channel's name is `base_key` read as text, and its keys are
+    /// `base_key` verbatim: a caller who never asks for a second channel
+    /// cannot tell this version from the one before it, on the wire or in the
+    /// API.
     pub fn new(host: impl Into<String>, port: u16, base_key: Vec<u8>) -> Self {
-        let mut consumer_admin = base_key.clone();
-        consumer_admin.extend_from_slice(CONSUMER_ADMIN_SUFFIX);
-        let mut supplier_admin = base_key.clone();
-        supplier_admin.extend_from_slice(SUPPLIER_ADMIN_SUFFIX);
-        Self {
-            host: host.into(),
-            port,
-            base: base_key,
-            consumer_admin,
-            supplier_admin,
-            shared: Arc::new(Shared {
-                state: Mutex::new(ChannelState::new()),
-                wake: Condvar::new(),
-                progress: Condvar::new(),
+        let name = String::from_utf8_lossy(&base_key).into_owned();
+        let objects = Arc::new(ChannelObjects::new(name.clone(), base_key.clone()));
+        let mut channels = BTreeMap::new();
+        channels.insert(name.clone(), objects);
+        EventChannelServer {
+            inner: Arc::new(Inner {
+                host: host.into(),
+                port,
+                default_name: name,
+                default_base: base_key,
+                registry: Mutex::new(Registry {
+                    channels,
+                    running: None,
+                    started: std::collections::BTreeSet::new(),
+                    threads: Vec::new(),
+                }),
             }),
         }
     }
 
-    /// Starts the delivery thread with [`DEFAULT_PUSH_TIMEOUT`].
+    /// Adds a channel named `name`, with its own admins, its own proxies and
+    /// its own [`ChannelStats`].
+    ///
+    /// The name is checked by [`is_channel_name_safe`], whose documentation
+    /// carries the argument for why the rule is what it is. A rejected name is
+    /// an error and never a coerced-into-safety name: silently renaming a
+    /// caller's channel would publish references under a name the caller does
+    /// not know it has.
+    ///
+    /// If [`EventChannelServer::start_delivery`] has already been called, the
+    /// new channel's two outbound threads start here, so a channel created at
+    /// any moment behaves like one created before the server started serving.
+    pub fn create_channel(&self, name: &str) -> std::result::Result<ChannelHandle, ChannelError> {
+        if let Some(why) = why_unsafe(name) {
+            return Err(ChannelError::UnsafeName { name: name.to_owned(), why });
+        }
+        let mut base = self.inner.default_base.clone();
+        base.push(b'/');
+        base.extend_from_slice(name.as_bytes());
+        let objects = Arc::new(ChannelObjects::new(name.to_owned(), base));
+        let handle = ChannelHandle { shared: Arc::clone(&objects.shared) };
+
+        let mut reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+        if reg.channels.contains_key(name) {
+            return Err(ChannelError::Duplicate { name: name.to_owned() });
+        }
+        reg.channels.insert(name.to_owned(), Arc::clone(&objects));
+        if let Some(timeout) = reg.running {
+            spawn_outbound(&mut reg, &objects, timeout);
+        }
+        Ok(handle)
+    }
+
+    /// Every channel this server holds, in name order.
+    pub fn channel_names(&self) -> Vec<String> {
+        let reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+        reg.channels.keys().cloned().collect()
+    }
+
+    /// Starts both outbound threads for every channel, with
+    /// [`DEFAULT_PUSH_TIMEOUT`].
     pub fn start_delivery(&self) -> Delivery {
         self.start_delivery_with(DEFAULT_PUSH_TIMEOUT)
     }
 
-    /// Starts both outbound threads, bounding each outbound call by `timeout`.
+    /// Starts both outbound threads for every channel, bounding each outbound
+    /// call by `timeout`.
     ///
     /// The source thread runs whether or not a supplier is ever connected: it
     /// costs one condvar wake per [`ChannelState::source_poll`] while nothing
     /// is attached, which is the same idle cost the delivery thread has always
     /// had, and making it conditional would mean a `connect_pull_supplier`
     /// arriving at a channel with no one to answer it.
+    ///
+    /// Two threads **per channel**, not two per server. Channels are the unit
+    /// a slow peer can wedge — the queues, the timeouts and the failure counts
+    /// are all per channel — so sharing one delivery thread between them would
+    /// make one channel's dead consumer every other channel's latency, which
+    /// is the failure this module is built around avoiding, one level up.
     pub fn start_delivery_with(&self, timeout: Duration) -> Delivery {
-        let shared = Arc::clone(&self.shared);
-        let thread = std::thread::Builder::new()
-            .name("orbweaver-event-delivery".into())
-            .spawn(move || delivery_loop(shared, timeout))
-            .expect("spawning the event delivery thread");
-        let shared = Arc::clone(&self.shared);
-        let source = std::thread::Builder::new()
-            .name("orbweaver-event-source".into())
-            .spawn(move || source_loop(shared, timeout))
-            .expect("spawning the event source thread");
-        Delivery { handle: self.handle(), thread: Some(thread), source: Some(source) }
+        let mut reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+        reg.running = Some(timeout);
+        let all: Vec<Arc<ChannelObjects>> = reg.channels.values().map(Arc::clone).collect();
+        for objects in all {
+            if !reg.started.contains(&objects.name) {
+                spawn_outbound(&mut reg, &objects, timeout);
+            }
+        }
+        drop(reg);
+        Delivery { inner: Arc::clone(&self.inner) }
     }
 
-    /// A handle usable after the servant has been moved into a serving thread.
+    /// A handle to the channel created with the server, usable after the
+    /// servant has been moved into a serving thread.
     pub fn handle(&self) -> ChannelHandle {
-        ChannelHandle { shared: Arc::clone(&self.shared) }
+        ChannelHandle { shared: Arc::clone(&self.default_objects().shared) }
     }
 
-    /// The channel's own object key — what [`crate::server::Server`] must be
-    /// bound with for the two to describe the same object.
+    /// A handle to the channel named `name`, or `None` if there is none.
+    pub fn handle_named(&self, name: &str) -> Option<ChannelHandle> {
+        let reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+        reg.channels.get(name).map(|c| ChannelHandle { shared: Arc::clone(&c.shared) })
+    }
+
+    /// The sum of every channel's counters.
+    ///
+    /// The one question a *process* is asked — "did anything here lose an
+    /// event?" — and the honest limit is the same one the per-channel numbers
+    /// already have one level down: it cannot say **which** channel, and
+    /// nothing here divides by the channel count to guess. Every counter is
+    /// additive and [`ChannelStats::split_adds_up`] is a linear identity, so
+    /// it holds of the sum exactly when it holds of every part; a sum that
+    /// failed it would mean a channel that had.
+    ///
+    /// The gauges (`queued`, the three `*_connected`) are sums too, and mean
+    /// what a sum of gauges means: how many there are in this process now.
+    pub fn total_stats(&self) -> ChannelStats {
+        let all: Vec<Arc<ChannelObjects>> = {
+            let reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+            reg.channels.values().map(Arc::clone).collect()
+        };
+        let mut total = ChannelStats::default();
+        for objects in all {
+            let s = objects.shared.lock().stats();
+            total.accepted += s.accepted;
+            total.fanned_out += s.fanned_out;
+            total.delivered += s.delivered;
+            total.dropped += s.dropped;
+            total.dropped_overflow += s.dropped_overflow;
+            total.dropped_on_disconnect += s.dropped_on_disconnect;
+            total.dropped_on_failure_disconnect += s.dropped_on_failure_disconnect;
+            total.dropped_at_stop += s.dropped_at_stop;
+            total.sourced += s.sourced;
+            total.push_failures += s.push_failures;
+            total.pull_failures += s.pull_failures;
+            total.disconnected_for_failure += s.disconnected_for_failure;
+            total.unrelayable += s.unrelayable;
+            total.pulled += s.pulled;
+            total.queued += s.queued;
+            total.consumers_connected += s.consumers_connected;
+            total.pull_consumers_connected += s.pull_consumers_connected;
+            total.pull_suppliers_connected += s.pull_suppliers_connected;
+        }
+        total
+    }
+
+    /// The object key of the channel created with the server — what
+    /// [`crate::server::Server`] must be bound with for the two to describe
+    /// the same object.
+    ///
+    /// Only that channel's, because only that one's key is the caller's to
+    /// know in advance; every other channel's is derived and is reached
+    /// through [`EventChannelServer::channel_ior_named`]. The server's
+    /// `knows` answers for all of them either way.
     pub fn channel_key(&self) -> &[u8] {
-        &self.base
+        &self.inner.default_base
     }
 
-    /// A publishable reference to the channel itself.
+    /// A publishable reference to the channel created with the server.
     pub fn channel_ior(&self) -> Ior {
-        self.ior_for(&self.base, EVENT_CHANNEL_ID)
+        self.ior_for(&self.inner.default_base, EVENT_CHANNEL_ID)
+    }
+
+    /// A publishable reference to the channel named `name`, or `None` if
+    /// there is none. This is what E3 will bind into a naming context.
+    pub fn channel_ior_named(&self, name: &str) -> Option<Ior> {
+        let base = {
+            let reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+            reg.channels.get(name)?.base.clone()
+        };
+        Some(self.ior_for(&base, EVENT_CHANNEL_ID))
     }
 
     fn ior_for(&self, key: &[u8], type_id: &str) -> Ior {
@@ -1781,8 +2134,8 @@ impl EventChannelServer {
             type_id: type_id.to_owned(),
             profiles: vec![IiopProfile {
                 version: Version::V1_2,
-                host: self.host.clone(),
-                port: self.port,
+                host: self.inner.host.clone(),
+                port: self.inner.port,
                 object_key: key.to_vec(),
                 // §7.10.2.4: a profile with no `TAG_CODE_SETS` declares no
                 // `wchar` support, and a conformant client then refuses to
@@ -1792,36 +2145,73 @@ impl EventChannelServer {
         }
     }
 
-    fn route(&self, key: &[u8]) -> Option<Target> {
-        if key == self.base {
-            return Some(Target::Channel);
-        }
-        if key == self.consumer_admin {
-            return Some(Target::ConsumerAdmin);
-        }
-        if key == self.supplier_admin {
-            return Some(Target::SupplierAdmin);
-        }
-        let state = self.shared.lock();
-        if state.proxy_suppliers.contains_key(key) {
-            return Some(Target::ProxySupplier);
-        }
-        if state.proxy_consumers.contains_key(key) {
-            return Some(Target::ProxyConsumer);
-        }
-        if state.proxy_pull_suppliers.contains_key(key) {
-            return Some(Target::ProxyPullSupplier);
-        }
-        if state.proxy_pull_consumers.contains_key(key) {
-            return Some(Target::ProxyPullConsumer);
+    /// Which channel's which object a key names.
+    ///
+    /// The channel list is copied out from under the registry lock before any
+    /// channel state is touched, so this never holds two locks at once — the
+    /// discipline [`crate::guarded`] enforces for outbound calls, kept here
+    /// for the ordinary reason as well.
+    ///
+    /// Membership is **exact**, never a prefix match: a minted key is in
+    /// exactly one channel's tables, and the fixed keys are compared whole.
+    /// A prefix match would have made [`is_channel_name_safe`] a suggestion,
+    /// since `base/x/pps1` begins with `base` too.
+    fn route(&self, key: &[u8]) -> Option<(Arc<ChannelObjects>, Target)> {
+        let all: Vec<Arc<ChannelObjects>> = {
+            let reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+            reg.channels.values().map(Arc::clone).collect()
+        };
+        for objects in all {
+            if key == objects.base {
+                return Some((objects, Target::Channel));
+            }
+            if key == objects.consumer_admin {
+                return Some((objects, Target::ConsumerAdmin));
+            }
+            if key == objects.supplier_admin {
+                return Some((objects, Target::SupplierAdmin));
+            }
+            let found = {
+                let state = objects.shared.lock();
+                if state.proxy_suppliers.contains_key(key) {
+                    Some(Target::ProxySupplier)
+                } else if state.proxy_consumers.contains_key(key) {
+                    Some(Target::ProxyConsumer)
+                } else if state.proxy_pull_suppliers.contains_key(key) {
+                    Some(Target::ProxyPullSupplier)
+                } else if state.proxy_pull_consumers.contains_key(key) {
+                    Some(Target::ProxyPullConsumer)
+                } else {
+                    None
+                }
+            };
+            if let Some(target) = found {
+                return Some((objects, target));
+            }
         }
         None
     }
 
-    fn mint(&self, tag: &str) -> Vec<u8> {
-        let mut state = self.shared.lock();
+    /// Mints a proxy key **inside one channel's key space**, from that
+    /// channel's own counter.
+    ///
+    /// Per channel and not per server, so the numbering restarts for each and
+    /// two channels both mint `pps1` — under different prefixes, which is the
+    /// whole reason the prefix rule has to hold.
+    /// The objects of the channel created with the server.
+    fn default_objects(&self) -> Arc<ChannelObjects> {
+        let reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+        Arc::clone(
+            reg.channels
+                .get(&self.inner.default_name)
+                .expect("the default channel is never removed"),
+        )
+    }
+
+    fn mint_on(&self, objects: &ChannelObjects, tag: &str) -> Vec<u8> {
+        let mut state = objects.shared.lock();
         state.minted += 1;
-        let mut key = self.base.clone();
+        let mut key = objects.base.clone();
         key.extend_from_slice(format!("/{tag}{}", state.minted).as_bytes());
         key
     }
@@ -1832,7 +2222,11 @@ impl EventChannelServer {
     /// `out` until the operation can no longer raise a *user* exception,
     /// because the buffer travels whole under a single reply status.
     fn invoke_operation(&self, req: &Request, out: &mut Encoder) -> std::result::Result<(), Raise> {
-        let target = self
+        // Which channel, and which of its objects. Every arm below reaches
+        // `chan` and never a field of `self`: the servant holds no channel
+        // state of its own any more, which is what makes "an operation on one
+        // channel cannot touch another" structural rather than careful.
+        let (chan, target) = self
             .route(&req.object_key)
             .ok_or_else(|| Raise::System(SystemException::object_not_exist()))?;
         let mut args = req.body().map_err(|_| marshal())?;
@@ -1854,24 +2248,24 @@ impl EventChannelServer {
         match (target, req.operation.as_str()) {
             // ── EventChannel ──
             (Target::Channel, "for_consumers") => {
-                let ior = self.ior_for(&self.consumer_admin, CONSUMER_ADMIN_ID);
+                let ior = self.ior_for(&chan.consumer_admin, CONSUMER_ADMIN_ID);
                 ior.write_to(out).map_err(|_| marshal())?;
             }
             (Target::Channel, "for_suppliers") => {
-                let ior = self.ior_for(&self.supplier_admin, SUPPLIER_ADMIN_ID);
+                let ior = self.ior_for(&chan.supplier_admin, SUPPLIER_ADMIN_ID);
                 ior.write_to(out).map_err(|_| marshal())?;
             }
 
             // ── ConsumerAdmin ──
             (Target::ConsumerAdmin, "obtain_push_supplier") => {
-                let key = self.mint("pps");
-                self.shared.lock().proxy_suppliers.insert(key.clone(), ProxySupplier::default());
+                let key = self.mint_on(&chan, "pps");
+                chan.shared.lock().proxy_suppliers.insert(key.clone(), ProxySupplier::default());
                 self.ior_for(&key, PROXY_PUSH_SUPPLIER_ID).write_to(out).map_err(|_| marshal())?;
             }
 
             (Target::ConsumerAdmin, "obtain_pull_supplier") => {
-                let key = self.mint("pls");
-                self.shared
+                let key = self.mint_on(&chan, "pls");
+                chan.shared
                     .lock()
                     .proxy_pull_suppliers
                     .insert(key.clone(), ProxyPullSupplier::default());
@@ -1880,14 +2274,14 @@ impl EventChannelServer {
 
             // ── SupplierAdmin ──
             (Target::SupplierAdmin, "obtain_push_consumer") => {
-                let key = self.mint("ppc");
-                self.shared.lock().proxy_consumers.insert(key.clone(), ProxyConsumer::default());
+                let key = self.mint_on(&chan, "ppc");
+                chan.shared.lock().proxy_consumers.insert(key.clone(), ProxyConsumer::default());
                 self.ior_for(&key, PROXY_PUSH_CONSUMER_ID).write_to(out).map_err(|_| marshal())?;
             }
 
             (Target::SupplierAdmin, "obtain_pull_consumer") => {
-                let key = self.mint("plc");
-                self.shared
+                let key = self.mint_on(&chan, "plc");
+                chan.shared
                     .lock()
                     .proxy_pull_consumers
                     .insert(key.clone(), ProxyPullConsumer::default());
@@ -1902,7 +2296,7 @@ impl EventChannelServer {
                     // would queue events for a reference nothing can dial.
                     return Err(bad_param());
                 }
-                let mut state = self.shared.lock();
+                let mut state = chan.shared.lock();
                 let proxy = state
                     .proxy_suppliers
                     .get_mut(&req.object_key)
@@ -1914,7 +2308,7 @@ impl EventChannelServer {
                 proxy.consecutive_failures = 0;
             }
             (Target::ProxySupplier, "disconnect_push_supplier") => {
-                let mut state = self.shared.lock();
+                let mut state = chan.shared.lock();
                 if let Some(proxy) = state.proxy_suppliers.get_mut(&req.object_key) {
                     let abandoned = proxy.queue.len() as u64;
                     proxy.queue.clear();
@@ -1940,7 +2334,7 @@ impl EventChannelServer {
                 // the proxy can call disconnect_push_supplier back, which is
                 // optional.
                 let supplier = Ior::read_from(&mut args).map_err(|_| marshal())?;
-                let mut state = self.shared.lock();
+                let mut state = chan.shared.lock();
                 let proxy = state
                     .proxy_consumers
                     .get_mut(&req.object_key)
@@ -1953,7 +2347,7 @@ impl EventChannelServer {
             }
             (Target::ProxyConsumer, "push") => {
                 {
-                    let state = self.shared.lock();
+                    let state = chan.shared.lock();
                     let proxy = state
                         .proxy_consumers
                         .get(&req.object_key)
@@ -1965,11 +2359,11 @@ impl EventChannelServer {
                 let event = capture_event(&mut args, 0)?;
                 // The lock is taken only to enqueue, and released before this
                 // arm returns: the servant never calls out while holding it.
-                self.shared.lock().fan_out(event);
-                self.shared.wake.notify_all();
+                chan.shared.lock().fan_out(event);
+                chan.shared.wake.notify_all();
             }
             (Target::ProxyConsumer, "disconnect_push_consumer") => {
-                let mut state = self.shared.lock();
+                let mut state = chan.shared.lock();
                 if let Some(proxy) = state.proxy_consumers.get_mut(&req.object_key) {
                     proxy.connected = false;
                     proxy.supplier = None;
@@ -1986,7 +2380,7 @@ impl EventChannelServer {
                 // `disconnect_pull_consumer` back, which the standard makes
                 // optional and this channel does not do.
                 let consumer = Ior::read_from(&mut args).map_err(|_| marshal())?;
-                let mut state = self.shared.lock();
+                let mut state = chan.shared.lock();
                 let proxy = state
                     .proxy_pull_suppliers
                     .get_mut(&req.object_key)
@@ -2007,7 +2401,7 @@ impl EventChannelServer {
                 let at = out.position();
                 let endian = out.endian();
 
-                let mut state = self.shared.lock();
+                let mut state = chan.shared.lock();
                 let deadline = Instant::now() + state.pull_block;
                 let event = loop {
                     let connected = state
@@ -2035,7 +2429,7 @@ impl EventChannelServer {
                     // a supplier's `push` is served while a `pull` blocks —
                     // which is the only reason a blocking `pull` can ever be
                     // satisfied at all.
-                    state = self.shared.wait(&self.shared.wake, state, left.min(PULL_POLL));
+                    state = chan.shared.wait(&chan.shared.wake, state, left.min(PULL_POLL));
                 };
                 // Released before anything is marshalled: a large `any` must
                 // not hold the channel shut while it is written out.
@@ -2058,10 +2452,10 @@ impl EventChannelServer {
                     typecode::encode(out, &TypeCode::Null).map_err(|_| marshal())?;
                     out.put_bool(false);
                 }
-                self.shared.progress.notify_all();
+                chan.shared.progress.notify_all();
             }
             (Target::ProxyPullSupplier, "disconnect_pull_supplier") => {
-                let mut state = self.shared.lock();
+                let mut state = chan.shared.lock();
                 if let Some(proxy) = state.proxy_pull_suppliers.get_mut(&req.object_key) {
                     let abandoned = proxy.queue.len() as u64;
                     proxy.queue.clear();
@@ -2081,7 +2475,7 @@ impl EventChannelServer {
                 // to learn it was disconnected rather than sit out its
                 // deadline. The key stays known and reconnectable, the same
                 // choice the push proxy and F6's unbound contexts make.
-                self.shared.wake.notify_all();
+                chan.shared.wake.notify_all();
             }
 
             // ── ProxyPullConsumer: the pulled supplier's end ──
@@ -2098,7 +2492,7 @@ impl EventChannelServer {
                     // because it is never dialled at all.
                     return Err(bad_param());
                 }
-                let mut state = self.shared.lock();
+                let mut state = chan.shared.lock();
                 let proxy = state
                     .proxy_pull_consumers
                     .get_mut(&req.object_key)
@@ -2112,10 +2506,10 @@ impl EventChannelServer {
                 drop(state);
                 // The source thread may be asleep between rounds; a supplier
                 // that has just connected should not wait one out.
-                self.shared.wake.notify_all();
+                chan.shared.wake.notify_all();
             }
             (Target::ProxyPullConsumer, "disconnect_pull_consumer") => {
-                let mut state = self.shared.lock();
+                let mut state = chan.shared.lock();
                 if let Some(proxy) = state.proxy_pull_consumers.get_mut(&req.object_key) {
                     proxy.connected = false;
                     proxy.supplier = None;
@@ -2942,6 +3336,7 @@ mod tests {
     /// arrive; `shutdown` still takes the last client so the test's own
     /// ordering stays explicit.
     struct Served {
+        servant: Arc<EventChannelServer>,
         channel: Ior,
         handle: ChannelHandle,
         delivery: Option<Delivery>,
@@ -2971,29 +3366,29 @@ mod tests {
             let stats = server.stats();
             let stop = Arc::new(AtomicBool::new(false));
             let flag = stop.clone();
+            let servant = Arc::clone(&channel);
             // `serve_shared`: the channel answers two calls at once now, which
             // is what makes the delivery/serving overlap tests below test the
             // thing they claim to.
             let thread = std::thread::spawn(move || {
-                server.serve_shared(&*channel, move || flag.load(Ordering::SeqCst)).unwrap();
+                server.serve_shared(&*servant, move || flag.load(Ordering::SeqCst)).unwrap();
             });
-            Served { channel: ior, handle, delivery: None, stats, stop, thread: Some(thread) }
+            Served {
+                servant: channel,
+                channel: ior,
+                handle,
+                delivery: None,
+                stats,
+                stop,
+                thread: Some(thread),
+            }
         }
 
-        /// Starts both outbound threads against the already-serving channel's
-        /// shared state. Both, not just delivery: a helper that started one of
-        /// them would let a test claim a channel was running while the half it
-        /// did not start sat idle.
+        /// Starts both outbound threads against the already-serving server,
+        /// through its own public entry point rather than by reaching into its
+        /// internals — so a test cannot start a shape the product cannot.
         fn begin_delivery(&mut self) {
-            let shared = Arc::clone(&self.handle.shared);
-            let thread = std::thread::spawn(move || delivery_loop(shared, PUSH_T));
-            let shared = Arc::clone(&self.handle.shared);
-            let source = std::thread::spawn(move || source_loop(shared, PUSH_T));
-            self.delivery = Some(Delivery {
-                handle: self.handle.clone(),
-                thread: Some(thread),
-                source: Some(source),
-            });
+            self.delivery = Some(self.servant.start_delivery_with(PUSH_T));
         }
 
         fn dial(&self, ior: &Ior) -> Connection {
@@ -3790,8 +4185,9 @@ mod tests {
         let channel = EventChannelServer::new("127.0.0.1", 1, b"EventChannel".to_vec());
         // A minted but unconnected ProxyPushConsumer: pushing into it raises
         // Disconnected, which this entry point cannot carry.
-        let key = channel.mint("ppc");
-        channel.shared.lock().proxy_consumers.insert(key.clone(), ProxyConsumer::default());
+        let objects = channel.default_objects();
+        let key = channel.mint_on(&objects, "ppc");
+        objects.shared.lock().proxy_consumers.insert(key.clone(), ProxyConsumer::default());
 
         let wire =
             crate::encode_request(Version::V1_2, Endian::Little, 7, &key, "push", true, |e| {
