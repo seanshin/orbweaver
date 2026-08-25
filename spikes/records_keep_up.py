@@ -17,6 +17,14 @@ with its record is at zero.
 기록이 참인지는 스크립트가 볼 수 없다. 볼 수 있는 것은 **열어보기라도 했는가**이며,
 2026-08-18의 답은 "행동이 바뀐 커밋 39개 전"이었고 그동안 COMPONENTS의 세 행이
 거짓이 되어 있었다.
+
+**A `git` that failed used to read as a distance of zero.** `run()` returned
+`stdout.strip()` and discarded the return code, so a `git log` that printed a
+diagnostic to stderr and nothing to stdout produced an empty listing, a count
+of zero, and the line `ok CHANGELOG.md is 0 commit(s) behind the code` — the
+most reassuring output this gate can print, over a measurement that did not
+happen. Every `git` invocation is now checked, and a failed one is a counted
+FAIL naming the command and what git said.
 """
 import subprocess
 import sys
@@ -30,19 +38,38 @@ RECORDS = ["CHANGELOG.md", "docs/COMPONENTS.md"]
 WATCHED = ["crates/", "spikes/"]
 
 
+class GitFailed(Exception):
+    """git could not answer. Not an answer of zero."""
+
+
 def run(*args):
-    return subprocess.run(args, capture_output=True, text=True).stdout.strip()
+    r = subprocess.run(args, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise GitFailed("`%s` exited %d: %s"
+                        % (" ".join(args), r.returncode,
+                           (r.stderr or r.stdout).strip().splitlines()[0] if (r.stderr or r.stdout).strip() else "no output"))
+    return r.stdout.strip()
 
 
 def main():
     bad = 0
     for record in RECORDS:
-        last = run("git", "log", "-1", "--format=%H", "--", record)
+        try:
+            last = run("git", "log", "-1", "--format=%H", "--", record)
+        except GitFailed as e:
+            print(f"  FAIL {record}: {e}")
+            bad += 1
+            continue
         if not last:
             print(f"  FAIL {record} has no history — it is not in this repository")
             bad += 1
             continue
-        behind = run("git", "log", "--oneline", f"{last}..HEAD", "--", *WATCHED)
+        try:
+            behind = run("git", "log", "--oneline", f"{last}..HEAD", "--", *WATCHED)
+        except GitFailed as e:
+            print(f"  FAIL {record}: the distance was not measured — {e}")
+            bad += 1
+            continue
         n = len([line for line in behind.split("\n") if line.strip()])
         if n > ALLOWED:
             print(f"  FAIL {record} is {n} commit(s) behind the code it describes")

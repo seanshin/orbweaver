@@ -35,6 +35,20 @@ as a claim about the decision. It fired exactly once, in a pipeline-run record
 that is now out of scope for the separate reason above. Guarding it would take
 a guess about where an option's name ends, so it waits for a second sighting in
 a document this gate actually reads.
+
+**What it could not read is printed, and counts against it.** Measured
+2026-08-25: `bilingual_halves()` captured the first non-space token after each
+marker and dropped every token that mapped to no state — so `**상태: 승인됨**`
+(the suffixed form ten decisions use) and `**상태:** 2026-08-12 승인·구현 완료`
+(the date-first form D001 uses) were dropped, leaving one state in the set and
+nothing to compare. **Eleven of thirteen decisions had never had their Korean
+half checked**, D003 among them — the file whose split halves are why this
+check exists. Nothing was red; the gate printed `0 drifted status claim(s)`
+over eleven halves it had not read. A marker now takes the first status *word*
+on its own line, and a marker carrying none is an `UNREAD` finding rather than
+a silent drop. The verdict line states markers read, markers unread, documents
+scanned and documents out of scope, because a gate that cannot say how much it
+read cannot be told from one that read nothing.
 """
 import pathlib
 import re
@@ -63,7 +77,41 @@ WORD_RE = re.compile("|".join(sorted(WORDS, key=len, reverse=True)), re.IGNORECA
 REF_RE = re.compile(r"\bD0\d\d\b")
 
 
-def bilingual_halves():
+MARKER_RE = re.compile(r"\*{0,2}(STATUS|Status|\uc0c1\ud0dc)[:\*]{1,3}")
+
+
+def markers(text):
+    """(lineno, language, state, line) for every status marker in a decision.
+
+    `state` is the **first status word on the marker's own line**, not the
+    first whitespace-delimited token after the marker. The token rule is what
+    made this gate blind: `\uc2b9\uc778\ub428` is not a key of WORDS (`\uc2b9\uc778` is), and D001's
+    Korean marker puts the date first, so eleven of thirteen Korean halves
+    mapped to None and were discarded before the comparison. Reading the line
+    for a word also keeps the declared state ahead of the history that follows
+    it on the same line \u2014 `**STATUS: APPROVED** \u2014 drafted 2026-08-14` is
+    APPROVED, which is the same rule `authoritative()` has always applied.
+
+    `state` is None when the line carries no status word at all. That is not a
+    skip: `main()` counts it, prints it, and fails on it.
+    """
+    for lineno, line in enumerate(text.splitlines(), 1):
+        m = MARKER_RE.search(line)
+        if not m:
+            continue
+        lang = "KO" if m.group(1) == "\uc0c1\ud0dc" else "EN"
+        w = WORD_RE.search(line, m.end())
+        state = WORDS[w.group().upper()] if w else None
+        yield lineno, lang, state, line.strip()
+
+
+def decisions():
+    """(path, [marker, ...]) for every decision file, markers included."""
+    for path in sorted(DECISIONS.glob("D0*.md")):
+        yield path, list(markers(path.read_text(encoding="utf-8")))
+
+
+def bilingual_halves(marked):
     """Every status marker inside a decision must name the same state.
 
     A status is prose spanning several lines in two languages, so an edit that
@@ -73,26 +121,32 @@ def bilingual_halves():
     English and \uc81c\uc548 in Korean, four lines apart. The English half is what
     every other document had been copying.
     """
-    for path in sorted(DECISIONS.glob("D0*.md")):
-        text = path.read_text(encoding="utf-8")
-        marks = re.findall(r"\*{0,2}(?:STATUS|Status|\uc0c1\ud0dc)[:\*]{1,3}\s*\**([^\s*]+)", text)
-        states = {WORDS.get(m.upper()) for m in marks}
-        states.discard(None)
+    for path, marks in marked:
+        states = sorted({s for _, _, s, _ in marks if s is not None})
         if len(states) > 1:
-            yield path, sorted(states)
+            yield path, states
 
 
-def authoritative():
-    """The status each decision file declares, from its own STATUS line."""
+def one_language_only(marked):
+    """A decision carrying a status in one language and not the other.
+
+    The bilingual comparison has nothing to compare when a half is absent, so
+    an absent half reads exactly like an agreeing one. All thirteen files carry
+    both today; the check exists so that stays a measured fact.
+    """
+    for path, marks in marked:
+        langs = {lang for _, lang, _, _ in marks}
+        for missing in sorted({"EN", "KO"} - langs):
+            yield path, missing
+
+
+def authoritative(marked):
+    """The status each decision file declares, from its first English marker."""
     out = {}
-    for path in sorted(DECISIONS.glob("D0*.md")):
+    for path, marks in marked:
         name = path.name.split("-")[0]
-        text = path.read_text(encoding="utf-8")
-        m = re.search(r"\*{0,2}(?:STATUS|Status)[:\*]{1,3}\s*\**([A-Za-z]+)", text)
-        if not m:
-            out[name] = None
-            continue
-        out[name] = WORDS.get(m.group(1).upper())
+        english = [s for _, lang, s, _ in marks if lang == "EN"]
+        out[name] = english[0] if english else None
     return out
 
 
@@ -168,10 +222,22 @@ def bound(piece):
     return out
 
 
-def scanned():
-    """(path, text) for every living document, CHANGELOG cut to Unreleased."""
-    for path in sorted(ROOT.glob("*.md")) + sorted(ROOT.glob("docs/**/*.md")):
+def in_glob():
+    """Every markdown file this gate's globs can reach, living or dated."""
+    return sorted(set(ROOT.glob("*.md")) | set(ROOT.glob("docs/**/*.md")))
+
+
+def scanned(skipped):
+    """(path, text) for every living document, CHANGELOG cut to Unreleased.
+
+    `skipped` collects the dated records passed over, so the verdict line can
+    say how many documents were deliberately not read. A deliberate skip that
+    is never counted is indistinguishable in the output from a glob that
+    matched nothing.
+    """
+    for path in in_glob():
         if not living(path):
+            skipped.append(path)
             continue
         text = path.read_text(encoding="utf-8")
         if path.name == "CHANGELOG.md":
@@ -182,12 +248,43 @@ def scanned():
         yield path, text
 
 
+PRUNE = {".git", "target", "node_modules", ".claude", "venv", ".venv"}
+
+
+def cited_out_of_scope():
+    """Markdown that names a decision and lives outside this gate's globs.
+
+    The globs read the repository root and `docs/`. `corpus/requirements/`,
+    `corpus/include/` and `spikes/tls/` also carry prose, and a status claim
+    written there would never be compared with anything. Reported rather than
+    scanned: widening the globs changes what the gate covers and would want its
+    own false-positive measurement first, exactly as `gap_symbols.py` did
+    before proposing itself. What is not reported at all cannot be decided
+    about, which is why the count is printed either way.
+    """
+    reachable = set(in_glob())
+    out, stack = [], [ROOT]
+    while stack:
+        for p in sorted(stack.pop().iterdir()):
+            if p.is_dir():
+                if p.name not in PRUNE:
+                    stack.append(p)
+            elif p.suffix == ".md" and p not in reachable:
+                if REF_RE.search(p.read_text(encoding="utf-8", errors="replace")):
+                    out.append(p)
+    return sorted(out)
+
+
 def main():
-    truth = authoritative()
+    marked = list(decisions())
+    truth = authoritative(marked)
     unknown = [d for d, s in truth.items() if s is None]
     findings = []
     missing = set()
-    for path, text in scanned():
+    read = 0
+    skipped_docs = []
+    for path, text in scanned(skipped_docs):
+        read += 1
         for lineno, piece in passages(text):
             for ref, claimed in bound(piece).items():
                 if ref not in truth:
@@ -212,12 +309,33 @@ def main():
         print(f"  DRIFT docs/decisions/{d}-*.md has no parsable STATUS line")
     for path, lineno, ref in sorted(missing):
         print(f"  DRIFT {path}:{lineno} cites {ref}, which has no decision file")
-    split = list(bilingual_halves())
+    split = list(bilingual_halves(marked))
     for path, states in split:
         print(f"  DRIFT {path.relative_to(ROOT)} states {'/'.join(states)} "
               f"in different halves of one file")
-    total = len(findings) + len(unknown) + len(split) + len(missing)
-    print(f"  {len(truth)} decisions, {total} drifted status claim(s)")
+    # A marker the parser could not classify is the failure this gate is for:
+    # it is the shape in which the gate went green over eleven Korean halves.
+    unread = [(path, lineno, line)
+              for path, marks in marked
+              for lineno, _, state, line in marks if state is None]
+    for path, lineno, line in unread:
+        print(f"  UNREAD {path.relative_to(ROOT)}:{lineno} status marker names no "
+              f"state this gate knows — it was not compared")
+        print(f"         {line[:120]}")
+    half = list(one_language_only(marked))
+    for path, missing_lang in half:
+        print(f"  UNREAD {path.relative_to(ROOT)} carries no {missing_lang} status "
+              f"marker, so its bilingual halves cannot be compared")
+    total = len(findings) + len(unknown) + len(split) + len(missing) + len(unread) + len(half)
+    n_marks = sum(len(m) for _, m in marked)
+    print(f"  {len(truth)} decisions, {n_marks} status marker(s) read, "
+          f"{len(unread)} unread; {read} living document(s) scanned, "
+          f"{len(skipped_docs)} dated record(s) out of scope")
+    outside = cited_out_of_scope()
+    print(f"  {len(outside)} document(s) cite a decision from outside this gate's "
+          f"globs and are not scanned"
+          + (": " + ", ".join(str(p.relative_to(ROOT)) for p in outside) if outside else ""))
+    print(f"  {total} drifted status claim(s)")
     return 1 if total else 0
 
 
