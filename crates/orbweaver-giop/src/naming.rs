@@ -703,6 +703,16 @@ pub fn stringify_name(name: &[NameComponent]) -> String {
 }
 
 /// Builds a stringified IOR for a `corbaloc:` URL, for tools that want one.
+///
+/// # This is not `string_to_object`
+///
+/// It reads **one** of the three forms a stringified reference can take, and
+/// its name says so. A caller holding a string whose form is the deployment's
+/// choice rather than the programmer's wants
+/// [`crate::orb::Orb::string_to_object`] (CORBA 3.4 §8.2.2.2), which decides
+/// between all three and stamps no repository id it was not given. This stays
+/// because a tool that has just built a `corbaloc:` URL and wants the `IOR:`
+/// form of it, with a type it knows, should not have to construct an ORB.
 pub fn corbaloc_to_ior_string(url: &str, type_id: &str) -> Result<String> {
     let parsed = ObjectUrl::parse(url).map_err(|_| Error::BadIor("malformed corbaloc URL"))?;
     let ior = parsed
