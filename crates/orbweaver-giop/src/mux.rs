@@ -175,9 +175,32 @@
 //! groups is wrong in one direction or the other whichever answer is chosen,
 //! which is why there are two.
 //!
-//! Still not observed from a peer: this needs a server to shut down inside the
-//! window between two fragments, and neither fixture will do it on command. The
-//! oracle is a scripted TCP peer built from this crate's own encoders.
+//! **Measured 2026-08-25, and the sentence that used to be here was the wrong
+//! conclusion from a true premise.** It read: *"Still not observed from a peer:
+//! this needs a server to shut down inside the window between two fragments,
+//! and neither fixture will do it on command."* Neither fixture will, and
+//! `docs/decisions/D010` §4 B5 files the shape as class B on that ground — but
+//! the peer this needs is not an ORB. It is a socket that writes GIOP by hand,
+//! and a socket needs nothing that is missing here.
+//!
+//! Two now exist, and they answer different questions.
+//! `tests/two_writes_of_one_reply.rs` is sixteen in-process peers whose bytes
+//! are built from §9.4 rather than from this crate's encoders, varying every
+//! axis the older measurement in `tests/mux_pool.rs` holds constant: the
+//! **reply's byte order, chosen independently of the request's** (a peer may
+//! answer a little-endian request in big-endian bytes, and [`Connection`]'s own
+//! order is `Endian::native()`, so a peer that echoed it would leave one order
+//! unmeasured on any one machine), which of the two callers is cut, which one
+//! reads the socket, how many continuations arrived, and how long the window
+//! was. `spikes/half_reply_peer.py` is the same peer in another language in
+//! another process, driven by `spikes/half_reply.sh`, and it adds the one thing
+//! an in-process peer cannot: the id the client says was cut is checked against
+//! the id the **peer** says it cut, by two processes separately.
+//!
+//! The claim held in all thirty-two cases, and its two halves fail
+//! independently: making `unsent` generous turns the cut caller red, making it
+//! stingy turns the untouched caller red, and dropping the per-caller arm of
+//! [`Fault::to_error`] turns both red.
 //!
 //! # Locks
 //!

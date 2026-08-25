@@ -80,3 +80,7 @@ path = "src/bin/spike_nat.rs"
 [[bin]]
 name = "spike-mux"
 path = "src/bin/spike_mux.rs"
+
+[[bin]]
+name = "spike-half-reply"
+path = "src/bin/spike_half_reply.rs"
