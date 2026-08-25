@@ -252,7 +252,13 @@ fn a_value_of_the_wrong_shape_is_refused_by_a_name_the_type_actually_has() {
         (TypeCode::TypeCode, "typecode"),
         (TypeCode::Void, "void"),
         (TypeCode::Null, "null"),
-        (TypeCode::Principal, "principal"),
+        // `Principal` was here until 2026-08-26 and is not any more, which is
+        // a repair rather than a loss of coverage. `type_name` gave it a name
+        // — the defect this test was written for — but naming it was all this
+        // layer did: "WChar('한') is not a value of principal" is a true
+        // sentence about the wrong problem, and the problem is that CORBA 3.0
+        // removed the type. It is refused by the fifth family's head now, and
+        // `deferred_sentence_agreement` measures that instead.
         (TypeCode::String(5), "string<5>"),
         (TypeCode::WString(5), "wstring<5>"),
         (
@@ -274,15 +280,21 @@ fn a_value_of_the_wrong_shape_is_refused_by_a_name_the_type_actually_has() {
 
 /// The read direction — the one a peer-fed document meets.
 ///
-/// Exactly three types are left to `from_json_at`'s own `"cannot cross yet"`
-/// tail: everything else has an arm, and the four the wire cannot carry are
+/// Exactly **two** types are left to `from_json_at`'s own `"cannot cross yet"`
+/// tail: everything else has an arm, and the five the wire cannot carry are
 /// guarded before it by their own families' sentences. `orbweaver-test`'s
 /// `json_unmapped` states that set in prose; this is where it is measured.
+///
+/// It was three until 2026-08-26, and the third is the interesting one.
+/// `Principal` sat in this list while the tail said **"yet"** about a type
+/// CORBA 3.0 removed — the same falsehood the `native` arm was written to stop
+/// a release earlier, over a different `TypeCode`, and a test asserted it here
+/// by name for as long as it was true. `void` and `null` keep the tail
+/// honestly: neither is a type a peer can send a value of, and "yet" is
+/// harmless about a thing that is not a type.
 #[test]
-fn the_three_types_left_to_cannot_cross_yet_are_refused_by_name() {
-    for (tc, want) in
-        [(TypeCode::Void, "void"), (TypeCode::Null, "null"), (TypeCode::Principal, "principal")]
-    {
+fn the_two_types_left_to_cannot_cross_yet_are_refused_by_name() {
+    for (tc, want) in [(TypeCode::Void, "void"), (TypeCode::Null, "null")] {
         for j in documents() {
             let err =
                 from_json(&tc, &j, &LocalReferences::new()).expect_err("none of these can be read");

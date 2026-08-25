@@ -2,7 +2,7 @@
 //! assumed, over the golden corpus and over every shape the rule knows.
 //!
 //! `docs/PLAN.md` §4.4 defers `valuetype`, abstract interfaces and `fixed`.
-//! **The set this test holds equal is four families, not three.** The fourth
+//! **The set this test holds equal is five families, not three.** The fourth
 //! is `native X;`, and the difference is not pedantry: §4.4's three have a
 //! wire form the specification defines and this version does not implement,
 //! while a native has none to implement in any version. It was missing from
@@ -22,6 +22,18 @@
 //! not a fifth family; it is a valuetype, and it is here because until
 //! `corpus/golden/32` no corpus file wrote the keyword, so the two sets were
 //! never compared over one.
+//!
+//! The fifth is `::CORBA::Principal`, and it is the family this test was
+//! **green over** for as long as it had existed. Both sides were empty: the
+//! rule did not name it (it has no `Definition` to become a finding) and the
+//! emitters refused it out of their own catch-alls, whose sentences carry no
+//! published head — and `sets()` below reads the heads to tell a wire refusal
+//! from an ordinary skip, so it filtered those skips out. Two empty sets are
+//! equal. **An equality between two things computed by the same filter proves
+//! nothing about what the filter cannot see**, which is why the count on the
+//! set below is asserted as a list and not as a number, and why
+//! `orbweaver-test`'s `one_home_for_a_wire_refusal` grew a fixture-shaped
+//! assertion in the same batch.
 //!
 //! Two places compute what that costs a contract: the front end's
 //! [`orbweaver_idl::deferred_wire_types`], which S4 reports (`wire/deferred-type`,
@@ -91,6 +103,7 @@ struct Sets {
     rule: BTreeSet<String>,
     rule_fixed: BTreeSet<String>,
     rule_native: BTreeSet<String>,
+    rule_withdrawn: BTreeSet<String>,
     rust: BTreeSet<String>,
     python: BTreeSet<String>,
     /// Everything the two emitters skipped, with the reason — for the one
@@ -116,6 +129,11 @@ fn sets(src: &str) -> Sets {
         uses.iter().filter(|d| d.family() == "fixed").map(|d| d.declaration.clone()).collect();
     let rule_native: BTreeSet<String> =
         uses.iter().filter(|d| d.family() == "natives").map(|d| d.declaration.clone()).collect();
+    let rule_withdrawn: BTreeSet<String> = uses
+        .iter()
+        .filter(|d| d.family() == "withdrawn types")
+        .map(|d| d.declaration.clone())
+        .collect();
 
     // The classifier asks the crate that owns the two heads what they say,
     // rather than keeping a fragment of one. It matched the literal `"4.4"`
@@ -126,10 +144,23 @@ fn sets(src: &str) -> Sets {
     // it is a smaller finding than its twin in `orbweaver-test`.
     let deferred_marker = marker(orbweaver_dynamic::deferred_wire_head);
     let native_marker = marker(orbweaver_dynamic::unmarshallable_wire_head);
+    // The fifth family's marker, added 2026-08-26 — and the reason this list
+    // is a list rather than a call to one function is worth a sentence. Both
+    // emitters refused a `Principal` out of their own catch-all until that
+    // day, so its skips carried no head at all, so **this filter could not see
+    // them and the equality below held over a divergence**: the rule named
+    // nothing for `corpus/golden/34` and the emitters skipped five
+    // declarations, and both sets came out empty. A classifier that reads the
+    // published heads is only as complete as the set of published heads.
+    let withdrawn_marker = marker(orbweaver_dynamic::withdrawn_wire_head);
     let qualified = |skipped: &[(String, String)]| -> BTreeSet<String> {
         skipped
             .iter()
-            .filter(|(_, why)| why.contains(&deferred_marker) || why.contains(&native_marker))
+            .filter(|(_, why)| {
+                why.contains(&deferred_marker)
+                    || why.contains(&native_marker)
+                    || why.contains(&withdrawn_marker)
+            })
             .map(|(id, _)| {
                 registry.qualified_name(id).unwrap_or_else(|| panic!("{id} has no name")).to_owned()
             })
@@ -145,7 +176,16 @@ fn sets(src: &str) -> Sets {
     let python_skipped = name(&emit_python(&registry, "g").skipped);
     let rust = qualified(&emit(&registry, "g").skipped);
     let python = qualified(&emit_python(&registry, "g").skipped);
-    Sets { rule, rule_fixed, rule_native, rust, python, rust_skipped, python_skipped }
+    Sets {
+        rule,
+        rule_fixed,
+        rule_native,
+        rule_withdrawn,
+        rust,
+        python,
+        rust_skipped,
+        python_skipped,
+    }
 }
 
 /// Over the golden corpus: the generator's §4.4 skips are exactly the rule's
@@ -157,6 +197,7 @@ fn over_the_golden_corpus_the_rule_names_every_generator_skip() {
     let mut all_rust = BTreeSet::new();
     let mut all_fixed = BTreeSet::new();
     let mut all_native = BTreeSet::new();
+    let mut all_withdrawn = BTreeSet::new();
     for (name, src) in golden() {
         let s = sets(&src);
         assert_eq!(s.rust, s.rule, "{name}: Rust emitter vs the rule");
@@ -165,6 +206,7 @@ fn over_the_golden_corpus_the_rule_names_every_generator_skip() {
         all_rust.extend(s.rust);
         all_fixed.extend(s.rule_fixed);
         all_native.extend(s.rule_native);
+        all_withdrawn.extend(s.rule_withdrawn);
     }
     // The set itself, so the numbers in the record are checked, not typed:
     // three from 21 and eight from `deferred-reach` reach `fixed`; four from
@@ -172,8 +214,12 @@ fn over_the_golden_corpus_the_rule_names_every_generator_skip() {
     // interface; six from 31 reach a `native`, which §4.4 does not defer
     // because there is nothing to defer; four from 32 reach `ValueBase`,
     // which is a valuetype and had been an object reference in the registry
-    // for as long as the keyword had been parsed. Thirty declarations, one
-    // list, both halves of the gate.
+    // for as long as the keyword had been parsed; five from 34 reach
+    // `::CORBA::Principal`, which is neither deferred nor never-marshallable —
+    // it was withdrawn — and which **neither half of this gate could see**
+    // until 2026-08-26, because the rule did not name it and the emitters
+    // refused it out of their own catch-alls, so the two empty sets agreed.
+    // Thirty-five declarations, one list, both halves of the gate.
     assert_eq!(
         all_rust.iter().map(String::as_str).collect::<Vec<_>>(),
         [
@@ -203,6 +249,11 @@ fn over_the_golden_corpus_the_rule_names_every_generator_skip() {
             "gn31::Roster",
             "gn31::Session",
             "gn31::Slot",
+            "gp34::Caller",
+            "gp34::Envelope",
+            "gp34::Gateway",
+            "gp34::Manifest",
+            "gp34::Roll",
             "gvb32::Cargo",
             "gvb32::Courier",
             "gvb32::Envelope",
@@ -232,7 +283,23 @@ fn over_the_golden_corpus_the_rule_names_every_generator_skip() {
             "gn31::Slot",
         ]
     );
-    assert_eq!(all_rule.len(), 30);
+    // The fifth family, pinned separately for the reason the fourth is: its
+    // sentence differs from every other family's, and a set that only counted
+    // would let a `Principal` finding drift into the valuetype bucket — which
+    // is `family()`'s `else` arm — without anything going red. The negative
+    // controls in the batch that added it moved this set, not the total.
+    //
+    // Note the two `gp34` declarations that are **absent**: `gp34::Desk` holds
+    // a reference to the unservable `Gateway`, and a reference is an IOR
+    // whatever the interface's operations take; `gp34::Described` holds the
+    // sibling predeclared name `::CORBA::TypeCode`, which is `tk_TypeCode` and
+    // marshals perfectly well. Both would have been swept in by a rule that
+    // keyed on the scope rather than on the name.
+    assert_eq!(
+        all_withdrawn.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["gp34::Caller", "gp34::Envelope", "gp34::Gateway", "gp34::Manifest", "gp34::Roll"]
+    );
+    assert_eq!(all_rule.len(), 35);
 }
 
 /// The three ways a reader is told something false about a `native`, asserted
@@ -313,6 +380,72 @@ fn no_layer_calls_a_native_deferred_and_none_of_them_says_yet() {
                  \"…{before}§4.4…\" promises a section that will never carry one: {s}"
             );
         }
+    }
+}
+
+/// The same three prohibitions over the fifth family, and a fourth that only
+/// applies to it.
+///
+/// `Principal` is the one construct in this rule's set that a contract author
+/// can be given a **replacement** for rather than only a redesign: caller
+/// identity did not vanish when CORBA 3.0 removed the type, it moved into a
+/// CSIv2 service context. So the fix has to name where it went. A fix that only
+/// said "do not use it" would be true and useless, and this project has already
+/// measured what a true-and-useless refusal costs — see the `<anonymous>`
+/// sweep in `orbweaver-dynamic`.
+///
+/// The §4.4 window check below is the one this file's own negative control
+/// taught it: two forbidden substrings are not the rule, the rule is that every
+/// mention of the section in a sentence about this family is a denial.
+#[test]
+fn no_layer_calls_a_withdrawn_type_deferred_and_none_of_them_says_yet() {
+    const DEFERRAL_CLAIM: &str = "is not marshalled by the v1 wire (docs/PLAN.md §4.4)";
+    const WINDOW: usize = 40;
+
+    let src = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/golden/34-corba-principal.idl"),
+    )
+    .expect("corpus/golden/34-corba-principal.idl");
+    let spec = orbweaver_idl::check(&src).expect("checks out");
+
+    let uses = orbweaver_idl::deferred_wire_types(&spec);
+    let withdrawn: Vec<_> = uses.iter().filter(|d| d.family() == "withdrawn types").collect();
+    assert_eq!(withdrawn.len(), 5, "34-corba-principal reaches one five ways: {withdrawn:?}");
+    let mut sentences: Vec<String> =
+        withdrawn.iter().flat_map(|d| [d.message(), d.fix()]).collect();
+
+    let s = sets(&src);
+    let ids: Vec<&str> = withdrawn.iter().map(|d| d.declaration.as_str()).collect();
+    for (name, why) in s.rust_skipped.iter().chain(&s.python_skipped) {
+        if ids.iter().any(|d| d == name) {
+            sentences.push(why.clone());
+        }
+    }
+    assert!(sentences.len() > withdrawn.len() * 2, "no emitter reason collected: {sentences:?}");
+
+    for s in &sentences {
+        assert!(!s.contains("yet"), "a withdrawn type is not waiting on a release: {s}");
+        assert!(!s.contains(DEFERRAL_CLAIM), "a withdrawn type is not a §4.4 deferral: {s}");
+        for (at, _) in s.match_indices("§4.4") {
+            let before = &s[at.saturating_sub(WINDOW)..at].to_lowercase();
+            assert!(
+                before.contains("not"),
+                "a withdrawn type's sentence names §4.4 without denying it — \"…{before}§4.4…\": {s}"
+            );
+        }
+    }
+
+    // And the half a `native`'s fix cannot have: where the thing the author
+    // wanted actually lives now. `orbweaver_giop::csiv2` is the layer that
+    // carries it, so the advice points at something this ORB implements rather
+    // than at a specification the author would have to go and read.
+    let fixes: Vec<String> = withdrawn.iter().map(|d| d.fix()).collect();
+    for fix in &fixes {
+        assert!(
+            fix.contains("IdentityToken") && fix.contains("CSIv2"),
+            "the fix must name where caller identity went, not only that it left: {fix}"
+        );
     }
 }
 

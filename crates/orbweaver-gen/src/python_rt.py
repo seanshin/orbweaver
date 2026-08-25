@@ -147,6 +147,25 @@ _UNMARSHALLABLE = ("%s has no wire form at all: it names a type only a language 
                    "§4.4's deferrals — those have a wire form this version has not implemented, "
                    "and there is none here to implement")
 
+#: The fifth family, and **not** a third caller of either string above.
+#:
+#: ``::CORBA::Principal`` was neither deferred nor never-marshallable: GIOP 1.0
+#: carried one in every request header and CORBA 3.0 removed the type. So the
+#: head names the withdrawal, and the tail keeps D008's asymmetry (the
+#: description crosses — ``_desc_of`` reads ``{"kind": "principal"}`` — and the
+#: value does not) while denying §4.4 out loud, because a reader who met the
+#: section in this runtime's other refusals will search for it here.
+#:
+#: Equal to `orbweaver_dynamic::withdrawn_wire_sentence` by ``python_target``'s
+#: comparison, for the reason the two above are: Python cannot import a Rust
+#: constant, so the equality is a test.
+_WITHDRAWN = ("%s was withdrawn from CORBA: GIOP 1.0 carried one in every request header, "
+              "GIOP 1.1 dropped that field and CORBA 3.0 removed the type — so this version "
+              "marshals no value for one, and no later version will; the TypeCode describing "
+              "it reads, the value behind it does not. This is not one of docs/PLAN.md §4.4's "
+              "deferrals: those wait on this project, and a type the specification has removed "
+              "waits on nobody")
+
 
 def _subject(kind, name, id):
     """How a construct is spelled as the subject of a refusal: kind word,
@@ -159,6 +178,14 @@ def _subject(kind, name, id):
     two modules declaring ``Describable`` produced one string (2026-08-25).
     """
     return "%s %s (%s)" % (kind, name, id) if name else "%s %s" % (kind, id)
+
+
+#: The subject ``_WITHDRAWN`` is always filled with. A ``("principal",)``
+#: descriptor carries no id — ``tk_Principal`` is a primitive kind and has none
+#: on the wire — so unlike ``native`` there is nothing to look up in ``NAMES``,
+#: and the spelling is fixed. Equal to `orbweaver_dynamic::principal_subject`.
+_PRINCIPAL = _subject("predeclared type", "::CORBA::Principal",
+                      "IDL:omg.org/CORBA/Principal:1.0")
 
 
 class TransportError(Error):
@@ -750,6 +777,8 @@ def to_json(desc, value, path=""):
             raise MarshalError(path, _DEFERRED % ("fixed<%d,%d>" % (d[1], d[2])))
         if kind == "native":
             raise MarshalError(path, _UNMARSHALLABLE % _subject("native", NAMES.get(d[1], ""), d[1]))
+        if kind == "principal":
+            raise MarshalError(path, _WITHDRAWN % _PRINCIPAL)
         raise MarshalError(path, "no AnyJSON form for %r" % (kind,))
 
     if isinstance(d, type) and issubclass(d, Enum):
@@ -868,6 +897,14 @@ def from_json(desc, j, path=""):
             raise MarshalError(path, _DEFERRED % ("fixed<%d,%d>" % (d[1], d[2])))
         if kind == "native":
             raise MarshalError(path, _UNMARSHALLABLE % _subject("native", NAMES.get(d[1], ""), d[1]))
+        # The fifth family, on the direction that matters: the document was a
+        # peer's. Until 2026-08-26 this fell to the line below and answered
+        # "no AnyJSON form for 'principal'" — a hole in this runtime, which is
+        # not what happened. The type was removed from CORBA; the reader has to
+        # learn that the `_t` half was understood and that no release restores
+        # the `_v` half.
+        if kind == "principal":
+            raise MarshalError(path, _WITHDRAWN % _PRINCIPAL)
         raise MarshalError(path, "no AnyJSON form for %r" % (kind,))
 
     if isinstance(d, type) and issubclass(d, Enum):
@@ -1005,8 +1042,10 @@ def _desc_of(form, path):
         return ("native", id)
     if kind == "principal":
         # Withdrawn from CORBA, and still a kind `tc_to_json` writes: the
-        # description crosses, the value legs fall to their generic refusal —
-        # the same division of labour the Rust side applies to it.
+        # description crosses and the value legs refuse with ``_WITHDRAWN`` —
+        # the same division of labour the Rust side applies to it. No id is
+        # read here because ``tk_Principal`` carries none; the subject is
+        # ``_PRINCIPAL``, fixed.
         return ("principal",)
     raise MarshalError(path, "no AnyJSON value form for a %r type" % (kind,))
 
