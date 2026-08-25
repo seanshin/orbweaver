@@ -1,15 +1,35 @@
 # D019 — The ORB has no object, and everything above it assembles one by hand
 
-**STATUS: PROPOSED** — drafted 2026-08-25 from a challenge that landed: *is it
-not strange that development continues without an ORB?* It is, and the
-measurements below say so more sharply than the question did. This proposes the
-missing thing and argues its surface **from what is scattered today**, not from
-the C++ mapping. Not self-approvable: it changes the shape of the product's
-own API, which is the user's to decide.
+**STATUS: APPROVED 2026-08-26** — drafted 2026-08-25 from a challenge that
+landed: *is it not strange that development continues without an ORB?* It is,
+and the measurements below say so more sharply than the question did. This
+proposes the missing thing and argues its surface **from what is scattered
+today**, not from the C++ mapping.
 
-**상태: 제안** — 2026-08-25, *"ORB도 없이 후속 개발이 진행되는 것이 이상하지
-않나"* 라는 지적에서 작성. 이상하고, 아래 측정이 질문보다 더 날카롭게 그것을
-말한다. 제안하는 표면은 C++ 매핑이 아니라 **오늘 흩어져 있는 것**에서 논증한다.
+**상태: 승인 2026-08-26** — 2026-08-25, *"ORB도 없이 후속 개발이 진행되는 것이
+이상하지 않나"* 라는 지적에서 작성. 이상하고, 아래 측정이 질문보다 더 날카롭게
+그것을 말한다. 제안하는 표면은 C++ 매핑이 아니라 **오늘 흩어져 있는 것**에서
+논증한다.
+
+> **How it was approved, recorded so a reader can check rather than trust.**
+> This document was *not* self-approvable — §5 changes the shape of the
+> product's own API. On 2026-08-26 the user said ORB composition reaching a
+> completed first form was the top priority, and was then asked one question
+> naming step 4 directly: **does the hand-built path go away, or stay?** The
+> answer was **"일방향 — §5 그대로"** — one-way, §5 as written. That settles
+> exactly what §5 gates and nothing wider: `Server::bind` and `Poa::new` stop
+> being the public way in, the thirteen spikes migrate, and the configuration
+> reaches the transport because there is only one path for it to travel.
+>
+> Approved is the **shape**, not a licence to widen it. §5's *"not proposed"*
+> list is unchanged and still binding: no `ORB_init` signature, no
+> `run`/`shutdown`, no thread policies. Four responsibilities and nothing
+> beyond them.
+>
+> *자기 승인이 불가능한 문서였다. 2026-08-26에 사용자가 ORB 구성 완료를 최우선으로
+> 지정했고, 4단계를 직접 이름한 질문 하나 — **손으로 짓는 길을 없앨까 남길까** —
+> 에 **"일방향, §5 그대로"** 로 답했다. 승인된 것은 **모양**이며 넓힐 면허가
+> 아니다: §5의 "제안하지 않는 것" 목록은 그대로 구속력을 갖는다.*
 
 > **Direction, 2026-08-25.** The user designated **ORB composition the primary
 > goal** on reading §1–§3. That is a decision about *priority* and it is
