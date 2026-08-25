@@ -12,8 +12,15 @@ use crate::policy::{Approval, Exposure};
 use crate::rpc::{self, codes};
 use crate::{Bridge, ToolError};
 
-/// Default result cap for `search_interfaces`.
-const DEFAULT_LIMIT: usize = 20;
+/// Default result cap for `search_interfaces`, for a deployment that has not
+/// said.
+///
+/// The agent may ask for a different one per request; this is what it gets when
+/// it asks for none. How many results are useful is a fact about the size of
+/// the estate and the agent's context window, both of which a deployment knows
+/// and this crate does not — so it is settable
+/// ([`Session::set_search_limit`]) and stated here once.
+pub const DEFAULT_SEARCH_LIMIT: usize = 20;
 
 /// An MCP session.
 ///
@@ -28,6 +35,8 @@ pub struct Session<'a> {
     conn: Option<Connection>,
     /// Set once `initialize` has been answered.
     ready: bool,
+    /// What `search_interfaces` caps at when the request names no `limit`.
+    search_limit: usize,
 }
 
 impl<'a> Session<'a> {
@@ -47,7 +56,24 @@ impl<'a> Session<'a> {
         exposure: Exposure,
         session_id: impl Into<String>,
     ) -> Self {
-        Self { bridge: Bridge::new(registry, exposure, session_id), conn: None, ready: false }
+        Self {
+            bridge: Bridge::new(registry, exposure, session_id),
+            conn: None,
+            ready: false,
+            search_limit: DEFAULT_SEARCH_LIMIT,
+        }
+    }
+
+    /// Overrides the result cap a `search_interfaces` that names none gets.
+    ///
+    /// A deployment's number, not the crate's: see [`DEFAULT_SEARCH_LIMIT`].
+    pub fn set_search_limit(&mut self, limit: usize) {
+        self.search_limit = limit;
+    }
+
+    /// The cap in force for a request that names none.
+    pub fn search_limit(&self) -> usize {
+        self.search_limit
     }
 
     /// Attaches a target.
@@ -159,7 +185,7 @@ impl<'a> Session<'a> {
                         Json::Number(n) => n.parse::<usize>().ok(),
                         _ => None,
                     })
-                    .unwrap_or(DEFAULT_LIMIT);
+                    .unwrap_or(self.search_limit);
                 rpc::result(id, rpc::tool_content(&self.bridge.search(query, limit)))
             }
             "describe_interface" => {

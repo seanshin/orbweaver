@@ -2,6 +2,7 @@
 //!
 //! ```text
 //! orbweaver-mcp-server --idl <file.idl>... --ior <file> [-I <dir>]... \
+//!                      [--config <policy.json>] \
 //!                      [--expose <IDL:module/Iface:1.0[.operation]>]... \
 //!                      [--assume-effect <ai_effect value>] \
 //!                      [--as <principal>] [--scope <scope>]... \
@@ -13,9 +14,49 @@
 //!                      [--audit-capacity <lines>]
 //! ```
 //!
-//! Exposure is **default-deny**: with no `--expose`, the server starts, answers
-//! the handshake, and finds nothing. That is the correct behaviour and not a
-//! misconfiguration — an operator naming what an agent may reach is the point.
+//! Exposure is **default-deny**: with no `--expose` and no `expose` in a
+//! `--config`, the server starts, answers the handshake, and finds nothing.
+//! That is the correct behaviour and not a misconfiguration — an operator
+//! naming what an agent may reach is the point.
+//!
+//! # `--config`: the numbers a deployment owns, in a file
+//!
+//! Every flag below is a thing an operator says at the moment they start the
+//! process. Three things they own were sayable **nowhere**: how long a
+//! capability lives (`orbweaver_mcp::handles::DEFAULT_TTL` and a builder only
+//! tests called), how many references a session may hold, and how many results
+//! a search that names no limit returns. `--config <policy.json>` is where
+//! those live, along with a file's copy of the exposure, the assumption, the
+//! quota, the ledger bound and the dial timeout —
+//! `orbweaver_mcp::deployment::Deployment` documents the shape and the reasons.
+//!
+//! Three properties, each of which is the reason for the next:
+//!
+//! - **No `--config` means no change.** The parsed value supplies `None` for
+//!   every setting and installs nothing, so a deployment that does not use the
+//!   flag runs the code it ran before the flag existed. There is no search
+//!   path and no file picked up from the working directory: a configuration
+//!   this process found on its own could start applying to a deployment nobody
+//!   changed.
+//! - **A flag beats the file** where both speak, so an invocation that worked
+//!   before still means what it meant. `expose` is the exception and is a
+//!   *union*: both are the operator naming something explicitly, and neither
+//!   can be widened by an absence — a missing `expose`, an empty one, an empty
+//!   document and an absent flag all leave the allowlist exactly where the
+//!   command line put it.
+//! - **A malformed file stops the process**, naming the file, the key and what
+//!   was expected — including a key no setting is named by, because a typo an
+//!   operator wrote is a setting they believe is in force. Nothing is applied
+//!   on the way to finding the fault: the document parses whole or not at all,
+//!   and a half-applied policy is worse than none because it looks like one.
+//!
+//! What is in force is said on stderr, wherever it is in force — including
+//! under `--dry-run`, where a report that hid the quota it was predicting
+//! against would be the report disagreeing with the run.
+//!
+//! *배포가 소유하는 수치는 파일에 산다. `--config`가 없으면 아무것도 달라지지
+//! 않고, 플래그가 파일을 이기며, 잘못된 파일은 파일·키·기대값을 말하고 프로세스를
+//! 멈춘다. 부분 적용은 없다.*
 //!
 //! # `--idl` takes a path, so it takes a translation unit
 //!
@@ -256,14 +297,14 @@
 //! the loop: it prints one JSON object and the process ends.
 
 use std::io::{BufRead, Write};
-use std::time::Duration;
 
 use orbweaver_dynamic::json::Json;
 use orbweaver_giop::{Connection, Ior};
 use orbweaver_mcp::Bridge;
+use orbweaver_mcp::deployment::{DEFAULT_CONNECT_TIMEOUT, Deployment};
 use orbweaver_mcp::identity::Caller;
-use orbweaver_mcp::policy::{Approval, Exposure, Unannotated};
-use orbweaver_mcp::quota::{Quota, Renewal, Scope};
+use orbweaver_mcp::policy::{Approval, Exposure, Unannotated, split_operation};
+use orbweaver_mcp::quota::Scope;
 use orbweaver_mcp::session::Session;
 use orbweaver_mcp::telemetry::{CallPath, JsonLines, Timestamp, Trace};
 use orbweaver_mcp::token::ScopeMap;
@@ -288,45 +329,42 @@ fn trace_for(to: &str, ts: Option<&str>, session: &str) -> Result<Trace, String>
     Ok(Trace::new(session, CallPath::Dynamic, ts, JsonLines::new(sink)))
 }
 
-/// §4.5 #2's occupant for this run, or `None` when no `--quota` was given.
+/// The deployment this run is configured by: the file if `--config` named one,
+/// and then whatever the command line said on top.
 ///
-/// [`Renewal::Never`]: this process has no window source, so the honest shape
-/// is a per-run total whose refusals do not invite a retry. See the module
-/// docs.
-fn quota_for(limit: Option<u64>, scope: &str) -> Result<Option<Quota>, String> {
-    let Some(limit) = limit else { return Ok(None) };
-    let scope = match scope {
-        "everything" => Scope::Everything,
-        "caller" => Scope::Caller,
-        "interface" => Scope::Interface,
-        "operation" => Scope::Operation,
-        other => {
-            return Err(format!(
-                "--quota-scope {other:?}: expected everything, caller, interface or operation"
-            ));
-        }
+/// **A flag beats the file.** An invocation that worked before a configuration
+/// file existed has to keep meaning what it meant, and a flag is the more
+/// specific instrument — it names one run, where a file names a deployment.
+/// `expose` is the exception (a union, folded into the allowlist below): two
+/// explicit grants add up, and neither is a default that could widen by
+/// accident.
+///
+/// `--quota-scope` is validated only when `--quota` gave it something to
+/// count, which is how it behaved before: a scope with no budget attached
+/// installs nothing whatever it says.
+fn deployment_for(
+    config: Option<&str>,
+    quota_limit: Option<u64>,
+    quota_scope: &str,
+    audit_capacity: Option<usize>,
+) -> Result<Deployment, String> {
+    let mut deployment = match config {
+        None => Deployment::default(),
+        Some(path) => Deployment::from_file(path).map_err(|e| e.to_string())?,
     };
-    Ok(Some(Quota::new(limit, scope, Renewal::Never)))
-}
-
-/// `IDL:m/I:1.0[.operation]` — the interface, and the operation if one is
-/// named. The **one** reading of that grammar, for `--expose` and `--dry-run=`
-/// alike.
-///
-/// The operation is split at the last dot. A repository id ends in its
-/// *version*, `:1.0`, which has a dot in it, so the trailing part is only an
-/// operation when it looks like an IDL identifier: a bare `IDL:spike/Echo:1.0`
-/// used to be read as the interface `IDL:spike/Echo:1` with an operation named
-/// `0`, which allowlisted an interface nobody had and exposed nothing. The
-/// first `--dry-run` report run against a real IDL file said
-/// `id: IDL:spike/Echo:1, operation: 0, declared: false`, which is how this
-/// was found.
-fn split_operation(spec: &str) -> (&str, Option<&str>) {
-    let identifier = |op: &str| op.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_');
-    match spec.rsplit_once('.') {
-        Some((id, op)) if identifier(op) && !op.contains(':') => (id, Some(op)),
-        _ => (spec, None),
+    if let Some(limit) = quota_limit {
+        let Some(scope) = Scope::parse(quota_scope) else {
+            return Err(format!(
+                "--quota-scope {quota_scope:?}: expected one of {}",
+                Scope::names().join(", ")
+            ));
+        };
+        deployment.set_quota(limit, scope);
     }
+    if let Some(capacity) = audit_capacity {
+        deployment.set_audit_capacity(capacity);
+    }
+    Ok(deployment)
 }
 
 /// `--dry-run-handle <name>=<IOR:…|file>`: a reference this dry run will
@@ -455,6 +493,7 @@ fn main() -> std::process::ExitCode {
     let mut quota_scope = "caller".to_owned();
     let mut audit_capacity: Option<usize> = None;
     let mut assume_effect: Option<String> = None;
+    let mut config_path: Option<String> = None;
 
     let mut argv: Vec<String> = std::env::args().skip(1).collect();
     let search = match take_include_dirs(&mut argv) {
@@ -473,6 +512,19 @@ fn main() -> std::process::ExitCode {
         let taken = match a.as_str() {
             "--idl" => next("--idl").map(|v| idls.push(v)),
             "--ior" => next("--ior").map(|v| ior_path = Some(v)),
+            // Named, never discovered. Read below, once, before anything is
+            // built from it. Twice is a usage error rather than a merge: two
+            // policy files with no stated precedence is a deployment nobody
+            // can read off the command line.
+            "--config" => next("--config").and_then(|v| match &config_path {
+                Some(first) => {
+                    Err(format!("--config {first:?} and {v:?}: name one configuration file"))
+                }
+                None => {
+                    config_path = Some(v);
+                    Ok(())
+                }
+            }),
             "--expose" => next("--expose").map(|v| expose.push(v)),
             // An empty value would be an assumption nobody could read back off
             // a report, which is the one thing this flag exists to prevent.
@@ -556,7 +608,8 @@ fn main() -> std::process::ExitCode {
             "-h" | "--help" => {
                 eprintln!(
                     "usage: orbweaver-mcp-server --idl <file.idl>... --ior <file> \
-                     [-I <dir>]... [--expose <id[.operation]>]... [--assume-effect <value>] \
+                     [-I <dir>]... [--config <policy.json>] \
+                     [--expose <id[.operation]>]... [--assume-effect <value>] \
                      [--as <principal>] [--scope <scope>]... \
                      [--map-scope <token>=<contract>]... [--token-scope <scope>]... \
                      [--dry-run[=<id[.operation]>]] [--dry-run-args <json>] \
@@ -646,6 +699,20 @@ fn main() -> std::process::ExitCode {
     // nobody could run. What made an estate unservable was the include, and
     // `registry_from_files` refuses that above, naming the file.
 
+    // The whole deployment, decided in one place before anything is built from
+    // it: the file if one was named, then the flags on top. A malformed file
+    // stops the process here — before the exposure exists, before a socket, and
+    // with nothing applied — which is what makes "never partially applied" a
+    // property of the order rather than a promise.
+    let deployment =
+        match deployment_for(config_path.as_deref(), quota_limit, &quota_scope, audit_capacity) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("{e}");
+                return std::process::ExitCode::from(2);
+            }
+        };
+
     let mut exposure = Exposure::nothing();
     for spec in &expose {
         exposure = match split_operation(spec) {
@@ -653,10 +720,16 @@ fn main() -> std::process::ExitCode {
             (id, None) => exposure.allow_interface(id),
         };
     }
+    // The file's grants, added to the command line's through the same two
+    // builders and the same reading of the grammar. Only ever additive, and
+    // only ever what somebody wrote.
+    exposure = deployment.extend_exposure(exposure);
+    // The flag wins; the file answers when the flag was silent.
+    let assume_effect = assume_effect.or_else(|| deployment.assume_effect().map(str::to_owned));
     if let Some(effect) = &assume_effect {
         exposure = exposure.assuming_unannotated(Unannotated::Assume(effect.clone()));
     }
-    if expose.is_empty() {
+    if expose.is_empty() && deployment.expose().is_empty() {
         eprintln!(
             "no --expose given: the catalog holds {} interface(s) and the agent will see none",
             orbweaver_mcp::exposable_interfaces(&registry).len()
@@ -710,14 +783,6 @@ fn main() -> std::process::ExitCode {
             .fold(Caller::new(p), |c, scope| c.with_scope(scope.clone()))
     });
 
-    let quota = match quota_for(quota_limit, &quota_scope) {
-        Ok(q) => q,
-        Err(e) => {
-            eprintln!("{e}");
-            return std::process::ExitCode::from(2);
-        }
-    };
-
     if dry_run {
         // No socket is opened and no target is read: the report is a question
         // about the policy and the policy is in memory. The only references
@@ -736,20 +801,19 @@ fn main() -> std::process::ExitCode {
         if let Some(caller) = caller {
             bridge.set_caller(caller);
         }
-        if let Some(capacity) = audit_capacity
-            && !bridge.chain_mut().audit_capacity(capacity)
-        {
-            eprintln!("no audit stage to bound");
-            return std::process::ExitCode::from(2);
-        }
         // The report is about the chain this deployment would run, so the
-        // quota goes in before the questions are asked. A dry run spends none
-        // of it — `orbweaver_mcp::quota` refunds what a question charges.
-        if let Some(quota) = &quota
-            && !bridge.chain_mut().quota(quota.clone())
-        {
-            eprintln!("no authorization stage to put a quota after");
-            return std::process::ExitCode::from(2);
+        // ledger bound, the expiry policy and the quota go in before the
+        // questions are asked. A dry run spends none of the budget —
+        // `orbweaver_mcp::quota` refunds what a question charges — and it is
+        // said out loud here for the same reason it is said when serving: a
+        // report that hid the quota it was predicting against would be the
+        // report disagreeing with the run.
+        match deployment.apply(&mut bridge) {
+            Ok(said) => said.iter().for_each(|line| eprintln!("{line}")),
+            Err(e) => {
+                eprintln!("{e}");
+                return std::process::ExitCode::from(2);
+            }
         }
         // A dry run is traced too, under its own decision tokens: the questions
         // an operator asked before a deployment are exactly what somebody wants
@@ -867,7 +931,10 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
-    let conn = match Connection::connect(&ior, Duration::from_secs(10)) {
+    // How long to wait for a target that may be on the other side of a WAN is
+    // a fact about where this is deployed, not about the protocol.
+    let dial = deployment.connect_timeout().unwrap_or(DEFAULT_CONNECT_TIMEOUT);
+    let conn = match Connection::connect(&ior, dial) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("cannot reach the target: {e}");
@@ -876,28 +943,21 @@ fn main() -> std::process::ExitCode {
     };
 
     let mut session = Session::new(&registry, exposure, conn, session_id.clone());
-    if let Some(capacity) = audit_capacity {
-        if !session.bridge().chain_mut().audit_capacity(capacity) {
-            eprintln!("no audit stage to bound");
+    // Everything this deployment said that belongs to a live bridge, installed
+    // once and **said out loud**: a ledger that drops lines, a budget that
+    // refuses, a capability that expires sooner than it used to are all things
+    // an operator chose, and a choice they forgot they wrote is one they will
+    // debug as a policy failure. A file makes forgetting easier than a flag did.
+    match deployment.apply(session.bridge()) {
+        Ok(said) => said.iter().for_each(|line| eprintln!("{line}")),
+        Err(e) => {
+            eprintln!("{e}");
             return std::process::ExitCode::from(2);
         }
-        // Said out loud, like the quota: a ledger that drops lines is something
-        // an operator chose, and the choice belongs in the same stream as the
-        // lines it will eventually elide.
-        eprintln!("audit ledger: the newest {capacity} lines are kept in memory (stderr has all)");
     }
-    if let Some(quota) = &quota {
-        if !session.bridge().chain_mut().quota(quota.clone()) {
-            eprintln!("no authorization stage to put a quota after");
-            return std::process::ExitCode::from(2);
-        }
-        // Said out loud at startup: a limit an operator forgot they set is a
-        // limit they will debug as a policy failure.
-        eprintln!(
-            "quota: {} calls per {}, for this run only (this process opens no windows)",
-            quota.limit(),
-            quota.scope()
-        );
+    if let Some(limit) = deployment.search_limit() {
+        session.set_search_limit(limit);
+        eprintln!("search: a request naming no limit gets {limit} result(s)");
     }
     if let Some(trace_to) = &trace_to {
         match trace_for(trace_to, trace_ts.as_deref(), &session_id) {

@@ -352,6 +352,32 @@ pub enum Unannotated {
     Assume(String),
 }
 
+/// `IDL:module/Iface:1.0[.operation]` — the interface, and the operation if one
+/// is named.
+///
+/// **The one reading of that grammar**, for every surface an operator writes an
+/// exposure on: `--expose`, `--dry-run=`, and a configuration file's `expose`
+/// list. It lived in the server binary while the command line was the only such
+/// surface; a file is a second, and a repository id that meant one thing in a
+/// flag and another in a file would be an allowlist entry silently naming a
+/// different operation than the operator wrote.
+///
+/// The operation is split at the last dot. A repository id ends in its
+/// *version*, `:1.0`, which has a dot in it, so the trailing part is only an
+/// operation when it looks like an IDL identifier: a bare `IDL:spike/Echo:1.0`
+/// used to be read as the interface `IDL:spike/Echo:1` with an operation named
+/// `0`, which allowlisted an interface nobody had and exposed nothing. The
+/// first `--dry-run` report run against a real IDL file said
+/// `id: IDL:spike/Echo:1, operation: 0, declared: false`, which is how that was
+/// found.
+pub fn split_operation(spec: &str) -> (&str, Option<&str>) {
+    let identifier = |op: &str| op.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_');
+    match spec.rsplit_once('.') {
+        Some((id, op)) if identifier(op) && !op.contains(':') => (id, Some(op)),
+        _ => (spec, None),
+    }
+}
+
 /// Which interfaces and operations an agent may reach, and what it does with
 /// the operations whose contracts say nothing.
 #[derive(Debug, Default, Clone)]
@@ -680,6 +706,21 @@ pub(crate) fn stated_effect(registry: &Registry, id: &str, operation: &str) -> E
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The version's dot is not an operation's, and an operation's is.
+    #[test]
+    fn a_repository_ids_version_is_not_an_operation() {
+        assert_eq!(split_operation("IDL:spike/Echo:1.0"), ("IDL:spike/Echo:1.0", None));
+        assert_eq!(
+            split_operation("IDL:spike/Echo:1.0.echo"),
+            ("IDL:spike/Echo:1.0", Some("echo"))
+        );
+        assert_eq!(
+            split_operation("IDL:spike/Echo:1.0._get_balance"),
+            ("IDL:spike/Echo:1.0", Some("_get_balance"))
+        );
+        assert_eq!(split_operation("IDL:a/B:1.0.2"), ("IDL:a/B:1.0.2", None), "not an identifier");
+    }
 
     /// An `ai_authz` written on an attribute used to buy nothing: the accessor
     /// has no operation signature, so the scope check found no annotations and

@@ -39,6 +39,7 @@
 
 #![deny(missing_docs)]
 
+pub mod deployment;
 pub mod dryrun;
 pub mod embed;
 pub mod guard;
