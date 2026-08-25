@@ -13,6 +13,13 @@ orbweaver-giop = { path = "../orbweaver-giop", default-features = false }
 orbweaver-registry = { path = "../orbweaver-registry" }
 orbweaver-dynamic = { path = "../orbweaver-dynamic" }
 orbweaver-idl = { path = "../orbweaver-idl" }
+# D024 §5's four contract tools wrap pipeline stages that already exist, so the
+# boundary must be able to reach them: S4 lives in `orbweaver-forge`, `gen` in
+# `orbweaver-gen`, and the §5.3 differ in `orbweaver-registry` above. Both edges
+# are new on 2026-08-26 and neither is a cycle — see `orbweaver-forge`'s own
+# Cargo.toml for the one that had to be reversed to make this legal.
+orbweaver-forge = { path = "../orbweaver-forge" }
+orbweaver-gen = { path = "../orbweaver-gen" }
 
 [lints]
 workspace = true

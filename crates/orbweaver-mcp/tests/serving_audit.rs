@@ -331,11 +331,25 @@ fn an_unannotated_operation_is_refused_by_the_process_and_the_silence_is_counted
     );
 
     // Said before the loop, not discovered one refusal at a time.
+    //
+    // The expected text is **computed by calling the function that writes it**
+    // rather than retyped here. This assertion used to quote
+    // `"carry no ai_effect and will be REFUSED"`, a fragment of a sentence
+    // another crate owns — the classifier-is-a-sentence shape — and it went red
+    // on 2026-08-26 for the right reason: the sentence moved to one home
+    // (`orbweaver_forge::effect`) and the retyped copy did not move with it.
+    let expected = orbweaver_forge::effect::annotate_or_assume(
+        &orbweaver_forge::effect::OFFER_AUTHOR,
+        Some("--assume-effect <value>"),
+    );
     assert!(
         served.err.iter().any(|l| {
-            l.contains("carry no ai_effect and will be REFUSED") && l.contains("--assume-effect")
+            l.contains(orbweaver_forge::effect::SILENCE)
+                && l.contains("REFUSED")
+                && l.contains(&expected)
         }),
-        "the size of the silence must be stated at startup:\n{:#?}",
+        "the size of the silence must be stated at startup, in the words \
+         `orbweaver_forge::effect` writes:\n  {expected}\n{:#?}",
         served.err
     );
     let refuse = served
@@ -343,9 +357,18 @@ fn an_unannotated_operation_is_refused_by_the_process_and_the_silence_is_counted
         .iter()
         .find(|l| l.starts_with("REFUSE ") && l.contains("operation=sweep"))
         .unwrap_or_else(|| panic!("no refusal for sweep:\n{:#?}", served.err));
-    // The actionable half: what is missing, and where it goes.
+    // The actionable half: what is missing, and where it goes. Computed from
+    // the one home rather than retyped — and note the gate's offer is
+    // deliberately narrower than the author's (`OFFER_GATE`, two poles), so
+    // asserting the author's list here would be asserting the wrong sentence.
     assert!(refuse.contains("carries no ai_effect"), "{refuse}");
-    assert!(refuse.contains("ai_effect: read_only"), "{refuse}");
+    assert!(
+        refuse.contains(&orbweaver_forge::effect::annotate_or_assume(
+            &orbweaver_forge::effect::OFFER_GATE,
+            None
+        )),
+        "{refuse}"
+    );
     // And it must not read as a permissions misconfiguration, which is the
     // failure mode the estate recorded arriving by another road.
     assert!(!refuse.contains("is not exposed"), "{refuse}");

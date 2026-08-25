@@ -264,11 +264,26 @@ fn an_unstated_effect_names_the_annotation_that_would_settle_it() {
     let mut chain = Chain::standard(Exposure::nothing().allow_interface(ACCOUNT));
     let why = chain.run(&ctx(&reg, None, "touch", Approval::default())).unwrap_err();
     assert!(matches!(why, Denied::EffectUnstated { .. }), "{why:?}");
-    teaches(&why, &[ACCOUNT, "touch", "ai_effect: read_only", "ai_effect: destructive"], &[]);
+    // The values are **computed from the one home** rather than retyped. This
+    // assertion quoted `"ai_effect: read_only"` until 2026-08-26 and went red
+    // when the sentence acquired an owner — which is the whole point of the
+    // gate in `orbweaver-test`: a layer that keeps a literal fails at the next
+    // rewording rather than at the next reading, and a *test* that keeps one
+    // fails the same way.
+    let mut wants = vec![ACCOUNT.to_owned(), "touch".to_owned()];
+    wants.extend(orbweaver_forge::effect::OFFER_GATE.iter().map(|v| format!("`{v}`")));
+    let wants: Vec<&str> = wants.iter().map(String::as_str).collect();
+    teaches(&why, &wants, &[]);
     // Said once. The fact used to live in the `Display` arm as well, and two
     // copies of one sentence is how a sentence goes false in one of them.
     let shown = why.to_string();
-    assert_eq!(shown.matches("//@ ai_effect: read_only").count(), 1, "{shown}");
+    assert_eq!(
+        shown
+            .matches(&orbweaver_forge::effect::annotate(&orbweaver_forge::effect::OFFER_GATE))
+            .count(),
+        1,
+        "{shown}"
+    );
 }
 
 // ── the seats a deployment fills ────────────────────────────────────────────

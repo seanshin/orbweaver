@@ -12,9 +12,19 @@ orbweaver-idl = { path = "../orbweaver-idl" }
 orbweaver-registry = { path = "../orbweaver-registry" }
 orbweaver-dynamic = { path = "../orbweaver-dynamic" }
 orbweaver-giop = { path = "../orbweaver-giop", default-features = false }
-# Cycle-free: orbweaver-mcp depends only on cdr/giop/registry/dynamic/idl,
-# never on forge. S5 uses its `exposable_interfaces` so "what could be
-# exposed" has exactly one definition, and the I2 tests drive its Bridge.
+# **Reversed 2026-08-26.** This was a `[dependencies]` entry, and it put the
+# agent boundary *upstream* of the pipeline it exists to expose: `orbweaver-mcp`
+# could not call S4, the §5.3 differ or `gen` without a cycle, which is why
+# D024 §5's four contract tools had nowhere to be written. The whole of the
+# source-level coupling was one call — `exposable_interfaces`, in S5 — and that
+# question is a property of a catalog, so it moved to
+# `Registry::exposable_interfaces` and this edge became dev-only.
+#
+# The I2 tests still drive `orbweaver-mcp`'s `Bridge`, which is exactly what a
+# dev-dependency is for: cargo permits a cycle through dev-dependencies, and
+# `orbweaver-mcp -> orbweaver-forge` is now a real dependency in the direction
+# the layering always implied.
+[dev-dependencies]
 orbweaver-mcp = { path = "../orbweaver-mcp" }
 
 [lints]

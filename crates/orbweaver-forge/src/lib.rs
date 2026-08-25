@@ -66,6 +66,7 @@
 #![deny(missing_docs)]
 
 pub mod annotate;
+pub mod effect;
 pub mod infer;
 pub mod ingest;
 pub mod pipeline;
@@ -963,10 +964,11 @@ fn annotation_advice(src: &str, spec: &orbweaver_idl::ast::Spec) -> Vec<Finding>
                     rule: "sidl/missing-ai_effect".into(),
                     severity: Severity::Advice,
                     message: format!(
-                        "{}.{} has no ai_effect, so the bridge refuses it: it cannot tell \
-                         whether an agent may call this without a human. Annotate it, or set \
-                         the exposure's --assume-effect",
-                        i.name.text, op.name.text
+                        "{}.{} is an {}, so the bridge refuses it: it cannot tell whether an \
+                         agent may call this without a human",
+                        i.name.text,
+                        op.name.text,
+                        crate::effect::SILENCE
                     ),
                     line: op.name.span.line,
                     column: op.name.span.column,
@@ -974,9 +976,14 @@ fn annotation_advice(src: &str, spec: &orbweaver_idl::ast::Spec) -> Vec<Finding>
                         .get(op.name.span.start..op.name.span.end)
                         .unwrap_or_default()
                         .to_owned(),
-                    fix: Some(
-                        "add `//@ ai_effect: read_only`, `idempotent` or `destructive`".into(),
-                    ),
+                    // S4 is talking to whoever writes the contract, so it
+                    // offers the author's three values and names the flag the
+                    // operator would use instead. One home:
+                    // `crate::effect`.
+                    fix: Some(crate::effect::annotate_or_assume(
+                        &crate::effect::OFFER_AUTHOR,
+                        Some("--assume-effect <value>"),
+                    )),
                 });
             }
         }

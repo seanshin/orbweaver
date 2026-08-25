@@ -748,11 +748,19 @@ fn main() -> std::process::ExitCode {
             .map(|(id, op)| format!("{}.{op}", id.rsplit('/').next().unwrap_or(id)))
             .collect();
         match &assume_effect {
+            // The operator's audience, so the flag *is* named — this is the
+            // one reader who can run it. The sentence itself comes from
+            // `orbweaver_forge::effect`, the same home S4's fix hint and the
+            // gate's remedy read, so a rewording reaches all four at once.
             None => eprintln!(
-                "{} exposed operation(s) carry no ai_effect and will be REFUSED ({}…): annotate \
-                 them, or declare what this exposure assumes with --assume-effect <value>",
+                "{} exposed operation(s) are each an {} and will be REFUSED ({}…): {}",
                 silent.len(),
-                sample.join(", ")
+                orbweaver_forge::effect::SILENCE,
+                sample.join(", "),
+                orbweaver_forge::effect::annotate_or_assume(
+                    &orbweaver_forge::effect::OFFER_AUTHOR,
+                    Some("--assume-effect <value>"),
+                )
             ),
             Some(effect) => eprintln!(
                 "--assume-effect {effect:?}: {} exposed operation(s) carry no ai_effect and will \

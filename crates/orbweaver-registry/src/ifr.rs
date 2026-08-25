@@ -1094,13 +1094,51 @@ pub mod description_tc {
 // ── repository-id arithmetic ─────────────────────────────────────────────────
 
 /// The three things every IR description derives from a repository id: the
-/// unqualified name, the containing module's id, and the version.
+/// unqualified name, the containing module's id, and the version — **read
+/// against a registry**, which is what makes it right under a
+/// `#pragma prefix`.
 ///
-/// `IDL:a/b/C:1.0` splits into `("C", "IDL:a/b:1.0", "1.0")`. A top-level
-/// definition has no containing module, so `defined_in` is empty — the
+/// `IDL:a/b/C:1.0` becomes `("C", "IDL:a/b:1.0", "1.0")`. A top-level
+/// definition has no containing module, so `defined_in` is empty: the
 /// container is the repository itself, which has no repository id of its own.
-/// An id in a shape we do not recognise keeps its whole self as the name
-/// rather than being silently mangled.
+/// An entry with no recorded qualified name — anything ingested from a peer —
+/// falls back to [`split_repository_id`], which is all the information there
+/// is for those.
+///
+/// # Why it is published
+///
+/// `Contained::describe` answers this triple over the wire, and D024 §5's
+/// `describe_type` answers it locally out of the same registry. **The two must
+/// agree**, and the way two answers agree is by being one answer: this
+/// function is what both call. It was a private method on `RepositoryServer`
+/// until 2026-08-26, which left the local half with no way to reach it and
+/// nothing but a test to notice if it drifted.
+///
+/// *두 답이 일치하는 방법은 하나의 답이 되는 것이다.*
+pub fn contained_of(registry: &Registry, id: &str) -> (String, RepositoryId, String) {
+    let split = split_repository_id(id);
+    let Some(qual) = registry.qualified_name(id) else { return split };
+    let (_, _, version) = split;
+    let Some(path) = id.strip_prefix("IDL:").and_then(|rest| rest.rsplit_once(':').map(|(p, _)| p))
+    else {
+        return split_repository_id(id);
+    };
+    let name = qual.rsplit("::").next().unwrap_or(qual).to_owned();
+    let segments: Vec<&str> = path.split('/').collect();
+    let defined_in = if qual.split("::").count() < 2 || segments.len() < 2 {
+        // Top level: the container is the repository, which has no id.
+        String::new()
+    } else {
+        format!("IDL:{}:{version}", segments[..segments.len() - 1].join("/"))
+    };
+    (name, defined_in, version)
+}
+
+/// The prefix-blind split, for an id with no entry in any registry.
+///
+/// Prefer [`contained_of`] wherever a `Registry` is in hand: under a
+/// `#pragma prefix` the path segments and the qualified name disagree about
+/// how much of the path is prefix, and this function cannot tell.
 pub fn split_repository_id(id: &str) -> (String, RepositoryId, String) {
     let Some(rest) = id.strip_prefix("IDL:") else {
         return (id.to_owned(), String::new(), "1.0".into());
@@ -1898,23 +1936,7 @@ impl RepositoryServer {
     /// Entries with no recorded name — anything ingested from a peer — fall
     /// back to the split, which is all the information there is for those.
     fn contained_of(&self, id: &str) -> (String, RepositoryId, String) {
-        let split = split_repository_id(id);
-        let Some(qual) = self.registry.qualified_name(id) else { return split };
-        let (_, _, version) = split;
-        let Some(path) =
-            id.strip_prefix("IDL:").and_then(|rest| rest.rsplit_once(':').map(|(p, _)| p))
-        else {
-            return split_repository_id(id);
-        };
-        let name = qual.rsplit("::").next().unwrap_or(qual).to_owned();
-        let segments: Vec<&str> = path.split('/').collect();
-        let defined_in = if qual.split("::").count() < 2 || segments.len() < 2 {
-            // Top level: the container is the repository, which has no id.
-            String::new()
-        } else {
-            format!("IDL:{}:{version}", segments[..segments.len() - 1].join("/"))
-        };
-        (name, defined_in, version)
+        contained_of(&self.registry, id)
     }
 
     /// `::bank::Account` — the scoped name, with no prefix in it.

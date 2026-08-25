@@ -326,14 +326,27 @@ impl Catalog {
     ///
     /// Two sentences rather than a word, because "refuse" alone has been read
     /// as "the gate refused something" instead of "the gate refuses these".
+    /// **The one home that reports rather than advises.** A catalog page
+    /// renders and decides nothing, so this states the posture in force and
+    /// offers no way out of it — the console is read by an operator who has
+    /// already made the declaration, not by an author choosing a value or an
+    /// agent that was just refused.
+    ///
+    /// What it shares with the other three layers is the *condition* and the
+    /// *act*, and it reads both from `orbweaver_forge::effect` so that a
+    /// rewording there reaches this legend too. What it does not share is a
+    /// remedy, because it has none to give.
     pub fn unannotated_sentence(&self) -> String {
         match self.unannotated_effect.as_str() {
-            "refuse" => "An operation whose contract states no ai_effect is refused: this \
-                         exposure declares no assumption for the silences."
-                .to_owned(),
+            "refuse" => format!(
+                "An {} is refused: {}.",
+                orbweaver_forge::effect::SILENCE,
+                orbweaver_forge::effect::NO_ASSUMPTION
+            ),
             effect => format!(
-                "An operation whose contract states no ai_effect is treated as {effect} — an \
-                 operator declared that assumption for this exposure."
+                "An {} is treated as {effect} — an operator declared that assumption for this \
+                 exposure.",
+                orbweaver_forge::effect::SILENCE
             ),
         }
     }

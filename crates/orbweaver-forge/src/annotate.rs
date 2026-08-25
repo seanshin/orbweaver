@@ -377,13 +377,17 @@ pub fn sidl_version_findings(spec: &Spec) -> Vec<Finding> {
 
 /// `ai_effect` values the MCP policy gate treats as needing no approval.
 ///
-/// Mirrored from `orbweaver-mcp`'s `policy::is_harmless` — the predicate
-/// `policy::effect_refusal` asks before it lets a call through — by way of
-/// `orbweaver-test`'s `contract::UNGATED_EFFECTS`. It named a
-/// `policy::destructive_effect` until 2026-08-25; see
-/// [`crate::infer::UNGATING`], which is pinned against the gate's own
+/// **No longer a mirror.** It used to carry its own copy of the list and a
+/// doc comment admitting where the list came from — *"mirrored from
+/// `orbweaver-mcp`'s `policy::is_harmless` … by way of `orbweaver-test`'s
+/// `contract::UNGATED_EFFECTS`"* — three hand-kept copies of one predicate,
+/// which is the shape that goes quiet when the owner changes for a good
+/// reason. Since 2026-08-26 the vocabulary has one home in
+/// [`crate::effect::UNGATED`] and `policy::is_harmless` reads it too, so this
+/// name is an alias and the agreement is not a thing that can drift.
+/// See [`crate::infer::UNGATING`], which is pinned against the gate's own
 /// behaviour rather than against this sentence.
-pub const UNGATED_EFFECTS: [&str; 4] = ["read_only", "readonly", "idempotent", "safe"];
+pub const UNGATED_EFFECTS: [&str; 4] = crate::effect::UNGATED;
 
 /// The subset of [`UNGATED_EFFECTS`] claiming the operation *only reads*.
 ///
@@ -393,7 +397,10 @@ pub const UNGATED_EFFECTS: [&str; 4] = ["read_only", "readonly", "idempotent", "
 pub const READ_ONLY_EFFECTS: [&str; 3] = ["read_only", "readonly", "safe"];
 
 /// The one `ai_effect` value that means "needs a human" on purpose.
-pub const GATED_EFFECTS: [&str; 1] = ["destructive"];
+///
+/// An alias for [`crate::effect::GATED`], for the reason
+/// [`UNGATED_EFFECTS`] gives.
+pub const GATED_EFFECTS: [&str; 1] = crate::effect::GATED;
 
 /// `ai_pii` levels §2.2 defines.
 pub const PII_LEVELS: [&str; 3] = ["none", "low", "high"];
@@ -778,12 +785,19 @@ fn operation_findings(index: &TypeIndex, iface: &str, op: &Operation) -> Vec<Fin
             "s3/missing-ai_effect",
             Severity::Error,
             format!(
-                "{where_} has no ai_effect, so the MCP policy gate must assume it needs human \
-                 approval"
+                "{where_} is an {}, so the MCP policy gate must assume it needs human approval",
+                crate::effect::SILENCE
             ),
             at,
             name.to_owned(),
-            "add `//@ ai_effect: read_only`, `idempotent` or `destructive`",
+            // S3 writes for the author of the contract, exactly as S4 does:
+            // the same sentence, the same three values, one home
+            // (`crate::effect`). These two hints were byte-identical strings
+            // maintained in two files, which is how they stayed equal by luck.
+            &crate::effect::annotate_or_assume(
+                &crate::effect::OFFER_AUTHOR,
+                Some("--assume-effect <value>"),
+            ),
         )),
         Some(e) if !UNGATED_EFFECTS.contains(&e) && !GATED_EFFECTS.contains(&e) => {
             out.push(finding(
@@ -796,7 +810,11 @@ fn operation_findings(index: &TypeIndex, iface: &str, op: &Operation) -> Vec<Fin
                 ),
                 at,
                 name.to_owned(),
-                "use one of read_only, idempotent, safe or destructive",
+                // The one site that enumerates rather than recommends: the
+                // contract already said something, and the useful answer is
+                // the whole vocabulary rather than a shortlist. That is why
+                // `OFFER_ALL` exists and why this hint names `safe`.
+                &crate::effect::annotate(&crate::effect::OFFER_ALL),
             ));
         }
         Some(_) => {}
