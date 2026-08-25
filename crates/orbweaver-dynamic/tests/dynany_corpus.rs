@@ -154,7 +154,24 @@ fn leaf(tc: &TypeCode, tick: &mut u64) -> Result<Value, Uncovered> {
                     .into(),
             ));
         }
-        TypeCode::Principal => return Err(Uncovered("`Principal` has no Value variant".into())),
+        // The fifth, and the second that is not §4.4's. It reached this arm for
+        // the first time on 2026-08-25: `::CORBA::Principal` is predeclared by
+        // the front end and the registry answered `TypeCode::Void` for it, so
+        // every contract using it walked a member that marshals **zero bytes**
+        // and this sampler was never handed a `Principal` to refuse. The
+        // registry answers `TypeCode::Principal` now
+        // (`corpus/golden/34-corba-principal.idl`), which is what made the arm
+        // reachable — and the reason had to say what a `native`'s says, because
+        // the gate below requires every uncovered type to cite §4.4 and this
+        // one cites it in order to deny it: `Principal` was **withdrawn from
+        // CORBA**, so there is no deferred wire form waiting to be implemented.
+        TypeCode::Principal => {
+            return Err(Uncovered(
+                "`Principal` is withdrawn from CORBA and has no Value variant — not a \
+                 docs/PLAN.md §4.4 deferral"
+                    .into(),
+            ));
+        }
         other => return Err(Uncovered(format!("no leaf value for {other:?}"))),
     })
 }

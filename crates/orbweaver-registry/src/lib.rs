@@ -909,11 +909,12 @@ enum DefRef {
     /// project has not implemented, and a native has none to implement in any
     /// version. See [`TypeCode::Native`] for what omniORB does when asked.
     ///
-    /// Only a `native X;` written in the contract reaches here. The
-    /// predeclared `::CORBA::TypeCode` is not a definition and never enters
-    /// the name table; it is answered by `is_corba_typecode` as
-    /// [`TypeCode::TypeCode`], which is `tk_TypeCode` and marshals perfectly
-    /// well.
+    /// Only a `native X;` written in the contract reaches here. The names the
+    /// front end predeclares inside module `CORBA`
+    /// ([`orbweaver_idl::sema::PREDECLARED_CORBA`]) are not definitions and
+    /// never enter the name table; they are answered by
+    /// [`predeclared_corba`], which is the only thing standing between them
+    /// and `TypeCode::Void`.
     Native,
 }
 
@@ -1656,34 +1657,75 @@ impl Builder<'_> {
                 // `describe_interface` and said so rather than emitting an
                 // empty reply.
                 Some(p) => self.derive(&p).unwrap_or(TypeCode::Void),
-                // `::CORBA::TypeCode` is *predeclared by the front end* for
-                // checking and is not among the spec's definitions, so it
-                // resolves to nothing and used to land here, silently, as
-                // `void`.
-                None if is_corba_typecode(n) => TypeCode::TypeCode,
-                // An unresolved name is a semantic error the checker already
-                // reports; producing `void` here keeps the registry loadable
-                // for tooling that wants to show what *did* resolve — but it
-                // is recorded, for the same reason a base or a `raises` is.
-                // `void` where a type belongs marshals nothing, and a gate
-                // reading a graph with a member typed `void` by accident is
-                // deciding from evidence it does not have.
-                None => {
-                    self.note_unresolved(&qualified(scope), UnresolvedKind::Type, n);
-                    TypeCode::Void
-                }
+                // The names module `CORBA` predeclares are *predeclared by the
+                // front end* for checking and are not among the spec's
+                // definitions, so they resolve to nothing and land here.
+                None => match predeclared_corba(n) {
+                    Some(tc) => tc,
+                    // An unresolved name is a semantic error the checker
+                    // already reports; producing `void` here keeps the registry
+                    // loadable for tooling that wants to show what *did*
+                    // resolve — but it is recorded, for the same reason a base
+                    // or a `raises` is. `void` where a type belongs marshals
+                    // nothing, and a gate reading a graph with a member typed
+                    // `void` by accident is deciding from evidence it does not
+                    // have.
+                    None => {
+                        self.note_unresolved(&qualified(scope), UnresolvedKind::Type, n);
+                        TypeCode::Void
+                    }
+                },
             },
         }
     }
 }
 
-/// Whether a scoped name is the predeclared `::CORBA::TypeCode`.
+/// The `TypeCode` for a name the front end predeclares inside module `CORBA`,
+/// or `None` if `n` is not one of them.
 ///
-/// Matched on the full name rather than on a trailing `TypeCode`, so a user's
-/// own `TypeCode` declared in their own module keeps whatever they declared it
-/// to be — that one resolves, and never reaches this arm.
-fn is_corba_typecode(n: &orbweaver_idl::ast::ScopedName) -> bool {
-    matches!(n.parts.as_slice(), [m, t] if m == "CORBA" && t == "TypeCode")
+/// These names have no `Definition` behind them, so `derive` has nothing to
+/// work from and the caller's only other answer is `TypeCode::Void` — a member
+/// that marshals **zero bytes** where the author wrote a type. This function is
+/// therefore the whole promise the front end makes when it admits a name:
+/// `orbweaver_idl::sema::PREDECLARED_CORBA` is the table, and
+/// `every_predeclared_corba_name_reaches_a_typecode_or_is_refused` iterates it
+/// against this one so a row added there without a row here goes red.
+///
+/// It handled `TypeCode` alone until 2026-08-25, when the sweep that rule
+/// demanded found `Principal` — predeclared on the very next line of that table
+/// — landing on the `void` this function exists to prevent, in the exact shape
+/// its own comment describes as "not a cosmetic default". One row of a table
+/// had been repaired and its neighbour left, which is what a fix scoped to a
+/// keyword rather than to a rule buys.
+///
+/// `Principal` is answered rather than refused because **the oracle accepts
+/// the contract**: `omniidl -b dump` on `corpus/golden/34-corba-principal.idl`
+/// prints `CORBA::Principal who;` and exits 0, so refusing the name in the
+/// front end would be a divergence from a conformant compiler over a file it
+/// parses. The type is withdrawn from CORBA (it left the GIOP request header
+/// after 1.0 and CORBA 3.x removed it) and this version marshals no value for
+/// it — which is a *wire* answer, and every marshalling layer already gives it
+/// by name: `orbweaver_dynamic::dynany` refuses a `TypeCode::Principal`,
+/// `orbweaver_test::prop` says it is withdrawn and not marshalled, and both
+/// emitters fall to their catch-all and skip the declaration. None of those
+/// arms was reachable from a contract until this line existed.
+///
+/// Matched on the full name rather than on a trailing identifier, so a user's
+/// own `TypeCode` or `Principal` declared in their own module keeps whatever
+/// they declared it to be — that one resolves, and never reaches this arm.
+///
+/// `Object` and `ValueBase` are in that table and are deliberately absent here:
+/// `object` and `valuebase` are IDL keywords, so `::CORBA::Object` is a parse
+/// error and no `TypeSpec::Named` can carry either. Their keyword spellings are
+/// `TypeSpec::Object` and `TypeSpec::ValueBase`, answered above. An arm here
+/// would be code no contract can execute; the test covers them through the
+/// refusal branch instead, and turns red if the lexer ever lets them through.
+fn predeclared_corba(n: &orbweaver_idl::ast::ScopedName) -> Option<TypeCode> {
+    match n.parts.as_slice() {
+        [m, t] if m == "CORBA" && t == "TypeCode" => Some(TypeCode::TypeCode),
+        [m, t] if m == "CORBA" && t == "Principal" => Some(TypeCode::Principal),
+        _ => None,
+    }
 }
 
 fn annotations_of(d: &Definition) -> &[orbweaver_idl::lex::Annotation] {
@@ -1928,6 +1970,100 @@ mod tests {
             matches!(i.operations["describe"].returns.resolve_alias(), TypeCode::Long),
             "{:?}",
             i.operations["describe"].returns
+        );
+    }
+
+    /// The rule the `TypeCode` fix above was one row of: **every name the front
+    /// end predeclares inside module `CORBA` either reaches a `TypeCode` this
+    /// registry means, or is refused.** Never `Void`.
+    ///
+    /// `corba_typecode_is_not_void` pinned one entry of
+    /// [`orbweaver_idl::sema::PREDECLARED_CORBA`] and left its three
+    /// neighbours unmeasured, and one of them — `Principal`, the next line of
+    /// the same table — was landing on exactly the `void` that test's own
+    /// docstring calls out. A member typed `void` marshals zero bytes, so a
+    /// peer writing a Principal handed us nothing and we mis-parsed everything
+    /// after it; both emitters produced it (`("who", "who", "void")` in Python,
+    /// `pub who: ()` in Rust) and no gate was red.
+    ///
+    /// So the test iterates the table rather than naming an entry, and a row
+    /// added there without a row in [`predeclared_corba`] fails here. Two of
+    /// the four cannot be spelled as a scoped name at all — `object` and
+    /// `valuebase` are [`orbweaver_idl::lex::KEYWORDS`] — and a refusal is an
+    /// acceptable answer under the rule, so the assertion is on the *pair*:
+    /// parsed implies not-`Void`. The day the lexer admits those spellings this
+    /// goes red instead of the wire going quiet.
+    ///
+    /// *한 줄만 고정한 테스트는 그 옆줄을 재지 않는다. 그래서 표를 순회한다.*
+    #[test]
+    fn every_predeclared_corba_name_reaches_a_typecode_or_is_refused() {
+        let mut verdicts = Vec::new();
+        for (name, _) in orbweaver_idl::sema::PREDECLARED_CORBA {
+            let src = format!("module m {{ struct Holder {{ ::CORBA::{name} slot; }}; }};");
+            let Ok(spec) = orbweaver_idl::check(&src) else {
+                verdicts.push((*name, "refused by the front end".to_owned()));
+                continue;
+            };
+            let mut r = Registry::new();
+            r.load(&spec).expect("loads");
+            let Some(Entry::Type(TypeCode::Struct { members, .. })) = r.get("IDL:m/Holder:1.0")
+            else {
+                panic!("{name}: no struct");
+            };
+            let tc = &members[0].tc;
+            assert_ne!(
+                *tc,
+                TypeCode::Void,
+                "::CORBA::{name} is admitted by the front end and the registry called it \
+                 `void`, so a member of that type marshals zero bytes — give it an arm in \
+                 `predeclared_corba`, or refuse the name"
+            );
+            verdicts.push((*name, format!("{tc:?}")));
+        }
+        // The verdicts themselves, so the sweep's result is checked rather than
+        // described. Two answers and two refusals, and which is which is the
+        // part a reader of the table cannot work out from the table.
+        assert_eq!(
+            verdicts,
+            [
+                ("TypeCode", "TypeCode".to_owned()),
+                ("Object", "refused by the front end".to_owned()),
+                ("ValueBase", "refused by the front end".to_owned()),
+                ("Principal", "Principal".to_owned()),
+            ]
+        );
+    }
+
+    /// And the two that are refused as scoped names are carried by their
+    /// keyword spellings instead, so the refusal above costs a contract
+    /// nothing — the negative control for the branch this rule accepts.
+    #[test]
+    fn the_keyword_spellings_of_the_refused_two_are_not_void() {
+        let r = load("module m { struct Held { Object o; }; struct Kept { ValueBase v; }; };");
+        let Some(Entry::Type(TypeCode::Struct { members: held, .. })) = r.get("IDL:m/Held:1.0")
+        else {
+            panic!("no Held")
+        };
+        let Some(Entry::Type(TypeCode::Struct { members: kept, .. })) = r.get("IDL:m/Kept:1.0")
+        else {
+            panic!("no Kept")
+        };
+        assert!(matches!(held[0].tc, TypeCode::ObjRef { .. }), "{:?}", held[0].tc);
+        assert!(matches!(kept[0].tc, TypeCode::Value { .. }), "{:?}", kept[0].tc);
+    }
+
+    /// A user's own `Principal`, like a user's own `TypeCode`, keeps what they
+    /// declared: [`predeclared_corba`] matches the full name.
+    #[test]
+    fn a_users_own_principal_is_still_their_own() {
+        let r = load("module m { typedef string Principal; struct S { Principal who; }; };");
+        let Some(Entry::Type(TypeCode::Struct { members, .. })) = r.get("IDL:m/S:1.0") else {
+            panic!("no struct")
+        };
+        assert!(
+            matches!(members[0].tc.resolve_alias(), TypeCode::String(0)),
+            "{:?}",
+            members[0].tc
         );
     }
 

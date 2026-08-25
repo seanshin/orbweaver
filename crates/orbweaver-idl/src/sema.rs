@@ -166,6 +166,37 @@ pub fn analyse(spec: &Spec) -> Analysis {
     Analysis { scopes: a.scopes, diagnostics: a.diagnostics, deferred_wire }
 }
 
+/// The names this front end predeclares inside module `CORBA`, with the kind
+/// each is checked as.
+///
+/// **Admitting a name here is a promise the registry has to keep.** These are
+/// not `Definition`s: nothing declares them, so nothing derives a `TypeCode`
+/// for them, and every layer downstream has to have an arm keyed on the name
+/// itself. `::CORBA::TypeCode` did not, and fell to `void` — a member that
+/// marshals zero bytes where a peer writes a TypeCode — which was fixed in the
+/// registry and left `::CORBA::Principal`, predeclared on the next line of this
+/// very table, doing the same thing (measured 2026-08-25; the fixture is
+/// `corpus/golden/34-corba-principal.idl`). One row of a table was fixed and
+/// its neighbour was not, because the table was a literal inside one function
+/// and no other layer could enumerate it.
+///
+/// So it is public, and `orbweaver-registry` iterates it: for every entry, a
+/// member typed `::CORBA::<name>` must either fail to parse or reach a
+/// `TypeCode` the registry means — never `Void`. Two of the four fail to parse
+/// today, because `object` and `valuebase` are [`crate::lex::KEYWORDS`] and so
+/// cannot appear as the tail of a scoped name; that is a refusal, which the
+/// rule accepts, and the day it stops being true the registry test goes red
+/// rather than the wire going quiet.
+///
+/// *여기에 이름을 등록하는 것은 레지스트리가 지켜야 할 약속이다. 이 표가 한
+/// 함수 안의 리터럴이었기 때문에 한 줄만 고쳐지고 그 옆줄은 남았다.*
+pub const PREDECLARED_CORBA: &[(&str, SymbolKind)] = &[
+    ("TypeCode", SymbolKind::Native),
+    ("Object", SymbolKind::Interface),
+    ("ValueBase", SymbolKind::ValueType),
+    ("Principal", SymbolKind::Native),
+];
+
 /// A name reference held back until every declaration is known.
 ///
 /// IDL allows a type to be used before it is declared within the same scope,
@@ -197,12 +228,7 @@ impl Analyser {
     /// *is* legal has to resolve to something.
     fn install_corba_module(&mut self) {
         let corba = self.push_scope(0, "CORBA");
-        for (name, kind) in [
-            ("TypeCode", SymbolKind::Native),
-            ("Object", SymbolKind::Interface),
-            ("ValueBase", SymbolKind::ValueType),
-            ("Principal", SymbolKind::Native),
-        ] {
+        for &(name, kind) in PREDECLARED_CORBA {
             self.scopes[corba].symbols.insert(
                 name.to_lowercase(),
                 Symbol {
@@ -1488,10 +1514,27 @@ impl Analyser {
             // Only a native *written in the contract* reaches here. The
             // predeclared `::CORBA::TypeCode` and `::CORBA::Principal` are
             // `SymbolKind::Native` too, but they are not `Definition`s, so
-            // they never become a `WireDecl` and never acquire a cause — a
-            // struct member typed `::CORBA::TypeCode` is `tk_TypeCode`, which
-            // marshals perfectly well, and flagging it would be a false
-            // refusal. Asserted, not left to the shape of the code.
+            // they never become a `WireDecl` and never acquire a cause.
+            //
+            // For `::CORBA::TypeCode` that is right: the member is
+            // `tk_TypeCode`, which marshals perfectly well, and flagging it
+            // would be a false refusal. Asserted, not left to the shape of
+            // the code.
+            //
+            // For `::CORBA::Principal` it is **not** right, and this comment
+            // asserted it anyway — one sentence covering two names, half of it
+            // false, with nothing compiling either half. `Principal` was
+            // withdrawn from CORBA and has no wire form this version writes;
+            // the registry answers `TypeCode::Principal` (since 2026-08-25) and
+            // every marshalling layer refuses it by name, so a contract using
+            // it is refused at generation rather than served with a member that
+            // writes zero bytes. It is still not named by this rule, so S4 does
+            // not warn on it: making it a fifth family means giving the refusal
+            // one published head in `orbweaver-dynamic` and teaching both
+            // emitters to use it, and `crates/orbweaver-gen/tests/
+            // deferred_wire_agreement.rs` holds those two sets equal — so that
+            // is one change across three crates, not a line here.
+            // Recorded rather than half-done. See `corpus/golden/34`.
             Definition::Native(_) => {
                 decl.kind = "native";
                 decl.direct = Some((None, "native".into()));
