@@ -21,12 +21,26 @@ stub, the caller's shape is fixed before it runs. An agent discovers at runtime
 and composes calls it was never compiled against.
 
 **And this project already answers a large part of that.** SIDL's vocabulary,
-measured 2026-08-25, is nine keys:
+measured 2026-08-25, is **eight** keys:
 
 ```
-ai_desc  ai_effect  ai_authz  ai_idempotent  ai_unit
-ai_pii   ai_sensitivity  ai_example  ai_precond
+ai_desc  ai_effect  ai_authz  ai_idempotent
+ai_unit  ai_pii   ai_example  ai_precond
 ```
+
+> **Corrected 2026-08-25, before this document's first commit.** The paragraph
+> above said *nine* and listed `ai_sensitivity`. Both are wrong, and the way
+> they are wrong is worth keeping: `contract::VOCABULARY` is declared
+> `[&str; 8]` — **the type states the count** — and `ai_sensitivity`'s only
+> occurrence in `crates/` is as the test input for the rule
+> `contract/inference-promotes-into-nothing`. It is the suite's canonical
+> example of a key **outside** the vocabulary, and this document had promoted
+> it into one. A count written from recall next to a constant that declares it
+> is the same defect §5 exists to prevent, arriving in the sentence that
+> introduces §5.
+>
+> *이 문서의 첫 커밋 전에 정정. `ai_sensitivity`는 어휘가 아니라, 어휘 **밖**
+> 키의 표준 예시다 — 그것을 어휘로 올려놓았다.*
 
 with **fourteen contract rules** enforcing them (`contract/effect-unknown`,
 `gated-without-authz`, `pii-without-authz`, `read-only-mutating-name`,
@@ -42,7 +56,7 @@ document says "this is what we did about the model not fitting."
 
 ## 2. The measurement that decides where to start
 
-**Two of the nine keys are inert.** `ai_example` and `ai_precond` are in the
+**Two of the eight keys are inert.** `ai_example` and `ai_precond` are in the
 known-key list — so writing one does not trip `unknown key` — and:
 
 - **no consumer reads either.** Every occurrence in `crates/` is the vocabulary
@@ -55,9 +69,21 @@ most lacks — and both are empty and unread. **That is where this starts**, and
 it starts by making what exists reach the prompt rather than by inventing more
 vocabulary.
 
-*아홉 중 둘이 불활성이다. 프롬프트가 가장 필요로 하고 타입 계약이 가장 못 담는
+*여덟 중 둘이 불활성이다. 프롬프트가 가장 필요로 하고 타입 계약이 가장 못 담는
 것 둘 — **예시**와 **선행조건** — 이 이미 자리를 갖고 있고, 비어 있으며, 아무도
 읽지 않는다.*
+
+**And two more are half-inert, which P1 measured and this section had not.**
+`ai_unit` and `ai_idempotent` are **checkers only**: a contract rule warns when
+one is misapplied, and nothing converts, renders, validates or retries on the
+value. So the vocabulary's live half is four — `ai_desc`, `ai_effect`,
+`ai_authz`, `ai_pii` — and the inert-to-live ratio is the finding, not the two
+keys §6's P1 was scoped to. *A batch scoped to the two keys it was handed would
+have fixed two keys*; the rule in CLAUDE.md that says to re-measure the
+neighbours is why the other two are named here at all.
+
+*둘이 더 반쯤 불활성이다 — `ai_unit`과 `ai_idempotent`는 **검사기 전용**이다.
+살아 있는 절반은 넷뿐이고, 그 비율이 발견이지 넘겨받은 키 둘이 아니다.*
 
 ## 3. The renderer already exists and is where the extension lands
 
@@ -147,7 +173,7 @@ contract, which makes it the rare annotation a compiler can hold to account.
 ### P4 — name what already exists (documents)
 
 One section, in `ARCHITECTURE.md` or `PLAN.md`, saying plainly: *this is what
-was done about the CORBA model not fitting an agent caller* — SIDL's nine keys,
+was done about the CORBA model not fitting an agent caller* — SIDL's eight keys,
 the fourteen contract rules, the chain, the dry run, the handle TTL, AnyJSON.
 Today a reader has to assemble it from five documents and would not know it was
 one answer.
