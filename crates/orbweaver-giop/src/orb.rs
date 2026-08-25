@@ -77,10 +77,14 @@
 //! 표를 갖고 있지 않았다. 이 모듈이 그 표다 — CORBA 3.4 §8.5.2가 정의한 평평한
 //! 단일 계층 이름 공간이고, 없는 이름은 **이름을 대며** 거절한다.*
 
+pub mod config;
+
 use std::collections::BTreeMap;
 
 use crate::Ior;
 use crate::naming::ObjectUrl;
+
+pub use config::{ConfigError, OrbConfig};
 
 /// The `ObjectId`s CORBA 3.4 §8.5.2 reserves, in the order the specification
 /// lists them.
@@ -228,14 +232,62 @@ impl std::error::Error for InvalidName {}
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Orb {
     initial: BTreeMap<String, Ior>,
+    config: OrbConfig,
 }
 
 impl Orb {
-    /// An ORB that resolves nothing. See *Nothing registers itself* in the
-    /// module docs: this is not a stub, it is the answer until a deployment
-    /// registers something.
+    /// An ORB that resolves nothing and changes no limit. See *Nothing
+    /// registers itself* in the module docs: this is not a stub, it is the
+    /// answer until a deployment registers something.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An ORB carrying a deployment's configuration (D019 step 3).
+    ///
+    /// Every `-ORBInitRef` in the configuration is resolved with
+    /// [`Orb::string_to_object`] and registered, **all of them or none**: the
+    /// table is built to one side and only moved in once every entry has been
+    /// read, so a configuration with one bad URL in it leaves no half-populated
+    /// ORB behind. That is the property CORBA 3.4 §8.5.1 requires of
+    /// `ORB_init`'s argument handling and the one the MCP `--config` batch
+    /// proved is worth having.
+    ///
+    /// The seven-plus-one numbers are held, not applied. Applying them means
+    /// handing them to a `Connection`, a `Server` and a `Pool`, which is the
+    /// ORB owning the transport — **D019 step 4**, and the step the §5 shape
+    /// approval gates. Until then a caller reads them off
+    /// [`Orb::config`] and applies what it constructs itself; the numbers now
+    /// have one home, which is what this step was for.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::InitRefUnreadable`], naming the `ObjectId`, the URL and
+    /// why the URL could not be turned into a reference.
+    pub fn with_config(config: OrbConfig) -> std::result::Result<Self, ConfigError> {
+        let mut orb = Self { initial: BTreeMap::new(), config };
+        let mut table = BTreeMap::new();
+        for (object_id, url) in orb.config.initial_references() {
+            let ior =
+                orb.string_to_object(url).map_err(|cause| ConfigError::InitRefUnreadable {
+                    object_id: object_id.clone(),
+                    url: url.clone(),
+                    reason: cause.to_string(),
+                })?;
+            // `OrbConfig::from_orb_args` already refuses a repeated ObjectId,
+            // so this cannot collide; inserting into a table of its own is what
+            // makes "all of them or none" a property of the code rather than a
+            // claim.
+            table.insert(object_id.clone(), ior);
+        }
+        orb.initial = table;
+        Ok(orb)
+    }
+
+    /// The deployment's answers to the numbers this ORB owns. Defaults to
+    /// today's constants for anything unset — see [`OrbConfig`].
+    pub fn config(&self) -> &OrbConfig {
+        &self.config
     }
 
     /// `ORB::register_initial_reference` (CORBA 3.4 §16.10.1) — makes `id`
@@ -880,6 +932,94 @@ mod tests {
             assert!(s.starts_with("IOR:"), "§8.2.2 asks for the interoperable form, got {s:?}");
             assert_eq!(orb.string_to_object(&s).unwrap(), obj, "round trip failed for {s}");
         }
+    }
+
+    /// D019 step 3, end to end: a deployment's `-ORBInitRef` arguments become
+    /// entries in the table, so `corbaloc:rir:NameService` answers **without a
+    /// line of Rust having named the service.**
+    #[test]
+    fn orb_init_ref_arguments_populate_the_table() {
+        let argv = [
+            "serve",
+            "-ORBInitRef",
+            "NameService=corbaloc::h.test:2809/NameService",
+            "-ORBInitRef",
+            "InterfaceRepository=corbaloc:iiop:1.2@h.test:4001/IFR",
+            "--verbose",
+        ];
+        let (config, rest) = OrbConfig::from_orb_args(&argv).unwrap();
+        assert_eq!(rest, ["serve", "--verbose"], "§8.5.1 removes what it recognised");
+
+        let orb = Orb::with_config(config).unwrap();
+        assert_eq!(orb.list_initial_services(), ["InterfaceRepository", "NameService"]);
+
+        let ns = orb.string_to_object("corbaloc:rir:NameService").unwrap();
+        assert_eq!(ns.profiles[0].host, "h.test");
+        assert_eq!(ns.profiles[0].port, 2809);
+        assert_eq!(ns.profiles[0].object_key, b"NameService");
+
+        let ifr = orb.resolve_initial_reference("InterfaceRepository").unwrap();
+        assert_eq!(ifr.profiles[0].port, 4001);
+        assert_eq!(ifr.profiles[0].version, Version::V1_2);
+
+        // A name nobody configured is still refused by name.
+        assert!(
+            orb.resolve_initial_reference("TradingService")
+                .unwrap_err()
+                .to_string()
+                .contains("\"TradingService\"")
+        );
+    }
+
+    /// An `IOR:` blob is one of the forms §8.5.3.2 shows, and it goes through
+    /// the same `string_to_object` — which is why step 2 came first.
+    #[test]
+    fn an_init_ref_may_be_a_stringified_ior() {
+        let published = ior(b"NS");
+        let hex = published.to_stringified().unwrap();
+        let (config, _) =
+            OrbConfig::from_orb_args(&["-ORBInitRef".to_owned(), format!("NameService={hex}")])
+                .unwrap();
+        let orb = Orb::with_config(config).unwrap();
+        assert_eq!(orb.string_to_object("corbaloc:rir:").unwrap(), published);
+    }
+
+    /// Refused whole: the second of two `-ORBInitRef`s cannot be read, and the
+    /// **first one is not registered either**. There is no half-configured ORB.
+    #[test]
+    fn a_configuration_with_one_bad_reference_registers_nothing() {
+        let (config, _) = OrbConfig::from_orb_args(&[
+            "-ORBInitRef",
+            "NameService=corbaloc::good.test/NameService",
+            "-ORBInitRef",
+            "InterfaceRepository=not a reference at all",
+        ])
+        .unwrap();
+        let err = Orb::with_config(config).unwrap_err();
+        assert!(matches!(err, ConfigError::InitRefUnreadable { .. }));
+        let said = err.to_string();
+        assert!(said.contains("InterfaceRepository"), "names the ObjectId: {said}");
+        assert!(said.contains("not a reference at all"), "names the URL: {said}");
+        assert!(said.contains("nothing was registered"), "says what it did: {said}");
+        assert!(said.contains("§8.2.2.2"), "carries string_to_object's own reason: {said}");
+    }
+
+    /// The numbers have one home, and an unconfigured ORB answers exactly the
+    /// constants the crate used before any of this existed.
+    #[test]
+    fn the_configuration_travels_with_the_orb_and_defaults_to_todays_values() {
+        assert!(Orb::new().config().is_empty());
+        assert_eq!(Orb::new().config().max_message_size(), crate::DEFAULT_MAX_MESSAGE_SIZE);
+
+        let (config, _) =
+            OrbConfig::from_orb_args(&["-ORBmaxMessageSize", "4096", "-ORBmaxForwardHops", "2"])
+                .unwrap();
+        let orb = Orb::with_config(config).unwrap();
+        assert_eq!(orb.config().max_message_size(), 4096);
+        assert_eq!(orb.config().max_forward_hops(), 2);
+        // …and everything not named stayed where it was.
+        assert_eq!(orb.config().stop_poll(), crate::server::STOP_POLL);
+        assert_eq!(orb.config().max_connections(), crate::server::DEFAULT_MAX_CONNECTIONS);
     }
 
     /// A `corbaname:` URL carrying a name denotes the object bound under it,
