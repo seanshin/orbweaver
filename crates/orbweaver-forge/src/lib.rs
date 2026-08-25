@@ -173,6 +173,24 @@ pub struct Finding {
 }
 
 impl Finding {
+    /// The measured position, or `None` when none was measured.
+    ///
+    /// `line == 0` is the documented sentinel for "about the file as a whole"
+    /// (see [`Finding::line`]), and this method is its one reader. The
+    /// renderers used to read the fields directly, and two of them rendered
+    /// the sentinel as a position — [`Report::repair_prompt`] told a generator
+    /// to act at `line 0, column 0`, a place nothing was written at, in the
+    /// one string it is told to act on, while `sidl-validate`'s printer
+    /// (via [`written_in`]) already refused it. A finding with no position
+    /// renders its source identifier instead, and the decision of *which*
+    /// finding that is lives here so the renderers cannot drift apart again.
+    ///
+    /// *0번 줄은 위치가 아니라 "측정된 위치 없음"이라는 뜻이고, 그 판독은 여기
+    /// 한 곳에 산다.*
+    pub fn position(&self) -> Option<(u32, u32)> {
+        (self.line != 0).then_some((self.line, self.column))
+    }
+
     /// The finding rendered with `place` in front of it — and **no second
     /// position**.
     ///
@@ -186,11 +204,17 @@ impl Finding {
     ///
     /// `place` is whatever the caller can point at: `file:line:column`, or just
     /// the file when the finding is about the file as a whole (`line == 0`) and
-    /// there is no line to name.
+    /// there is no line to name. An empty `place` writes no prefix at all — a
+    /// whole-file finding with an empty source has nothing to point at, and a
+    /// leading `: ` would point at nothing with a colon.
     ///
     /// *위치는 한 번만 찍는다. 렌더러가 하나이기 때문이다.*
     pub fn rendered_at(&self, place: &str) -> String {
-        let mut s = format!("{place}: {}: {} [{}]", self.severity.label(), self.message, self.rule);
+        let mut s = if place.is_empty() {
+            format!("{}: {} [{}]", self.severity.label(), self.message, self.rule)
+        } else {
+            format!("{place}: {}: {} [{}]", self.severity.label(), self.message, self.rule)
+        };
         if let Some(fix) = &self.fix {
             s.push_str(&format!("\n    fix: {fix}"));
         }
@@ -200,7 +224,14 @@ impl Finding {
 
 impl std::fmt::Display for Finding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.rendered_at(&format!("{}:{}", self.line, self.column)))
+        // A position only when one was measured ([`Finding::position`]); a
+        // whole-file finding's place is its source identifier, which is all
+        // a caller holding neither file nor unit can point at.
+        let place = match self.position() {
+            Some((line, column)) => format!("{line}:{column}"),
+            None => self.source.clone(),
+        };
+        write!(f, "{}", self.rendered_at(&place))
     }
 }
 
@@ -273,7 +304,18 @@ impl Report {
                 out.push_str(&format!("  {fix}\n"));
             }
             for f in findings {
-                out.push_str(&format!("    line {}, column {}: {}\n", f.line, f.column, f.source));
+                match f.position() {
+                    Some((line, column)) => {
+                        out.push_str(&format!("    line {line}, column {column}: {}\n", f.source))
+                    }
+                    // No position was measured: `line 0, column 0` names the
+                    // wrong place in the one string a generator is told to act
+                    // on. The occurrence names what was measured — the source
+                    // identifier — or nothing, when the message above already
+                    // is the whole finding.
+                    None if f.source.is_empty() => {}
+                    None => out.push_str(&format!("    {}\n", f.source)),
+                }
             }
         }
         out
@@ -380,22 +422,17 @@ pub fn validate_source_for(src: Source<'_>, search: &SearchPath, wire: WireGate)
 /// Fed to `locate`, that 0 became line 1 of the root, a position nothing was
 /// written at. [`locate_findings`] had always skipped line 0 for exactly this
 /// reason and `sidl-validate`'s printer, written earlier, had not; two callers
-/// of one rule is how they drift, so there is now one.
+/// of one rule is how they drift, so there is now one — and the sentinel's
+/// reading itself lives in [`Finding::position`], for the renderers that hold
+/// no [`Unit`](orbweaver_idl::include::Unit) to map through.
 ///
 /// *0번 줄은 위치가 아니라 "파일 전체"라는 뜻이다. 스팬으로 넘기면 1번 줄이 된다.*
 pub fn written_in<'a>(
     finding: &Finding,
     unit: &'a orbweaver_idl::include::Unit,
 ) -> Option<orbweaver_idl::include::Location<'a>> {
-    if finding.line == 0 {
-        return None;
-    }
-    Some(unit.locate(orbweaver_idl::lex::Span {
-        start: 0,
-        end: 0,
-        line: finding.line,
-        column: finding.column,
-    }))
+    let (line, column) = finding.position()?;
+    Some(unit.locate(orbweaver_idl::lex::Span { start: 0, end: 0, line, column }))
 }
 
 /// Maps every finding's position back to the file its line was written in.
@@ -1240,6 +1277,61 @@ mod tests {
         let r = validate_against(proposed, released);
         assert!(r.is_ok(), "{:?}", r.findings);
         assert!(r.findings.iter().any(|f| f.rule == "evolution/server-first"));
+    }
+
+    /// `line == 0` is the sentinel for "no position was measured", and the
+    /// repair prompt used to render it anyway — `line 0, column 0`, a position
+    /// that names the wrong place, in the one string a generator is told to
+    /// act on. A finding with no position names its source identifier instead,
+    /// exactly as `sidl-validate`'s printer already named the file.
+    #[test]
+    fn a_finding_without_a_position_renders_its_source_and_no_position() {
+        let released = "module m { interface I { long f(); }; };";
+        let proposed = "module m { interface I { }; };";
+        let r = validate_against(proposed, released);
+        assert!(!r.is_ok(), "{:?}", r.findings);
+        let f = r.findings.iter().find(|f| f.rule.starts_with("evolution/")).expect("reported");
+        assert_eq!(f.line, 0, "the shape under test: a whole-file finding");
+        assert!(!f.source.is_empty(), "an evolution finding's source is the changed id");
+        let prompt = r.repair_prompt();
+        assert!(!prompt.contains("line 0"), "the sentinel is not a position:\n{prompt}");
+        assert!(
+            prompt.contains(&format!("    {}\n", f.source)),
+            "the occurrence names the source instead:\n{prompt}"
+        );
+        // `Display` holds no file to name either, and did the same as `0:0:`.
+        let shown = format!("{f}");
+        assert!(!shown.contains("0:0"), "{shown}");
+        assert!(shown.starts_with(&format!("{}: ", f.source)), "{shown}");
+    }
+
+    /// The other half of the rule: a measured position is still rendered.
+    #[test]
+    fn a_positioned_finding_still_names_its_line_and_column() {
+        let r = validate(
+            "module m { struct Position { double x; }; struct T { Position position; }; };",
+        );
+        let f = r.findings.iter().find(|f| f.rule.contains("clash")).expect("clash reported");
+        assert!(f.line > 0, "the shape under test: a positioned finding");
+        let prompt = r.repair_prompt();
+        assert!(
+            prompt.contains(&format!("line {}, column {}: {}", f.line, f.column, f.source)),
+            "{prompt}"
+        );
+        assert!(format!("{f}").starts_with(&format!("{}:{}: ", f.line, f.column)), "{f}");
+    }
+
+    /// A whole-file finding with an empty source — `released-unreadable`,
+    /// `registry` — has nothing to point at: its message is the whole finding,
+    /// so the occurrence line is omitted rather than left dangling.
+    #[test]
+    fn a_whole_file_finding_with_no_identifier_is_its_message_alone() {
+        let r = validate_against("module m { struct S { long a; }; };", "not idl at all");
+        let f = r.findings.iter().find(|f| f.rule == RELEASED_UNREADABLE).expect("reported");
+        assert_eq!((f.line, f.source.as_str()), (0, ""), "the shape under test");
+        let prompt = r.repair_prompt();
+        assert!(!prompt.contains("line 0"), "{prompt}");
+        assert!(!prompt.contains("\n    \n"), "no dangling occurrence line:\n{prompt}");
     }
 
     /// A file that does not parse must not also be reported against a baseline:
