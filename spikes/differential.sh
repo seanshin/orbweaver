@@ -11,11 +11,18 @@
 # programs whose text output we read, and are never linked into or shipped with
 # Orbweaver. See docs/PLAN.md section 10.
 #
-# usage: differential.sh [--require omniidl,jacorb_idl,tao_idl]
+# usage: differential.sh [--require omniidl,jacorb_idl,tao_idl] [--record]
 #
 # Absent oracles are SKIPPED and counted as unmeasured, except where --require
 # names them, in which case absence is a failure. CI requires two; a laptop
 # often has one.
+#
+# `--record` writes what every file's oracles said to
+# `corpus/differential-results.tsv`, which turns this run from an event into
+# data. It is what makes "has this corpus file ever been through both front
+# ends" answerable by something that has no oracle installed — see
+# `crates/orbweaver-test/tests/every_corpus_file_met_both_front_ends.rs`, which
+# is the gate, and `--record`'s own refusal below for why it insists on both.
 #
 # Written for bash 3.2, which is what macOS ships: no associative arrays.
 set -uo pipefail
@@ -23,9 +30,11 @@ cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 
 REQUIRED=""
+RECORD=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --require) REQUIRED="${2:-}"; shift 2 ;;
+    --record) RECORD=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -171,6 +180,12 @@ examine() {
   if [ "$us" -ne "$want" ]; then
     ours_wrong="$ours_wrong|$base — we say $(verdict_word $us), filed as $expected, oracles$votes"
   fi
+
+  # One line per file for `--record`, written whether or not anything diverged:
+  # the record's job is to say the file *was measured*, and a file both oracles
+  # agree about is exactly the one nobody would remember to write down.
+  printf '%s\t%s\t%s\t%s\n' "$base" "$expected" "$(verdict_word $us)" \
+    "$(printf '%s' "$votes" | sed 's/^ //; s/ /,/g')" >> "$TMP/records"
 }
 
 for f in $files_accept; do examine "$f" accept; done
@@ -222,6 +237,47 @@ if [ -f "$DIVERGENCES" ]; then
     echo "  FAIL $(count "$stale") recorded divergence(s) no longer happen — delete the entry:"
     show "$stale"
     fails=$((fails+1))
+  fi
+fi
+
+# ── The record ───────────────────────────────────────────────────────────────
+# Only ever written with both front ends present. A record produced from one
+# oracle would say a file was measured while nothing had asked the second, and
+# the gate that reads it cannot tell the two apart — which is the hole this
+# whole record exists to close, reopened one directory further along.
+RESULTS="$ROOT/corpus/differential-results.tsv"
+if [ "$RECORD" -eq 1 ]; then
+  missing=""
+  for o in omniidl jacorb_idl; do
+    case " $ORACLES " in *" $o "*) ;; *) missing="$missing $o" ;; esac
+  done
+  if [ -n "$missing" ]; then
+    echo "  FAIL --record needs both front ends and is missing:$missing"
+    echo "       (omniidl: brew install omniorb · jacorb_idl: spikes/jacorb/setup.sh --jars-only)"
+    fails=$((fails+1))
+  else
+    {
+      echo "# What each corpus file's front ends said, written by"
+      echo "# \`spikes/differential.sh --record\`. Generated: do not hand-edit."
+      echo "#"
+      echo "# This exists so that \"has this file ever been through both front ends\""
+      echo "# can be answered by something with no oracle installed. The gate over it"
+      echo "# is \`crates/orbweaver-test/tests/every_corpus_file_met_both_front_ends.rs\`,"
+      echo "# and it checks **membership only** — that every file the differential"
+      echo "# enumerates has a row and every row names a file that still exists. It"
+      echo "# does not check that the verdicts below are today's; the differential"
+      echo "# itself is the only thing that can, and it rewrites this file whole."
+      echo "#"
+      echo "# 오라클이 설치되지 않은 곳에서도 \"이 파일이 두 프런트엔드를 거쳤는가\"를"
+      echo "# 답할 수 있게 하는 기록이다. 게이트는 **소속만** 검사한다 — 아래 판정이"
+      echo "# 오늘의 것인지는 differential 자신만 말할 수 있고, 매번 전체를 다시 쓴다."
+      echo "#"
+      echo "# Columns: file <TAB> filed as <TAB> our verdict <TAB> each oracle's verdict"
+      echo "# Measured: $(date +%Y-%m-%d) · oracles:$ORACLES"
+      echo
+      sort "$TMP/records"
+    } > "$RESULTS"
+    echo "  ok   recorded $checked file(s) in corpus/differential-results.tsv"
   fi
 fi
 

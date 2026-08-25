@@ -606,21 +606,30 @@ fn label_literal(label: &[u8], disc: &TypeCode) -> String {
 /// otherwise emit cleanly and reference a type that was never written, moving
 /// the failure from the generator's report to the consumer's compiler — with
 /// the §4.4 reason lost on the way.
-fn representable(tc: &TypeCode, visiting: &mut Vec<String>) -> Result<(), String> {
+///
+/// **What has a static mapping is [`rust_type`]'s question, asked rather than
+/// answered again.** This function used to carry its own match over the four
+/// families the wire cannot carry, with everything else falling through a
+/// `_ => Ok(())` — a second copy of a list `rust_type` already owns, and the
+/// two copies did not agree. `rust_type` ends in a catch-all that refuses
+/// anything it has no arm for; this one ended in a catch-all that *cleared*
+/// it. `TypeCode::Principal` landed in the gap between them, so
+/// `struct Envelope { ::CORBA::Principal sender; }` was skipped with its
+/// reason while `struct Manifest { Envelope sealed; }` was emitted referring
+/// to it, and the generated crate did not compile (`corpus/golden/34`,
+/// measured 2026-08-25 — the file had been in the corpus since `0b8a387`).
+///
+/// Asking the mapper at every node is what makes that gap unrepresentable
+/// rather than detectable: there is one list and one catch-all, so a
+/// `TypeCode` family the mapper cannot map cascades from the day it exists
+/// and nobody has a second list to keep in step.
+fn representable(tc: &TypeCode, cx: &Cx<'_>, visiting: &mut Vec<String>) -> Result<(), String> {
+    // The node itself. `rust_type` names an aggregate by path and never looks
+    // inside one, which is what the recursion below adds.
+    rust_type(tc, cx)?;
     match tc {
-        TypeCode::Fixed { digits, scale } => Err(deferred_fixed(*digits, *scale)),
-        // The other two of §4.4's three, cascading exactly as `fixed` does.
-        // They did not, for six phases, because the registry handed this
-        // function a `TypeCode::ObjRef` for both and an object reference is
-        // representable — the cascade was correct and its input was not.
-        TypeCode::Value { name, id, .. } => Err(deferred_value(name, id)),
-        TypeCode::AbstractInterface { name, id, .. } => Err(deferred_abstract(name, id)),
-        // The fourth thing the wire cannot carry, cascading the same way and
-        // for a stronger reason — see [`unmarshallable_native`]. It reached
-        // here as a `TypeCode::ObjRef` until 2026-08-21, which is representable.
-        TypeCode::Native { name, id, .. } => Err(unmarshallable_native(name, id)),
         TypeCode::Sequence { element, .. } | TypeCode::Array { element, .. } => {
-            representable(element, visiting)
+            representable(element, cx, visiting)
         }
         TypeCode::Struct { id, members, .. } | TypeCode::Except { id, members, .. } => {
             if visiting.iter().any(|v| v == id) {
@@ -628,7 +637,8 @@ fn representable(tc: &TypeCode, visiting: &mut Vec<String>) -> Result<(), String
             }
             visiting.push(id.clone());
             let r = members.iter().try_for_each(|m| {
-                representable(&m.tc, visiting).map_err(|why| format!("member {}: {why}", m.name))
+                representable(&m.tc, cx, visiting)
+                    .map_err(|why| format!("member {}: {why}", m.name))
             });
             visiting.pop();
             r
@@ -639,7 +649,7 @@ fn representable(tc: &TypeCode, visiting: &mut Vec<String>) -> Result<(), String
             }
             visiting.push(id.clone());
             let r = cases.iter().try_for_each(|c| {
-                representable(&c.tc, visiting).map_err(|why| format!("case {}: {why}", c.name))
+                representable(&c.tc, cx, visiting).map_err(|why| format!("case {}: {why}", c.name))
             });
             visiting.pop();
             r
@@ -649,7 +659,7 @@ fn representable(tc: &TypeCode, visiting: &mut Vec<String>) -> Result<(), String
                 return Ok(());
             }
             visiting.push(id.clone());
-            let r = representable(aliased, visiting);
+            let r = representable(aliased, cx, visiting);
             visiting.pop();
             r
         }
@@ -690,7 +700,7 @@ pub(crate) fn abstract_name(registry: &Registry, id: &str) -> String {
     qualified.rsplit("::").next().unwrap_or(qualified).to_owned()
 }
 
-fn interface_representable(registry: &Registry, id: &str) -> Result<(), String> {
+fn interface_representable(registry: &Registry, id: &str, cx: &Cx<'_>) -> Result<(), String> {
     let Some(entry) = registry.interface(id) else {
         return Ok(());
     };
@@ -706,10 +716,10 @@ fn interface_representable(registry: &Registry, id: &str) -> Result<(), String> 
     // interface whose base contributes a deferred type.
     let (operations, attributes) = resolved_members(registry, id);
     for (name, sig) in &operations {
-        representable(&sig.returns, &mut Vec::new())
+        representable(&sig.returns, cx, &mut Vec::new())
             .map_err(|why| format!("operation {name} returns: {why}"))?;
         for p in &sig.params {
-            representable(&p.tc, &mut Vec::new())
+            representable(&p.tc, cx, &mut Vec::new())
                 .map_err(|why| format!("operation {name}, parameter {}: {why}", p.name))?;
         }
         // The skeleton marshals raised exceptions, so a `fixed` reachable only
@@ -721,12 +731,13 @@ fn interface_representable(registry: &Registry, id: &str) -> Result<(), String> 
                     "operation {name} raises {ex}, which the registry has no type for"
                 ));
             };
-            representable(tc, &mut Vec::new())
+            representable(tc, cx, &mut Vec::new())
                 .map_err(|why| format!("operation {name} raises {ex}: {why}"))?;
         }
     }
     for (name, a) in &attributes {
-        representable(&a.tc, &mut Vec::new()).map_err(|why| format!("attribute {name}: {why}"))?;
+        representable(&a.tc, cx, &mut Vec::new())
+            .map_err(|why| format!("attribute {name}: {why}"))?;
     }
     Ok(())
 }
@@ -749,11 +760,11 @@ pub fn emit(registry: &Registry, root: &str) -> Generated {
         let (module, _name) = path.split_at(path.len() - 1);
         let code = match registry.get(id) {
             Some(Entry::Type(tc)) => {
-                representable(tc, &mut Vec::new()).and_then(|()| emit_type(id, tc, cx))
+                representable(tc, cx, &mut Vec::new()).and_then(|()| emit_type(id, tc, cx))
             }
             // One contract, both halves: the caller's stub and the servant's
             // skeleton are emitted together, from the same resolved members.
-            Some(Entry::Interface(_)) => interface_representable(registry, id).and_then(|()| {
+            Some(Entry::Interface(_)) => interface_representable(registry, id, cx).and_then(|()| {
                 let stub = emit_interface(registry, id, cx)?;
                 let skel = skeleton::emit_skeleton(registry, id, cx)?;
                 Ok(format!("{stub}\n{skel}"))
@@ -1773,6 +1784,93 @@ mod tests {
             }
         }
         assert!(seen > 0, "corpus/services must not be empty");
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// Nothing either emitter writes may name an item it skipped.
+    ///
+    /// The property behind the cascade, stated where the cascade cannot reach
+    /// it: `representable` and `crossable` decide *whether* to skip, and this
+    /// asks the only question a consumer ever asks — is every name in the
+    /// output a name the output declares. It is deliberately blind to *why*
+    /// something was skipped, so it holds for a family nobody has thought of
+    /// yet, which is the class it was written for.
+    ///
+    /// It could not have been written from the corpus alone. The two
+    /// exemptions above let a file that is allowed to skip skip **anything**,
+    /// so `34-corba-principal` generated a `Manifest` referring to a skipped
+    /// `Envelope` and this test suite stayed green for three days; the Rust
+    /// half was caught by the harness's out-of-workspace `cargo build` and the
+    /// Python half by nothing at all — Python has no compiler, and a
+    /// descriptor naming an undeclared id fails at the first call.
+    ///
+    /// Each half asks the emitter's own namer — `rust_path` and `descriptor`
+    /// — rather than a retyped path rule, because a retyped one drifts on the
+    /// day a name needs escaping differently.
+    #[test]
+    fn no_emitted_item_names_an_item_that_was_skipped() {
+        let corpora = ["../../corpus/golden", "../../corpus/services"];
+        let mut seen = 0usize;
+        let mut failures = Vec::new();
+        for dir in corpora {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
+            for entry in std::fs::read_dir(&root).expect("corpus") {
+                let path = entry.expect("entry").path();
+                if path.extension().is_none_or(|x| x != "idl") {
+                    continue;
+                }
+                let src = std::fs::read_to_string(&path).expect("read");
+                let Ok(spec) = orbweaver_idl::parse(&src) else { continue };
+                let mut r = Registry::new();
+                if r.load(&spec).is_err() {
+                    continue;
+                }
+                seen += 1;
+                let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+
+                // Rust. Cross-references are absolute `crate::…` paths, so the
+                // path the emitter would have written for a skipped id is
+                // exactly what must not occur — outside the `// skipped` lines,
+                // which name the id and not the path.
+                let g = emit(&r, "g");
+                let cx = &Cx { root: "g", names: name_table(&r) };
+                let body: String = g
+                    .source
+                    .lines()
+                    .filter(|l| !l.trim_start().starts_with("// skipped "))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                for (id, why) in &g.skipped {
+                    let path = rust_path(id, cx);
+                    if body.contains(&path) {
+                        failures.push(format!("{stem}: rust names {path}, skipped as \"{why}\""));
+                    }
+                }
+
+                // Python. Descriptors name types by repository id, so the
+                // needle is the descriptor itself rather than the bare id:
+                // `("ref", id)` resolves to a class the package must have
+                // declared, while `("objref", id)` needs none — a reference to
+                // an interface we cannot generate a stub for is still an IOR,
+                // and `corpus/golden/34`'s `struct Desk { Gateway agent; }`
+                // exists to say so. Taken from `descriptor` rather than
+                // spelled here, so the day the descriptor form changes this
+                // follows it instead of quietly matching nothing.
+                let p = python::emit_python(&r, "g");
+                for (id, why) in &p.skipped {
+                    let needle = python::descriptor(&TypeCode::Recursive(id.clone()))
+                        .expect("a recursion marker always has a descriptor");
+                    for (file, text) in &p.files {
+                        if text.contains(&needle) {
+                            failures.push(format!(
+                                "{stem}: python {file} names {needle}, skipped as \"{why}\""
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(seen > 0, "the corpora must not be empty");
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
