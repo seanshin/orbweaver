@@ -163,6 +163,45 @@
 //!    account and so [`ChannelStats::split_adds_up`] cannot be disturbed by
 //!    it — `stop`'s [`DropCause::Stop`] tally counts proxy *queues*, and this
 //!    proxy has none.
+//! 4. **A disconnect stops the asking, and "stops" carries a stated bound
+//!    rather than a hope.** `disconnect_pull_consumer` clears the proxy's flag
+//!    under the state lock and returns. It does **not** wait for the source
+//!    thread, and that was decided rather than overlooked: the thread it would
+//!    wait for is blocked in an outbound call to the very supplier whose
+//!    process is free to be the one calling the disconnect, so a disconnect
+//!    that waited would be rule 1 of the fan-out section seen in a mirror — a
+//!    servant held for an outbound timeout by the peer it is answering, with
+//!    no timeout of its own to break it. A disconnect that can cost
+//!    [`DEFAULT_PUSH_TIMEOUT`] is a worse property than a stray call. What is
+//!    guaranteed instead is this, stated exactly because a stray call has
+//!    already cost one CI failure at each end of it:
+//!
+//!    > The source loop's **commit point** is
+//!    > [`ChannelState::source_still_wanted`], taken under the state lock with
+//!    > no I/O between it and the request going out.
+//!    > `disconnect_pull_consumer` and [`ChannelHandle::stop`] take that same
+//!    > lock. So once either of them has returned, the only `try_pull` that
+//!    > can still reach that supplier is one whose commit point had **already
+//!    > been passed**; every later round is cancelled where it stands, costs
+//!    > nothing, and is counted in [`ChannelStats::pull_rounds_cancelled`].
+//!    > One source thread runs one round at a time, so that is **at most one
+//!    > further call, landing within the outbound timeout** — never a stream,
+//!    > and never a second one.
+//!
+//!    A caller in this process waits that one round out with
+//!    [`ChannelHandle::wait_source_idle`]. A caller over the wire — a supplier
+//!    tearing itself down, which is the case that matters — has the time bound
+//!    and nothing else, which is why `spikes/event_pull_supplier.py` waits it
+//!    out before it lets its ORB go.
+//!
+//!    Both halves of what this replaced were measured on CI Linux under five
+//!    concurrent whole-suite runs and neither has ever reproduced on macOS
+//!    (20 serial runs, 5 concurrent, and a 200 µs source poll): a Rust test
+//!    sampled a counter an instant before the late call landed, and the Python
+//!    fixture printed `PASS` and then aborted, because the late call reached a
+//!    servant whose interpreter had already begun clearing its module globals.
+//!    One window, two costumes — which is why the repair is one predicate and
+//!    not two patches.
 //!
 //! # Fan-out: the part that is not hand-waved
 //!
@@ -653,6 +692,18 @@ pub struct ChannelStats {
     /// consumers this channel could not push to and suppliers it could not
     /// pull from alike.
     pub disconnected_for_failure: u64,
+    /// Source rounds taken and then **not issued**, because the proxy was
+    /// disconnected or the channel stopped before the round reached its commit
+    /// point ([`ChannelState::source_still_wanted`]).
+    ///
+    /// Not a failure and not an `Empty` answer: nobody failed and nobody was
+    /// asked. It is here rather than nowhere because a thrown-away action is
+    /// the same class as a thrown-away event — the module's rule about never
+    /// discarding anything silently, applied to the one thing this channel
+    /// discards that is not an event. No drop cause joins the split for it,
+    /// for the reason a `ProxyPullConsumer` adds none anywhere: there is no
+    /// queue here and so nothing was lost.
+    pub pull_rounds_cancelled: u64,
     /// Events refused because the destination's CDR alignment or byte order
     /// differs from where the `any` was captured. See the module docs.
     ///
@@ -767,9 +818,36 @@ struct ChannelState {
     cursor: Vec<u8>,
     /// The same, for the source loop's round over connected suppliers.
     source_cursor: Vec<u8>,
+    /// The proxy whose round the source thread has **taken** and not yet
+    /// recorded, if any.
+    ///
+    /// Not an idleness counter — see [`ChannelState::idle`], which this
+    /// deliberately stays out of. It answers the one question the disconnect
+    /// property in the module docs leaves open: *could a round already past
+    /// its commit point still be on the wire?* [`ChannelHandle::wait_source_idle`]
+    /// is that question asked with a deadline.
+    source_in_flight: Option<Vec<u8>>,
+    /// A test seam on the source loop; see [`ChannelHandle::set_source_gate`].
+    /// `None` in every production configuration.
+    source_gate: Option<SourceGate>,
     /// Jobs taken out of a queue but not yet recorded. Part of "idle".
     in_flight: usize,
     stats: ChannelStats,
+}
+
+/// The callback behind a [`SourceGate`], taking the proxy key of the round
+/// that has been taken.
+type SourceGateFn = dyn Fn(&[u8]) + Send + Sync;
+
+/// A callback the source thread runs after taking a round and before
+/// committing to it. See [`ChannelHandle::set_source_gate`].
+#[derive(Clone)]
+struct SourceGate(Arc<SourceGateFn>);
+
+impl std::fmt::Debug for SourceGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SourceGate(..)")
+    }
 }
 
 /// One delivery attempt, copied out from under the lock.
@@ -802,6 +880,12 @@ enum SourceOutcome {
     /// The supplier raised `CosEventComm::Disconnected`: it is finished, which
     /// is a statement rather than a fault. Released without a failure counted.
     SupplierDisconnected(String),
+    /// The call was never made: at the commit point the channel no longer
+    /// wanted it, because the proxy had been disconnected or the channel
+    /// stopped while the round was being set up. Nobody was asked and nobody
+    /// failed, so no failure count and no `Empty` reset — see
+    /// [`ChannelStats::pull_rounds_cancelled`].
+    Cancelled,
     /// The call did not complete.
     Failed(String),
 }
@@ -821,6 +905,8 @@ impl ChannelState {
             stopped: false,
             cursor: Vec::new(),
             source_cursor: Vec::new(),
+            source_in_flight: None,
+            source_gate: None,
             in_flight: 0,
             stats: ChannelStats::default(),
         }
@@ -960,9 +1046,13 @@ impl ChannelState {
     /// *round* is, and therefore how many fruitless visits mean the round was
     /// barren rather than that this one supplier is quiet.
     ///
-    /// Nothing is taken out of anything here, so there is no `in_flight`
-    /// counterpart: a `ProxyPullConsumer` holds no queue, and a visit that
-    /// fails loses nothing because nothing had been removed.
+    /// Nothing is taken *out* of anything here — a `ProxyPullConsumer` holds
+    /// no queue, and a visit that fails loses nothing because nothing had been
+    /// removed — so there is no `in_flight` counterpart in the delivery
+    /// thread's sense. [`ChannelState::source_in_flight`] is still recorded,
+    /// for the different question stated on it: not "is there work
+    /// outstanding" but "could a round already past its commit point still be
+    /// on the wire".
     fn take_next_source(&mut self) -> Option<(SourceJob, usize)> {
         let keys: Vec<Vec<u8>> = self
             .proxy_pull_consumers
@@ -978,7 +1068,30 @@ impl ChannelState {
         let key = keys[start].clone();
         let supplier = self.proxy_pull_consumers.get(&key)?.supplier.clone()?;
         self.source_cursor = key.clone();
+        self.source_in_flight = Some(key.clone());
         Some((SourceJob { proxy: key, supplier }, keys.len()))
+    }
+
+    /// **The commit point**: whether the round already taken for `proxy_key`
+    /// may still go out.
+    ///
+    /// The module docs state the property this predicate is; the short form is
+    /// that it is taken under the same lock `disconnect_pull_consumer` and
+    /// [`ChannelHandle::stop`] take, and that nothing between it and the
+    /// outbound request does any I/O. One predicate for both of them, because
+    /// "the channel no longer wants this round" is one fact — a second check
+    /// spelled out at each caller is how the two would drift apart.
+    ///
+    /// The supplier reference is compared and not only the flag: a client that
+    /// disconnected and reconnected to a *different* supplier while this round
+    /// was being set up would otherwise be asked a question meant for the old
+    /// one.
+    fn source_still_wanted(&self, proxy_key: &[u8], supplier: &Ior) -> bool {
+        !self.stopped
+            && self
+                .proxy_pull_consumers
+                .get(proxy_key)
+                .is_some_and(|p| p.connected && p.supplier.as_ref() == Some(supplier))
     }
 
     /// Every supplier the source loop is currently entitled to dial, so the
@@ -994,6 +1107,9 @@ impl ChannelState {
     /// Records one `try_pull` attempt. Returns whether the proxy is still
     /// connected afterwards, which is the source loop's cue to drop its socket.
     fn record_source(&mut self, proxy_key: &[u8], outcome: SourceOutcome) -> bool {
+        // The taken round is over, whatever it did — before the early return
+        // below, or a proxy forgotten mid-call would leave this set forever.
+        self.source_in_flight = None;
         let name = String::from_utf8_lossy(proxy_key).into_owned();
         if !self.proxy_pull_consumers.contains_key(proxy_key) {
             return false; // disconnected and forgotten while the call was out
@@ -1014,6 +1130,13 @@ impl ChannelState {
                 if let Some(proxy) = self.proxy_pull_consumers.get_mut(proxy_key) {
                     proxy.consecutive_failures = 0;
                 }
+            }
+            SourceOutcome::Cancelled => {
+                // Nothing went out, so nothing here moves but the count of
+                // rounds thrown away: not a failure (nobody failed), not
+                // `Empty` (nobody answered, so there is no failure streak to
+                // reset), and no event to drop.
+                self.stats.pull_rounds_cancelled += 1;
             }
             SourceOutcome::SupplierDisconnected(why) => {
                 if let Some(proxy) = self.proxy_pull_consumers.get_mut(proxy_key) {
@@ -1278,6 +1401,58 @@ impl ChannelHandle {
         }
     }
 
+    /// Blocks until the source thread has finished the round it had taken, or
+    /// `timeout` elapses. Returns whether it finished.
+    ///
+    /// This is the escape clause of the disconnect property in the module docs
+    /// made observable. After `disconnect_pull_consumer` — or [`stop`] — a
+    /// round already past its commit point may still be on the wire, at most
+    /// one; a caller that needs "and now nobody is being asked at all" waits
+    /// here for it. It is deliberately **not** part of [`wait_idle`], which is
+    /// the delivery thread's question and answers about queues.
+    ///
+    /// A caller over the wire cannot reach this and has the time bound
+    /// instead: one outbound timeout.
+    ///
+    /// [`stop`]: ChannelHandle::stop
+    /// [`wait_idle`]: ChannelHandle::wait_idle
+    pub fn wait_source_idle(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut state = self.shared.lock();
+        loop {
+            if state.source_in_flight.is_none() {
+                return true;
+            }
+            let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+                return false;
+            };
+            state = self.shared.wait(&self.shared.progress, state, left);
+        }
+    }
+
+    /// Installs a callback the source thread runs after **taking** a round and
+    /// before committing to it, with the proxy key and with no lock held.
+    ///
+    /// A test seam, and it exists for the reason [`EventSource::pull_calls`]
+    /// does: a property of this loop that is otherwise observable only by
+    /// luck. The property is the disconnect bound above, and the window it
+    /// concerns is a few instructions wide — five concurrent whole-suite runs
+    /// on CI Linux hit it, twenty serial runs on macOS never did. A callback
+    /// that blocks here holds the round open and makes the ordering happen
+    /// every time, which is what lets the bound be tested rather than hoped
+    /// for.
+    ///
+    /// Blocking in it holds the source thread and nothing else — no lock is
+    /// held and the servant threads are untouched — but it does hold
+    /// [`Delivery`]'s join, so a callback with no deadline of its own turns a
+    /// failing test into a hanging one.
+    pub fn set_source_gate<F>(&self, gate: F)
+    where
+        F: Fn(&[u8]) + Send + Sync + 'static,
+    {
+        self.shared.lock().source_gate = Some(SourceGate(Arc::new(gate)));
+    }
+
     /// Blocks until every connected proxy's queue is empty and no push is in
     /// flight. Returns whether that happened before `timeout`.
     pub fn wait_idle(&self, timeout: Duration) -> bool {
@@ -1307,6 +1482,12 @@ impl ChannelHandle {
     /// push proxies keep their consumers; the tally below counts proxy queues,
     /// which those proxies do not have, so [`ChannelStats::split_adds_up`]
     /// cannot be disturbed by this direction at all.
+    ///
+    /// **The asking stops on the same terms a disconnect's does.** Raising
+    /// `stopped` under this lock fails the source loop's commit point, so
+    /// every round not already past it is cancelled rather than issued; at
+    /// most one further `try_pull` can reach a supplier, and
+    /// [`ChannelHandle::wait_source_idle`] waits it out. Module docs, point 4.
     pub fn stop(&self) {
         let mut state = self.shared.lock();
         state.stopped = true;
@@ -1538,6 +1719,7 @@ fn delivery_loop(shared: Arc<Shared>, timeout: Duration) {
 /// `pull` is specified to block and this is a shared round, so one silent
 /// supplier would be every other supplier's outage.
 fn source_pull(
+    shared: &Shared,
     conns: &mut HashMap<Vec<u8>, (Ior, Connection)>,
     job: &SourceJob,
     timeout: Duration,
@@ -1559,6 +1741,18 @@ fn source_pull(
     }
     let (_, conn) = conns.get_mut(&job.proxy).expect("inserted just above");
     conn.set_endian(endian);
+
+    // ── The commit point, and the last instant it can be taken: the connect
+    // above may have cost a whole timeout, and a disconnect that landed during
+    // it must not be answered with a question. The lock is taken and released
+    // here — held across the invoke below it would be rule 1, and `guarded`
+    // would say so — so what remains open is the gap between this line and the
+    // request, which contains no I/O. That gap is the module docs' "at most
+    // one further call", and it is the whole of it. ──
+    let wanted = shared.lock().source_still_wanted(&job.proxy, &job.supplier);
+    if !wanted {
+        return SourceOutcome::Cancelled;
+    }
 
     let reply = match conn.invoke_nullary("try_pull") {
         Ok(reply) => reply,
@@ -1614,14 +1808,15 @@ fn source_loop(shared: Arc<Shared>, timeout: Duration) {
     // a round, every connected supplier has been asked and none had anything.
     let mut barren = 0usize;
     loop {
-        let (job, round, endian) = {
+        let (job, round, endian, gate) = {
             let mut state = shared.lock();
             loop {
                 if state.stopped {
                     return;
                 }
                 if let Some((job, round)) = state.take_next_source() {
-                    break (job, round, state.source_endian);
+                    let gate = state.source_gate.clone();
+                    break (job, round, state.source_endian, gate);
                 }
                 // Nothing is connected. Sleep on the condvar so a connect
                 // arriving in a moment is served in a moment.
@@ -1630,8 +1825,14 @@ fn source_loop(shared: Arc<Shared>, timeout: Duration) {
                 state = shared.wait(&shared.wake, state, poll);
             }
         };
-        // ── no lock is held across this call. See the module docs. ──
-        let outcome = source_pull(&mut conns, &job, timeout, endian);
+        // ── no lock is held from here on. See the module docs. ──
+        // A round has been taken and nothing has gone out yet, which is the
+        // only instant from which the commit point inside `source_pull` can be
+        // observed to do anything. Production installs no gate.
+        if let Some(gate) = gate {
+            (gate.0)(&job.proxy);
+        }
+        let outcome = source_pull(&shared, &mut conns, &job, timeout, endian);
         let got = matches!(outcome, SourceOutcome::Got(_));
         {
             let mut state = shared.lock();
@@ -1643,13 +1844,16 @@ fn source_loop(shared: Arc<Shared>, timeout: Duration) {
             let live = state.connected_source_keys();
             conns.retain(|key, _| live.iter().any(|k| k == key));
         }
+        // Every recorded round, not only a fruitful one: `progress` is what
+        // `wait_source_idle` sleeps on, and the round a disconnect has to
+        // outlast is exactly a round that fetched nothing.
+        shared.progress.notify_all();
         if got {
             barren = 0;
             // A fetched event is a queued event: wake the delivery thread and
             // any consumer blocked in `pull`, exactly as an inbound `push`
             // does.
             shared.wake.notify_all();
-            shared.progress.notify_all();
         } else {
             barren += 1;
             if barren >= round {
@@ -2092,6 +2296,7 @@ impl EventChannelServer {
             total.push_failures += s.push_failures;
             total.pull_failures += s.pull_failures;
             total.disconnected_for_failure += s.disconnected_for_failure;
+            total.pull_rounds_cancelled += s.pull_rounds_cancelled;
             total.unrelayable += s.unrelayable;
             total.pulled += s.pulled;
             total.queued += s.queued;
@@ -2519,6 +2724,15 @@ impl EventChannelServer {
                 // never held a queue. The key stays known and reconnectable,
                 // and a second disconnect is not an error — the same two
                 // choices every other proxy here makes.
+                //
+                // Clearing the flag under this lock is also what stops the
+                // asking, and the module docs' point 4 states exactly how far
+                // that goes: the source loop's commit point reads the same
+                // flag under the same lock, so every round not already past it
+                // is cancelled. This does **not** wait for a round that is —
+                // a disconnect that could cost an outbound timeout is a worse
+                // property than the one stray call, and the peer it would wait
+                // on is free to be the caller.
                 //
                 // §2.3 says the proxy calls `disconnect_pull_supplier` back on
                 // the supplier. This channel does not, for the reason it does

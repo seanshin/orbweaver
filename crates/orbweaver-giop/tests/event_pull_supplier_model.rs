@@ -28,8 +28,8 @@
 //! an event crosses it.
 
 use std::net::TcpListener;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use orbweaver_cdr::Endian;
@@ -51,6 +51,10 @@ const OUTBOUND_T: Duration = Duration::from_millis(500);
 /// The default is `DEFAULT_SOURCE_POLL`; a test that used it would be
 /// measuring the constant rather than the loop.
 const POLL: Duration = Duration::from_millis(5);
+/// How long "and it stayed still" is given. Twenty `POLL` intervals: a channel
+/// that were still asking would ask twenty times in here, so this is a margin
+/// rather than a coin toss.
+const STILL: Duration = Duration::from_millis(100);
 
 /// A channel on loopback with both outbound threads running.
 struct Channel {
@@ -267,6 +271,89 @@ fn until(
     pred: impl FnMut(&orbweaver_giop::event_server::ChannelStats) -> bool,
 ) {
     assert!(handle.wait_until(T, pred), "{what}: {:?}", handle.stats());
+}
+
+/// Asserts that a supplier has **stopped being asked**.
+///
+/// Two things can move `try_pull_calls` just after a disconnect or a `stop`,
+/// and only one of them is a defect:
+///
+/// - a round the channel had already committed to before the flag changed can
+///   still land. That is the module's stated bound — at most one, within the
+///   outbound timeout — and it is permitted;
+/// - a round issued *after* the flag changed is the channel still asking, and
+///   that is the defect.
+///
+/// Sampling once and asserting equality after a sleep cannot tell them apart,
+/// and picks whichever one the scheduler hands it. That is precisely how the
+/// three sites this replaces were green on macOS — 20 serial runs, 5
+/// concurrent whole-suite runs, a 200 µs source poll — and red on CI Linux
+/// under five concurrent whole-suite runs: the sample was taken an instant
+/// before the permitted call landed, so the permitted call read as the defect.
+///
+/// So the permitted round is waited out on the channel's own observable first,
+/// and only then is stillness asserted. That is a *stronger* claim than the
+/// one it replaces, not a looser one: the old form would have passed on a
+/// channel that asked once more, if the sample happened to fall after it.
+fn stops_being_asked(handle: &ChannelHandle, source: &EventSource, what: &str) {
+    assert!(handle.wait_source_idle(T), "{what}: a taken source round never finished");
+    let settled = source.try_pull_calls();
+    std::thread::sleep(STILL);
+    assert_eq!(source.try_pull_calls(), settled, "{what}");
+}
+
+/// A one-shot barrier the source thread is held at, for the control below.
+///
+/// The source loop calls it after taking a round and before the commit point,
+/// so a test that holds it there owns the ordering the CI failure produced by
+/// luck. Deadline-bounded on purpose: `Delivery`'s drop joins the source
+/// thread, so a barrier with no deadline of its own would turn a failing test
+/// into a hanging one.
+#[derive(Default)]
+struct HeldRound {
+    /// `(a round is being held, the test has released it)`.
+    state: Mutex<(bool, bool)>,
+    cv: Condvar,
+}
+
+impl HeldRound {
+    /// Called on the source thread. Blocks the first round until `release`;
+    /// every round after that passes straight through.
+    fn hold(&self) {
+        let deadline = Instant::now() + T;
+        let mut s = self.state.lock().unwrap();
+        if s.1 {
+            return;
+        }
+        s.0 = true;
+        self.cv.notify_all();
+        while !s.1 {
+            let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+                return; // the test has gone wrong; do not also hang it
+            };
+            s = self.cv.wait_timeout(s, left).unwrap().0;
+        }
+    }
+
+    /// Whether a round reached the barrier before `timeout`.
+    fn wait_until_held(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut s = self.state.lock().unwrap();
+        loop {
+            if s.0 {
+                return true;
+            }
+            let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+                return false;
+            };
+            s = self.cv.wait_timeout(s, left).unwrap().0;
+        }
+    }
+
+    fn release(&self) {
+        self.state.lock().unwrap().1 = true;
+        self.cv.notify_all();
+    }
 }
 
 /// The path the deferral was about, in both byte orders: a supplier that must
@@ -519,9 +606,7 @@ fn a_supplier_that_says_disconnected_is_released_without_a_failure() {
     assert!(stats.split_adds_up(), "{stats:?}");
 
     // It stopped being asked, rather than being asked forever.
-    let asked = supplier.source.try_pull_calls();
-    std::thread::sleep(Duration::from_millis(100));
-    assert_eq!(supplier.source.try_pull_calls(), asked, "a released supplier is not re-asked");
+    stops_being_asked(&chan.handle, &supplier.source, "a released supplier is not re-asked");
 
     supplier.shutdown();
     chan.shutdown();
@@ -559,16 +644,79 @@ fn the_pull_supplier_connect_and_disconnect_state_machine() {
     assert!(chan.handle.stats().split_adds_up());
 
     // It really stopped asking, and offering more does not reach the channel.
-    let asked = supplier.source.try_pull_calls();
+    // The offer goes in *before* the settle, so a channel that were still
+    // asking would have something to find and both assertions would catch it.
     supplier.source.offer(&TypeCode::ULong, Endian::native(), |e| e.put_u32(2)).unwrap();
-    std::thread::sleep(Duration::from_millis(100));
-    assert_eq!(supplier.source.try_pull_calls(), asked, "a disconnected proxy is not asked");
+    stops_being_asked(&chan.handle, &supplier.source, "a disconnected proxy is not asked");
     assert_eq!(chan.handle.stats().sourced, 1, "and nothing more was fetched");
 
     // Idempotent, and the key stays reconnectable.
     client::disconnect_pull_consumer(&mut conn).unwrap();
     client::connect_pull_supplier(&mut conn, &supplier.ior).unwrap();
     until(&chan.handle, "the reconnected proxy fetched the second event", |s| s.sourced == 2);
+
+    drop(conn);
+    supplier.shutdown();
+    chan.shutdown();
+}
+
+/// **The control.** The race the three settle-and-pin sites above were
+/// sampling through, made to happen every run instead of once in a few hundred
+/// on a loaded Linux box.
+///
+/// The channel takes a round, and is held there with nothing on the wire yet;
+/// the disconnect lands; the round is released. That is the exact interleaving
+/// CI produced by luck — `disconnect_pull_consumer` returned and a `try_pull`
+/// followed it — and the only ordering under which the commit point does
+/// anything at all.
+///
+/// Its own negative control: delete the commit-point check in `source_pull`
+/// (`source_still_wanted` / `SourceOutcome::Cancelled`) and this fails on the
+/// `try_pull_calls` assertion with `left: 1  right: 0`, which is the CI
+/// diagnostic one proxy earlier in the same story.
+#[test]
+fn a_round_taken_before_a_disconnect_is_cancelled_rather_than_issued() {
+    let chan = Channel::start();
+    let supplier = Supplier::start(b"HeldRoundSupplier");
+    let (_, mut conn) = chan.pull_consumer_proxy_conn();
+
+    let gate = Arc::new(HeldRound::default());
+    let held = Arc::clone(&gate);
+    chan.handle.set_source_gate(move |_proxy| held.hold());
+
+    // Connecting is what gives the source loop a round to take, so the barrier
+    // is installed first: the first round there can ever be is the held one.
+    client::connect_pull_supplier(&mut conn, &supplier.ior).unwrap();
+    assert!(gate.wait_until_held(T), "the source thread never took a round");
+    assert_eq!(
+        supplier.source.try_pull_calls(),
+        0,
+        "the barrier is before the commit point: nothing may have gone out yet"
+    );
+
+    // The disconnect lands while the round is held — and returns, which is the
+    // moment the property is about.
+    client::disconnect_pull_consumer(&mut conn).unwrap();
+    gate.release();
+
+    assert!(chan.handle.wait_source_idle(T), "the held round never finished");
+    assert_eq!(
+        supplier.source.try_pull_calls(),
+        0,
+        "a round taken before the disconnect must not be issued after it"
+    );
+    let stats = chan.handle.stats();
+    assert_eq!(stats.pull_rounds_cancelled, 1, "it was thrown away at the commit point");
+    assert_eq!(stats.pull_failures, 0, "a cancelled round is not a failure — nobody failed");
+    assert_eq!(stats.sourced, 0, "and nothing was fetched");
+    assert_eq!(stats.dropped, 0, "this proxy holds no queue, so there is nothing to abandon");
+    assert!(stats.split_adds_up(), "{stats:?}");
+
+    // And the proxy is still the reconnectable key every other one here is:
+    // the round that was cancelled cost the supplier nothing.
+    client::connect_pull_supplier(&mut conn, &supplier.ior).unwrap();
+    supplier.source.offer(&TypeCode::ULong, Endian::native(), |e| e.put_u32(9)).unwrap();
+    until(&chan.handle, "the reconnected proxy was pulled from", |s| s.sourced == 1);
 
     drop(conn);
     supplier.shutdown();
@@ -607,14 +755,11 @@ fn stopping_the_channel_leaves_the_supplier_connected_and_the_split_true() {
     );
 
     // And the supplier stops being asked, because the thread that asked is
-    // gone. Settle first: `stop` raises a flag the source loop reads between
-    // visits, so a `try_pull` already on the wire completes rather than being
-    // cancelled — that is one extra call, not an unbounded stream, and this
-    // asserts the difference. Read after the settle, then prove it is still.
-    std::thread::sleep(Duration::from_millis(100));
-    let asked = supplier.source.try_pull_calls();
-    std::thread::sleep(Duration::from_millis(200));
-    assert_eq!(supplier.source.try_pull_calls(), asked, "a stopped channel asks nobody");
+    // gone. `stop` fails the same commit point a disconnect does, so a round
+    // not yet past it is cancelled and one already past it completes — at most
+    // one extra call, never a stream. Wait that round out, then prove it is
+    // still: the two are different claims and only the second is a defect.
+    stops_being_asked(&chan.handle, &supplier.source, "a stopped channel asks nobody");
 
     drop(puller);
     supplier.shutdown();
