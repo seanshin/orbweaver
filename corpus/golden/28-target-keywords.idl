@@ -12,6 +12,72 @@
 //     those, and the harness treats a warning on stderr as a failure;
 //   * no case-insensitive clash with a type or an enclosing scope, which is
 //     this project's dominant generation failure.
+//
+// ── Extended 2026-08-25: both lists, in every position ──────────────────────
+//
+// The rule this file exists for says "adding a target means adding its keyword
+// list to that file's coverage", and the Python target landed on 2026-08-14
+// with four names in one position. So the coverage was still an assumption.
+// It was measured by generating **1989 probes** — 117 identifiers legal to the
+// front end, each in 17 positions — through both emitters and then compiling
+// the Rust and *importing* the Python. Position turned out to be the whole
+// question: an emitter escapes a member and not a module, and nothing but
+// generating the module says so.
+//
+// Everything below is a name whose position was measured to survive both
+// emitters, so this file states executed coverage rather than intent. Five
+// classes were measured NOT to survive and are deliberately absent; each is a
+// generator or oracle defect, not a contract defect, and belongs here the day
+// it is fixed:
+//
+//   1. A **nested IDL module whose name is a Python keyword**. The package
+//      directory is written from the raw name (`lambda/`) and the parent's
+//      import from the escaped one (`from . import _lambda`), so the package
+//      does not import at all. 33 of 33 escaped names, module position only.
+//      `use`, `loop`, `mod`, `gen`, `match` and `type` are here because they
+//      are not escaped and so cannot diverge — `match` and `type` are Python
+//      *soft* keywords, legal identifiers, and needing no escape is the fact
+//      worth pinning.
+//   2. **`Self` anywhere.** Rust's `ident()` gives `self`, `super` and `crate`
+//      a trailing underscore because they cannot be raw identifiers; `Self` is
+//      in that same class and is in neither the special case nor the keyword
+//      list, so `pub struct Self` is emitted. 15 of the 17 positions.
+//   3. **A name the emitted code needs from the prelude**, bound into the same
+//      scope: `Result`, `Vec` as type names, `Some`/`Ok`/`Err`/`None` as
+//      parameter names. Escaping is the wrong tool for this one — `r#Result`
+//      is still the name the generated `-> Result<_, _>` resolves to.
+//   4. **`property` as a union member.** The Python union emitter writes
+//      `@property` per branch, and a branch that binds the name `property` in
+//      the class body makes the *next* branch's decorator call a property
+//      object. Order-dependent: last member would pass.
+//   5. **An interface whose name is a Python keyword.** The emitter is right
+//      here — the class is `_from` — and the *oracle* is not: the python-
+//      target sweep escapes the method it calls (`python_name(&op)`) and looks
+//      the class and the module segments up by the raw IDL name, so
+//      `getattr(module, "from")` raises. Importing the package does not see
+//      this; only calling into it does, which is the whole reason the sweep
+//      exists. Found by putting `interface from` in this file: 2 divergences
+//      out of 236 values and 161 calls, and no other check went red.
+//      `loop`, `mod` and `unsafe` are here instead — Rust keywords, which the
+//      Python mapping does not escape, so the two spellings cannot differ.
+//
+// One thing is deliberately not here: the Rust prelude and Python builtin
+// names that DID survive (`Option`, `Box`, `Clone`, `Copy`, …). They were
+// measured one to a file, where nothing else in the module derived `Clone` or
+// spelled `Copy`; that is not the same as surviving a module that does, and a
+// corpus case is a claim about what was executed.
+//
+// What is covered, counted against the two lists rather than asserted:
+//   * Python — 35 of 35. `keyword.kwlist` + `keyword.softkwlist` + `self` and
+//     `cls` is 41 names; `False`, `True`, `import`, `in`, `case` and `_` are
+//     not legal IDL identifiers (an IDL keyword, or differing from one only in
+//     case, or not starting with a letter), leaving 35, and all 35 are here.
+//   * Rust — 44 of 45. Strict plus reserved, 2015 through 2024, is 52 names;
+//     `abstract`, `const`, `enum`, `false`, `in`, `struct` and `true` are not
+//     legal IDL, leaving 45. The one absent is `Self`, which is class 2.
+// 69 distinct identifiers across 18 positions. Both front ends accept the file
+// and `omniidl` says nothing on stderr.
+
 module target_kw {
   //@ ai_desc: Members whose names are reserved words in a target language
   struct Reserved {
@@ -32,4 +98,175 @@ module target_kw {
     //@ ai_desc: An attribute whose accessor names must survive escaping too
     readonly attribute Reserved final;
   };
+};
+
+// Member positions. A member lives in its container's scope, so these names
+// never meet each other and never meet a type name.
+module kw_shape {
+  //@ ai_desc: Struct members named for reserved words in both target languages
+  struct Members {
+    long None;      // Python keyword
+    long global;    // Python keyword
+    long cls;       // not a keyword: the name a generated classmethod binds
+    long self;      // not a keyword either: the receiver, and `self_` in Rust
+    long where;     // Rust keyword
+  };
+
+  //@ ai_desc: Enum members, which leave their own scope and land in this module
+  enum Choices {
+    and,            // Python keyword
+    if,             // Python keyword
+    crate,          // Rust keyword — and one of the three that cannot be raw
+    become          // Rust reserved word
+  };
+
+  //@ ai_desc: Union branches, whose Python accessors are properties
+  union Branches switch (long) {
+    case 1: long as;    // reserved in both
+    case 2: long is;    // Python keyword
+    case 3: long dyn;   // Rust keyword
+    default: long box;  // Rust reserved word
+  };
+
+  //@ ai_desc: Exception members, which cross the wire inside a fault
+  exception Fault {
+    long assert;    // Python keyword
+    long lambda;    // Python keyword
+    long extern;    // Rust keyword
+    long do;        // Rust reserved word
+  };
+};
+
+// Operation, parameter and attribute positions. An attribute is two accessors
+// in every target, so the escaping has to survive being decorated.
+module kw_call {
+  //@ ai_desc: Operations named for reserved words
+  interface Calls {
+    //@ ai_desc: Does nothing; it exists so `async` is emitted as a method name
+    //@ ai_effect: idempotent
+    void async();     // reserved in both
+    //@ ai_desc: Does nothing; it exists so `nonlocal` is emitted as a method name
+    //@ ai_effect: idempotent
+    void nonlocal();  // Python keyword
+    //@ ai_desc: Does nothing; it exists so `fn` is emitted as a method name
+    //@ ai_effect: idempotent
+    void fn();        // Rust keyword
+    //@ ai_desc: Does nothing; it exists so `final` is emitted as a method name
+    //@ ai_effect: idempotent
+    void final();     // Rust reserved word
+  };
+
+  //@ ai_desc: Parameters named for reserved words, in all three directions
+  interface Args {
+    //@ ai_desc: in parameters
+    //@ ai_effect: idempotent
+    void absorb(in long await, in long not, in long impl, in long macro);
+    //@ ai_desc: out parameters, which are return values in both targets
+    //@ ai_effect: read_only
+    void produce(out long break, out long or, out long let, out long override);
+    //@ ai_desc: inout parameters, which are both at once
+    //@ ai_effect: idempotent
+    void adjust(inout long class, inout long pass, inout long loop, inout long priv);
+  };
+
+  //@ ai_desc: Attributes, whose getter and setter names both need escaping
+  interface Props {
+    readonly attribute long continue;  // Python keyword
+    readonly attribute long raise;     // Python keyword
+    readonly attribute long mod;       // Rust keyword
+    readonly attribute long typeof;    // Rust reserved word
+    attribute long def;                // Python keyword
+    attribute long return;             // reserved in both
+    attribute long move;               // Rust keyword
+    attribute long unsized;            // Rust reserved word
+  };
+};
+
+// Type-name positions. These names all share one scope, which is why they are
+// alone in this module: a type named for a keyword is where the Rust emitter
+// writes `pub struct`, `pub enum`, `pub type` and `pub const`.
+module kw_types {
+  //@ ai_desc: Structs named for reserved words
+  struct del { long v0; };       // Python keyword
+  //@ ai_desc: Reserved in both
+  struct try { long v1; };
+  //@ ai_desc: Rust keyword
+  struct mut { long v2; };
+  //@ ai_desc: Rust reserved word
+  struct virtual { long v3; };
+
+  //@ ai_desc: Enums named for reserved words
+  enum elif { e0a, e0b };        // Python keyword
+  //@ ai_desc: Python keyword
+  enum while { e1a, e1b };
+  //@ ai_desc: Rust keyword
+  enum pub { e2a, e2b };
+  //@ ai_desc: Rust reserved word — added to the list in the 2024 edition
+  enum gen { e3a, e3b };
+
+  //@ ai_desc: Unions named for reserved words
+  union else switch (long) { case 1: long u0a; default: long u0b; };
+  //@ ai_desc: Python keyword
+  union with switch (long) { case 1: long u1a; default: long u1b; };
+  //@ ai_desc: Rust keyword
+  union ref switch (long) { case 1: long u2a; default: long u2b; };
+
+  //@ ai_desc: Exceptions named for reserved words
+  exception except { long code0; };   // Python keyword
+  //@ ai_desc: Reserved in both — the name that started this file
+  exception yield { long code1; };
+  //@ ai_desc: Reserved in both
+  exception static { long code2; };
+
+  //@ ai_desc: Typedefs named for reserved words
+  typedef sequence<long> finally;     // Python keyword
+  //@ ai_desc: A Python soft keyword: a legal identifier, escaped by nobody
+  typedef sequence<long> match;
+  //@ ai_desc: Rust keyword, and one of the three that cannot be raw
+  typedef sequence<long> super;
+
+  //@ ai_desc: Constants named for reserved words
+  const long for = 1;                 // Python keyword
+  //@ ai_desc: A Python soft keyword and a Rust keyword at once
+  const long type = 2;
+  //@ ai_desc: Rust keyword
+  const long trait = 3;
+
+  //@ ai_desc: Interfaces named for reserved words. Rust-only ones, because a
+  //@ ai_desc: Python keyword here is class 5 in the header.
+  interface loop {                    // Rust keyword
+    //@ ai_desc: Does nothing; the interface's own name is what is under test
+    //@ ai_effect: idempotent
+    void ping0();
+  };
+  //@ ai_desc: Rust keyword
+  interface mod {
+    //@ ai_desc: Does nothing; the interface's own name is what is under test
+    //@ ai_effect: idempotent
+    void ping1();
+  };
+  //@ ai_desc: Rust keyword
+  interface unsafe {
+    //@ ai_desc: Does nothing; the interface's own name is what is under test
+    //@ ai_effect: idempotent
+    void ping2();
+  };
+};
+
+// Module-name position — the one the Python emitter writes twice, once as a
+// directory and once as an import. Only names it does not escape can be here
+// until that is one call; see note 1 in the header.
+module kw_scope {
+  //@ ai_desc: Rust keyword as a nested module name
+  module use { struct Held0 { long v; }; };
+  //@ ai_desc: Rust keyword
+  module loop { struct Held1 { long v; }; };
+  //@ ai_desc: Rust keyword
+  module mod { struct Held2 { long v; }; };
+  //@ ai_desc: Rust reserved word
+  module gen { struct Held3 { long v; }; };
+  //@ ai_desc: Python soft keyword — a legal identifier needing no escape
+  module match { struct Held4 { long v; }; };
+  //@ ai_desc: Python soft keyword and a Rust keyword
+  module type { struct Held5 { long v; }; };
 };
