@@ -14,6 +14,19 @@
 //!    policy said. Refusals findable at a glance; a dry run never mistakable
 //!    for a call.
 //!
+//! Since D024 §6 there is a fourth, and it is here for the same reason the
+//! other three are: **[`orb`]** — what is registered under which ObjectId, what
+//! the ORB's seven numbers are and *where each value came from*, and what the
+//! pool, server and channel counters say. That is the read half of
+//! administration, and the read half of administration is rendering. It
+//! decides nothing either: the reserved-ObjectId table is the ORB's, the drop
+//! split is the channel's, and the seven values are read from the constants
+//! that own them. There is no wire behind it — D024 §7 refuses one until the
+//! caller model `PLAN-DEFERRED` §11 is waiting on exists — so its input is a
+//! snapshot the holding process states, and **nothing in this workspace writes
+//! one yet**. See [`orb`] for why that is a limit stated rather than a limit
+//! hidden.
+//!
 //! # The rule this crate is built around
 //!
 //! **The console renders. It does not decide.**
@@ -85,4 +98,5 @@ pub mod contract;
 pub mod declarations;
 pub mod html;
 pub mod load;
+pub mod orb;
 pub mod traces;
