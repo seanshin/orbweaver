@@ -30,12 +30,25 @@
 //! running count, so a harness reading the log can say how many requests
 //! reached this address before and after a change it made — the count is the
 //! measurement; the client's answer only corroborates it.
+//!
+//! **The count is taken from a `ROW` line, not from the English beside it.**
+//! `spikes/perm_fallback.sh` used to `grep -c "forwarded ping()"` and
+//! `grep -c "served ping()"`, which made the wording of two `println!`s below
+//! part of a gate; the tab-separated rows this binary now also prints are the
+//! channel a script keys on (see `rows/mod.rs`). The prose is unchanged and
+//! stays: it is what a human reads when the gate goes red.
 
 use orbweaver_cdr::Encoder;
 use orbweaver_giop::server::{Dispatch, Request, Server, SystemException};
 use orbweaver_giop::{Forward, IiopProfile, Ior, Version};
 use orbweaver_object::{ObjectOps, get_reference, is_equivalent, put_reference};
 use orbweaver_registry::{Registry, Strictness};
+
+/// The `ROW` channel `spikes/perm_fallback.sh` (and, when it is next touched,
+/// `spikes/jacorb_giop11.sh` and `run_checks.sh`) keys its counts on, so that
+/// no verdict depends on the wording of a `println!` below. See its own docs.
+#[path = "rows/mod.rs"]
+mod rows;
 
 /// Matches `spikes/echo.idl`.
 const TYPE_ID: &str = "IDL:spike/Echo:1.0";
@@ -93,6 +106,21 @@ impl Dispatch for Echo {
                         to.primary().map(|p| p.host.as_str()).unwrap_or("?"),
                         to.primary().map(|p| p.port).unwrap_or(0)
                     );
+                    rows::Row {
+                        seat: rows::SERVE,
+                        event: rows::event::FORWARDED,
+                        op: "ping",
+                        giop: &rows::giop(request.version),
+                        endian: rows::endian(request.endian),
+                        n: &self.forwarded.to_string(),
+                        note: if self.for_good {
+                            rows::note::PERMANENT
+                        } else {
+                            rows::note::TEMPORARY
+                        },
+                        ..Default::default()
+                    }
+                    .emit();
                     Some(if self.for_good {
                         Forward::Permanent(to)
                     } else {
@@ -114,6 +142,18 @@ impl Dispatch for Echo {
                 "emitted LOCATION_FORWARD for ping() to {} bytes of key",
                 to.primary().map(|p| p.object_key.len()).unwrap_or(0)
             );
+            self.forwarded += 1;
+            rows::Row {
+                seat: rows::SERVE,
+                event: rows::event::FORWARDED,
+                op: "ping",
+                giop: &rows::giop(request.version),
+                endian: rows::endian(request.endian),
+                n: &self.forwarded.to_string(),
+                note: rows::note::ONCE,
+                ..Default::default()
+            }
+            .emit();
             return Some(Forward::Temporary(to));
         }
         None
@@ -121,8 +161,17 @@ impl Dispatch for Echo {
 
     fn dispatch(&mut self, req: &Request, out: &mut Encoder) -> Result<(), SystemException> {
         self.calls += 1;
+        let (gv, end) = (rows::giop(req.version), rows::endian(req.endian));
         if self.seen.insert((req.version.major, req.version.minor)) {
             println!("first request at {} ({:?})", req.version, req.endian);
+            rows::Row {
+                seat: rows::SERVE,
+                event: rows::event::FIRST,
+                giop: &gv,
+                endian: end,
+                ..Default::default()
+            }
+            .emit();
         }
         // Every ORB probes with these, and without `_is_a` there is no
         // narrowing at all.
@@ -150,6 +199,17 @@ impl Dispatch for Echo {
             "ping" => {
                 self.pinged += 1;
                 println!("served ping() #{} here -> {}", self.pinged, self.ping_answer);
+                rows::Row {
+                    seat: rows::SERVE,
+                    event: rows::event::SERVED,
+                    op: "ping",
+                    giop: &gv,
+                    endian: end,
+                    n: &self.pinged.to_string(),
+                    got: &self.ping_answer.to_string(),
+                    ..Default::default()
+                }
+                .emit();
                 out.put_i32(self.ping_answer);
             }
 
@@ -233,6 +293,7 @@ impl Dispatch for Echo {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    rows::header();
     let out_path = std::env::args().nth(1).unwrap_or_else(|| "spikes/server.ior".into());
     let host = std::env::args().nth(2).unwrap_or_else(|| "127.0.0.1".into());
     let port = std::env::args().nth(3).unwrap_or_else(|| "0".into());
@@ -321,4 +382,102 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     server.serve(&mut echo, || false)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use orbweaver_cdr::Endian;
+    use orbweaver_giop::server::decode_request;
+
+    use super::*;
+
+    fn a_reference(port: u16) -> Ior {
+        Ior {
+            type_id: TYPE_ID.into(),
+            profiles: vec![IiopProfile {
+                version: Version::V1_2,
+                host: "127.0.0.1".into(),
+                port,
+                object_key: b"OrbweaverEcho".to_vec(),
+                components: vec![],
+            }],
+        }
+    }
+
+    /// A real GIOP `Request`, encoded and decoded as the wire does it.
+    fn request(op: &str) -> Request {
+        let bytes = orbweaver_giop::encode_request(
+            Version::V1_2,
+            Endian::Big,
+            1,
+            b"OrbweaverEcho",
+            op,
+            true,
+            |_| {},
+        )
+        .unwrap();
+        decode_request(orbweaver_giop::read_message(&mut &bytes[..], 1 << 20).unwrap()).unwrap()
+    }
+
+    fn servant(forward_to: Option<std::path::PathBuf>, for_good: bool) -> Echo {
+        Echo {
+            self_ref: a_reference(1),
+            registry: Registry::default(),
+            forward_ping_to: None,
+            forward_to,
+            for_good,
+            ping_answer: 2,
+            forwarded: 0,
+            pinged: 0,
+            calls: 0,
+            seen: Default::default(),
+        }
+    }
+
+    /// `spikes/perm_fallback.sh` counted `grep -c "forwarded ping()"` and
+    /// `grep -c "served ping()"` — two `println!` sentences from this file
+    /// standing in for two classes. These are the rows that replaced them.
+    /// Reword either sentence and this test stays green; change a token in a
+    /// row and it goes red.
+    #[test]
+    fn the_forward_and_the_local_answer_are_told_apart_by_a_row() {
+        // Served here: the `n` column is the running count the script reads
+        // before and after it kills the forwarded-to server.
+        let mut echo = servant(None, false);
+        let req = request("ping");
+        assert!(echo.redirect(&req).is_none());
+        let _ = rows::captured::drain();
+        let mut out = Encoder::new(req.endian);
+        echo.dispatch(&req, &mut out).unwrap();
+        assert_eq!(
+            rows::captured::drain(),
+            vec![
+                "ROW\tserve\tfirst\t-\t1.2\tBE\t-\t-\t-\t-\t-".to_owned(),
+                "ROW\tserve\tserved\tping\t1.2\tBE\t-\t1\t-\t2\t-".to_owned(),
+            ]
+        );
+
+        // Forwarded, both statuses. The file's presence is the switch, so the
+        // target's published IOR is written where the servant looks for it.
+        for (for_good, note) in [(false, "temporary"), (true, "permanent")] {
+            let path = std::env::temp_dir()
+                .join(format!("orbweaver-rows-{}-{for_good}.ior", std::process::id()));
+            std::fs::write(&path, a_reference(4321).to_stringified().unwrap()).unwrap();
+            let mut echo = servant(Some(path.clone()), for_good);
+            let _ = rows::captured::drain();
+            assert!(echo.redirect(&req).is_some());
+            assert_eq!(
+                rows::captured::drain(),
+                vec![format!("ROW\tserve\tforwarded\tping\t1.2\tBE\t-\t1\t-\t-\t{note}")]
+            );
+
+            // The file gone is how the harness says the target died: from
+            // here on `ping` is served at this address, and no row says
+            // `forwarded`.
+            std::fs::remove_file(&path).unwrap();
+            let _ = rows::captured::drain();
+            assert!(echo.redirect(&req).is_none());
+            assert!(rows::captured::drain().is_empty());
+        }
+    }
 }
