@@ -2654,9 +2654,33 @@ for cd_run in $(seq 1 "$cd_runs"); do
   # and was a build-cache one. The lint gate is CI's job; this group's job is
   # the repeat count.
   cd_out=$(cargo test -q -p orbweaver-giop -p orbweaver-registry -p orbweaver-object 2>&1)
-  if grep -q "^test result: FAILED" <<<"$cd_out"; then
-    echo "  FAIL run $cd_run of $cd_runs"
-    printf '%s' "$cd_out" | grep -A3 "^failures:" | head -6 | sed 's/^/       /'
+  cd_rc=$?
+  if [ "$cd_rc" -ne 0 ] || grep -q "^test result: FAILED" <<<"$cd_out"; then
+    echo "  FAIL run $cd_run of $cd_runs (cargo exit $cd_rc)"
+    # What this group owes when it goes red is a *diagnosis*, and until
+    # 2026-08-25 it could not give one. It printed
+    #   printf '%s' "$cd_out" | grep -A3 "^failures:" | head -6
+    # and cargo emits two `failures:` sections — a detail block holding the
+    # panic and, later, a bare list of names. Three lines after the first
+    # match is the blank line and the `---- name stdout ----` header; the
+    # panic is further down, and `head -6` cut before reaching it. A CI run
+    # therefore reported `FAIL run 5 of 5` followed by six lines containing no
+    # information, which is what it did on the first push after this group's
+    # own five-run argument was written down. **A group whose case is "one
+    # green run is not evidence" produced a red run that was not evidence
+    # either.** Name the tests, then print each one's panic line.
+    # No pipe: `head`/`grep -q` on a pipe are the two forms this file has been
+    # bitten by, so the capture is a variable and the trim is a herestring.
+    cd_names=$(grep -E "^test .* \.\.\. FAILED$" <<<"$cd_out" || true)
+    cd_why=$(grep -E "panicked at|^assertion .* failed|^  left:|^ right:" <<<"$cd_out" || true)
+    [ -n "$cd_names" ] && sed 's/^/       /' <<<"$cd_names"
+    [ -n "$cd_why" ] && sed -n '1,20p' <<<"$cd_why" | sed 's/^/       | /'
+    if [ -z "$cd_names$cd_why" ]; then
+      # Neither shape matched: say so rather than printing nothing, which is
+      # how this group spent its first red run saying nothing at all.
+      echo "       (no FAILED test line and no panic in the output — last 8 lines:)"
+      tail -8 <<<"$cd_out" | sed 's/^/       | /'
+    fi
     cd_failures=$((cd_failures+1))
   fi
 done

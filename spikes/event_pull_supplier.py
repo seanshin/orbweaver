@@ -120,6 +120,12 @@ def main(argv):
         print("FAIL the reference did not narrow to ProxyPullConsumer")
         return 1
     proxy.connect_pull_supplier(supplier._this())
+    # Published for the teardown below. `main` has seven return paths and the
+    # channel starts asking at the line above, so every one of them from here
+    # on has to stop it asking — a `finally` around one of them would leave the
+    # other six aborting. See `stop_being_a_supplier`.
+    global _CONNECTED_PROXY  # noqa: PLW0603 — a fixture, and the alternative is six call sites
+    _CONNECTED_PROXY = proxy
 
     # A sleeping, deadline-bounded wait. A loop with no sleep is the Phase 0
     # wait loop that finishes in microseconds and does not wait at all.
@@ -162,5 +168,35 @@ def main(argv):
     return 0
 
 
+def stop_being_a_supplier(proxy):
+    """Tell the channel to stop asking, before this interpreter goes away.
+
+    Measured 2026-08-25 on CI (Linux; it had never fired on macOS): the script
+    printed `PASS` and every value matched, then exited **134** — SIGABRT. Our
+    channel polls `try_pull` every `DEFAULT_SOURCE_POLL`, and a call that lands
+    while CPython is tearing down finds module globals already cleared, so
+    `CORBA.Any` raises `AttributeError`. omniORB sees a servant method raise
+    something that is not a CORBA exception, prints `FATAL: exception not
+    rethrown`, and aborts the process.
+
+    **The measurement was sound and the process still died**, which is exactly
+    why this group reads the exit code instead of grepping for `PASS`: a group
+    that matched the word would have been green over an aborting fixture. The
+    repair is the protocol's own: `disconnect_pull_consumer` is what a supplier
+    that is going away is supposed to say, and saying it also exercises the
+    third of the three operations this fixture exists to measure.
+    """
+    try:
+        proxy.disconnect_pull_consumer()
+    except Exception as exc:  # noqa: BLE001 — reported; teardown must not mask a result
+        print("note teardown: disconnect_pull_consumer raised", exc)
+
+
+#: The channel's `ProxyPullConsumer` once connected, or `None`.
+_CONNECTED_PROXY = None
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    rc = main(sys.argv)
+    if _CONNECTED_PROXY is not None:
+        stop_being_a_supplier(_CONNECTED_PROXY)
+    sys.exit(rc)
