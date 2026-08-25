@@ -38,10 +38,19 @@
 // itself the OMG IR IDL's order. Reordering a member here is a silent breaking
 // change that no compiler will catch and the comparison will.
 //
-// One thing in the real IR is still deliberately absent:
+// This header used to say that one thing in the real IR was "still
+// deliberately absent — `valuetype`-shaped definition kinds. The registry does
+// not hold them." That was true when it was written and **false from
+// 2026-08-20** (74b5662, a valuetype became `TypeCode::Value`) and 2026-08-21
+// (22637a8, a native became `TypeCode::Native`): the registry has held both for
+// four days. The sentence survived because nothing compiles a comment and
+// because the enum below was truncated in the same shape, so contract and
+// prose agreed with each other and both disagreed with the registry. Its twin
+// lived in `ifr.rs` over `def_kind`'s catch-all; both are repaired in the same
+// commit, because a fact with two homes drifts at whichever one is edited
+// second.
 //
-//   * `valuetype`-shaped definition kinds. The registry does not hold them.
-//
+
 // The mutating half is present on purpose: `create_module` is declared so that
 // the servant can *refuse* it with NO_PERMISSION. A policy refusal is only
 // expressible for an operation the contract declares — `BAD_OPERATION` says
@@ -57,11 +66,34 @@ module CORBA {
   typedef string RepositoryId;
   typedef string VersionSpec;
 
+  // `CORBA — Part 1: Interfaces, v3.4` §14.5.1 "Supporting Type Definitions",
+  // in chapter 14 "The Interface Repository", in declaration order — which is what
+  // fixes every ordinal. **The whole list, and not the prefix we happened to
+  // answer**: this enum stopped at `dk_Repository` until 2026-08-25, so a
+  // generated client could not decode `dk_Value` (20) and the generated
+  // skeleton in `ifr_shape.rs` had no such enumerator to answer with — which is
+  // why the second home of `def_kind` could not be repaired without repairing
+  // this. A truncated enum refuses a conformant peer's ordinal in its `get`
+  // arm, which is the same defect as answering the wrong one.
+  //
+  // Measured against the peer 2026-08-25 (omniORB 4.3.4's own `omniORB.ir_idl`
+  // stubs, clause (a) of the licensing boundary — a separate process over TCP):
+  // its `CORBA.DefinitionKind` carries **25 members, 0..24, ending at
+  // `dk_AbstractInterface`** — the CORBA 3.0 list. Ordinals 0..24 below are
+  // therefore confirmed by name against a client we did not write; **25..35 are
+  // declared from the specification and are not nameable by that peer**, and
+  // nothing in this workspace answers one. Our facade answers no ordinal above
+  // 24 (`orbweaver_registry::ifr::DefinitionKind`, whose members stop exactly
+  // where the measurement does).
   //@ ai_desc: What kind of IDL construct a repository entry describes
   enum DefinitionKind {
     dk_none, dk_all, dk_Attribute, dk_Constant, dk_Exception, dk_Interface,
     dk_Module, dk_Operation, dk_Typedef, dk_Alias, dk_Struct, dk_Union,
-    dk_Enum, dk_Primitive, dk_String, dk_Sequence, dk_Array, dk_Repository
+    dk_Enum, dk_Primitive, dk_String, dk_Sequence, dk_Array, dk_Repository,
+    dk_Wstring, dk_Fixed, dk_Value, dk_ValueBox, dk_ValueMember, dk_Native,
+    dk_AbstractInterface, dk_LocalInterface, dk_Component, dk_Home,
+    dk_Factory, dk_Finder, dk_Emits, dk_Publishes, dk_Consumes, dk_Provides,
+    dk_Uses, dk_Event
   };
 
   //@ ai_desc: The root of the Interface Repository hierarchy

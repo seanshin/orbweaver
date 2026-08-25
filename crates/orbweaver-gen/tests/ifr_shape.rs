@@ -106,6 +106,31 @@ module bank {
     //@ ai_authz: bank.account.withdraw
     void withdraw(in Money amount) raises (Denied);
   };
+  // Five entry shapes added 2026-08-25. Two of them — `Voucher` and `Ledger` —
+  // were answered `dk_none` by both `def_kind`s until that day, and `Auditable`
+  // was answered `dk_Interface` with nothing looking at whether it was
+  // abstract. **None of the five was in this subject**, which is why the two
+  // classifiers could carry the same `_ =>` catch-all for five days with 82
+  // pinned comparisons green: the comparison only compares what the contract
+  // declares, so a shared blind spot is invisible to it by construction.
+  // `CEILING` and `Statement` were already answered correctly and are here as
+  // the control — the exhaustive rewrite must not move them.
+  //@ ai_desc: The largest amount a single withdrawal may take
+  const long CEILING = 1000000;
+  //@ ai_desc: A run of amounts, oldest first
+  typedef sequence<Money> Statement;
+  //@ ai_desc: Anything that can describe itself to an auditor
+  abstract interface Auditable {
+    //@ ai_desc: A one-line description for the audit log
+    string audit_line();
+  };
+  //@ ai_desc: A held amount, carried by value rather than by reference
+  valuetype Voucher {
+    //@ ai_desc: What the voucher is worth
+    public long worth;
+  };
+  //@ ai_desc: A handle only the local language mapping understands
+  native Ledger;
 };
 ";
 
@@ -115,6 +140,16 @@ const MONEY: &str = "IDL:bank/Money:1.0";
 const CURRENCY: &str = "IDL:bank/Currency:1.0";
 const DENIED: &str = "IDL:bank/Denied:1.0";
 const ABSENT: &str = "IDL:bank/Nope:1.0";
+/// `Entry::Const` — `dk_Constant`.
+const CEILING: &str = "IDL:bank/CEILING:1.0";
+/// `TypeCode::Alias` — `dk_Alias`.
+const STATEMENT: &str = "IDL:bank/Statement:1.0";
+/// `Entry::Interface` with `abstract_interface` set — `dk_AbstractInterface`.
+const AUDITABLE: &str = "IDL:bank/Auditable:1.0";
+/// `TypeCode::Value` — `dk_Value`, 20.
+const VOUCHER: &str = "IDL:bank/Voucher:1.0";
+/// `TypeCode::Native` — `dk_Native`, 23.
+const LEDGER: &str = "IDL:bank/Ledger:1.0";
 
 /// `create_module(in RepositoryId, in Identifier, in VersionSpec)` — three
 /// arguments, and writing one made the generated skeleton answer `MARSHAL`
@@ -196,17 +231,69 @@ fn exception_description(registry: &Registry, id: &str) -> ExceptionDescription 
     }
 }
 
+/// `IRObject::_get_def_kind`, against the **generated** enum.
+///
+/// This is the second home of `ifr::RepositoryServer::def_kind` and was a
+/// byte-for-byte duplicate of it — the same five arms and the same
+/// `_ => dk_none` catch-all — so when the oracle's arm swallowed
+/// `TypeCode::Value`, `Native` and `AbstractInterface`, this one swallowed them
+/// too and the comparison stayed green over both. **A duplicated classifier
+/// cannot refute the classifier it duplicates.** It is still a duplicate — the
+/// point of this file is that a generated skeleton can express the hand-written
+/// servant, and calling the private original would measure nothing — but it is
+/// now a duplicate that has to be *kept* in step by
+/// [`the_two_def_kinds_agree_on_every_entry_the_subject_declares`], which
+/// drives both over every entry rather than trusting the eye.
+///
+/// No `_` arm, for the same reason the original has none: a new `TypeCode`
+/// variant must break the build here too.
 fn def_kind_of(registry: &Registry, id: &str) -> DefinitionKind {
     match registry.get(id) {
-        Some(Entry::Interface(_)) => DefinitionKind::dk_Interface,
+        Some(Entry::Interface(i)) => {
+            if i.abstract_interface {
+                DefinitionKind::dk_AbstractInterface
+            } else {
+                DefinitionKind::dk_Interface
+            }
+        }
         Some(Entry::Const { .. }) => DefinitionKind::dk_Constant,
         Some(Entry::Type(tc)) => match tc {
+            TypeCode::Null
+            | TypeCode::Void
+            | TypeCode::Short
+            | TypeCode::Long
+            | TypeCode::UShort
+            | TypeCode::ULong
+            | TypeCode::Float
+            | TypeCode::Double
+            | TypeCode::Boolean
+            | TypeCode::Char
+            | TypeCode::Octet
+            | TypeCode::Any
+            | TypeCode::TypeCode
+            | TypeCode::Principal
+            | TypeCode::LongLong
+            | TypeCode::ULongLong
+            | TypeCode::LongDouble
+            | TypeCode::WChar => DefinitionKind::dk_Primitive,
+            // Unbounded is a PrimitiveDef, bounded is a StringDef (§14.5.15).
+            TypeCode::String(0) => DefinitionKind::dk_Primitive,
+            TypeCode::String(_) => DefinitionKind::dk_String,
+            TypeCode::WString(0) => DefinitionKind::dk_Primitive,
+            TypeCode::WString(_) => DefinitionKind::dk_Wstring,
+            TypeCode::Fixed { .. } => DefinitionKind::dk_Fixed,
+            TypeCode::Sequence { .. } => DefinitionKind::dk_Sequence,
+            TypeCode::Array { .. } => DefinitionKind::dk_Array,
+            TypeCode::ObjRef { .. } => DefinitionKind::dk_Interface,
             TypeCode::Struct { .. } => DefinitionKind::dk_Struct,
             TypeCode::Union { .. } => DefinitionKind::dk_Union,
             TypeCode::Enum { .. } => DefinitionKind::dk_Enum,
             TypeCode::Alias { .. } => DefinitionKind::dk_Alias,
             TypeCode::Except { .. } => DefinitionKind::dk_Exception,
-            _ => DefinitionKind::dk_none,
+            TypeCode::Value { .. } => DefinitionKind::dk_Value,
+            TypeCode::Native { .. } => DefinitionKind::dk_Native,
+            TypeCode::AbstractInterface { .. } => DefinitionKind::dk_AbstractInterface,
+            TypeCode::Recursive(_) => DefinitionKind::dk_none,
         },
         None => DefinitionKind::dk_none,
     }
@@ -604,7 +691,10 @@ fn compared() -> Vec<Case> {
     v.push(case("repository describe_interface", ROOT.to_vec(), "describe_interface", &[]));
 
     // ── an InterfaceDef, at a derived key ──
-    for id in [ACCOUNT, PARTY] {
+    // `AUDITABLE` is abstract, which changes only `_get_def_kind`; every other
+    // accessor must answer identically to a plain interface's, and that is the
+    // half a `def_kind`-only test would not have checked.
+    for id in [ACCOUNT, PARTY, AUDITABLE] {
         let key = entry_key(id);
         for want in [
             ifr::INTERFACE_DEF_ID,
@@ -643,7 +733,12 @@ fn compared() -> Vec<Case> {
     }
 
     // ── a Contained, at a derived key, for every non-interface entry kind ──
-    for id in [MONEY, CURRENCY, DENIED] {
+    // Five of these eight are new on 2026-08-25 and three of them — `VOUCHER`,
+    // `LEDGER` and, through `Entry::Const`, `CEILING` — are the entry shapes
+    // whose `_get_def_kind` this batch repaired. `STATEMENT` is here because an
+    // alias was already answered correctly and a regression in the exhaustive
+    // rewrite would be invisible without it.
+    for id in [MONEY, CURRENCY, DENIED, CEILING, STATEMENT, VOUCHER, LEDGER] {
         let key = entry_key(id);
         v.push(case("contained _non_existent", key.clone(), "_non_existent", &[]));
         for op in ["_get_def_kind", "_get_id", "_get_name", "_get_absolute_name", "_get_version"] {
@@ -706,8 +801,14 @@ fn the_generated_skeleton_answers_what_the_hand_written_servant_answers() {
 fn the_comparison_is_not_vacuous() {
     let cases = compared();
     // Pinned, not bounded: a matrix that silently shrinks is a comparison
-    // that silently weakens, and ">= 60" would not have noticed.
-    assert_eq!(cases.len(), 82, "the compared matrix changed size");
+    // that silently weakens, and ">= 60" would not have noticed. 82 → 131 on
+    // 2026-08-25, when `SUBJECT` gained the five entry shapes whose
+    // `_get_def_kind` answered `dk_none` — one more InterfaceDef key (17 cases)
+    // and four more Contained keys (8 each) — and the reason the figure moves
+    // is worth more than the figure: the two `def_kind`s carried the same
+    // catch-all for five days *because the contract declared nothing that
+    // reached it*.
+    assert_eq!(cases.len(), 131, "the compared matrix changed size");
     let mut from_idl = generated();
     let (mut bodies, mut raised, mut unknown) = (0, 0, 0);
     let mut nonempty = 0;
@@ -804,6 +905,122 @@ fn a_generated_description_decodes_as_the_oracles_own_struct() {
         assert_eq!(described.attributes[0].defined_in, PARTY);
         assert_eq!(described.attributes[0].id, "IDL:bank/Party/party_id:1.0");
     }
+}
+
+/// The two `def_kind`s agree on **every** entry the subject declares, and none
+/// of them is `dk_none`.
+///
+/// [`compared`] drives `_get_def_kind` on a fixed handful of keys, which is why
+/// the duplicate classifier below could carry the oracle's catch-all for five
+/// days undetected: the two agreed *because they were the same wrong code*, and
+/// the entries that would have shown it were not in the contract. This walks
+/// the registry instead of a list, so an entry shape added to `SUBJECT` is
+/// covered the moment it is declared.
+///
+/// The second assertion is the defect itself, stated as an invariant:
+/// **`dk_none` means "no such definition", so no id the registry holds may
+/// answer it** (D016 §5 B1). `TypeCode::Recursive` is the one shape that could,
+/// and it cannot be an entry — it names one.
+#[test]
+fn the_two_def_kinds_agree_on_every_entry_the_subject_declares() {
+    let r = registry();
+    let mut hand = hand_written();
+    let mut from_idl = generated();
+    let ids: Vec<String> = r.ids().cloned().collect();
+    assert!(ids.len() >= 10, "the subject declares {} entries", ids.len());
+
+    let mut none_answered = Vec::new();
+    let mut disagreed = Vec::new();
+    for endian in ORDERS {
+        for id in &ids {
+            let key = entry_key(id);
+            let want = ask(&mut hand, endian, &key, "_get_def_kind", &[]);
+            let got = ask(&mut from_idl, endian, &key, "_get_def_kind", &[]);
+            if want != got {
+                disagreed.push(format!("{id} ({endian:?}):\n  hand: {want:?}\n  gen:  {got:?}"));
+            }
+            if def_kind_of(&r, id) == DefinitionKind::dk_none {
+                none_answered.push(id.clone());
+            }
+        }
+    }
+    assert!(disagreed.is_empty(), "the two def_kinds differ:\n{}", disagreed.join("\n"));
+    assert!(
+        none_answered.is_empty(),
+        "these registered entries were told they do not exist: {none_answered:?}"
+    );
+}
+
+/// The contract declares every ordinal the specification does, and the facade
+/// answers only ordinals the peer can name.
+///
+/// The generated enum stopped at `dk_Repository` (17) until 2026-08-25, which
+/// is why `def_kind_of` above *could not* have been repaired on its own: there
+/// was no `dk_Value` to return. A truncated enum also refuses a conformant
+/// sender's ordinal in its generated `get`, which is the same defect pointed
+/// the other way.
+#[test]
+fn the_contracts_definition_kind_is_the_specifications() {
+    // `CORBA — Part 1: Interfaces, v3.4` §14.5.1, in declaration order.
+    let spec = [
+        "dk_none",
+        "dk_all",
+        "dk_Attribute",
+        "dk_Constant",
+        "dk_Exception",
+        "dk_Interface",
+        "dk_Module",
+        "dk_Operation",
+        "dk_Typedef",
+        "dk_Alias",
+        "dk_Struct",
+        "dk_Union",
+        "dk_Enum",
+        "dk_Primitive",
+        "dk_String",
+        "dk_Sequence",
+        "dk_Array",
+        "dk_Repository",
+        "dk_Wstring",
+        "dk_Fixed",
+        "dk_Value",
+        "dk_ValueBox",
+        "dk_ValueMember",
+        "dk_Native",
+        "dk_AbstractInterface",
+        "dk_LocalInterface",
+        "dk_Component",
+        "dk_Home",
+        "dk_Factory",
+        "dk_Finder",
+        "dk_Emits",
+        "dk_Publishes",
+        "dk_Consumes",
+        "dk_Provides",
+        "dk_Uses",
+        "dk_Event",
+    ];
+    let src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/services/ir-subset.idl"),
+    )
+    .expect("the contract");
+    let parsed = orbweaver_idl::parse(&src).expect("the contract parses");
+    let mut r = Registry::new();
+    r.load(&parsed).expect("loads");
+    let Some(TypeCode::Enum { members, .. }) = r.typecode("IDL:omg.org/CORBA/DefinitionKind:1.0")
+    else {
+        panic!("the contract must declare DefinitionKind as an enum");
+    };
+    assert_eq!(members, &spec, "ordinal N is declaration position N; a gap renumbers the wire");
+
+    // What the facade may *answer* is the narrower list, and the boundary is a
+    // measurement rather than a preference: omniORB 4.3.4's `omniORB.ir_idl`
+    // stubs declare 0..24 and would raise MARSHAL on 25. Nothing in this
+    // workspace answers above 24 — the hand-written enum stops there.
+    assert_eq!(ifr::DefinitionKind::AbstractInterface as u32, 24);
+    assert_eq!(ifr::DefinitionKind::Value as u32, 20);
+    assert_eq!(ifr::DefinitionKind::Native as u32, 23);
 }
 
 /// The contract really does declare the operation, with the members that once

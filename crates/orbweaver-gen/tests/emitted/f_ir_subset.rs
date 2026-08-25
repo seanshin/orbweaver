@@ -1255,6 +1255,42 @@ pub mod CORBA {
         dk_Array = 16,
         /// IDL enumerator `dk_Repository`; ordinal 17 on the wire.
         dk_Repository = 17,
+        /// IDL enumerator `dk_Wstring`; ordinal 18 on the wire.
+        dk_Wstring = 18,
+        /// IDL enumerator `dk_Fixed`; ordinal 19 on the wire.
+        dk_Fixed = 19,
+        /// IDL enumerator `dk_Value`; ordinal 20 on the wire.
+        dk_Value = 20,
+        /// IDL enumerator `dk_ValueBox`; ordinal 21 on the wire.
+        dk_ValueBox = 21,
+        /// IDL enumerator `dk_ValueMember`; ordinal 22 on the wire.
+        dk_ValueMember = 22,
+        /// IDL enumerator `dk_Native`; ordinal 23 on the wire.
+        dk_Native = 23,
+        /// IDL enumerator `dk_AbstractInterface`; ordinal 24 on the wire.
+        dk_AbstractInterface = 24,
+        /// IDL enumerator `dk_LocalInterface`; ordinal 25 on the wire.
+        dk_LocalInterface = 25,
+        /// IDL enumerator `dk_Component`; ordinal 26 on the wire.
+        dk_Component = 26,
+        /// IDL enumerator `dk_Home`; ordinal 27 on the wire.
+        dk_Home = 27,
+        /// IDL enumerator `dk_Factory`; ordinal 28 on the wire.
+        dk_Factory = 28,
+        /// IDL enumerator `dk_Finder`; ordinal 29 on the wire.
+        dk_Finder = 29,
+        /// IDL enumerator `dk_Emits`; ordinal 30 on the wire.
+        dk_Emits = 30,
+        /// IDL enumerator `dk_Publishes`; ordinal 31 on the wire.
+        dk_Publishes = 31,
+        /// IDL enumerator `dk_Consumes`; ordinal 32 on the wire.
+        dk_Consumes = 32,
+        /// IDL enumerator `dk_Provides`; ordinal 33 on the wire.
+        dk_Provides = 33,
+        /// IDL enumerator `dk_Uses`; ordinal 34 on the wire.
+        dk_Uses = 34,
+        /// IDL enumerator `dk_Event`; ordinal 35 on the wire.
+        dk_Event = 35,
     }
     impl Cdr for DefinitionKind {
         fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
@@ -1281,6 +1317,24 @@ pub mod CORBA {
                 15 => Self::dk_Sequence,
                 16 => Self::dk_Array,
                 17 => Self::dk_Repository,
+                18 => Self::dk_Wstring,
+                19 => Self::dk_Fixed,
+                20 => Self::dk_Value,
+                21 => Self::dk_ValueBox,
+                22 => Self::dk_ValueMember,
+                23 => Self::dk_Native,
+                24 => Self::dk_AbstractInterface,
+                25 => Self::dk_LocalInterface,
+                26 => Self::dk_Component,
+                27 => Self::dk_Home,
+                28 => Self::dk_Factory,
+                29 => Self::dk_Finder,
+                30 => Self::dk_Emits,
+                31 => Self::dk_Publishes,
+                32 => Self::dk_Consumes,
+                33 => Self::dk_Provides,
+                34 => Self::dk_Uses,
+                35 => Self::dk_Event,
                 _ => return Err(rt::GiopError::Decode("ordinal outside DefinitionKind; the sender may be built against a newer contract")),
             })
         }
