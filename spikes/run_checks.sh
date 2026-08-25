@@ -997,12 +997,27 @@ cleanup
 # ── Assumption D ─────────────────────────────────────────────────────────────
 hr "assumption D — IOR endpoint publishing"
 if start_server; then
-  adv=$(cargo run -q --bin spike-dump -- spikes/echo.ior ping little 1 2>&1 | head -1)
+  # `... | head -1` SIGPIPEd spike-dump and, under `pipefail`, threw away its
+  # exit status — so a spike-dump that could not run at all left `$adv` holding
+  # its first error line, which does not contain 127.0.0.1, and the `*)` arm
+  # below printed **"confirmed a routable-but-local address is published"** over
+  # a producer that published nothing. Capture first, read the producer's own
+  # status, then take the first line off a herestring where nothing can exit
+  # early on a pipe.
+  adv_raw=$(cargo run -q --bin spike-dump -- spikes/echo.ior ping little 1 2>&1); adv_rc=$?
+  adv=$(head -1 <<<"$adv_raw")
   echo "  default publish: $adv"
-  case "$adv" in
-    *127.0.0.1*) echo "  note  loopback published; a container would publish its pod IP instead" ;;
-    *)           echo "  confirmed  a routable-but-local address is published, not loopback (risk R7 is real)" ;;
-  esac
+  if [ "$adv_rc" -ne 0 ]; then
+    echo "  FAIL spike-dump could not read the published address (exit $adv_rc) — R7 is UNMEASURED here,"
+    echo "       which is a failure and not a 'confirmed'"
+    tail -3 <<<"$adv_raw" | sed 's/^/       | /'
+    fail_total=$((fail_total+1))
+  else
+    case "$adv" in
+      *127.0.0.1*) echo "  note  loopback published; a container would publish its pod IP instead" ;;
+      *)           echo "  confirmed  a routable-but-local address is published, not loopback (risk R7 is real)" ;;
+    esac
+  fi
 else
   fail_total=$((fail_total+1))
 fi
@@ -1014,12 +1029,16 @@ cleanup
 # of ten runs: "Address in use?" from a fixture that had done nothing wrong.
 if start_server -ORBendPoint giop:tcp::24404 -ORBendPointPublish giop:tcp:127.0.0.1:24404; then
   rewritten=$(cargo run -q --bin spike-dump -- spikes/echo.ior ping little 1 2>&1)
-  echo "  rewritten publish: $(echo "$rewritten" | head -1)"
-  if echo "$rewritten" | grep -q RESPONSE; then
+  echo "  rewritten publish: $(head -1 <<<"$rewritten")"
+  # Was `echo "$rewritten" | grep -q RESPONSE` — the form this file's own header
+  # calls out twice: `grep -q` exits on the first match, SIGPIPEs `echo`, and
+  # `pipefail` hands the pipeline that 141 so the `if` reads a MATCH as "no
+  # match". A herestring has no producer to kill and no pipeline status.
+  if grep -q RESPONSE <<<"$rewritten"; then
     echo "  ok   endpoint rewriting works — mitigation for R7 is available"
   else
     echo "  FAIL endpoint rewriting did not produce a reachable reference"
-    echo "$rewritten" | grep -E "no response|closed|error" | sed 's/^/       /'
+    grep -E "no response|closed|error" <<<"$rewritten" | sed 's/^/       /'
     fail_total=$((fail_total+1))
   fi
 else
@@ -1439,8 +1458,20 @@ else
     out=$(cargo run -q --bin spike-interop -- spikes/jacorb.ior 2>&1)
     if grep -q "assumption A: PASS" <<<"$out"; then
       echo "  ok   our client -> JacORB server, 20/20 both byte orders"
-      cs=$(printf '%s' "$out" | grep -m1 "negotiated char codeset" | sed 's/.*: //')
-      echo "  ok   codeset negotiated with a second peer: $cs"
+      # `grep -m1` on a pipe is the same early-exit hazard as `grep -q`, and it
+      # had a second defect on top: when nothing matched, `$cs` was empty and
+      # the line below still printed `ok codeset negotiated with a second
+      # peer:` followed by nothing — an `ok` asserting a measurement that was
+      # not taken. Match on a herestring, take the first line without a pipe,
+      # and make the empty case a failure.
+      cs=$(head -1 <<<"$(grep "negotiated char codeset" <<<"$out" | sed 's/.*: //')")
+      if [ -n "$cs" ]; then
+        echo "  ok   codeset negotiated with a second peer: $cs"
+      else
+        echo "  FAIL our client printed no negotiated char codeset against JacORB, so the"
+        echo "       codeset claim is UNMEASURED — not an ok with an empty value after it"
+        jfail=1
+      fi
     else
       echo "  FAIL our client -> JacORB server"; printf '%s' "$out" | grep "  FAIL" | head -3 | sed 's/^/       /'
       jfail=1
@@ -2340,8 +2371,14 @@ fi
 # line stops meaning anything. Negative control: the pre-A4 `_rt.py` reads
 # "85 divergence(s)" here (the D008 refusal on every structural `_t`).
 py_sweep=$(cargo test -q -p orbweaver-gen --test python_target -- --nocapture 2>&1)
-gl=$(printf '%s\n' "$py_sweep" | sed -n 's/^.*corpus\/golden: .* \([0-9][0-9]*\) value(s) and \([0-9][0-9]*\) call(s) .* \([0-9][0-9]*\) divergence(s)$/\1 \2 \3/p' | head -1)
-sv=$(printf '%s\n' "$py_sweep" | sed -n 's/^.*corpus\/services: .* \([0-9][0-9]*\) value(s) and \([0-9][0-9]*\) call(s) .* \([0-9][0-9]*\) divergence(s)$/\1 \2 \3/p' | head -1)
+# These two feed the floors below, so they are the early-exit-on-a-pipe class
+# that can change a verdict: `sed … | head -1` SIGPIPEs sed and, under
+# `pipefail`, gives the substitution sed's status instead of head's. Herestring
+# in, herestring out — no pipe anywhere, so nothing can exit early on one.
+gl_all=$(sed -n 's/^.*corpus\/golden: .* \([0-9][0-9]*\) value(s) and \([0-9][0-9]*\) call(s) .* \([0-9][0-9]*\) divergence(s)$/\1 \2 \3/p' <<<"$py_sweep")
+sv_all=$(sed -n 's/^.*corpus\/services: .* \([0-9][0-9]*\) value(s) and \([0-9][0-9]*\) call(s) .* \([0-9][0-9]*\) divergence(s)$/\1 \2 \3/p' <<<"$py_sweep")
+gl=$(head -1 <<<"$gl_all")
+sv=$(head -1 <<<"$sv_all")
 set -- $gl
 if [ "${1:-0}" -ge 170 ] && [ "${2:-0}" -ge 137 ] && [ "${3:-1}" -eq 0 ]; then
   echo "  ok   $1 golden value(s) over $2 call(s) crossed to Python and back, constructed anys included, 0 divergences"
@@ -2746,7 +2783,15 @@ else
   ifr_fail=1
 fi
 rm -f "$IFR_IOR" /tmp/orbweaver-ifr-hold.log
-cargo run -q --bin spike-ifr -- "$IFR_IOR" --hold >/tmp/orbweaver-ifr-hold.log 2>&1 &
+# `spikes/dkprobe.idl` rides along on the SAME holding facade rather than
+# starting a second one: it adds one definition per DefinitionKind the facade
+# can answer, including the three the v1 wire cannot carry, for the def_kind
+# group below. Adding it does not move the walk group's expectations — every
+# `expect` there is about gc10, and the walk was re-run against this three-file
+# facade before the file was added (51 legs, unchanged).
+cargo run -q --bin spike-ifr -- "$IFR_IOR" \
+  corpus/golden/10-inheritance.idl corpus/golden/19-realistic-service.idl \
+  spikes/dkprobe.idl --hold >/tmp/orbweaver-ifr-hold.log 2>&1 &
 IFR_PID=$!
 ifr_up=0
 for _ in $(seq 1 60); do
@@ -2754,24 +2799,54 @@ for _ in $(seq 1 60); do
   sleep 0.2
 done
 if [ "$ifr_up" -eq 1 ]; then
-  ifr_out=$(python3 -c "import sys, CORBA, omniORB.ir_idl
+  # Whether omniORBpy's IR stubs are importable is ONE fact, and all three legs
+  # below need it. It is decided once, here, by a probe whose verdict is its
+  # exit code — never by matching `ImportError` in a leg's output, which is the
+  # class D010 §7.2 names: a traceback echoes the source line it failed on, so
+  # a gate that greps for its own probe text can match itself. This used to be
+  # spelled two ways in this section (a `case` arm here and an exit-code probe
+  # before the walk); two spellings of one fact drift, so there is one.
+  if python3 -c "import CORBA, omniORB.ir_idl" >/dev/null 2>&1; then
+    ir_stubs=1
+  else
+    ir_stubs=0
+  fi
+
+  if [ "$ir_stubs" -eq 0 ]; then
+    echo "  SKIPPED  omniORBpy IR stubs absent (fixture: omniORBpy's omniORB.ir_idl) — the"
+    echo "           cross-ORB half is unmeasured, not passing"
+    skipped=$((skipped+1))
+  else
+    # The snippet's verdict is its exit code too, not a line bash matches:
+    # every expectation is asserted inside python, so a mismatch is exit 1 and
+    # an unexpected exception is exit 1 as well, and neither can be spelled by
+    # accident in a traceback.
+    ifr_out=$(python3 -c "import sys, CORBA, omniORB.ir_idl
 orb = CORBA.ORB_init(sys.argv)
 r = orb.string_to_object(open('$IFR_IOR').read().strip())._narrow(CORBA.Repository)
+if r is None:
+    print('the IOR did not narrow to CORBA::Repository')
+    raise SystemExit(1)
 d = r.lookup_id('IDL:gc10/Both:1.0')._narrow(CORBA.InterfaceDef).describe_interface()
-print(d.name, [o.name for o in d.operations], [a.name for a in d.attributes])
+got = (d.name, [o.name for o in d.operations], [a.name for a in d.attributes])
+want = ('Both', ['touch', 'value'], ['id', 'name'])
+if got != want:
+    print(f'described {got!r}, want {want!r}')
+    raise SystemExit(1)
 try:
     r.create_module('IDL:x:1.0', 'x', '1.0')
-    print('WRITE ACCEPTED')
+    print('a write was ACCEPTED; the facade is meant to be read-only')
+    raise SystemExit(1)
 except CORBA.NO_PERMISSION:
-    print('refused')" 2>&1)
-  case "$ifr_out" in
-    "Both ['touch', 'value'] ['id', 'name']"*refused*)
-      echo "  ok   omniORB's IR client decoded our FullInterfaceDescription and was refused a write" ;;
-    *ImportError*|*ModuleNotFoundError*)
-      echo "  SKIPPED  omniORBpy IR stubs absent — the cross-ORB half is unmeasured, not passing"
-      skipped=$((skipped+1)) ;;
-    *) echo "  FAIL cross-ORB IR client: $(printf '%s' "$ifr_out" | tr '\n' ' ')"; ifr_fail=1 ;;
-  esac
+    pass" 2>&1); ifr_rc=$?
+    if [ "$ifr_rc" -eq 0 ]; then
+      echo "  ok   omniORB's IR client decoded our FullInterfaceDescription and was refused a write"
+    else
+      echo "  FAIL cross-ORB IR client (exit $ifr_rc)"
+      tail -6 <<<"$ifr_out" | sed 's/^/       | /'
+      ifr_fail=1
+    fi
+  fi
 
   # And the containment walk the one-shot above does not reach: `contents`
   # with its filter, `describe_contents` and `max_returned_objs`, `lookup` vs
@@ -2785,10 +2860,9 @@ except CORBA.NO_PERMISSION:
   # of a stream that prints its own expectations — that stream contains the
   # word FAILURES and the words it compares against.
   #
-  # Absent stubs are told from a failed walk by their own probe with its own
-  # exit code, before the walk runs, rather than by matching ImportError in
-  # output a traceback could echo for any other reason.
-  if ! python3 -c "import CORBA, omniORB.ir_idl" >/dev/null 2>&1; then
+  # Absent stubs are told from a failed walk by `$ir_stubs` above — one probe,
+  # one exit code, for all three legs of this group.
+  if [ "$ir_stubs" -eq 0 ]; then
     echo "  SKIPPED  omniORBpy IR stubs absent (fixture: omniORBpy's omniORB.ir_idl) — the"
     echo "           containment walk is unmeasured, not passing"
     skipped=$((skipped+1))
@@ -2810,6 +2884,61 @@ except CORBA.NO_PERMISSION:
       echo "       describe_contents with max_returned_objs, lookup/lookup_name, defined_in back up"
       echo "       to the repository, get_primitive, and create_module still refused"
     fi
+  fi
+
+  # And the one thing neither leg above can refute: the ORDINAL our servant
+  # writes for `_get_def_kind`. Every local comparison uses the same enum on
+  # both sides and therefore agrees with itself, so a wrong ordinal is
+  # invisible to a self-test — and was: before 2026-08-25 a valuetype, an
+  # abstract interface and a native all answered `dk_none`, *"no such
+  # definition"*, for definitions the registry holds, and nothing was red.
+  # `spikes/dkprobe.idl` on the same holding facade is what makes those three
+  # reachable at all.
+  #
+  # Same discipline as the walk: the verdict is the script's exit code, never a
+  # marker grepped out of a stream that prints the enumerator names it is
+  # comparing against — that stream contains every string a marker match could
+  # want. And exit 3 is kept apart from exit 1 the way `spikes/ssliop.sh` keeps
+  # them apart: 3 means nothing was measured, 1 means the claim was refuted.
+  # Conflating them is how a run whose every leg came back COMM_FAILURE reads
+  # as a pass, which is exactly what the un-gated version of this probe did.
+  if [ "$ir_stubs" -eq 0 ]; then
+    echo "  SKIPPED  omniORBpy IR stubs absent (fixture: omniORBpy's omniORB.ir_idl) — every"
+    echo "           definition kind is unmeasured, not passing"
+    skipped=$((skipped+1))
+  else
+    dk_out=$(python3 spikes/dk_peer.py "$IFR_IOR" 2>&1); dk_rc=$?
+    # 10 is a FLOOR — nine definitions plus the leg that checks the expected
+    # table against omniORB's own DefinitionKind — not today's figure. Adding a
+    # definition to dkprobe.idl raises it. Exit 0 over one leg is what an
+    # emptied table looks like, and it is why the floor is here at all.
+    dk_legs=$(sed -n 's/^def_kind: every leg answered as expected (\([0-9][0-9]*\) legs)$/\1/p' <<<"$dk_out")
+    case "$dk_rc" in
+      0)
+        if [ -z "$dk_legs" ] || [ "$dk_legs" -lt 10 ]; then
+          echo "  FAIL the def_kind probe exited 0 over ${dk_legs:-no} legs (floor 10) — it measured"
+          echo "       less than it has"
+          ifr_fail=1
+        else
+          echo "  ok   omniORB's IR client named every kind our facade answers, $dk_legs legs:"
+          echo "       struct/enum/exception/alias/constant/interface, and the three that used to"
+          echo "       come back dk_none — valuetype, abstract interface, native"
+        fi ;;
+      3)
+        # Not a SKIPPED: the optional fixture was already probed and is
+        # present, so exit 3 here means OUR facade stopped answering after it
+        # wrote READY. Unmeasured is a failure — and saying so in these words
+        # keeps a reader from going after a wire defect that is not there.
+        echo "  FAIL the def_kind probe measured NOTHING (exit 3) — it never reached the facade,"
+        echo "       so no claim was refuted and there is no wire defect to chase; the holding"
+        echo "       facade stopped answering after it wrote READY"
+        tail -3 <<<"$dk_out" | sed 's/^/       | /'
+        ifr_fail=1 ;;
+      *)
+        echo "  FAIL omniORB's IR client did not name our definition kinds (exit $dk_rc)"
+        tail -12 <<<"$dk_out" | sed 's/^/       | /'
+        ifr_fail=1 ;;
+    esac
   fi
 else
   echo "  FAIL the holding IFR facade never came up"; ifr_fail=1
@@ -2882,14 +3011,29 @@ for _ in $(seq 1 60); do
   sleep 0.2
 done
 if [ "$ev_up" -eq 1 ]; then
-  ev_out=$(python3 spikes/event_consumer.py "$EV_IOR" 2>&1)
-  case "$ev_out" in
-    *PASS*) echo "  ok   omniORB's PushConsumer received events from OUR channel" ;;
-    *ModuleNotFoundError*|*ImportError*)
-      echo "  SKIPPED  omniORBpy CosEventComm stubs absent — the cross-ORB half is unmeasured, not passing"
-      skipped=$((skipped+1)) ;;
-    *) echo "  FAIL cross-ORB consumer: $(printf '%s' "$ev_out" | tail -2 | tr '\n' ' ')"; ev_fail=1 ;;
-  esac
+  # Two spellings of one fact used to live here: an `*ImportError*` arm decided
+  # whether the fixture existed, and a `*PASS*` arm decided whether it had
+  # worked. Both are string matches over a stream that can print either word
+  # for the wrong reason — a traceback echoes the source line it failed on, and
+  # this consumer's own docstring says the word PASS. Both are now exit codes:
+  # the stub probe's, and `event_consumer.py`'s own (0 an event arrived, 1 it
+  # did not, non-zero-and-noisy it could not run).
+  if ! python3 -c "import CosEventComm, CosEventComm__POA, CosEventChannelAdmin" \
+       >/dev/null 2>&1; then
+    echo "  SKIPPED  omniORBpy CosEventComm/CosEventChannelAdmin stubs absent (fixture:"
+    echo "           spikes/event_consumer.py needs them) — the cross-ORB half is"
+    echo "           unmeasured, not passing"
+    skipped=$((skipped+1))
+  else
+    ev_out=$(python3 spikes/event_consumer.py "$EV_IOR" 2>&1); ev_rc=$?
+    if [ "$ev_rc" -eq 0 ]; then
+      echo "  ok   omniORB's PushConsumer received events from OUR channel"
+    else
+      echo "  FAIL cross-ORB consumer (exit $ev_rc)"
+      tail -6 <<<"$ev_out" | sed 's/^/       | /'
+      ev_fail=1
+    fi
+  fi
 else
   # Print what the fixture said: on CI (run for 46ccaae, 2026-08-19) this line
   # fired once with nothing to read, right after the self-consistency spike
