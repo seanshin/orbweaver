@@ -27,8 +27,14 @@ use orbweaver_giop::{IiopProfile, Ior, Version};
 use orbweaver_registry::Registry;
 
 pub mod expert_service;
+pub mod policy;
 pub mod residency;
 pub mod tenant_service;
+
+use policy::{
+    IdAssignmentPolicy, ImplicitActivationPolicy, LifespanPolicy, Policies,
+    RequestProcessingPolicy, ServantRetentionPolicy, ThreadPolicy,
+};
 
 /// Repository id every CORBA object answers to.
 pub const OBJECT_ID: &str = "IDL:omg.org/CORBA/Object:1.0";
@@ -50,6 +56,11 @@ impl ObjectId {
 }
 
 /// How long a reference is meant to stay valid.
+///
+/// This is the specification's **Lifespan policy**, CORBA 3.4 §15.3.8.2, under
+/// a shorter name — and it is the only one of the seven §15.3.8 policies that
+/// was named here before D020. [`policy::LifespanPolicy`] carries the spec's
+/// value names, and [`Poa::policies`] maps this onto it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lifespan {
     /// Valid only while this process lives. The id carries a nonce so a
@@ -61,11 +72,20 @@ pub enum Lifespan {
 }
 
 /// What to do when an object id is not currently activated.
+///
+/// This ranges over two of the three values of the specification's **Request
+/// Processing policy**, CORBA 3.4 §15.3.8.6, which nothing said until D020:
+/// [`Reject`](Self::Reject) is `USE_ACTIVE_OBJECT_MAP_ONLY` and
+/// [`AskLocator`](Self::AskLocator) is `USE_SERVANT_MANAGER`.
+/// `USE_DEFAULT_SERVANT` has no analogue here — see
+/// [`policy::RequestProcessingPolicy`], which also records where our
+/// `AskLocator` with no locator diverges from the section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnknownIdPolicy {
-    /// Raise `OBJECT_NOT_EXIST`.
+    /// Raise `OBJECT_NOT_EXIST`. §15.3.8.6's `USE_ACTIVE_OBJECT_MAP_ONLY`.
     Reject,
     /// Ask the locator, which may activate one or forward the caller.
+    /// §15.3.8.6's `USE_SERVANT_MANAGER`.
     AskLocator,
 }
 
@@ -177,6 +197,58 @@ impl Poa {
     /// The POA's name, which prefixes every object key it mints.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// What this POA behaves as, for each of the seven policies of
+    /// CORBA 3.4 §15.3.8.
+    ///
+    /// **Computed, never stored, and not configurable.** Two fields vary —
+    /// [`Lifespan`] gives §15.3.8.2 and [`UnknownIdPolicy`] gives §15.3.8.6 —
+    /// and the other five are the same for every `Poa` that can exist today.
+    /// That they are constants is the finding rather than an oversight in the
+    /// report: a policy nobody can select still has a value, and four of these
+    /// had never been written down. See [`policy`] for each one's section, its
+    /// meaning, and whether we chose it.
+    ///
+    /// The answer for §15.3.8.4 is [`IdAssignmentPolicy::Either`], which is
+    /// **ours and not the specification's** — this POA accepts both assignment
+    /// models on one adapter. D020 Stage A records that; Stage B makes the two
+    /// specified values real.
+    ///
+    /// Every field is backed by a behavioural test in this crate except
+    /// §15.3.8.1 (the concurrency lives in `orbweaver_giop::Server`) and
+    /// §15.3.8.3 (a policy about servants, in a map that holds none). Those
+    /// two say so in their own documentation rather than being covered by a
+    /// test that would pass whatever they said.
+    pub fn policies(&self) -> Policies {
+        Policies {
+            // §15.3.8.1 — implicit, and decided a layer away: the ORB assigns
+            // requests to threads (one per connection, in `Server`).
+            thread: ThreadPolicy::OrbCtrlModel,
+            // §15.3.8.2 — the one policy a caller chose.
+            lifespan: match self.lifespan {
+                Lifespan::Transient => LifespanPolicy::Transient,
+                Lifespan::Persistent => LifespanPolicy::Persistent,
+            },
+            // §15.3.8.3 — `active` is `HashMap<ObjectId, ()>`: ids, not
+            // servants, so the policy has nothing here to be about.
+            id_uniqueness: None,
+            // §15.3.8.4 — the divergence. `activate` is USER_ID and
+            // `activate_new` is SYSTEM_ID, on the same POA.
+            id_assignment: IdAssignmentPolicy::Either,
+            // §15.3.8.5 — what a locator resolves is inserted into `active`
+            // and survives the request, which is RETAIN however the hook is
+            // spelled.
+            servant_retention: ServantRetentionPolicy::Retain,
+            // §15.3.8.6 — the correspondence `UnknownIdPolicy` already had
+            // without saying so.
+            request_processing: match self.unknown_id {
+                UnknownIdPolicy::Reject => RequestProcessingPolicy::UseActiveObjectMapOnly,
+                UnknownIdPolicy::AskLocator => RequestProcessingPolicy::UseServantManager,
+            },
+            // §15.3.8.7 — nothing becomes active as a side effect of anything.
+            implicit_activation: ImplicitActivationPolicy::NoImplicitActivation,
+        }
     }
 
     /// Activates `id`, so requests for it are served here.
@@ -528,6 +600,177 @@ mod tests {
         let mut poa = Poa::new("P", "IDL:m/I:1.0").with_unknown_id(UnknownIdPolicy::AskLocator);
         let key = poa.object_key(&ObjectId::from_name("absent"));
         assert!(matches!(poa.dispatch_target(&key, None), Target::Unknown));
+    }
+
+    // ── the seven policies, each claim against the behaviour ────────────────
+    //
+    // D020 Stage A's oracle. Every one of these asserts the value
+    // `Poa::policies()` reports **and** the behaviour that value names, in the
+    // same test, so that changing the claim alone makes it red. A report
+    // nothing checks against behaviour is the green-while-measuring-nothing
+    // class this project has found six times in a week.
+    //
+    // Two of the seven have no test here and say so instead:
+    //   §15.3.8.1 Thread — the concurrency is `orbweaver_giop::Server`'s, and
+    //     `Poa` has no thread field to observe.
+    //   §15.3.8.3 Object Id Uniqueness — the map holds ids, not servants, so
+    //     there is nothing for the policy to constrain and nothing a test
+    //     could refute.
+
+    /// §15.3.8.2 — TRANSIENT claimed, and TRANSIENT behaved: the key carries
+    /// the incarnation, so the next run's POA refuses it.
+    #[test]
+    fn transient_is_claimed_and_a_transient_key_does_not_survive_the_process() {
+        let a = Poa::new("P", "IDL:m/I:1.0");
+        let b = Poa::new("P", "IDL:m/I:1.0");
+        assert_eq!(a.policies().lifespan, LifespanPolicy::Transient);
+        assert_eq!(b.parse_key(&a.object_key(&ObjectId::from_name("x"))), None);
+    }
+
+    /// §15.3.8.2 — PERSISTENT claimed, and PERSISTENT behaved: the key is
+    /// reproducible, so another instantiation of the same POA accepts it.
+    #[test]
+    fn persistent_is_claimed_and_a_persistent_key_outlives_the_process() {
+        let a = Poa::new("P", "IDL:m/I:1.0").with_lifespan(Lifespan::Persistent);
+        let b = Poa::new("P", "IDL:m/I:1.0").with_lifespan(Lifespan::Persistent);
+        assert_eq!(a.policies().lifespan, LifespanPolicy::Persistent);
+        let id = ObjectId::from_name("well-known");
+        assert_eq!(b.parse_key(&a.object_key(&id)), Some(id));
+    }
+
+    /// §15.3.8.6 — USE_ACTIVE_OBJECT_MAP_ONLY claimed, and behaved: a locator
+    /// that *would* have said `Here` is offered and never asked.
+    #[test]
+    fn use_active_object_map_only_is_claimed_and_the_map_is_the_only_source() {
+        let mut poa = Poa::new("P", "IDL:m/I:1.0");
+        assert_eq!(
+            poa.policies().request_processing,
+            RequestProcessingPolicy::UseActiveObjectMapOnly
+        );
+        let absent = ObjectId::from_name("absent");
+        let key = poa.object_key(&absent);
+        let mut always_here = Activator;
+        assert!(matches!(poa.dispatch_target(&key, Some(&mut always_here)), Target::Unknown));
+        assert!(!poa.is_active(&absent), "the locator must not have been consulted");
+    }
+
+    /// §15.3.8.6 — USE_SERVANT_MANAGER claimed, and behaved: the same locator,
+    /// the same absent id, and now it is asked.
+    #[test]
+    fn use_servant_manager_is_claimed_and_the_manager_is_consulted() {
+        let mut poa = Poa::new("P", "IDL:m/I:1.0").with_unknown_id(UnknownIdPolicy::AskLocator);
+        assert_eq!(poa.policies().request_processing, RequestProcessingPolicy::UseServantManager);
+        let absent = ObjectId::from_name("absent");
+        let key = poa.object_key(&absent);
+        let mut always_here = Activator;
+        assert!(matches!(poa.dispatch_target(&key, Some(&mut always_here)), Target::Active(_)));
+    }
+
+    /// §15.3.8.5 — RETAIN claimed, and behaved: what the manager resolved
+    /// survives the request that resolved it, so a second dispatch with **no**
+    /// manager at all is still served.
+    ///
+    /// This is the claim D020 §3 row 5 guessed the other way round, from the
+    /// name `ServantLocator` — which is the specification's NON_RETAIN half.
+    /// The behaviour is the RETAIN one.
+    #[test]
+    fn retain_is_claimed_and_a_located_id_outlives_the_request_that_located_it() {
+        let mut poa = Poa::new("P", "IDL:m/I:1.0").with_unknown_id(UnknownIdPolicy::AskLocator);
+        assert_eq!(poa.policies().servant_retention, ServantRetentionPolicy::Retain);
+        let key = poa.object_key(&ObjectId::from_name("x"));
+        let mut once = Activator;
+        assert!(matches!(poa.dispatch_target(&key, Some(&mut once)), Target::Active(_)));
+        // No locator this time. Under NON_RETAIN this would be `Unknown`.
+        assert!(matches!(poa.dispatch_target(&key, None), Target::Active(_)));
+    }
+
+    /// §15.3.8.7 — NO_IMPLICIT_ACTIVATION claimed, and behaved: minting a
+    /// reference is the operation a POA with IMPLICIT_ACTIVATION would
+    /// activate on, and afterwards the id is still inactive and still unknown
+    /// to a request.
+    #[test]
+    fn no_implicit_activation_is_claimed_and_minting_a_reference_activates_nothing() {
+        let mut poa = Poa::new("P", "IDL:m/I:1.0").publish_at("h", 1);
+        assert_eq!(
+            poa.policies().implicit_activation,
+            ImplicitActivationPolicy::NoImplicitActivation
+        );
+        let never = ObjectId::from_name("never-activated");
+        let key = poa.object_key(&never);
+        assert!(poa.reference(&never).is_some(), "a reference is mintable regardless");
+        assert!(!poa.is_active(&never), "and minting it must not have activated it");
+        assert!(matches!(poa.dispatch_target(&key, None), Target::Unknown));
+    }
+
+    /// §15.3.8.4 — the divergence, claimed and behaved. The section makes id
+    /// assignment a **per-POA** choice; this POA answers to both models at
+    /// once, which is why the reported value is one the specification does not
+    /// have. `IdAssignmentPolicy::default()` is the spec's `SYSTEM_ID`, and
+    /// the two disagreeing here *is* the divergence.
+    #[test]
+    fn id_assignment_is_ours_because_one_poa_answers_to_both_models() {
+        let mut poa = Poa::new("P", "IDL:m/I:1.0");
+        assert_eq!(poa.policies().id_assignment, IdAssignmentPolicy::Either);
+        assert_ne!(
+            poa.policies().id_assignment,
+            IdAssignmentPolicy::default(),
+            "§15.3.8.4 defaults to SYSTEM_ID; we behave as neither of its values"
+        );
+
+        // USER_ID: the application chose the id.
+        let user = ObjectId::from_name("chosen-by-the-application");
+        poa.activate(user.clone());
+        // SYSTEM_ID: the POA chose it. On the same adapter, in the same test.
+        let system = poa.activate_new();
+
+        assert_ne!(user, system);
+        assert!(poa.is_active(&user) && poa.is_active(&system));
+        let ukey = poa.object_key(&user);
+        let skey = poa.object_key(&system);
+        assert!(matches!(poa.dispatch_target(&ukey, None), Target::Active(_)));
+        assert!(matches!(poa.dispatch_target(&skey, None), Target::Active(_)));
+    }
+
+    /// §15.3.8.3 — reported as **not applicable**, and this is a claim about
+    /// the report and not about behaviour. There is no servant in the map for
+    /// a uniqueness policy to be about, so no test can refute either value;
+    /// answering `None` rather than picking one is the honest result.
+    #[test]
+    fn object_id_uniqueness_reports_not_applicable_rather_than_a_value() {
+        assert_eq!(Poa::new("P", "IDL:m/I:1.0").policies().id_uniqueness, None);
+    }
+
+    /// §15.3.8.1 — reported as ORB_CTRL_MODEL, **unobservable from here**, and
+    /// this test says only that the report is constant across every POA this
+    /// crate can build. It is not evidence about threading; the evidence would
+    /// have to come from `orbweaver_giop::Server`.
+    #[test]
+    fn the_thread_model_is_reported_but_not_measured_here() {
+        for p in [
+            Poa::new("P", "IDL:m/I:1.0"),
+            Poa::new("P", "IDL:m/I:1.0").with_lifespan(Lifespan::Persistent),
+            Poa::new("P", "IDL:m/I:1.0").with_unknown_id(UnknownIdPolicy::AskLocator),
+        ] {
+            assert_eq!(p.policies().thread, ThreadPolicy::OrbCtrlModel);
+        }
+    }
+
+    /// Nothing this crate can build breaks a constraint §15.3.8 states between
+    /// policies — including `IMPLICIT_ACTIVATION requires SYSTEM_ID and
+    /// RETAIN` (§15.3.8.7, verbatim), which our `Either` would violate if
+    /// implicit activation were ever turned on.
+    #[test]
+    fn no_poa_we_can_build_violates_a_policy_constraint() {
+        for p in [
+            Poa::new("P", "IDL:m/I:1.0"),
+            Poa::new("P", "IDL:m/I:1.0").with_lifespan(Lifespan::Persistent),
+            Poa::new("P", "IDL:m/I:1.0").with_unknown_id(UnknownIdPolicy::AskLocator),
+            Poa::new("P", "IDL:m/I:1.0")
+                .with_lifespan(Lifespan::Persistent)
+                .with_unknown_id(UnknownIdPolicy::AskLocator),
+        ] {
+            assert!(p.policies().spec_violations().is_empty(), "{:?}", p.policies());
+        }
     }
 
     // ── references as values ────────────────────────────────────────────────
