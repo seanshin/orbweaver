@@ -133,6 +133,16 @@ pub enum Scope {
 }
 
 impl Scope {
+    /// Every scope, in the order a diagnostic lists them.
+    ///
+    /// Exists so that the "expected one of …" a flag prints and the one a
+    /// configuration file prints are the same list computed from the same
+    /// place. Both used to be hand-typed, and a hand-typed list of the variants
+    /// of an enum is a sentence that goes stale the day a variant is added —
+    /// silently, because nothing compiles it.
+    pub const ALL: [Scope; 4] =
+        [Scope::Everything, Scope::Caller, Scope::Interface, Scope::Operation];
+
     /// The name this appears under in a report.
     pub fn name(self) -> &'static str {
         match self {
@@ -141,6 +151,21 @@ impl Scope {
             Scope::Interface => "interface",
             Scope::Operation => "operation",
         }
+    }
+
+    /// The scope an operator named, or `None` if nothing is called that.
+    ///
+    /// The one reading of these four words, for `--quota-scope` and for a
+    /// configuration file's `quota.scope` alike: a budget must not be counted
+    /// per caller in a flag and per interface in a file because two places
+    /// spelled the match arms separately.
+    pub fn parse(name: &str) -> Option<Scope> {
+        Scope::ALL.into_iter().find(|s| s.name() == name)
+    }
+
+    /// The names, for a diagnostic that has to list what it would have taken.
+    pub fn names() -> Vec<&'static str> {
+        Scope::ALL.into_iter().map(Scope::name).collect()
     }
 }
 
@@ -444,6 +469,20 @@ mod tests {
     use crate::interceptor::{Chain, SEAT_QUOTA, STAGE_APPROVAL, STAGE_SCOPES};
     use crate::policy::{Approval, Exposure};
     use crate::telemetry::{CallPath, SpanRecord, TelemetrySink, Timestamp, Trace};
+
+    /// Every scope is reachable by the name it reports, and nothing else is a
+    /// scope. A variant added without a name would fail here rather than at the
+    /// first configuration file that tried to reach it.
+    #[test]
+    fn every_scope_parses_from_the_name_it_reports() {
+        for scope in Scope::ALL {
+            assert_eq!(Scope::parse(scope.name()), Some(scope));
+        }
+        assert_eq!(Scope::names().len(), Scope::ALL.len());
+        for bad in ["tenant", "Caller", "", " caller"] {
+            assert_eq!(Scope::parse(bad), None, "{bad:?}");
+        }
+    }
 
     fn registry(src: &str) -> Registry {
         let spec = orbweaver_idl::parse(src).expect("parses");

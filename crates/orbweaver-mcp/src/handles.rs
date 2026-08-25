@@ -60,18 +60,28 @@ pub(crate) fn shared(session: impl Into<String>) -> SharedTable {
     Rc::new(RefCell::new(CapabilityTable::new(session)))
 }
 
-/// How long a handle stays usable.
+/// How long a handle stays usable, for a deployment that has not said.
 ///
 /// Long enough for an agent to describe an interface and then call it, short
-/// enough that a transcript captured after the fact is worthless.
+/// enough that a transcript captured after the fact is worthless. **How long a
+/// capability lives is a policy only an operator has**, and until
+/// `crates/orbweaver-mcp/src/deployment.rs` existed this constant and
+/// [`CapabilityTable::with_ttl`] were the whole of the surface — the builder
+/// reachable from tests and from nothing a deployment runs. It is a default
+/// now rather than the only value, and it is stated here once:
+/// [`crate::deployment::Deployment`] references it and never restates it.
 pub const DEFAULT_TTL: Duration = Duration::from_secs(15 * 60);
 
-/// How many references one session may hold at once.
+/// How many references one session may hold at once, for a deployment that has
+/// not said.
 ///
 /// A bound, because an agent in a loop that fetches references and never uses
 /// them would otherwise grow the table without limit — the same
 /// unbounded-allocation shape the Phase 0 audit found on the wire, arriving
-/// through the front door instead.
+/// through the front door instead. How many is legitimate is a fact about the
+/// estate and the agent, so it is settable
+/// ([`CapabilityTable::set_max_per_session`]); that it is bounded at all is
+/// not.
 pub const MAX_HANDLES_PER_SESSION: usize = 4096;
 
 /// Why a handle could not be issued or resolved.
@@ -79,8 +89,11 @@ pub const MAX_HANDLES_PER_SESSION: usize = 4096;
 pub enum HandleError {
     /// The operating system's entropy source could not be read.
     NoEntropy(String),
-    /// This session already holds the maximum number of references.
-    TooMany,
+    /// This session already holds the maximum number of references, which the
+    /// error carries because the ceiling is a deployment's
+    /// ([`CapabilityTable::set_max_per_session`]) and a message that quoted
+    /// [`MAX_HANDLES_PER_SESSION`] would name a number that was not in force.
+    TooMany(usize),
 }
 
 impl std::fmt::Display for HandleError {
@@ -91,8 +104,8 @@ impl std::fmt::Display for HandleError {
                 "cannot issue a capability handle: no entropy source ({why}). \
                  Refusing rather than issuing a guessable one"
             ),
-            HandleError::TooMany => {
-                write!(f, "this session already holds {MAX_HANDLES_PER_SESSION} references")
+            HandleError::TooMany(max) => {
+                write!(f, "this session already holds {max} references")
             }
         }
     }
@@ -132,6 +145,7 @@ pub struct CapabilityTable {
     entries: BTreeMap<String, Entry>,
     session: String,
     ttl: Duration,
+    max: usize,
 }
 
 impl CapabilityTable {
@@ -140,13 +154,55 @@ impl CapabilityTable {
     /// The session name is opaque here; the bridge decides what it means. It is
     /// compared, never parsed.
     pub fn new(session: impl Into<String>) -> Self {
-        Self { entries: BTreeMap::new(), session: session.into(), ttl: DEFAULT_TTL }
+        Self {
+            entries: BTreeMap::new(),
+            session: session.into(),
+            ttl: DEFAULT_TTL,
+            max: MAX_HANDLES_PER_SESSION,
+        }
     }
 
     /// Overrides the lifetime, for tests and for deployments with a policy.
     pub fn with_ttl(mut self, ttl: Duration) -> Self {
         self.ttl = ttl;
         self
+    }
+
+    /// The same, on a table something else already owns.
+    ///
+    /// The consuming builder could not reach the one table that matters: a
+    /// [`crate::Bridge`] builds its own and shares it with every
+    /// [`crate::guard::Guarded`] it issues, so a deployment's expiry policy has
+    /// to arrive **after** construction or not at all. It arrived not at all,
+    /// for as long as `with_ttl` was the only door — which is why every
+    /// `ttl` in this crate's three binaries used to be nothing.
+    ///
+    /// Applies to handles already issued as well as to the next one, because
+    /// the table stores an issue instant and compares it against the *current*
+    /// lifetime: shortening the policy retires the outstanding capabilities
+    /// too, which is the direction an operator shortening a TTL means.
+    pub fn set_ttl(&mut self, ttl: Duration) {
+        self.ttl = ttl;
+    }
+
+    /// The lifetime in force.
+    pub fn ttl(&self) -> Duration {
+        self.ttl
+    }
+
+    /// Overrides how many references this session may hold at once.
+    ///
+    /// Lowering it below what is already held issues nothing further and
+    /// revokes nothing: a capability an agent was given does not stop being one
+    /// because the ceiling moved, and dropping references to reach a new bound
+    /// would be a revocation nobody asked for.
+    pub fn set_max_per_session(&mut self, max: usize) {
+        self.max = max;
+    }
+
+    /// The ceiling in force.
+    pub fn max_per_session(&self) -> usize {
+        self.max
     }
 
     /// The session this table belongs to.
@@ -162,8 +218,8 @@ impl CapabilityTable {
     /// deployment it was not told.
     pub fn issue_checked(&mut self, ior: &Ior) -> Result<Handle, HandleError> {
         self.expire();
-        if self.entries.len() >= MAX_HANDLES_PER_SESSION {
-            return Err(HandleError::TooMany);
+        if self.entries.len() >= self.max {
+            return Err(HandleError::TooMany(self.max));
         }
         let token = format!("cap_{}", hex(&entropy16()?));
         self.entries.insert(
@@ -388,7 +444,34 @@ mod tests {
         for _ in 0..MAX_HANDLES_PER_SESSION {
             t.issue_checked(&ior(b"k")).expect("within the bound");
         }
-        assert_eq!(t.issue_checked(&ior(b"k")), Err(HandleError::TooMany));
+        assert_eq!(t.issue_checked(&ior(b"k")), Err(HandleError::TooMany(MAX_HANDLES_PER_SESSION)));
+    }
+
+    /// The ceiling a deployment set is the one that refuses, and the one the
+    /// refusal names. A message quoting [`MAX_HANDLES_PER_SESSION`] here would
+    /// tell an operator a number that was not in force.
+    #[test]
+    fn a_configured_ceiling_is_the_one_that_refuses_and_the_one_named() {
+        let mut t = CapabilityTable::new("s1");
+        t.set_max_per_session(2);
+        assert_eq!(t.max_per_session(), 2);
+        t.issue_checked(&ior(b"k")).expect("within the bound");
+        t.issue_checked(&ior(b"k")).expect("within the bound");
+        let e = t.issue_checked(&ior(b"k")).expect_err("over the bound");
+        assert_eq!(e, HandleError::TooMany(2));
+        assert!(e.to_string().contains('2'), "{e}");
+    }
+
+    /// The door `with_ttl` could not reach: a table something else owns.
+    #[test]
+    fn a_ttl_set_after_construction_retires_a_live_handle() {
+        let mut t = CapabilityTable::new("s1");
+        let h = t.issue_checked(&ior(b"k")).unwrap();
+        assert!(t.resolve(h.as_str()).is_some(), "live under the default");
+        t.set_ttl(Duration::from_millis(20));
+        assert_eq!(t.ttl(), Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(40));
+        assert_eq!(t.resolve(h.as_str()), None, "a shortened policy retires what is out");
     }
 
     /// Expiry must reclaim space, not merely hide entries: otherwise a

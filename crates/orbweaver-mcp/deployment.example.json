@@ -1,0 +1,24 @@
+{
+  "expose": [
+    "IDL:bank/Account:1.0.balance",
+    "IDL:bank/Ledger:1.0"
+  ],
+  "assume_effect": "read_only",
+  "handles": {
+    "ttl_seconds": 300,
+    "max_per_session": 64
+  },
+  "quota": {
+    "limit": 500,
+    "scope": "caller"
+  },
+  "audit": {
+    "capacity": 4096
+  },
+  "search": {
+    "default_limit": 10
+  },
+  "connect": {
+    "timeout_seconds": 30
+  }
+}
