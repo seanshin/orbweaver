@@ -277,7 +277,7 @@ Pure code generation breaks automation the moment a schema changes, because ever
 | Type safety | Runtime | Compile time |
 | Best for | Discovery, experiments, low-frequency calls | Hot paths, real-time constraints |
 
-**Promotion criteria** — at least 1,000 calls per day, schema unchanged for 30 days, and a green regression suite. Demotion is automatic on a breaking schema change.
+**Promotion criteria, as planned** — at least 1,000 calls per day, schema unchanged for 30 days, a green regression suite, and automatic demotion on a breaking schema change. **What `PromotionPolicy` implements is narrower** (verified 2026-08-25): a call count (`min_calls` — a raw count, not a rate) and a failure-rate ceiling, with the identity check as the gate (§7.4 I4). The module reads no clock, and `demote` exists nowhere in the workspace. The calendar clauses need a store that outlives a process (§6, still future work), which is why this paragraph is design intent and was reading as behaviour.
 
 ### 4.4 Wire-level decisions
 
@@ -371,7 +371,10 @@ both faster and works when the target is unreachable.
 
 **Lifecycle.** A POA with object ids and activation policies, plus servant
 managers. `ServantLocator` is what produces `LOCATION_FORWARD`, which the client
-already follows (§Batch 1) but which we cannot yet *emit*. Dynamically created
+follows and the server now emits — `Dispatch::forward` and `Dispatch::redirect`,
+temporary and permanent, with the 1.2 → 1.0/1.1 status downgrade
+(`orbweaver-giop::server`, landed 2026-08-12 and 2026-08-19; this sentence said
+*cannot yet emit* for thirteen days after the first half of it landed). Dynamically created
 services need registration and retirement that cannot leak references to
 servants that are gone.
 
@@ -592,7 +595,13 @@ Two rules carry over unchanged from the operating model:
 
 | Phase 4 — static generation, promotion (was not started at v0.6) | **Substantially landed.** Rust client stubs with the §8 static-equals-dynamic oracle against both peers; **server skeletons** driven by omniORB's own python client (narrow, attributes, `out` parameters, a oneway then a twoway on one connection, user exceptions by class); the promotion gate I4 live-verified. What remains is not restated here — the `orbweaver-gen` row of `COMPONENTS.md` carries it and is refreshed after every wave. This table's business is what was planned against what landed, and the three items this cell used to list had all landed while it still named them | `COMPONENTS.md`, harness stream-B group |
 
-Not started from the original plan: Phase 6 (productionization). The
+Not started from the original plan: **nothing**. Phase 6 (productionization)
+began 2026-08-14 — [`PHASE6.md`](PHASE6.md) holds two batches, R7 endpoint
+rewriting and the second-host probe — and Stream D (§7.3) is the rest of it.
+This line said "Phase 6" for eleven days after that, one paragraph below the
+cell that had just stopped restating three landed items for the same reason.
+Status lives in [`COMPONENTS.md`](COMPONENTS.md); this line says only that no
+phase is untouched. The
 model-in-the-loop stages S1–S3 were **landed and measured** against a real
 model on 2026-08-13 (S1 90 % / S2 95 % / S3 100 % first pass over the twenty,
 `docs/pipeline-runs/2026-08-13-split-pipeline.md`); this sentence said "not
@@ -655,9 +664,15 @@ produces), and **oracle** (what verifies the whole batch deterministically).
 
 #### Stream B — Static generation and promotion (was Phase 4)
 
-- **What:** `orbweaver-gen` stubs/skeletons from the registry (Rust first,
-  then Python); promotion engine (dynamic → static with regression gating);
-  contract tests generated from annotations; ~~`valuetype`/`fixed` wire decision
+- **What:** ~~`orbweaver-gen` stubs/skeletons from the registry (Rust first,
+  then Python)~~ (both landed; the Python client target 2026-08-14, `0d6ef7e`);
+  ~~promotion engine (dynamic → static with regression gating)~~ (landed
+  2026-08-13, `99abbfa`; the gate is §7.4 I4);
+  contract tests generated from annotations (**the only item left** — aspiration
+  A8, §11). These are the same three items §7.2 stopped restating on 2026-08-19;
+  the repair was applied there and not here, one section later, so two of them
+  stood unstruck for six more days;
+  ~~`valuetype`/`fixed` wire decision
   gate~~ (landed 2026-08-19 as `wire/deferred-type` at S4 — warning by default,
   refusal in the pipeline and under `--wire v1` — held to the generator's skip
   list by a test; the *wire support* decision itself stays a Phase 4 gate,

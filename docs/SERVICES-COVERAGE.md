@@ -89,13 +89,21 @@ is *dispatched*; it does not prove it is *correct* — the operations that got a
 real call with real arguments are the ones quoted in each section, and the rest
 rest on `spike-names`/`spike-events`/`spike-ifr`/`spike-experts`/`spike-tenants`.
 And `_is_a`/`_non_existent` are `CORBA::Object` pseudo-operations, not part of
-any service's declared count; both answered on all fourteen objects addressed.
+any service's declared count; both answered on every object the sweep
+addressed. The count is deliberately not restated here — this sentence read
+"all fourteen objects addressed" while the sweep grew a fourth MoE object (§6)
+and a real `ProxyPullSupplier` (§4) underneath it, and nothing compiles a
+sentence. §8 is the home: the pseudo-operations are probed once per object and
+counted apart there, inside each service's `Probes` total.
 
 와이어는 마지막 두 판정을 구분하지 **못한다** — 거부된 pull 연산과 잊힌 연산은
 둘 다 `BAD_OPERATION`이다. 그러므로 사실은 와이어가, 이유는 문서가 댄다. 사실만
 있고 이유가 없는 연산 — 그것이 이 배치가 찾으려던 것이다. 한계 둘: `MARSHAL`은
 *디스패치*를 증명할 뿐 *정확성*을 증명하지 않으며, `_is_a`/`_non_existent`는
-어느 서비스의 선언 수에도 넣지 않았다(주소 지정한 14개 객체 전부에서 응답함).
+어느 서비스의 선언 수에도 넣지 않았다(스윕이 주소 지정한 모든 객체에서 응답함).
+객체 수는 여기에 다시 적지 않는다 — 이 문장이 "14개"라고 말하는 동안 스윕은 MoE
+객체 하나(§6)와 진짜 `ProxyPullSupplier`(§4)를 더 얻었다. 집은 §8이며, 의사
+연산은 객체마다 한 번씩 프로브되어 각 서비스의 `Probes` 합계 안에서 따로 계수된다.
 
 ## 3. CosNaming — the first reading, 2026-08-14 / 첫 판독
 
@@ -172,15 +180,33 @@ Objects addressed: the channel from `spike-events --hold`, then
 
 This is the cleanest of the five: every operation not served has a reason
 written in the servant, and the ratio is exactly what PLAN-SERVICES §4 scoped.
-The pull interfaces are refused *by construction* — no `ProxyPullSupplier`
-object can be obtained at all — so their operations were probed against the
-push proxies, which is the strongest statement the wire can make about an
-operation nothing can address.
+On 2026-08-14 the pull interfaces were refused *by construction* — no
+`ProxyPullSupplier` object could be obtained at all — so their operations were
+probed against the push proxies, which was the strongest statement the wire
+could make about an operation nothing can address.
+
+**Since 2026-08-18 that sentence is half true, and it went on saying the whole
+thing for a week.** The consumer half of pull is served and the sweep obtains
+the real proxy: §8 shows `obtain_pull_supplier`, `connect_pull_consumer`,
+`pull`, `try_pull` and `disconnect_pull_supplier` dispatched against a genuine
+`ProxyPullSupplier`, not against a push proxy standing in for one. The
+`ProxyPullConsumer` probe still goes to a push proxy, and there that is still
+the honest thing — `obtain_pull_consumer` answers `NO_IMPLEMENT`, so the
+interface has no object, and an operation nothing can address is still an
+operation the channel does not have.
 
 주소 지정 객체 다섯. **선언 18 · 서빙 9 · 이유 있는 거부 9 · 부재 0.**
 다섯 중 가장 깨끗하다: 서빙하지 않는 모든 연산에 서번트가 쓴 이유가 있다.
-pull 인터페이스는 객체 자체를 얻을 수 없으므로, push 프록시에 프로브를 던져
-"어떤 객체도 이 연산을 답하지 않는다"는 진술을 측정으로 만들었다.
+2026-08-14 당시 pull 인터페이스는 객체 자체를 얻을 수 없었으므로, push 프록시에
+프로브를 던져 "어떤 객체도 이 연산을 답하지 않는다"는 진술을 측정으로 만들었다.
+
+**2026-08-18부터 그 문장은 절반만 참이며, 이레 동안 전부인 양 적혀 있었다.**
+pull의 소비자 쪽은 서빙되고 스윕은 진짜 프록시를 얻는다 — §8에서
+`obtain_pull_supplier`, `connect_pull_consumer`, `pull`, `try_pull`,
+`disconnect_pull_supplier`가 실제 `ProxyPullSupplier`에 디스패치된다.
+`ProxyPullConsumer` 프로브는 여전히 push 프록시로 가며, 거기서는 그것이 정직하다 —
+`obtain_pull_consumer`가 `NO_IMPLEMENT`이므로 그 인터페이스에는 객체가 없고,
+주소 지정할 수 없는 연산은 채널에 없는 연산이다.
 
 ## 5. Interface Repository — the first reading, and 6 refusals nobody had written down / 첫 판독
 
@@ -245,8 +271,13 @@ has the two backwards.
 답하고 있는 셈이다.
 
 > **Acted on 2026-08-14 and since re-measured by this same sweep**, which now
-> runs in `run_checks.sh`: IFR reports **probes 66 · dispatched 28 ·
-> `NO_PERMISSION` 38 · `BAD_OPERATION` 0**. The six absences this section found
+> runs in `run_checks.sh`: IFR reports **probes 66 · dispatched 14 ·
+> `NO_PERMISSION` 38 · `BAD_OPERATION` 0** — 14 dispatched, 38 refused and 14
+> deferred is the 66. This line said *dispatched 28* until 2026-08-25, counting
+> `NO_IMPLEMENT` as dispatch; the History section below caught it — *"the IFR's
+> served count was overstated by 14 … a facade that answers 14 operations read
+> as 28"* — and this quotation of the number stayed wrong while the correction
+> sat in the same file. The six absences this section found
 > are gone — not by serving everything, but by making a deferral answer
 > differently from an oversight, which is the distinction §2 says the wire
 > cannot make on its own. `BAD_OPERATION` still means "nobody decided", and it
@@ -265,7 +296,12 @@ has the two backwards.
 > here. It has not been run: this batch had no omniORB fixture available
 > (`omniidl` absent), and an unmeasured check is not a pass.
 >
-> **2026-08-14 조치, 이 스윕으로 재측정되지 않음.** `_get_version`은 서빙되고,
+> **2026-08-14 조치, 그 뒤 같은 스윕으로 재측정됨** — 이제 `run_checks.sh`에서
+> 돌며 IFR은 **프로브 66 · 디스패치 14 · `NO_PERMISSION` 38 · `BAD_OPERATION` 0**을
+> 보고한다. 이 머리 문장은 2026-08-25까지 "이 스윕으로 재측정되지 않음"이라고
+> 적혀 있었다 — 스무 줄 위 영문 쌍둥이가 "그 뒤 같은 스윕으로 재측정됨"이라고
+> 말하는 동안, 한 사실이 한 문서 안에서 두 언어로 정반대를 말한 것이다.
+> 아래는 원래의 조치 기록이다. `_get_version`은 서빙되고,
 > 유예 연산 10개는 `NO_IMPLEMENT`로 답한다 — §2가 "와이어는 구분하지 못한다"고
 > 적은 그 구분을 이 서비스에서는 와이어가 한다. 위 표는 스윕이 측정한 상태이며,
 > 새 답은 단위 테스트와 `spike-ifr`가 검증한다. `service_sweep.sh` 재실행이
@@ -302,17 +338,45 @@ the harness-only holder `spikes/svc-hold` on 2026-08-14 (removed 2026-08-19 — 
 The two servants serve their two interfaces completely — the module's claim
 (*"the two interfaces below are served exactly as declared there, with no
 operation added and none half-served"*) is measured true, 7 of 7. What no
-document states is the other half of the contract. `moe::Expert` is defensible
-by design: the registry *stores* expert references and the experts are served
-elsewhere, so an `Expert` servant here would be wrong — but that sentence is
-nowhere written. `moe::Router` has no defence recorded at all: it is declared
-in the contract, named in no plan, and answered by nothing.
+document stated **when this was written, on 2026-08-14,** was the other half of
+the contract. `moe::Expert` is defensible by design: the registry *stores*
+expert references and the experts are served elsewhere, so an `Expert` servant
+here would be wrong — *"but that sentence is nowhere written"*. And
+`moe::Router` had *"no defence recorded at all: it is declared in the contract,
+named in no plan, and answered by nothing."*
+
+**Both complaints are closed: every clause above that asserted an absence is
+now false, and only the plain facts — `Expert` is defensible, `Router` is
+declared in the contract — still stand.**
+The `Expert` sentence is written: `PLAN-SERVICES.md` §8.1.1 quotes this
+paragraph's own words back — *"defensible by design … but that sentence is
+nowhere written. This is the sentence"* — and the sweep now reports the
+interface as *claimed by no object*, its own fact, rather than as five missing
+operations. `Router` keeps only *declared in the contract*: its defence is
+recorded (`PLAN-MOE.md` §4.6, *"Why `Router` is in no plan — the plane rule and
+its escape hatch"*), `dispatch`'s exclusion is D006, **APPROVED 2026-08-14 —
+the same day this section reported that no defence existed anywhere**, and it
+is answered by something: §8 has `select` served and `dispatch` answering
+`NO_IMPLEMENT` since 2026-08-18. A decision approved and a document written do
+not reach the wire or the neighbouring section on their own; that gap is what
+this paragraph measured without knowing it.
 
 **선언 12 · 서빙 7 · 이유 있는 거부 0 · 부재 5.** 두 서번트는 자기 인터페이스
-두 개를 완전히 서빙한다(7/7, 모듈 문서의 주장은 측정으로 참). 문서화되지 않은
-것은 계약의 나머지 절반이다. `moe::Expert`는 설계상 변호 가능하지만(레지스트리는
-참조를 *저장*할 뿐 익스퍼트는 다른 곳에서 서빙된다) 그 문장이 어디에도 없고,
-`moe::Router`는 변호조차 기록되어 있지 않다.
+두 개를 완전히 서빙한다(7/7, 모듈 문서의 주장은 측정으로 참). **2026-08-14 이 절을
+쓸 당시** 문서화되지 않은 것은 계약의 나머지 절반이었다. `moe::Expert`는 설계상
+변호 가능하지만(레지스트리는 참조를 *저장*할 뿐 익스퍼트는 다른 곳에서 서빙된다)
+"그 문장이 어디에도 없고", `moe::Router`는 "변호조차 기록되어 있지 않다"고 적었다.
+
+**둘 다 닫혔다 — 위에서 부재를 주장한 절은 모두 거짓이 되었고, 남은 것은
+`Expert`가 변호 가능하다는 것과 `Router`가 계약에 선언되어 있다는 사실뿐이다.**
+`Expert`의 그 문장은 `PLAN-SERVICES.md` §8.1.1이 이 문단의 지적을 그대로 인용하며
+쓴다("그 문장이 어디에도 없다 — 이 문단이 그 문장이다"). 스윕도 그것을 "연산 다섯
+개 누락"이 아니라 "어떤 객체도 자처하지 않는 인터페이스"라는 자기 사실로 보고한다.
+`Router`의 이유는 `PLAN-MOE.md` §4.6("`Router`가 어느 계획서에도 없던 이유")에
+기록되어 있고, `dispatch`의 제외는 **D006 — 이 절이 "변호가 없다"고 적은 바로 그
+날인 2026-08-14에 승인** — 이며, §8에서 `select`는 서빙되고 `dispatch`는
+2026-08-18부터 `NO_IMPLEMENT`로 답한다. 승인된 결정과 쓰인 문서가 저절로 와이어나
+옆 절에 닿지는 않는다는 것 — 이 문단이 모르고 측정한 것이 그것이다.
 
 ## 7. MoE enterprise (`corpus/golden/23`) — the first reading / 첫 판독
 
@@ -338,7 +402,10 @@ Source: `corpus/golden/23-moe-enterprise.idl`.
 
 **Declared 16 · served 16 · refused with a reason 0 · absent 0.**
 
-The only service of the five whose ✅ needs no qualification. The module's claim
+**When this was written on 2026-08-14, the only service of the five whose ✅
+needed no qualification** — and it stopped being the only one on 2026-08-18,
+when CosNaming joined it: §8 reads 14 declared, 14 served. "Only" was a dated
+word left in the present tense for a week. The module's claim
 — *"The contract is corpus/golden/23 and nothing else: every operation it
 declares is served, including the two `EnterpriseExpert` inherits from
 `::moe::Expert`, and nothing it does not declare exists on the wire"* — is
@@ -346,8 +413,10 @@ measured true in both directions: 16 of 16 served, and every operation from a
 *neighbouring* interface answered `BAD_OPERATION` on every object, which is what
 makes these five distinct objects rather than one with a union of operations.
 
-**선언 16 · 서빙 16 · 이유 있는 거부 0 · 부재 0.** 다섯 중 유일하게 단서가
-필요 없는 ✅다. 모듈 문서의 주장이 양방향으로 참임이 측정되었다 — 16/16 서빙,
+**선언 16 · 서빙 16 · 이유 있는 거부 0 · 부재 0.** **2026-08-14 당시** 다섯 중
+유일하게 단서가 필요 없는 ✅였고, 2026-08-18 CosNaming이 합류하면서 "유일하게"는
+끝났다(§8: 선언 14 · 서빙 14). 날짜에 묶인 말이 현재형으로 이레를 더 남아 있었다.
+모듈 문서의 주장이 양방향으로 참임이 측정되었다 — 16/16 서빙,
 그리고 *이웃* 인터페이스의 연산은 모든 객체에서 `BAD_OPERATION`.
 
 ## 8. Measured now — generated by the sweep / 지금의 측정 — 스윕이 생성

@@ -10,9 +10,14 @@ still has to be decided rather than assumed.
 출발한다. 스스로 승인하지 않는다. §5의 권고는 **짓지 않는 것**이며, 그것도
 가정이 아니라 결정되어야 할 사항이다.
 
-> **Line references.** Everything cited is on `main` at `efc728f` unless the
-> citation says *(branch)*, which means `adf0867` and is not on `main` yet.
-> *인용한 줄 번호는 별도 표시가 없으면 `main`(`efc728f`) 기준이다.*
+> **Line references.** Everything cited is on `main`. The citations marked
+> *(branch)* were on `adf0867` when this was drafted against `main` at
+> `efc728f`; **that branch has since merged** (verified 2026-08-25 — `adf0867`
+> is an ancestor of `HEAD` and every cited line resolves on `main` unchanged),
+> so the marker now records where a line came from rather than where a reader
+> must go to find it.
+> *인용한 줄 번호는 모두 `main` 기준이다. *(branch)* 표시는 기안 당시
+> `adf0867`에 있었다는 뜻이며, 그 브랜치는 이미 병합되었다(2026-08-25 확인).*
 
 ---
 

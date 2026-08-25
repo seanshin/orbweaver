@@ -113,6 +113,15 @@ Ordered by what a defect would cost, not by size.
   forwards — a review note, so nobody expects it to.
 
 ### A2. Trading's `moe::Capability` cannot answer `specialization` or `latency_p50` — *stream F*
+
+> **Landed 2026-08-19 (`06ea90e`).** The additive `MeasuredCapability` carries
+> both fields with `register_measured`/`heartbeat_measured`, and both
+> `idl-diff` gates are in the harness with the frozen pair under
+> `corpus/evolution/moe/`. The State paragraph below is the position **as of
+> drafting** and is left standing as the record of what the batch was aimed
+> at; §8's Landed column has said so since the day it landed, while this row
+> went on describing the gap in the present tense.
+
 - **State.** The three-valued matcher already treats an unpopulated field as
   *unanswerable* rather than false. But the wire contract declares neither
   field, so wire-registered offers can never populate them, and adding them is
@@ -179,6 +188,13 @@ Ordered by what a defect would cost, not by size.
   harness group that already carries the dynamic one.
 
 ### A4. `_rt.py` refuses an `any` carrying a constructed type — *stream B, `orbweaver-gen`*
+
+> **Landed 2026-08-19 (`50a4d12`, with `1b6b4c8`).** A structural `_t` crosses;
+> the sweep's count went 78 → 158 → 170 and is **182 values / 139 calls** over
+> golden as of 2026-08-24 (the harness pins floors of 170/137, which is why the
+> figure quoted below could age without anything going red). The State
+> paragraph is the position **as of drafting**, kept as the record.
+
 - **State.** D008's D-symmetry: the Python half reads only a named `_t` and
   refuses v1.1's structural form **citing the decision** rather than guessing.
   Correct, and a limit a Python client meets on the first `any` with a struct
@@ -267,13 +283,20 @@ docker already follow. None may report `ok`.
   omniORBpy cannot unmarshal its own 1.1 `wchar` output, so it is not an oracle
   for 1.1 wide text; and `InterruptedMidReassembly`'s shape needs a peer to
   close between two writes of one reply, which neither fixture exposes.
-- **Missing.** A second peer for the first: JacORB *may* serve, but **nothing
-  in the tree drives JacORB at GIOP 1.1 at all** — every JacORB group in the
-  harness runs at its default 1.2, and its `giop_minor_version` property has
-  never been set here. So the first step is not a wide-char test; it is a
-  JacORB-at-1.1 fixture, after which the wide-char question is one more call.
-  A controllable peer for the second — one that can be told to close between
-  two writes of a reply — which neither installed ORB is.
+- **Missing — the first half is closed** (2026-08-19, `74b0f15`, `2a052cb`,
+  `382baa9`). `spikes/jacorb_giop11.sh` drives JacORB at GIOP 1.1 in both
+  directions with `-Djacorb.giop_minor_version=1`, the version asserted from
+  the tapped bytes rather than from the property, and the first measurement
+  found and fixed a wire defect. What remains is the second: a controllable
+  peer that can be told to close between two writes of one reply, which
+  neither installed ORB is — a fixture-building batch.
+
+  > **This paragraph said the opposite for six days**, and §8 of this same
+  > document recorded the closure the whole time ("B5 measured in full"). One
+  > document, two homes for one fact, and the two disagreed — the class
+  > CLAUDE.md names, found here in the file that exists to inventory what
+  > remains. A planner reading §4 would have built a fixture that already
+  > exists. *한 문서 안에서 한 사실이 두 집을 갖자 둘이 어긋났다.*
 
 ### B6. TAO — *streams B/E, and PLAN §8*
 - **State.** Named in §8 as a peer since v0.2; `tao_idl` absent; nothing

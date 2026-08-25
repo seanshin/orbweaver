@@ -46,6 +46,45 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **A refusal's subject carries the repository id, and the subject's spelling
+  has one home per language.** The commissioning defect (2026-08-24, recorded
+  as its own batch): a simple name is ambiguous — two modules declaring
+  `Describable` produce one string, so a reader of two refusals could not
+  tell whether they named one type or two. `orbweaver-dynamic` now publishes
+  the spelling — `valuetype_subject`, `abstract_interface_subject`,
+  `native_subject` (`{kind} {name} ({id})`, the id alone when a peer-built
+  TypeCode has no name) and `fixed_subject` (digits and scale *are* its
+  identity) — and `deferred_wire_name`/`unmarshallable_wire_name` build from
+  them. Scoped to the rule, not the instance: **nine Rust sites in two other
+  crates and seven Python sites were formatting their own subject**
+  (`format!("valuetype {name}")`, `"native " + name`), the same defect the
+  sentence *heads* had at `pub(crate)`, one layer down; all sixteen now ask
+  the owner (Python's one home is `_subject`, held equal by `python_target`'s
+  cross-language comparison), and the three sites rebuilding
+  `fixed<{digits},{scale}>` were found by re-measuring the neighbours of the
+  shape handed in. Test pins that had retyped a subject were repaired to
+  *compute* it — the dynamic unit pin went red the moment the id joined the
+  subject, which is that pin working — and
+  `one_home_for_a_wire_refusal.rs`, built two batches ago to compute expected
+  text by calling the owners, stayed green through the rewording untouched:
+  the first live proof of the class it was built for.
+
+  **거부 문장의 주어가 repository id를 담고, 주어의 철자는 언어당 한 집을
+  갖는다.** 발주 결함(2026-08-24 기록): 단순 이름은 모호하다 — 두 모듈의
+  `Describable`이 한 문자열이 되어, 두 거부를 읽는 독자가 한 타입인지 두
+  타입인지 알 수 없었다. `orbweaver-dynamic`이 철자를 공개하고
+  (`valuetype_subject` 등, `{kind} {name} ({id})`, 이름 없는 peer TypeCode는
+  id만; `fixed_subject`는 digits/scale이 곧 정체성), 이름 함수들이 그것으로
+  짓는다. 규칙 단위 범위: **다른 두 크레이트의 Rust 9곳과 Python 7곳**이
+  주어를 직접 조립하고 있었다 — 문장 머리가 `pub(crate)`이던 것과 같은 결함,
+  한 층 아래. 열여섯 곳 전부 이제 소유자에게 묻고(Python의 한 집은
+  `_subject`, 교차 언어 등식으로 고정), `fixed<{digits},{scale}>`를 재조립하던
+  세 곳은 받은 모양의 이웃 재측정으로 발견했다. 주어를 옮겨 적던 테스트 핀은
+  계산하도록 수리 — dynamic 단위 핀은 id가 주어에 합류하는 순간 빨개졌고,
+  그것이 핀이 일하는 모습이다 — 두 배치 전에 지어진
+  `one_home_for_a_wire_refusal.rs`는 문구 변경을 손대지 않고 초록으로
+  통과했다: 그 게이트가 지어진 목적 계급의 첫 실전 증명.
+
 - **The generated Python runtime reads every description the Rust side
   writes, and refuses only the value — closing the D008 asymmetry.** The
   rule is D008's: a TypeCode is a value the wire carries; §4.4 defers the

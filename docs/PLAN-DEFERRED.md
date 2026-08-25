@@ -434,7 +434,11 @@ documented, rather than serving iterator lifecycles no caller has.
 no other trigger is credible for the standard itself. A second, weaker trigger
 argues for the *shape* rather than the standard: a result set that genuinely
 cannot be bounded, where paging becomes necessary and a cursor becomes the
-honest answer. Today's largest set is a corpus of roughly thirty interfaces.
+honest answer. Today's largest set is the golden corpus — **44 distinct
+interface names across its 36 files** (measured 2026-08-25 by name, not by
+declaration), still trivially bounded. It read "roughly thirty" while the
+number was growing under it, which changes nothing about the verdict and is
+exactly why the measurement now carries its date.
 
 **v1 sketch.** Not `CosCollection`. One first-party paging shape, reused
 everywhere rather than invented per call site: `(items, next_cursor)` where the
@@ -531,7 +535,12 @@ independent ORB rather than against ourselves.
 
 ## 8. Security Service beyond CSIv2 / CSIv2 너머의 보안 서비스
 
-**What PHASE5 has today** (from `COMPONENTS.md`, measured): CSIv2 wire — SAS
+**What PHASE5 has today** (measured; the CSIv2-advertisement half of this
+paragraph is owned by the harness's identity group in `spikes/run_checks.sh`,
+which goes FAIL the day a peer advertises and nothing measures it — the
+citation said `COMPONENTS.md` until 2026-08-25, by which time that document
+held no such sentence, the fact having moved to the gate that can check it):
+CSIv2 wire — SAS
 service context, GSSUP, mechanism lists — unit-tested in both byte orders;
 delegation policy, default-deny with recorded reasons; structurally enforced
 credential hygiene (`audit_line` takes a `&Caller` and an `&Assertion`, so
@@ -583,7 +592,13 @@ mostly the part that maps to transport security — which D002 already covers.
 **v1 sketch.** Not CORBASec. Each trigger gets the narrowest first-party answer
 in the vocabulary that already exists. (1) A `PolicyDomain` that is a **set
 label** on registry entries, with the `Exposure` decision resolved and cached
-per domain — the mechanism exists, the *noun* is what is missing. (2) `Caller`
+per domain — the mechanism exists, the *noun* is what is missing. **The noun is
+no longer free** (found 2026-08-25): `moe::enterprise::PolicyDomain` has existed
+since F5 tenancy (`IDL:moe/enterprise/PolicyDomain:1.0`, `tenant_service.rs`)
+meaning a *residency and placement* domain — unrelated to a CORBASec security
+policy domain, and served 3 of 3 over the wire. No trigger has fired, so §9
+imposes no obligation to correct the sketch; recorded here so that the day it is
+used, the collision is a known cost and not a surprise. (2) `Caller`
 gains a read-only attribute map, populated from the same token exchange stream
 C is already building for OAuth2/JWT, handed to servants as a borrow and never
 as a mutable store, so the hygiene property stays structural. (3) Audit lines

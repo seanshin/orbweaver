@@ -48,27 +48,39 @@ not compile as written** — two causes:
 
 After the two renames (plus keyword-safe operation names — `register_expert`,
 `clone_model`, `get_manifest`, `get_tenant_id`): **S4 0 rejected, omniidl ok,
-JacORB ok — measured 2026-08-14.** The corrected files live in `corpus/moe/`
-with the findings in their headers; stream F batch 1 promotes them to
-`corpus/golden/` and adds negative-corpus cases from the original defects.
+JacORB ok — measured 2026-08-14.** The corrected files were staged in
+`corpus/moe/` with the findings in their headers, and **stream F batch 1 landed
+them the same day** (`f4b3868`): they are now
+`corpus/golden/22-moe-control-plane.idl` and
+`corpus/golden/23-moe-enterprise.idl`, their headers carrying the provenance the
+side directory used to hold, and the two original defects were minted as
+negative corpus — `corpus/negative/n11-keyword-context.idl` (`struct Context`,
+the OMG keyword) and `corpus/negative/n12-enum-member-case-clash.idl`
+(`Residency residency`). **`corpus/moe/` no longer exists**: the corpus is the
+home, and a side directory would rot. *This paragraph said the files "live in
+`corpus/moe/`" and that batch 1 "promotes them" — present and future tense
+about a directory deleted by the commit that closed the batch.*
 
 원문 IDL은 그대로는 컴파일되지 않는다 — `Context`는 예약어, `residency`는 이
 프로젝트가 성문화한 대소문자 무시 충돌. 수정 후 세 프론트엔드 모두 수용(실측).
+수정본은 `f4b3868`으로 착지했다 — golden 22·23, 원래 결함 둘은 negative
+n11·n12, `corpus/moe/`는 삭제. 코퍼스가 집이고 곁가지 디렉터리는 썩는다.
+*이 문단은 그 디렉터리가 아직 있고 승격이 아직 남은 것처럼 적혀 있었다.*
 
 ## 2. What already exists / 이미 있는 것
 
-| MoE 문서 개념 | Orbweaver 실물 | 상태 |
+| MoE 문서 개념 / Concept in the source document | Orbweaver 실물 / What exists here | 상태 / Status |
 |---|---|---|
 | Expert = 분산 객체 + IOR | `orbweaver-object` (references as values, `_is_a`) | ✅ 측정됨 |
 | POA ServantActivator 적재기 | `Poa` + `ServantLocator` (`Located::{Here,Forward,Unknown}`) + `residency::ExpertLoader` | ✅ — 상태 머신 F3 착지 |
 | Interface Repository | `orbweaver-registry` + SIDL annotations (`ai_desc`… ≈ capability contract) | ✅ |
 | MCP 얼굴 + 핸들↔IOR 바인딩 | `orbweaver-mcp` triad + `CapabilityTable` | ✅, 원문보다 강함 |
-| PolicyDomain (인가·레지던시·감사) | `Exposure` + `Delegation` + `Caller`/`ai_authz` + audit lines; 계약의 `PolicyDomain`은 `tenant_service.rs`가 16/16 서빙 | ◐ — `Delegation::decide`의 residency 항만 없음 |
+| PolicyDomain (인가·레지던시·감사) | `Exposure` + `Delegation` + `Caller`/`ai_authz` + audit lines; 계약의 `PolicyDomain`은 선언 오퍼레이션 **셋**(`authorize`, `check_residency`, `audit`)이고 셋 다 `tenant_service.rs`가 서빙한다. 16/16은 golden 23 **계약 전체**의 수치다 — 다섯 인터페이스(`Expert` 2, `EnterpriseExpert` 3, `PolicyDomain` 3, `ComposedModel` 4, `ModelFactory` 4), `SERVICES-COVERAGE` §7 | ◐ — `Delegation::decide`의 residency 항만 없음 |
 | 테넌트 격리 | per-session capability tables + default-deny exposure + F5 `tenant_service.rs`(2026-08-14) | ✅ — F5가 *인가* 모양을 택했다(한 그래프, 테넌트별 키); 도메인 모양은 PLAN-DEFERRED §7의 방아쇠로 남음 |
 | route_freq 텔레메트리 | `promote::CallStats` — 승격 엔진이 곧 적재 정책의 사촌 | ◐ — IF2 재사용은 착지(`Bridge::invoke` → `CallStats`, F4의 텔레메트리 인터셉터); MoE 오퍼 저장소의 `route_freq`는 여전히 자체 카운터이고 `CallStats`가 먹이지 않는다 |
-| 인터셉터 체인 | `interceptor::Chain::standard` — exposure → scopes → quota → approval → safety → telemetry → audit | ✅ — F4 착지 2026-08-14 |
+| 인터셉터 체인 | `interceptor::Chain::standard` — 등록 순서 audit → telemetry → exposure → scopes → approval. 등록 순서는 행위 순서가 아니다: 게이트는 들어가며 §4.5의 1→2→3(exposure·scopes·approval), 관측자는 나오며 4→5(telemetry, 마지막 말은 audit). 이름은 있으나 표준 스택이 채우지 않는 좌석 셋 — `SEAT_QUOTA`는 점유자가 **있고**(`quota::Quota`, `Chain::quota`가 설치) 기본값으로 넣지 않는다: 한계값은 운영자만 가진 숫자이며 스택이 고를 수 있는 두 숫자가 다 틀리다(무제한은 거부하지 않는 단계, 0은 아무것도 답하지 않는 다리). `SEAT_SAFETY_CONTENT`는 점유자를 **싣지 않는다** — 계약을 읽는 절반은 `STAGE_APPROVAL`이 채우고, 인자를 읽는 절반의 *규칙*은 배포자의 것이다. `SEAT_EXPIRY`도 같은 이유로 `Chain::expiry`(이 크레이트에는 시계가 없다) | ✅ — F4 착지 2026-08-14; 순서는 `the_standard_stack_registers_every_named_stage_in_order`가 고정한다. 이 칸은 `exposure → scopes → quota → approval → safety → telemetry → audit`라고 적혀 있었다 — 표준 스택에 없는 두 좌석을 점유자로 세고, 관측자 둘을 게이트 안쪽에 두었다 |
 | Naming | CosNaming client + corbaname | ✅ |
-| 언어별 스텁 (원문 §10) | `orbweaver-gen` Rust 백엔드, 오라클 정적=동적 | ◐ — 타 언어는 스트림 B |
+| 언어별 스텁 (원문 §10) | `orbweaver-gen` Rust 백엔드(스텁 + 스켈레톤), 오라클 정적=동적 · **두 번째 타깃 착지**: Python 클라이언트 — `src/python.rs`, `gen-python` 바이너리, `tests/python_target.rs`(생성 코드를 실제로 **실행**해 golden 코퍼스 전체에서 Rust 매핑과 대조, 양쪽 바이트 순서). 씸은 D007(**승인됨** 2026-08-18, v1은 A안: AnyJSON을 말하는 로컬 브리지 프로세스, 새 의존성 없음) | ◐ — Python은 **클라이언트 전용**이다(모듈 헤더의 명시적 범위 경계: Python 서번트는 브리지가 역방향으로 Python을 호출해야 하고, 서빙 절반은 Rust `skeleton`이 이미 답한다). 남은 ◐는 그 외 언어이며, 여기에는 "타 언어는 스트림 B"라고만 적혀 있었다 |
 
 ## 3. Stream F — MoE control plane / 스트림 F
 
@@ -89,7 +101,9 @@ reports an unmeasurable number later.
   affinity ÷ mem_footprint`, watermarks, LFU eviction) replayed over recorded
   traces with pinned outcomes.
 - **F3 — residency state machine on the POA.** ✅ *landed 2026-08-14:
-  `orbweaver-object::residency`, 20 tests (34 in the crate) — the 4×5
+  `orbweaver-object::residency`, 20 tests (34 in the crate **on that day** —
+  a crate-wide figure inside a module record, which is the half that rots: 84
+  today) — the 4×5
   transition table pinned answer by answer, each of the guard's four
   conditions proven necessary by flipping it alone, PERSISTENT state surviving
   an evict/reload cycle, and a two-window `Decision` list applied end to end
@@ -107,10 +121,26 @@ reports an unmeasurable number later.
   `Located::Here` activates an id permanently, so eviction has to be
   reconciled onto the POA (`ExpertLoader::reconcile`) or an evicted expert
   keeps being served out of the active map.
-- **F4 — the interceptor chain, formalized.** ✅ *landed 2026-08-14 (`crates/orbweaver-mcp/src/interceptor.rs`, order pinned by `the_chain_and_check_call_answer_alike`).* The guard's checks become an
-  ordered, extensible chain: authn → quota → safety → telemetry → audit (원문
-  §4.5 순서), with telemetry feeding `CallStats`/`route_freq`. Oracle: order
-  pinned by tests; every existing guard test must pass unchanged.
+- **F4 — the interceptor chain, formalized.** ✅ *landed 2026-08-14
+  (`crates/orbweaver-mcp/src/interceptor.rs`).* The guard's checks became an
+  ordered, extensible chain. Planned scope was §4.5's numbering — authn → quota
+  → safety → telemetry → audit — and what `Chain::standard` registers is
+  **audit → telemetry → exposure → scopes → approval**, because registration
+  order is not acting order: the gates act on the way *in* in §4.5's order
+  1 → 2 → 3, the observers act on the way *out* in order 4 → 5, so an observer
+  that must see every call — including a refused one — has to be registered
+  outside every gate. Two of the five §4.5 numbers are **named empty seats** in
+  the standard stack rather than occupants: `SEAT_QUOTA` has a first-party
+  occupant (`quota::Quota`, installed by `Chain::quota`) that is not built in
+  because the limit is a number only an operator has, and
+  `SEAT_SAFETY_CONTENT`'s argument-reading half ships no occupant because the
+  rule is a deployment's — `STAGE_APPROVAL` fills the contract-reading half.
+  Telemetry feeds `CallStats`/`route_freq`. Oracle: registration order pinned by
+  `the_standard_stack_registers_every_named_stage_in_order`, the chain's verdicts
+  pinned against `Exposure::check_call` case by case by
+  `the_chain_and_check_call_answer_alike`; every existing guard test passes
+  unchanged. *This entry listed the planned §4.5 order as though it were the
+  shipped one, and credited the order pin to the verdict-equivalence test.*
 - **F5 — enterprise composition.** ✅ *landed 2026-08-14 as `tenant_service.rs`, 16/16 served (PLAN-SERVICES §10); the residency term in `Delegation::decide` is the open half.* `ComposedModel`/`ModelFactory` over the
   registry; tenancy = per-domain `Exposure` + capability tables; residency
   constraint joins `Delegation::decide`. Oracle: cross-tenant invisibility
@@ -120,6 +150,73 @@ reports an unmeasurable number later.
 Integration points (§7.4 style): **IF1** F2's selection must return capability
 handles at the MCP face, never IORs (transcript-leak test reused). **IF2**
 F4's telemetry and stream B's promotion stats are one store, not two.
+
+§7.3의 형식을 따른다 — 모든 배치는 단위 하나와 결정적 오라클 하나를 가진다.
+데이터 플레인은 영구히 CORBA 밖에 남고(원문 철칙 1 그대로), 적중률·지연시간
+주장은 이 저장소에 없는 실제 가속기가 아니라 **결정적 라우팅 트레이스**에 대해
+오라클로 검증한다 — 나중에 아무도 측정 불가능한 숫자를 보고하지 않도록 지금
+적어 둔다.
+
+- **F1 — 계약을 코퍼스로.** ✅ *2026-08-14 착지: golden 22·23, negative
+  n11·n12, 네 번째 divergences 항목, 그리고 생성기 위생 결함 하나(`e`라는 이름의
+  파라미터가 클로저를 가림)를 잡아 고쳤다.* 단위: MoE IDL → golden 코퍼스,
+  그리고 원래의 `Context`/`residency` 결함에서 주조한 negative 케이스.
+  오라클: S4 + differential(프론트엔드 셋) + gen-corpus 컴파일.
+- **F2 — 트레이딩 서비스.** ✅ *결정 엔진 2026-08-14 착지(`orbweaver-trading`,
+  37 tests); 와이어 표면은 2026-08-15에 프로젝트 계약으로 뒤따랐다 —
+  `orbweaver-object::expert_service`가 `corpus/golden/22`의
+  `moe::ExpertRegistry`/`ExpertLoader`를 서빙하며, `apply_policy`가 오퍼
+  저장소와 F3의 상태 머신이 만나는 유일한 지점이다. 표준 `CosTrading::Lookup`
+  파사드는 유예로 남는다: PLAN-SERVICES §3.* 원래 범위: 오퍼 저장소(Capability
+  프로퍼티), 제약 질의 부분집합, 결정적 정렬. 오라클: 픽스처 오퍼에 대한 속성
+  질의 테스트와, 기록된 트레이스 위에서 결과를 고정해 재생한 §6 적재 정책
+  (`score = route_freq × affinity ÷ mem_footprint`, 워터마크, LFU 축출).
+- **F3 — POA 위의 레지던시 상태 머신.** ✅ *2026-08-14 착지:
+  `orbweaver-object::residency`, 20 tests(그날의 크레이트 전체 34 —
+  모듈 기록 안에 든 크레이트 수치이며 썩는 쪽이다: 오늘은 84) — 4×5 전이표를 답
+  하나하나 고정하고, 가드의 네 조건 각각을 혼자 뒤집어 필요함을 증명하고,
+  PERSISTENT 상태가 축출/재적재 주기를 살아남고, 두 창짜리 `Decision` 목록을
+  실제 §6 정책에 대해 끝에서 끝까지 적용했다.* `ServantLocator` 위의
+  `ExpertLoader`; 전이는 OFFLOADED→PREFETCHING→RESIDENT(→ACTIVE 표지)→OFFLOADED
+  뿐이며, **토큰 주기 전이는 구성상 없다** — API에 호출당 훅이 아예 없고, 이는
+  문서가 아니라 `compile_fail` 문서 테스트가 붙든다. 오라클: 축출 가드
+  (`inflight == 0`)를 포함한 전이 테스트와 PERSISTENT 상태 보존. 줄을 따로 받을
+  결정이 둘. **OFFLOADED expert에 대한 요청은 거부되며(`OBJECT_NOT_EXIST`)
+  동기 적재로 서빙되지 않는다** — `locate` 안에서의 요구 적재는 §11이 프리페치를
+  두어 숨기려는 바로 그 지연이고, 복사가 끝날 때까지 디스패치 스레드를 붙잡는다.
+  미스는 대신 프리페치를 요청하고 그것을 *다음* 창이 완료한다. 그리고
+  `Located::Here`는 id를 영구 활성화하므로 축출은 POA로 화해되어야 하며
+  (`ExpertLoader::reconcile`), 그러지 않으면 축출된 expert가 활성 맵에서 계속
+  서빙된다.
+- **F4 — 인터셉터 체인의 형식화.** ✅ *2026-08-14 착지
+  (`crates/orbweaver-mcp/src/interceptor.rs`).* 가드의 검사들이 순서 있고 확장
+  가능한 체인이 되었다. 계획된 범위는 §4.5의 번호 —
+  authn → quota → safety → telemetry → audit — 였고, `Chain::standard`가 실제로
+  등록하는 것은 **audit → telemetry → exposure → scopes → approval**이다.
+  등록 순서는 행위 순서가 아니기 때문이다: 게이트는 들어가며 §4.5의 1→2→3으로,
+  관측자는 나오며 4→5로 행위한다. 그래서 거부된 호출까지 **모든** 호출을 봐야
+  하는 관측자는 모든 게이트 바깥에 등록되어야 한다. §4.5의 다섯 번호 중 둘은
+  표준 스택에서 점유자가 아니라 **이름 붙은 빈 좌석**이다: `SEAT_QUOTA`는
+  일급 점유자(`quota::Quota`, `Chain::quota`가 설치)가 있지만 기본 내장되지
+  않는데 한계값은 운영자만 가진 숫자이기 때문이고, `SEAT_SAFETY_CONTENT`의
+  인자를 읽는 절반은 점유자를 싣지 않는데 그 규칙은 배포자의 것이기 때문이다 —
+  계약을 읽는 절반은 `STAGE_APPROVAL`이 채운다. 텔레메트리는
+  `CallStats`/`route_freq`를 먹인다. 오라클: 등록 순서는
+  `the_standard_stack_registers_every_named_stage_in_order`가, 체인의 판정은
+  `Exposure::check_call`과의 사례별 대조로
+  `the_chain_and_check_call_answer_alike`가 고정한다. 기존 가드 테스트는 전부
+  그대로 통과한다. *이 항목은 계획된 §4.5 순서를 출하된 순서인 양 적었고, 순서
+  고정의 공을 판정 동치 테스트에 돌렸다.*
+- **F5 — 엔터프라이즈 합성.** ✅ *2026-08-14에 `tenant_service.rs`로 착지,
+  16/16 서빙(PLAN-SERVICES §10); `Delegation::decide`의 레지던시 항이 열린
+  절반이다.* 레지스트리 위의 `ComposedModel`/`ModelFactory`; 테넌시는 도메인별
+  `Exposure` + 능력 테이블; 레지던시 제약은 `Delegation::decide`에 합류한다.
+  오라클: 기존 세션 간 핸들 테스트와 정확히 같은 모양의 테넌트 간 비가시성
+  테스트, 그리고 `ai_effect: destructive`라 승인이 필요한 `ModelFactory.retire`.
+
+통합 지점(§7.4 형식): **IF1** F2의 선택은 MCP 얼굴에서 능력 핸들을 반환해야
+하며 IOR을 반환해서는 안 된다(전사 유출 테스트 재사용). **IF2** F4의
+텔레메트리와 스트림 B의 승격 통계는 저장소 둘이 아니라 하나다.
 
 ## 4. Core CORBA services coverage / CORBA 필수 서비스 커버리지
 
@@ -246,11 +343,14 @@ What the engine and the servant do with it, measured:
   "expert-math"]` and the pick is the one measured faster. A bound nothing
   meets is an honest empty answer, not a refusal.
 
-Still true and unchanged: `Router::select` orders by `route_freq`, which every
-offer carries, so the wire operation never sets anything aside for ranking;
-`Constraints` is released and still binds `max_latency_ms` to p99. Ordering by
-p50 over the wire would be a `select_measured` with its own reason, and no
-consumer has named one.
+Still true and unchanged, as the record of what landed against this plan:
+`Router::select` orders by `route_freq`, which every offer carries, so the wire
+operation never sets anything aside for ranking; `Constraints` is released and
+still binds `max_latency_ms` to p99. What that leaves open on the wire is
+current status, not plan history, and its home is `COMPONENTS.md`'s trading row
+— read the gap column there. *A sentence naming the terms of the open half was
+retyped here from that column, which is the drift this project has measured
+before: a fact has one home.*
 
 **2026-08-19 종결 (D010 A2).** 이유가 생겼다: 지연시간 순 라우터가 v1.0 오퍼만
 가진 상태에서 "미지값은 마지막에 정렬"은 옳은 답이지만 질문이 틀렸다 — 아무도
@@ -264,8 +364,10 @@ consumer has named one.
 순서로 서비스하며, v1.0 `heartbeat`는 자기가 언급할 수 없는 두 멤버를 지우지
 않는다. `spike-experts` 4·5번 창이 거부→부분 측정 거부→완전한 답을 순서대로
 보인다. `Router::select`는 `route_freq`로 정렬하므로 와이어 동작은 변하지 않았다.
+와이어에서 아직 열려 있는 것은 계획 이력이 아니라 **현재 상태**이고, 그 집은
+`COMPONENTS.md`의 트레이딩 행이다 — 여기서 다시 적지 않는다. 사실의 집은 하나다.
 
-## 4.6 Why `Router` is in no plan — the plane rule and its escape hatch
+## 4.6 Why `Router` is in no plan — the plane rule and its escape hatch / `Router`가 어느 계획서에도 없던 이유 — 평면 규칙과 그 탈출구
 
 The coverage sweep found `moe::Router::select` and `dispatch` declared in a
 landed contract, served by nothing, and named in no plan — not even in the
@@ -368,3 +470,10 @@ per the source document's own rule — AnyJSON already refuses to inline what a
 handle should carry. Performance targets (§11의 <5% 오버헤드, p99 은닉) become
 measurable only when a data-plane simulator exists; until then stream F
 reports state-machine and policy correctness, nothing about latency.
+
+이 저장소에는 가속기도, 융합 커널도, RDMA도 없다. 데이터 플레인은 이름이 붙은
+외부로 남는다. `Expert.process`의 페이로드는 원문 자신의 규칙대로 참조로
+건너간다 — AnyJSON은 핸들이 날라야 할 것을 인라인하기를 이미 거부한다. 성능
+목표(원문 §11의 <5% 오버헤드, p99 은닉)는 데이터 플레인 시뮬레이터가 생겨야
+비로소 측정 가능해진다. 그때까지 스트림 F가 보고하는 것은 상태 머신과 정책의
+정확성이며, 지연시간에 대해서는 아무것도 보고하지 않는다.

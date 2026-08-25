@@ -40,10 +40,15 @@ generated block `SERVICES-COVERAGE.md` §8, never this sentence. Re-run it
 with `./spikes/service_sweep.sh`.
 
 규칙 2가 지켜지고 있는지는 주장이 아니라 **측정**된다 —
-[`SERVICES-COVERAGE.md`](SERVICES-COVERAGE.md)가 선언된 모든 연산을 실행 중인
-서번트에 걸어보고 서빙/이유 있는 거부/이유 없는 거부로 분류한다. 마지막 칸이
-비어 있게 하는 것이 이 규칙의 목적이며, 현재 **선언 107개 중 12개**가 거기에
-있다.
+[`SERVICES-COVERAGE.md`](SERVICES-COVERAGE.md)(2026-08-14)가 선언된 모든 연산을
+실행 중인 서번트에 걸어보고 서빙/이유 있는 거부/이유 없는 거부로 분류한다.
+마지막 칸이 비어 있게 하는 것이 이 규칙의 목적이며, 거기에는 **선언 107개 중
+12개**(2026-08-14), **선언 106개 중 0개**(2026-08-19)가 있었다 — 현재
+숫자는 `SERVICES-COVERAGE.md` §8의 생성 블록이며 이 문장이 아니다.
+`./spikes/service_sweep.sh`로 다시 잰다.
+(이 문단은 날짜도 살아 있는 집도 없이 **현재형으로 "선언 107개 중 12개"라고만
+적고 있었다** — 영어 쌍둥이가 두 수치를 모두 날짜와 함께 적고 생성 블록을 지목한
+바로 그 자리에서. 수를 적는 법의 본보기는 위 영어 문단이다.)
 
 ## 2. CosNaming / 네이밍 — ✅ both halves landed and measured
 
@@ -69,7 +74,53 @@ PLAN-DEFERRED §7's trigger *in code* and found the other shape —
 `rebind_context` and `destroy` are **served** since 2026-08-18 (this sentence
 said "refused loudly" and §8.1.1 said "moved to `NO_IMPLEMENT`" while the wire
 served all three — one fact, three homes, three answers, found by the plan
-review of 2026-08-19; the wire is the home).
+review of 2026-08-19; the wire is the home). What is still deferred is
+narrower than "federation": a `bind_context` whose argument is a **foreign**
+context answers `NO_IMPLEMENT`, and the reason and trigger for that live in
+**PLAN-DEFERRED §12** (chaining to a foreign context), not in §7 — this
+paragraph named only §7, which is the trading-link/naming-federation chapter,
+so a reader chasing the refusal landed a chapter away from its reason. The
+membership test is `local_context_key` in `naming_server.rs`: a profile at the
+host and port this server publishes **and** a key the tree currently holds,
+because the key alone would adopt somebody else's object and the address alone
+would accept a key `destroy` has retired. Measured in-crate (a dummy foreign
+reference gets `NO_IMPLEMENT` while an undeclared name still gets
+`BAD_OPERATION`) and from a peer (`naming_lifecycle_from_a_peer.rs` asserts the
+`bind_context_foreign` row is `NO_IMPLEMENT`); the servant holds no
+`Connection`, which is `naming_no_outbound_call.rs` rather than a sentence.
+
+표준은 `CosNaming`과 INS의 `NamingContextExt`. 소비자는 하네스, MCP의 참조 획득,
+F7의 채널 발견, IFR 파사드. 클라이언트 절반(Phase 1)은 resolve/resolve_str/
+corbaname이며 omniNames에 대고 검증했고, 서버 절반(F6, 2026-08-14)은
+resolve/bind/rebind/unbind/bind_new_context/new_context/list과 Ext 문자열
+표면이며 중첩 컨텍스트는 서로 다른 오브젝트 키로 산다.
+
+**양방향으로 측정했다.** 우리 클라이언트가 우리 서버에 대고
+bind/AlreadyBound/NotFound{why, rest_of_name}/중첩 해석을 왕복하고,
+**omniORB의 파이썬 클라이언트가 우리 서버에서 `spike/Echo`를 해석하고 우리가 보낸
+`NotFound` 사용자 예외 바이트를 디코딩했다** — 프로젝트 최초의 "그들의 클라이언트,
+우리의 서버" 주장이다. 사용자 예외를 서빙하는 것 자체가 `Dispatch::dispatch_body`를
+필요로 했고, 기존 서번트 전부가 그것을 변경 없이 물려받는다.
+
+소비자가 나타날 때까지 하지 않는 것: 진짜 `BindingIterator` 수명 주기(인터페이스는
+선언되어 있으나 어떤 객체에도 프로브되지 않았다 — 커버리지 문서 §8이 이를 미측정으로
+적는다), 네이밍 도메인 간 연합(F5가 PLAN-DEFERRED §7의 방아쇠를 *코드 안에서*
+평가했고 다른 모양을 찾았다 — `tenant_service.rs`, "그래프 하나, 테넌트별 키").
+`bind_context`, `rebind_context`, `destroy`는 2026-08-18 이후 **서빙된다**(이
+문단은 "시끄럽게 거부"라고, §8.1.1은 "`NO_IMPLEMENT`로 옮겼다"고 적고 있었으나
+와이어는 셋 다 서빙하고 있었다 — 사실 하나에 집 셋, 답 셋. 2026-08-19 계획 검토가
+찾았고, 집은 와이어다). 아직 유예된 것은 "연합"보다 좁다: 인자가 **외부**
+컨텍스트인 `bind_context`는 `NO_IMPLEMENT`로 답하며, 그 이유와 방아쇠는 §7이 아니라
+**PLAN-DEFERRED §12**(외부 컨텍스트로의 연쇄)에 산다 — 이 문단은 §7만 지목하고
+있었고 §7은 트레이딩 링크/네이밍 연합의 장이므로, 거부의 이유를 좇는 독자는 한 장
+떨어진 곳에 도착했다. 판정은 `naming_server.rs`의 `local_context_key`다: 이 서버가
+공표하는 호스트·포트의 프로파일 **그리고** 트리가 지금 들고 있는 키. 키만으로는
+남의 객체를 제 것인 양 채택하게 되고, 주소만으로는 `destroy`가 거둔 키까지
+받아들이기 때문이다. 크레이트 안에서(가짜 외부 참조는 `NO_IMPLEMENT`를 받고, 선언
+자체가 없는 이름은 여전히 `BAD_OPERATION`을 받는다) 그리고 피어에서
+(`naming_lifecycle_from_a_peer.rs`가 `bind_context_foreign` 행이 `NO_IMPLEMENT`임을
+단언한다) 측정했다. 서번트가 `Connection`을 들지 않는다는 것은 문장이 아니라
+`naming_no_outbound_call.rs`다.
 
 ## 3. CosTrading / 트레이딩 — ✅ engine and project-contract wire both landed
 
@@ -128,9 +179,15 @@ to report.
 시스템 예외이며, 행동 가능하도록 골랐다(`BAD_PARAM` 미등록, `BAD_INV_ORDER`
 없는 간선, `NO_PERMISSION` 핀, `TRANSIENT` 다음 윈도우 재시도). 사용자 예외를
 발명하면 생성된 클라이언트가 해석할 분기가 없는 바이트가 나간다. 그리고
-**`moe::Capability`에는 `specialization`도 `latency_p50`도 없다** — 이 계약으로
-들어온 오퍼는 그 속성 제약 조회를 만족시킬 수 없으며, 이는 여기서 기본값으로
-때울 문제가 아니라 F1의 계약 문제다.
+**`moe::Capability`에는 `specialization`도 `latency_p50`도 없었다** —
+2026-08-19, §5.3의 방식으로 닫혔다. 릴리스된 `Capability`를 제자리에서 고치는
+것은 우리 `idl-diff`가 BREAKING으로 판정하므로(CDR 멤버에는 태그도 길이도 없다),
+그것을 **합성하는** `MeasuredCapability`(`base` + `specialization` +
+`latency_p50_ms`)와 새 연산 `register_measured`/`heartbeat_measured`가
+`corpus/golden/22`에 들어왔다. 집은 [`PLAN-MOE.md`](PLAN-MOE.md) §4.5.1이고,
+`corpus/evolution/moe/`가 얼린 짝 — `v1.0`과 거절된 `v1.1-in-place` — 을 갖고
+있다. 이 문단은 그 뒤로도 현재형으로 "없다 … F1의 계약 문제"라고, 즉 닫힌 것을
+열린 것으로 적고 있었다.
 
 측정되지 않았고 주장하지도 않는 것: 우리 클라이언트만 호출했다. 외부 MoE 피어가
 없으므로 §2와 달리 "그들의 클라이언트, 우리의 서버" 방향은 보고할 것이 없다.
@@ -154,7 +211,11 @@ consumer/supplier against it.** Scope v1: `EventChannel` +
 — the push model, and since 2026-08-18 the **consumer half of pull**
 (`obtain_pull_supplier`, `pull`, `try_pull` served); the supplier half and
 `destroy` are `NO_IMPLEMENT` with reasons in `event_server.rs`'s header (and
-now PLAN-DEFERRED §10). Events are `any`, which AnyJSON already carries.
+now PLAN-DEFERRED **§10 for the supplier side of pull, §11 for `destroy`** —
+this sentence named §10 for both, and they are two chapters with two different
+triggers: §10 wants a named `PullSupplier` in this workspace, §11 wants a
+caller model, because `destroy` ends the channel for every other client).
+Events are `any`, which AnyJSON already carries.
 
 Batch unit: the channel × both directions (our supplier → omniORB consumer,
 omniORB supplier → our consumer) × disconnect semantics (a dead consumer must
@@ -163,7 +224,13 @@ reported, per the "no silent truncation" rule).
 
 측정이 오라클을 결정했다: omniEvents 픽스처는 없으나 omniORBpy가 CosEventComm
 스텁을 싣고 있으므로, F6과 같은 방향 — 채널은 우리가 서빙하고 독립 ORB가 consumer/
-supplier로 접속 — 이 가능하다. push 모델만, 컨트롤 플레인 입도만.
+supplier로 접속 — 이 가능하다. 컨트롤 플레인 입도만이라는 규칙은 그대로이고,
+범위는 push 모델에 더해 2026-08-18 이후의 **pull 소비자 쪽**
+(`obtain_pull_supplier`, `pull`, `try_pull` 서빙)이다 — 이 문단은 "push 모델만"
+이라고만 적고 있었다. pull의 공급자 쪽과 `destroy`는 `NO_IMPLEMENT`이며 이유는
+`event_server.rs` 헤더에, 그리고 **PLAN-DEFERRED §10(pull 공급자 쪽)과
+§11(`destroy`)에 있다** — 영어 쌍둥이도 둘 다 §10이라고 적고 있었으나 방아쇠가
+서로 다른 두 개의 장이다.
 
 ## 5. CosLifeCycle & CosProperty / 생명주기·프로퍼티 — F5
 
@@ -176,6 +243,14 @@ into the `Manifest` struct until a second consumer exists — the F6 rule: no
 standalone service without a named caller. Tenancy isolation tests take the
 cross-session capability-table shape already proven in the MCP batches.
 
+`ModelFactory`(create/clone_model/deploy/retire, `corpus/golden/23`)는
+GenericFactory의 모양에서 표준의 일반성을 덜어낸 것이다 — 계약마다 타입이 붙은
+팩토리. 타입 없는 `create(key, criteria)`야말로 S4가 막으려고 존재하는 문자열
+표면이기 때문이다. `retire`는 `ai_effect: destructive`이며 기존 승인 게이트를 탄다.
+CosProperty는 두 번째 소비자가 생길 때까지 `Manifest` 구조체 안에 접힌 채로 둔다 —
+F6의 규칙, 즉 이름 붙은 호출자 없는 독립 서비스는 없다. 테넌시 격리 테스트는 MCP
+배치에서 이미 입증된 세션 간 능력 테이블 모양을 그대로 가져간다.
+
 ## 6. Security — cross-reference only / 교차 참조
 
 CSIv2 wire, delegation policy, credential hygiene and `ai_authz` scopes are
@@ -183,6 +258,12 @@ PHASE5 + guard work and stay there; this plan adds nothing on top. The one
 service-suite note: none of the services above invent their own authorization
 — a naming `bind` or channel `connect` at the MCP boundary passes the same
 `Exposure`/`Guarded` gate as any other operation (I1's rule, inherited).
+
+CSIv2 와이어, 위임 정책, 자격 증명 위생, `ai_authz` 스코프는 PHASE5와 가드 작업의
+몫이며 거기 그대로 둔다 — 이 계획은 그 위에 아무것도 얹지 않는다. 서비스 묶음에
+대해 적을 것은 하나뿐이다: 위 서비스 가운데 어느 것도 **자기만의 인가를 발명하지
+않는다**. MCP 경계에서의 네이밍 `bind`나 채널 `connect`는 다른 모든 연산과 똑같이
+`Exposure`/`Guarded` 게이트를 통과한다(I1의 규칙을 물려받는다).
 
 ## 7. Interface Repository facade / IFR 파사드 — ✅ landed, both directions
 
@@ -256,11 +337,24 @@ concrete trigger that would un-defer it, and the v1 we would build — in
 | Time / PSS / Concurrency / Collections | no consumer names them; adopt-on-demand |
 | Federated Naming / Trading Link | tenancy (F5) may name the requirement; until then out |
 
-## 8.1 Operations absent without a reason / 이유 없는 부재 — 12건
+행별 이유. **트랜잭션(OTS)** — 반쪽 구현들의 무덤이고, 컨트롤 플레인에서 객체 간
+원자성을 필요로 하는 것이 없다. 장식용 `Current`보다 정직한 부재가 낫다.
+**CosNotification** — 구조화 이벤트·필터·QoS 관리를 얹은 Event의 무거운 상위
+집합이며, 이름 붙은 소비자 전부는 평범한 CosEvent로 충분하다. 필터링이 서버 쪽으로
+옮겨갈 때에만 다시 본다. **Time / PSS / Concurrency / Collections** — 이름을 대는
+소비자가 없다. 필요해지면 그때 채택한다. **연합 네이밍 / 트레이딩 링크** — 테넌시
+(F5)가 요구를 명명할 수 있으나, 그전까지는 범위 밖이다.
 
-`SERVICES-COVERAGE.md` probed all 107 declared operations over the wire and
-found **12 answering `BAD_OPERATION` with no reason written anywhere**. The
-wire cannot distinguish a considered refusal from a forgotten one, so a
+## 8.1 Operations absent without a reason, 2026-08-14 — 12건 / 이유 없는 부재
+
+**The reading below is 2026-08-14's, and every row carries its own date.** On
+that day `SERVICES-COVERAGE.md` probed all 107 declared operations over the
+wire and found **12 answering `BAD_OPERATION` with no reason written
+anywhere**; the rows record what happened to each since. The current count is
+the generated block `SERVICES-COVERAGE.md` §8 and is not restated here — the
+heading and this sentence used to be undated and present-tense over dated rows,
+which reads as today's number and had stopped being one. The wire cannot
+distinguish a considered refusal from a forgotten one, so a
 `BAD_OPERATION` nobody wrote a sentence about is a gap by definition. This
 section is that sentence, written now — and where the honest answer is "nobody
 decided", it says so rather than inventing a rationale after the fact.
@@ -274,7 +368,11 @@ decided", it says so rather than inventing a rationale after the fact.
 | `IDLType::_get_type` | **Deferred with the same reason as `describe_interface`'s absence used to have**: it returns a `TypeCode`, and until recently the registry loaded `::CORBA::TypeCode` as `void`. That is fixed, so this one is now merely unimplemented rather than unimplementable. **Answers `NO_IMPLEMENT` since 2026-08-14.** |
 | `moe::Router::select`, `dispatch` | **`select` served 2026-08-14**, delegating to the trading engine and refusing the *whole call* with `NO_IMPLEMENT` when a constraint names a field a wire-registered offer cannot answer — a sequence of references is a complete answer or it is a refusal. `dispatch` is **excluded by D006 (approved 2026-08-14)**, together with `Expert::process`: both carry an `Activation`, nothing serves them, and bounding an operation that has never run would write an unmeasured constant into a wire contract to govern traffic nobody has sent. The return path is a new versioned interface carrying a bounded handle, where §5.3 already prescribes the version bump. Originally: **split, and only half undecided** — reasoned in [`PLAN-MOE.md`](PLAN-MOE.md) §4.6. `select` returns references only, is pure control plane, and its absence is a **gap**. `dispatch` (and `Expert::process`) carry an `Activation`, which is control-plane-legal only under the reading that `Tensor` holds a handle rather than a payload — a reading that lives in a corpus comment, binds nothing, and is enforced by nothing. Committing to it is the decision. |
 
-**부재 12건에 대한 문장.** 와이어는 숙고된 거부와 잊힌 거부를 구분하지 못하므로,
+**부재 12건에 대한 문장 — 2026-08-14 판독이며, 아래 각 행은 자기 날짜를
+달고 있다.** 지금의 수는 `SERVICES-COVERAGE.md` §8의 생성 블록이며 여기에 다시
+적지 않는다(제목과 첫 문장은 날짜 없는 현재형으로 날짜 붙은 행들 위에 서 있었고,
+그것은 오늘의 수로 읽히지만 이미 오늘의 수가 아니었다).
+와이어는 숙고된 거부와 잊힌 거부를 구분하지 못하므로,
 아무도 문장을 쓰지 않은 `BAD_OPERATION`은 정의상 공백이다. `to_url`과
 `_get_version`은 **결함**이고, 나머지는 이유를 붙여 유예하며, `moe::Router`는
 **미결정**이라고 적는다 — 사후에 근거를 지어내지 않는다.
@@ -339,6 +437,15 @@ after the extra import; that one line is what made §7's oracle possible),
 omniEvents (absent — recorded above), sslTP (absent —
 `spikes/tls/PEER-STATUS.md`).
 
+이 계획의 어떤 서비스도 Cargo 의존성을 추가하지 않는다 — 순수한 명세 구현이다.
+픽스처는 sslTP 프로브의 선례를 따른다: 먼저 프로브하고, 측정된 출력을 인용하고,
+BLOCKED 프로브도 유효한 배치 결과로 친다. 기록에 남은 프로브: omniNames(있음,
+Phase 1부터 사용), omniORBpy의 CosNaming/CosEventComm 스텁(있음, 측정됨),
+omniORBpy의 **IR 스텁**(`omniORB.ir_idl`로 있음 — 맨 `import CORBA`만 하면
+`hasattr(CORBA, "Repository")`가 `False`이고 그 임포트를 더하면 `True`가 된다.
+§7의 오라클을 가능하게 한 것이 그 한 줄이다), omniEvents(없음 — 위에 기록),
+sslTP(없음 — `spikes/tls/PEER-STATUS.md`).
+
 ## 10. Sequencing / 순서
 
 | Batch | After | Why that order |
@@ -347,5 +454,27 @@ omniEvents (absent — recorded above), sslTP (absent —
 | F7 Event channel | F6 | **landed** (push both ways; consumer-side pull 2026-08-18) — the channel is a named object; discovery wants Naming |
 | IFR facade (§7) | F6 | **landed** — same reason |
 | Trading wire (`ExpertRegistry` served) | F3 | **landed 2026-08-15** (§3) — the loader/state machine is its first caller |
-| F5 LifeCycle/Property | F2 ✅ + F4 | **landed 2026-08-14** as `tenant_service.rs`, and this row never grew the marker the F6 and IFR rows have — measured 16/16 in `SERVICES-COVERAGE.md` §7. What was missing was the *direction*: 2026-08-18 an omniORB client calls all sixteen through its own stubs. Open hole: `bind_expert`/`set_policy` take references **no operation of the contract returns**, so a caller must build them from the key template |
-| CosEvent → telemetry feedback | F4 + F7 | **both exist since 2026-08-18 and nothing publishes** a control-plane event into the channel — the precondition is met and the work is open (plan review 2026-08-19); needs a short design note first: what is published, what is not (the §5 trust boundary) |
+| F5 LifeCycle/Property | F2 ✅ + F4 | **landed 2026-08-14** as `tenant_service.rs`, and this row never grew the marker the F6 and IFR rows have — measured 16/16 in `SERVICES-COVERAGE.md` §7. What was missing was the *direction*: 2026-08-18 an omniORB client calls all sixteen through its own stubs (what F5 still lacks is `COMPONENTS.md`'s gap column, not this table's — a clause restating it stood here) |
+| CosEvent → telemetry feedback | F4 + F7 | **both exist since 2026-08-18 and nothing publishes** a control-plane event into the channel — re-measured 2026-08-25: no use of the event servant anywhere in `orbweaver-mcp`, `orbweaver-object` or `orbweaver-trading`. The design note this row asked for now exists — [`docs/decisions/D011-control-plane-events.md`](decisions/D011-control-plane-events.md), STATUS **PROPOSED**, drafted 2026-08-19 — and it answers "what is published, what is not (the §5 trust boundary)"; this cell went on saying "needs a short design note first", one document behind. D011 deliberately does not edit this row: its §11 writes out, unapplied, what this cell becomes under each option, so the batch that closes the row applies it in one edit |
+
+순서의 이유, 행별로. **F6 네이밍 서버** — 선행 없음, **2026-08-14 착지**.
+**F7 이벤트 채널** — F6 다음. **착지**(push는 양방향, consumer 쪽 pull은
+2026-08-18). 채널은 이름 붙은 객체이고, 발견에는 네이밍이 필요하다.
+**IFR 파사드(§7)** — F6 다음, **착지**, 같은 이유. **트레이딩 와이어
+(`ExpertRegistry` 서빙)** — F3 다음, **2026-08-15 착지**(§3). 로더/상태 머신이
+그 첫 호출자다. **F5 라이프사이클/프로퍼티** — F2 ✅와 F4 다음,
+`tenant_service.rs`로 **2026-08-14 착지**. 이 행은 F6·IFR 행이 가진 표시를 끝내
+달지 못했는데, `SERVICES-COVERAGE.md` §7에서 16/16으로 측정되어 있었다. 빠져
+있던 것은 *방향*이며, 2026-08-18, omniORB 클라이언트가 자기 스텁으로 열여섯
+연산을 모두 호출했다(F5에 아직 없는 것은 `COMPONENTS.md`의 공백 열 소관이지 이
+표의 소관이 아니다 — 그것을 다시 적은 절이 여기 서 있었다).
+**CosEvent → 텔레메트리 되먹임** — F4와 F7 다음. **양쪽 다 2026-08-18 이후
+존재하지만 아무것도 발행하지 않는다**. 2026-08-25 재측정: `orbweaver-mcp`,
+`orbweaver-object`, `orbweaver-trading` 어디에서도 이벤트 서번트를 쓰지 않는다.
+이 행이 요구한 설계 노트는 이제 존재한다 —
+[`docs/decisions/D011-control-plane-events.md`](decisions/D011-control-plane-events.md),
+상태 **제안**, 2026-08-19 작성 — 그리고 "무엇을 발행하고 무엇을 발행하지 않는가
+(§5의 신뢰 경계)"에 답한다. 이 칸은 그동안에도 "짧은 설계 노트가 먼저 필요하다"고
+적고 있었다 — 문서 하나만큼 뒤처진 채로. D011은 이 행을 의도적으로 고치지 않는다.
+그 §11이 선택지별로 이 칸이 무엇이 되는지를 **미적용 상태로** 써 두었으므로, 행을
+닫는 배치가 한 번의 편집으로 적용한다.
