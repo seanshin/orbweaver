@@ -12,6 +12,20 @@ the wire says. That is the harness's oracle for the document, the same move
 `records_keep_up.py` made one level up: a script cannot check a sentence for
 truth, so the tables that *can* be checked are the ones the script writes.
 
+**What the parser could not read is counted, and a malformed row is fatal.**
+`parse()` used to accept `ROW` at exactly seven fields and `TOTAL` at three or
+more and drop everything else without a word — so a `ROW` the sweep emitted
+with a tab inside an answer, or with a field added, disappeared from the
+tables, and `--check` compared a document regenerated from the same short read
+against a sweep it had also mis-read, printing `ok … says what the wire says`.
+The two classes are now told apart, because the input carries both: a line
+whose first field is a tag this renderer knows but whose shape is wrong is a
+**dropped measurement** and fails the check; a line that is not a tagged row at
+all is fixture noise — `service_sweep.sh` folds stderr into the same stream —
+and is counted and printed, never fatal. The verdict line says how many rows
+were read and how much was not, so a run that read nothing cannot look like a
+run that agreed with everything.
+
 The renderer is deterministic — rows keep the sweep's order, which is the IDL
 declaration order — and it renders nothing it did not read: an interface no
 object claimed is listed as the sweep reports it, a `MARSHAL` is written as
@@ -40,30 +54,63 @@ KIND_LABEL = {
 }
 
 
+# Every tag `service_sweep.py` emits, and the field count this renderer needs
+# to read one. A tag listed with None is read and deliberately not rendered —
+# it belongs to the sweep's own verdict, which the harness reads directly.
+TAGS = {"ROW": 7, "TOTAL": 3, "UNSERVED": 4, "UNPROBED": 4,
+        "ANSWER": None, "UNMEASURED": None, "ABSENT": None}
+
+
 def parse(text):
+    """(services, unserved, unprobed, dropped, noise).
+
+    `dropped` is every line tagged as a sweep row whose shape this renderer
+    could not read — a measurement that exists and did not reach the tables.
+    `noise` is every other non-blank, non-comment line: `service_sweep.sh`
+    redirects fixture stderr into the same stream, so untagged text is
+    expected there and is reported rather than treated as a defect.
+    """
     services = OrderedDict()   # service -> {"rows": [...], "total": {...}}
     unserved = []
     unprobed = []
-    for line in text.splitlines():
+    dropped = []
+    noise = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if not line.strip() or line.startswith("#") or line.startswith("service-sweep:"):
+            continue      # blank, section header, or the sweep's own verdict line
         parts = line.rstrip("\n").split("\t")
         tag = parts[0]
-        if tag == "ROW" and len(parts) == 7:
+        if tag not in TAGS:
+            noise.append((lineno, line.strip()))
+            continue
+        need = TAGS[tag]
+        if need is None:
+            continue          # read, and this renderer does not draw it
+        if len(parts) < need or (tag == "ROW" and len(parts) != need):
+            dropped.append((lineno, tag, len(parts), need, line.strip()))
+            continue
+        if tag == "ROW":
             _, service, obj, iface, op, answer, kind = parts
             services.setdefault(service, {"rows": [], "total": None})
             services[service]["rows"].append((obj, iface, op, answer, kind))
-        elif tag == "TOTAL" and len(parts) >= 3:
+        elif tag == "TOTAL":
             service = parts[1]
             services.setdefault(service, {"rows": [], "total": None})
             tot = OrderedDict()
             for cell in parts[2:]:
                 k, _, v = cell.rpartition(" ")
-                tot[k] = int(v)
+                try:
+                    tot[k] = int(v)
+                except ValueError:
+                    dropped.append((lineno, tag, len(parts), need, line.strip()))
+                    tot = None
+                    break
             services[service]["total"] = tot
-        elif tag == "UNSERVED" and len(parts) >= 4:
+        elif tag == "UNSERVED":
             unserved.append((parts[1], parts[2], parts[3]))
-        elif tag == "UNPROBED" and len(parts) >= 4:
+        elif tag == "UNPROBED":
             unprobed.append((parts[1], parts[2], parts[3]))
-    return services, unserved, unprobed
+    return services, unserved, unprobed, dropped, noise
 
 
 def cell(s):
@@ -71,11 +118,12 @@ def cell(s):
 
 
 def render(text):
-    services, unserved, unprobed = parse(text)
+    """(document region, dropped rows, noise lines)."""
+    services, unserved, unprobed, dropped, noise = parse(text)
     out = [BEGIN, ""]
     if not services:
         out += ["_The sweep produced no rows — an unmeasured document, not an empty service._", "", END]
-        return "\n".join(out) + "\n"
+        return "\n".join(out) + "\n", dropped, noise
 
     # ── per-service tables ────────────────────────────────────────────────
     for service, data in services.items():
@@ -161,7 +209,7 @@ def render(text):
         out.append("_none_")
     out.append("")
     out.append(END)
-    return "\n".join(out) + "\n"
+    return "\n".join(out) + "\n", dropped, noise
 
 
 def region_of(doc_text):
@@ -172,21 +220,42 @@ def region_of(doc_text):
     return doc_text[b:e + len(END)] + "\n"
 
 
+def report(dropped, noise):
+    """Print what the parser could not read. Returns True if anything was lost."""
+    for lineno, tag, got, need, line in dropped:
+        print("  FAIL sweep line %d: %s row has %d field(s), this renderer reads %d — "
+              "a measured probe that did not reach the tables" % (lineno, tag, got, need))
+        print("       " + line[:140])
+    if noise:
+        print("  note %d sweep line(s) carried no row tag and were not rendered "
+              "(service_sweep.sh folds fixture stderr into this stream); first: %s"
+              % (len(noise), noise[0][1][:100]))
+    return bool(dropped)
+
+
 def main(argv):
     text = sys.stdin.read()
-    rendered = render(text)
+    rendered, dropped, noise = render(text)
     if "--check" not in argv:
         sys.stdout.write(rendered)
-        return 0
+        report(dropped, noise)
+        return 1 if dropped else 0
+    lost = report(dropped, noise)
     doc = DOC.read_text()
     committed = region_of(doc)
     if committed is None:
         print("  FAIL %s has no generated region (%s … %s)" % (DOC.name, BEGIN[:20], END))
         return 1
-    if committed == rendered:
+    if committed == rendered and not lost:
         n = sum(1 for l in rendered.splitlines() if l.startswith("| ") and not l.startswith("| Service") and not l.startswith("| Interface"))
-        print("  ok   docs/SERVICES-COVERAGE.md §8 says what the wire says (%d table row(s))" % n)
+        print("  ok   docs/SERVICES-COVERAGE.md §8 says what the wire says "
+              "(%d table row(s); %d sweep line(s) read, 0 dropped)"
+              % (n, len(text.splitlines())))
         return 0
+    if lost:
+        print("  FAIL the tables were rendered from an incomplete read of the sweep; "
+              "the comparison below is not evidence either way")
+        return 1
     print("  FAIL docs/SERVICES-COVERAGE.md §8 no longer says what the wire says; regenerate:")
     print("       ./spikes/service_sweep.sh --raw | python3 spikes/coverage_tables.py --write")
     for line in difflib.unified_diff(committed.splitlines(), rendered.splitlines(),
@@ -197,7 +266,12 @@ def main(argv):
 
 def write(argv):
     text = sys.stdin.read()
-    rendered = render(text)
+    rendered, dropped, noise = render(text)
+    if report(dropped, noise):
+        # Writing a document from a read that lost rows is how the check and
+        # the document come to agree about a measurement neither of them has.
+        print("refusing to write %s from an incomplete read of the sweep" % DOC)
+        return 1
     doc = DOC.read_text()
     committed = region_of(doc)
     if committed is None:

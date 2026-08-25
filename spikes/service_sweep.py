@@ -461,9 +461,19 @@ ATTR_RE = re.compile(r"^\s*(readonly\s+)?attribute\s+.*?(\w+)\s*;")
 OP_RE = re.compile(
     r"^\s*(?:oneway\s+)?[\w:]+(?:\s*<[^>]*>)?\s+(\w+)\s*\([^)]*\)\s*(?:raises\s*\([^)]*\))?\s*;"
 )
+# Lines that legitimately stand inside an interface and declare no operation:
+# braces, preprocessor and pragma lines, comments, and the type declarations
+# an interface may carry. The keyword must be followed by space — `enum X {`
+# is a type, `enumKind k();` is an operation whose return type starts with
+# those four letters, and the `startswith` guard on OP_RE above cannot tell
+# them apart. Writing the distinction here means the counter reports that
+# operation as unread rather than joining the guard in dropping it.
+STRUCTURAL_RE = re.compile(
+    r"^(?:[{}();]+\s*$|#|//|/\*|\*|"
+    r"(?:typedef|struct|enum|union|exception|const|native)\s)")
 
 
-def declared_operations(idl_paths, includes):
+def declared_operations(idl_paths, includes, unclassified=None):
     """Every operation each interface declares, from `omniidl -b dump`.
 
     omniidl is run as an external program and its text output is read — the
@@ -471,6 +481,29 @@ def declared_operations(idl_paths, includes):
 
     Attributes become the `_get_`/`_set_` operations they are on the wire
     (§11.3.7), because that is the name a request actually carries.
+
+    `unclassified`, when a list is passed, receives every line standing
+    directly inside an interface that matched neither `ATTR_RE` nor `OP_RE`.
+    Those lines are the silent half of this reader: an operation whose shape
+    the regex misses is not declared, so it is never probed, never appears in
+    `#ABSENT`, and cannot appear in `#UNPROBED-INTERFACES` either — that list
+    is built from the interfaces this same regex parsed. The declared count
+    and the probe count fall by one each, stay consistent with each other, and
+    the run prints `every declared operation was answered`.
+
+    Measured 2026-08-25 over the four COS/IR contracts and golden 22/23:
+    **50 interfaces, 189 operations, 0 unclassified.** Two shapes reproduce
+    through `omniidl -b dump` and are now reported — `unsigned long f();`
+    (`[\\w:]+` takes one word) and `enumKind k();` (the `startswith` guard
+    below cannot tell a keyword-prefixed return type from a type
+    declaration). Two more are real and this counter does **not** see them,
+    which is why they are written down here rather than claimed as covered:
+    `abstract interface X` does not match `INTERFACE_RE`, so its whole body
+    falls under a `("block", None)` scope and never reaches this
+    fall-through; and `attribute long a, b;` matches `ATTR_RE`, which takes
+    only `b`. Neither shape occurs in today's input, so neither could be
+    widened against real input in this tree. A `context (…)` clause is not a
+    hazard here at all: the dump elides it.
     """
     args = ["omniidl"] + [f"-I{i}" for i in includes] + ["-b", "dump"]
     text = ""
@@ -517,6 +550,12 @@ def declared_operations(idl_paths, includes):
             if m and not stripped.startswith(("typedef", "struct", "enum", "union", "exception")):
                 interfaces[current[1]]["ops"].append(m.group(1))
                 continue
+            # Standing inside an interface, opening no block, and matching
+            # neither shape. Structural braces and preprocessor lines are the
+            # expected residue; anything else is a declaration this reader did
+            # not understand and therefore did not declare.
+            if unclassified is not None and not STRUCTURAL_RE.match(stripped):
+                unclassified.append((current[1], stripped))
 
         if opens > 0:
             scope.append(("block", None))
@@ -992,6 +1031,11 @@ def main(argv):
     cos = os.path.join(root, "COS")
     print(f"idl-root {root}")
 
+    # A declaration this reader cannot classify is an operation that is never
+    # probed, and silence about it reads as coverage — the same way silence
+    # about unprobed interfaces did until 2026-08-19. Collected here and given
+    # to the sweep as unmeasured, which is what it is.
+    unclassified = []
     omg = declared_operations(
         [
             os.path.join(cos, "CosNaming.idl"),
@@ -1000,15 +1044,20 @@ def main(argv):
             os.path.join(root, "ir.idl"),
         ],
         [root, cos],
+        unclassified,
     )
     # The two project contracts are read *separately* and never merged: each
     # declares its own `moe::Expert`, and golden 22's carries a `delegate` that
     # golden 23's does not. Merging them would invent an operation neither
     # servant's contract asks for.
-    control = declared_operations(["corpus/golden/22-moe-control-plane.idl"], [])
-    enterprise = declared_operations(["corpus/golden/23-moe-enterprise.idl"], [])
+    control = declared_operations(["corpus/golden/22-moe-control-plane.idl"], [], unclassified)
+    enterprise = declared_operations(["corpus/golden/23-moe-enterprise.idl"], [], unclassified)
 
     sweep = Sweep()
+    for iface, line in unclassified:
+        sweep.unmeasured.append(
+            f"{iface}: declaration not classified by this reader, so it was never "
+            f"probed — {line}")
     plan = [
         ("names.ior", lambda ref: do_naming(sweep, omg, ref)),
         ("events.ior", lambda ref: do_event(sweep, omg, ref)),
