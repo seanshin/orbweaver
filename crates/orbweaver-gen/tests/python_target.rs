@@ -457,6 +457,46 @@ struct Outcome {
     failures: Vec<String>,
 }
 
+/// Where a generated stub is reached, as **Python** names: the class, and the
+/// module segments to walk to it.
+///
+/// Every segment through `python_name`, not just the method the sweep already
+/// escaped. The escaping rule is one function and this oracle is one of its
+/// callers; it called it for the method and spelled the other two sites
+/// itself, so `interface from` — whose emitted class is `_from`, exactly what
+/// the OMG Python mapping says — made `getattr(module, "from")` raise, and the
+/// *oracle* was the thing that was wrong. Importing a package cannot see this,
+/// which is why 1989 import probes did not: only calling into one does.
+///
+/// A function rather than three lines inside the sweep, so that
+/// [`a_stub_is_looked_up_by_the_name_the_emitter_gave_it`] can go red on the
+/// contract the corpus is not obliged to carry.
+fn stub_location(registry: &Registry, id: &str) -> Option<(String, Vec<String>)> {
+    let qualified: Vec<String> =
+        registry.qualified_name(id).map(|q| q.split("::").map(str::to_owned).collect())?;
+    let (class, module) = qualified.split_last()?;
+    Some((
+        orbweaver_gen::python::python_name(class),
+        module.iter().map(|s| orbweaver_gen::python::python_name(s)).collect(),
+    ))
+}
+
+/// The sweep reaches a stub by the name the emitter gave it.
+///
+/// The contract here is the one that was missing: a module and an interface
+/// both named for a Python keyword. `IDL:lambda/from:1.0` is `_lambda._from`
+/// in the package and `lambda`/`from` on the wire, and the two are never the
+/// same string.
+#[test]
+fn a_stub_is_looked_up_by_the_name_the_emitter_gave_it() {
+    let spec =
+        orbweaver_idl::parse("module _lambda { interface _from { long ping(); }; };").expect("idl");
+    let mut registry = Registry::new();
+    registry.load(&spec).expect("loads");
+    let found = stub_location(&registry, "IDL:lambda/from:1.0").expect("the interface");
+    assert_eq!(found, ("_from".to_owned(), vec!["_lambda".to_owned()]), "{found:?}");
+}
+
 /// Generates, executes and checks one corpus directory in one pass.
 fn run_corpus(dir: &str) -> Outcome {
     let tmp = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("python-target/{dir}"));
@@ -535,14 +575,7 @@ fn run_corpus(dir: &str) -> Outcome {
                     expected.push((format!("{id} in an any"), TypeCode::Any, carried));
                 }
                 Some(Entry::Interface(_)) => {
-                    let module: Vec<String> = registry
-                        .qualified_name(id)
-                        .map(|q| q.split("::").map(str::to_owned).collect())
-                        .unwrap_or_default();
-                    let (class, module) = match module.split_last() {
-                        Some((c, m)) => (c.clone(), m.to_vec()),
-                        None => continue,
-                    };
+                    let Some((class, module)) = stub_location(&registry, id) else { continue };
                     for (op, sig) in orbweaver_gen::python::client_operations(&registry, id) {
                         let mut args = Vec::new();
                         let mut arg_checks = Vec::new();
@@ -916,6 +949,63 @@ fn run_script(name: &str, idl: &str, script: &str) -> String {
         String::from_utf8_lossy(&run.stderr)
     );
     stdout
+}
+
+/// Every name the emitted package writes, and every name it looks one up by,
+/// goes through [`python_name`] — measured by *executing* the package.
+///
+/// Three sites had spelled it themselves, and each failed differently:
+///
+/// * the package **directory** was the raw IDL name while the parent's
+///   `from . import …` was escaped, so a module named for a Python keyword
+///   wrote `lambda/` and imported `_lambda` — `ImportError`, for all 37
+///   escaped names and in no other position;
+/// * `@property` was looked up as a bare builtin in a class body the contract
+///   writes into, so a union branch named `property` made the *next* branch's
+///   decorator call a property object (order-dependent: last would pass);
+/// * `class X(object)` looked the base up the same way, so `const long object`
+///   beside an interface made the class statement call an `int`.
+///
+/// All three are one rule and this test is one contract: a module, a union and
+/// an interface, each named for the thing the emitter used to reach past.
+#[test]
+fn one_function_spells_every_python_name_the_package_writes_or_reaches() {
+    let out = run_script(
+        "one_spelling",
+        "module _lambda {\n\
+           const long _object = 1;\n\
+           union Choice switch (long) { case 1: long property; case 2: long tail; };\n\
+           interface _from { long ping(in long amount); };\n\
+         };",
+        r#"
+import sys
+sys.path.insert(0, sys.argv[1])
+
+# 1. The directory the parent imports is the directory that was written.
+import one_spelling
+mod = getattr(one_spelling, "_lambda")
+assert not hasattr(one_spelling, "lambda"), "the raw IDL name must not be bound"
+
+# 2. The branch named `property` did not eat the next branch's decorator.
+c = mod.Choice(1)
+c.property = 5
+assert c.property == 5 and c._d == 1, (c._d, c._v)
+c.tail = 7
+assert c.tail == 7 and c._d == 2, (c._d, c._v)
+
+# 3. The class statement was not handed the contract's `object`.
+assert mod.object == 1, "an IDL `_object` is the plain Python name `object`"
+stub = mod._from(one_spelling._rt.Loopback([{"ok": {"returns": 9, "outputs": {}}}]))
+assert stub.ping(3) == 9
+
+# 4. The name that travels is the IDL one; the name reached is the escaped one.
+assert not hasattr(mod, "from")
+assert mod._from._idl_id == "IDL:lambda/from:1.0", mod._from._idl_id
+assert stub._invoker.requests[0]["op"] == "ping"
+print("ok")
+"#,
+    );
+    assert!(out.contains("ok"), "{out}");
 }
 
 /// The reply paths the corpus sweep cannot reach: a raised user exception, a

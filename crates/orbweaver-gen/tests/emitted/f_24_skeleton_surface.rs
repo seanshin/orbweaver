@@ -13,16 +13,16 @@
 
 /// IDL module `gc24`.
 pub mod gc24 {
-    use orbweaver_gen::rt::{self, Cdr};
+    use ::orbweaver_gen::rt::{self as __rt, Cdr as __Cdr};
     /// IDL exception `IDL:gc24/Busy:1.0`.
     #[derive(Debug, Clone, PartialEq)]
     pub struct Busy {
     }
-    impl Cdr for Busy {
-        fn put(&self, _e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
+    impl __Cdr for Busy {
+        fn put(&self, __unused_e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
             Ok(())
         }
-        fn get(_d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+        fn get(__unused_d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
             Ok(Self {
             })
         }
@@ -39,78 +39,78 @@ pub mod gc24 {
     /// `Connection` inside the trust boundary, or over the guarded
     /// wrapper at it — a stub hard-wired to the transport would be the
     /// §4.7 bypass in compiled form.
-    pub struct GaugeClient<C: rt::Invoker> {
+    pub struct GaugeClient<C: __rt::Invoker> {
         /// What calls travel over.
         pub conn: C,
     }
-    impl<C: rt::Invoker> GaugeClient<C> {
+    impl<C: __rt::Invoker> GaugeClient<C> {
         /// A stub over an open invoker.
-        pub fn new(conn: C) -> Self { Self { conn } }
+        pub fn new(__conn: C) -> Self { Self { conn: __conn } }
         /// Records one sample and returns the reading it produced
         ///
         /// `record` on the wire.
-        pub fn record(&mut self, sample: f64, unit: String) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn record(&mut self, sample: f64, unit: ::std::string::String) -> ::std::result::Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             sample.put(&mut __probe)?;
             unit.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("record", |__e| {
                 let _ = sample.put(__e);
                 let _ = unit.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// whether it happened, so the scope is all that guards it
         ///
         /// `reset` on the wire.
-        pub fn reset(&mut self) -> Result<(), rt::GiopError> {
+        pub fn reset(&mut self) -> ::std::result::Result<(), __rt::GiopError> {
             self.conn.invoke_oneway("reset", |__e| {
             })
         }
         /// Multiplies every stored sample and answers how many changed
         ///
         /// `scale_all` on the wire.
-        pub fn scale_all(&mut self, e: f64) -> Result<i32, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn scale_all(&mut self, e: f64) -> ::std::result::Result<i32, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             e.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("scale_all", |__e| {
                 let _ = e.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// Splits the latest reading into its parts
         ///
         /// `split` on the wire.
-        pub fn split(&mut self) -> Result<(f64, String), rt::GiopError> {
+        pub fn split(&mut self) -> ::std::result::Result<(f64, ::std::string::String), __rt::GiopError> {
             let __reply = self.conn.invoke("split", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
-            let __r1 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
+            let __r1 = __Cdr::get(&mut __body)?;
             Ok((__r0, __r1))
         }
         /// Human-readable label for this gauge
         ///
         /// `_get_label` on the wire.
-        pub fn label(&mut self) -> Result<String, rt::GiopError> {
+        pub fn label(&mut self) -> ::std::result::Result<::std::string::String, __rt::GiopError> {
             let __reply = self.conn.invoke("_get_label", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// Human-readable label for this gauge
         ///
         /// `_set_label` on the wire.
-        pub fn set_label(&mut self, value: String) -> Result<(), rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn set_label(&mut self, value: ::std::string::String) -> ::std::result::Result<(), __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             value.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("_set_label", |__e| {
                 let _ = value.put(__e);
             })?;
@@ -120,11 +120,11 @@ pub mod gc24 {
         /// The most recent reading, or a zeroed one before any sample
         ///
         /// `_get_latest` on the wire.
-        pub fn latest(&mut self) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, rt::GiopError> {
+        pub fn latest(&mut self) -> ::std::result::Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, __rt::GiopError> {
             let __reply = self.conn.invoke("_get_latest", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
     }
@@ -134,7 +134,7 @@ pub mod gc24 {
     /// `System` is always here, whatever the contract declares: an unknown
     /// key is `OBJECT_NOT_EXIST`, a refused call is `NO_PERMISSION`, a
     /// temporary refusal is `TRANSIENT`, and IDL has no way to declare any
-    /// of them. Build one with `rt::raise::*`, which does not produce a
+    /// of them. Build one with `orbweaver_gen::rt::raise::*`, which does not produce a
     /// `SystemException` until the completion status is stated — the field
     /// that tells the caller whether a retry is safe, and the one thing a
     /// generator cannot know for a servant.
@@ -143,23 +143,23 @@ pub mod gc24 {
     /// clause of this interface or of one it inherits. `write` puts the
     /// body §9.4.3.1 describes — repository id first, then the members —
     /// which is exactly what the client side reads back out of
-    /// `rt::GiopError::UserException`.
+    /// `orbweaver_gen::rt::GiopError::UserException`.
     #[derive(Debug, Clone)]
     pub enum GaugeFault {
         /// A CORBA system exception, with the completion status the
         /// servant chose. Travels as a `SystemException` reply.
-        System(rt::SystemException),
+        System(__rt::SystemException),
         /// IDL exception `IDL:gc24/Busy:1.0`.
         Busy(crate::emitted::f_24_skeleton_surface::gc24::Busy),
         /// IDL exception `IDL:gc24/Rejected:1.0`.
         Rejected(crate::emitted::f_24_skeleton_surface::gc24::Rejected),
     }
-    impl From<rt::SystemException> for GaugeFault {
-        fn from(__ex: rt::SystemException) -> Self {
+    impl ::std::convert::From<__rt::SystemException> for GaugeFault {
+        fn from(__ex: __rt::SystemException) -> Self {
             Self::System(__ex)
         }
     }
-    impl PartialEq for GaugeFault {
+    impl ::std::cmp::PartialEq for GaugeFault {
         fn eq(&self, __other: &Self) -> bool {
             match (self, __other) {
                 (Self::System(__a), Self::System(__b)) => {
@@ -176,7 +176,7 @@ pub mod gc24 {
     impl GaugeFault {
         /// The repository id of the user exception this fault carries, or
         /// `None` for a system exception, which carries its own.
-        pub fn user_id(&self) -> Option<&'static str> {
+        pub fn user_id(&self) -> ::std::option::Option<&'static str> {
             match self {
                 Self::System(_) => None,
                 Self::Busy(_) => Some("IDL:gc24/Busy:1.0"),
@@ -191,18 +191,18 @@ pub mod gc24 {
         /// dispatcher hands it to the server to encode instead. That is also why
         /// nothing may be written before the fault is known — the whole buffer
         /// travels under one status.
-        pub fn write(&self, __out: &mut rt::Encoder) -> Result<rt::DispatchBody, rt::SystemException> {
+        pub fn write(&self, __out: &mut __rt::Encoder) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             match self {
                 Self::System(__ex) => Err(__ex.clone()),
                 Self::Busy(__v) => {
                     __out.put_str("IDL:gc24/Busy:1.0");
-                    __v.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::UserException)
+                    __v.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::UserException)
                 }
                 Self::Rejected(__v) => {
                     __out.put_str("IDL:gc24/Rejected:1.0");
-                    __v.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::UserException)
+                    __v.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::UserException)
                 }
             }
         }
@@ -216,7 +216,7 @@ pub mod gc24 {
     /// root ++ "/Gauge/" ++ <oid>    the object named <oid>
     /// ```
     ///
-    /// `root` is the key the `rt::Server` was bound with. The derivation is
+    /// `root` is the key the `orbweaver_gen::rt::Server` was bound with. The derivation is
     /// reversible, so no table of minted keys exists: a reference survives a
     /// restart, and a client cannot make the process grow by looking things
     /// up. The oid is the *whole* remainder after the prefix, so it may
@@ -230,14 +230,14 @@ pub mod gc24 {
     /// # Minting
     ///
     /// `reference` and `ior` answer with a real IIOP profile, built by
-    /// `rt::ObjectHome` — the servant never assembles one, which is why the
+    /// `orbweaver_gen::rt::ObjectHome` — the servant never assembles one, which is why the
     /// GIOP version and profile shape are still decided in exactly one
     /// place. `nil` is the nil reference (§9.3.6), the truthful answer when
     /// there is no such object.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct GaugeRefs {
-        home: rt::ObjectHome,
-        infix: String,
+        home: __rt::ObjectHome,
+        infix: ::std::string::String,
     }
     impl GaugeRefs {
         /// The repository id minted references advertise.
@@ -245,42 +245,42 @@ pub mod gc24 {
         /// What separates the root key from the oid.
         pub const KEY_INFIX: &'static str = "/Gauge/";
         /// The scheme rooted at `home`, with the generated infix.
-        pub fn new(home: rt::ObjectHome) -> Self {
-            Self { home, infix: Self::KEY_INFIX.to_owned() }
+        pub fn new(__home: __rt::ObjectHome) -> Self {
+            Self { home: __home, infix: Self::KEY_INFIX.to_owned() }
         }
         /// The same, with a key space this interface shares with another.
         ///
         /// Two skeletons given the same infix must disagree about `knows`
-        /// for every key, or `rt::Servants` will hand a request to
+        /// for every key, or `orbweaver_gen::rt::Servants` will hand a request to
         /// whichever was added first. Sharing a key space is a claim that
         /// the two answer for disjoint sets of objects.
-        pub fn with_infix(home: rt::ObjectHome, infix: impl Into<String>) -> Self {
-            Self { home, infix: infix.into() }
+        pub fn with_infix(__home: __rt::ObjectHome, __infix: impl ::std::convert::Into<::std::string::String>) -> Self {
+            Self { home: __home, infix: __infix.into() }
         }
         /// Where these objects are published.
-        pub fn home(&self) -> &rt::ObjectHome { &self.home }
+        pub fn home(&self) -> &__rt::ObjectHome { &self.home }
         /// The infix in use, generated or overridden.
         pub fn infix(&self) -> &str { &self.infix }
         /// The default object's key, which is also every other key's prefix.
         pub fn root_key(&self) -> &[u8] { self.home.root_key() }
         /// The object key for `oid`; the empty oid is the root key.
-        pub fn key_of(&self, oid: &str) -> Vec<u8> {
-            self.home.key_of(&self.infix, oid)
+        pub fn key_of(&self, __oid: &str) -> ::std::vec::Vec<u8> {
+            self.home.key_of(&self.infix, __oid)
         }
         /// The oid a key addresses, or `None` if it is not one of ours.
-        pub fn oid_of<'a>(&self, key: &'a [u8]) -> Option<&'a str> {
-            self.home.oid_of(&self.infix, key)
+        pub fn oid_of<'a>(&self, __key: &'a [u8]) -> ::std::option::Option<&'a str> {
+            self.home.oid_of(&self.infix, __key)
         }
         /// A reference to `oid`, in the form an operation returns.
-        pub fn reference(&self, oid: &str) -> rt::ObjRef {
-            self.home.reference(Self::TYPE_ID, self.key_of(oid))
+        pub fn reference(&self, __oid: &str) -> __rt::ObjRef {
+            self.home.reference(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The same reference, in the form `LOCATION_FORWARD` carries.
-        pub fn ior(&self, oid: &str) -> rt::Ior {
-            self.home.ior(Self::TYPE_ID, self.key_of(oid))
+        pub fn ior(&self, __oid: &str) -> __rt::Ior {
+            self.home.ior(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The nil reference: there is no such object.
-        pub fn nil() -> rt::ObjRef { rt::ObjectHome::nil() }
+        pub fn nil() -> __rt::ObjRef { __rt::ObjectHome::nil() }
     }
     /// Which `IDL:gc24/Gauge:1.0` a call is addressed to.
     ///
@@ -299,8 +299,8 @@ pub mod gc24 {
     }
     impl<'a> GaugeTarget<'a> {
         /// The identity `oid` under `refs`.
-        pub fn new(oid: &'a str, refs: &'a GaugeRefs) -> Self {
-            Self { oid, refs }
+        pub fn new(__oid: &'a str, __refs: &'a GaugeRefs) -> Self {
+            Self { oid: __oid, refs: __refs }
         }
         /// Which object this is. The empty oid is the default object,
         /// addressed by the bare root key the server was bound with.
@@ -310,11 +310,11 @@ pub mod gc24 {
         /// The key scheme, for minting references into other key spaces.
         pub fn refs(&self) -> &'a GaugeRefs { self.refs }
         /// The raw object key this call arrived on.
-        pub fn key(&self) -> Vec<u8> { self.refs.key_of(self.oid) }
+        pub fn key(&self) -> ::std::vec::Vec<u8> { self.refs.key_of(self.oid) }
         /// A reference to *this* object, for handing back one's own address.
-        pub fn reference(&self) -> rt::ObjRef { self.refs.reference(self.oid) }
+        pub fn reference(&self) -> __rt::ObjRef { self.refs.reference(self.oid) }
         /// A reference to another object of this interface.
-        pub fn sibling(&self, oid: &str) -> rt::ObjRef { self.refs.reference(oid) }
+        pub fn sibling(&self, __oid: &str) -> __rt::ObjRef { self.refs.reference(__oid) }
     }
     /// A gauge whose skeleton exercises oneway, attributes and alignment
     ///
@@ -323,10 +323,10 @@ pub mod gc24 {
     /// One method per operation and per attribute accessor, taking decoded
     /// Rust arguments. Nothing here mentions GIOP: the wire is entirely the
     /// business of `GaugeSkeleton`, which adapts this trait to
-    /// `rt::Dispatch`.
+    /// `orbweaver_gen::rt::Dispatch`.
     ///
     /// Every method may fail with a `GaugeFault`: a declared user exception,
-    /// or a system exception built with `rt::raise::*` — the vocabulary
+    /// or a system exception built with `orbweaver_gen::rt::raise::*` — the vocabulary
     /// (`OBJECT_NOT_EXIST`, `NO_PERMISSION`, `BAD_PARAM`, `TRANSIENT`) that
     /// no contract declares and every servant needs.
     ///
@@ -350,7 +350,7 @@ pub mod gc24 {
     pub trait GaugeServant {
         /// Whether this servant answers for the object `__at` names.
         ///
-        /// **Required, with no default.** `rt::Dispatch::knows` defaults to
+        /// **Required, with no default.** `orbweaver_gen::rt::Dispatch::knows` defaults to
         /// accepting everything, which is right for a process with one object and
         /// is exactly what stopped a generated skeleton from ever holding more
         /// than one: an unknown key was served as if it were the only object.
@@ -360,7 +360,7 @@ pub mod gc24 {
         ///
         /// A single-object servant writes `__at.is_default()`. A `false` here
         /// becomes `OBJECT_NOT_EXIST` for a request and `UNKNOWN_OBJECT` for a
-        /// `LocateRequest`, and is also how `rt::Servants` picks between
+        /// `LocateRequest`, and is also how `orbweaver_gen::rt::Servants` picks between
         /// skeletons sharing one key space.
         fn knows(&self, __at: &GaugeTarget<'_>) -> bool;
         /// Where this request should be sent instead, if anywhere.
@@ -385,14 +385,14 @@ pub mod gc24 {
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
         /// the address. This hook is the *temporary* forward; an object that has
         /// moved for good says so through `redirect`, below.
-        fn forward(&mut self, __at: &GaugeTarget<'_>) -> Option<rt::Ior> {
+        fn forward(&mut self, __at: &GaugeTarget<'_>) -> ::std::option::Option<__rt::Ior> {
             let _ = __at;
             None
         }
         /// Where this request should be sent instead, and whether for good.
         ///
-        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
-        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// The method the runtime actually asks. `orbweaver_gen::rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `orbweaver_gen::rt::Forward::Permanent` is a
         /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
         /// the temporary form, its reply-status enumeration having no other),
         /// and is the one thing a servant can say that lets a client replace the
@@ -401,13 +401,13 @@ pub mod gc24 {
         /// Defaults to `forward` wrapped as temporary, so a servant that
         /// overrides only `forward` behaves as it always did. Override this one
         /// to say *permanent*; there is no reason to override both.
-        fn redirect(&mut self, __at: &GaugeTarget<'_>) -> Option<rt::Forward> {
-            self.forward(__at).map(rt::Forward::Temporary)
+        fn redirect(&mut self, __at: &GaugeTarget<'_>) -> ::std::option::Option<__rt::Forward> {
+            self.forward(__at).map(__rt::Forward::Temporary)
         }
         /// Records one sample and returns the reading it produced
         ///
         /// `record` on the wire.
-        fn record(&mut self, __at: &GaugeTarget<'_>, sample: f64, unit: String) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault>;
+        fn record(&mut self, __at: &GaugeTarget<'_>, sample: f64, unit: ::std::string::String) -> ::std::result::Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault>;
         /// whether it happened, so the scope is all that guards it
         ///
         /// `reset` on the wire.
@@ -415,27 +415,27 @@ pub mod gc24 {
         /// `oneway`: the caller is not waiting, so neither a result nor a fault
         /// can reach it. Returning `Err` here is dropped — deliberately, and
         /// logged, because a oneway that fails invisibly is undebuggable.
-        fn reset(&mut self, __at: &GaugeTarget<'_>) -> Result<(), GaugeFault>;
+        fn reset(&mut self, __at: &GaugeTarget<'_>) -> ::std::result::Result<(), GaugeFault>;
         /// Multiplies every stored sample and answers how many changed
         ///
         /// `scale_all` on the wire.
-        fn scale_all(&mut self, __at: &GaugeTarget<'_>, e: f64) -> Result<i32, GaugeFault>;
+        fn scale_all(&mut self, __at: &GaugeTarget<'_>, e: f64) -> ::std::result::Result<i32, GaugeFault>;
         /// Splits the latest reading into its parts
         ///
         /// `split` on the wire.
-        fn split(&mut self, __at: &GaugeTarget<'_>) -> Result<(f64, String), GaugeFault>;
+        fn split(&mut self, __at: &GaugeTarget<'_>) -> ::std::result::Result<(f64, ::std::string::String), GaugeFault>;
         /// Human-readable label for this gauge
         ///
         /// `_get_label` on the wire.
-        fn label(&mut self, __at: &GaugeTarget<'_>) -> Result<String, GaugeFault>;
+        fn label(&mut self, __at: &GaugeTarget<'_>) -> ::std::result::Result<::std::string::String, GaugeFault>;
         /// Human-readable label for this gauge
         ///
         /// `_set_label` on the wire.
-        fn set_label(&mut self, __at: &GaugeTarget<'_>, value: String) -> Result<(), GaugeFault>;
+        fn set_label(&mut self, __at: &GaugeTarget<'_>, value: ::std::string::String) -> ::std::result::Result<(), GaugeFault>;
         /// The most recent reading, or a zeroed one before any sample
         ///
         /// `_get_latest` on the wire.
-        fn latest(&mut self, __at: &GaugeTarget<'_>) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault>;
+        fn latest(&mut self, __at: &GaugeTarget<'_>) -> ::std::result::Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault>;
     }
     /// One object of `IDL:gc24/Gauge:1.0`, for a servant that keeps a value per object.
     ///
@@ -454,31 +454,31 @@ pub mod gc24 {
         /// Records one sample and returns the reading it produced
         ///
         /// `record` on the wire.
-        fn record(&mut self, sample: f64, unit: String) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault>;
+        fn record(&mut self, sample: f64, unit: ::std::string::String) -> ::std::result::Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault>;
         /// whether it happened, so the scope is all that guards it
         ///
         /// `reset` on the wire.
-        fn reset(&mut self) -> Result<(), GaugeFault>;
+        fn reset(&mut self) -> ::std::result::Result<(), GaugeFault>;
         /// Multiplies every stored sample and answers how many changed
         ///
         /// `scale_all` on the wire.
-        fn scale_all(&mut self, e: f64) -> Result<i32, GaugeFault>;
+        fn scale_all(&mut self, e: f64) -> ::std::result::Result<i32, GaugeFault>;
         /// Splits the latest reading into its parts
         ///
         /// `split` on the wire.
-        fn split(&mut self) -> Result<(f64, String), GaugeFault>;
+        fn split(&mut self) -> ::std::result::Result<(f64, ::std::string::String), GaugeFault>;
         /// Human-readable label for this gauge
         ///
         /// `_get_label` on the wire.
-        fn label(&mut self) -> Result<String, GaugeFault>;
+        fn label(&mut self) -> ::std::result::Result<::std::string::String, GaugeFault>;
         /// Human-readable label for this gauge
         ///
         /// `_set_label` on the wire.
-        fn set_label(&mut self, value: String) -> Result<(), GaugeFault>;
+        fn set_label(&mut self, value: ::std::string::String) -> ::std::result::Result<(), GaugeFault>;
         /// The most recent reading, or a zeroed one before any sample
         ///
         /// `_get_latest` on the wire.
-        fn latest(&mut self) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault>;
+        fn latest(&mut self) -> ::std::result::Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault>;
     }
     /// A map from oid to one `GaugeObject`, serving `IDL:gc24/Gauge:1.0`.
     ///
@@ -492,34 +492,34 @@ pub mod gc24 {
     /// bare root key addresses. A one-object process inserts exactly that.
     #[derive(Debug, Clone)]
     pub struct GaugeObjects<S: GaugeObject> {
-        objects: std::collections::BTreeMap<String, S>,
+        objects: ::std::collections::BTreeMap<::std::string::String, S>,
     }
-    impl<S: GaugeObject> Default for GaugeObjects<S> {
+    impl<S: GaugeObject> ::std::default::Default for GaugeObjects<S> {
         fn default() -> Self {
-            Self { objects: std::collections::BTreeMap::new() }
+            Self { objects: ::std::collections::BTreeMap::new() }
         }
     }
     impl<S: GaugeObject> GaugeObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { <Self as std::default::Default>::default() }
+        pub fn new() -> Self { <Self as ::std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
-        pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
-            self.objects.insert(oid.into(), object)
+        pub fn insert(&mut self, __oid: impl ::std::convert::Into<::std::string::String>, __object: S) -> ::std::option::Option<S> {
+            self.objects.insert(__oid.into(), __object)
         }
         /// Removes an object, after which its key is `OBJECT_NOT_EXIST`.
-        pub fn remove(&mut self, oid: &str) -> Option<S> {
-            self.objects.remove(oid)
+        pub fn remove(&mut self, __oid: &str) -> ::std::option::Option<S> {
+            self.objects.remove(__oid)
         }
         /// The object under `oid`, if there is one.
-        pub fn get(&self, oid: &str) -> Option<&S> { self.objects.get(oid) }
+        pub fn get(&self, __oid: &str) -> ::std::option::Option<&S> { self.objects.get(__oid) }
         /// The object under `oid`, mutably.
-        pub fn get_mut(&mut self, oid: &str) -> Option<&mut S> {
-            self.objects.get_mut(oid)
+        pub fn get_mut(&mut self, __oid: &str) -> ::std::option::Option<&mut S> {
+            self.objects.get_mut(__oid)
         }
         /// Every oid held, in sorted order.
-        pub fn oids(&self) -> impl Iterator<Item = &str> {
-            self.objects.keys().map(String::as_str)
+        pub fn oids(&self) -> impl ::std::iter::Iterator<Item = &str> {
+            self.objects.keys().map(::std::string::String::as_str)
         }
         /// How many objects are held.
         pub fn len(&self) -> usize { self.objects.len() }
@@ -530,53 +530,53 @@ pub mod gc24 {
         fn knows(&self, __at: &GaugeTarget<'_>) -> bool {
             self.objects.contains_key(__at.oid())
         }
-        fn record(&mut self, __at: &GaugeTarget<'_>, sample: f64, unit: String) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault> {
+        fn record(&mut self, __at: &GaugeTarget<'_>, sample: f64, unit: ::std::string::String) -> ::std::result::Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.record(sample, unit),
-                None => Err(GaugeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(GaugeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn reset(&mut self, __at: &GaugeTarget<'_>) -> Result<(), GaugeFault> {
+        fn reset(&mut self, __at: &GaugeTarget<'_>) -> ::std::result::Result<(), GaugeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.reset(),
-                None => Err(GaugeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(GaugeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn scale_all(&mut self, __at: &GaugeTarget<'_>, e: f64) -> Result<i32, GaugeFault> {
+        fn scale_all(&mut self, __at: &GaugeTarget<'_>, e: f64) -> ::std::result::Result<i32, GaugeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.scale_all(e),
-                None => Err(GaugeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(GaugeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn split(&mut self, __at: &GaugeTarget<'_>) -> Result<(f64, String), GaugeFault> {
+        fn split(&mut self, __at: &GaugeTarget<'_>) -> ::std::result::Result<(f64, ::std::string::String), GaugeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.split(),
-                None => Err(GaugeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(GaugeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn label(&mut self, __at: &GaugeTarget<'_>) -> Result<String, GaugeFault> {
+        fn label(&mut self, __at: &GaugeTarget<'_>) -> ::std::result::Result<::std::string::String, GaugeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.label(),
-                None => Err(GaugeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(GaugeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn set_label(&mut self, __at: &GaugeTarget<'_>, value: String) -> Result<(), GaugeFault> {
+        fn set_label(&mut self, __at: &GaugeTarget<'_>, value: ::std::string::String) -> ::std::result::Result<(), GaugeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.set_label(value),
-                None => Err(GaugeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(GaugeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn latest(&mut self, __at: &GaugeTarget<'_>) -> Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault> {
+        fn latest(&mut self, __at: &GaugeTarget<'_>) -> ::std::result::Result<crate::emitted::f_24_skeleton_surface::gc24::Reading, GaugeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.latest(),
-                None => Err(GaugeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(GaugeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
     }
     /// Serves `IDL:gc24/Gauge:1.0`: decodes the request, calls the servant, encodes the reply.
     ///
-    /// Hand it to `rt::Server::serve` in place of a hand-written
-    /// `rt::Dispatch`. What it answers, beyond the contract's own
+    /// Hand it to `orbweaver_gen::rt::Server::serve` in place of a hand-written
+    /// `orbweaver_gen::rt::Dispatch`. What it answers, beyond the contract's own
     /// operations:
     ///
     /// * `_is_a`, from the inheritance chain the registry resolved, because
@@ -607,52 +607,52 @@ pub mod gc24 {
     impl<S: GaugeServant> GaugeSkeleton<S> {
         /// A skeleton serving `servant`'s objects under `refs`.
         ///
-        /// `refs` must be rooted at the key the `rt::Server` was bound
+        /// `refs` must be rooted at the key the `orbweaver_gen::rt::Server` was bound
         /// with, or nothing this skeleton parses will match what arrives.
-        pub fn new(refs: GaugeRefs, servant: S) -> Self {
-            Self { servant, refs }
+        pub fn new(__refs: GaugeRefs, __servant: S) -> Self {
+            Self { servant: __servant, refs: __refs }
         }
         /// The key scheme in force, for minting references to these objects.
         pub fn refs(&self) -> &GaugeRefs { &self.refs }
     }
-    impl<S: GaugeServant> rt::Dispatch for GaugeSkeleton<S> {
+    impl<S: GaugeServant> __rt::Dispatch for GaugeSkeleton<S> {
         fn knows(&self, __object_key: &[u8]) -> bool {
             match self.refs.oid_of(__object_key) {
                 Some(__oid) => self.servant.knows(&GaugeTarget::new(__oid, &self.refs)),
                 None => false,
             }
         }
-        fn forward(&mut self, __req: &rt::Request) -> Option<rt::Ior> {
+        fn forward(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Ior> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = GaugeTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
         }
-        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+        fn redirect(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Forward> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = GaugeTarget::new(__oid, &self.refs);
             self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<rt::DispatchBody, rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let __oid = self
                 .refs
                 .oid_of(&__req.object_key)
-                .ok_or_else(rt::SystemException::object_not_exist)?;
+                .ok_or_else(__rt::SystemException::object_not_exist)?;
             let __at = GaugeTarget::new(__oid, &self.refs);
-            let mut __args = __req.body().map_err(|_| rt::SystemException::marshal())?;
+            let mut __args = __req.body().map_err(|_| __rt::SystemException::marshal())?;
             match __req.operation.as_str() {
                 "record" => {
-                    let sample: f64 = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let unit: String = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let sample: f64 = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let unit: ::std::string::String = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.record(&__at, sample, unit) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -664,17 +664,17 @@ pub mod gc24 {
                     // verdict has no way back, so it is dropped — and logged, so the
                     // drop is a decision somebody can see rather than a silence.
                     if let Err(__f) = self.servant.reset(&__at) {
-                        rt::oneway_fault_dropped("IDL:gc24/Gauge:1.0", "reset", &__f);
+                        __rt::oneway_fault_dropped("IDL:gc24/Gauge:1.0", "reset", &__f);
                     }
-                    Ok(rt::DispatchBody::Return)
+                    Ok(__rt::DispatchBody::Return)
                 }
                 "scale_all" => {
-                    let e: f64 = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let e: f64 = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.scale_all(&__at, e) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -682,9 +682,9 @@ pub mod gc24 {
                 "split" => {
                     match self.servant.split(&__at) {
                         Ok((__r0, __r1)) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            __r1.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            __r1.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -692,18 +692,18 @@ pub mod gc24 {
                 "_get_label" => {
                     match self.servant.label(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "_set_label" => {
-                    let value: String = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let value: ::std::string::String = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.set_label(&__at, value) {
                         Ok(()) => {
-                            Ok(rt::DispatchBody::Return)
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -711,37 +711,37 @@ pub mod gc24 {
                 "_get_latest" => {
                     match self.servant.latest(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "_is_a" => {
-                    let __id: String = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let __id: ::std::string::String = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     let __answer = matches!(__id.as_str(),
                         "IDL:gc24/Gauge:1.0" |
-                        rt::OBJECT_ID);
-                    __answer.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                        __rt::OBJECT_ID);
+                    __answer.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
                 "_non_existent" => {
-                    false.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                    false.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
-                _ => Err(rt::SystemException::bad_operation()),
+                _ => Err(__rt::SystemException::bad_operation()),
             }
         }
         fn dispatch(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<(), rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<(), __rt::SystemException> {
             match self.dispatch_body(__req, __out)? {
-                rt::DispatchBody::Return => Ok(()),
-                rt::DispatchBody::UserException => {
-                    Err(rt::SystemException::unknown_user_exception())
+                __rt::DispatchBody::Return => Ok(()),
+                __rt::DispatchBody::UserException => {
+                    Err(__rt::SystemException::unknown_user_exception())
                 }
             }
         }
@@ -755,20 +755,20 @@ pub mod gc24 {
         /// IDL member `sequence_no`, marshalled second.
         pub sequence_no: i32,
         /// IDL member `unit`, marshalled third.
-        pub unit: String,
+        pub unit: ::std::string::String,
     }
-    impl Cdr for Reading {
-        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-            self.at.put(e)?;
-            self.sequence_no.put(e)?;
-            self.unit.put(e)?;
+    impl __Cdr for Reading {
+        fn put(&self, __e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
+            self.at.put(__e)?;
+            self.sequence_no.put(__e)?;
+            self.unit.put(__e)?;
             Ok(())
         }
-        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+        fn get(__d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
             Ok(Self {
-                at: Cdr::get(d)?,
-                sequence_no: Cdr::get(d)?,
-                unit: Cdr::get(d)?,
+                at: __Cdr::get(__d)?,
+                sequence_no: __Cdr::get(__d)?,
+                unit: __Cdr::get(__d)?,
             })
         }
     }
@@ -777,20 +777,20 @@ pub mod gc24 {
     #[derive(Debug, Clone, PartialEq)]
     pub struct Rejected {
         /// IDL member `why`, marshalled first.
-        pub why: String,
+        pub why: ::std::string::String,
         /// IDL member `code`, marshalled second.
         pub code: i32,
     }
-    impl Cdr for Rejected {
-        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-            self.why.put(e)?;
-            self.code.put(e)?;
+    impl __Cdr for Rejected {
+        fn put(&self, __e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
+            self.why.put(__e)?;
+            self.code.put(__e)?;
             Ok(())
         }
-        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+        fn get(__d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
             Ok(Self {
-                why: Cdr::get(d)?,
-                code: Cdr::get(d)?,
+                why: __Cdr::get(__d)?,
+                code: __Cdr::get(__d)?,
             })
         }
     }

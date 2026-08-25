@@ -13,7 +13,7 @@
 
 /// IDL module `gclint`.
 pub mod gclint {
-    use orbweaver_gen::rt::{self, Cdr};
+    use ::orbweaver_gen::rt::{self as __rt, Cdr as __Cdr};
     /// IDL struct `IDL:gclint/Pair:1.0`.
     #[derive(Debug, Clone, PartialEq)]
     pub struct Pair {
@@ -22,16 +22,16 @@ pub mod gclint {
         /// IDL member `b`, marshalled second.
         pub b: i32,
     }
-    impl Cdr for Pair {
-        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-            self.a.put(e)?;
-            self.b.put(e)?;
+    impl __Cdr for Pair {
+        fn put(&self, __e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
+            self.a.put(__e)?;
+            self.b.put(__e)?;
             Ok(())
         }
-        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+        fn get(__d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
             Ok(Self {
-                a: Cdr::get(d)?,
-                b: Cdr::get(d)?,
+                a: __Cdr::get(__d)?,
+                b: __Cdr::get(__d)?,
             })
         }
     }
@@ -47,178 +47,178 @@ pub mod gclint {
     /// `Connection` inside the trust boundary, or over the guarded
     /// wrapper at it — a stub hard-wired to the transport would be the
     /// §4.7 bypass in compiled form.
-    pub struct ProbeClient<C: rt::Invoker> {
+    pub struct ProbeClient<C: __rt::Invoker> {
         /// What calls travel over.
         pub conn: C,
     }
-    impl<C: rt::Invoker> ProbeClient<C> {
+    impl<C: __rt::Invoker> ProbeClient<C> {
         /// A stub over an open invoker.
-        pub fn new(conn: C) -> Self { Self { conn } }
+        pub fn new(__conn: C) -> Self { Self { conn: __conn } }
         /// This probe's first number increased by an amount
         ///
         /// `add` on the wire.
-        pub fn add(&mut self, v: i32) -> Result<i32, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn add(&mut self, v: i32) -> ::std::result::Result<i32, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             v.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("add", |__e| {
                 let _ = v.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// This probe's state viewed as a pair
         ///
         /// `as_pair` on the wire.
-        pub fn as_pair(&mut self) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, rt::GiopError> {
+        pub fn as_pair(&mut self) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, __rt::GiopError> {
             let __reply = self.conn.invoke("as_pair", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// A copy of this probe's state
         ///
         /// `clone` on the wire.
-        pub fn clone(&mut self) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, rt::GiopError> {
+        pub fn clone(&mut self) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, __rt::GiopError> {
             let __reply = self.conn.invoke("clone", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// The pair this probe starts from
         ///
         /// `default` on the wire.
-        pub fn default(&mut self) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, rt::GiopError> {
+        pub fn default(&mut self) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, __rt::GiopError> {
             let __reply = self.conn.invoke("default", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// Whether the given pair equals this probe's state
         ///
         /// `eq` on the wire.
-        pub fn eq(&mut self, other: crate::emitted::f_gen_target_lints::gclint::Pair) -> Result<bool, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn eq(&mut self, other: crate::emitted::f_gen_target_lints::gclint::Pair) -> ::std::result::Result<bool, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             other.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("eq", |__e| {
                 let _ = other.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// The pair a textual rendering denotes
         ///
         /// `from_text` on the wire.
-        pub fn from_text(&mut self, t: String) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn from_text(&mut self, t: ::std::string::String) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             t.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("from_text", |__e| {
                 let _ = t.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// The number held at a position
         ///
         /// `index` on the wire.
-        pub fn index(&mut self, v: i32) -> Result<i32, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn index(&mut self, v: i32) -> ::std::result::Result<i32, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             v.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("index", |__e| {
                 let _ = v.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// This probe's state consumed into a pair
         ///
         /// `into_pair` on the wire.
-        pub fn into_pair(&mut self) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, rt::GiopError> {
+        pub fn into_pair(&mut self) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, __rt::GiopError> {
             let __reply = self.conn.invoke("into_pair", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// Whether the probe will answer right now
         ///
         /// `is_ready` on the wire.
-        pub fn is_ready(&mut self) -> Result<bool, rt::GiopError> {
+        pub fn is_ready(&mut self) -> ::std::result::Result<bool, __rt::GiopError> {
             let __reply = self.conn.invoke("is_ready", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// How many numbers this probe holds
         ///
         /// `len` on the wire.
-        pub fn len(&mut self) -> Result<i32, rt::GiopError> {
+        pub fn len(&mut self) -> ::std::result::Result<i32, __rt::GiopError> {
             let __reply = self.conn.invoke("len", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// This probe's first number with its sign flipped
         ///
         /// `neg` on the wire.
-        pub fn neg(&mut self) -> Result<i32, rt::GiopError> {
+        pub fn neg(&mut self) -> ::std::result::Result<i32, __rt::GiopError> {
             let __reply = self.conn.invoke("neg", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// The next pair in sequence
         ///
         /// `next` on the wire.
-        pub fn next(&mut self) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, rt::GiopError> {
+        pub fn next(&mut self) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, __rt::GiopError> {
             let __reply = self.conn.invoke("next", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// This probe's first number reduced by an amount
         ///
         /// `sub` on the wire.
-        pub fn sub(&mut self, v: i32) -> Result<i32, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn sub(&mut self, v: i32) -> ::std::result::Result<i32, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             v.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("sub", |__e| {
                 let _ = v.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// A textual rendering of this probe
         ///
         /// `to_text` on the wire.
-        pub fn to_text(&mut self) -> Result<String, rt::GiopError> {
+        pub fn to_text(&mut self) -> ::std::result::Result<::std::string::String, __rt::GiopError> {
             let __reply = self.conn.invoke("to_text", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// Takes more parameters than the target's style lint allows for
         ///
         /// `wide` on the wire.
-        pub fn wide(&mut self, a1: i32, a2: i32, a3: i32, a4: i32, a5: i32, a6: i32, a7: i32, a8: i32, a9: i32) -> Result<(), rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn wide(&mut self, a1: i32, a2: i32, a3: i32, a4: i32, a5: i32, a6: i32, a7: i32, a8: i32, a9: i32) -> ::std::result::Result<(), __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             a1.put(&mut __probe)?;
             a2.put(&mut __probe)?;
             a3.put(&mut __probe)?;
@@ -228,7 +228,7 @@ pub mod gclint {
             a7.put(&mut __probe)?;
             a8.put(&mut __probe)?;
             a9.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("wide", |__e| {
                 let _ = a1.put(__e);
                 let _ = a2.put(__e);
@@ -250,7 +250,7 @@ pub mod gclint {
     /// `System` is always here, whatever the contract declares: an unknown
     /// key is `OBJECT_NOT_EXIST`, a refused call is `NO_PERMISSION`, a
     /// temporary refusal is `TRANSIENT`, and IDL has no way to declare any
-    /// of them. Build one with `rt::raise::*`, which does not produce a
+    /// of them. Build one with `orbweaver_gen::rt::raise::*`, which does not produce a
     /// `SystemException` until the completion status is stated — the field
     /// that tells the caller whether a retry is safe, and the one thing a
     /// generator cannot know for a servant.
@@ -262,14 +262,14 @@ pub mod gclint {
     pub enum ProbeFault {
         /// A CORBA system exception, with the completion status the
         /// servant chose. Travels as a `SystemException` reply.
-        System(rt::SystemException),
+        System(__rt::SystemException),
     }
-    impl From<rt::SystemException> for ProbeFault {
-        fn from(__ex: rt::SystemException) -> Self {
+    impl ::std::convert::From<__rt::SystemException> for ProbeFault {
+        fn from(__ex: __rt::SystemException) -> Self {
             Self::System(__ex)
         }
     }
-    impl PartialEq for ProbeFault {
+    impl ::std::cmp::PartialEq for ProbeFault {
         fn eq(&self, __other: &Self) -> bool {
             match (self, __other) {
                 (Self::System(__a), Self::System(__b)) => {
@@ -283,7 +283,7 @@ pub mod gclint {
     impl ProbeFault {
         /// The repository id of the user exception this fault carries, or
         /// `None` for a system exception, which carries its own.
-        pub fn user_id(&self) -> Option<&'static str> {
+        pub fn user_id(&self) -> ::std::option::Option<&'static str> {
             match self {
                 Self::System(_) => None,
             }
@@ -296,7 +296,7 @@ pub mod gclint {
         /// dispatcher hands it to the server to encode instead. That is also why
         /// nothing may be written before the fault is known — the whole buffer
         /// travels under one status.
-        pub fn write(&self, __out: &mut rt::Encoder) -> Result<rt::DispatchBody, rt::SystemException> {
+        pub fn write(&self, __out: &mut __rt::Encoder) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let _ = __out;
             match self {
                 Self::System(__ex) => Err(__ex.clone()),
@@ -312,7 +312,7 @@ pub mod gclint {
     /// root ++ "/Probe/" ++ <oid>    the object named <oid>
     /// ```
     ///
-    /// `root` is the key the `rt::Server` was bound with. The derivation is
+    /// `root` is the key the `orbweaver_gen::rt::Server` was bound with. The derivation is
     /// reversible, so no table of minted keys exists: a reference survives a
     /// restart, and a client cannot make the process grow by looking things
     /// up. The oid is the *whole* remainder after the prefix, so it may
@@ -326,14 +326,14 @@ pub mod gclint {
     /// # Minting
     ///
     /// `reference` and `ior` answer with a real IIOP profile, built by
-    /// `rt::ObjectHome` — the servant never assembles one, which is why the
+    /// `orbweaver_gen::rt::ObjectHome` — the servant never assembles one, which is why the
     /// GIOP version and profile shape are still decided in exactly one
     /// place. `nil` is the nil reference (§9.3.6), the truthful answer when
     /// there is no such object.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct ProbeRefs {
-        home: rt::ObjectHome,
-        infix: String,
+        home: __rt::ObjectHome,
+        infix: ::std::string::String,
     }
     impl ProbeRefs {
         /// The repository id minted references advertise.
@@ -341,42 +341,42 @@ pub mod gclint {
         /// What separates the root key from the oid.
         pub const KEY_INFIX: &'static str = "/Probe/";
         /// The scheme rooted at `home`, with the generated infix.
-        pub fn new(home: rt::ObjectHome) -> Self {
-            Self { home, infix: Self::KEY_INFIX.to_owned() }
+        pub fn new(__home: __rt::ObjectHome) -> Self {
+            Self { home: __home, infix: Self::KEY_INFIX.to_owned() }
         }
         /// The same, with a key space this interface shares with another.
         ///
         /// Two skeletons given the same infix must disagree about `knows`
-        /// for every key, or `rt::Servants` will hand a request to
+        /// for every key, or `orbweaver_gen::rt::Servants` will hand a request to
         /// whichever was added first. Sharing a key space is a claim that
         /// the two answer for disjoint sets of objects.
-        pub fn with_infix(home: rt::ObjectHome, infix: impl Into<String>) -> Self {
-            Self { home, infix: infix.into() }
+        pub fn with_infix(__home: __rt::ObjectHome, __infix: impl ::std::convert::Into<::std::string::String>) -> Self {
+            Self { home: __home, infix: __infix.into() }
         }
         /// Where these objects are published.
-        pub fn home(&self) -> &rt::ObjectHome { &self.home }
+        pub fn home(&self) -> &__rt::ObjectHome { &self.home }
         /// The infix in use, generated or overridden.
         pub fn infix(&self) -> &str { &self.infix }
         /// The default object's key, which is also every other key's prefix.
         pub fn root_key(&self) -> &[u8] { self.home.root_key() }
         /// The object key for `oid`; the empty oid is the root key.
-        pub fn key_of(&self, oid: &str) -> Vec<u8> {
-            self.home.key_of(&self.infix, oid)
+        pub fn key_of(&self, __oid: &str) -> ::std::vec::Vec<u8> {
+            self.home.key_of(&self.infix, __oid)
         }
         /// The oid a key addresses, or `None` if it is not one of ours.
-        pub fn oid_of<'a>(&self, key: &'a [u8]) -> Option<&'a str> {
-            self.home.oid_of(&self.infix, key)
+        pub fn oid_of<'a>(&self, __key: &'a [u8]) -> ::std::option::Option<&'a str> {
+            self.home.oid_of(&self.infix, __key)
         }
         /// A reference to `oid`, in the form an operation returns.
-        pub fn reference(&self, oid: &str) -> rt::ObjRef {
-            self.home.reference(Self::TYPE_ID, self.key_of(oid))
+        pub fn reference(&self, __oid: &str) -> __rt::ObjRef {
+            self.home.reference(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The same reference, in the form `LOCATION_FORWARD` carries.
-        pub fn ior(&self, oid: &str) -> rt::Ior {
-            self.home.ior(Self::TYPE_ID, self.key_of(oid))
+        pub fn ior(&self, __oid: &str) -> __rt::Ior {
+            self.home.ior(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The nil reference: there is no such object.
-        pub fn nil() -> rt::ObjRef { rt::ObjectHome::nil() }
+        pub fn nil() -> __rt::ObjRef { __rt::ObjectHome::nil() }
     }
     /// Which `IDL:gclint/Probe:1.0` a call is addressed to.
     ///
@@ -395,8 +395,8 @@ pub mod gclint {
     }
     impl<'a> ProbeTarget<'a> {
         /// The identity `oid` under `refs`.
-        pub fn new(oid: &'a str, refs: &'a ProbeRefs) -> Self {
-            Self { oid, refs }
+        pub fn new(__oid: &'a str, __refs: &'a ProbeRefs) -> Self {
+            Self { oid: __oid, refs: __refs }
         }
         /// Which object this is. The empty oid is the default object,
         /// addressed by the bare root key the server was bound with.
@@ -406,11 +406,11 @@ pub mod gclint {
         /// The key scheme, for minting references into other key spaces.
         pub fn refs(&self) -> &'a ProbeRefs { self.refs }
         /// The raw object key this call arrived on.
-        pub fn key(&self) -> Vec<u8> { self.refs.key_of(self.oid) }
+        pub fn key(&self) -> ::std::vec::Vec<u8> { self.refs.key_of(self.oid) }
         /// A reference to *this* object, for handing back one's own address.
-        pub fn reference(&self) -> rt::ObjRef { self.refs.reference(self.oid) }
+        pub fn reference(&self) -> __rt::ObjRef { self.refs.reference(self.oid) }
         /// A reference to another object of this interface.
-        pub fn sibling(&self, oid: &str) -> rt::ObjRef { self.refs.reference(oid) }
+        pub fn sibling(&self, __oid: &str) -> __rt::ObjRef { self.refs.reference(__oid) }
     }
     /// One operation per naming convention the target language claims
     ///
@@ -419,10 +419,10 @@ pub mod gclint {
     /// One method per operation and per attribute accessor, taking decoded
     /// Rust arguments. Nothing here mentions GIOP: the wire is entirely the
     /// business of `ProbeSkeleton`, which adapts this trait to
-    /// `rt::Dispatch`.
+    /// `orbweaver_gen::rt::Dispatch`.
     ///
     /// Every method may fail with a `ProbeFault`: a declared user exception,
-    /// or a system exception built with `rt::raise::*` — the vocabulary
+    /// or a system exception built with `orbweaver_gen::rt::raise::*` — the vocabulary
     /// (`OBJECT_NOT_EXIST`, `NO_PERMISSION`, `BAD_PARAM`, `TRANSIENT`) that
     /// no contract declares and every servant needs.
     ///
@@ -446,7 +446,7 @@ pub mod gclint {
     pub trait ProbeServant {
         /// Whether this servant answers for the object `__at` names.
         ///
-        /// **Required, with no default.** `rt::Dispatch::knows` defaults to
+        /// **Required, with no default.** `orbweaver_gen::rt::Dispatch::knows` defaults to
         /// accepting everything, which is right for a process with one object and
         /// is exactly what stopped a generated skeleton from ever holding more
         /// than one: an unknown key was served as if it were the only object.
@@ -456,7 +456,7 @@ pub mod gclint {
         ///
         /// A single-object servant writes `__at.is_default()`. A `false` here
         /// becomes `OBJECT_NOT_EXIST` for a request and `UNKNOWN_OBJECT` for a
-        /// `LocateRequest`, and is also how `rt::Servants` picks between
+        /// `LocateRequest`, and is also how `orbweaver_gen::rt::Servants` picks between
         /// skeletons sharing one key space.
         fn knows(&self, __at: &ProbeTarget<'_>) -> bool;
         /// Where this request should be sent instead, if anywhere.
@@ -481,14 +481,14 @@ pub mod gclint {
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
         /// the address. This hook is the *temporary* forward; an object that has
         /// moved for good says so through `redirect`, below.
-        fn forward(&mut self, __at: &ProbeTarget<'_>) -> Option<rt::Ior> {
+        fn forward(&mut self, __at: &ProbeTarget<'_>) -> ::std::option::Option<__rt::Ior> {
             let _ = __at;
             None
         }
         /// Where this request should be sent instead, and whether for good.
         ///
-        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
-        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// The method the runtime actually asks. `orbweaver_gen::rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `orbweaver_gen::rt::Forward::Permanent` is a
         /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
         /// the temporary form, its reply-status enumeration having no other),
         /// and is the one thing a servant can say that lets a client replace the
@@ -497,69 +497,69 @@ pub mod gclint {
         /// Defaults to `forward` wrapped as temporary, so a servant that
         /// overrides only `forward` behaves as it always did. Override this one
         /// to say *permanent*; there is no reason to override both.
-        fn redirect(&mut self, __at: &ProbeTarget<'_>) -> Option<rt::Forward> {
-            self.forward(__at).map(rt::Forward::Temporary)
+        fn redirect(&mut self, __at: &ProbeTarget<'_>) -> ::std::option::Option<__rt::Forward> {
+            self.forward(__at).map(__rt::Forward::Temporary)
         }
         /// This probe's first number increased by an amount
         ///
         /// `add` on the wire.
-        fn add(&mut self, __at: &ProbeTarget<'_>, v: i32) -> Result<i32, ProbeFault>;
+        fn add(&mut self, __at: &ProbeTarget<'_>, v: i32) -> ::std::result::Result<i32, ProbeFault>;
         /// This probe's state viewed as a pair
         ///
         /// `as_pair` on the wire.
-        fn as_pair(&mut self, __at: &ProbeTarget<'_>) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
+        fn as_pair(&mut self, __at: &ProbeTarget<'_>) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
         /// A copy of this probe's state
         ///
         /// `clone` on the wire.
-        fn clone(&mut self, __at: &ProbeTarget<'_>) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
+        fn clone(&mut self, __at: &ProbeTarget<'_>) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
         /// The pair this probe starts from
         ///
         /// `default` on the wire.
-        fn default(&mut self, __at: &ProbeTarget<'_>) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
+        fn default(&mut self, __at: &ProbeTarget<'_>) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
         /// Whether the given pair equals this probe's state
         ///
         /// `eq` on the wire.
-        fn eq(&mut self, __at: &ProbeTarget<'_>, other: crate::emitted::f_gen_target_lints::gclint::Pair) -> Result<bool, ProbeFault>;
+        fn eq(&mut self, __at: &ProbeTarget<'_>, other: crate::emitted::f_gen_target_lints::gclint::Pair) -> ::std::result::Result<bool, ProbeFault>;
         /// The pair a textual rendering denotes
         ///
         /// `from_text` on the wire.
-        fn from_text(&mut self, __at: &ProbeTarget<'_>, t: String) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
+        fn from_text(&mut self, __at: &ProbeTarget<'_>, t: ::std::string::String) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
         /// The number held at a position
         ///
         /// `index` on the wire.
-        fn index(&mut self, __at: &ProbeTarget<'_>, v: i32) -> Result<i32, ProbeFault>;
+        fn index(&mut self, __at: &ProbeTarget<'_>, v: i32) -> ::std::result::Result<i32, ProbeFault>;
         /// This probe's state consumed into a pair
         ///
         /// `into_pair` on the wire.
-        fn into_pair(&mut self, __at: &ProbeTarget<'_>) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
+        fn into_pair(&mut self, __at: &ProbeTarget<'_>) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
         /// Whether the probe will answer right now
         ///
         /// `is_ready` on the wire.
-        fn is_ready(&mut self, __at: &ProbeTarget<'_>) -> Result<bool, ProbeFault>;
+        fn is_ready(&mut self, __at: &ProbeTarget<'_>) -> ::std::result::Result<bool, ProbeFault>;
         /// How many numbers this probe holds
         ///
         /// `len` on the wire.
-        fn len(&mut self, __at: &ProbeTarget<'_>) -> Result<i32, ProbeFault>;
+        fn len(&mut self, __at: &ProbeTarget<'_>) -> ::std::result::Result<i32, ProbeFault>;
         /// This probe's first number with its sign flipped
         ///
         /// `neg` on the wire.
-        fn neg(&mut self, __at: &ProbeTarget<'_>) -> Result<i32, ProbeFault>;
+        fn neg(&mut self, __at: &ProbeTarget<'_>) -> ::std::result::Result<i32, ProbeFault>;
         /// The next pair in sequence
         ///
         /// `next` on the wire.
-        fn next(&mut self, __at: &ProbeTarget<'_>) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
+        fn next(&mut self, __at: &ProbeTarget<'_>) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
         /// This probe's first number reduced by an amount
         ///
         /// `sub` on the wire.
-        fn sub(&mut self, __at: &ProbeTarget<'_>, v: i32) -> Result<i32, ProbeFault>;
+        fn sub(&mut self, __at: &ProbeTarget<'_>, v: i32) -> ::std::result::Result<i32, ProbeFault>;
         /// A textual rendering of this probe
         ///
         /// `to_text` on the wire.
-        fn to_text(&mut self, __at: &ProbeTarget<'_>) -> Result<String, ProbeFault>;
+        fn to_text(&mut self, __at: &ProbeTarget<'_>) -> ::std::result::Result<::std::string::String, ProbeFault>;
         /// Takes more parameters than the target's style lint allows for
         ///
         /// `wide` on the wire.
-        fn wide(&mut self, __at: &ProbeTarget<'_>, a1: i32, a2: i32, a3: i32, a4: i32, a5: i32, a6: i32, a7: i32, a8: i32, a9: i32) -> Result<(), ProbeFault>;
+        fn wide(&mut self, __at: &ProbeTarget<'_>, a1: i32, a2: i32, a3: i32, a4: i32, a5: i32, a6: i32, a7: i32, a8: i32, a9: i32) -> ::std::result::Result<(), ProbeFault>;
     }
     /// One object of `IDL:gclint/Probe:1.0`, for a servant that keeps a value per object.
     ///
@@ -578,63 +578,63 @@ pub mod gclint {
         /// This probe's first number increased by an amount
         ///
         /// `add` on the wire.
-        fn add(&mut self, v: i32) -> Result<i32, ProbeFault>;
+        fn add(&mut self, v: i32) -> ::std::result::Result<i32, ProbeFault>;
         /// This probe's state viewed as a pair
         ///
         /// `as_pair` on the wire.
-        fn as_pair(&mut self) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
+        fn as_pair(&mut self) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
         /// A copy of this probe's state
         ///
         /// `clone` on the wire.
-        fn clone(&mut self) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
+        fn clone(&mut self) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
         /// The pair this probe starts from
         ///
         /// `default` on the wire.
-        fn default(&mut self) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
+        fn default(&mut self) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
         /// Whether the given pair equals this probe's state
         ///
         /// `eq` on the wire.
-        fn eq(&mut self, other: crate::emitted::f_gen_target_lints::gclint::Pair) -> Result<bool, ProbeFault>;
+        fn eq(&mut self, other: crate::emitted::f_gen_target_lints::gclint::Pair) -> ::std::result::Result<bool, ProbeFault>;
         /// The pair a textual rendering denotes
         ///
         /// `from_text` on the wire.
-        fn from_text(&mut self, t: String) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
+        fn from_text(&mut self, t: ::std::string::String) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
         /// The number held at a position
         ///
         /// `index` on the wire.
-        fn index(&mut self, v: i32) -> Result<i32, ProbeFault>;
+        fn index(&mut self, v: i32) -> ::std::result::Result<i32, ProbeFault>;
         /// This probe's state consumed into a pair
         ///
         /// `into_pair` on the wire.
-        fn into_pair(&mut self) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
+        fn into_pair(&mut self) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
         /// Whether the probe will answer right now
         ///
         /// `is_ready` on the wire.
-        fn is_ready(&mut self) -> Result<bool, ProbeFault>;
+        fn is_ready(&mut self) -> ::std::result::Result<bool, ProbeFault>;
         /// How many numbers this probe holds
         ///
         /// `len` on the wire.
-        fn len(&mut self) -> Result<i32, ProbeFault>;
+        fn len(&mut self) -> ::std::result::Result<i32, ProbeFault>;
         /// This probe's first number with its sign flipped
         ///
         /// `neg` on the wire.
-        fn neg(&mut self) -> Result<i32, ProbeFault>;
+        fn neg(&mut self) -> ::std::result::Result<i32, ProbeFault>;
         /// The next pair in sequence
         ///
         /// `next` on the wire.
-        fn next(&mut self) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
+        fn next(&mut self) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault>;
         /// This probe's first number reduced by an amount
         ///
         /// `sub` on the wire.
-        fn sub(&mut self, v: i32) -> Result<i32, ProbeFault>;
+        fn sub(&mut self, v: i32) -> ::std::result::Result<i32, ProbeFault>;
         /// A textual rendering of this probe
         ///
         /// `to_text` on the wire.
-        fn to_text(&mut self) -> Result<String, ProbeFault>;
+        fn to_text(&mut self) -> ::std::result::Result<::std::string::String, ProbeFault>;
         /// Takes more parameters than the target's style lint allows for
         ///
         /// `wide` on the wire.
-        fn wide(&mut self, a1: i32, a2: i32, a3: i32, a4: i32, a5: i32, a6: i32, a7: i32, a8: i32, a9: i32) -> Result<(), ProbeFault>;
+        fn wide(&mut self, a1: i32, a2: i32, a3: i32, a4: i32, a5: i32, a6: i32, a7: i32, a8: i32, a9: i32) -> ::std::result::Result<(), ProbeFault>;
     }
     /// A map from oid to one `ProbeObject`, serving `IDL:gclint/Probe:1.0`.
     ///
@@ -648,34 +648,34 @@ pub mod gclint {
     /// bare root key addresses. A one-object process inserts exactly that.
     #[derive(Debug, Clone)]
     pub struct ProbeObjects<S: ProbeObject> {
-        objects: std::collections::BTreeMap<String, S>,
+        objects: ::std::collections::BTreeMap<::std::string::String, S>,
     }
-    impl<S: ProbeObject> Default for ProbeObjects<S> {
+    impl<S: ProbeObject> ::std::default::Default for ProbeObjects<S> {
         fn default() -> Self {
-            Self { objects: std::collections::BTreeMap::new() }
+            Self { objects: ::std::collections::BTreeMap::new() }
         }
     }
     impl<S: ProbeObject> ProbeObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { <Self as std::default::Default>::default() }
+        pub fn new() -> Self { <Self as ::std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
-        pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
-            self.objects.insert(oid.into(), object)
+        pub fn insert(&mut self, __oid: impl ::std::convert::Into<::std::string::String>, __object: S) -> ::std::option::Option<S> {
+            self.objects.insert(__oid.into(), __object)
         }
         /// Removes an object, after which its key is `OBJECT_NOT_EXIST`.
-        pub fn remove(&mut self, oid: &str) -> Option<S> {
-            self.objects.remove(oid)
+        pub fn remove(&mut self, __oid: &str) -> ::std::option::Option<S> {
+            self.objects.remove(__oid)
         }
         /// The object under `oid`, if there is one.
-        pub fn get(&self, oid: &str) -> Option<&S> { self.objects.get(oid) }
+        pub fn get(&self, __oid: &str) -> ::std::option::Option<&S> { self.objects.get(__oid) }
         /// The object under `oid`, mutably.
-        pub fn get_mut(&mut self, oid: &str) -> Option<&mut S> {
-            self.objects.get_mut(oid)
+        pub fn get_mut(&mut self, __oid: &str) -> ::std::option::Option<&mut S> {
+            self.objects.get_mut(__oid)
         }
         /// Every oid held, in sorted order.
-        pub fn oids(&self) -> impl Iterator<Item = &str> {
-            self.objects.keys().map(String::as_str)
+        pub fn oids(&self) -> impl ::std::iter::Iterator<Item = &str> {
+            self.objects.keys().map(::std::string::String::as_str)
         }
         /// How many objects are held.
         pub fn len(&self) -> usize { self.objects.len() }
@@ -686,101 +686,101 @@ pub mod gclint {
         fn knows(&self, __at: &ProbeTarget<'_>) -> bool {
             self.objects.contains_key(__at.oid())
         }
-        fn add(&mut self, __at: &ProbeTarget<'_>, v: i32) -> Result<i32, ProbeFault> {
+        fn add(&mut self, __at: &ProbeTarget<'_>, v: i32) -> ::std::result::Result<i32, ProbeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.add(v),
-                None => Err(ProbeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ProbeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn as_pair(&mut self, __at: &ProbeTarget<'_>) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault> {
+        fn as_pair(&mut self, __at: &ProbeTarget<'_>) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.as_pair(),
-                None => Err(ProbeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ProbeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn clone(&mut self, __at: &ProbeTarget<'_>) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault> {
+        fn clone(&mut self, __at: &ProbeTarget<'_>) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.clone(),
-                None => Err(ProbeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ProbeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn default(&mut self, __at: &ProbeTarget<'_>) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault> {
+        fn default(&mut self, __at: &ProbeTarget<'_>) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.default(),
-                None => Err(ProbeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ProbeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn eq(&mut self, __at: &ProbeTarget<'_>, other: crate::emitted::f_gen_target_lints::gclint::Pair) -> Result<bool, ProbeFault> {
+        fn eq(&mut self, __at: &ProbeTarget<'_>, other: crate::emitted::f_gen_target_lints::gclint::Pair) -> ::std::result::Result<bool, ProbeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.eq(other),
-                None => Err(ProbeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ProbeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn from_text(&mut self, __at: &ProbeTarget<'_>, t: String) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault> {
+        fn from_text(&mut self, __at: &ProbeTarget<'_>, t: ::std::string::String) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.from_text(t),
-                None => Err(ProbeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ProbeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn index(&mut self, __at: &ProbeTarget<'_>, v: i32) -> Result<i32, ProbeFault> {
+        fn index(&mut self, __at: &ProbeTarget<'_>, v: i32) -> ::std::result::Result<i32, ProbeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.index(v),
-                None => Err(ProbeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ProbeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn into_pair(&mut self, __at: &ProbeTarget<'_>) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault> {
+        fn into_pair(&mut self, __at: &ProbeTarget<'_>) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.into_pair(),
-                None => Err(ProbeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ProbeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn is_ready(&mut self, __at: &ProbeTarget<'_>) -> Result<bool, ProbeFault> {
+        fn is_ready(&mut self, __at: &ProbeTarget<'_>) -> ::std::result::Result<bool, ProbeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.is_ready(),
-                None => Err(ProbeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ProbeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn len(&mut self, __at: &ProbeTarget<'_>) -> Result<i32, ProbeFault> {
+        fn len(&mut self, __at: &ProbeTarget<'_>) -> ::std::result::Result<i32, ProbeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.len(),
-                None => Err(ProbeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ProbeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn neg(&mut self, __at: &ProbeTarget<'_>) -> Result<i32, ProbeFault> {
+        fn neg(&mut self, __at: &ProbeTarget<'_>) -> ::std::result::Result<i32, ProbeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.neg(),
-                None => Err(ProbeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ProbeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn next(&mut self, __at: &ProbeTarget<'_>) -> Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault> {
+        fn next(&mut self, __at: &ProbeTarget<'_>) -> ::std::result::Result<crate::emitted::f_gen_target_lints::gclint::Pair, ProbeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.next(),
-                None => Err(ProbeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ProbeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn sub(&mut self, __at: &ProbeTarget<'_>, v: i32) -> Result<i32, ProbeFault> {
+        fn sub(&mut self, __at: &ProbeTarget<'_>, v: i32) -> ::std::result::Result<i32, ProbeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.sub(v),
-                None => Err(ProbeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ProbeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn to_text(&mut self, __at: &ProbeTarget<'_>) -> Result<String, ProbeFault> {
+        fn to_text(&mut self, __at: &ProbeTarget<'_>) -> ::std::result::Result<::std::string::String, ProbeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.to_text(),
-                None => Err(ProbeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ProbeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn wide(&mut self, __at: &ProbeTarget<'_>, a1: i32, a2: i32, a3: i32, a4: i32, a5: i32, a6: i32, a7: i32, a8: i32, a9: i32) -> Result<(), ProbeFault> {
+        fn wide(&mut self, __at: &ProbeTarget<'_>, a1: i32, a2: i32, a3: i32, a4: i32, a5: i32, a6: i32, a7: i32, a8: i32, a9: i32) -> ::std::result::Result<(), ProbeFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.wide(a1, a2, a3, a4, a5, a6, a7, a8, a9),
-                None => Err(ProbeFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(ProbeFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
     }
     /// Serves `IDL:gclint/Probe:1.0`: decodes the request, calls the servant, encodes the reply.
     ///
-    /// Hand it to `rt::Server::serve` in place of a hand-written
-    /// `rt::Dispatch`. What it answers, beyond the contract's own
+    /// Hand it to `orbweaver_gen::rt::Server::serve` in place of a hand-written
+    /// `orbweaver_gen::rt::Dispatch`. What it answers, beyond the contract's own
     /// operations:
     ///
     /// * `_is_a`, from the inheritance chain the registry resolved, because
@@ -811,50 +811,50 @@ pub mod gclint {
     impl<S: ProbeServant> ProbeSkeleton<S> {
         /// A skeleton serving `servant`'s objects under `refs`.
         ///
-        /// `refs` must be rooted at the key the `rt::Server` was bound
+        /// `refs` must be rooted at the key the `orbweaver_gen::rt::Server` was bound
         /// with, or nothing this skeleton parses will match what arrives.
-        pub fn new(refs: ProbeRefs, servant: S) -> Self {
-            Self { servant, refs }
+        pub fn new(__refs: ProbeRefs, __servant: S) -> Self {
+            Self { servant: __servant, refs: __refs }
         }
         /// The key scheme in force, for minting references to these objects.
         pub fn refs(&self) -> &ProbeRefs { &self.refs }
     }
-    impl<S: ProbeServant> rt::Dispatch for ProbeSkeleton<S> {
+    impl<S: ProbeServant> __rt::Dispatch for ProbeSkeleton<S> {
         fn knows(&self, __object_key: &[u8]) -> bool {
             match self.refs.oid_of(__object_key) {
                 Some(__oid) => self.servant.knows(&ProbeTarget::new(__oid, &self.refs)),
                 None => false,
             }
         }
-        fn forward(&mut self, __req: &rt::Request) -> Option<rt::Ior> {
+        fn forward(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Ior> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = ProbeTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
         }
-        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+        fn redirect(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Forward> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = ProbeTarget::new(__oid, &self.refs);
             self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<rt::DispatchBody, rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let __oid = self
                 .refs
                 .oid_of(&__req.object_key)
-                .ok_or_else(rt::SystemException::object_not_exist)?;
+                .ok_or_else(__rt::SystemException::object_not_exist)?;
             let __at = ProbeTarget::new(__oid, &self.refs);
-            let mut __args = __req.body().map_err(|_| rt::SystemException::marshal())?;
+            let mut __args = __req.body().map_err(|_| __rt::SystemException::marshal())?;
             match __req.operation.as_str() {
                 "add" => {
-                    let v: i32 = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let v: i32 = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.add(&__at, v) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -862,8 +862,8 @@ pub mod gclint {
                 "as_pair" => {
                     match self.servant.as_pair(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -871,8 +871,8 @@ pub mod gclint {
                 "clone" => {
                     match self.servant.clone(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -880,41 +880,41 @@ pub mod gclint {
                 "default" => {
                     match self.servant.default(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "eq" => {
-                    let other: crate::emitted::f_gen_target_lints::gclint::Pair = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let other: crate::emitted::f_gen_target_lints::gclint::Pair = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.eq(&__at, other) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "from_text" => {
-                    let t: String = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let t: ::std::string::String = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.from_text(&__at, t) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "index" => {
-                    let v: i32 = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let v: i32 = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.index(&__at, v) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -922,8 +922,8 @@ pub mod gclint {
                 "into_pair" => {
                     match self.servant.into_pair(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -931,8 +931,8 @@ pub mod gclint {
                 "is_ready" => {
                     match self.servant.is_ready(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -940,8 +940,8 @@ pub mod gclint {
                 "len" => {
                     match self.servant.len(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -949,8 +949,8 @@ pub mod gclint {
                 "neg" => {
                     match self.servant.neg(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -958,19 +958,19 @@ pub mod gclint {
                 "next" => {
                     match self.servant.next(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "sub" => {
-                    let v: i32 = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let v: i32 = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.sub(&__at, v) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -978,63 +978,63 @@ pub mod gclint {
                 "to_text" => {
                     match self.servant.to_text(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "wide" => {
-                    let a1: i32 = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let a2: i32 = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let a3: i32 = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let a4: i32 = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let a5: i32 = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let a6: i32 = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let a7: i32 = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let a8: i32 = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let a9: i32 = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let a1: i32 = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let a2: i32 = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let a3: i32 = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let a4: i32 = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let a5: i32 = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let a6: i32 = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let a7: i32 = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let a8: i32 = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let a9: i32 = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.wide(&__at, a1, a2, a3, a4, a5, a6, a7, a8, a9) {
                         Ok(()) => {
-                            Ok(rt::DispatchBody::Return)
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "_is_a" => {
-                    let __id: String = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let __id: ::std::string::String = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     let __answer = matches!(__id.as_str(),
                         "IDL:gclint/Probe:1.0" |
-                        rt::OBJECT_ID);
-                    __answer.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                        __rt::OBJECT_ID);
+                    __answer.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
                 "_non_existent" => {
-                    false.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                    false.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
-                _ => Err(rt::SystemException::bad_operation()),
+                _ => Err(__rt::SystemException::bad_operation()),
             }
         }
         fn dispatch(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<(), rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<(), __rt::SystemException> {
             match self.dispatch_body(__req, __out)? {
-                rt::DispatchBody::Return => Ok(()),
-                rt::DispatchBody::UserException => {
-                    Err(rt::SystemException::unknown_user_exception())
+                __rt::DispatchBody::Return => Ok(()),
+                __rt::DispatchBody::UserException => {
+                    Err(__rt::SystemException::unknown_user_exception())
                 }
             }
         }

@@ -67,6 +67,7 @@ wire has no encoding for. Refusing the description too would have made a peer's
 """
 
 import base64
+import builtins
 import json
 import keyword
 import math
@@ -78,8 +79,21 @@ __all__ = [
     "Struct", "Union", "Enum", "EnumItem", "ObjectRef", "LongDouble", "TypeCode",
     "ValueType",
     "TYPES", "NAMES", "register", "register_alias", "register_name", "resolve",
-    "to_json", "from_json", "call", "Bridge", "Loopback", "connect",
+    "to_json", "from_json", "call", "Bridge", "Loopback", "connect", "property",
 ]
+
+#: The builtin ``property``, reachable through this module.
+#:
+#: A generated union writes one ``@_rt.property`` per branch, and not
+#: ``@property``, because a union's class body is a scope the *contract* writes
+#: into: a branch named ``property`` binds the name, and the next branch's
+#: decorator then calls a property object (``TypeError: 'property' object is
+#: not callable``). An item named ``property`` in the enclosing module does the
+#: same from one scope out. ``_rt`` is the one name a generated module holds
+#: that no IDL identifier can spell — a leading underscore is IDL's escape
+#: character rather than an identifier character — so reaching the builtin
+#: through it is not shadowable by any contract.
+property = builtins.property
 
 
 # ── errors ──────────────────────────────────────────────────────────────────

@@ -13,7 +13,7 @@
 
 /// IDL module `CosNaming`.
 pub mod CosNaming {
-    use orbweaver_gen::rt::{self, Cdr};
+    use ::orbweaver_gen::rt::{self as __rt, Cdr as __Cdr};
     /// IDL struct `IDL:omg.org/CosNaming/Binding:1.0`.
     #[derive(Debug, Clone, PartialEq)]
     pub struct Binding {
@@ -22,16 +22,16 @@ pub mod CosNaming {
         /// IDL member `binding_type`, marshalled second.
         pub binding_type: crate::emitted::f_gen_naming_subset::CosNaming::BindingType,
     }
-    impl Cdr for Binding {
-        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-            self.binding_name.put(e)?;
-            self.binding_type.put(e)?;
+    impl __Cdr for Binding {
+        fn put(&self, __e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
+            self.binding_name.put(__e)?;
+            self.binding_type.put(__e)?;
             Ok(())
         }
-        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+        fn get(__d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
             Ok(Self {
-                binding_name: Cdr::get(d)?,
-                binding_type: Cdr::get(d)?,
+                binding_name: __Cdr::get(__d)?,
+                binding_type: __Cdr::get(__d)?,
             })
         }
     }
@@ -47,17 +47,17 @@ pub mod CosNaming {
     /// `Connection` inside the trust boundary, or over the guarded
     /// wrapper at it — a stub hard-wired to the transport would be the
     /// §4.7 bypass in compiled form.
-    pub struct BindingIteratorClient<C: rt::Invoker> {
+    pub struct BindingIteratorClient<C: __rt::Invoker> {
         /// What calls travel over.
         pub conn: C,
     }
-    impl<C: rt::Invoker> BindingIteratorClient<C> {
+    impl<C: __rt::Invoker> BindingIteratorClient<C> {
         /// A stub over an open invoker.
-        pub fn new(conn: C) -> Self { Self { conn } }
+        pub fn new(__conn: C) -> Self { Self { conn: __conn } }
         /// Releases the iterator
         ///
         /// `destroy` on the wire.
-        pub fn destroy(&mut self) -> Result<(), rt::GiopError> {
+        pub fn destroy(&mut self) -> ::std::result::Result<(), __rt::GiopError> {
             let __reply = self.conn.invoke("destroy", |__e| {
             })?;
             let _ = __reply;
@@ -70,7 +70,7 @@ pub mod CosNaming {
     /// `System` is always here, whatever the contract declares: an unknown
     /// key is `OBJECT_NOT_EXIST`, a refused call is `NO_PERMISSION`, a
     /// temporary refusal is `TRANSIENT`, and IDL has no way to declare any
-    /// of them. Build one with `rt::raise::*`, which does not produce a
+    /// of them. Build one with `orbweaver_gen::rt::raise::*`, which does not produce a
     /// `SystemException` until the completion status is stated — the field
     /// that tells the caller whether a retry is safe, and the one thing a
     /// generator cannot know for a servant.
@@ -82,14 +82,14 @@ pub mod CosNaming {
     pub enum BindingIteratorFault {
         /// A CORBA system exception, with the completion status the
         /// servant chose. Travels as a `SystemException` reply.
-        System(rt::SystemException),
+        System(__rt::SystemException),
     }
-    impl From<rt::SystemException> for BindingIteratorFault {
-        fn from(__ex: rt::SystemException) -> Self {
+    impl ::std::convert::From<__rt::SystemException> for BindingIteratorFault {
+        fn from(__ex: __rt::SystemException) -> Self {
             Self::System(__ex)
         }
     }
-    impl PartialEq for BindingIteratorFault {
+    impl ::std::cmp::PartialEq for BindingIteratorFault {
         fn eq(&self, __other: &Self) -> bool {
             match (self, __other) {
                 (Self::System(__a), Self::System(__b)) => {
@@ -103,7 +103,7 @@ pub mod CosNaming {
     impl BindingIteratorFault {
         /// The repository id of the user exception this fault carries, or
         /// `None` for a system exception, which carries its own.
-        pub fn user_id(&self) -> Option<&'static str> {
+        pub fn user_id(&self) -> ::std::option::Option<&'static str> {
             match self {
                 Self::System(_) => None,
             }
@@ -116,7 +116,7 @@ pub mod CosNaming {
         /// dispatcher hands it to the server to encode instead. That is also why
         /// nothing may be written before the fault is known — the whole buffer
         /// travels under one status.
-        pub fn write(&self, __out: &mut rt::Encoder) -> Result<rt::DispatchBody, rt::SystemException> {
+        pub fn write(&self, __out: &mut __rt::Encoder) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let _ = __out;
             match self {
                 Self::System(__ex) => Err(__ex.clone()),
@@ -132,7 +132,7 @@ pub mod CosNaming {
     /// root ++ "/BindingIterator/" ++ <oid>    the object named <oid>
     /// ```
     ///
-    /// `root` is the key the `rt::Server` was bound with. The derivation is
+    /// `root` is the key the `orbweaver_gen::rt::Server` was bound with. The derivation is
     /// reversible, so no table of minted keys exists: a reference survives a
     /// restart, and a client cannot make the process grow by looking things
     /// up. The oid is the *whole* remainder after the prefix, so it may
@@ -146,14 +146,14 @@ pub mod CosNaming {
     /// # Minting
     ///
     /// `reference` and `ior` answer with a real IIOP profile, built by
-    /// `rt::ObjectHome` — the servant never assembles one, which is why the
+    /// `orbweaver_gen::rt::ObjectHome` — the servant never assembles one, which is why the
     /// GIOP version and profile shape are still decided in exactly one
     /// place. `nil` is the nil reference (§9.3.6), the truthful answer when
     /// there is no such object.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct BindingIteratorRefs {
-        home: rt::ObjectHome,
-        infix: String,
+        home: __rt::ObjectHome,
+        infix: ::std::string::String,
     }
     impl BindingIteratorRefs {
         /// The repository id minted references advertise.
@@ -161,42 +161,42 @@ pub mod CosNaming {
         /// What separates the root key from the oid.
         pub const KEY_INFIX: &'static str = "/BindingIterator/";
         /// The scheme rooted at `home`, with the generated infix.
-        pub fn new(home: rt::ObjectHome) -> Self {
-            Self { home, infix: Self::KEY_INFIX.to_owned() }
+        pub fn new(__home: __rt::ObjectHome) -> Self {
+            Self { home: __home, infix: Self::KEY_INFIX.to_owned() }
         }
         /// The same, with a key space this interface shares with another.
         ///
         /// Two skeletons given the same infix must disagree about `knows`
-        /// for every key, or `rt::Servants` will hand a request to
+        /// for every key, or `orbweaver_gen::rt::Servants` will hand a request to
         /// whichever was added first. Sharing a key space is a claim that
         /// the two answer for disjoint sets of objects.
-        pub fn with_infix(home: rt::ObjectHome, infix: impl Into<String>) -> Self {
-            Self { home, infix: infix.into() }
+        pub fn with_infix(__home: __rt::ObjectHome, __infix: impl ::std::convert::Into<::std::string::String>) -> Self {
+            Self { home: __home, infix: __infix.into() }
         }
         /// Where these objects are published.
-        pub fn home(&self) -> &rt::ObjectHome { &self.home }
+        pub fn home(&self) -> &__rt::ObjectHome { &self.home }
         /// The infix in use, generated or overridden.
         pub fn infix(&self) -> &str { &self.infix }
         /// The default object's key, which is also every other key's prefix.
         pub fn root_key(&self) -> &[u8] { self.home.root_key() }
         /// The object key for `oid`; the empty oid is the root key.
-        pub fn key_of(&self, oid: &str) -> Vec<u8> {
-            self.home.key_of(&self.infix, oid)
+        pub fn key_of(&self, __oid: &str) -> ::std::vec::Vec<u8> {
+            self.home.key_of(&self.infix, __oid)
         }
         /// The oid a key addresses, or `None` if it is not one of ours.
-        pub fn oid_of<'a>(&self, key: &'a [u8]) -> Option<&'a str> {
-            self.home.oid_of(&self.infix, key)
+        pub fn oid_of<'a>(&self, __key: &'a [u8]) -> ::std::option::Option<&'a str> {
+            self.home.oid_of(&self.infix, __key)
         }
         /// A reference to `oid`, in the form an operation returns.
-        pub fn reference(&self, oid: &str) -> rt::ObjRef {
-            self.home.reference(Self::TYPE_ID, self.key_of(oid))
+        pub fn reference(&self, __oid: &str) -> __rt::ObjRef {
+            self.home.reference(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The same reference, in the form `LOCATION_FORWARD` carries.
-        pub fn ior(&self, oid: &str) -> rt::Ior {
-            self.home.ior(Self::TYPE_ID, self.key_of(oid))
+        pub fn ior(&self, __oid: &str) -> __rt::Ior {
+            self.home.ior(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The nil reference: there is no such object.
-        pub fn nil() -> rt::ObjRef { rt::ObjectHome::nil() }
+        pub fn nil() -> __rt::ObjRef { __rt::ObjectHome::nil() }
     }
     /// Which `IDL:omg.org/CosNaming/BindingIterator:1.0` a call is addressed to.
     ///
@@ -215,8 +215,8 @@ pub mod CosNaming {
     }
     impl<'a> BindingIteratorTarget<'a> {
         /// The identity `oid` under `refs`.
-        pub fn new(oid: &'a str, refs: &'a BindingIteratorRefs) -> Self {
-            Self { oid, refs }
+        pub fn new(__oid: &'a str, __refs: &'a BindingIteratorRefs) -> Self {
+            Self { oid: __oid, refs: __refs }
         }
         /// Which object this is. The empty oid is the default object,
         /// addressed by the bare root key the server was bound with.
@@ -226,11 +226,11 @@ pub mod CosNaming {
         /// The key scheme, for minting references into other key spaces.
         pub fn refs(&self) -> &'a BindingIteratorRefs { self.refs }
         /// The raw object key this call arrived on.
-        pub fn key(&self) -> Vec<u8> { self.refs.key_of(self.oid) }
+        pub fn key(&self) -> ::std::vec::Vec<u8> { self.refs.key_of(self.oid) }
         /// A reference to *this* object, for handing back one's own address.
-        pub fn reference(&self) -> rt::ObjRef { self.refs.reference(self.oid) }
+        pub fn reference(&self) -> __rt::ObjRef { self.refs.reference(self.oid) }
         /// A reference to another object of this interface.
-        pub fn sibling(&self, oid: &str) -> rt::ObjRef { self.refs.reference(oid) }
+        pub fn sibling(&self, __oid: &str) -> __rt::ObjRef { self.refs.reference(__oid) }
     }
     /// Serves the remainder of a listing; this server always answers nil
     ///
@@ -239,10 +239,10 @@ pub mod CosNaming {
     /// One method per operation and per attribute accessor, taking decoded
     /// Rust arguments. Nothing here mentions GIOP: the wire is entirely the
     /// business of `BindingIteratorSkeleton`, which adapts this trait to
-    /// `rt::Dispatch`.
+    /// `orbweaver_gen::rt::Dispatch`.
     ///
     /// Every method may fail with a `BindingIteratorFault`: a declared user exception,
-    /// or a system exception built with `rt::raise::*` — the vocabulary
+    /// or a system exception built with `orbweaver_gen::rt::raise::*` — the vocabulary
     /// (`OBJECT_NOT_EXIST`, `NO_PERMISSION`, `BAD_PARAM`, `TRANSIENT`) that
     /// no contract declares and every servant needs.
     ///
@@ -266,7 +266,7 @@ pub mod CosNaming {
     pub trait BindingIteratorServant {
         /// Whether this servant answers for the object `__at` names.
         ///
-        /// **Required, with no default.** `rt::Dispatch::knows` defaults to
+        /// **Required, with no default.** `orbweaver_gen::rt::Dispatch::knows` defaults to
         /// accepting everything, which is right for a process with one object and
         /// is exactly what stopped a generated skeleton from ever holding more
         /// than one: an unknown key was served as if it were the only object.
@@ -276,7 +276,7 @@ pub mod CosNaming {
         ///
         /// A single-object servant writes `__at.is_default()`. A `false` here
         /// becomes `OBJECT_NOT_EXIST` for a request and `UNKNOWN_OBJECT` for a
-        /// `LocateRequest`, and is also how `rt::Servants` picks between
+        /// `LocateRequest`, and is also how `orbweaver_gen::rt::Servants` picks between
         /// skeletons sharing one key space.
         fn knows(&self, __at: &BindingIteratorTarget<'_>) -> bool;
         /// Where this request should be sent instead, if anywhere.
@@ -301,14 +301,14 @@ pub mod CosNaming {
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
         /// the address. This hook is the *temporary* forward; an object that has
         /// moved for good says so through `redirect`, below.
-        fn forward(&mut self, __at: &BindingIteratorTarget<'_>) -> Option<rt::Ior> {
+        fn forward(&mut self, __at: &BindingIteratorTarget<'_>) -> ::std::option::Option<__rt::Ior> {
             let _ = __at;
             None
         }
         /// Where this request should be sent instead, and whether for good.
         ///
-        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
-        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// The method the runtime actually asks. `orbweaver_gen::rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `orbweaver_gen::rt::Forward::Permanent` is a
         /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
         /// the temporary form, its reply-status enumeration having no other),
         /// and is the one thing a servant can say that lets a client replace the
@@ -317,13 +317,13 @@ pub mod CosNaming {
         /// Defaults to `forward` wrapped as temporary, so a servant that
         /// overrides only `forward` behaves as it always did. Override this one
         /// to say *permanent*; there is no reason to override both.
-        fn redirect(&mut self, __at: &BindingIteratorTarget<'_>) -> Option<rt::Forward> {
-            self.forward(__at).map(rt::Forward::Temporary)
+        fn redirect(&mut self, __at: &BindingIteratorTarget<'_>) -> ::std::option::Option<__rt::Forward> {
+            self.forward(__at).map(__rt::Forward::Temporary)
         }
         /// Releases the iterator
         ///
         /// `destroy` on the wire.
-        fn destroy(&mut self, __at: &BindingIteratorTarget<'_>) -> Result<(), BindingIteratorFault>;
+        fn destroy(&mut self, __at: &BindingIteratorTarget<'_>) -> ::std::result::Result<(), BindingIteratorFault>;
     }
     /// One object of `IDL:omg.org/CosNaming/BindingIterator:1.0`, for a servant that keeps a value per object.
     ///
@@ -342,7 +342,7 @@ pub mod CosNaming {
         /// Releases the iterator
         ///
         /// `destroy` on the wire.
-        fn destroy(&mut self) -> Result<(), BindingIteratorFault>;
+        fn destroy(&mut self) -> ::std::result::Result<(), BindingIteratorFault>;
     }
     /// A map from oid to one `BindingIteratorObject`, serving `IDL:omg.org/CosNaming/BindingIterator:1.0`.
     ///
@@ -356,34 +356,34 @@ pub mod CosNaming {
     /// bare root key addresses. A one-object process inserts exactly that.
     #[derive(Debug, Clone)]
     pub struct BindingIteratorObjects<S: BindingIteratorObject> {
-        objects: std::collections::BTreeMap<String, S>,
+        objects: ::std::collections::BTreeMap<::std::string::String, S>,
     }
-    impl<S: BindingIteratorObject> Default for BindingIteratorObjects<S> {
+    impl<S: BindingIteratorObject> ::std::default::Default for BindingIteratorObjects<S> {
         fn default() -> Self {
-            Self { objects: std::collections::BTreeMap::new() }
+            Self { objects: ::std::collections::BTreeMap::new() }
         }
     }
     impl<S: BindingIteratorObject> BindingIteratorObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { <Self as std::default::Default>::default() }
+        pub fn new() -> Self { <Self as ::std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
-        pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
-            self.objects.insert(oid.into(), object)
+        pub fn insert(&mut self, __oid: impl ::std::convert::Into<::std::string::String>, __object: S) -> ::std::option::Option<S> {
+            self.objects.insert(__oid.into(), __object)
         }
         /// Removes an object, after which its key is `OBJECT_NOT_EXIST`.
-        pub fn remove(&mut self, oid: &str) -> Option<S> {
-            self.objects.remove(oid)
+        pub fn remove(&mut self, __oid: &str) -> ::std::option::Option<S> {
+            self.objects.remove(__oid)
         }
         /// The object under `oid`, if there is one.
-        pub fn get(&self, oid: &str) -> Option<&S> { self.objects.get(oid) }
+        pub fn get(&self, __oid: &str) -> ::std::option::Option<&S> { self.objects.get(__oid) }
         /// The object under `oid`, mutably.
-        pub fn get_mut(&mut self, oid: &str) -> Option<&mut S> {
-            self.objects.get_mut(oid)
+        pub fn get_mut(&mut self, __oid: &str) -> ::std::option::Option<&mut S> {
+            self.objects.get_mut(__oid)
         }
         /// Every oid held, in sorted order.
-        pub fn oids(&self) -> impl Iterator<Item = &str> {
-            self.objects.keys().map(String::as_str)
+        pub fn oids(&self) -> impl ::std::iter::Iterator<Item = &str> {
+            self.objects.keys().map(::std::string::String::as_str)
         }
         /// How many objects are held.
         pub fn len(&self) -> usize { self.objects.len() }
@@ -394,17 +394,17 @@ pub mod CosNaming {
         fn knows(&self, __at: &BindingIteratorTarget<'_>) -> bool {
             self.objects.contains_key(__at.oid())
         }
-        fn destroy(&mut self, __at: &BindingIteratorTarget<'_>) -> Result<(), BindingIteratorFault> {
+        fn destroy(&mut self, __at: &BindingIteratorTarget<'_>) -> ::std::result::Result<(), BindingIteratorFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.destroy(),
-                None => Err(BindingIteratorFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(BindingIteratorFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
     }
     /// Serves `IDL:omg.org/CosNaming/BindingIterator:1.0`: decodes the request, calls the servant, encodes the reply.
     ///
-    /// Hand it to `rt::Server::serve` in place of a hand-written
-    /// `rt::Dispatch`. What it answers, beyond the contract's own
+    /// Hand it to `orbweaver_gen::rt::Server::serve` in place of a hand-written
+    /// `orbweaver_gen::rt::Dispatch`. What it answers, beyond the contract's own
     /// operations:
     ///
     /// * `_is_a`, from the inheritance chain the registry resolved, because
@@ -435,83 +435,83 @@ pub mod CosNaming {
     impl<S: BindingIteratorServant> BindingIteratorSkeleton<S> {
         /// A skeleton serving `servant`'s objects under `refs`.
         ///
-        /// `refs` must be rooted at the key the `rt::Server` was bound
+        /// `refs` must be rooted at the key the `orbweaver_gen::rt::Server` was bound
         /// with, or nothing this skeleton parses will match what arrives.
-        pub fn new(refs: BindingIteratorRefs, servant: S) -> Self {
-            Self { servant, refs }
+        pub fn new(__refs: BindingIteratorRefs, __servant: S) -> Self {
+            Self { servant: __servant, refs: __refs }
         }
         /// The key scheme in force, for minting references to these objects.
         pub fn refs(&self) -> &BindingIteratorRefs { &self.refs }
     }
-    impl<S: BindingIteratorServant> rt::Dispatch for BindingIteratorSkeleton<S> {
+    impl<S: BindingIteratorServant> __rt::Dispatch for BindingIteratorSkeleton<S> {
         fn knows(&self, __object_key: &[u8]) -> bool {
             match self.refs.oid_of(__object_key) {
                 Some(__oid) => self.servant.knows(&BindingIteratorTarget::new(__oid, &self.refs)),
                 None => false,
             }
         }
-        fn forward(&mut self, __req: &rt::Request) -> Option<rt::Ior> {
+        fn forward(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Ior> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = BindingIteratorTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
         }
-        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+        fn redirect(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Forward> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = BindingIteratorTarget::new(__oid, &self.refs);
             self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<rt::DispatchBody, rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let __oid = self
                 .refs
                 .oid_of(&__req.object_key)
-                .ok_or_else(rt::SystemException::object_not_exist)?;
+                .ok_or_else(__rt::SystemException::object_not_exist)?;
             let __at = BindingIteratorTarget::new(__oid, &self.refs);
-            let mut __args = __req.body().map_err(|_| rt::SystemException::marshal())?;
+            let mut __args = __req.body().map_err(|_| __rt::SystemException::marshal())?;
             match __req.operation.as_str() {
                 "destroy" => {
                     match self.servant.destroy(&__at) {
                         Ok(()) => {
-                            Ok(rt::DispatchBody::Return)
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "_is_a" => {
-                    let __id: String = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let __id: ::std::string::String = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     let __answer = matches!(__id.as_str(),
                         "IDL:omg.org/CosNaming/BindingIterator:1.0" |
-                        rt::OBJECT_ID);
-                    __answer.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                        __rt::OBJECT_ID);
+                    __answer.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
                 "_non_existent" => {
-                    false.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                    false.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
-                _ => Err(rt::SystemException::bad_operation()),
+                _ => Err(__rt::SystemException::bad_operation()),
             }
         }
         fn dispatch(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<(), rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<(), __rt::SystemException> {
             match self.dispatch_body(__req, __out)? {
-                rt::DispatchBody::Return => Ok(()),
-                rt::DispatchBody::UserException => {
-                    Err(rt::SystemException::unknown_user_exception())
+                __rt::DispatchBody::Return => Ok(()),
+                __rt::DispatchBody::UserException => {
+                    Err(__rt::SystemException::unknown_user_exception())
                 }
             }
         }
     }
 
     /// IDL typedef `IDL:omg.org/CosNaming/BindingList:1.0`.
-    pub type BindingList = Vec<crate::emitted::f_gen_naming_subset::CosNaming::Binding>;
+    pub type BindingList = ::std::vec::Vec<crate::emitted::f_gen_naming_subset::CosNaming::Binding>;
 
     /// IDL enum `IDL:omg.org/CosNaming/BindingType:1.0`. The ordinal is what travels.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -521,41 +521,41 @@ pub mod CosNaming {
         /// IDL enumerator `ncontext`; ordinal 1 on the wire.
         ncontext = 1,
     }
-    impl Cdr for BindingType {
-        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-            e.put_u32(*self as u32);
+    impl __Cdr for BindingType {
+        fn put(&self, __e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
+            __e.put_u32(*self as u32);
             Ok(())
         }
-        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
-            Ok(match d.get_u32()? {
+        fn get(__d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
+            Ok(match __d.get_u32()? {
                 0 => Self::nobject,
                 1 => Self::ncontext,
-                _ => return Err(rt::GiopError::Decode("ordinal outside BindingType; the sender may be built against a newer contract")),
+                _ => return Err(__rt::GiopError::Decode("ordinal outside BindingType; the sender may be built against a newer contract")),
             })
         }
     }
 
     /// IDL typedef `IDL:omg.org/CosNaming/Name:1.0`.
-    pub type Name = Vec<crate::emitted::f_gen_naming_subset::CosNaming::NameComponent>;
+    pub type Name = ::std::vec::Vec<crate::emitted::f_gen_naming_subset::CosNaming::NameComponent>;
 
     /// IDL struct `IDL:omg.org/CosNaming/NameComponent:1.0`.
     #[derive(Debug, Clone, PartialEq)]
     pub struct NameComponent {
         /// IDL member `id`, marshalled first.
-        pub id: String,
+        pub id: ::std::string::String,
         /// IDL member `kind`, marshalled second.
-        pub kind: String,
+        pub kind: ::std::string::String,
     }
-    impl Cdr for NameComponent {
-        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-            self.id.put(e)?;
-            self.kind.put(e)?;
+    impl __Cdr for NameComponent {
+        fn put(&self, __e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
+            self.id.put(__e)?;
+            self.kind.put(__e)?;
             Ok(())
         }
-        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+        fn get(__d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
             Ok(Self {
-                id: Cdr::get(d)?,
-                kind: Cdr::get(d)?,
+                id: __Cdr::get(__d)?,
+                kind: __Cdr::get(__d)?,
             })
         }
     }
@@ -571,21 +571,21 @@ pub mod CosNaming {
     /// `Connection` inside the trust boundary, or over the guarded
     /// wrapper at it — a stub hard-wired to the transport would be the
     /// §4.7 bypass in compiled form.
-    pub struct NamingContextClient<C: rt::Invoker> {
+    pub struct NamingContextClient<C: __rt::Invoker> {
         /// What calls travel over.
         pub conn: C,
     }
-    impl<C: rt::Invoker> NamingContextClient<C> {
+    impl<C: __rt::Invoker> NamingContextClient<C> {
         /// A stub over an open invoker.
-        pub fn new(conn: C) -> Self { Self { conn } }
+        pub fn new(__conn: C) -> Self { Self { conn: __conn } }
         /// Binds a name to an object in this context
         ///
         /// `bind` on the wire.
-        pub fn bind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: orbweaver_gen::rt::ObjRef) -> Result<(), rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn bind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: __rt::ObjRef) -> ::std::result::Result<(), __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             n.put(&mut __probe)?;
             obj.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("bind", |__e| {
                 let _ = n.put(__e);
                 let _ = obj.put(__e);
@@ -596,11 +596,11 @@ pub mod CosNaming {
         /// Binds a name to a context served elsewhere
         ///
         /// `bind_context` on the wire.
-        pub fn bind_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: orbweaver_gen::rt::ObjRef) -> Result<(), rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn bind_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: __rt::ObjRef) -> ::std::result::Result<(), __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             n.put(&mut __probe)?;
             nc.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("bind_context", |__e| {
                 let _ = n.put(__e);
                 let _ = nc.put(__e);
@@ -611,21 +611,21 @@ pub mod CosNaming {
         /// A fresh context, bound under the given name
         ///
         /// `bind_new_context` on the wire.
-        pub fn bind_new_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn bind_new_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<__rt::ObjRef, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             n.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("bind_new_context", |__e| {
                 let _ = n.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// Discards this context, which must already be empty
         ///
         /// `destroy` on the wire.
-        pub fn destroy(&mut self) -> Result<(), rt::GiopError> {
+        pub fn destroy(&mut self) -> ::std::result::Result<(), __rt::GiopError> {
             let __reply = self.conn.invoke("destroy", |__e| {
             })?;
             let _ = __reply;
@@ -634,36 +634,36 @@ pub mod CosNaming {
         /// Up to how_many of this context's own bindings
         ///
         /// `list` on the wire.
-        pub fn list(&mut self, how_many: u32) -> Result<(crate::emitted::f_gen_naming_subset::CosNaming::BindingList, orbweaver_gen::rt::ObjRef), rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn list(&mut self, how_many: u32) -> ::std::result::Result<(crate::emitted::f_gen_naming_subset::CosNaming::BindingList, __rt::ObjRef), __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             how_many.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("list", |__e| {
                 let _ = how_many.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
-            let __r1 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
+            let __r1 = __Cdr::get(&mut __body)?;
             Ok((__r0, __r1))
         }
         /// A fresh context, bound to nothing
         ///
         /// `new_context` on the wire.
-        pub fn new_context(&mut self) -> Result<orbweaver_gen::rt::ObjRef, rt::GiopError> {
+        pub fn new_context(&mut self) -> ::std::result::Result<__rt::ObjRef, __rt::GiopError> {
             let __reply = self.conn.invoke("new_context", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// Binds a name to an object, replacing any object already there
         ///
         /// `rebind` on the wire.
-        pub fn rebind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: orbweaver_gen::rt::ObjRef) -> Result<(), rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn rebind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: __rt::ObjRef) -> ::std::result::Result<(), __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             n.put(&mut __probe)?;
             obj.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("rebind", |__e| {
                 let _ = n.put(__e);
                 let _ = obj.put(__e);
@@ -674,11 +674,11 @@ pub mod CosNaming {
         /// Binds a name to a context, replacing any context already there
         ///
         /// `rebind_context` on the wire.
-        pub fn rebind_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: orbweaver_gen::rt::ObjRef) -> Result<(), rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn rebind_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: __rt::ObjRef) -> ::std::result::Result<(), __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             n.put(&mut __probe)?;
             nc.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("rebind_context", |__e| {
                 let _ = n.put(__e);
                 let _ = nc.put(__e);
@@ -689,24 +689,24 @@ pub mod CosNaming {
         /// The object or context a path names
         ///
         /// `resolve` on the wire.
-        pub fn resolve(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn resolve(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<__rt::ObjRef, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             n.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("resolve", |__e| {
                 let _ = n.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// Removes a binding; what it named is untouched
         ///
         /// `unbind` on the wire.
-        pub fn unbind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<(), rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn unbind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<(), __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             n.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("unbind", |__e| {
                 let _ = n.put(__e);
             })?;
@@ -720,7 +720,7 @@ pub mod CosNaming {
     /// `System` is always here, whatever the contract declares: an unknown
     /// key is `OBJECT_NOT_EXIST`, a refused call is `NO_PERMISSION`, a
     /// temporary refusal is `TRANSIENT`, and IDL has no way to declare any
-    /// of them. Build one with `rt::raise::*`, which does not produce a
+    /// of them. Build one with `orbweaver_gen::rt::raise::*`, which does not produce a
     /// `SystemException` until the completion status is stated — the field
     /// that tells the caller whether a retry is safe, and the one thing a
     /// generator cannot know for a servant.
@@ -729,12 +729,12 @@ pub mod CosNaming {
     /// clause of this interface or of one it inherits. `write` puts the
     /// body §9.4.3.1 describes — repository id first, then the members —
     /// which is exactly what the client side reads back out of
-    /// `rt::GiopError::UserException`.
+    /// `orbweaver_gen::rt::GiopError::UserException`.
     #[derive(Debug, Clone)]
     pub enum NamingContextFault {
         /// A CORBA system exception, with the completion status the
         /// servant chose. Travels as a `SystemException` reply.
-        System(rt::SystemException),
+        System(__rt::SystemException),
         /// IDL exception `IDL:omg.org/CosNaming/NamingContext/AlreadyBound:1.0`.
         AlreadyBound(crate::emitted::f_gen_naming_subset::CosNaming::NamingContext::AlreadyBound),
         /// IDL exception `IDL:omg.org/CosNaming/NamingContext/InvalidName:1.0`.
@@ -744,12 +744,12 @@ pub mod CosNaming {
         /// IDL exception `IDL:omg.org/CosNaming/NamingContext/NotFound:1.0`.
         NotFound(crate::emitted::f_gen_naming_subset::CosNaming::NamingContext::NotFound),
     }
-    impl From<rt::SystemException> for NamingContextFault {
-        fn from(__ex: rt::SystemException) -> Self {
+    impl ::std::convert::From<__rt::SystemException> for NamingContextFault {
+        fn from(__ex: __rt::SystemException) -> Self {
             Self::System(__ex)
         }
     }
-    impl PartialEq for NamingContextFault {
+    impl ::std::cmp::PartialEq for NamingContextFault {
         fn eq(&self, __other: &Self) -> bool {
             match (self, __other) {
                 (Self::System(__a), Self::System(__b)) => {
@@ -768,7 +768,7 @@ pub mod CosNaming {
     impl NamingContextFault {
         /// The repository id of the user exception this fault carries, or
         /// `None` for a system exception, which carries its own.
-        pub fn user_id(&self) -> Option<&'static str> {
+        pub fn user_id(&self) -> ::std::option::Option<&'static str> {
             match self {
                 Self::System(_) => None,
                 Self::AlreadyBound(_) => Some("IDL:omg.org/CosNaming/NamingContext/AlreadyBound:1.0"),
@@ -785,28 +785,28 @@ pub mod CosNaming {
         /// dispatcher hands it to the server to encode instead. That is also why
         /// nothing may be written before the fault is known — the whole buffer
         /// travels under one status.
-        pub fn write(&self, __out: &mut rt::Encoder) -> Result<rt::DispatchBody, rt::SystemException> {
+        pub fn write(&self, __out: &mut __rt::Encoder) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             match self {
                 Self::System(__ex) => Err(__ex.clone()),
                 Self::AlreadyBound(__v) => {
                     __out.put_str("IDL:omg.org/CosNaming/NamingContext/AlreadyBound:1.0");
-                    __v.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::UserException)
+                    __v.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::UserException)
                 }
                 Self::InvalidName(__v) => {
                     __out.put_str("IDL:omg.org/CosNaming/NamingContext/InvalidName:1.0");
-                    __v.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::UserException)
+                    __v.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::UserException)
                 }
                 Self::NotEmpty(__v) => {
                     __out.put_str("IDL:omg.org/CosNaming/NamingContext/NotEmpty:1.0");
-                    __v.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::UserException)
+                    __v.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::UserException)
                 }
                 Self::NotFound(__v) => {
                     __out.put_str("IDL:omg.org/CosNaming/NamingContext/NotFound:1.0");
-                    __v.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::UserException)
+                    __v.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::UserException)
                 }
             }
         }
@@ -820,7 +820,7 @@ pub mod CosNaming {
     /// root ++ "/NamingContext/" ++ <oid>    the object named <oid>
     /// ```
     ///
-    /// `root` is the key the `rt::Server` was bound with. The derivation is
+    /// `root` is the key the `orbweaver_gen::rt::Server` was bound with. The derivation is
     /// reversible, so no table of minted keys exists: a reference survives a
     /// restart, and a client cannot make the process grow by looking things
     /// up. The oid is the *whole* remainder after the prefix, so it may
@@ -834,14 +834,14 @@ pub mod CosNaming {
     /// # Minting
     ///
     /// `reference` and `ior` answer with a real IIOP profile, built by
-    /// `rt::ObjectHome` — the servant never assembles one, which is why the
+    /// `orbweaver_gen::rt::ObjectHome` — the servant never assembles one, which is why the
     /// GIOP version and profile shape are still decided in exactly one
     /// place. `nil` is the nil reference (§9.3.6), the truthful answer when
     /// there is no such object.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct NamingContextRefs {
-        home: rt::ObjectHome,
-        infix: String,
+        home: __rt::ObjectHome,
+        infix: ::std::string::String,
     }
     impl NamingContextRefs {
         /// The repository id minted references advertise.
@@ -849,42 +849,42 @@ pub mod CosNaming {
         /// What separates the root key from the oid.
         pub const KEY_INFIX: &'static str = "/NamingContext/";
         /// The scheme rooted at `home`, with the generated infix.
-        pub fn new(home: rt::ObjectHome) -> Self {
-            Self { home, infix: Self::KEY_INFIX.to_owned() }
+        pub fn new(__home: __rt::ObjectHome) -> Self {
+            Self { home: __home, infix: Self::KEY_INFIX.to_owned() }
         }
         /// The same, with a key space this interface shares with another.
         ///
         /// Two skeletons given the same infix must disagree about `knows`
-        /// for every key, or `rt::Servants` will hand a request to
+        /// for every key, or `orbweaver_gen::rt::Servants` will hand a request to
         /// whichever was added first. Sharing a key space is a claim that
         /// the two answer for disjoint sets of objects.
-        pub fn with_infix(home: rt::ObjectHome, infix: impl Into<String>) -> Self {
-            Self { home, infix: infix.into() }
+        pub fn with_infix(__home: __rt::ObjectHome, __infix: impl ::std::convert::Into<::std::string::String>) -> Self {
+            Self { home: __home, infix: __infix.into() }
         }
         /// Where these objects are published.
-        pub fn home(&self) -> &rt::ObjectHome { &self.home }
+        pub fn home(&self) -> &__rt::ObjectHome { &self.home }
         /// The infix in use, generated or overridden.
         pub fn infix(&self) -> &str { &self.infix }
         /// The default object's key, which is also every other key's prefix.
         pub fn root_key(&self) -> &[u8] { self.home.root_key() }
         /// The object key for `oid`; the empty oid is the root key.
-        pub fn key_of(&self, oid: &str) -> Vec<u8> {
-            self.home.key_of(&self.infix, oid)
+        pub fn key_of(&self, __oid: &str) -> ::std::vec::Vec<u8> {
+            self.home.key_of(&self.infix, __oid)
         }
         /// The oid a key addresses, or `None` if it is not one of ours.
-        pub fn oid_of<'a>(&self, key: &'a [u8]) -> Option<&'a str> {
-            self.home.oid_of(&self.infix, key)
+        pub fn oid_of<'a>(&self, __key: &'a [u8]) -> ::std::option::Option<&'a str> {
+            self.home.oid_of(&self.infix, __key)
         }
         /// A reference to `oid`, in the form an operation returns.
-        pub fn reference(&self, oid: &str) -> rt::ObjRef {
-            self.home.reference(Self::TYPE_ID, self.key_of(oid))
+        pub fn reference(&self, __oid: &str) -> __rt::ObjRef {
+            self.home.reference(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The same reference, in the form `LOCATION_FORWARD` carries.
-        pub fn ior(&self, oid: &str) -> rt::Ior {
-            self.home.ior(Self::TYPE_ID, self.key_of(oid))
+        pub fn ior(&self, __oid: &str) -> __rt::Ior {
+            self.home.ior(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The nil reference: there is no such object.
-        pub fn nil() -> rt::ObjRef { rt::ObjectHome::nil() }
+        pub fn nil() -> __rt::ObjRef { __rt::ObjectHome::nil() }
     }
     /// Which `IDL:omg.org/CosNaming/NamingContext:1.0` a call is addressed to.
     ///
@@ -903,8 +903,8 @@ pub mod CosNaming {
     }
     impl<'a> NamingContextTarget<'a> {
         /// The identity `oid` under `refs`.
-        pub fn new(oid: &'a str, refs: &'a NamingContextRefs) -> Self {
-            Self { oid, refs }
+        pub fn new(__oid: &'a str, __refs: &'a NamingContextRefs) -> Self {
+            Self { oid: __oid, refs: __refs }
         }
         /// Which object this is. The empty oid is the default object,
         /// addressed by the bare root key the server was bound with.
@@ -914,11 +914,11 @@ pub mod CosNaming {
         /// The key scheme, for minting references into other key spaces.
         pub fn refs(&self) -> &'a NamingContextRefs { self.refs }
         /// The raw object key this call arrived on.
-        pub fn key(&self) -> Vec<u8> { self.refs.key_of(self.oid) }
+        pub fn key(&self) -> ::std::vec::Vec<u8> { self.refs.key_of(self.oid) }
         /// A reference to *this* object, for handing back one's own address.
-        pub fn reference(&self) -> rt::ObjRef { self.refs.reference(self.oid) }
+        pub fn reference(&self) -> __rt::ObjRef { self.refs.reference(self.oid) }
         /// A reference to another object of this interface.
-        pub fn sibling(&self, oid: &str) -> rt::ObjRef { self.refs.reference(oid) }
+        pub fn sibling(&self, __oid: &str) -> __rt::ObjRef { self.refs.reference(__oid) }
     }
     /// One node of the naming tree, addressed by its own object key
     ///
@@ -927,10 +927,10 @@ pub mod CosNaming {
     /// One method per operation and per attribute accessor, taking decoded
     /// Rust arguments. Nothing here mentions GIOP: the wire is entirely the
     /// business of `NamingContextSkeleton`, which adapts this trait to
-    /// `rt::Dispatch`.
+    /// `orbweaver_gen::rt::Dispatch`.
     ///
     /// Every method may fail with a `NamingContextFault`: a declared user exception,
-    /// or a system exception built with `rt::raise::*` — the vocabulary
+    /// or a system exception built with `orbweaver_gen::rt::raise::*` — the vocabulary
     /// (`OBJECT_NOT_EXIST`, `NO_PERMISSION`, `BAD_PARAM`, `TRANSIENT`) that
     /// no contract declares and every servant needs.
     ///
@@ -954,7 +954,7 @@ pub mod CosNaming {
     pub trait NamingContextServant {
         /// Whether this servant answers for the object `__at` names.
         ///
-        /// **Required, with no default.** `rt::Dispatch::knows` defaults to
+        /// **Required, with no default.** `orbweaver_gen::rt::Dispatch::knows` defaults to
         /// accepting everything, which is right for a process with one object and
         /// is exactly what stopped a generated skeleton from ever holding more
         /// than one: an unknown key was served as if it were the only object.
@@ -964,7 +964,7 @@ pub mod CosNaming {
         ///
         /// A single-object servant writes `__at.is_default()`. A `false` here
         /// becomes `OBJECT_NOT_EXIST` for a request and `UNKNOWN_OBJECT` for a
-        /// `LocateRequest`, and is also how `rt::Servants` picks between
+        /// `LocateRequest`, and is also how `orbweaver_gen::rt::Servants` picks between
         /// skeletons sharing one key space.
         fn knows(&self, __at: &NamingContextTarget<'_>) -> bool;
         /// Where this request should be sent instead, if anywhere.
@@ -989,14 +989,14 @@ pub mod CosNaming {
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
         /// the address. This hook is the *temporary* forward; an object that has
         /// moved for good says so through `redirect`, below.
-        fn forward(&mut self, __at: &NamingContextTarget<'_>) -> Option<rt::Ior> {
+        fn forward(&mut self, __at: &NamingContextTarget<'_>) -> ::std::option::Option<__rt::Ior> {
             let _ = __at;
             None
         }
         /// Where this request should be sent instead, and whether for good.
         ///
-        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
-        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// The method the runtime actually asks. `orbweaver_gen::rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `orbweaver_gen::rt::Forward::Permanent` is a
         /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
         /// the temporary form, its reply-status enumeration having no other),
         /// and is the one thing a servant can say that lets a client replace the
@@ -1005,49 +1005,49 @@ pub mod CosNaming {
         /// Defaults to `forward` wrapped as temporary, so a servant that
         /// overrides only `forward` behaves as it always did. Override this one
         /// to say *permanent*; there is no reason to override both.
-        fn redirect(&mut self, __at: &NamingContextTarget<'_>) -> Option<rt::Forward> {
-            self.forward(__at).map(rt::Forward::Temporary)
+        fn redirect(&mut self, __at: &NamingContextTarget<'_>) -> ::std::option::Option<__rt::Forward> {
+            self.forward(__at).map(__rt::Forward::Temporary)
         }
         /// Binds a name to an object in this context
         ///
         /// `bind` on the wire.
-        fn bind(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextFault>;
+        fn bind(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: __rt::ObjRef) -> ::std::result::Result<(), NamingContextFault>;
         /// Binds a name to a context served elsewhere
         ///
         /// `bind_context` on the wire.
-        fn bind_context(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextFault>;
+        fn bind_context(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: __rt::ObjRef) -> ::std::result::Result<(), NamingContextFault>;
         /// A fresh context, bound under the given name
         ///
         /// `bind_new_context` on the wire.
-        fn bind_new_context(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, NamingContextFault>;
+        fn bind_new_context(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<__rt::ObjRef, NamingContextFault>;
         /// Discards this context, which must already be empty
         ///
         /// `destroy` on the wire.
-        fn destroy(&mut self, __at: &NamingContextTarget<'_>) -> Result<(), NamingContextFault>;
+        fn destroy(&mut self, __at: &NamingContextTarget<'_>) -> ::std::result::Result<(), NamingContextFault>;
         /// Up to how_many of this context's own bindings
         ///
         /// `list` on the wire.
-        fn list(&mut self, __at: &NamingContextTarget<'_>, how_many: u32) -> Result<(crate::emitted::f_gen_naming_subset::CosNaming::BindingList, orbweaver_gen::rt::ObjRef), NamingContextFault>;
+        fn list(&mut self, __at: &NamingContextTarget<'_>, how_many: u32) -> ::std::result::Result<(crate::emitted::f_gen_naming_subset::CosNaming::BindingList, __rt::ObjRef), NamingContextFault>;
         /// A fresh context, bound to nothing
         ///
         /// `new_context` on the wire.
-        fn new_context(&mut self, __at: &NamingContextTarget<'_>) -> Result<orbweaver_gen::rt::ObjRef, NamingContextFault>;
+        fn new_context(&mut self, __at: &NamingContextTarget<'_>) -> ::std::result::Result<__rt::ObjRef, NamingContextFault>;
         /// Binds a name to an object, replacing any object already there
         ///
         /// `rebind` on the wire.
-        fn rebind(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextFault>;
+        fn rebind(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: __rt::ObjRef) -> ::std::result::Result<(), NamingContextFault>;
         /// Binds a name to a context, replacing any context already there
         ///
         /// `rebind_context` on the wire.
-        fn rebind_context(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextFault>;
+        fn rebind_context(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: __rt::ObjRef) -> ::std::result::Result<(), NamingContextFault>;
         /// The object or context a path names
         ///
         /// `resolve` on the wire.
-        fn resolve(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, NamingContextFault>;
+        fn resolve(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<__rt::ObjRef, NamingContextFault>;
         /// Removes a binding; what it named is untouched
         ///
         /// `unbind` on the wire.
-        fn unbind(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<(), NamingContextFault>;
+        fn unbind(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<(), NamingContextFault>;
     }
     /// One object of `IDL:omg.org/CosNaming/NamingContext:1.0`, for a servant that keeps a value per object.
     ///
@@ -1066,43 +1066,43 @@ pub mod CosNaming {
         /// Binds a name to an object in this context
         ///
         /// `bind` on the wire.
-        fn bind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextFault>;
+        fn bind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: __rt::ObjRef) -> ::std::result::Result<(), NamingContextFault>;
         /// Binds a name to a context served elsewhere
         ///
         /// `bind_context` on the wire.
-        fn bind_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextFault>;
+        fn bind_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: __rt::ObjRef) -> ::std::result::Result<(), NamingContextFault>;
         /// A fresh context, bound under the given name
         ///
         /// `bind_new_context` on the wire.
-        fn bind_new_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, NamingContextFault>;
+        fn bind_new_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<__rt::ObjRef, NamingContextFault>;
         /// Discards this context, which must already be empty
         ///
         /// `destroy` on the wire.
-        fn destroy(&mut self) -> Result<(), NamingContextFault>;
+        fn destroy(&mut self) -> ::std::result::Result<(), NamingContextFault>;
         /// Up to how_many of this context's own bindings
         ///
         /// `list` on the wire.
-        fn list(&mut self, how_many: u32) -> Result<(crate::emitted::f_gen_naming_subset::CosNaming::BindingList, orbweaver_gen::rt::ObjRef), NamingContextFault>;
+        fn list(&mut self, how_many: u32) -> ::std::result::Result<(crate::emitted::f_gen_naming_subset::CosNaming::BindingList, __rt::ObjRef), NamingContextFault>;
         /// A fresh context, bound to nothing
         ///
         /// `new_context` on the wire.
-        fn new_context(&mut self) -> Result<orbweaver_gen::rt::ObjRef, NamingContextFault>;
+        fn new_context(&mut self) -> ::std::result::Result<__rt::ObjRef, NamingContextFault>;
         /// Binds a name to an object, replacing any object already there
         ///
         /// `rebind` on the wire.
-        fn rebind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextFault>;
+        fn rebind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: __rt::ObjRef) -> ::std::result::Result<(), NamingContextFault>;
         /// Binds a name to a context, replacing any context already there
         ///
         /// `rebind_context` on the wire.
-        fn rebind_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextFault>;
+        fn rebind_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: __rt::ObjRef) -> ::std::result::Result<(), NamingContextFault>;
         /// The object or context a path names
         ///
         /// `resolve` on the wire.
-        fn resolve(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, NamingContextFault>;
+        fn resolve(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<__rt::ObjRef, NamingContextFault>;
         /// Removes a binding; what it named is untouched
         ///
         /// `unbind` on the wire.
-        fn unbind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<(), NamingContextFault>;
+        fn unbind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<(), NamingContextFault>;
     }
     /// A map from oid to one `NamingContextObject`, serving `IDL:omg.org/CosNaming/NamingContext:1.0`.
     ///
@@ -1116,34 +1116,34 @@ pub mod CosNaming {
     /// bare root key addresses. A one-object process inserts exactly that.
     #[derive(Debug, Clone)]
     pub struct NamingContextObjects<S: NamingContextObject> {
-        objects: std::collections::BTreeMap<String, S>,
+        objects: ::std::collections::BTreeMap<::std::string::String, S>,
     }
-    impl<S: NamingContextObject> Default for NamingContextObjects<S> {
+    impl<S: NamingContextObject> ::std::default::Default for NamingContextObjects<S> {
         fn default() -> Self {
-            Self { objects: std::collections::BTreeMap::new() }
+            Self { objects: ::std::collections::BTreeMap::new() }
         }
     }
     impl<S: NamingContextObject> NamingContextObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { <Self as std::default::Default>::default() }
+        pub fn new() -> Self { <Self as ::std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
-        pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
-            self.objects.insert(oid.into(), object)
+        pub fn insert(&mut self, __oid: impl ::std::convert::Into<::std::string::String>, __object: S) -> ::std::option::Option<S> {
+            self.objects.insert(__oid.into(), __object)
         }
         /// Removes an object, after which its key is `OBJECT_NOT_EXIST`.
-        pub fn remove(&mut self, oid: &str) -> Option<S> {
-            self.objects.remove(oid)
+        pub fn remove(&mut self, __oid: &str) -> ::std::option::Option<S> {
+            self.objects.remove(__oid)
         }
         /// The object under `oid`, if there is one.
-        pub fn get(&self, oid: &str) -> Option<&S> { self.objects.get(oid) }
+        pub fn get(&self, __oid: &str) -> ::std::option::Option<&S> { self.objects.get(__oid) }
         /// The object under `oid`, mutably.
-        pub fn get_mut(&mut self, oid: &str) -> Option<&mut S> {
-            self.objects.get_mut(oid)
+        pub fn get_mut(&mut self, __oid: &str) -> ::std::option::Option<&mut S> {
+            self.objects.get_mut(__oid)
         }
         /// Every oid held, in sorted order.
-        pub fn oids(&self) -> impl Iterator<Item = &str> {
-            self.objects.keys().map(String::as_str)
+        pub fn oids(&self) -> impl ::std::iter::Iterator<Item = &str> {
+            self.objects.keys().map(::std::string::String::as_str)
         }
         /// How many objects are held.
         pub fn len(&self) -> usize { self.objects.len() }
@@ -1154,71 +1154,71 @@ pub mod CosNaming {
         fn knows(&self, __at: &NamingContextTarget<'_>) -> bool {
             self.objects.contains_key(__at.oid())
         }
-        fn bind(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextFault> {
+        fn bind(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: __rt::ObjRef) -> ::std::result::Result<(), NamingContextFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.bind(n, obj),
-                None => Err(NamingContextFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn bind_context(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextFault> {
+        fn bind_context(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: __rt::ObjRef) -> ::std::result::Result<(), NamingContextFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.bind_context(n, nc),
-                None => Err(NamingContextFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn bind_new_context(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, NamingContextFault> {
+        fn bind_new_context(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<__rt::ObjRef, NamingContextFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.bind_new_context(n),
-                None => Err(NamingContextFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn destroy(&mut self, __at: &NamingContextTarget<'_>) -> Result<(), NamingContextFault> {
+        fn destroy(&mut self, __at: &NamingContextTarget<'_>) -> ::std::result::Result<(), NamingContextFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.destroy(),
-                None => Err(NamingContextFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn list(&mut self, __at: &NamingContextTarget<'_>, how_many: u32) -> Result<(crate::emitted::f_gen_naming_subset::CosNaming::BindingList, orbweaver_gen::rt::ObjRef), NamingContextFault> {
+        fn list(&mut self, __at: &NamingContextTarget<'_>, how_many: u32) -> ::std::result::Result<(crate::emitted::f_gen_naming_subset::CosNaming::BindingList, __rt::ObjRef), NamingContextFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.list(how_many),
-                None => Err(NamingContextFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn new_context(&mut self, __at: &NamingContextTarget<'_>) -> Result<orbweaver_gen::rt::ObjRef, NamingContextFault> {
+        fn new_context(&mut self, __at: &NamingContextTarget<'_>) -> ::std::result::Result<__rt::ObjRef, NamingContextFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.new_context(),
-                None => Err(NamingContextFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn rebind(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextFault> {
+        fn rebind(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: __rt::ObjRef) -> ::std::result::Result<(), NamingContextFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.rebind(n, obj),
-                None => Err(NamingContextFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn rebind_context(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextFault> {
+        fn rebind_context(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: __rt::ObjRef) -> ::std::result::Result<(), NamingContextFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.rebind_context(n, nc),
-                None => Err(NamingContextFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn resolve(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, NamingContextFault> {
+        fn resolve(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<__rt::ObjRef, NamingContextFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.resolve(n),
-                None => Err(NamingContextFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn unbind(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<(), NamingContextFault> {
+        fn unbind(&mut self, __at: &NamingContextTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<(), NamingContextFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.unbind(n),
-                None => Err(NamingContextFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
     }
     /// Serves `IDL:omg.org/CosNaming/NamingContext:1.0`: decodes the request, calls the servant, encodes the reply.
     ///
-    /// Hand it to `rt::Server::serve` in place of a hand-written
-    /// `rt::Dispatch`. What it answers, beyond the contract's own
+    /// Hand it to `orbweaver_gen::rt::Server::serve` in place of a hand-written
+    /// `orbweaver_gen::rt::Dispatch`. What it answers, beyond the contract's own
     /// operations:
     ///
     /// * `_is_a`, from the inheritance chain the registry resolved, because
@@ -1249,74 +1249,74 @@ pub mod CosNaming {
     impl<S: NamingContextServant> NamingContextSkeleton<S> {
         /// A skeleton serving `servant`'s objects under `refs`.
         ///
-        /// `refs` must be rooted at the key the `rt::Server` was bound
+        /// `refs` must be rooted at the key the `orbweaver_gen::rt::Server` was bound
         /// with, or nothing this skeleton parses will match what arrives.
-        pub fn new(refs: NamingContextRefs, servant: S) -> Self {
-            Self { servant, refs }
+        pub fn new(__refs: NamingContextRefs, __servant: S) -> Self {
+            Self { servant: __servant, refs: __refs }
         }
         /// The key scheme in force, for minting references to these objects.
         pub fn refs(&self) -> &NamingContextRefs { &self.refs }
     }
-    impl<S: NamingContextServant> rt::Dispatch for NamingContextSkeleton<S> {
+    impl<S: NamingContextServant> __rt::Dispatch for NamingContextSkeleton<S> {
         fn knows(&self, __object_key: &[u8]) -> bool {
             match self.refs.oid_of(__object_key) {
                 Some(__oid) => self.servant.knows(&NamingContextTarget::new(__oid, &self.refs)),
                 None => false,
             }
         }
-        fn forward(&mut self, __req: &rt::Request) -> Option<rt::Ior> {
+        fn forward(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Ior> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = NamingContextTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
         }
-        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+        fn redirect(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Forward> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = NamingContextTarget::new(__oid, &self.refs);
             self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<rt::DispatchBody, rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let __oid = self
                 .refs
                 .oid_of(&__req.object_key)
-                .ok_or_else(rt::SystemException::object_not_exist)?;
+                .ok_or_else(__rt::SystemException::object_not_exist)?;
             let __at = NamingContextTarget::new(__oid, &self.refs);
-            let mut __args = __req.body().map_err(|_| rt::SystemException::marshal())?;
+            let mut __args = __req.body().map_err(|_| __rt::SystemException::marshal())?;
             match __req.operation.as_str() {
                 "bind" => {
-                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let obj: orbweaver_gen::rt::ObjRef = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let obj: __rt::ObjRef = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.bind(&__at, n, obj) {
                         Ok(()) => {
-                            Ok(rt::DispatchBody::Return)
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "bind_context" => {
-                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let nc: orbweaver_gen::rt::ObjRef = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let nc: __rt::ObjRef = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.bind_context(&__at, n, nc) {
                         Ok(()) => {
-                            Ok(rt::DispatchBody::Return)
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "bind_new_context" => {
-                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.bind_new_context(&__at, n) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -1324,19 +1324,19 @@ pub mod CosNaming {
                 "destroy" => {
                     match self.servant.destroy(&__at) {
                         Ok(()) => {
-                            Ok(rt::DispatchBody::Return)
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "list" => {
-                    let how_many: u32 = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let how_many: u32 = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.list(&__at, how_many) {
                         Ok((__r0, __r1)) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            __r1.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            __r1.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -1344,82 +1344,82 @@ pub mod CosNaming {
                 "new_context" => {
                     match self.servant.new_context(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "rebind" => {
-                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let obj: orbweaver_gen::rt::ObjRef = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let obj: __rt::ObjRef = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.rebind(&__at, n, obj) {
                         Ok(()) => {
-                            Ok(rt::DispatchBody::Return)
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "rebind_context" => {
-                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let nc: orbweaver_gen::rt::ObjRef = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let nc: __rt::ObjRef = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.rebind_context(&__at, n, nc) {
                         Ok(()) => {
-                            Ok(rt::DispatchBody::Return)
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "resolve" => {
-                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.resolve(&__at, n) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "unbind" => {
-                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.unbind(&__at, n) {
                         Ok(()) => {
-                            Ok(rt::DispatchBody::Return)
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "_is_a" => {
-                    let __id: String = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let __id: ::std::string::String = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     let __answer = matches!(__id.as_str(),
                         "IDL:omg.org/CosNaming/NamingContext:1.0" |
-                        rt::OBJECT_ID);
-                    __answer.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                        __rt::OBJECT_ID);
+                    __answer.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
                 "_non_existent" => {
-                    false.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                    false.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
-                _ => Err(rt::SystemException::bad_operation()),
+                _ => Err(__rt::SystemException::bad_operation()),
             }
         }
         fn dispatch(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<(), rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<(), __rt::SystemException> {
             match self.dispatch_body(__req, __out)? {
-                rt::DispatchBody::Return => Ok(()),
-                rt::DispatchBody::UserException => {
-                    Err(rt::SystemException::unknown_user_exception())
+                __rt::DispatchBody::Return => Ok(()),
+                __rt::DispatchBody::UserException => {
+                    Err(__rt::SystemException::unknown_user_exception())
                 }
             }
         }
@@ -1436,21 +1436,21 @@ pub mod CosNaming {
     /// `Connection` inside the trust boundary, or over the guarded
     /// wrapper at it — a stub hard-wired to the transport would be the
     /// §4.7 bypass in compiled form.
-    pub struct NamingContextExtClient<C: rt::Invoker> {
+    pub struct NamingContextExtClient<C: __rt::Invoker> {
         /// What calls travel over.
         pub conn: C,
     }
-    impl<C: rt::Invoker> NamingContextExtClient<C> {
+    impl<C: __rt::Invoker> NamingContextExtClient<C> {
         /// A stub over an open invoker.
-        pub fn new(conn: C) -> Self { Self { conn } }
+        pub fn new(__conn: C) -> Self { Self { conn: __conn } }
         /// Binds a name to an object in this context
         ///
         /// `bind` on the wire.
-        pub fn bind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: orbweaver_gen::rt::ObjRef) -> Result<(), rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn bind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: __rt::ObjRef) -> ::std::result::Result<(), __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             n.put(&mut __probe)?;
             obj.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("bind", |__e| {
                 let _ = n.put(__e);
                 let _ = obj.put(__e);
@@ -1461,11 +1461,11 @@ pub mod CosNaming {
         /// Binds a name to a context served elsewhere
         ///
         /// `bind_context` on the wire.
-        pub fn bind_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: orbweaver_gen::rt::ObjRef) -> Result<(), rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn bind_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: __rt::ObjRef) -> ::std::result::Result<(), __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             n.put(&mut __probe)?;
             nc.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("bind_context", |__e| {
                 let _ = n.put(__e);
                 let _ = nc.put(__e);
@@ -1476,21 +1476,21 @@ pub mod CosNaming {
         /// A fresh context, bound under the given name
         ///
         /// `bind_new_context` on the wire.
-        pub fn bind_new_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn bind_new_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<__rt::ObjRef, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             n.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("bind_new_context", |__e| {
                 let _ = n.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// Discards this context, which must already be empty
         ///
         /// `destroy` on the wire.
-        pub fn destroy(&mut self) -> Result<(), rt::GiopError> {
+        pub fn destroy(&mut self) -> ::std::result::Result<(), __rt::GiopError> {
             let __reply = self.conn.invoke("destroy", |__e| {
             })?;
             let _ = __reply;
@@ -1499,36 +1499,36 @@ pub mod CosNaming {
         /// Up to how_many of this context's own bindings
         ///
         /// `list` on the wire.
-        pub fn list(&mut self, how_many: u32) -> Result<(crate::emitted::f_gen_naming_subset::CosNaming::BindingList, orbweaver_gen::rt::ObjRef), rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn list(&mut self, how_many: u32) -> ::std::result::Result<(crate::emitted::f_gen_naming_subset::CosNaming::BindingList, __rt::ObjRef), __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             how_many.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("list", |__e| {
                 let _ = how_many.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
-            let __r1 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
+            let __r1 = __Cdr::get(&mut __body)?;
             Ok((__r0, __r1))
         }
         /// A fresh context, bound to nothing
         ///
         /// `new_context` on the wire.
-        pub fn new_context(&mut self) -> Result<orbweaver_gen::rt::ObjRef, rt::GiopError> {
+        pub fn new_context(&mut self) -> ::std::result::Result<__rt::ObjRef, __rt::GiopError> {
             let __reply = self.conn.invoke("new_context", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// Binds a name to an object, replacing any object already there
         ///
         /// `rebind` on the wire.
-        pub fn rebind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: orbweaver_gen::rt::ObjRef) -> Result<(), rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn rebind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: __rt::ObjRef) -> ::std::result::Result<(), __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             n.put(&mut __probe)?;
             obj.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("rebind", |__e| {
                 let _ = n.put(__e);
                 let _ = obj.put(__e);
@@ -1539,11 +1539,11 @@ pub mod CosNaming {
         /// Binds a name to a context, replacing any context already there
         ///
         /// `rebind_context` on the wire.
-        pub fn rebind_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: orbweaver_gen::rt::ObjRef) -> Result<(), rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn rebind_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: __rt::ObjRef) -> ::std::result::Result<(), __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             n.put(&mut __probe)?;
             nc.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("rebind_context", |__e| {
                 let _ = n.put(__e);
                 let _ = nc.put(__e);
@@ -1554,82 +1554,82 @@ pub mod CosNaming {
         /// The object or context a path names
         ///
         /// `resolve` on the wire.
-        pub fn resolve(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn resolve(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<__rt::ObjRef, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             n.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("resolve", |__e| {
                 let _ = n.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// Resolves a stringified path in one call
         ///
         /// `resolve_str` on the wire.
-        pub fn resolve_str(&mut self, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> Result<orbweaver_gen::rt::ObjRef, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn resolve_str(&mut self, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> ::std::result::Result<__rt::ObjRef, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             sn.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("resolve_str", |__e| {
                 let _ = sn.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// The path a stringified form denotes
         ///
         /// `to_name` on the wire.
-        pub fn to_name(&mut self, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> Result<crate::emitted::f_gen_naming_subset::CosNaming::Name, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn to_name(&mut self, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> ::std::result::Result<crate::emitted::f_gen_naming_subset::CosNaming::Name, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             sn.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("to_name", |__e| {
                 let _ = sn.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// The stringified form of a path
         ///
         /// `to_string` on the wire.
-        pub fn to_string(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn to_string(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             n.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("to_string", |__e| {
                 let _ = n.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// A corbaname URL naming sn at addr; a pure string operation
         ///
         /// `to_url` on the wire.
-        pub fn to_url(&mut self, addr: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::Address, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> Result<crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::URLString, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn to_url(&mut self, addr: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::Address, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> ::std::result::Result<crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::URLString, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             addr.put(&mut __probe)?;
             sn.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("to_url", |__e| {
                 let _ = addr.put(__e);
                 let _ = sn.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// Removes a binding; what it named is untouched
         ///
         /// `unbind` on the wire.
-        pub fn unbind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<(), rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn unbind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<(), __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             n.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("unbind", |__e| {
                 let _ = n.put(__e);
             })?;
@@ -1643,7 +1643,7 @@ pub mod CosNaming {
     /// `System` is always here, whatever the contract declares: an unknown
     /// key is `OBJECT_NOT_EXIST`, a refused call is `NO_PERMISSION`, a
     /// temporary refusal is `TRANSIENT`, and IDL has no way to declare any
-    /// of them. Build one with `rt::raise::*`, which does not produce a
+    /// of them. Build one with `orbweaver_gen::rt::raise::*`, which does not produce a
     /// `SystemException` until the completion status is stated — the field
     /// that tells the caller whether a retry is safe, and the one thing a
     /// generator cannot know for a servant.
@@ -1652,12 +1652,12 @@ pub mod CosNaming {
     /// clause of this interface or of one it inherits. `write` puts the
     /// body §9.4.3.1 describes — repository id first, then the members —
     /// which is exactly what the client side reads back out of
-    /// `rt::GiopError::UserException`.
+    /// `orbweaver_gen::rt::GiopError::UserException`.
     #[derive(Debug, Clone)]
     pub enum NamingContextExtFault {
         /// A CORBA system exception, with the completion status the
         /// servant chose. Travels as a `SystemException` reply.
-        System(rt::SystemException),
+        System(__rt::SystemException),
         /// IDL exception `IDL:omg.org/CosNaming/NamingContext/AlreadyBound:1.0`.
         AlreadyBound(crate::emitted::f_gen_naming_subset::CosNaming::NamingContext::AlreadyBound),
         /// IDL exception `IDL:omg.org/CosNaming/NamingContext/InvalidName:1.0`.
@@ -1669,12 +1669,12 @@ pub mod CosNaming {
         /// IDL exception `IDL:omg.org/CosNaming/NamingContextExt/InvalidAddress:1.0`.
         InvalidAddress(crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::InvalidAddress),
     }
-    impl From<rt::SystemException> for NamingContextExtFault {
-        fn from(__ex: rt::SystemException) -> Self {
+    impl ::std::convert::From<__rt::SystemException> for NamingContextExtFault {
+        fn from(__ex: __rt::SystemException) -> Self {
             Self::System(__ex)
         }
     }
-    impl PartialEq for NamingContextExtFault {
+    impl ::std::cmp::PartialEq for NamingContextExtFault {
         fn eq(&self, __other: &Self) -> bool {
             match (self, __other) {
                 (Self::System(__a), Self::System(__b)) => {
@@ -1694,7 +1694,7 @@ pub mod CosNaming {
     impl NamingContextExtFault {
         /// The repository id of the user exception this fault carries, or
         /// `None` for a system exception, which carries its own.
-        pub fn user_id(&self) -> Option<&'static str> {
+        pub fn user_id(&self) -> ::std::option::Option<&'static str> {
             match self {
                 Self::System(_) => None,
                 Self::AlreadyBound(_) => Some("IDL:omg.org/CosNaming/NamingContext/AlreadyBound:1.0"),
@@ -1712,33 +1712,33 @@ pub mod CosNaming {
         /// dispatcher hands it to the server to encode instead. That is also why
         /// nothing may be written before the fault is known — the whole buffer
         /// travels under one status.
-        pub fn write(&self, __out: &mut rt::Encoder) -> Result<rt::DispatchBody, rt::SystemException> {
+        pub fn write(&self, __out: &mut __rt::Encoder) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             match self {
                 Self::System(__ex) => Err(__ex.clone()),
                 Self::AlreadyBound(__v) => {
                     __out.put_str("IDL:omg.org/CosNaming/NamingContext/AlreadyBound:1.0");
-                    __v.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::UserException)
+                    __v.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::UserException)
                 }
                 Self::InvalidName(__v) => {
                     __out.put_str("IDL:omg.org/CosNaming/NamingContext/InvalidName:1.0");
-                    __v.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::UserException)
+                    __v.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::UserException)
                 }
                 Self::NotEmpty(__v) => {
                     __out.put_str("IDL:omg.org/CosNaming/NamingContext/NotEmpty:1.0");
-                    __v.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::UserException)
+                    __v.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::UserException)
                 }
                 Self::NotFound(__v) => {
                     __out.put_str("IDL:omg.org/CosNaming/NamingContext/NotFound:1.0");
-                    __v.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::UserException)
+                    __v.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::UserException)
                 }
                 Self::InvalidAddress(__v) => {
                     __out.put_str("IDL:omg.org/CosNaming/NamingContextExt/InvalidAddress:1.0");
-                    __v.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::UserException)
+                    __v.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::UserException)
                 }
             }
         }
@@ -1752,7 +1752,7 @@ pub mod CosNaming {
     /// root ++ "/NamingContextExt/" ++ <oid>    the object named <oid>
     /// ```
     ///
-    /// `root` is the key the `rt::Server` was bound with. The derivation is
+    /// `root` is the key the `orbweaver_gen::rt::Server` was bound with. The derivation is
     /// reversible, so no table of minted keys exists: a reference survives a
     /// restart, and a client cannot make the process grow by looking things
     /// up. The oid is the *whole* remainder after the prefix, so it may
@@ -1766,14 +1766,14 @@ pub mod CosNaming {
     /// # Minting
     ///
     /// `reference` and `ior` answer with a real IIOP profile, built by
-    /// `rt::ObjectHome` — the servant never assembles one, which is why the
+    /// `orbweaver_gen::rt::ObjectHome` — the servant never assembles one, which is why the
     /// GIOP version and profile shape are still decided in exactly one
     /// place. `nil` is the nil reference (§9.3.6), the truthful answer when
     /// there is no such object.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct NamingContextExtRefs {
-        home: rt::ObjectHome,
-        infix: String,
+        home: __rt::ObjectHome,
+        infix: ::std::string::String,
     }
     impl NamingContextExtRefs {
         /// The repository id minted references advertise.
@@ -1781,42 +1781,42 @@ pub mod CosNaming {
         /// What separates the root key from the oid.
         pub const KEY_INFIX: &'static str = "/NamingContextExt/";
         /// The scheme rooted at `home`, with the generated infix.
-        pub fn new(home: rt::ObjectHome) -> Self {
-            Self { home, infix: Self::KEY_INFIX.to_owned() }
+        pub fn new(__home: __rt::ObjectHome) -> Self {
+            Self { home: __home, infix: Self::KEY_INFIX.to_owned() }
         }
         /// The same, with a key space this interface shares with another.
         ///
         /// Two skeletons given the same infix must disagree about `knows`
-        /// for every key, or `rt::Servants` will hand a request to
+        /// for every key, or `orbweaver_gen::rt::Servants` will hand a request to
         /// whichever was added first. Sharing a key space is a claim that
         /// the two answer for disjoint sets of objects.
-        pub fn with_infix(home: rt::ObjectHome, infix: impl Into<String>) -> Self {
-            Self { home, infix: infix.into() }
+        pub fn with_infix(__home: __rt::ObjectHome, __infix: impl ::std::convert::Into<::std::string::String>) -> Self {
+            Self { home: __home, infix: __infix.into() }
         }
         /// Where these objects are published.
-        pub fn home(&self) -> &rt::ObjectHome { &self.home }
+        pub fn home(&self) -> &__rt::ObjectHome { &self.home }
         /// The infix in use, generated or overridden.
         pub fn infix(&self) -> &str { &self.infix }
         /// The default object's key, which is also every other key's prefix.
         pub fn root_key(&self) -> &[u8] { self.home.root_key() }
         /// The object key for `oid`; the empty oid is the root key.
-        pub fn key_of(&self, oid: &str) -> Vec<u8> {
-            self.home.key_of(&self.infix, oid)
+        pub fn key_of(&self, __oid: &str) -> ::std::vec::Vec<u8> {
+            self.home.key_of(&self.infix, __oid)
         }
         /// The oid a key addresses, or `None` if it is not one of ours.
-        pub fn oid_of<'a>(&self, key: &'a [u8]) -> Option<&'a str> {
-            self.home.oid_of(&self.infix, key)
+        pub fn oid_of<'a>(&self, __key: &'a [u8]) -> ::std::option::Option<&'a str> {
+            self.home.oid_of(&self.infix, __key)
         }
         /// A reference to `oid`, in the form an operation returns.
-        pub fn reference(&self, oid: &str) -> rt::ObjRef {
-            self.home.reference(Self::TYPE_ID, self.key_of(oid))
+        pub fn reference(&self, __oid: &str) -> __rt::ObjRef {
+            self.home.reference(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The same reference, in the form `LOCATION_FORWARD` carries.
-        pub fn ior(&self, oid: &str) -> rt::Ior {
-            self.home.ior(Self::TYPE_ID, self.key_of(oid))
+        pub fn ior(&self, __oid: &str) -> __rt::Ior {
+            self.home.ior(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The nil reference: there is no such object.
-        pub fn nil() -> rt::ObjRef { rt::ObjectHome::nil() }
+        pub fn nil() -> __rt::ObjRef { __rt::ObjectHome::nil() }
     }
     /// Which `IDL:omg.org/CosNaming/NamingContextExt:1.0` a call is addressed to.
     ///
@@ -1835,8 +1835,8 @@ pub mod CosNaming {
     }
     impl<'a> NamingContextExtTarget<'a> {
         /// The identity `oid` under `refs`.
-        pub fn new(oid: &'a str, refs: &'a NamingContextExtRefs) -> Self {
-            Self { oid, refs }
+        pub fn new(__oid: &'a str, __refs: &'a NamingContextExtRefs) -> Self {
+            Self { oid: __oid, refs: __refs }
         }
         /// Which object this is. The empty oid is the default object,
         /// addressed by the bare root key the server was bound with.
@@ -1846,11 +1846,11 @@ pub mod CosNaming {
         /// The key scheme, for minting references into other key spaces.
         pub fn refs(&self) -> &'a NamingContextExtRefs { self.refs }
         /// The raw object key this call arrived on.
-        pub fn key(&self) -> Vec<u8> { self.refs.key_of(self.oid) }
+        pub fn key(&self) -> ::std::vec::Vec<u8> { self.refs.key_of(self.oid) }
         /// A reference to *this* object, for handing back one's own address.
-        pub fn reference(&self) -> rt::ObjRef { self.refs.reference(self.oid) }
+        pub fn reference(&self) -> __rt::ObjRef { self.refs.reference(self.oid) }
         /// A reference to another object of this interface.
-        pub fn sibling(&self, oid: &str) -> rt::ObjRef { self.refs.reference(oid) }
+        pub fn sibling(&self, __oid: &str) -> __rt::ObjRef { self.refs.reference(__oid) }
     }
     /// A naming context that also speaks the stringified name surface
     ///
@@ -1859,10 +1859,10 @@ pub mod CosNaming {
     /// One method per operation and per attribute accessor, taking decoded
     /// Rust arguments. Nothing here mentions GIOP: the wire is entirely the
     /// business of `NamingContextExtSkeleton`, which adapts this trait to
-    /// `rt::Dispatch`.
+    /// `orbweaver_gen::rt::Dispatch`.
     ///
     /// Every method may fail with a `NamingContextExtFault`: a declared user exception,
-    /// or a system exception built with `rt::raise::*` — the vocabulary
+    /// or a system exception built with `orbweaver_gen::rt::raise::*` — the vocabulary
     /// (`OBJECT_NOT_EXIST`, `NO_PERMISSION`, `BAD_PARAM`, `TRANSIENT`) that
     /// no contract declares and every servant needs.
     ///
@@ -1886,7 +1886,7 @@ pub mod CosNaming {
     pub trait NamingContextExtServant {
         /// Whether this servant answers for the object `__at` names.
         ///
-        /// **Required, with no default.** `rt::Dispatch::knows` defaults to
+        /// **Required, with no default.** `orbweaver_gen::rt::Dispatch::knows` defaults to
         /// accepting everything, which is right for a process with one object and
         /// is exactly what stopped a generated skeleton from ever holding more
         /// than one: an unknown key was served as if it were the only object.
@@ -1896,7 +1896,7 @@ pub mod CosNaming {
         ///
         /// A single-object servant writes `__at.is_default()`. A `false` here
         /// becomes `OBJECT_NOT_EXIST` for a request and `UNKNOWN_OBJECT` for a
-        /// `LocateRequest`, and is also how `rt::Servants` picks between
+        /// `LocateRequest`, and is also how `orbweaver_gen::rt::Servants` picks between
         /// skeletons sharing one key space.
         fn knows(&self, __at: &NamingContextExtTarget<'_>) -> bool;
         /// Where this request should be sent instead, if anywhere.
@@ -1921,14 +1921,14 @@ pub mod CosNaming {
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
         /// the address. This hook is the *temporary* forward; an object that has
         /// moved for good says so through `redirect`, below.
-        fn forward(&mut self, __at: &NamingContextExtTarget<'_>) -> Option<rt::Ior> {
+        fn forward(&mut self, __at: &NamingContextExtTarget<'_>) -> ::std::option::Option<__rt::Ior> {
             let _ = __at;
             None
         }
         /// Where this request should be sent instead, and whether for good.
         ///
-        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
-        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// The method the runtime actually asks. `orbweaver_gen::rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `orbweaver_gen::rt::Forward::Permanent` is a
         /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
         /// the temporary form, its reply-status enumeration having no other),
         /// and is the one thing a servant can say that lets a client replace the
@@ -1937,65 +1937,65 @@ pub mod CosNaming {
         /// Defaults to `forward` wrapped as temporary, so a servant that
         /// overrides only `forward` behaves as it always did. Override this one
         /// to say *permanent*; there is no reason to override both.
-        fn redirect(&mut self, __at: &NamingContextExtTarget<'_>) -> Option<rt::Forward> {
-            self.forward(__at).map(rt::Forward::Temporary)
+        fn redirect(&mut self, __at: &NamingContextExtTarget<'_>) -> ::std::option::Option<__rt::Forward> {
+            self.forward(__at).map(__rt::Forward::Temporary)
         }
         /// Binds a name to an object in this context
         ///
         /// `bind` on the wire.
-        fn bind(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextExtFault>;
+        fn bind(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: __rt::ObjRef) -> ::std::result::Result<(), NamingContextExtFault>;
         /// Binds a name to a context served elsewhere
         ///
         /// `bind_context` on the wire.
-        fn bind_context(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextExtFault>;
+        fn bind_context(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: __rt::ObjRef) -> ::std::result::Result<(), NamingContextExtFault>;
         /// A fresh context, bound under the given name
         ///
         /// `bind_new_context` on the wire.
-        fn bind_new_context(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, NamingContextExtFault>;
+        fn bind_new_context(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<__rt::ObjRef, NamingContextExtFault>;
         /// Discards this context, which must already be empty
         ///
         /// `destroy` on the wire.
-        fn destroy(&mut self, __at: &NamingContextExtTarget<'_>) -> Result<(), NamingContextExtFault>;
+        fn destroy(&mut self, __at: &NamingContextExtTarget<'_>) -> ::std::result::Result<(), NamingContextExtFault>;
         /// Up to how_many of this context's own bindings
         ///
         /// `list` on the wire.
-        fn list(&mut self, __at: &NamingContextExtTarget<'_>, how_many: u32) -> Result<(crate::emitted::f_gen_naming_subset::CosNaming::BindingList, orbweaver_gen::rt::ObjRef), NamingContextExtFault>;
+        fn list(&mut self, __at: &NamingContextExtTarget<'_>, how_many: u32) -> ::std::result::Result<(crate::emitted::f_gen_naming_subset::CosNaming::BindingList, __rt::ObjRef), NamingContextExtFault>;
         /// A fresh context, bound to nothing
         ///
         /// `new_context` on the wire.
-        fn new_context(&mut self, __at: &NamingContextExtTarget<'_>) -> Result<orbweaver_gen::rt::ObjRef, NamingContextExtFault>;
+        fn new_context(&mut self, __at: &NamingContextExtTarget<'_>) -> ::std::result::Result<__rt::ObjRef, NamingContextExtFault>;
         /// Binds a name to an object, replacing any object already there
         ///
         /// `rebind` on the wire.
-        fn rebind(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextExtFault>;
+        fn rebind(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: __rt::ObjRef) -> ::std::result::Result<(), NamingContextExtFault>;
         /// Binds a name to a context, replacing any context already there
         ///
         /// `rebind_context` on the wire.
-        fn rebind_context(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextExtFault>;
+        fn rebind_context(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: __rt::ObjRef) -> ::std::result::Result<(), NamingContextExtFault>;
         /// The object or context a path names
         ///
         /// `resolve` on the wire.
-        fn resolve(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, NamingContextExtFault>;
+        fn resolve(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<__rt::ObjRef, NamingContextExtFault>;
         /// Resolves a stringified path in one call
         ///
         /// `resolve_str` on the wire.
-        fn resolve_str(&mut self, __at: &NamingContextExtTarget<'_>, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> Result<orbweaver_gen::rt::ObjRef, NamingContextExtFault>;
+        fn resolve_str(&mut self, __at: &NamingContextExtTarget<'_>, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> ::std::result::Result<__rt::ObjRef, NamingContextExtFault>;
         /// The path a stringified form denotes
         ///
         /// `to_name` on the wire.
-        fn to_name(&mut self, __at: &NamingContextExtTarget<'_>, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> Result<crate::emitted::f_gen_naming_subset::CosNaming::Name, NamingContextExtFault>;
+        fn to_name(&mut self, __at: &NamingContextExtTarget<'_>, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> ::std::result::Result<crate::emitted::f_gen_naming_subset::CosNaming::Name, NamingContextExtFault>;
         /// The stringified form of a path
         ///
         /// `to_string` on the wire.
-        fn to_string(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName, NamingContextExtFault>;
+        fn to_string(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName, NamingContextExtFault>;
         /// A corbaname URL naming sn at addr; a pure string operation
         ///
         /// `to_url` on the wire.
-        fn to_url(&mut self, __at: &NamingContextExtTarget<'_>, addr: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::Address, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> Result<crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::URLString, NamingContextExtFault>;
+        fn to_url(&mut self, __at: &NamingContextExtTarget<'_>, addr: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::Address, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> ::std::result::Result<crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::URLString, NamingContextExtFault>;
         /// Removes a binding; what it named is untouched
         ///
         /// `unbind` on the wire.
-        fn unbind(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<(), NamingContextExtFault>;
+        fn unbind(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<(), NamingContextExtFault>;
     }
     /// One object of `IDL:omg.org/CosNaming/NamingContextExt:1.0`, for a servant that keeps a value per object.
     ///
@@ -2014,59 +2014,59 @@ pub mod CosNaming {
         /// Binds a name to an object in this context
         ///
         /// `bind` on the wire.
-        fn bind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextExtFault>;
+        fn bind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: __rt::ObjRef) -> ::std::result::Result<(), NamingContextExtFault>;
         /// Binds a name to a context served elsewhere
         ///
         /// `bind_context` on the wire.
-        fn bind_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextExtFault>;
+        fn bind_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: __rt::ObjRef) -> ::std::result::Result<(), NamingContextExtFault>;
         /// A fresh context, bound under the given name
         ///
         /// `bind_new_context` on the wire.
-        fn bind_new_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, NamingContextExtFault>;
+        fn bind_new_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<__rt::ObjRef, NamingContextExtFault>;
         /// Discards this context, which must already be empty
         ///
         /// `destroy` on the wire.
-        fn destroy(&mut self) -> Result<(), NamingContextExtFault>;
+        fn destroy(&mut self) -> ::std::result::Result<(), NamingContextExtFault>;
         /// Up to how_many of this context's own bindings
         ///
         /// `list` on the wire.
-        fn list(&mut self, how_many: u32) -> Result<(crate::emitted::f_gen_naming_subset::CosNaming::BindingList, orbweaver_gen::rt::ObjRef), NamingContextExtFault>;
+        fn list(&mut self, how_many: u32) -> ::std::result::Result<(crate::emitted::f_gen_naming_subset::CosNaming::BindingList, __rt::ObjRef), NamingContextExtFault>;
         /// A fresh context, bound to nothing
         ///
         /// `new_context` on the wire.
-        fn new_context(&mut self) -> Result<orbweaver_gen::rt::ObjRef, NamingContextExtFault>;
+        fn new_context(&mut self) -> ::std::result::Result<__rt::ObjRef, NamingContextExtFault>;
         /// Binds a name to an object, replacing any object already there
         ///
         /// `rebind` on the wire.
-        fn rebind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextExtFault>;
+        fn rebind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: __rt::ObjRef) -> ::std::result::Result<(), NamingContextExtFault>;
         /// Binds a name to a context, replacing any context already there
         ///
         /// `rebind_context` on the wire.
-        fn rebind_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextExtFault>;
+        fn rebind_context(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: __rt::ObjRef) -> ::std::result::Result<(), NamingContextExtFault>;
         /// The object or context a path names
         ///
         /// `resolve` on the wire.
-        fn resolve(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, NamingContextExtFault>;
+        fn resolve(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<__rt::ObjRef, NamingContextExtFault>;
         /// Resolves a stringified path in one call
         ///
         /// `resolve_str` on the wire.
-        fn resolve_str(&mut self, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> Result<orbweaver_gen::rt::ObjRef, NamingContextExtFault>;
+        fn resolve_str(&mut self, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> ::std::result::Result<__rt::ObjRef, NamingContextExtFault>;
         /// The path a stringified form denotes
         ///
         /// `to_name` on the wire.
-        fn to_name(&mut self, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> Result<crate::emitted::f_gen_naming_subset::CosNaming::Name, NamingContextExtFault>;
+        fn to_name(&mut self, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> ::std::result::Result<crate::emitted::f_gen_naming_subset::CosNaming::Name, NamingContextExtFault>;
         /// The stringified form of a path
         ///
         /// `to_string` on the wire.
-        fn to_string(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName, NamingContextExtFault>;
+        fn to_string(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName, NamingContextExtFault>;
         /// A corbaname URL naming sn at addr; a pure string operation
         ///
         /// `to_url` on the wire.
-        fn to_url(&mut self, addr: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::Address, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> Result<crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::URLString, NamingContextExtFault>;
+        fn to_url(&mut self, addr: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::Address, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> ::std::result::Result<crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::URLString, NamingContextExtFault>;
         /// Removes a binding; what it named is untouched
         ///
         /// `unbind` on the wire.
-        fn unbind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<(), NamingContextExtFault>;
+        fn unbind(&mut self, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<(), NamingContextExtFault>;
     }
     /// A map from oid to one `NamingContextExtObject`, serving `IDL:omg.org/CosNaming/NamingContextExt:1.0`.
     ///
@@ -2080,34 +2080,34 @@ pub mod CosNaming {
     /// bare root key addresses. A one-object process inserts exactly that.
     #[derive(Debug, Clone)]
     pub struct NamingContextExtObjects<S: NamingContextExtObject> {
-        objects: std::collections::BTreeMap<String, S>,
+        objects: ::std::collections::BTreeMap<::std::string::String, S>,
     }
-    impl<S: NamingContextExtObject> Default for NamingContextExtObjects<S> {
+    impl<S: NamingContextExtObject> ::std::default::Default for NamingContextExtObjects<S> {
         fn default() -> Self {
-            Self { objects: std::collections::BTreeMap::new() }
+            Self { objects: ::std::collections::BTreeMap::new() }
         }
     }
     impl<S: NamingContextExtObject> NamingContextExtObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { <Self as std::default::Default>::default() }
+        pub fn new() -> Self { <Self as ::std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
-        pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
-            self.objects.insert(oid.into(), object)
+        pub fn insert(&mut self, __oid: impl ::std::convert::Into<::std::string::String>, __object: S) -> ::std::option::Option<S> {
+            self.objects.insert(__oid.into(), __object)
         }
         /// Removes an object, after which its key is `OBJECT_NOT_EXIST`.
-        pub fn remove(&mut self, oid: &str) -> Option<S> {
-            self.objects.remove(oid)
+        pub fn remove(&mut self, __oid: &str) -> ::std::option::Option<S> {
+            self.objects.remove(__oid)
         }
         /// The object under `oid`, if there is one.
-        pub fn get(&self, oid: &str) -> Option<&S> { self.objects.get(oid) }
+        pub fn get(&self, __oid: &str) -> ::std::option::Option<&S> { self.objects.get(__oid) }
         /// The object under `oid`, mutably.
-        pub fn get_mut(&mut self, oid: &str) -> Option<&mut S> {
-            self.objects.get_mut(oid)
+        pub fn get_mut(&mut self, __oid: &str) -> ::std::option::Option<&mut S> {
+            self.objects.get_mut(__oid)
         }
         /// Every oid held, in sorted order.
-        pub fn oids(&self) -> impl Iterator<Item = &str> {
-            self.objects.keys().map(String::as_str)
+        pub fn oids(&self) -> impl ::std::iter::Iterator<Item = &str> {
+            self.objects.keys().map(::std::string::String::as_str)
         }
         /// How many objects are held.
         pub fn len(&self) -> usize { self.objects.len() }
@@ -2118,95 +2118,95 @@ pub mod CosNaming {
         fn knows(&self, __at: &NamingContextExtTarget<'_>) -> bool {
             self.objects.contains_key(__at.oid())
         }
-        fn bind(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextExtFault> {
+        fn bind(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: __rt::ObjRef) -> ::std::result::Result<(), NamingContextExtFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.bind(n, obj),
-                None => Err(NamingContextExtFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextExtFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn bind_context(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextExtFault> {
+        fn bind_context(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: __rt::ObjRef) -> ::std::result::Result<(), NamingContextExtFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.bind_context(n, nc),
-                None => Err(NamingContextExtFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextExtFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn bind_new_context(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, NamingContextExtFault> {
+        fn bind_new_context(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<__rt::ObjRef, NamingContextExtFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.bind_new_context(n),
-                None => Err(NamingContextExtFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextExtFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn destroy(&mut self, __at: &NamingContextExtTarget<'_>) -> Result<(), NamingContextExtFault> {
+        fn destroy(&mut self, __at: &NamingContextExtTarget<'_>) -> ::std::result::Result<(), NamingContextExtFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.destroy(),
-                None => Err(NamingContextExtFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextExtFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn list(&mut self, __at: &NamingContextExtTarget<'_>, how_many: u32) -> Result<(crate::emitted::f_gen_naming_subset::CosNaming::BindingList, orbweaver_gen::rt::ObjRef), NamingContextExtFault> {
+        fn list(&mut self, __at: &NamingContextExtTarget<'_>, how_many: u32) -> ::std::result::Result<(crate::emitted::f_gen_naming_subset::CosNaming::BindingList, __rt::ObjRef), NamingContextExtFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.list(how_many),
-                None => Err(NamingContextExtFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextExtFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn new_context(&mut self, __at: &NamingContextExtTarget<'_>) -> Result<orbweaver_gen::rt::ObjRef, NamingContextExtFault> {
+        fn new_context(&mut self, __at: &NamingContextExtTarget<'_>) -> ::std::result::Result<__rt::ObjRef, NamingContextExtFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.new_context(),
-                None => Err(NamingContextExtFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextExtFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn rebind(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextExtFault> {
+        fn rebind(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, obj: __rt::ObjRef) -> ::std::result::Result<(), NamingContextExtFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.rebind(n, obj),
-                None => Err(NamingContextExtFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextExtFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn rebind_context(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: orbweaver_gen::rt::ObjRef) -> Result<(), NamingContextExtFault> {
+        fn rebind_context(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name, nc: __rt::ObjRef) -> ::std::result::Result<(), NamingContextExtFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.rebind_context(n, nc),
-                None => Err(NamingContextExtFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextExtFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn resolve(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<orbweaver_gen::rt::ObjRef, NamingContextExtFault> {
+        fn resolve(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<__rt::ObjRef, NamingContextExtFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.resolve(n),
-                None => Err(NamingContextExtFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextExtFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn resolve_str(&mut self, __at: &NamingContextExtTarget<'_>, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> Result<orbweaver_gen::rt::ObjRef, NamingContextExtFault> {
+        fn resolve_str(&mut self, __at: &NamingContextExtTarget<'_>, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> ::std::result::Result<__rt::ObjRef, NamingContextExtFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.resolve_str(sn),
-                None => Err(NamingContextExtFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextExtFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn to_name(&mut self, __at: &NamingContextExtTarget<'_>, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> Result<crate::emitted::f_gen_naming_subset::CosNaming::Name, NamingContextExtFault> {
+        fn to_name(&mut self, __at: &NamingContextExtTarget<'_>, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> ::std::result::Result<crate::emitted::f_gen_naming_subset::CosNaming::Name, NamingContextExtFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.to_name(sn),
-                None => Err(NamingContextExtFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextExtFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn to_string(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName, NamingContextExtFault> {
+        fn to_string(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName, NamingContextExtFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.to_string(n),
-                None => Err(NamingContextExtFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextExtFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn to_url(&mut self, __at: &NamingContextExtTarget<'_>, addr: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::Address, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> Result<crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::URLString, NamingContextExtFault> {
+        fn to_url(&mut self, __at: &NamingContextExtTarget<'_>, addr: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::Address, sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName) -> ::std::result::Result<crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::URLString, NamingContextExtFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.to_url(addr, sn),
-                None => Err(NamingContextExtFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextExtFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn unbind(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> Result<(), NamingContextExtFault> {
+        fn unbind(&mut self, __at: &NamingContextExtTarget<'_>, n: crate::emitted::f_gen_naming_subset::CosNaming::Name) -> ::std::result::Result<(), NamingContextExtFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.unbind(n),
-                None => Err(NamingContextExtFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(NamingContextExtFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
     }
     /// Serves `IDL:omg.org/CosNaming/NamingContextExt:1.0`: decodes the request, calls the servant, encodes the reply.
     ///
-    /// Hand it to `rt::Server::serve` in place of a hand-written
-    /// `rt::Dispatch`. What it answers, beyond the contract's own
+    /// Hand it to `orbweaver_gen::rt::Server::serve` in place of a hand-written
+    /// `orbweaver_gen::rt::Dispatch`. What it answers, beyond the contract's own
     /// operations:
     ///
     /// * `_is_a`, from the inheritance chain the registry resolved, because
@@ -2237,74 +2237,74 @@ pub mod CosNaming {
     impl<S: NamingContextExtServant> NamingContextExtSkeleton<S> {
         /// A skeleton serving `servant`'s objects under `refs`.
         ///
-        /// `refs` must be rooted at the key the `rt::Server` was bound
+        /// `refs` must be rooted at the key the `orbweaver_gen::rt::Server` was bound
         /// with, or nothing this skeleton parses will match what arrives.
-        pub fn new(refs: NamingContextExtRefs, servant: S) -> Self {
-            Self { servant, refs }
+        pub fn new(__refs: NamingContextExtRefs, __servant: S) -> Self {
+            Self { servant: __servant, refs: __refs }
         }
         /// The key scheme in force, for minting references to these objects.
         pub fn refs(&self) -> &NamingContextExtRefs { &self.refs }
     }
-    impl<S: NamingContextExtServant> rt::Dispatch for NamingContextExtSkeleton<S> {
+    impl<S: NamingContextExtServant> __rt::Dispatch for NamingContextExtSkeleton<S> {
         fn knows(&self, __object_key: &[u8]) -> bool {
             match self.refs.oid_of(__object_key) {
                 Some(__oid) => self.servant.knows(&NamingContextExtTarget::new(__oid, &self.refs)),
                 None => false,
             }
         }
-        fn forward(&mut self, __req: &rt::Request) -> Option<rt::Ior> {
+        fn forward(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Ior> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = NamingContextExtTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
         }
-        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+        fn redirect(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Forward> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = NamingContextExtTarget::new(__oid, &self.refs);
             self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<rt::DispatchBody, rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let __oid = self
                 .refs
                 .oid_of(&__req.object_key)
-                .ok_or_else(rt::SystemException::object_not_exist)?;
+                .ok_or_else(__rt::SystemException::object_not_exist)?;
             let __at = NamingContextExtTarget::new(__oid, &self.refs);
-            let mut __args = __req.body().map_err(|_| rt::SystemException::marshal())?;
+            let mut __args = __req.body().map_err(|_| __rt::SystemException::marshal())?;
             match __req.operation.as_str() {
                 "bind" => {
-                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let obj: orbweaver_gen::rt::ObjRef = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let obj: __rt::ObjRef = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.bind(&__at, n, obj) {
                         Ok(()) => {
-                            Ok(rt::DispatchBody::Return)
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "bind_context" => {
-                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let nc: orbweaver_gen::rt::ObjRef = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let nc: __rt::ObjRef = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.bind_context(&__at, n, nc) {
                         Ok(()) => {
-                            Ok(rt::DispatchBody::Return)
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "bind_new_context" => {
-                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.bind_new_context(&__at, n) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -2312,19 +2312,19 @@ pub mod CosNaming {
                 "destroy" => {
                     match self.servant.destroy(&__at) {
                         Ok(()) => {
-                            Ok(rt::DispatchBody::Return)
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "list" => {
-                    let how_many: u32 = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let how_many: u32 = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.list(&__at, how_many) {
                         Ok((__r0, __r1)) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            __r1.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            __r1.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -2332,129 +2332,129 @@ pub mod CosNaming {
                 "new_context" => {
                     match self.servant.new_context(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "rebind" => {
-                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let obj: orbweaver_gen::rt::ObjRef = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let obj: __rt::ObjRef = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.rebind(&__at, n, obj) {
                         Ok(()) => {
-                            Ok(rt::DispatchBody::Return)
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "rebind_context" => {
-                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let nc: orbweaver_gen::rt::ObjRef = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let nc: __rt::ObjRef = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.rebind_context(&__at, n, nc) {
                         Ok(()) => {
-                            Ok(rt::DispatchBody::Return)
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "resolve" => {
-                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.resolve(&__at, n) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "resolve_str" => {
-                    let sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.resolve_str(&__at, sn) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "to_name" => {
-                    let sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.to_name(&__at, sn) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "to_string" => {
-                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.to_string(&__at, n) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "to_url" => {
-                    let addr: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::Address = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let addr: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::Address = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let sn: crate::emitted::f_gen_naming_subset::CosNaming::NamingContextExt::StringName = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.to_url(&__at, addr, sn) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "unbind" => {
-                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let n: crate::emitted::f_gen_naming_subset::CosNaming::Name = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.unbind(&__at, n) {
                         Ok(()) => {
-                            Ok(rt::DispatchBody::Return)
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "_is_a" => {
-                    let __id: String = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let __id: ::std::string::String = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     let __answer = matches!(__id.as_str(),
                         "IDL:omg.org/CosNaming/NamingContext:1.0" |
                         "IDL:omg.org/CosNaming/NamingContextExt:1.0" |
-                        rt::OBJECT_ID);
-                    __answer.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                        __rt::OBJECT_ID);
+                    __answer.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
                 "_non_existent" => {
-                    false.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                    false.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
-                _ => Err(rt::SystemException::bad_operation()),
+                _ => Err(__rt::SystemException::bad_operation()),
             }
         }
         fn dispatch(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<(), rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<(), __rt::SystemException> {
             match self.dispatch_body(__req, __out)? {
-                rt::DispatchBody::Return => Ok(()),
-                rt::DispatchBody::UserException => {
-                    Err(rt::SystemException::unknown_user_exception())
+                __rt::DispatchBody::Return => Ok(()),
+                __rt::DispatchBody::UserException => {
+                    Err(__rt::SystemException::unknown_user_exception())
                 }
             }
         }
@@ -2462,16 +2462,16 @@ pub mod CosNaming {
 
     /// IDL module `NamingContext`.
     pub mod NamingContext {
-        use orbweaver_gen::rt::{self, Cdr};
+        use ::orbweaver_gen::rt::{self as __rt, Cdr as __Cdr};
         /// IDL exception `IDL:omg.org/CosNaming/NamingContext/AlreadyBound:1.0`.
         #[derive(Debug, Clone, PartialEq)]
         pub struct AlreadyBound {
         }
-        impl Cdr for AlreadyBound {
-            fn put(&self, _e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
+        impl __Cdr for AlreadyBound {
+            fn put(&self, __unused_e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
                 Ok(())
             }
-            fn get(_d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+            fn get(__unused_d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
                 Ok(Self {
                 })
             }
@@ -2481,11 +2481,11 @@ pub mod CosNaming {
         #[derive(Debug, Clone, PartialEq)]
         pub struct InvalidName {
         }
-        impl Cdr for InvalidName {
-            fn put(&self, _e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
+        impl __Cdr for InvalidName {
+            fn put(&self, __unused_e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
                 Ok(())
             }
-            fn get(_d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+            fn get(__unused_d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
                 Ok(Self {
                 })
             }
@@ -2495,11 +2495,11 @@ pub mod CosNaming {
         #[derive(Debug, Clone, PartialEq)]
         pub struct NotEmpty {
         }
-        impl Cdr for NotEmpty {
-            fn put(&self, _e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
+        impl __Cdr for NotEmpty {
+            fn put(&self, __unused_e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
                 Ok(())
             }
-            fn get(_d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+            fn get(__unused_d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
                 Ok(Self {
                 })
             }
@@ -2513,16 +2513,16 @@ pub mod CosNaming {
             /// IDL member `rest_of_name`, marshalled second.
             pub rest_of_name: crate::emitted::f_gen_naming_subset::CosNaming::Name,
         }
-        impl Cdr for NotFound {
-            fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-                self.why.put(e)?;
-                self.rest_of_name.put(e)?;
+        impl __Cdr for NotFound {
+            fn put(&self, __e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
+                self.why.put(__e)?;
+                self.rest_of_name.put(__e)?;
                 Ok(())
             }
-            fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+            fn get(__d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
                 Ok(Self {
-                    why: Cdr::get(d)?,
-                    rest_of_name: Cdr::get(d)?,
+                    why: __Cdr::get(__d)?,
+                    rest_of_name: __Cdr::get(__d)?,
                 })
             }
         }
@@ -2537,17 +2537,17 @@ pub mod CosNaming {
             /// IDL enumerator `not_object`; ordinal 2 on the wire.
             not_object = 2,
         }
-        impl Cdr for NotFoundReason {
-            fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-                e.put_u32(*self as u32);
+        impl __Cdr for NotFoundReason {
+            fn put(&self, __e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
+                __e.put_u32(*self as u32);
                 Ok(())
             }
-            fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
-                Ok(match d.get_u32()? {
+            fn get(__d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
+                Ok(match __d.get_u32()? {
                     0 => Self::missing_node,
                     1 => Self::not_context,
                     2 => Self::not_object,
-                    _ => return Err(rt::GiopError::Decode("ordinal outside NotFoundReason; the sender may be built against a newer contract")),
+                    _ => return Err(__rt::GiopError::Decode("ordinal outside NotFoundReason; the sender may be built against a newer contract")),
                 })
             }
         }
@@ -2555,29 +2555,29 @@ pub mod CosNaming {
     }
     /// IDL module `NamingContextExt`.
     pub mod NamingContextExt {
-        use orbweaver_gen::rt::{self, Cdr};
+        use ::orbweaver_gen::rt::{self as __rt, Cdr as __Cdr};
         /// IDL typedef `IDL:omg.org/CosNaming/NamingContextExt/Address:1.0`.
-        pub type Address = String;
+        pub type Address = ::std::string::String;
 
         /// IDL exception `IDL:omg.org/CosNaming/NamingContextExt/InvalidAddress:1.0`.
         #[derive(Debug, Clone, PartialEq)]
         pub struct InvalidAddress {
         }
-        impl Cdr for InvalidAddress {
-            fn put(&self, _e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
+        impl __Cdr for InvalidAddress {
+            fn put(&self, __unused_e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
                 Ok(())
             }
-            fn get(_d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+            fn get(__unused_d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
                 Ok(Self {
                 })
             }
         }
 
         /// IDL typedef `IDL:omg.org/CosNaming/NamingContextExt/StringName:1.0`.
-        pub type StringName = String;
+        pub type StringName = ::std::string::String;
 
         /// IDL typedef `IDL:omg.org/CosNaming/NamingContextExt/URLString:1.0`.
-        pub type URLString = String;
+        pub type URLString = ::std::string::String;
 
     }
 }

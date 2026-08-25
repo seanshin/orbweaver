@@ -13,12 +13,12 @@
 
 /// IDL module `gc27`.
 pub mod gc27 {
-    use orbweaver_gen::rt::{self, Cdr};
+    use ::orbweaver_gen::rt::{self as __rt, Cdr as __Cdr};
     /// IDL typedef `IDL:gc27/Blob:1.0`.
-    pub type Blob = orbweaver_gen::rt::Bounded<Vec<u8>, 6>;
+    pub type Blob = __rt::Bounded<::std::vec::Vec<u8>, 6>;
 
     /// IDL typedef `IDL:gc27/BlobSeq:1.0`.
-    pub type BlobSeq = Vec<crate::emitted::f_27_bounds::gc27::Blob>;
+    pub type BlobSeq = ::std::vec::Vec<crate::emitted::f_27_bounds::gc27::Blob>;
 
     /// Client stub for `IDL:gc27/Ledger:1.0`.
     ///
@@ -29,52 +29,52 @@ pub mod gc27 {
     /// `Connection` inside the trust boundary, or over the guarded
     /// wrapper at it — a stub hard-wired to the transport would be the
     /// §4.7 bypass in compiled form.
-    pub struct LedgerClient<C: rt::Invoker> {
+    pub struct LedgerClient<C: __rt::Invoker> {
         /// What calls travel over.
         pub conn: C,
     }
-    impl<C: rt::Invoker> LedgerClient<C> {
+    impl<C: __rt::Invoker> LedgerClient<C> {
         /// A stub over an open invoker.
-        pub fn new(conn: C) -> Self { Self { conn } }
+        pub fn new(__conn: C) -> Self { Self { conn: __conn } }
         /// `digest`. The contract carries no `ai_desc` for this operation.
-        pub fn digest(&mut self, batch: crate::emitted::f_27_bounds::gc27::BlobSeq) -> Result<crate::emitted::f_27_bounds::gc27::TagSeq, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn digest(&mut self, batch: crate::emitted::f_27_bounds::gc27::BlobSeq) -> ::std::result::Result<crate::emitted::f_27_bounds::gc27::TagSeq, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             batch.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("digest", |__e| {
                 let _ = batch.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// `keep`. The contract carries no `ai_desc` for this operation.
-        pub fn keep(&mut self, key: crate::emitted::f_27_bounds::gc27::Tag, entry: crate::emitted::f_27_bounds::gc27::Record) -> Result<crate::emitted::f_27_bounds::gc27::Record, rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn keep(&mut self, key: crate::emitted::f_27_bounds::gc27::Tag, entry: crate::emitted::f_27_bounds::gc27::Record) -> ::std::result::Result<crate::emitted::f_27_bounds::gc27::Record, __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             key.put(&mut __probe)?;
             entry.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("keep", |__e| {
                 let _ = key.put(__e);
                 let _ = entry.put(__e);
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// `_get_title`. The contract carries no `ai_desc` for this operation.
-        pub fn title(&mut self) -> Result<crate::emitted::f_27_bounds::gc27::Tag, rt::GiopError> {
+        pub fn title(&mut self) -> ::std::result::Result<crate::emitted::f_27_bounds::gc27::Tag, __rt::GiopError> {
             let __reply = self.conn.invoke("_get_title", |__e| {
             })?;
             let mut __body = __reply.body()?;
-            let __r0 = Cdr::get(&mut __body)?;
+            let __r0 = __Cdr::get(&mut __body)?;
             Ok(__r0)
         }
         /// `_set_title`. The contract carries no `ai_desc` for this operation.
-        pub fn set_title(&mut self, value: crate::emitted::f_27_bounds::gc27::Tag) -> Result<(), rt::GiopError> {
-            let mut __probe = rt::Encoder::new(self.conn.endian());
+        pub fn set_title(&mut self, value: crate::emitted::f_27_bounds::gc27::Tag) -> ::std::result::Result<(), __rt::GiopError> {
+            let mut __probe = __rt::Encoder::new(self.conn.endian());
             value.put(&mut __probe)?;
-            __probe.finish().map_err(rt::GiopError::Cdr)?;
+            __probe.finish().map_err(__rt::GiopError::Cdr)?;
             let __reply = self.conn.invoke("_set_title", |__e| {
                 let _ = value.put(__e);
             })?;
@@ -88,7 +88,7 @@ pub mod gc27 {
     /// `System` is always here, whatever the contract declares: an unknown
     /// key is `OBJECT_NOT_EXIST`, a refused call is `NO_PERMISSION`, a
     /// temporary refusal is `TRANSIENT`, and IDL has no way to declare any
-    /// of them. Build one with `rt::raise::*`, which does not produce a
+    /// of them. Build one with `orbweaver_gen::rt::raise::*`, which does not produce a
     /// `SystemException` until the completion status is stated — the field
     /// that tells the caller whether a retry is safe, and the one thing a
     /// generator cannot know for a servant.
@@ -97,21 +97,21 @@ pub mod gc27 {
     /// clause of this interface or of one it inherits. `write` puts the
     /// body §9.4.3.1 describes — repository id first, then the members —
     /// which is exactly what the client side reads back out of
-    /// `rt::GiopError::UserException`.
+    /// `orbweaver_gen::rt::GiopError::UserException`.
     #[derive(Debug, Clone)]
     pub enum LedgerFault {
         /// A CORBA system exception, with the completion status the
         /// servant chose. Travels as a `SystemException` reply.
-        System(rt::SystemException),
+        System(__rt::SystemException),
         /// IDL exception `IDL:gc27/TooBig:1.0`.
         TooBig(crate::emitted::f_27_bounds::gc27::TooBig),
     }
-    impl From<rt::SystemException> for LedgerFault {
-        fn from(__ex: rt::SystemException) -> Self {
+    impl ::std::convert::From<__rt::SystemException> for LedgerFault {
+        fn from(__ex: __rt::SystemException) -> Self {
             Self::System(__ex)
         }
     }
-    impl PartialEq for LedgerFault {
+    impl ::std::cmp::PartialEq for LedgerFault {
         fn eq(&self, __other: &Self) -> bool {
             match (self, __other) {
                 (Self::System(__a), Self::System(__b)) => {
@@ -127,7 +127,7 @@ pub mod gc27 {
     impl LedgerFault {
         /// The repository id of the user exception this fault carries, or
         /// `None` for a system exception, which carries its own.
-        pub fn user_id(&self) -> Option<&'static str> {
+        pub fn user_id(&self) -> ::std::option::Option<&'static str> {
             match self {
                 Self::System(_) => None,
                 Self::TooBig(_) => Some("IDL:gc27/TooBig:1.0"),
@@ -141,13 +141,13 @@ pub mod gc27 {
         /// dispatcher hands it to the server to encode instead. That is also why
         /// nothing may be written before the fault is known — the whole buffer
         /// travels under one status.
-        pub fn write(&self, __out: &mut rt::Encoder) -> Result<rt::DispatchBody, rt::SystemException> {
+        pub fn write(&self, __out: &mut __rt::Encoder) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             match self {
                 Self::System(__ex) => Err(__ex.clone()),
                 Self::TooBig(__v) => {
                     __out.put_str("IDL:gc27/TooBig:1.0");
-                    __v.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::UserException)
+                    __v.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::UserException)
                 }
             }
         }
@@ -161,7 +161,7 @@ pub mod gc27 {
     /// root ++ "/Ledger/" ++ <oid>    the object named <oid>
     /// ```
     ///
-    /// `root` is the key the `rt::Server` was bound with. The derivation is
+    /// `root` is the key the `orbweaver_gen::rt::Server` was bound with. The derivation is
     /// reversible, so no table of minted keys exists: a reference survives a
     /// restart, and a client cannot make the process grow by looking things
     /// up. The oid is the *whole* remainder after the prefix, so it may
@@ -175,14 +175,14 @@ pub mod gc27 {
     /// # Minting
     ///
     /// `reference` and `ior` answer with a real IIOP profile, built by
-    /// `rt::ObjectHome` — the servant never assembles one, which is why the
+    /// `orbweaver_gen::rt::ObjectHome` — the servant never assembles one, which is why the
     /// GIOP version and profile shape are still decided in exactly one
     /// place. `nil` is the nil reference (§9.3.6), the truthful answer when
     /// there is no such object.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct LedgerRefs {
-        home: rt::ObjectHome,
-        infix: String,
+        home: __rt::ObjectHome,
+        infix: ::std::string::String,
     }
     impl LedgerRefs {
         /// The repository id minted references advertise.
@@ -190,42 +190,42 @@ pub mod gc27 {
         /// What separates the root key from the oid.
         pub const KEY_INFIX: &'static str = "/Ledger/";
         /// The scheme rooted at `home`, with the generated infix.
-        pub fn new(home: rt::ObjectHome) -> Self {
-            Self { home, infix: Self::KEY_INFIX.to_owned() }
+        pub fn new(__home: __rt::ObjectHome) -> Self {
+            Self { home: __home, infix: Self::KEY_INFIX.to_owned() }
         }
         /// The same, with a key space this interface shares with another.
         ///
         /// Two skeletons given the same infix must disagree about `knows`
-        /// for every key, or `rt::Servants` will hand a request to
+        /// for every key, or `orbweaver_gen::rt::Servants` will hand a request to
         /// whichever was added first. Sharing a key space is a claim that
         /// the two answer for disjoint sets of objects.
-        pub fn with_infix(home: rt::ObjectHome, infix: impl Into<String>) -> Self {
-            Self { home, infix: infix.into() }
+        pub fn with_infix(__home: __rt::ObjectHome, __infix: impl ::std::convert::Into<::std::string::String>) -> Self {
+            Self { home: __home, infix: __infix.into() }
         }
         /// Where these objects are published.
-        pub fn home(&self) -> &rt::ObjectHome { &self.home }
+        pub fn home(&self) -> &__rt::ObjectHome { &self.home }
         /// The infix in use, generated or overridden.
         pub fn infix(&self) -> &str { &self.infix }
         /// The default object's key, which is also every other key's prefix.
         pub fn root_key(&self) -> &[u8] { self.home.root_key() }
         /// The object key for `oid`; the empty oid is the root key.
-        pub fn key_of(&self, oid: &str) -> Vec<u8> {
-            self.home.key_of(&self.infix, oid)
+        pub fn key_of(&self, __oid: &str) -> ::std::vec::Vec<u8> {
+            self.home.key_of(&self.infix, __oid)
         }
         /// The oid a key addresses, or `None` if it is not one of ours.
-        pub fn oid_of<'a>(&self, key: &'a [u8]) -> Option<&'a str> {
-            self.home.oid_of(&self.infix, key)
+        pub fn oid_of<'a>(&self, __key: &'a [u8]) -> ::std::option::Option<&'a str> {
+            self.home.oid_of(&self.infix, __key)
         }
         /// A reference to `oid`, in the form an operation returns.
-        pub fn reference(&self, oid: &str) -> rt::ObjRef {
-            self.home.reference(Self::TYPE_ID, self.key_of(oid))
+        pub fn reference(&self, __oid: &str) -> __rt::ObjRef {
+            self.home.reference(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The same reference, in the form `LOCATION_FORWARD` carries.
-        pub fn ior(&self, oid: &str) -> rt::Ior {
-            self.home.ior(Self::TYPE_ID, self.key_of(oid))
+        pub fn ior(&self, __oid: &str) -> __rt::Ior {
+            self.home.ior(Self::TYPE_ID, self.key_of(__oid))
         }
         /// The nil reference: there is no such object.
-        pub fn nil() -> rt::ObjRef { rt::ObjectHome::nil() }
+        pub fn nil() -> __rt::ObjRef { __rt::ObjectHome::nil() }
     }
     /// Which `IDL:gc27/Ledger:1.0` a call is addressed to.
     ///
@@ -244,8 +244,8 @@ pub mod gc27 {
     }
     impl<'a> LedgerTarget<'a> {
         /// The identity `oid` under `refs`.
-        pub fn new(oid: &'a str, refs: &'a LedgerRefs) -> Self {
-            Self { oid, refs }
+        pub fn new(__oid: &'a str, __refs: &'a LedgerRefs) -> Self {
+            Self { oid: __oid, refs: __refs }
         }
         /// Which object this is. The empty oid is the default object,
         /// addressed by the bare root key the server was bound with.
@@ -255,21 +255,21 @@ pub mod gc27 {
         /// The key scheme, for minting references into other key spaces.
         pub fn refs(&self) -> &'a LedgerRefs { self.refs }
         /// The raw object key this call arrived on.
-        pub fn key(&self) -> Vec<u8> { self.refs.key_of(self.oid) }
+        pub fn key(&self) -> ::std::vec::Vec<u8> { self.refs.key_of(self.oid) }
         /// A reference to *this* object, for handing back one's own address.
-        pub fn reference(&self) -> rt::ObjRef { self.refs.reference(self.oid) }
+        pub fn reference(&self) -> __rt::ObjRef { self.refs.reference(self.oid) }
         /// A reference to another object of this interface.
-        pub fn sibling(&self, oid: &str) -> rt::ObjRef { self.refs.reference(oid) }
+        pub fn sibling(&self, __oid: &str) -> __rt::ObjRef { self.refs.reference(__oid) }
     }
     /// What a servant for `IDL:gc27/Ledger:1.0` must implement.
     ///
     /// One method per operation and per attribute accessor, taking decoded
     /// Rust arguments. Nothing here mentions GIOP: the wire is entirely the
     /// business of `LedgerSkeleton`, which adapts this trait to
-    /// `rt::Dispatch`.
+    /// `orbweaver_gen::rt::Dispatch`.
     ///
     /// Every method may fail with a `LedgerFault`: a declared user exception,
-    /// or a system exception built with `rt::raise::*` — the vocabulary
+    /// or a system exception built with `orbweaver_gen::rt::raise::*` — the vocabulary
     /// (`OBJECT_NOT_EXIST`, `NO_PERMISSION`, `BAD_PARAM`, `TRANSIENT`) that
     /// no contract declares and every servant needs.
     ///
@@ -293,7 +293,7 @@ pub mod gc27 {
     pub trait LedgerServant {
         /// Whether this servant answers for the object `__at` names.
         ///
-        /// **Required, with no default.** `rt::Dispatch::knows` defaults to
+        /// **Required, with no default.** `orbweaver_gen::rt::Dispatch::knows` defaults to
         /// accepting everything, which is right for a process with one object and
         /// is exactly what stopped a generated skeleton from ever holding more
         /// than one: an unknown key was served as if it were the only object.
@@ -303,7 +303,7 @@ pub mod gc27 {
         ///
         /// A single-object servant writes `__at.is_default()`. A `false` here
         /// becomes `OBJECT_NOT_EXIST` for a request and `UNKNOWN_OBJECT` for a
-        /// `LocateRequest`, and is also how `rt::Servants` picks between
+        /// `LocateRequest`, and is also how `orbweaver_gen::rt::Servants` picks between
         /// skeletons sharing one key space.
         fn knows(&self, __at: &LedgerTarget<'_>) -> bool;
         /// Where this request should be sent instead, if anywhere.
@@ -328,14 +328,14 @@ pub mod gc27 {
         /// lift: a `oneway` is never forwarded, because there is no reply to carry
         /// the address. This hook is the *temporary* forward; an object that has
         /// moved for good says so through `redirect`, below.
-        fn forward(&mut self, __at: &LedgerTarget<'_>) -> Option<rt::Ior> {
+        fn forward(&mut self, __at: &LedgerTarget<'_>) -> ::std::option::Option<__rt::Ior> {
             let _ = __at;
             None
         }
         /// Where this request should be sent instead, and whether for good.
         ///
-        /// The method the runtime actually asks. `rt::Forward::Temporary` is a
-        /// `LOCATION_FORWARD`; `rt::Forward::Permanent` is a
+        /// The method the runtime actually asks. `orbweaver_gen::rt::Forward::Temporary` is a
+        /// `LOCATION_FORWARD`; `orbweaver_gen::rt::Forward::Permanent` is a
         /// `LOCATION_FORWARD_PERM` (§9.4.3.2, GIOP 1.2 — a 1.0/1.1 peer is told
         /// the temporary form, its reply-status enumeration having no other),
         /// and is the one thing a servant can say that lets a client replace the
@@ -344,17 +344,17 @@ pub mod gc27 {
         /// Defaults to `forward` wrapped as temporary, so a servant that
         /// overrides only `forward` behaves as it always did. Override this one
         /// to say *permanent*; there is no reason to override both.
-        fn redirect(&mut self, __at: &LedgerTarget<'_>) -> Option<rt::Forward> {
-            self.forward(__at).map(rt::Forward::Temporary)
+        fn redirect(&mut self, __at: &LedgerTarget<'_>) -> ::std::option::Option<__rt::Forward> {
+            self.forward(__at).map(__rt::Forward::Temporary)
         }
         /// `digest`. The contract carries no `ai_desc` for this operation.
-        fn digest(&mut self, __at: &LedgerTarget<'_>, batch: crate::emitted::f_27_bounds::gc27::BlobSeq) -> Result<crate::emitted::f_27_bounds::gc27::TagSeq, LedgerFault>;
+        fn digest(&mut self, __at: &LedgerTarget<'_>, batch: crate::emitted::f_27_bounds::gc27::BlobSeq) -> ::std::result::Result<crate::emitted::f_27_bounds::gc27::TagSeq, LedgerFault>;
         /// `keep`. The contract carries no `ai_desc` for this operation.
-        fn keep(&mut self, __at: &LedgerTarget<'_>, key: crate::emitted::f_27_bounds::gc27::Tag, entry: crate::emitted::f_27_bounds::gc27::Record) -> Result<crate::emitted::f_27_bounds::gc27::Record, LedgerFault>;
+        fn keep(&mut self, __at: &LedgerTarget<'_>, key: crate::emitted::f_27_bounds::gc27::Tag, entry: crate::emitted::f_27_bounds::gc27::Record) -> ::std::result::Result<crate::emitted::f_27_bounds::gc27::Record, LedgerFault>;
         /// `_get_title`. The contract carries no `ai_desc` for this operation.
-        fn title(&mut self, __at: &LedgerTarget<'_>) -> Result<crate::emitted::f_27_bounds::gc27::Tag, LedgerFault>;
+        fn title(&mut self, __at: &LedgerTarget<'_>) -> ::std::result::Result<crate::emitted::f_27_bounds::gc27::Tag, LedgerFault>;
         /// `_set_title`. The contract carries no `ai_desc` for this operation.
-        fn set_title(&mut self, __at: &LedgerTarget<'_>, value: crate::emitted::f_27_bounds::gc27::Tag) -> Result<(), LedgerFault>;
+        fn set_title(&mut self, __at: &LedgerTarget<'_>, value: crate::emitted::f_27_bounds::gc27::Tag) -> ::std::result::Result<(), LedgerFault>;
     }
     /// One object of `IDL:gc27/Ledger:1.0`, for a servant that keeps a value per object.
     ///
@@ -371,13 +371,13 @@ pub mod gc27 {
     /// implement the servant trait directly.
     pub trait LedgerObject {
         /// `digest`. The contract carries no `ai_desc` for this operation.
-        fn digest(&mut self, batch: crate::emitted::f_27_bounds::gc27::BlobSeq) -> Result<crate::emitted::f_27_bounds::gc27::TagSeq, LedgerFault>;
+        fn digest(&mut self, batch: crate::emitted::f_27_bounds::gc27::BlobSeq) -> ::std::result::Result<crate::emitted::f_27_bounds::gc27::TagSeq, LedgerFault>;
         /// `keep`. The contract carries no `ai_desc` for this operation.
-        fn keep(&mut self, key: crate::emitted::f_27_bounds::gc27::Tag, entry: crate::emitted::f_27_bounds::gc27::Record) -> Result<crate::emitted::f_27_bounds::gc27::Record, LedgerFault>;
+        fn keep(&mut self, key: crate::emitted::f_27_bounds::gc27::Tag, entry: crate::emitted::f_27_bounds::gc27::Record) -> ::std::result::Result<crate::emitted::f_27_bounds::gc27::Record, LedgerFault>;
         /// `_get_title`. The contract carries no `ai_desc` for this operation.
-        fn title(&mut self) -> Result<crate::emitted::f_27_bounds::gc27::Tag, LedgerFault>;
+        fn title(&mut self) -> ::std::result::Result<crate::emitted::f_27_bounds::gc27::Tag, LedgerFault>;
         /// `_set_title`. The contract carries no `ai_desc` for this operation.
-        fn set_title(&mut self, value: crate::emitted::f_27_bounds::gc27::Tag) -> Result<(), LedgerFault>;
+        fn set_title(&mut self, value: crate::emitted::f_27_bounds::gc27::Tag) -> ::std::result::Result<(), LedgerFault>;
     }
     /// A map from oid to one `LedgerObject`, serving `IDL:gc27/Ledger:1.0`.
     ///
@@ -391,34 +391,34 @@ pub mod gc27 {
     /// bare root key addresses. A one-object process inserts exactly that.
     #[derive(Debug, Clone)]
     pub struct LedgerObjects<S: LedgerObject> {
-        objects: std::collections::BTreeMap<String, S>,
+        objects: ::std::collections::BTreeMap<::std::string::String, S>,
     }
-    impl<S: LedgerObject> Default for LedgerObjects<S> {
+    impl<S: LedgerObject> ::std::default::Default for LedgerObjects<S> {
         fn default() -> Self {
-            Self { objects: std::collections::BTreeMap::new() }
+            Self { objects: ::std::collections::BTreeMap::new() }
         }
     }
     impl<S: LedgerObject> LedgerObjects<S> {
         /// An empty map, which knows no object at all.
-        pub fn new() -> Self { <Self as std::default::Default>::default() }
+        pub fn new() -> Self { <Self as ::std::default::Default>::default() }
         /// Adds or replaces the object under `oid`, answering what it
         /// displaced. The empty oid is the default object.
-        pub fn insert(&mut self, oid: impl Into<String>, object: S) -> Option<S> {
-            self.objects.insert(oid.into(), object)
+        pub fn insert(&mut self, __oid: impl ::std::convert::Into<::std::string::String>, __object: S) -> ::std::option::Option<S> {
+            self.objects.insert(__oid.into(), __object)
         }
         /// Removes an object, after which its key is `OBJECT_NOT_EXIST`.
-        pub fn remove(&mut self, oid: &str) -> Option<S> {
-            self.objects.remove(oid)
+        pub fn remove(&mut self, __oid: &str) -> ::std::option::Option<S> {
+            self.objects.remove(__oid)
         }
         /// The object under `oid`, if there is one.
-        pub fn get(&self, oid: &str) -> Option<&S> { self.objects.get(oid) }
+        pub fn get(&self, __oid: &str) -> ::std::option::Option<&S> { self.objects.get(__oid) }
         /// The object under `oid`, mutably.
-        pub fn get_mut(&mut self, oid: &str) -> Option<&mut S> {
-            self.objects.get_mut(oid)
+        pub fn get_mut(&mut self, __oid: &str) -> ::std::option::Option<&mut S> {
+            self.objects.get_mut(__oid)
         }
         /// Every oid held, in sorted order.
-        pub fn oids(&self) -> impl Iterator<Item = &str> {
-            self.objects.keys().map(String::as_str)
+        pub fn oids(&self) -> impl ::std::iter::Iterator<Item = &str> {
+            self.objects.keys().map(::std::string::String::as_str)
         }
         /// How many objects are held.
         pub fn len(&self) -> usize { self.objects.len() }
@@ -429,35 +429,35 @@ pub mod gc27 {
         fn knows(&self, __at: &LedgerTarget<'_>) -> bool {
             self.objects.contains_key(__at.oid())
         }
-        fn digest(&mut self, __at: &LedgerTarget<'_>, batch: crate::emitted::f_27_bounds::gc27::BlobSeq) -> Result<crate::emitted::f_27_bounds::gc27::TagSeq, LedgerFault> {
+        fn digest(&mut self, __at: &LedgerTarget<'_>, batch: crate::emitted::f_27_bounds::gc27::BlobSeq) -> ::std::result::Result<crate::emitted::f_27_bounds::gc27::TagSeq, LedgerFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.digest(batch),
-                None => Err(LedgerFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(LedgerFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn keep(&mut self, __at: &LedgerTarget<'_>, key: crate::emitted::f_27_bounds::gc27::Tag, entry: crate::emitted::f_27_bounds::gc27::Record) -> Result<crate::emitted::f_27_bounds::gc27::Record, LedgerFault> {
+        fn keep(&mut self, __at: &LedgerTarget<'_>, key: crate::emitted::f_27_bounds::gc27::Tag, entry: crate::emitted::f_27_bounds::gc27::Record) -> ::std::result::Result<crate::emitted::f_27_bounds::gc27::Record, LedgerFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.keep(key, entry),
-                None => Err(LedgerFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(LedgerFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn title(&mut self, __at: &LedgerTarget<'_>) -> Result<crate::emitted::f_27_bounds::gc27::Tag, LedgerFault> {
+        fn title(&mut self, __at: &LedgerTarget<'_>) -> ::std::result::Result<crate::emitted::f_27_bounds::gc27::Tag, LedgerFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.title(),
-                None => Err(LedgerFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(LedgerFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
-        fn set_title(&mut self, __at: &LedgerTarget<'_>, value: crate::emitted::f_27_bounds::gc27::Tag) -> Result<(), LedgerFault> {
+        fn set_title(&mut self, __at: &LedgerTarget<'_>, value: crate::emitted::f_27_bounds::gc27::Tag) -> ::std::result::Result<(), LedgerFault> {
             match self.objects.get_mut(__at.oid()) {
                 Some(__o) => __o.set_title(value),
-                None => Err(LedgerFault::System(rt::raise::object_not_exist().did_not_run())),
+                None => Err(LedgerFault::System(__rt::raise::object_not_exist().did_not_run())),
             }
         }
     }
     /// Serves `IDL:gc27/Ledger:1.0`: decodes the request, calls the servant, encodes the reply.
     ///
-    /// Hand it to `rt::Server::serve` in place of a hand-written
-    /// `rt::Dispatch`. What it answers, beyond the contract's own
+    /// Hand it to `orbweaver_gen::rt::Server::serve` in place of a hand-written
+    /// `orbweaver_gen::rt::Dispatch`. What it answers, beyond the contract's own
     /// operations:
     ///
     /// * `_is_a`, from the inheritance chain the registry resolved, because
@@ -488,63 +488,63 @@ pub mod gc27 {
     impl<S: LedgerServant> LedgerSkeleton<S> {
         /// A skeleton serving `servant`'s objects under `refs`.
         ///
-        /// `refs` must be rooted at the key the `rt::Server` was bound
+        /// `refs` must be rooted at the key the `orbweaver_gen::rt::Server` was bound
         /// with, or nothing this skeleton parses will match what arrives.
-        pub fn new(refs: LedgerRefs, servant: S) -> Self {
-            Self { servant, refs }
+        pub fn new(__refs: LedgerRefs, __servant: S) -> Self {
+            Self { servant: __servant, refs: __refs }
         }
         /// The key scheme in force, for minting references to these objects.
         pub fn refs(&self) -> &LedgerRefs { &self.refs }
     }
-    impl<S: LedgerServant> rt::Dispatch for LedgerSkeleton<S> {
+    impl<S: LedgerServant> __rt::Dispatch for LedgerSkeleton<S> {
         fn knows(&self, __object_key: &[u8]) -> bool {
             match self.refs.oid_of(__object_key) {
                 Some(__oid) => self.servant.knows(&LedgerTarget::new(__oid, &self.refs)),
                 None => false,
             }
         }
-        fn forward(&mut self, __req: &rt::Request) -> Option<rt::Ior> {
+        fn forward(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Ior> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = LedgerTarget::new(__oid, &self.refs);
             self.servant.forward(&__at)
         }
-        fn redirect(&mut self, __req: &rt::Request) -> Option<rt::Forward> {
+        fn redirect(&mut self, __req: &__rt::Request) -> ::std::option::Option<__rt::Forward> {
             let __oid = self.refs.oid_of(&__req.object_key)?;
             let __at = LedgerTarget::new(__oid, &self.refs);
             self.servant.redirect(&__at)
         }
         fn dispatch_body(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<rt::DispatchBody, rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<__rt::DispatchBody, __rt::SystemException> {
             let __oid = self
                 .refs
                 .oid_of(&__req.object_key)
-                .ok_or_else(rt::SystemException::object_not_exist)?;
+                .ok_or_else(__rt::SystemException::object_not_exist)?;
             let __at = LedgerTarget::new(__oid, &self.refs);
-            let mut __args = __req.body().map_err(|_| rt::SystemException::marshal())?;
+            let mut __args = __req.body().map_err(|_| __rt::SystemException::marshal())?;
             match __req.operation.as_str() {
                 "digest" => {
-                    let batch: crate::emitted::f_27_bounds::gc27::BlobSeq = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let batch: crate::emitted::f_27_bounds::gc27::BlobSeq = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.digest(&__at, batch) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "keep" => {
-                    let key: crate::emitted::f_27_bounds::gc27::Tag = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
-                    let entry: crate::emitted::f_27_bounds::gc27::Record = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let key: crate::emitted::f_27_bounds::gc27::Tag = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
+                    let entry: crate::emitted::f_27_bounds::gc27::Record = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.keep(&__at, key, entry) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
@@ -552,47 +552,47 @@ pub mod gc27 {
                 "_get_title" => {
                     match self.servant.title(&__at) {
                         Ok(__r0) => {
-                            __r0.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                            Ok(rt::DispatchBody::Return)
+                            __r0.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "_set_title" => {
-                    let value: crate::emitted::f_27_bounds::gc27::Tag = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let value: crate::emitted::f_27_bounds::gc27::Tag = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     match self.servant.set_title(&__at, value) {
                         Ok(()) => {
-                            Ok(rt::DispatchBody::Return)
+                            Ok(__rt::DispatchBody::Return)
                         }
                         Err(__f) => __f.write(__out),
                     }
                 }
                 "_is_a" => {
-                    let __id: String = Cdr::get(&mut __args)
-                        .map_err(|_| rt::SystemException::marshal())?;
+                    let __id: ::std::string::String = __Cdr::get(&mut __args)
+                        .map_err(|_| __rt::SystemException::marshal())?;
                     let __answer = matches!(__id.as_str(),
                         "IDL:gc27/Ledger:1.0" |
-                        rt::OBJECT_ID);
-                    __answer.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                        __rt::OBJECT_ID);
+                    __answer.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
                 "_non_existent" => {
-                    false.put(__out).map_err(|_| rt::SystemException::marshal())?;
-                    Ok(rt::DispatchBody::Return)
+                    false.put(__out).map_err(|_| __rt::SystemException::marshal())?;
+                    Ok(__rt::DispatchBody::Return)
                 }
-                _ => Err(rt::SystemException::bad_operation()),
+                _ => Err(__rt::SystemException::bad_operation()),
             }
         }
         fn dispatch(
             &mut self,
-            __req: &rt::Request,
-            __out: &mut rt::Encoder,
-        ) -> Result<(), rt::SystemException> {
+            __req: &__rt::Request,
+            __out: &mut __rt::Encoder,
+        ) -> ::std::result::Result<(), __rt::SystemException> {
             match self.dispatch_body(__req, __out)? {
-                rt::DispatchBody::Return => Ok(()),
-                rt::DispatchBody::UserException => {
-                    Err(rt::SystemException::unknown_user_exception())
+                __rt::DispatchBody::Return => Ok(()),
+                __rt::DispatchBody::UserException => {
+                    Err(__rt::SystemException::unknown_user_exception())
                 }
             }
         }
@@ -608,27 +608,27 @@ pub mod gc27 {
         /// IDL member `wide`, marshalled third.
         pub wide: crate::emitted::f_27_bounds::gc27::WideTag,
     }
-    impl Cdr for Record {
-        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-            self.label.put(e)?;
-            self.payload.put(e)?;
-            self.wide.put(e)?;
+    impl __Cdr for Record {
+        fn put(&self, __e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
+            self.label.put(__e)?;
+            self.payload.put(__e)?;
+            self.wide.put(__e)?;
             Ok(())
         }
-        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+        fn get(__d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
             Ok(Self {
-                label: Cdr::get(d)?,
-                payload: Cdr::get(d)?,
-                wide: Cdr::get(d)?,
+                label: __Cdr::get(__d)?,
+                payload: __Cdr::get(__d)?,
+                wide: __Cdr::get(__d)?,
             })
         }
     }
 
     /// IDL typedef `IDL:gc27/Tag:1.0`.
-    pub type Tag = orbweaver_gen::rt::Bounded<String, 8>;
+    pub type Tag = __rt::Bounded<::std::string::String, 8>;
 
     /// IDL typedef `IDL:gc27/TagSeq:1.0`.
-    pub type TagSeq = orbweaver_gen::rt::Bounded<Vec<crate::emitted::f_27_bounds::gc27::Tag>, 3>;
+    pub type TagSeq = __rt::Bounded<::std::vec::Vec<crate::emitted::f_27_bounds::gc27::Tag>, 3>;
 
     /// IDL exception `IDL:gc27/TooBig:1.0`.
     #[derive(Debug, Clone, PartialEq)]
@@ -638,21 +638,21 @@ pub mod gc27 {
         /// IDL member `offending`, marshalled second.
         pub offending: crate::emitted::f_27_bounds::gc27::Blob,
     }
-    impl Cdr for TooBig {
-        fn put(&self, e: &mut rt::Encoder) -> Result<(), rt::GiopError> {
-            self.reason.put(e)?;
-            self.offending.put(e)?;
+    impl __Cdr for TooBig {
+        fn put(&self, __e: &mut __rt::Encoder) -> ::std::result::Result<(), __rt::GiopError> {
+            self.reason.put(__e)?;
+            self.offending.put(__e)?;
             Ok(())
         }
-        fn get(d: &mut rt::Decoder<'_>) -> Result<Self, rt::GiopError> {
+        fn get(__d: &mut __rt::Decoder<'_>) -> ::std::result::Result<Self, __rt::GiopError> {
             Ok(Self {
-                reason: Cdr::get(d)?,
-                offending: Cdr::get(d)?,
+                reason: __Cdr::get(__d)?,
+                offending: __Cdr::get(__d)?,
             })
         }
     }
 
     /// IDL typedef `IDL:gc27/WideTag:1.0`.
-    pub type WideTag = orbweaver_gen::rt::Bounded<orbweaver_gen::rt::WString, 4>;
+    pub type WideTag = __rt::Bounded<__rt::WString, 4>;
 
 }

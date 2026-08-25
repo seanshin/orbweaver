@@ -780,23 +780,23 @@ fn every_declared_bound_appears_in_the_emitted_type() {
     let registry = registry();
     let source = orbweaver_gen::emit(&registry, "emitted::f_27_bounds").source;
     for wanted in [
-        "pub type Tag = orbweaver_gen::rt::Bounded<String, 8>;",
-        "pub type WideTag = orbweaver_gen::rt::Bounded<orbweaver_gen::rt::WString, 4>;",
-        "pub type Blob = orbweaver_gen::rt::Bounded<Vec<u8>, 6>;",
+        "pub type Tag = __rt::Bounded<::std::string::String, 8>;",
+        "pub type WideTag = __rt::Bounded<__rt::WString, 4>;",
+        "pub type Blob = __rt::Bounded<::std::vec::Vec<u8>, 6>;",
     ] {
         assert!(source.contains(wanted), "the emitted module is missing:\n  {wanted}");
     }
     // `TagSeq` is a bounded sequence *of* a bounded string: both numbers have
     // to survive, which a generator that carried only the outermost would fail.
     assert!(
-        source.contains("pub type TagSeq = orbweaver_gen::rt::Bounded<Vec<")
+        source.contains("pub type TagSeq = __rt::Bounded<::std::vec::Vec<")
             && source.contains("gc27::Tag>, 3>;"),
         "TagSeq lost a bound:\n{source}"
     );
     // And an unbounded declaration keeps its bare type: wrapping everything
     // would pass every test above and change every signature in the workspace.
     assert!(
-        source.contains("pub type BlobSeq = Vec<"),
+        source.contains("pub type BlobSeq = ::std::vec::Vec<"),
         "an unbounded sequence grew a wrapper:\n{source}"
     );
 }
