@@ -174,22 +174,62 @@ start_rust_server() {
 
 # ── Unit tests ───────────────────────────────────────────────────────────────
 hr "unit tests (CDR + GIOP)"
-if cargo test --workspace --quiet 2>&1 | grep -q "^error"; then
-  echo "  FAIL cargo test"; fail_total=$((fail_total+1))
+# Captured, then matched — and the producer's own exit status is read first.
+#
+# This was `cargo test --workspace --quiet 2>&1 | grep -q "^error"` until
+# 2026-08-25, and under this file's own `set -o pipefail` (line 9) that gate
+# **could not report a failing test suite**: a pipeline's status is its
+# rightmost non-zero exit, so a failing `cargo test` made the pipeline
+# non-zero, the `if` took the *else* branch, and the harness printed
+# `ok cargo test --workspace` over a red workspace. The FAIL branch required
+# `cargo test` to **pass** while printing a line starting with `error`.
+# Reproduced before repair:
+#   $ bash -c 'set -uo pipefail; f(){ echo "error: x"; return 101; };
+#              if f | grep -q "^error"; then echo THEN; else echo ELSE; fi'
+#   ELSE
+# CLAUDE.md's rule — never pipe into `grep -q` when the producer matters —
+# names the SIGPIPE half of this; `pipefail` is a second, independent way the
+# same pipeline lies, and it is the half that silenced this gate.
+ut_out=$(cargo test --workspace --quiet 2>&1); ut_rc=$?
+if [ "$ut_rc" -ne 0 ] || grep -q "^error" <<<"$ut_out"; then
+  echo "  FAIL cargo test --workspace (exit $ut_rc)"
+  grep -E "^(error|test result: FAILED|failures:)" <<<"$ut_out" | head -12 | sed 's/^/    | /'
+  fail_total=$((fail_total+1))
 else
   echo "  ok   cargo test --workspace"
 fi
 
 # ── Lint (runs before the oracle, on purpose) ────────────────────────────────
 hr "licence boundary"
-if cargo tree --workspace 2>/dev/null | grep -qiE "omniorb|jacorb"; then
-  echo "  FAIL an ORB fixture has become a dependency"; fail_total=$((fail_total+1))
+# The non-negotiable rule of this project, and until 2026-08-25 **its gate
+# could not go red**. `cargo tree --workspace | grep -qiE …` under `pipefail`:
+# `grep -q` exits on its first match and SIGPIPEs the producer, whose status
+# becomes 141, so the pipeline is non-zero exactly when the forbidden name IS
+# present — and the `if` took the else branch and printed `ok`. Reproduced
+# before repair with a long producer:
+#   $ bash -c 'set -uo pipefail; g(){ seq 1 200000 | sed "s/^/omniorb /"; };
+#              if g | grep -qiE "omniorb|jacorb"; then echo THEN; else echo ELSE; fi'
+#   ELSE
+# A short producer fits the pipe buffer and never sees SIGPIPE, which is why
+# this passed every hand-check anyone ever gave it.
+tree_out=$(cargo tree --workspace 2>/dev/null); tree_rc=$?
+if [ "$tree_rc" -ne 0 ]; then
+  echo "  FAIL cargo tree did not run (exit $tree_rc) — the licence boundary was NOT measured"
+  fail_total=$((fail_total+1))
+elif grep -qiE "omniorb|jacorb" <<<"$tree_out"; then
+  echo "  FAIL an ORB fixture has become a dependency"
+  grep -inE "omniorb|jacorb" <<<"$tree_out" | head -5 | sed 's/^/    | /'
+  fail_total=$((fail_total+1))
 else
   echo "  ok   no ORB fixture appears in cargo tree"
 fi
 # NOTICE promises that --no-default-features drops encoding_rs and the
 # BSD-3-Clause obligation with it. That promise is testable, so it is tested.
-if cargo tree -p orbweaver-giop --no-default-features 2>/dev/null | grep -q encoding_rs; then
+nodef_out=$(cargo tree -p orbweaver-giop --no-default-features 2>/dev/null); nodef_rc=$?
+if [ "$nodef_rc" -ne 0 ]; then
+  echo "  FAIL cargo tree --no-default-features did not run (exit $nodef_rc) — NOTICE's promise was NOT measured"
+  fail_total=$((fail_total+1))
+elif grep -q encoding_rs <<<"$nodef_out"; then
   echo "  FAIL --no-default-features still pulls encoding_rs; NOTICE is wrong"
   fail_total=$((fail_total+1))
 else
@@ -2213,9 +2253,10 @@ else
   echo "  FAIL gen-python refused the golden corpus"
   fail_total=$((fail_total+1))
 fi
-# The cross-implementation sweep must keep measuring what it measured:
-# 170 values / 137 calls over golden (158/132 before golden 29's labelled
-# defaults, 2026-08-19), 70 / 46 over services, 0 divergences (D010 A4 —
+# The cross-implementation sweep must keep measuring what it measured. These
+# are **floors, not figures**: 170 / 137 over golden (158/132 before golden
+# 29's labelled defaults, 2026-08-19; 182/139 as the corpus stands
+# 2026-08-24), 70 / 46 over services, 0 divergences (D010 A4 —
 # constructed anys and forward-declared references included). A drop is the oracle quietly measuring less, which is how a green
 # line stops meaning anything. Negative control: the pre-A4 `_rt.py` reads
 # "85 divergence(s)" here (the D008 refusal on every structural `_t`).

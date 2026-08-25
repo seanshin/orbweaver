@@ -145,8 +145,35 @@ Each of these produced a phantom failure during Phase 0. They will recur.
 - **Wait loops must sleep.** `for i in $(seq 1 500); do [ -f f ] && break; done`
   finishes in microseconds and does not wait at all. This caused the initial
   assumption A failure; the protocol was correct the whole time.
-- **Never pipe into `grep -q`** when the producer matters. `grep -q` exits on
-  first match and SIGPIPEs upstream. Capture to a variable, then match.
+- **Never pipe into `grep -q`** when the producer matters, and know that there
+  are **two** independent ways such a pipeline lies. `grep -q` exits on first
+  match and SIGPIPEs upstream (141). And under `set -o pipefail` — which
+  `run_checks.sh` sets on line 9 — a pipeline's status is its *rightmost
+  non-zero* exit, so **a producer that fails makes the pipeline fail, and an
+  `if` reads that as "no match".** Measured 2026-08-25, in this harness's own
+  first three gates: `cargo test --workspace --quiet 2>&1 | grep -q "^error"`
+  printed **`ok cargo test --workspace` over a red workspace** for as long as
+  it had existed — its FAIL branch required `cargo test` to *pass* while
+  printing an error line — and `cargo tree --workspace | grep -qiE
+  "omniorb|jacorb"` could not report a forbidden dependency, because finding
+  one is exactly when SIGPIPE fires. **The licence boundary this file calls
+  non-negotiable had a gate that could not go red.** A short producer fits the
+  64 KB pipe buffer and never sees SIGPIPE, which is why hand-checking it
+  always looked fine. Capture to a variable, then match with a herestring
+  (`grep -q … <<<"$out"`), and **read the producer's own exit status first** —
+  a producer that could not run at all is an unmeasured check, which is a
+  failure, never a pass. *두 가지 방식으로 거짓말한다 — SIGPIPE와 `pipefail`.
+  이 하네스의 첫 세 게이트가 그렇게 침묵했고, 그중 하나가 타협 불가라고 적힌
+  라이선스 경계다.*
+- **Never edit a script while it is running.** `bash` reads a script
+  incrementally, so an edit that shifts byte offsets can make a running shell
+  resume at the wrong place. Done 2026-08-25 — three gate repairs written into
+  `run_checks.sh` while a 43-minute run of it was in flight. Nothing visibly
+  broke, and that is the problem: **whether the run was affected cannot be
+  established after the fact**, so its verdict stopped being evidence and the
+  run had to be repeated. Wait for the lock, or copy the script. *실행 중인
+  스크립트를 편집하지 않는다. 영향 여부를 사후에 증명할 수 없으므로 그 실행의
+  판정은 증거가 되지 못한다.*
 - **A completed client `connect` does not mean the server can accept yet.**
   On macOS loopback a non-blocking single `accept()` misses fresh connections
   ~5% of the time (measured 25/500 in stream E batch 2). Accept-side checks
@@ -219,6 +246,22 @@ decisions being approved and work landing.
   D003's approval overwrote the head of its own PROPOSED block and left the
   tail, so the file said APPROVED in English and 제안 in Korean four lines
   apart — and every document that had copied it copied the English half.
+  **This rule alone did not stop it.** Swept 2026-08-25: four more instances,
+  every one the English half re-measured and the Korean left asserting the
+  pre-measurement fact — a sweep's Korean saying it had *not* re-measured
+  while the English said it had, and two counts frozen at a figure their own
+  English twin had already superseded. So the rule now has a script:
+  `spikes/bilingual_drift.py` blames each section and reports where the two
+  halves were last edited days apart, because *the rule is an invariant about
+  commits* — one fact, one change, both languages. Its first design compared
+  **date literals** and its negative control killed it: 34 findings of which 4
+  were real, and the threshold that suppressed the noise removed exactly those
+  4. **A check tuned until it is quiet, tested only against a tree with no
+  defect in it, is the green-while-measuring-nothing class with better
+  manners** — tune against the defect, then confirm the quiet.
+  *규칙만으로는 막히지 않았다. 규칙은 커밋에 대한 불변식이므로 이제 스크립트가
+  있다. 첫 설계는 부정 대조군이 죽였다 — 조용해질 때까지 조인 검사는 찾으려던
+  것만 정확히 걸러낸다.*
 - **A sentence many layers say is a fact, and `pub(crate)` is how a fact
   escapes its home.** A refusal, a limit, a diagnostic head that more than one
   layer must give in the same words belongs to one function, and that function
@@ -236,6 +279,23 @@ decisions being approved and work landing.
   reading. *여러 계층이 말하는 문장은 사실이며, `pub(crate)`은 사실이 자기 집을
   빠져나가는 경로다. 고정의 범위가 사실의 범위보다 좁으면 그 고정은 어긋남 위에서
   초록으로 남는다.*
+- **A floor is not a figure.** A gate pinned as `>= N` proves the property it
+  was built for — nothing regressed — and proves *nothing* about the count, so
+  every sentence that quotes `N` as if it were today's measurement drifts
+  upward in silence as the corpus grows, and the gate stays green over the
+  drift because green is all it was ever going to say. Measured 2026-08-25,
+  two instances in one sweep: `COMPONENTS.md` said the AnyJSON leg crosses
+  `5248/5248` (floor 5248, **actual 6016**) and that the Python sweep crosses
+  `172 values / 137 calls` (floor 170/137, **actual 182/139**) — and the
+  harness's own comment beside that floor said `170 / 137` too, so the row and
+  the gate agreed with each other and both disagreed with the run. A floor
+  keeps its rationale in the comment; a figure in prose carries **the date it
+  was measured**, or comes from a script that writes it
+  (`spikes/coverage_tables.py`). Where a document and a gate quote the same
+  number, say which one is the floor. *하한은 수치가 아니다. `>= N` 고정은
+  퇴행 없음을 증명할 뿐 개수에 대해서는 아무것도 증명하지 않으므로, `N`을
+  오늘의 측정처럼 인용한 문장은 조용히 어긋나고 게이트는 그 위에서 초록으로
+  남는다. 산문의 수치는 측정 날짜를 달거나, 그것을 쓰는 스크립트에서 온다.*
 - **A classifier is a sentence too.** Code that decides *which class a thing
   belongs to* by matching a hand-written substring of a sentence some other
   function owns is the same defect wearing the counting half's coat, and it
@@ -314,6 +374,8 @@ python3 spikes/gap_symbols.py   # before planning against a COMPONENTS gap row: 
                                 # names and whether that exists — a report, not a gate
 python3 spikes/plan_numbers.py  # every hand-typed count in the plan documents beside
                                 # today's computed figure — a report, not a gate
+python3 spikes/bilingual_drift.py  # sections whose EN and KO halves were last edited
+                                # days apart — a report, not a gate
 ```
 
 Fixture setup: `brew install omniorb` (interop peer and oracle only);
