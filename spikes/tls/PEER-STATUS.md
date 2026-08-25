@@ -58,16 +58,51 @@ using the self-originated fixtures in this directory): TLS establishment,
 certificate verification on and effective (`wrong-ca.pem` refused), GIOP bytes
 crossing the encrypted transport unchanged, clean refusal of a non-TLS peer.
 
-**Unmeasured, and still flagged as such in the source**: `Connection::connect_tls`
-against a foreign SSLIOP implementation, and parsing a `TAG_SSL_SEC_TRANS`
-component produced by a real ORB rather than by our own encoder. Nothing in
-this batch changes those claims.
+**Measured 2026-08-25** (`spikes/ssliop.sh`, **21 of 21 cases**, exit 0):
+`Connection::connect_tls` against an **out-of-process** peer whose TLS is
+OpenSSL and not rustls, and `ssliop::advertised` / `ssl_endpoint` over a
+`TAG_SSL_SEC_TRANS` component **this project's encoder did not write** — both
+IOR and component byte orders independently, including a little-endian
+component inside a big-endian IOR, a shape a deployment produces and our
+encoder never does. The dialled address is never handed in: it comes out of
+`ssl_endpoint` and is cross-checked against the port the peer says it listens
+on, so the call cannot pass by being told the answer. Five refusals, among them
+the two downgrade directions, one of them evidenced from the far end — the peer
+observed a TLS ClientHello arriving in cleartext, which is how "the client did
+not downgrade" is proved rather than asserted.
+
+The peer is `spikes/ssliop_peer.py`: stdlib `ssl`, **no ORB imported**, every
+GIOP and IOR octet built by hand. That is deliberate and it is the finding —
+SSLIOP is unmodified GIOP over TLS plus a component, so peer proof needs a peer
+that speaks IIOP over TLS, not another ORB's SSLIOP stack. See D010 §4 B3.
+
+**Still unmeasured:** a `TAG_SSL_SEC_TRANS` component produced by **omniORB's
+or JacORB's own encoder**. That is a claim about their encoder and only they can
+make it. The unblock paths below are now what that one residue needs; they are
+no longer what SSLIOP peer proof needs.
 
 **검증됨**(인프로세스 rustls 피어): TLS 수립, 인증서 검증이 켜져 있고 실제로
 작동함(`wrong-ca.pem` 거부), GIOP 바이트의 무손상 통과, 비-TLS 피어의 깨끗한
-거부. **미측정**(소스에 그대로 명시 유지): 외부 SSLIOP 구현체에 대한
-`connect_tls`, 그리고 우리 인코더가 아닌 실제 ORB가 만든 `TAG_SSL_SEC_TRANS`
-컴포넌트의 파싱. 이번 배치는 이 주장들을 바꾸지 않는다.
+거부.
+
+**2026-08-25 측정**(`spikes/ssliop.sh`, **21/21**, exit 0): TLS가 rustls가 아닌
+OpenSSL인 **외부 프로세스** 피어에 대한 `connect_tls`, 그리고 **우리 인코더가
+쓰지 않은** `TAG_SSL_SEC_TRANS` 컴포넌트의 파싱 — IOR과 컴포넌트 바이트 순서를
+각각 양쪽으로, 빅엔디언 IOR 안의 리틀엔디언 컴포넌트(배포가 만들고 우리 인코더는
+만들지 않는 모양)를 포함해서. 다이얼할 주소는 넘겨주지 않는다: `ssl_endpoint`가
+뱉은 것을 쓰고 피어가 말하는 포트와 교차 확인하므로, 답을 들어서 통과할 수 없다.
+거부 다섯 중 평문 다운그레이드 거부는 **반대편에서** 증거를 잡았다 — 피어가 TLS
+ClientHello가 평문으로 도착하는 것을 관측했다.
+
+피어는 `spikes/ssliop_peer.py`이며 stdlib `ssl`을 쓰고 **ORB를 하나도 임포트하지
+않는다**. 그것이 의도이자 발견이다 — SSLIOP는 TLS 위의 변경 없는 GIOP에 컴포넌트
+하나이므로, 피어 증명에 필요한 것은 다른 ORB의 SSLIOP 스택이 아니라 IIOP over
+TLS를 말하는 피어다(D010 §4 B3).
+
+**미측정으로 남는 것:** **omniORB나 JacORB 자신의 인코더**가 만든
+`TAG_SSL_SEC_TRANS` 컴포넌트. 그들의 인코더에 대한 주장이므로 그들만이 할 수
+있다. 아래 경로들은 이제 그 하나의 잔여를 위한 것이지, 피어 증명을 위한 것이
+아니다.
 
 ## What installing the peer would take / 피어 설치에 필요한 것
 

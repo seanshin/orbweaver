@@ -1831,11 +1831,20 @@ impl Connection {
     ///
     /// # What this has been measured against
     ///
-    /// An in-process rustls peer only (`tests/ssliop_tls.rs`). No
-    /// SSLIOP-speaking ORB — omniORB's sslTP, JacORB's SSL transport — has
-    /// been exercised yet; that fixture is a future batch. What is verified
-    /// today is the TLS layer and GIOP framing pass-through, not peer
-    /// interop.
+    /// An in-process rustls peer (`tests/ssliop_tls.rs`), **and since
+    /// 2026-08-25 an out-of-process peer whose TLS is OpenSSL rather than
+    /// rustls** — `spikes/ssliop.sh`, 21 of 21 cases, both IOR and component
+    /// byte orders independently, with the dialled address taken from
+    /// [`ssliop::ssl_endpoint`] rather than handed in, so the call cannot pass
+    /// by being told where to go. Five refusals are measured alongside,
+    /// including both cleartext-downgrade directions.
+    ///
+    /// This paragraph used to say no SSLIOP-speaking ORB had been exercised
+    /// and that the fixture was a future batch. The fixture was never the one
+    /// this needed: SSLIOP is unmodified GIOP over TLS plus an advertisement,
+    /// so the peer is anything speaking IIOP over TLS. What remains unmeasured
+    /// is narrower and is somebody else's to produce — a `TAG_SSL_SEC_TRANS`
+    /// component written by omniORB's or JacORB's own encoder.
     #[cfg(feature = "ssliop")]
     pub fn connect_tls(
         ior: &Ior,

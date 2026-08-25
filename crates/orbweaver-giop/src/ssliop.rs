@@ -32,11 +32,22 @@
 //! we can run detects cryptographic mistakes — a default build carries no TLS
 //! dependency at all.
 //!
-//! Honesty about what has been measured: the TLS path has been exercised
-//! against an in-process rustls peer only. No SSLIOP-speaking ORB (omniORB's
-//! sslTP, JacORB's SSL transport) has been dialed yet — that fixture is a
-//! future batch — so today's verified claim is "the TLS layer works and GIOP
-//! passes through it unchanged", not peer interop.
+//! Honesty about what has been measured, corrected 2026-08-25. This said the
+//! TLS path had met an in-process rustls peer only, and that no
+//! SSLIOP-speaking ORB had been dialed — treating "an ORB with SSL configured"
+//! as the fixture peer proof was waiting for. **It was not the fixture this
+//! needed.** SSLIOP adds nothing to GIOP: the Security Service defines
+//! unmodified GIOP over a TLS connection plus the component parsed here. No
+//! handshake of its own, no negotiation, no framing. So the peer is anything
+//! that speaks IIOP over TLS, and `spikes/ssliop_peer.py` is one — stdlib
+//! `ssl`, no ORB imported, every GIOP and IOR octet built by hand.
+//!
+//! Measured (`spikes/ssliop.sh`, 21 of 21 cases, 2026-08-25): an out-of-process
+//! peer whose TLS is OpenSSL rather than rustls, and this module's parsing over
+//! a component **our encoder did not write**, in both IOR and component byte
+//! orders independently. Still unmeasured, and it is the honest residue: a
+//! component produced by omniORB's or JacORB's *own* encoder, which is a claim
+//! about their encoder that only they can make.
 
 use orbweaver_cdr::{Decoder, Encoder, Endian};
 

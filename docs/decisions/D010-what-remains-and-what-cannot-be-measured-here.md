@@ -267,10 +267,39 @@ docker already follow. None may report `ok`.
 
 ### B3. SSLIOP against a peer — *stream C*
 > *SKIPPED group landed 2026-08-19: the probe is `from omniORB import sslTP` itself; a present module prints a distinct line ("IS present here and the peer proof is not built yet") so an available fixture nobody measures is visible.*
-- **State.** Built behind an off-by-default feature; in-process rustls tests
-  green; **peer proof BLOCKED** because brew's omniORBpy ships no `sslTP`.
-- **Missing.** An omniORB build with SSL, or JacORB's SSL transport configured.
-  `spikes/tls/PEER-STATUS.md` names the unblock path.
+- **State, corrected 2026-08-25 — the premise held and the conclusion did not.**
+  Built behind an off-by-default feature; in-process rustls tests green; and
+  **peer proof is measured**, 21 of 21 cases (`spikes/ssliop.sh`), both IOR and
+  component byte orders independently, five refusals including the two
+  cleartext-downgrade directions. `sslTP` is still absent here — that half of
+  the state was right. What was wrong is the inference from it. **SSLIOP is not
+  a protocol an ORB implements**: the Security Service defines exactly two
+  things, unmodified GIOP over a TLS connection and a `TAG_SSL_SEC_TRANS`
+  component saying where the TLS listener is. No handshake of its own, no
+  negotiation, no framing. So the peer this row needed was never *an ORB's
+  SSLIOP stack* — it was **a peer that speaks IIOP over TLS**, and a stdlib
+  `ssl` socket is one (`spikes/ssliop_peer.py`: no ORB imported, every GIOP and
+  IOR octet built by hand, so the licence boundary is untouched). The row was
+  blocked on a fixture it did not need.
+- **Missing — the residue, and it is genuinely somebody else's to make.** A
+  `TAG_SSL_SEC_TRANS` component produced by **omniORB's or JacORB's own
+  encoder**, with the association-option bits and port convention that
+  implementation chose. That is a claim about their encoder and only they can
+  make it. Everything else `spikes/tls/PEER-STATUS.md` listed as unmeasured is
+  reached, and the unblock paths it names are now for this one residue rather
+  than for peer proof.
+- **Still a counted `SKIPPED`, on purpose.** The residue keeps §2's rule: the
+  group prints a counted SKIPPED naming its fixture, and a *different* line
+  when `sslTP` is present, so an available fixture nobody measures stays
+  visible.
+
+*2026-08-25 정정 — 전제는 맞고 결론이 틀렸다. `sslTP`는 여전히 없고 그 절반은
+옳았다. 틀린 것은 거기서 끌어낸 추론이다. **SSLIOP는 ORB가 구현하는 프로토콜이
+아니다** — 명세가 정의하는 것은 TLS 연결 위의 변경 없는 GIOP와 리스너 위치를
+말하는 컴포넌트, 둘뿐이다. 그래서 이 행이 필요로 한 피어는 ORB의 SSLIOP 스택이
+아니라 **IIOP over TLS를 말하는 피어**였고, stdlib `ssl` 소켓이 그것이다. 21/21
+측정. 남는 잔여는 **실제 ORB 자신의 인코더가 만든 컴포넌트** 하나이며 그들만이
+할 수 있는 주장이므로, 계수되는 `SKIPPED`로 남는다.*
 
 ### B4. Deployment — *stream D*
 - **State.** R7's IOR rewriting built and measured against constructed failures;
@@ -402,7 +431,7 @@ they touch a batch; class B as fixtures appear; class C never, until triggered.
 | 4 | **A2** versioned `Capability` | A | `idl-diff` both directions; router refusing an unmeasured expert | 06ea90e — additive `MeasuredCapability`, both gates in the harness |
 | 5 | **A4** structural `_t` in `_rt.py` | A | golden crossings up, divergences 0 | 50a4d12 — 78→158 (→170 with golden 29); it found the anyjson `Recursive` gap, closed 1b6b4c8, and three empty witnesses, all closed |
 | 6 | **§6**'s five rows | D | none — restate/mark/remove with argument | 65f43a9; README's sixth row 585ed68 |
-| — | **B1–B6** | B | each a SKIPPED group naming its fixture; measured the day it appears | B5 measured in full (74b0f15, 2a052cb, 382baa9 — a wire defect found and fixed on the first measurement); B2/B3 became counted SKIPPED groups 7cefabd; B1/B4/B6 were already |
+| — | **B1–B6** | B | each a SKIPPED group naming its fixture; measured the day it appears | B5 measured in full (74b0f15, 2a052cb, 382baa9 — a wire defect found and fixed on the first measurement); **B3 measured in full 2026-08-25** (21 of 21, §4 B3 — the fixture it was waiting for was not the one it needed), its residue still a counted SKIPPED; B2 became a counted SKIPPED group 7cefabd, as B3 had until it was measured; B1/B4/B6 were already |
 | — | **A6** Python servants | A | not until a consumer names it | not started — no consumer has named it |
 
 *(The Landed column was added on 2026-08-19 evening; the record of how the
