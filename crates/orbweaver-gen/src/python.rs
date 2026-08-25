@@ -245,12 +245,26 @@ pub fn descriptor(tc: &TypeCode) -> Result<String, String> {
 /// The same cascade [`crate::representable`] runs for Rust, over a different
 /// set of stopping points: what a Python client cannot express is not what a
 /// Rust client cannot express, and merging the two checks would hide that.
+///
+/// **The stopping points are [`descriptor`]'s, asked rather than relisted.**
+/// This function used to name four `TypeCode` families of its own and let
+/// everything else through a `_ => Ok(())`, so it held a second copy of a list
+/// `descriptor` already owns — and the two disagreed. `TypeCode::Principal`
+/// reached `descriptor`'s catch-all and reached this function's, which meant
+/// `struct Envelope { ::CORBA::Principal sender; }` was skipped while
+/// `struct Manifest { Envelope sealed; }` was emitted naming it: a descriptor
+/// `("ref", "IDL:gp34/Envelope:1.0")` pointing at a class the package never
+/// declared, which Python discovers at the first call and never at import
+/// (measured 2026-08-25 on `corpus/golden/34`). Asking the mapper at every
+/// node is what makes the gap unrepresentable — there is one list, and a
+/// `TypeCode` family it cannot map cascades without anyone maintaining a
+/// second.
 fn crossable(tc: &TypeCode, visiting: &mut Vec<String>) -> Result<(), String> {
+    // The node itself, from the function that owns the answer. The recursion
+    // below is what this function adds: `descriptor` names an aggregate by id
+    // and never looks inside one.
+    descriptor(tc)?;
     match tc {
-        TypeCode::Fixed { .. }
-        | TypeCode::Value { .. }
-        | TypeCode::AbstractInterface { .. }
-        | TypeCode::Native { .. } => descriptor(tc).map(|_| ()),
         TypeCode::Sequence { element, .. } | TypeCode::Array { element, .. } => {
             crossable(element, visiting)
         }

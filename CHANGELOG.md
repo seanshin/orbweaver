@@ -779,6 +779,58 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **Both emitters kept a second list of what the wire cannot carry, and the
+  two lists disagreed.** `orbweaver-gen`'s type mapper ends in a catch-all that
+  *refuses* anything it has no arm for; the cascade that decides whether a skip
+  reaches the containers referring to the skipped type ended in a catch-all
+  that *cleared* it. `TypeCode::Principal` landed in the gap: `struct Envelope
+  { ::CORBA::Principal sender; }` was skipped with its reason while `struct
+  Manifest { Envelope sealed; }` was emitted naming it, so the generated crate
+  did not compile (`cannot find type Envelope`) — and the Python emitter had
+  the identical split, writing a descriptor `("ref", "IDL:gp34/Envelope:1.0")`
+  for a class its package never declares, which Python discovers at the first
+  call and never at import. `representable` and `crossable` now ask `rust_type`
+  and `descriptor` at every node instead of relisting four families each, so
+  there is **one list and one catch-all per target** and a family the mapper
+  cannot map cascades from the day it exists. The property behind it is pinned
+  directly — `no_emitted_item_names_an_item_that_was_skipped`, over golden and
+  services, both emitters, each half asking the emitter's own namer rather than
+  a retyped path rule. The pin that existed could not have caught this: the
+  corpus-wide skip test exempts a file that is allowed to skip from having its
+  skip *set* checked at all.
+
+  **두 에미터가 각각 "와이어가 실을 수 없는 것" 목록을 하나씩 더 들고 있었고, 두
+  목록이 서로 달랐다.** 타입 매퍼의 마지막 갈래는 모르는 것을 *거부*하고,
+  스킵을 컨테이너까지 전파하는 캐스케이드의 마지막 갈래는 그것을 *통과*시켰다.
+  그 틈에 `TypeCode::Principal`이 떨어져, 스킵된 `Envelope`을 참조하는
+  `Manifest`가 생성되어 크레이트가 컴파일되지 않았고 — 파이썬 쪽은 선언되지 않은
+  클래스를 가리키는 서술자를 써서, 임포트가 아니라 첫 호출에서야 드러났다. 이제
+  캐스케이드는 매 노드에서 매퍼에게 묻는다: 목록도 하나, 마지막 갈래도 하나.
+
+- **A corpus addition met the second front end only when the coordinator ran
+  the full harness.** `corpus/golden/34-corba-principal.idl` (`0b8a387`) and
+  `corpus/negative/n23`–`n30` (`14228da`) landed without `differential.sh`;
+  seven of the eight diverge between omniidl and JacORB 3.9, and nobody found
+  out for days. The differential was not broken — it was never run, because
+  agents are told not to run `run_checks.sh` and nothing named the standalone
+  gate. Naming the command in a document is what already failed, so the
+  verdict stopped being an event and became data: `differential.sh --record`
+  writes `corpus/differential-results.tsv` (and **refuses with one oracle**,
+  because a record made from omniidl alone would say *measured* about a file
+  JacORB never saw), and `every_corpus_file_met_both_front_ends` — no oracle
+  needed, inside the `cargo test --workspace` every batch already runs — goes
+  red for a corpus file with no row. Membership only, said in the record's
+  header, the test's docs and its failure message; the verdicts being today's
+  is a claim only the differential can make.
+
+  **코퍼스 추가가 두 번째 프런트엔드를 만나는 시점이 조정자의 전체 하네스 실행뿐
+  이었다.** 여덟 파일 중 일곱이 두 오라클 사이에서 갈렸는데 며칠 동안 아무도
+  몰랐다. differential이 고장난 게 아니라 실행되지 않았고, 실행할 독립 게이트를
+  아무도 이름 대지 않았다. 문서에 명령을 적는 방식은 이미 실패했으므로 판정을
+  사건이 아니라 데이터로 바꿨다 — `--record`는 오라클이 둘 다 있어야만 기록하고,
+  오라클 없이 읽을 수 있는 게이트가 `cargo test --workspace` 안에서 빨개진다.
+  검사하는 것은 **소속뿐**이며, 판정이 오늘의 것인지는 주장하지 않는다.
+
 - **Four gates were reporting green over what they had never read.** One
   class, found four ways in one day, each by running a gate rather than
   reading it.
