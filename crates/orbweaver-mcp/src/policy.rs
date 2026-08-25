@@ -120,6 +120,16 @@ pub enum Denied {
         /// written by the person who owns the interface or by the person who
         /// wired up the bridge.
         assumed: bool,
+        /// Who the contract says may approve it ([`crate::dryrun::AI_APPROVER`]),
+        /// or `None` where it does not say.
+        ///
+        /// Carried on the refusal rather than only in the dry-run report
+        /// because *waiting for whom* is half of what a caller stuck at this
+        /// gate needs, and the gate already had it: [`effect_refusal`] holds
+        /// the registry at the moment it refuses. Still **data** — nothing here
+        /// acts on it (§9.0 R11); it is rendered by [`Denied::remedy`] and
+        /// nowhere else.
+        approver: Option<String>,
     },
     /// The contract states no `ai_effect` for this operation and the exposure
     /// declares no assumption for the silence.
@@ -206,10 +216,215 @@ impl Denied {
     pub fn is_transient(&self) -> bool {
         matches!(self, Denied::QuotaExhausted { renews: true, .. })
     }
+
+    /// **What would make this call legitimate**, from what the gate already
+    /// held when it refused.
+    ///
+    /// S4 gives an IDL diagnostic a position and a fix hint, and this project
+    /// counts diagnostics as a product; a refused *call* used to get a rule id
+    /// and a reason and not the one thing an agent needs next. Nothing here is
+    /// inferred, discovered or guessed: every clause below is built from fields
+    /// this refusal already carries — the repository id the allowlist does not
+    /// name, the scope the contract asks for, the annotation the contract does
+    /// not carry, the budget's own key. This is `orbweaver-forge`'s
+    /// finding-plus-fix shape applied to calls, and it is deliberately the
+    /// *same* shape: an agent that meets two refusal formats from one system
+    /// learns neither.
+    ///
+    /// # The rule, and why it is written at the site
+    ///
+    /// **A remedy is not a way around the refusal.** Default-deny stays
+    /// default-deny. Every sentence below names an act belonging to somebody
+    /// who is not the caller — an operator widening an allowlist, the host that
+    /// issues credentials, a human approving, the author of the contract
+    /// annotating it — and none of them names a route the agent can take by
+    /// itself. If a remedy would read as *"ask again with X"* where `X` is
+    /// something the agent controls and the gate exists to stop, that remedy is
+    /// wrong and the refusal is correct as it stands. The next person to extend
+    /// this will feel the pull; [`REMEDY_ACTORS`] and [`REMEDY_FORBIDDEN`] are
+    /// how the tests hold the line, and they are published here rather than
+    /// retyped in a test so that a changed vocabulary changes both at once.
+    ///
+    /// The one apparent exception is [`Denied::QuotaExhausted`] on a renewing
+    /// budget, where waiting *is* the answer. It is not an exception to the
+    /// rule: that gate exists to bound a rate and not to bound a permission, so
+    /// a later window is the legitimate path and [`Denied::is_transient`]
+    /// already says so in the exception a stub's caller reads. The sentence
+    /// still names **the host** as what opens the next window, because nothing
+    /// about the *request* changes the count.
+    ///
+    /// # It is a `String` and the match is exhaustive
+    ///
+    /// Not an `Option`, and no `_ =>` arm. A refusal an agent can receive owes
+    /// it a next step, so the compiler is what asks the next variant's author
+    /// for one — which is the whole of the codification, since a rule about
+    /// diagnostics that lives only in a document is a rule the next variant
+    /// will not read.
+    ///
+    /// *거절은 우회로가 아니다. 모든 구제책은 호출자가 아닌 누군가의 행위를
+    /// 이름한다 — 운영자, 호스트, 승인하는 사람, 계약의 저자. 에이전트가 혼자
+    /// 갈 수 있는 길은 결코 적지 않는다.*
+    pub fn remedy(&self) -> String {
+        match self {
+            // Names the id and says the allowlist is default-deny by design. It
+            // must not say how to get on the allowlist: that is an operator's
+            // act, and an agent reading instructions for it is the failure this
+            // gate exists to prevent.
+            Denied::InterfaceNotExposed(id) => format!(
+                "an operator must add {id} to this bridge's exposure allowlist; exposure is \
+                 default-deny by design and no request can widen it"
+            ),
+            Denied::OperationNotExposed { id, operation } => format!(
+                "an operator must add {operation:?} to the operations allowed on {id}; the \
+                 interface is exposed and this operation is not, and no request can widen it"
+            ),
+            // The scope is right there in the comparison the stage just made.
+            Denied::MissingScope { id, operation, required } => format!(
+                "the scope {required:?} is what {id}.{operation} asks for, and the host that \
+                 issued this caller's credential is what grants it; a call cannot widen its own \
+                 scopes"
+            ),
+            Denied::NotAuthenticated { id, operation, required } => format!(
+                "the host must authenticate a caller before {id}.{operation} can be checked \
+                 against anything, and that caller has to hold the scope {required:?}"
+            ),
+            Denied::CredentialExpired { principal, overdue_secs: Some(_) } => format!(
+                "the host must re-authenticate {principal}; an expired credential cannot be \
+                 extended from the caller's side"
+            ),
+            Denied::CredentialExpired { principal, overdue_secs: None } => format!(
+                "the host must supply the current instant to the expiry gate before {principal}'s \
+                 credential can be judged still valid"
+            ),
+            Denied::NeedsApproval { id, operation, effect, assumed, approver } => {
+                let mut out = format!(
+                    "a human must approve this specific call of {id}.{operation} and the approval \
+                     reaches this bridge from the host that authenticated them; a caller cannot \
+                     assert its own approval"
+                );
+                if let Some(who) = approver {
+                    out.push_str(&format!(", and the contract names {who} as who may approve"));
+                }
+                // Said only for an assumed effect. The remedy for a *stated*
+                // one is the approval and nothing else: telling a caller its
+                // contract could say something different would be inviting an
+                // edit to get past a gate, which is the shape this whole
+                // function refuses.
+                if *assumed {
+                    out.push_str(&format!(
+                        ". {id}.{operation} could also state an ai_effect of its own, so that \
+                         {effect} comes from the contract's author rather than from this \
+                         exposure's assumption"
+                    ));
+                }
+                out
+            }
+            // The sentence S4 writes for the same condition, in this crate's
+            // wording. See the module note in `crate::guard` on where this fact
+            // lives: `orbweaver-forge`'s `sidl/missing-ai_effect` fix hint says
+            // it too and neither crate depends on the other.
+            Denied::EffectUnstated { id, operation } => format!(
+                "annotate the operation (`//@ ai_effect: read_only` or `//@ ai_effect: \
+                 destructive`), or an operator declares what this exposure assumes for the \
+                 operations that state none; until one of those happens {id}.{operation} has \
+                 nobody's statement to rest on"
+            ),
+            // Names the stage and **not one word the stage wrote**, for the
+            // reason `crate::guard::audit_reason` gives: that prose is the only
+            // part of a refusal this crate did not write, and the seat it comes
+            // from is the one that holds argument values.
+            Denied::Intercepted { stage, .. } => format!(
+                "the {stage} stage was installed by this deployment, so what would satisfy it is \
+                 an operator's answer and not this bridge's"
+            ),
+            Denied::QuotaExhausted { budget, window, renews: true, .. } => format!(
+                "the budget {budget} is spent for window {window:?} and the host is what opens \
+                 the next one; nothing about the request changes the count"
+            ),
+            Denied::QuotaExhausted { budget, renews: false, .. } => format!(
+                "an operator must raise or reset the limit on {budget}; this budget does not \
+                 renew, so no later window will"
+            ),
+        }
+    }
 }
 
+/// The actors a [`Denied::remedy`] is allowed to name, and every remedy names
+/// at least one of them.
+///
+/// The positive half of the rule that keeps a remedy from becoming a way
+/// around the refusal: the act that would make the call legitimate belongs to
+/// somebody who is **not the caller**, so the sentence has to say who. A
+/// remedy that names none of these is either vague or is addressing the agent,
+/// and both are defects.
+///
+/// Published here rather than retyped in a test because a classifier that
+/// matches a hand-written substring of a sentence some other function owns
+/// drifts the moment the sentence changes for a good reason.
+pub const REMEDY_ACTORS: [&str; 4] = ["an operator", "the host", "a human", "the contract"];
+
+/// Phrasings a [`Denied::remedy`] may never contain — the negative half.
+///
+/// Each is a way of telling the caller to act on **its own request**: to send
+/// it again, to send it differently, or to hand itself something. A gate whose
+/// refusal ends in one of these is a gate that has explained how to get past
+/// it. The second-person forms are here because that is how such a sentence
+/// arrives: a remedy addressed to *you* is a remedy the agent is expected to
+/// carry out.
+///
+/// `retry` is on the list even though a renewing budget genuinely does invite
+/// one — [`Denied::is_transient`] is where that is said, in the currency a
+/// stub's caller acts on, and saying it a second time in prose would put the
+/// retry decision back into text somebody has to grep.
+pub const REMEDY_FORBIDDEN: [&str; 10] = [
+    "you ",
+    "your ",
+    "yourself",
+    "retry",
+    "try again",
+    "ask again",
+    "call again",
+    "resend",
+    "re-send",
+    "request it again",
+];
+
+/// The refusal as everything that reads one hears it: **the fact, then what
+/// would make the call legitimate.**
+///
+/// The remedy is a second sentence in the same string rather than a field on
+/// the enum, and that is a decision about reach rather than about taste. Every
+/// consumer of a refusal in this crate already takes it as prose through this
+/// one rendering — [`crate::ToolError`]'s `Display`, which `crate::session`
+/// hands `crate::rpc::tool_error` verbatim; the [`crate::dryrun`] report's
+/// `why`; the audit
+/// ledger by way of `crate::guard::audit_reason`; every observer stage handed a
+/// `CallResult::Refused`. A field would have taught exactly the readers that
+/// were rewritten to ask for it and silently not the others, which is the
+/// familiar shape of a fact with two homes. [`Denied::remedy`] is still
+/// separately callable, so a structured consumer that wants the halves apart
+/// has them.
+///
+/// It reaches the ledger too, and that is intended: the remedy names an
+/// operator's act, and an operator grepping `REFUSE` lines is the actor most of
+/// these sentences are about. It is safe there for the reason
+/// `crate::guard::audit_reason` states — a remedy is built from repository ids,
+/// operation names, scope names and a budget key, and never from a byte the
+/// agent sent. The one variant whose prose could hold a payload,
+/// [`Denied::Intercepted`], gets a remedy that names its stage and quotes
+/// nothing.
 impl std::fmt::Display for Denied {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.fact(f)?;
+        write!(f, ". To make this call legitimate: {}", self.remedy())
+    }
+}
+
+impl Denied {
+    /// The refusal as it stood before it taught anything: what was refused and
+    /// why, with no next step. Split out of `Display` so that the two halves
+    /// have one writer each and neither can restate the other.
+    fn fact(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Denied::InterfaceNotExposed(id) => write!(
                 f,
@@ -240,13 +455,13 @@ impl std::fmt::Display for Denied {
                 "{id}.{operation} requires the scope {required:?} and this session has no \
                  authenticated caller, so there is nobody to check it against"
             ),
-            Denied::NeedsApproval { id, operation, effect, assumed: false } => write!(
+            Denied::NeedsApproval { id, operation, effect, assumed: false, .. } => write!(
                 f,
                 "{id}.{operation} is marked {effect} and needs an explicit approval before it \
                  can be called"
             ),
             // Who said the word matters to whoever is being asked to approve.
-            Denied::NeedsApproval { id, operation, effect, assumed: true } => write!(
+            Denied::NeedsApproval { id, operation, effect, assumed: true, .. } => write!(
                 f,
                 "{id}.{operation} states no ai_effect and this exposure assumes {effect} for the \
                  operations that state none, so it needs an explicit approval before it can be \
@@ -254,13 +469,15 @@ impl std::fmt::Display for Denied {
             ),
             // Names the annotation, not the allowlist. A refusal that said only
             // "no" would send an operator into a permissions config looking for
-            // a problem that is in the contract.
+            // a problem that is in the contract. The clause that says *which*
+            // annotation moved to [`Denied::remedy`] when every refusal grew
+            // one: it was this variant's second sentence before it was every
+            // variant's, and leaving a copy here would have made it the only
+            // refusal that says its remedy twice.
             Denied::EffectUnstated { id, operation } => write!(
                 f,
                 "{id}.{operation} carries no ai_effect, so the contract does not say whether an \
-                 agent may call it without a human, and this bridge will not guess one. Annotate \
-                 the operation (`//@ ai_effect: read_only` or `//@ ai_effect: destructive`), or \
-                 declare what this exposure assumes for operations that state none"
+                 agent may call it without a human, and this bridge will not guess one"
             ),
             Denied::Intercepted { stage, reason } => {
                 write!(f, "the {stage} stage refused this call: {reason}")
@@ -567,6 +784,13 @@ pub(crate) fn effect_refusal(
         operation: operation.to_owned(),
         effect,
         assumed,
+        // Read through the same constant the dry-run report reads it by, so the
+        // approver a report names and the approver a refusal names cannot come
+        // to differ. Absent is absent: nothing is guessed when the contract is
+        // silent about who may say yes.
+        approver: registry
+            .resolve_operation(id, operation)
+            .and_then(|(_, sig)| sig.annotations.get(crate::dryrun::AI_APPROVER).cloned()),
     })
 }
 
