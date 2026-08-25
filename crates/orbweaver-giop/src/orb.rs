@@ -54,13 +54,24 @@
 //! `NameService` entry would be answering for a service it does not serve, and
 //! the refusal is the honest answer until a deployment says otherwise.
 //!
+//! # The two conversions (D019 step 2)
+//!
+//! [`Orb::string_to_object`] and [`Orb::object_to_string`] are **CORBA 3.4
+//! §8.2.2**, under the names every CORBA programmer looks for. They are not new
+//! behaviour: [`Ior::parse`], [`Ior::to_stringified`] and
+//! [`crate::naming::ObjectUrl`] already did the work. What they add is the
+//! **decision** — §8.2.2 has one `string_to_object` because a caller holding a
+//! stringified reference cannot be expected to know which of three forms it
+//! has, and until step 1 landed the `rir` case there was no single place that
+//! could answer all three. See [`Orb::string_to_object`] for why that is a
+//! decision and not a rename.
+//!
 //! # What this module is not, yet
 //!
-//! D019 §5 proposes four responsibilities for this object. This is the first:
-//! the initial references table. The two named conversions
-//! (`string_to_object` / `object_to_string`), the seven configuration numbers
-//! and the handing out of transport and root POA are separate batches, and the
-//! last of those is gated on the §5 shape being approved.
+//! D019 §5 proposes four responsibilities for this object. This has the first
+//! two: the initial references table and the two named conversions. The seven
+//! configuration numbers and the handing out of transport and root POA are
+//! separate batches, and the last is gated on the §5 shape being approved.
 //!
 //! *ORB가 `resolve_initial_references`의 언어를 말할 줄 알면서 그것을 대조할
 //! 표를 갖고 있지 않았다. 이 모듈이 그 표다 — CORBA 3.4 §8.5.2가 정의한 평평한
@@ -342,47 +353,228 @@ impl Orb {
         }
     }
 
-    /// The same, from the URL text — parsing and then resolving.
+    /// `ORB::string_to_object` (CORBA 3.4 §8.2.2.2) — **the one operation that
+    /// decides** what a stringified reference is and turns it into one.
+    ///
+    /// Accepts every form this ORB can read:
+    ///
+    /// | The string starts | It is read by | Since |
+    /// |---|---|---|
+    /// | `IOR:<hex>` | [`Ior::parse`] | Phase 1 |
+    /// | `corbaloc:`, `corbaname:` | [`ObjectUrl::parse`] then [`Orb::resolve_url`] | Phase 1 |
+    /// | `corbaloc:rir:<ObjectId>` | the initial references table | D019 step 1 |
+    ///
+    /// # Why this is not cosmetic
+    ///
+    /// Those three rows were three separate entry points in two modules, and
+    /// **the caller had to already know which one it was holding** — which is
+    /// precisely the knowledge a stringified reference exists to remove. A
+    /// configuration file, a command line and a `-ORBInitRef` argument all hand
+    /// over a string whose form is the *deployment's* choice, not the
+    /// programmer's. §8.2.2 has one operation because a caller cannot have that
+    /// knowledge; we had two because we were reading from the emitting side,
+    /// where `to_stringified` is a perfectly good *serialiser* name and
+    /// `Ior::parse` is a perfectly good *parser* name. Neither is the name of
+    /// the thing a caller wants.
+    ///
+    /// # The type of what comes back
+    ///
+    /// §8.5.2: *"The application is responsible for narrowing the object
+    /// reference returned."* An `IOR:` string carries the repository id it was
+    /// written with and that id is kept. A URL carries **no type at all**, so
+    /// the reference comes back with an empty `type_id` rather than one this
+    /// function invented — an invented id is a claim the caller cannot check
+    /// and would carry onto the wire. A caller that knows the type stamps it,
+    /// or calls [`Orb::resolve_url`], which takes one.
     ///
     /// # Errors
     ///
-    /// [`ResolveError::Url`] if the string is not an object URL at all,
-    /// [`ResolveError::Name`] if it is a `rir:` name this ORB does not answer
-    /// for.
-    pub fn resolve_url_str(
-        &self,
-        url: &str,
-        type_id: &str,
-    ) -> std::result::Result<Ior, ResolveError> {
-        let parsed = ObjectUrl::parse(url).map_err(ResolveError::Url)?;
-        self.resolve_url(&parsed, type_id).map_err(ResolveError::Name)
+    /// [`StringToObjectError`], which keeps the four causes apart because they
+    /// need four different fixes, and names the string in every one.
+    ///
+    /// # Not accepted, deliberately
+    ///
+    /// `file:`, `ftp:` and `http:` URLs — which some ORBs read as *"fetch a
+    /// stringified IOR from there"* — are refused. They are not in §8.2.2 or in
+    /// Part 2 §7.6.10's object URL schemes, and each turns a conversion into an
+    /// outbound network fetch from a string a peer may have supplied.
+    pub fn string_to_object(&self, s: &str) -> std::result::Result<Ior, StringToObjectError> {
+        let text = s.trim();
+        if text.len() >= 4 && text[..4].eq_ignore_ascii_case("IOR:") {
+            // §7.6.9's prefix is case-insensitive, which is why this sniffs the
+            // same way `ior_hex_bytes` does rather than with `starts_with`.
+            return Ior::parse(text)
+                .map_err(|cause| StringToObjectError::Ior { text: text.to_owned(), cause });
+        }
+        // A `corbaname:` URL with a name in it denotes **the object bound under
+        // that name**, not the naming context that holds it (Part 2 §7.6.10.5).
+        // Producing the reference it denotes therefore takes an outbound
+        // `resolve` call, and a conversion that dials is not what this batch is.
+        // Measured against omniORB 2026-08-25, which *does* dial here — it
+        // answers `TRANSIENT` for an unreachable naming service — while
+        // agreeing with us on the fragment-less form, which denotes the context
+        // itself and needs no call.
+        //
+        // Returning the naming context would be the wrong object, silently, and
+        // that is the one answer this operation must never give. Refused by
+        // name until the resolving version has its own batch and its own
+        // timeout: see [`crate::naming::NamingContext::from_url`], which is how
+        // a caller does it today, in two steps that it can see.
+        if let Ok(ObjectUrl::Corbaname { name, .. }) = ObjectUrl::parse(text)
+            && !name.is_empty()
+        {
+            return Err(StringToObjectError::NeedsANamingCall {
+                text: text.to_owned(),
+                name: crate::naming::stringify_name(&name),
+            });
+        }
+        let url = ObjectUrl::parse(text).map_err(|cause| {
+            // `ObjectUrl::parse` refuses an unknown scheme with `BadSchemeName`,
+            // which is also the answer for a string that is not a reference at
+            // all — the only two things it can be, once `IOR:` is ruled out.
+            match cause {
+                crate::naming::UrlError::BadSchemeName(_) => {
+                    StringToObjectError::NotAReferenceString { text: text.to_owned() }
+                }
+                other => StringToObjectError::Url { text: text.to_owned(), cause: other },
+            }
+        })?;
+        self.resolve_url(&url, "")
+            .map_err(|cause| StringToObjectError::Name { text: text.to_owned(), cause })
+    }
+
+    /// `ORB::object_to_string` (CORBA 3.4 §8.2.2.1) — the `IOR:<hex>` string
+    /// for a reference.
+    ///
+    /// The conformance sentence §8.2.2 gives is a **round trip**, and it is the
+    /// only thing the sub clause promises: *"if obj is a valid reference to an
+    /// object, then `string_to_object(object_to_string(obj))` will return a
+    /// valid reference to the same object … For all conforming ORBs supporting
+    /// IOP, this remains true even if the two operations are performed on
+    /// different ORBs."* So this emits the interoperable form and never a URL:
+    /// a URL is a *bootstrap* that may name a different object tomorrow, which
+    /// is the opposite of what §8.2.2 asks for.
+    ///
+    /// # Errors
+    ///
+    /// The reference could not be marshalled — see [`Ior::to_stringified`],
+    /// which this delegates to and does not reimplement.
+    pub fn object_to_string(&self, obj: &Ior) -> crate::Result<String> {
+        obj.to_stringified()
     }
 }
 
-/// Why [`Orb::resolve_url_str`] could not produce a reference: the URL did not
-/// parse, or it named an initial reference this ORB does not have.
+/// Why [`Orb::string_to_object`] could not produce a reference.
 ///
-/// Two separate causes because they need different fixes — one is a typo in a
-/// URL, the other is a missing registration — and collapsing them into one
-/// string is how a caller ends up guessing which.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResolveError {
-    /// The string is not a `corbaloc:`/`corbaname:` URL.
-    Url(crate::naming::UrlError),
-    /// The URL is `corbaloc:rir:<ObjectId>` and the table has no such entry.
-    Name(InvalidName),
+/// Four causes, kept apart because they need four different fixes — a string
+/// that is not a reference at all, a malformed `IOR:` body, a malformed URL,
+/// and a well-formed `corbaloc:rir:` name nothing registered. Collapsing them
+/// into one string is how a caller ends up guessing which, and **every variant
+/// carries the string it was given**, so no refusal here is anonymous.
+///
+/// This type replaced `ResolveError` (D019 step 1) rather than joining it:
+/// two error types for *"I gave you a string, give me a reference"* is the same
+/// duplication [`Orb::string_to_object`] exists to remove, one layer up.
+#[derive(Debug)]
+pub enum StringToObjectError {
+    /// Neither `IOR:` nor any object URL scheme.
+    NotAReferenceString {
+        /// The string, as given.
+        text: String,
+    },
+    /// An `IOR:` prefix over a body that is not a marshalled reference.
+    Ior {
+        /// The string, as given.
+        text: String,
+        /// What the `IOR:<hex>` reader made of it.
+        cause: crate::Error,
+    },
+    /// A recognised URL scheme, malformed after it.
+    Url {
+        /// The string, as given.
+        text: String,
+        /// What the URL parser made of it, carrying §7.6.10.3's minor code.
+        cause: crate::naming::UrlError,
+    },
+    /// A well-formed `corbaloc:rir:<ObjectId>` this ORB has no entry for.
+    Name {
+        /// The string, as given.
+        text: String,
+        /// The refusal, which names the `ObjectId`.
+        cause: InvalidName,
+    },
+    /// A `corbaname:` URL carrying a name: the object it denotes can only be
+    /// had by calling `resolve` on the naming service the URL addresses, and
+    /// this operation does not dial. See [`Orb::string_to_object`].
+    NeedsANamingCall {
+        /// The string, as given.
+        text: String,
+        /// The stringified name that would have to be resolved.
+        name: String,
+    },
 }
 
-impl std::fmt::Display for ResolveError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl StringToObjectError {
+    /// The string that was handed to [`Orb::string_to_object`].
+    pub fn text(&self) -> &str {
         match self {
-            ResolveError::Url(e) => write!(f, "{e}"),
-            ResolveError::Name(e) => write!(f, "{e}"),
+            StringToObjectError::NotAReferenceString { text }
+            | StringToObjectError::Ior { text, .. }
+            | StringToObjectError::Url { text, .. }
+            | StringToObjectError::Name { text, .. }
+            | StringToObjectError::NeedsANamingCall { text, .. } => text,
         }
     }
 }
 
-impl std::error::Error for ResolveError {}
+impl std::fmt::Display for StringToObjectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Long strings are the normal case here — a stringified IOR runs to
+        // hundreds of hex digits — so the head is enough to identify it and the
+        // whole thing would bury the reason.
+        let text = self.text();
+        let shown: String = if text.chars().count() > 72 {
+            format!("{}…", text.chars().take(72).collect::<String>())
+        } else {
+            text.to_owned()
+        };
+        match self {
+            StringToObjectError::NotAReferenceString { .. } => write!(
+                f,
+                "{shown:?} is not a stringified object reference: it begins with neither \
+                 \"IOR:\" nor a corbaloc:/corbaname: scheme (CORBA 3.4 §8.2.2.2)"
+            ),
+            StringToObjectError::Ior { cause, .. } => {
+                write!(f, "{shown:?} has an \"IOR:\" prefix but does not decode: {cause}")
+            }
+            StringToObjectError::Url { cause, .. } => {
+                write!(f, "{shown:?} is a malformed object URL: {cause}")
+            }
+            StringToObjectError::Name { cause, .. } => {
+                write!(f, "{shown:?} could not be resolved: {cause}")
+            }
+            StringToObjectError::NeedsANamingCall { name, .. } => write!(
+                f,
+                "{shown:?} denotes the object bound under {name:?} in the naming service it \
+                 addresses (CORBA 3.4 Part 2 §7.6.10.5), and producing it takes a resolve call \
+                 this operation does not make; connect with NamingContext::from_url and resolve \
+                 the name"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for StringToObjectError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            StringToObjectError::NotAReferenceString { .. }
+            | StringToObjectError::NeedsANamingCall { .. } => None,
+            StringToObjectError::Ior { cause, .. } => Some(cause),
+            StringToObjectError::Url { cause, .. } => Some(cause),
+            StringToObjectError::Name { cause, .. } => Some(cause),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -561,22 +753,173 @@ mod tests {
         assert!(!is_reserved_object_id("nameservice"));
     }
 
-    /// The parse-and-resolve entry keeps the two causes apart, because a typo
-    /// in a URL and a missing registration need different fixes.
+    /// §8.2.2's one operation reads all three forms, and the caller does not
+    /// have to know which one it is holding. That is the whole claim of step 2.
     #[test]
-    fn resolve_url_str_tells_a_bad_url_apart_from_a_missing_name() {
+    fn string_to_object_decides_between_the_three_forms() {
         let mut orb = Orb::new();
-        orb.register_initial_reference("NameService", ior(b"NS")).unwrap();
-        assert_eq!(
-            orb.resolve_url_str("corbaloc:rir:NameService", "IDL:x:1.0").unwrap(),
-            ior(b"NS")
-        );
+        let registered = ior(b"NS");
+        orb.register_initial_reference("NameService", registered.clone()).unwrap();
+
+        // 1. the hex blob — and its repository id survives, because the string
+        //    carried one.
+        let hex = registered.to_stringified().unwrap();
+        let from_hex = orb.string_to_object(&hex).unwrap();
+        assert_eq!(from_hex, registered);
+        assert_eq!(from_hex.type_id, "IDL:omg.org/CosNaming/NamingContextExt:1.0");
+
+        // 2. an addressed URL — no type in the string, so no type invented.
+        let from_url = orb.string_to_object("corbaloc:iiop:1.2@10.0.0.1:9999/Echo").unwrap();
+        assert_eq!(from_url.type_id, "", "a URL carries no repository id; §8.5.2 narrows later");
+        assert_eq!(from_url.profiles[0].port, 9999);
+        assert_eq!(from_url.profiles[0].object_key, b"Echo");
+        // A corbaname URL with no name denotes the naming context itself, and
+        // needs no call to produce. One that carries a name does — see
+        // `a_corbaname_carrying_a_name_is_refused_rather_than_answered_wrongly`.
+        assert_eq!(orb.string_to_object("corbaname::host").unwrap().profiles[0].host, "host");
+
+        // 3. the form that carries no address at all, which only works because
+        //    step 1 gave the ORB a table.
+        assert_eq!(orb.string_to_object("corbaloc:rir:NameService").unwrap(), registered);
+        assert_eq!(orb.string_to_object("corbaloc:rir:").unwrap(), registered);
+
+        // Leading and trailing whitespace: a string read from a file has a
+        // newline on it, which is how every fixture in this repository holds an
+        // IOR.
+        assert_eq!(orb.string_to_object(&format!("  {hex}\n")).unwrap(), registered);
+    }
+
+    /// §7.6.9: *"the case of a stringified IOR is not significant."* The
+    /// sniffing that picks the branch has to agree with the parser it picks.
+    #[test]
+    fn the_ior_prefix_is_matched_case_insensitively() {
+        let orb = Orb::new();
+        let hex = ior(b"K").to_stringified().unwrap();
+        for spelling in ["IOR:", "ior:", "Ior:", "iOr:"] {
+            let restyled = format!("{spelling}{}", &hex[4..]);
+            assert_eq!(orb.string_to_object(&restyled).unwrap(), ior(b"K"), "{spelling}");
+        }
+    }
+
+    /// The four causes are kept apart, and **every refusal names the string**.
+    #[test]
+    fn string_to_object_keeps_its_four_causes_apart_and_names_the_string() {
+        let orb = Orb::new();
+
+        let not_one = orb.string_to_object("hello world").unwrap_err();
+        assert!(matches!(not_one, StringToObjectError::NotAReferenceString { .. }));
+        assert!(not_one.to_string().contains("hello world"), "{not_one}");
+        assert!(not_one.to_string().contains("§8.2.2.2"), "{not_one}");
+        assert_eq!(not_one.text(), "hello world");
+        // An unknown *scheme* is the same cause: it is not a reference string.
         assert!(matches!(
-            orb.resolve_url_str("http://x", "IDL:x:1.0"),
-            Err(ResolveError::Url(crate::naming::UrlError::BadSchemeName(_)))
+            orb.string_to_object("http://example.test/x"),
+            Err(StringToObjectError::NotAReferenceString { .. })
         ));
-        let missing = orb.resolve_url_str("corbaloc:rir:TradingService", "IDL:x:1.0").unwrap_err();
-        assert!(matches!(missing, ResolveError::Name(_)));
-        assert!(missing.to_string().contains("\"TradingService\""), "{missing}");
+
+        let bad_hex = orb.string_to_object("IOR:zzz").unwrap_err();
+        assert!(matches!(bad_hex, StringToObjectError::Ior { .. }));
+        assert!(bad_hex.to_string().contains("IOR:zzz"), "{bad_hex}");
+
+        let bad_url = orb.string_to_object("corbaloc::h:notaport/K").unwrap_err();
+        assert!(matches!(bad_url, StringToObjectError::Url { .. }));
+        let said = bad_url.to_string();
+        assert!(said.contains("corbaloc::h:notaport/K"), "{said}");
+        assert!(said.contains("BAD_PARAM minor 8"), "the URL layer's own code survives: {said}");
+
+        let missing = orb.string_to_object("corbaloc:rir:TradingService").unwrap_err();
+        assert!(matches!(missing, StringToObjectError::Name { .. }));
+        let said = missing.to_string();
+        assert!(said.contains("corbaloc:rir:TradingService"), "{said}");
+        assert!(said.contains("\"TradingService\""), "the InvalidName still names it: {said}");
+
+        // A stringified IOR is hundreds of characters; the head identifies it
+        // and the reason must not be buried behind it.
+        let long = format!("IOR:{}", "0".repeat(400));
+        let said = orb.string_to_object(&long).unwrap_err().to_string();
+        assert!(said.contains('…'), "a long string is elided: {said}");
+        assert!(said.len() < 300, "and the reason stays visible: {said}");
+    }
+
+    /// §8.2.2's conformance sentence, which is the only thing the sub clause
+    /// promises: `string_to_object(object_to_string(obj))` is `obj`.
+    ///
+    /// Run over every shape this crate can hold — nil, one profile, several,
+    /// IPv6, an empty type id, a key with non-UTF-8 bytes in it — because the
+    /// round trip is a property of the pair and not of one example.
+    #[test]
+    fn object_to_string_round_trips_through_string_to_object() {
+        let orb = Orb::new();
+        let profile = |host: &str, port: u16, key: &[u8], v: Version| IiopProfile {
+            version: v,
+            host: host.into(),
+            port,
+            object_key: key.to_vec(),
+            components: Vec::new(),
+        };
+        let cases = [
+            Ior { type_id: String::new(), profiles: Vec::new() }, // the nil reference
+            ior(b"one"),
+            Ior {
+                type_id: "IDL:spike/Echo:1.0".into(),
+                profiles: vec![
+                    profile("a.test", 1111, b"A", Version::V1_0),
+                    profile("::1", 2222, b"B", Version::V1_1),
+                    profile("c.test", 3333, b"C", Version::V1_2),
+                ],
+            },
+            Ior {
+                // No repository id, which is exactly what a URL-built
+                // reference looks like coming out of `string_to_object`.
+                type_id: String::new(),
+                profiles: vec![profile("h", 4001, &[0x00, 0xFF, 0x80, b'/'], Version::V1_2)],
+            },
+        ];
+        for obj in cases {
+            let s = orb.object_to_string(&obj).unwrap();
+            assert!(s.starts_with("IOR:"), "§8.2.2 asks for the interoperable form, got {s:?}");
+            assert_eq!(orb.string_to_object(&s).unwrap(), obj, "round trip failed for {s}");
+        }
+    }
+
+    /// A `corbaname:` URL carrying a name denotes the object bound under it,
+    /// which takes a call. The wrong answer was available and cheap — hand back
+    /// the naming context, which is what [`ObjectUrl::to_ior`] builds for this
+    /// form — and it is wrong *silently*, which is why it is refused instead.
+    #[test]
+    fn a_corbaname_carrying_a_name_is_refused_rather_than_answered_wrongly() {
+        let orb = Orb::new();
+        let err =
+            orb.string_to_object("corbaname::h.test:2809/NameService#spike/Echo").unwrap_err();
+        assert!(matches!(err, StringToObjectError::NeedsANamingCall { .. }));
+        let said = err.to_string();
+        assert!(said.contains("spike/Echo"), "the refusal names the name: {said}");
+        assert!(said.contains("§7.6.10.5"), "and cites the sub clause: {said}");
+        assert!(said.contains("NamingContext::from_url"), "and says what does work: {said}");
+
+        // The two-step path this points at is unchanged and still builds the
+        // naming context, which is the right object *for that step*.
+        let url = ObjectUrl::parse("corbaname::h.test:2809/NameService#spike/Echo").unwrap();
+        let ctx = url.to_ior("IDL:x:1.0").expect("the context is still addressable");
+        assert_eq!(ctx.profiles[0].object_key, b"NameService");
+        assert_eq!(ctx.profiles[0].port, 2809);
+
+        // …and the fragment-less form is a reference, not a lookup, so it is
+        // answered. Measured 2026-08-25: omniORB draws the line in the same
+        // place.
+        assert!(orb.string_to_object("corbaname::h.test:2809/NameService").is_ok());
+    }
+
+    /// `object_to_string` emits the `IOR:` form even for a reference that
+    /// arrived as a URL, because §8.2.2's promise is that the string denotes
+    /// *the same object* — and a URL is a bootstrap that may name a different
+    /// one tomorrow.
+    #[test]
+    fn a_url_becomes_an_interoperable_string_not_another_url() {
+        let orb = Orb::new();
+        let from_url = orb.string_to_object("corbaloc:iiop:1.2@10.0.0.1:9999/Echo").unwrap();
+        let s = orb.object_to_string(&from_url).unwrap();
+        assert!(s.starts_with("IOR:"), "{s}");
+        assert_eq!(orb.string_to_object(&s).unwrap(), from_url);
     }
 }

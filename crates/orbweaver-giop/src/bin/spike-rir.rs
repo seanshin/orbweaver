@@ -87,12 +87,20 @@ fn run(peer: &str, name: &str, empty: bool) -> Result<(), Box<dyn std::error::Er
     let mut orb = Orb::new();
 
     // ── 1. the address the deployment knows, turned into a reference ──
-    // This half is the part that already worked: an addressed URL builds an
-    // IOR. It is what a `-ORBInitRef NameService=<url>` would carry.
-    let endpoint = ObjectUrl::parse(peer)?;
-    let ns_ior: Ior = endpoint
-        .to_ior(NC_EXT)
-        .ok_or("--peer must be an addressed corbaloc: URL, not another rir: name")?;
+    // This half is the part that already worked. `--peer` is typed by a human,
+    // so it goes through `string_to_object` (§8.2.2.2, D019 step 2) and accepts
+    // an `IOR:<hex>` blob just as readily as a URL — the caller does not have
+    // to know which it is holding, which is the whole point of that operation.
+    // §8.5.3.2 says `-ORBInitRef <ObjectID>=<ObjectURL>` takes any scheme
+    // `string_to_object` supports, so this is also the shape a real ORB
+    // argument would have.
+    let mut ns_ior: Ior = orb.string_to_object(peer)?;
+    if ns_ior.type_id.is_empty() {
+        // A URL carries no repository id and this one is known: the peer is a
+        // naming context. Stamping it here rather than inside the conversion is
+        // §8.5.2's *"the application is responsible for narrowing"*.
+        ns_ior.type_id = NC_EXT.to_owned();
+    }
 
     if !empty {
         orb.register_initial_reference("NameService", ns_ior.clone())?;
@@ -168,7 +176,17 @@ fn run(peer: &str, name: &str, empty: bool) -> Result<(), Box<dyn std::error::Er
     }
 
     // ── 6. negative control: the forms that already worked have not moved ──
-    for text in [peer, "corbaname::127.0.0.1:2809/NameService#spike/Echo"] {
+    //
+    // Fixed URLs rather than `peer`: since step 2 routed `--peer` through
+    // `string_to_object`, it may be an `IOR:<hex>` blob, which `ObjectUrl::parse`
+    // rightly refuses. Found by running this binary with a hex `--peer` on
+    // 2026-08-25 — the check had quietly assumed its input was a URL, which is
+    // the very assumption `string_to_object` exists to stop callers making.
+    for text in [
+        "corbaloc::127.0.0.1:2809/NameService",
+        "corbaloc:iiop:1.2@10.0.0.1:9999/Echo",
+        "corbaname::127.0.0.1:2809/NameService#spike/Echo",
+    ] {
         let url = ObjectUrl::parse(text)?;
         let direct = url.to_ior(NC_EXT).ok_or("an addressed URL stopped building an IOR")?;
         let through = orb.resolve_url(&url, NC_EXT)?;
@@ -179,6 +197,18 @@ fn run(peer: &str, name: &str, empty: bool) -> Result<(), Box<dyn std::error::Er
         }
     }
     ok("corbaloc: and corbaname: resolve exactly as to_ior alone does — unchanged");
+
+    // ── 7. step 2: the same peer, named either way, is the same reference ──
+    // `--peer` went through `string_to_object`, so whichever form was typed,
+    // `object_to_string` of the result must denote the same endpoint. This is
+    // §8.2.2's round trip on a reference that came from a live peer rather than
+    // from a literal in a test.
+    let restringified = orb.object_to_string(&ns_ior)?;
+    let reread = orb.string_to_object(&restringified)?;
+    if reread.profiles != ns_ior.profiles {
+        return Err("object_to_string then string_to_object changed the endpoint".into());
+    }
+    ok("object_to_string/string_to_object round-tripped the peer's own reference");
 
     Ok(())
 }
