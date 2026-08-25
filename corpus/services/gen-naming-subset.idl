@@ -124,6 +124,7 @@ module CosNaming {
     //@ ai_desc: Binds a name to an object in this context
     //@ ai_effect: destructive
     //@ ai_authz: cosnaming.context.bind
+    //@ ai_precond: nothing is bound under n in this context — AlreadyBound above says so in the other direction, and rebind is the operation that does not require it
     void bind(in Name n, in Object obj) raises (NotFound, AlreadyBound, InvalidName);
 
     //@ ai_desc: Binds a name to an object, replacing any object already there
@@ -165,6 +166,7 @@ module CosNaming {
     //@ ai_desc: Discards this context, which must already be empty
     //@ ai_effect: destructive
     //@ ai_authz: cosnaming.context.destroy
+    //@ ai_precond: this context holds no bindings; unbind every one of them first, or NotEmpty refuses the call and the context survives
     void destroy() raises (NotEmpty);
 
     //@ ai_desc: Up to how_many of this context's own bindings
@@ -188,12 +190,20 @@ module CosNaming {
     //@ ai_desc: The address does not parse as one a URL may be built from
     exception InvalidAddress {};
 
+    // The two examples below are the served grammar, not a reading of it:
+    // `naming_server.rs`'s `the_ext_string_surface_matches_the_shared_grammar`
+    // drives exactly this pair over the wire and asserts both directions. They
+    // are written here because the StringName typedef above names the `/` and
+    // says nothing about the `.`, and a caller that discovers the kind
+    // separator from a failed resolve has already made the call.
     //@ ai_desc: The stringified form of a path
     //@ ai_effect: read_only
+    //@ ai_example: the two components {id "ctx", kind ""} and {id "obj", kind "dev"} stringify to "ctx/obj.dev" — components joined by /, a non-empty kind appended after a .
     StringName to_string(in Name n) raises (InvalidName);
 
     //@ ai_desc: The path a stringified form denotes
     //@ ai_effect: read_only
+    //@ ai_example: "ctx/obj.dev" is two components — {id "ctx", kind ""} then {id "obj", kind "dev"}; this is to_string read the other way
     Name to_name(in StringName sn) raises (InvalidName);
 
     //@ ai_desc: A corbaname URL naming sn at addr; a pure string operation

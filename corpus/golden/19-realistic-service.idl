@@ -22,13 +22,18 @@ module tms {
   interface TrackManager {
     //@ ai_effect: read_only
     TrackSeq  snapshot();
+    // The precondition below is not a guess about the service: it is what the
+    // raises clause on this line already says, moved to where a caller reads it
+    // before composing the call rather than after the exception arrives.
     //@ ai_effect: read_only
+    //@ ai_precond: id names a track this manager currently holds; any other value raises NoSuchTrack, which carries the id back
     Track     get(in long id) raises (NoSuchTrack);
     //@ ai_effect: destructive
     //@ ai_authz: tms.track.write
     long      create(in Track t) raises (Overloaded);
     //@ ai_effect: idempotent
     //@ ai_authz: tms.track.write
+    //@ ai_precond: t.id names a track this manager currently holds; there is no other way for this operation to reach NoSuchTrack
     void      update(in Track t) raises (NoSuchTrack);
     // Deletion behind a oneway: no reply, so no way to learn it failed. If
     // any operation in this file deserves its own scope, it is this one.
