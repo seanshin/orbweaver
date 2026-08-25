@@ -1,0 +1,28 @@
+// n25 — a name that resolves, to something that is not a type.
+//
+// `type_spec` reaches a constructed type through `struct_type`, `union_type`
+// and `enum_type`, and a scoped name is only a type if what it names is one. A
+// module is a scope and an operation is a member; neither can be the type of
+// anything. Both are refused, in one file, because they are one rule.
+//
+// omniidl 4.3.4, measured 2026-08-25, one line at a time:
+//   'inner' is not a type      ('inner' declared here)
+//   'Probe::run' is not a type ('Probe::run' declared here)
+//
+// **The rule existed and no corpus file produced it**, so the fix hint keyed to
+// `not-a-type` had never been executed — and writing this file is what found
+// that `SymbolKind::is_type` counted an exception as a type (n30) and that
+// omniidl accepts a *constant* in type position, which we refuse
+// (corpus/divergences.tsv). A rule with no corpus file is a rule whose edges
+// nobody has walked.
+//
+// 이름이 해석되었지만 타입이 아닌 것을 가리키는 경우다. 규칙은 있었으나 이를
+// 만들어내는 코퍼스 파일이 없었고, 이 파일을 쓰다가 두 건이 더 나왔다.
+module n25 {
+  module inner { const long K = 1; };
+  interface Probe { void run(); };
+  struct Holder {
+    inner slot;
+    Probe::run step;
+  };
+};

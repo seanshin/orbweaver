@@ -30,6 +30,7 @@ pub mod ast;
 pub mod include;
 pub mod lex;
 pub mod parse;
+pub mod rules;
 pub mod sema;
 
 pub use include::{SearchPath, Unit, preprocess, preprocess_file};

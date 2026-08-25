@@ -1,4 +1,4 @@
-// n22 — the two fixed-point literals that are not fixed-point literals.
+// n22 — a fixed-point literal carrying an exponent.
 //
 // CORBA 3.4 §7.2.6.5: `fixed_pt_literal` is digits, an optional point, more
 // digits and a `d`. There is no exponent production, so `1e3d` is a floating
@@ -8,18 +8,16 @@
 // and produced 1000.0: a value of the wrong type by a route that could not
 // report anything, because the suffix had already been thrown away.
 //
-// §7.11.3 caps a `fixed` at 31 significant digits, and the second line has 32.
+// **This file held the 31-digit case too, and never measured it** (2026-08-25).
+// Lexing stops at the first failure and returns one error, so the second
+// constant was never reached: the file was rejected for its first line and its
+// header claimed two refusals it could not have shown. One lexical refusal per
+// file, or the second one is a sentence rather than a measurement. The digit
+// cap is n23.
 //
-// **We are stricter than the oracle on the second line, deliberately.**
-// omniidl rejects 32 *integer* digits and silently truncates 32 *fractional*
-// digits to 31 — `0.1234…9012d` dumps back as `0.1234…901d`, measured the same
-// day. Silently dropping a digit from a constant is the exact failure this
-// batch exists to close, so both are refused here and the divergence is
-// recorded in corpus/divergences.tsv.
-//
-// 지수부가 붙은 것은 fixed 리터럴이 아니다. 유효숫자는 31자리가 상한이며,
-// 초과분을 조용히 버리는 것은 이 배치가 없애려는 바로 그 실패다.
+// 지수부가 붙은 것은 fixed 리터럴이 아니다. 어휘 실패는 하나만 보고되므로
+// 자릿수 상한은 n23으로 분리한다 — 한 파일에 두 개를 쓰면 두 번째는 측정이
+// 아니라 문장이 된다.
 module n22 {
   const fixed SCALED = 1e3d;
-  const fixed TOO_MANY = 12345678901234567890123456789012d;
 };

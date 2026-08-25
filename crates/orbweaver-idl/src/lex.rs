@@ -334,7 +334,11 @@ impl LexError {
     /// no test asserts what `rule()` returns for any message.
     #[must_use]
     pub fn rule(&self) -> &'static str {
-        if self.message.starts_with(FIXED_LITERAL_SUBJECT) { "fixed-literal" } else { "parse" }
+        if self.message.starts_with(FIXED_LITERAL_SUBJECT) {
+            crate::rules::FIXED_LITERAL
+        } else {
+            crate::rules::PARSE
+        }
     }
 }
 
