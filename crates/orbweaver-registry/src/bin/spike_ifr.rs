@@ -49,11 +49,11 @@
 
 use std::time::Duration;
 
-use orbweaver_giop::server::{BAD_OPERATION, Server};
+use orbweaver_giop::server::{BAD_OPERATION, MARSHAL, Server};
 use orbweaver_giop::typecode::TypeCode;
 use orbweaver_giop::{Connection, Error};
 use orbweaver_registry::ifr::{
-    self, DefinitionKind, FullInterfaceDescription, INTERFACE_DEF_ID, NO_IMPLEMENT, NO_PERMISSION,
+    self, DefinitionKind, FullInterfaceDescription, INTERFACE_DEF_ID, NO_PERMISSION,
     RepositoryServer,
 };
 use orbweaver_registry::{Registry, Strictness};
@@ -113,6 +113,18 @@ fn expect_system(result: Result<orbweaver_giop::Reply, Error>, want: &str, what:
     }
 }
 
+/// `contents(limit_type, exclude_inherited = true)`, counted.
+fn count_contents(
+    conn: &mut Connection,
+    limit: DefinitionKind,
+) -> Result<u32, Box<dyn std::error::Error>> {
+    let reply = conn.invoke("contents", |e| {
+        e.put_u32(limit as u32);
+        e.put_bool(true);
+    })?;
+    Ok(reply.body()?.get_u32()?)
+}
+
 fn run(ior_path: &str, idl_paths: &[&str], hold: bool) -> Fallible {
     // `Registry::load` accumulates, so several files become one repository —
     // which is what a repository is. Each file's `#include`s are resolved
@@ -168,12 +180,66 @@ fn run(ior_path: &str, idl_paths: &[&str], hold: bool) -> Fallible {
     }
     ok("create_interface / create_module / _set_id / destroy all refused NO_PERMISSION");
     // Three refusals, three meanings — and the wire, not a document, is what
-    // separates them. `contents` is deferred (declared, deliberately not
-    // implemented); `no_such_operation` is nothing at all.
-    expect_system(repo.invoke_nullary("contents"), NO_IMPLEMENT, "contents")?;
-    expect_system(repo.invoke_nullary("lookup_name"), NO_IMPLEMENT, "lookup_name")?;
+    // separates them. This used to check `contents` and `lookup_name` for
+    // NO_IMPLEMENT; both are served since 2026-08-25, so what is measured here
+    // is that they are *served* and that an operation nobody has decided about
+    // is still BAD_OPERATION. A nullary body reaches a `contents` that wants
+    // two arguments, so the honest answer to that request is MARSHAL.
+    expect_system(repo.invoke_nullary("contents"), MARSHAL, "contents with no arguments")?;
     expect_system(repo.invoke_nullary("no_such_operation"), BAD_OPERATION, "no_such_operation")?;
-    ok("a deferred read is NO_IMPLEMENT and an unknown one is BAD_OPERATION, not one answer");
+    ok("an unknown operation is BAD_OPERATION and a malformed one is MARSHAL, not one answer");
+
+    // ── the containment walk (§14.5.4), landed 2026-08-25 ──
+    let top = repo.invoke("contents", |e| {
+        e.put_u32(DefinitionKind::All as u32);
+        e.put_bool(true);
+    })?;
+    let mut body = top.body()?;
+    let count = body.get_u32()?;
+    require(count > 0, "the repository's contents are empty")?;
+    ok(&format!("Repository::contents(dk_all) returned {count} object(s)"));
+
+    // Everything at the root of this repository is a module, so the filter is
+    // measured by what it *excludes*: the same call limited to dk_Interface
+    // must come back empty, and limited to dk_Module must come back whole.
+    // A `contents` that ignored `limit_type` would pass a "> 0" check.
+    let modules = count_contents(&mut repo, DefinitionKind::Module)?;
+    let interfaces = count_contents(&mut repo, DefinitionKind::Interface)?;
+    let structs = count_contents(&mut repo, DefinitionKind::Struct)?;
+    require(
+        modules == count && interfaces == 0 && structs == 0,
+        "limit_type did not filter: dk_all/dk_Module/dk_Interface/dk_Struct          must be n/n/0/0 at a root holding only modules",
+    )?;
+    ok(&format!(
+        "limit_type filters: dk_all {count}, dk_Module {modules}, dk_Interface {interfaces},          dk_Struct {structs}"
+    ));
+
+    let looked = repo.invoke("lookup", |e| {
+        e.put_str("::gc10::Both");
+    })?;
+    let found_by_name = orbweaver_giop::Ior::read_from(&mut looked.body()?)?;
+    require(!found_by_name.profiles.is_empty(), "lookup of an absolute name returned nil")?;
+    ok("Container::lookup resolved an absolute scoped name");
+
+    let missing = repo.invoke("lookup", |e| {
+        e.put_str("::no::Such");
+    })?;
+    let nil = orbweaver_giop::Ior::read_from(&mut missing.body()?)?;
+    require(nil.profiles.is_empty(), "lookup of an absent name did not return nil")?;
+    ok("Container::lookup of an absent name is a nil reference, not an exception");
+
+    let undefined = repo.invoke("lookup_name", |e| {
+        e.put_str("Both");
+        e.put_i32(0);
+        e.put_u32(DefinitionKind::All as u32);
+        e.put_bool(true);
+    });
+    expect_system(
+        undefined,
+        "IDL:omg.org/CORBA/BAD_PARAM:1.0",
+        "lookup_name with levels_to_search = 0",
+    )?;
+    ok("levels_to_search 0 is undefined in the specification and is refused, not guessed");
 
     // One connection is served at a time: hang up before dialing the
     // InterfaceDef the lookup handed back.

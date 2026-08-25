@@ -1196,16 +1196,18 @@ const NOT_COMPARED: [(&str, &str); 5] = [
          request that was malformed anyway.",
     ),
     (
-        "a deferred operation",
-        "`ifr.rs` answers NO_IMPLEMENT for the IR operations it has decided not to implement — \
-         `contents`, `lookup`, `lookup_name`, `describe_contents`, `describe`, \
-         `_get_defined_in`, `_get_containing_repository`, `get_canonical_typecode`, \
-         `get_primitive`, `_get_type` — so that a client can tell a deferral from an \
-         oversight without reading a document. `corpus/services/ir-subset.idl` declares none \
-         of them, so the generated skeleton answers BAD_OPERATION: the same root cause as \
-         `create_module` on a `Contained`, since what is not expressible is answering \
-         *anything particular* about an operation the contract never declared. Both answers \
-         are right for what each servant knows.",
+        "the containment walk",
+        "`ifr.rs` **serves** the ten browse operations since 2026-08-25 — `contents`, \
+         `lookup`, `lookup_name`, `describe_contents`, `describe`, `_get_defined_in`, \
+         `_get_containing_repository`, `get_canonical_typecode`, `get_primitive`, \
+         `_get_type` — and `corpus/services/ir-subset.idl` declares none of them, so the \
+         generated skeleton answers BAD_OPERATION. This entry used to say the opposite half \
+         of the same sentence: that `ifr.rs` answered NO_IMPLEMENT and the divergence was \
+         deferral-versus-oversight. The divergence is now larger, not smaller — one servant \
+         answers and the other has never heard of the operation — and the entry is rewritten \
+         rather than deleted, because what changed is the reason and not the fact. Closing it \
+         means declaring the browse half in the contract, which is a contract change and a \
+         re-blessing, not an `ifr.rs` one.",
     ),
 ];
 
@@ -1223,16 +1225,32 @@ fn the_divergences_are_the_ones_named_and_they_still_diverge() {
     let key = entry_key(ACCOUNT);
     let big = Endian::Big;
 
-    // 0 — a deferred operation. The oracle distinguishes a deferral from an
-    // oversight on the wire; the generated skeleton only knows what the
-    // contract declares, and the contract declares neither.
-    for op in ["contents", "lookup_name", "get_primitive", "_get_type"] {
-        match (ask(&mut hand, big, ROOT, op, &["x"]), ask(&mut from_idl, big, ROOT, op, &["x"])) {
-            (Answer::Raised { id: a, .. }, Answer::Raised { id: b, .. }) => {
-                assert_eq!(a, ifr::NO_IMPLEMENT, "{op}: deferred, and the wire says so");
-                assert_eq!(b, rt::BAD_OPERATION, "{op}: the contract does not declare it");
+    // 0 — the containment walk. This leg used to assert the oracle answered
+    // `NO_IMPLEMENT` and the generated skeleton `BAD_OPERATION`; since
+    // 2026-08-25 the oracle **serves** these ten, so the divergence is larger
+    // rather than gone — one servant answers and the other has never heard of
+    // the operation. The claim is asserted in the shape that survives the
+    // change: the oracle's answer is anything except "no such operation", and
+    // the generated skeleton's is exactly that.
+    for (key, op, args) in [
+        (ROOT, "lookup", &["gc10"][..]),
+        (&key[..], "describe", &[][..]),
+        (&key[..], "_get_defined_in", &[][..]),
+        (&key[..], "_get_containing_repository", &[][..]),
+        (&key[..], "_get_type", &[][..]),
+    ] {
+        let served = ask(&mut hand, big, key, op, args);
+        let generated = ask(&mut from_idl, big, key, op, args);
+        assert!(
+            !matches!(&served, Answer::Raised { id, .. } if id == rt::BAD_OPERATION),
+            "{op}: the hand-written facade serves the walk and must not say BAD_OPERATION: \
+             {served:?}"
+        );
+        match generated {
+            Answer::Raised { id, .. } => {
+                assert_eq!(id, rt::BAD_OPERATION, "{op}: the contract does not declare it");
             }
-            other => panic!("{op}: both must refuse, differently: {other:?}"),
+            other => panic!("{op}: the generated skeleton cannot know this operation: {other:?}"),
         }
     }
 
