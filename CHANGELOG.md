@@ -777,6 +777,52 @@ records what changed and, where it matters, what it changes on the wire.
   **아무것도 재지 않았고**, 출력을 읽었기 때문에만 드러났다. 여섯 번째는 **행(hang)**
   이었고 정직한 증상 그대로 기록했다.
 
+- **Both emitters kept their own list of what the wire cannot carry, and both
+  disagreed with the type mapper.** `orbweaver-gen`'s `rust_type` ends in
+  `other => Err(..)` — it refuses what it has no arm for — while the walker
+  `representable` ended in `_ => Ok(())`, which cleared it. Every construct in
+  the gap between the two lists was **skipped at its declaration and emitted at
+  every container that named it**: `corpus/golden/34-corba-principal.idl`
+  produced `pub sealed: crate::f_34_corba_principal::gp34::Envelope` for an
+  `Envelope` the file never declares, and did not compile. `python.rs` had the
+  identical split and **was not red at all**, writing
+  `("ref", "IDL:gp34/Envelope:1.0")` for a class its package never defines —
+  found by the caller, at the first call. Both walkers now ask the mapper at
+  every node instead of relisting four families, so the gap is unrepresentable
+  rather than detectable.
+
+- **Eight corpus files had never met both front ends.** `corpus/golden/34` and
+  `corpus/negative/n23`–`n30` landed with the batches that motivated them, as
+  the rule requires, but the differential runs only inside the harness and the
+  batches that added them were told not to run it — so the comparison waited
+  days for a coordinator. Seven unexplained divergences and one non-compiling
+  golden file were the result. Each divergence now has a measured reason in
+  `corpus/divergences.tsv`; **JacORB 3.9 predeclares no `CORBA` scope at all**
+  (established by a `typedef ::CORBA::Principal PA;` at true global scope,
+  where there is no enclosing scope to prepend and the message is still
+  `Undefined name: CORBA.Principal`), which also **refutes the mechanism
+  `12-any-typecode.idl`'s existing row had asserted** — that row is corrected
+  and hands the measurement to the new one rather than restating it. The six
+  negative files share one cause and are **six rows, not one**, because their
+  outcomes differ: two are caught by `javac`, one throws at class
+  initialisation, and **three compile and run wrong** — `n26`'s two union
+  defaults both take discriminator 0, so a value set through `fallback(7)`
+  goes on the wire as 0. The gate no longer depends on remembering: the
+  differential's verdict is checked-in data (`corpus/differential-results.tsv`)
+  and an oracle-free test in `cargo test --workspace` compares the corpus
+  against it.
+
+  *두 방출기가 각자 "와이어가 못 나르는 것" 목록을 들고 있었고 둘 다 타입 매퍼와
+  어긋났다. 매퍼는 거부하고 순회는 통과시켜, 그 틈의 구성물은 선언에서 스킵되고
+  그것을 이름하는 모든 컨테이너에서 방출됐다. Rust 절반은 컴파일에 실패했고
+  **파이썬 절반은 아무것에도 안 잡혔다** — 패키지가 정의하지 않는 클래스를
+  참조했고, 호출자가 첫 호출에서 발견한다. 그리고 코퍼스 파일 여덟이 두 프런트엔드를
+  만난 적이 없었다: 규칙대로 배치와 함께 착지했으나 differential은 하네스 안에서만
+  돌고 그 배치들은 하네스를 돌리지 말라고 들었다. 이제 판정이 체크인 데이터가 되고
+  오라클 없는 테스트가 대조한다. 부정 코퍼스 여섯은 원인이 하나지만 **행이 여섯**
+  이다 — 결과가 다르기 때문이다: javac가 잡는 것 둘, 클래스 초기화에서 던지는 것
+  하나, **컴파일되고 틀리게 도는 것 셋**.*
+
 ### Fixed / 수정
 
 - **Both emitters kept a second list of what the wire cannot carry, and the
