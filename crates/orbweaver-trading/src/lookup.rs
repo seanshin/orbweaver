@@ -207,12 +207,11 @@ impl TypedOfferStore {
             return Err(Refusal::new(
                 RefusalKind::IllegalPolicyName,
                 format!(
-                    "this trader implements no import policy, and this query carries {name:?} \
-                     (of {} in the sequence): the cardinalities it applies are fixed — \
-                     `max_search_card` {MAX_SEARCH_CARD}, `max_match_card` {MAX_MATCH_CARD}, \
-                     `max_return_card` {MAX_RETURN_CARD} — and it has no links, so `hop_count` \
-                     and `follow_policy` say nothing here either. Send an empty `PolicySeq`",
-                    req.policies.len()
+                    "this trader implements no import policy, and this query carries {name:?}: \
+                     the cardinalities it applies are fixed — `max_search_card` \
+                     {MAX_SEARCH_CARD}, `max_match_card` {MAX_MATCH_CARD}, `max_return_card` \
+                     {MAX_RETURN_CARD} — and it has no links, so `hop_count` and `follow_policy` \
+                     say nothing here either. Send an empty `PolicySeq`"
                 ),
             ));
         }
@@ -269,6 +268,70 @@ fn matching_offers(selection: Selection<'_>) -> Vec<&Offer> {
     offers
 }
 
+/// The constraint keywords, in the spelling this engine's parser wants.
+///
+/// TCL spells its operators lowercase (`and`, `or`, `not`, `exist`) and
+/// `crate::query` spells them uppercase and says so — *"reconciling that
+/// spelling is the wire facade's problem (D022 T4), not this engine's"*. This
+/// is that facade, and this is the list.
+const CONSTRAINT_KEYWORDS: [&str; 8] = ["AND", "OR", "NOT", "EXIST", "ORDER", "BY", "ASC", "DESC"];
+
+/// The preference keywords, same argument.
+const PREFERENCE_KEYWORDS: [&str; 5] = ["MAX", "MIN", "WITH", "RANDOM", "FIRST"];
+
+/// Upper-cases whole-word occurrences of `keywords`, leaving quoted text alone.
+///
+/// **Byte positions survive**, and that is the reason this is a case fold and
+/// not a rewrite: ASCII upper-casing preserves length, so every `at` a parse
+/// error carries still indexes the caller's own constraint string. A facade
+/// that normalised by any other means would have to translate positions back,
+/// and a position translated wrongly is worse than no position.
+///
+/// Quoted text is skipped because `specialization == 'and'` is a comparison
+/// against the word *and*, not against a keyword. Only single quotes need
+/// handling: they are the only string delimiter `crate::query` lexes.
+///
+/// No field name collides with any keyword — the ten are `id`,
+/// `specialization`, `cost`, `latency_p50`, `latency_p99`, `load`,
+/// `residency`, `mem_footprint`, `placement_node`, `route_freq` — so folding
+/// cannot capture one, and a test holds that true as the lists change.
+///
+/// *TCL은 연산자를 소문자로 쓰고 이 엔진은 대문자로 쓴다. 이것이 그 파사드다.
+/// ASCII 대문자화는 길이를 보존하므로 **바이트 위치가 그대로 살아남는다** —
+/// 잘못 번역된 위치는 위치가 없는 것보다 나쁘다.*
+fn fold_keywords(text: &str, keywords: &[&str]) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    let mut in_quotes = false;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c == '\'' {
+            in_quotes = !in_quotes;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if in_quotes || !c.is_ascii_alphabetic() {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        // A whole word: letters, digits and underscores.
+        let start = i;
+        while i < bytes.len() && ((bytes[i] as char).is_ascii_alphanumeric() || bytes[i] == b'_') {
+            i += 1;
+        }
+        let word = &text[start..i];
+        match keywords.iter().find(|k| k.eq_ignore_ascii_case(word)) {
+            Some(k) => out.push_str(k),
+            None => out.push_str(word),
+        }
+    }
+    debug_assert_eq!(out.len(), text.len(), "a case fold preserves byte positions");
+    out
+}
+
 /// Parses a constraint, defaulting a blank one to *every offer of the type*.
 ///
 /// The blank case is expressed as a query that is `Yes` for every offer
@@ -278,14 +341,16 @@ fn matching_offers(selection: Selection<'_>) -> Vec<&Offer> {
 /// construction, so it is a constant `Yes`.
 fn parse_constraint(text: &str) -> Result<Query, Refusal> {
     let blank = text.trim().is_empty();
-    let text = if blank { "EXIST id" } else { text };
+    let folded = fold_keywords(text, &CONSTRAINT_KEYWORDS);
+    let text: &str = if blank { "EXIST id" } else { &folded };
     let query = Query::parse(text).map_err(|e: ParseError| {
         Refusal::new(
             RefusalKind::IllegalConstraint,
             format!(
                 "this constraint did not parse — {e}. This trader's constraint language is the \
                  subset `crate::query` documents: comparisons over {FIELD_LIST}, combined with \
-                 AND, OR, NOT and parentheses, plus EXIST. Its keywords are uppercase"
+                 AND, OR, NOT and parentheses, plus EXIST. Its keywords may be written in \
+                 either case; its property names are identifiers and may not"
             ),
         )
     })?;
@@ -309,13 +374,19 @@ fn parse_constraint(text: &str) -> Result<Query, Refusal> {
 
 /// Parses a preference, defaulting a blank one to `FIRST`.
 fn parse_preference(text: &str) -> Result<Preference, Refusal> {
-    let text = if text.trim().is_empty() { "FIRST" } else { text };
+    // Both keyword sets, because `WITH <constraint>` puts a constraint inside
+    // a preference and the constraint's keywords have to fold there too.
+    let mut all = PREFERENCE_KEYWORDS.to_vec();
+    all.extend(CONSTRAINT_KEYWORDS);
+    let folded = fold_keywords(text, &all);
+    let text: &str = if text.trim().is_empty() { "FIRST" } else { &folded };
     Preference::parse(text).map_err(|e| {
         Refusal::new(
             RefusalKind::IllegalPreference,
             format!(
                 "this preference did not parse — {e}. This trader's preference language is the \
-                 five forms `crate::preference` documents, and its keywords are uppercase"
+                 five forms `crate::preference` documents, and its keywords may be written in \
+                 either case"
             ),
         )
     })
@@ -531,6 +602,100 @@ mod tests {
         r.how_many = 10;
         let a = s.answer(&r).unwrap();
         assert!(a.properties.is_empty(), "DesiredProps::None projects nothing");
+    }
+
+    /// The whole point of the facade: TCL spells its operators lowercase, and
+    /// a foreign trading client writes TCL.
+    #[test]
+    fn a_constraint_in_tcls_own_lowercase_spelling_is_accepted() {
+        let s = store_of(3);
+        for constraint in [
+            "specialization == 'math' and cost < 2",
+            "specialization == 'math' AND cost < 2",
+            "specialization == 'math' And cost < 2",
+        ] {
+            let a = s.answer(&req(constraint, 10)).expect(constraint);
+            assert_eq!(a.offers.len(), 2, "{constraint}");
+        }
+
+        // **Keywords fold; property names do not.** A property name is an
+        // identifier and identifiers are case-sensitive, so folding one would
+        // be this facade inventing a name the contract does not have. The
+        // refusal names it and lists the ten.
+        let e = s.answer(&req("SpEcIaLiZaTiOn == 'math'", 10)).unwrap_err();
+        assert_eq!(e.kind, RefusalKind::IllegalConstraint);
+        assert!(e.message.contains("SpEcIaLiZaTiOn"), "{}", e.message);
+        // `not` and `exist` too, and mixed with ours.
+        assert_eq!(s.answer(&req("not exist specialization", 10)).unwrap().offers.len(), 0);
+        assert_eq!(s.answer(&req("exist id or cost > 99", 10)).unwrap().offers.len(), 3);
+    }
+
+    #[test]
+    fn a_preference_in_lowercase_is_accepted_including_inside_a_with() {
+        let s = store_of(3);
+        let mut r = req("", 10);
+        r.preference = "min cost";
+        assert_eq!(s.answer(&r).unwrap().offers[0].id, "e0000");
+        r.preference = "max cost";
+        assert_eq!(s.answer(&r).unwrap().offers[0].id, "e0002");
+        r.preference = "with cost < 1";
+        assert_eq!(s.answer(&r).unwrap().offers[0].id, "e0000", "the WITH group comes first");
+        r.preference = "with exist specialization and cost < 1";
+        assert_eq!(s.answer(&r).unwrap().offers[0].id, "e0000");
+        r.preference = "first";
+        assert!(s.answer(&r).is_ok());
+    }
+
+    /// A keyword inside a string literal is a value, not a keyword.
+    #[test]
+    fn the_fold_leaves_quoted_text_alone() {
+        assert_eq!(
+            fold_keywords("specialization == 'and' or cost < 1", &CONSTRAINT_KEYWORDS),
+            "specialization == 'and' OR cost < 1"
+        );
+        assert_eq!(
+            fold_keywords("placement_node == 'not a node'", &CONSTRAINT_KEYWORDS),
+            "placement_node == 'not a node'"
+        );
+    }
+
+    /// Only whole words fold, and the fold preserves byte positions — which is
+    /// what lets a parse error's `at` still index the caller's own text.
+    #[test]
+    fn the_fold_is_whole_word_and_length_preserving() {
+        assert_eq!(
+            fold_keywords("android ornate nothing", &CONSTRAINT_KEYWORDS),
+            "android ornate nothing"
+        );
+        for text in ["a and b", "not exist x", "'quoted and'", "", "   "] {
+            assert_eq!(
+                fold_keywords(text, &CONSTRAINT_KEYWORDS).len(),
+                text.len(),
+                "{text:?} changed length"
+            );
+        }
+        // The position a refusal carries indexes the caller's string, not a
+        // rewritten one: byte 21 is the second `<` in the original.
+        let s = store_of(1);
+        let e = s.answer(&req("specialization == 'math' and cost <<", 10)).unwrap_err();
+        assert_eq!(e.kind, RefusalKind::IllegalConstraint);
+        assert!(e.message.contains("at byte 35"), "{}", e.message);
+    }
+
+    /// No field name may collide with a keyword, or the fold would capture a
+    /// field and this facade would start rewriting the caller's question.
+    /// Holds this true as either list changes.
+    #[test]
+    fn no_offer_property_shares_a_name_with_a_keyword() {
+        for name in crate::service_type::ALL_PROPERTIES {
+            for k in CONSTRAINT_KEYWORDS.iter().chain(PREFERENCE_KEYWORDS.iter()) {
+                assert!(
+                    !k.eq_ignore_ascii_case(name),
+                    "the property {name:?} collides with the keyword {k:?}: folding would \
+                     capture it"
+                );
+            }
+        }
     }
 
     #[test]

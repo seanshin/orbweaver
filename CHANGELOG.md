@@ -169,6 +169,66 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **The trading service is open: `CosTrading::Lookup::query` answers a client
+  that is not ours.** D022 T3 and T4. `PLAN-SERVICES` §3 deferred the standard
+  facade *until a foreign trading client is named*, and the naming is measured
+  rather than asserted: omniORB 4.3.4 ships `CosTrading.idl` and generated
+  Python COS stubs, so `spikes/trading_client.py` narrows to
+  `IDL:omg.org/CosTrading/Lookup:1.0` and calls `query` with an ORB none of
+  this repository wrote — **45 assertions, 0 failures** against
+  `spike-trading` (2026-08-26). The licence boundary is untouched: omniORB
+  runs as a separate-process wire peer over TCP, `cargo tree` is unchanged.
+
+  **T3, the service type.** `orbweaver-trading::service_type` adds
+  `ServiceType` — a name, an interface repository id, a property schema — and
+  `TypedOfferStore`, which wraps `OfferStore` with one side table rather than
+  an eleventh `Offer` field, so nothing that builds an `Offer` changes. The
+  schema is checked at registration and refuses, each naming the offender: a
+  declared kind that disagrees with the engine's (refused where the schema is
+  *written*, not when a query runs), a property outside the closed ten, the
+  same property twice, an offer missing a mandatory property (before the store
+  is touched, so a refused registration leaves nothing behind), a heartbeat
+  that moves a readonly property, and **super types** — there is no
+  inheritance graph, so a query on a super type would quietly not match. **No
+  `ServiceTypeRepository` servant**, per D022 §7.
+
+  **T4, the wire.** `orbweaver-giop::trading_server` serves `Lookup` and the
+  twenty attributes of the three interfaces it inherits. `offer_itr` is
+  **always nil and the servant never truncates to make that true**: an
+  `OfferIterator` is the POA-hosted-object-per-query lifecycle
+  `COMPONENTS.md` records as deliberately not built for `DynAny`, so a query
+  whose answer would not fit is refused with `NO_IMPLEMENT` — this
+  workspace's own rule that `NO_IMPLEMENT` means *declared and deliberately
+  not served*. A nil iterator from this trader therefore always means "that is
+  all of them". The bound reaches the client as `max_return_card`, the
+  specification's own name for it, answered from the same constant the refusal
+  sentence quotes.
+
+  What a client learns about this trader on the wire rather than from a
+  comment: `register_if`/`link_if`/`proxy_if`/`admin_if` and `type_repos` are
+  nil, the three `supports_*` are false, both hop counts are zero and both
+  follow policies are `local_only`.
+
+  **Finding — the engine has three result lists and the wire has one.**
+  `Selection::unranked` (matched the constraint, the preference could not
+  place it) was going to be dropped on the way out, which reports fewer
+  matches than matched: the same false statement as truncating, since the
+  caller cannot tell the answer is short and cannot ask again for the rest.
+  They now go last, which keeps the argument the engine actually made — that
+  argument was about being *first*, so a router taking the head of the list
+  still never gets an unmeasured expert.
+
+  **Finding — a test that asserts against the constant it is testing measures
+  nothing.** Un-nesting `ILLEGAL_PREFERENCE_ID` to
+  `IDL:omg.org/CosTrading/IllegalPreference:1.0` — the exact mistake its own
+  doc comment warns about — left every `trading_server` test **green**, and
+  omniORB went red at once with `UNKNOWN(UNKNOWN_UserException)`. The
+  authority for those strings is the published OMG IDL, not us, so
+  `every_repository_id_is_the_one_the_omg_idl_declares` now writes all eleven
+  out a second time by hand: two independently typed copies of a string we do
+  not own is the right shape, and deriving one from the other was the
+  tautology it looked like.
+
 - **The ORB has an object.** Three steps of D019, landed in order because each
   is specified in terms of the one before.
 

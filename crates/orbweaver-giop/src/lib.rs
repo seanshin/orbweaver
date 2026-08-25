@@ -42,6 +42,7 @@ pub mod orb;
 pub mod pool;
 pub mod server;
 pub mod ssliop;
+pub mod trading_server;
 pub mod typecode;
 
 use orbweaver_cdr::{Decoder, Encoder, Endian};
