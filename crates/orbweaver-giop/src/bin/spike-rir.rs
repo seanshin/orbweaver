@@ -47,7 +47,7 @@
 //!   cannot move without this binary going red.
 
 use orbweaver_giop::naming::{NamingContext, ObjectUrl, stringify_name};
-use orbweaver_giop::orb::{InvalidName, Orb};
+use orbweaver_giop::orb::{InvalidName, Orb, OrbConfig};
 use orbweaver_giop::{Connection, Ior};
 use std::time::Duration;
 
@@ -63,7 +63,26 @@ fn main() -> std::process::ExitCode {
     let name = flag("--name").unwrap_or_else(|| "spike/Echo".into());
     let empty = args.iter().any(|a| a == "--empty-table");
 
-    match run(&peer, &name, empty) {
+    // D019 step 3: everything an operator would actually type. Anything that is
+    // not `-ORB...` comes back and is read by the flags above, which is CORBA
+    // 3.4 §8.5.1's *"it will remove from the arg_list ... all strings that match
+    // the -ORB<suffix> pattern"* doing its job on a real argument list.
+    let (config, rest) = match OrbConfig::from_orb_args(&args) {
+        Ok(pair) => pair,
+        Err(e) => {
+            println!("\nrir: FAIL — {e}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    if !config.is_empty() {
+        println!(
+            "orb args   {} consumed, {} left for the program",
+            args.len() - rest.len(),
+            rest.len()
+        );
+    }
+
+    match run(&peer, &name, empty, config) {
         Ok(()) => {
             println!("\nrir: PASS — a URL with no address reached a foreign servant");
             std::process::ExitCode::SUCCESS
@@ -79,12 +98,41 @@ fn ok(what: &str) {
     println!("  ok   {what}");
 }
 
-fn run(peer: &str, name: &str, empty: bool) -> Result<(), Box<dyn std::error::Error>> {
-    println!("peer       {peer}");
+fn run(
+    peer: &str,
+    name: &str,
+    empty: bool,
+    config: OrbConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let from_args = config.initial_references().iter().any(|(id, _)| id == "NameService");
+    // Say which input actually decided the target. Printing `--peer` when an
+    // `-ORBInitRef` overrode it would read as though this dialled the default,
+    // and a line a harness quotes has to be true.
+    if from_args {
+        println!("peer       (from -ORBInitRef NameService=…; --peer unused)");
+    } else {
+        println!("peer       {peer}");
+    }
     println!("name       {name}");
     println!("table      {}", if empty { "EMPTY (negative control)" } else { "NameService" });
 
-    let mut orb = Orb::new();
+    // -- 0. D019 step 3: the operator's own configuration --
+    // If a `-ORBInitRef` was given, the table is already populated before this
+    // binary names a single service, and every number below came off the
+    // argument list rather than out of a source file. That is the whole claim
+    // of step 3, and the steps that follow cannot tell the difference.
+    let configured = config.initial_references().to_vec();
+    let mut orb = Orb::with_config(config)?;
+    for (object_id, url) in &configured {
+        ok(&format!("-ORBInitRef {object_id}={url} registered (CORBA 3.4 §8.5.3.2)"));
+    }
+    println!(
+        "limits     max_message_size={} max_connections={} follow_timeout={:?} stop_poll={:?}",
+        orb.config().max_message_size(),
+        orb.config().max_connections(),
+        orb.config().follow_timeout(),
+        orb.config().stop_poll(),
+    );
 
     // ── 1. the address the deployment knows, turned into a reference ──
     // This half is the part that already worked. `--peer` is typed by a human,
@@ -102,7 +150,10 @@ fn run(peer: &str, name: &str, empty: bool) -> Result<(), Box<dyn std::error::Er
         ns_ior.type_id = NC_EXT.to_owned();
     }
 
-    if !empty {
+    if !empty && !orb.list_initial_services().iter().any(|k| k == "NameService") {
+        // §16.10.1 refuses a second registration, so this yields to whatever a
+        // `-ORBInitRef NameService=...` already put there: the operator's answer
+        // wins over the binary's, which is the point of having the argument.
         orb.register_initial_reference("NameService", ns_ior.clone())?;
         ok("registered NameService into the ORB's initial references table");
     }
@@ -126,7 +177,7 @@ fn run(peer: &str, name: &str, empty: bool) -> Result<(), Box<dyn std::error::Er
             return Err(format!("corbaloc:rir:NameService was refused: {said}").into());
         }
     };
-    if resolved != ns_ior {
+    if configured.is_empty() && resolved != ns_ior {
         return Err("the table answered with a reference that is not the one registered".into());
     }
     ok("corbaloc:rir:NameService resolved out of the table — no address in the URL");
