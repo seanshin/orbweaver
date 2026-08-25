@@ -80,6 +80,7 @@
 
 use std::cmp::Ordering;
 
+use crate::preference::{Preference, PreferenceError};
 use crate::{Offer, OfferStore, Residency};
 
 /// Why a query could not be parsed.
@@ -152,7 +153,7 @@ impl Expr {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Field {
+pub(crate) enum Field {
     Id,
     Specialization,
     Cost,
@@ -165,11 +166,11 @@ enum Field {
     RouteFreq,
 }
 
-const FIELD_LIST: &str = "id, specialization, cost, latency_p50, latency_p99, load, residency, \
+pub(crate) const FIELD_LIST: &str = "id, specialization, cost, latency_p50, latency_p99, load, residency, \
                           mem_footprint, placement_node, route_freq";
 
 impl Field {
-    fn from_name(name: &str) -> Option<Field> {
+    pub(crate) fn from_name(name: &str) -> Option<Field> {
         Some(match name {
             "id" => Field::Id,
             "specialization" => Field::Specialization,
@@ -185,7 +186,7 @@ impl Field {
         })
     }
 
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Field::Id => "id",
             Field::Specialization => "specialization",
@@ -200,7 +201,7 @@ impl Field {
         }
     }
 
-    fn kind(self) -> Kind {
+    pub(crate) fn kind(self) -> Kind {
         match self {
             Field::Id | Field::Specialization | Field::PlacementNode => Kind::Text,
             Field::Cost | Field::LatencyP50 | Field::LatencyP99 | Field::Load => Kind::Float,
@@ -211,7 +212,7 @@ impl Field {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind {
+pub(crate) enum Kind {
     Text,
     Float,
     Counter,
@@ -227,7 +228,7 @@ enum Literal {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CmpOp {
+pub(crate) enum CmpOp {
     Eq,
     Ne,
     Lt,
@@ -237,7 +238,7 @@ enum CmpOp {
 }
 
 impl CmpOp {
-    fn text(self) -> &'static str {
+    pub(crate) fn text(self) -> &'static str {
         match self {
             CmpOp::Eq => "==",
             CmpOp::Ne => "!=",
@@ -428,7 +429,7 @@ fn counter_value(offer: &Offer, field: Field) -> u64 {
 /// v1.0 wire registration cannot carry (`specialization`, `latency_p50`)
 /// are the only ones that can answer `false`, which is why `EXIST
 /// route_freq` is a constant `Yes` and not a filter.
-fn has_value(offer: &Offer, field: Field) -> bool {
+pub(crate) fn has_value(offer: &Offer, field: Field) -> bool {
     match field.kind() {
         Kind::Text => text_value(offer, field).is_some(),
         Kind::Float => float_value(offer, field).is_some(),
@@ -448,7 +449,7 @@ fn has_value(offer: &Offer, field: Field) -> bool {
 /// unmeasured the "fastest" was still one of them, and a router taking the
 /// head of the list preferred an expert nobody had timed. An offer that
 /// cannot be placed is not in the ordered answer at all.
-fn offer_cmp(a: &Offer, b: &Offer, field: Field) -> Ordering {
+pub(crate) fn offer_cmp(a: &Offer, b: &Offer, field: Field) -> Ordering {
     match field.kind() {
         Kind::Text => match (text_value(a, field), text_value(b, field)) {
             (Some(x), Some(y)) => x.cmp(y),
@@ -466,7 +467,7 @@ fn offer_cmp(a: &Offer, b: &Offer, field: Field) -> Ordering {
 // ---- lexer ----
 
 #[derive(Debug, Clone, PartialEq)]
-enum Tok {
+pub(crate) enum Tok {
     Ident(String),
     Number(String),
     Str(String),
@@ -476,7 +477,7 @@ enum Tok {
     End,
 }
 
-fn describe(tok: &Tok) -> String {
+pub(crate) fn describe(tok: &Tok) -> String {
     match tok {
         Tok::Ident(s) => format!("identifier {s:?}"),
         Tok::Number(s) => format!("number {s}"),
@@ -493,9 +494,9 @@ fn describe(tok: &Tok) -> String {
 /// before them, every lowercase keyword happened to appear where the parser
 /// was already expecting `AND` or `ORDER`, so the "keywords are uppercase"
 /// hint was reached by luck rather than by design.
-const KEYWORDS: [&str; 8] = ["AND", "OR", "NOT", "EXIST", "ORDER", "BY", "ASC", "DESC"];
+pub(crate) const KEYWORDS: [&str; 8] = ["AND", "OR", "NOT", "EXIST", "ORDER", "BY", "ASC", "DESC"];
 
-fn lex(text: &str) -> Result<Vec<(usize, Tok)>, ParseError> {
+pub(crate) fn lex(text: &str) -> Result<Vec<(usize, Tok)>, ParseError> {
     let bytes = text.as_bytes();
     let mut toks = Vec::new();
     let mut i = 0;
@@ -921,11 +922,38 @@ impl Query {
     /// Parses a query. Refusals name the byte position and what was
     /// expected there — see [`ParseError`].
     pub fn parse(text: &str) -> Result<Query, ParseError> {
+        Query::parse_inner(text, true)
+    }
+
+    /// The constraint language alone, with no `ORDER BY` accepted.
+    ///
+    /// `WITH <constraint>` inside a [`crate::preference::Preference`] reads
+    /// a constraint that is not a whole query: the preference *is* the
+    /// ordering there, so an `ORDER BY` inside it would be a second one, and
+    /// it is refused at the position of the word rather than ignored.
+    pub(crate) fn parse_constraint(text: &str) -> Result<Query, ParseError> {
+        Query::parse_inner(text, false)
+    }
+
+    /// Whether this query carries an `ORDER BY` clause of its own.
+    pub(crate) fn has_order(&self) -> bool {
+        self.order.is_some()
+    }
+
+    fn parse_inner(text: &str, allow_order: bool) -> Result<Query, ParseError> {
         let mut p = Parser { toks: lex(text)?, i: 0, depth: 0 };
         let expr = p.parse_expr()?;
         let mut order = None;
         let (at, tok) = p.bump();
         match tok {
+            Tok::Ident(ref s) if s == "ORDER" && !allow_order => {
+                return Err(ParseError {
+                    at,
+                    message: "'ORDER BY' is not allowed here: this constraint is being read \
+                              as part of a preference, and the preference is the ordering"
+                        .to_owned(),
+                });
+            }
             Tok::Ident(ref s) if s == "ORDER" => {
                 order = Some(p.parse_order()?);
                 let (at, tok) = p.bump();
@@ -1022,6 +1050,66 @@ impl Query {
         unanswerable.sort_by(|a, b| a.id.cmp(&b.id));
         unranked.sort_by(|a, b| a.id.cmp(&b.id));
         Selection { matched: out, unanswerable, unranked }
+    }
+
+    /// [`Query::select_reporting`], ordered by a
+    /// [`Preference`](crate::preference::Preference) instead of by this
+    /// query's own `ORDER BY` — D022 T2, the standard's second expression
+    /// language.
+    ///
+    /// The three buckets keep exactly their meaning. **The constraint
+    /// decides membership and the preference decides order**, and they ask
+    /// different questions of the same offer: an offer the constraint
+    /// answered [`Truth::Yes`] for can still be one the preference cannot
+    /// place, and it lands in [`Selection::unranked`] — the same bucket, for
+    /// the same reason, as an offer with no value for an `ORDER BY` field.
+    ///
+    /// # Two orderings is one too many
+    ///
+    /// A query that carries its own `ORDER BY` is **refused** here rather
+    /// than having one of the two silently win. `ORDER BY` did not go away —
+    /// it is still how our own callers order, and the MoE contract's queries
+    /// use it — so a caller holding both has written two answers to one
+    /// question, and picking for them is the sort of quiet choice this
+    /// workspace records instead of making.
+    pub fn select_preferring<'a>(
+        &self,
+        store: &'a OfferStore,
+        preference: &Preference,
+    ) -> Result<Selection<'a>, PreferenceError> {
+        if self.has_order() {
+            return Err(PreferenceError {
+                message: format!(
+                    "this query carries its own 'ORDER BY' and was also given the preference \
+                     {preference}: that is two orderings for one answer. Drop the ORDER BY \
+                     to order by the preference, or use select_reporting to order by the \
+                     ORDER BY."
+                ),
+            });
+        }
+        let mut candidates: Vec<&Offer> = Vec::new();
+        let mut unanswerable: Vec<&Offer> = Vec::new();
+        let mut unranked: Vec<&Offer> = Vec::new();
+        for offer in store.iter() {
+            match self.evaluate(offer) {
+                Truth::Yes => {
+                    if preference.can_place(offer) {
+                        candidates.push(offer);
+                    } else {
+                        unranked.push(offer);
+                    }
+                }
+                Truth::Unknown => unanswerable.push(offer),
+                Truth::No => {}
+            }
+        }
+        // Ties break by ascending id in both languages, so the order is
+        // pinned whatever the preference says — including `FIRST`, which
+        // says nothing and therefore gets the store order.
+        candidates.sort_by(|a, b| preference.rank(a, b).then_with(|| a.id.cmp(&b.id)));
+        unanswerable.sort_by(|a, b| a.id.cmp(&b.id));
+        unranked.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(Selection { matched: candidates, unanswerable, unranked })
     }
 }
 

@@ -33,6 +33,7 @@
 #![deny(missing_docs)]
 
 pub mod policy;
+pub mod preference;
 pub mod query;
 pub mod replay;
 
