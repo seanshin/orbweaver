@@ -192,7 +192,7 @@ to report.
 측정되지 않았고 주장하지도 않는 것: 우리 클라이언트만 호출했다. 외부 MoE 피어가
 없으므로 §2와 달리 "그들의 클라이언트, 우리의 서버" 방향은 보고할 것이 없다.
 
-## 4. CosEvent / 이벤트 — ✅ F7 landed (push both ways, the consumer half of pull), oracle design settled by measurement
+## 4. CosEvent / 이벤트 — ✅ all four models served (17 of 18), `PLAN-DEFERRED` §10 graduated here 2026-08-25
 
 | | |
 |---|---|
@@ -208,13 +208,14 @@ channel first-party, and omniORB's python acts as the independent push
 consumer/supplier against it.** Scope v1: `EventChannel` +
 `ConsumerAdmin::obtain_push_supplier` + `SupplierAdmin::obtain_push_consumer`
 + `ProxyPushConsumer::push(any)` / `ProxyPushSupplier::connect_push_consumer`
-— the push model, and since 2026-08-18 the **consumer half of pull**
-(`obtain_pull_supplier`, `pull`, `try_pull` served); the supplier half and
-`destroy` are `NO_IMPLEMENT` with reasons in `event_server.rs`'s header (and
-now PLAN-DEFERRED **§10 for the supplier side of pull, §11 for `destroy`** —
-this sentence named §10 for both, and they are two chapters with two different
-triggers: §10 wants a named `PullSupplier` in this workspace, §11 wants a
-caller model, because `destroy` ends the channel for every other client).
+— the push model, since 2026-08-18 the **consumer half of pull**
+(`obtain_pull_supplier`, `pull`, `try_pull`), and since 2026-08-25 the
+**supplier half** as well (§4.1), which is all four models. Only `destroy`
+remains `NO_IMPLEMENT`, with its reason in `event_server.rs`'s header and its
+chapter at PLAN-DEFERRED **§11** — it wants a caller model, because `destroy`
+ends the channel for every other client. §10 was the supplier side of pull and
+graduated into §4.1 above; the two were always two chapters with two different
+triggers, and this sentence named §10 for both until 2026-08-18.
 Events are `any`, which AnyJSON already carries.
 
 Batch unit: the channel × both directions (our supplier → omniORB consumer,
@@ -222,15 +223,63 @@ omniORB supplier → our consumer) × disconnect semantics (a dead consumer must
 not wedge the channel — bounded buffer, drop-oldest, drops counted and
 reported, per the "no silent truncation" rule).
 
+### 4.1 The supplier side of pull — graduated from `PLAN-DEFERRED` §10, 2026-08-25
+
+**The first chapter to graduate under §9**, so it is also the template. The
+trigger — *"a named `PullSupplier` in this workspace"* — fired on the project
+owner's request that the four models be creatable, under D023 §2's rule that
+**the owner naming a consumer fires a trigger**. It is now satisfied literally
+as well: `event_server::PullSupplierServant` is one, published from the crate
+rather than hidden in a test module where the trigger could not have seen it.
+
+**Batch unit** (what §9 says this file owes and `PLAN-DEFERRED` withholds): the
+three operations `SupplierAdmin::obtain_pull_consumer`,
+`ProxyPullConsumer::connect_pull_supplier` and
+`PullConsumer::disconnect_pull_consumer` × both byte orders × the failure
+directions (a supplier that never answers, one that answers `Disconnected`,
+one that disappears). Not four pieces of work: the whole gap between two
+served models and four is the channel acting as a **pull consumer of a
+supplier**, and all three operations carry that one shape.
+
+**Named oracle:** `spikes/event_pull_supplier.py` — an omniORBpy
+`CosEventComm::PullSupplier` that our channel dials and calls `try_pull` on,
+with an omniORB `PushConsumer` *and* an omniORB pull consumer both receiving
+what was fetched. Both byte orders via `spike-events --source-endian`. This is
+the mirror of §4's existing direction: there our channel is called by an ORB we
+did not write, here it is a **client** of one.
+
+Measured 2026-08-25 (`service_sweep.sh`): probes 28, dispatched 27,
+`NO_IMPLEMENT` 1 — **17 of 18 declared operations**, the remaining one being
+`destroy` (`PLAN-DEFERRED` §11, trigger unfired). One `EventChannelServer` also
+now holds several named channels (`create_channel`), which needed no wire
+interface and no factory.
+
+*§9 아래 **처음 졸업한 장**이므로 템플릿이기도 하다. 방아쇠는 네 모델을 생성
+가능하게 하라는 소유자의 요청으로 당겨졌다(D023 §2 — 소유자가 소비자를 지명하면
+방아쇠가 당겨진다). 이제 문자 그대로도 충족된다: `PullSupplierServant`가 그것이며,
+방아쇠가 볼 수 없는 테스트 모듈이 아니라 크레이트에서 공개된다.*
+
+***배치 단위***: 연산 셋 × 양쪽 바이트 순서 × 실패 방향들. 네 조각의 일이 아니다 —
+서빙되는 두 모델과 네 모델 사이의 간극 전체가 **채널이 공급자로부터 당기는** 한
+가지 모양이고, 연산 셋이 모두 그것을 나른다.
+
+***이름 붙은 오라클***: `spikes/event_pull_supplier.py` — 우리 채널이 다이얼해
+`try_pull`을 부르는 omniORBpy `PullSupplier`. §4의 기존 방향의 거울이다: 거기서는
+우리가 쓰지 않은 ORB가 우리 채널을 부르고, 여기서는 우리 채널이 그것의
+**클라이언트**다. 2026-08-25 측정: 선언 18개 중 **17개 서빙**, 남은 하나는
+`destroy`(§11, 미발화).
+
 측정이 오라클을 결정했다: omniEvents 픽스처는 없으나 omniORBpy가 CosEventComm
 스텁을 싣고 있으므로, F6과 같은 방향 — 채널은 우리가 서빙하고 독립 ORB가 consumer/
 supplier로 접속 — 이 가능하다. 컨트롤 플레인 입도만이라는 규칙은 그대로이고,
-범위는 push 모델에 더해 2026-08-18 이후의 **pull 소비자 쪽**
-(`obtain_pull_supplier`, `pull`, `try_pull` 서빙)이다 — 이 문단은 "push 모델만"
-이라고만 적고 있었다. pull의 공급자 쪽과 `destroy`는 `NO_IMPLEMENT`이며 이유는
-`event_server.rs` 헤더에, 그리고 **PLAN-DEFERRED §10(pull 공급자 쪽)과
-§11(`destroy`)에 있다** — 영어 쌍둥이도 둘 다 §10이라고 적고 있었으나 방아쇠가
-서로 다른 두 개의 장이다.
+범위는 push 모델, 2026-08-18 이후의 **pull 소비자 쪽**
+(`obtain_pull_supplier`, `pull`, `try_pull`), 그리고 2026-08-25 이후의
+**pull 공급자 쪽**(§4.1)이며 — 이것이 네 모델 전부다. `NO_IMPLEMENT`로 남는 것은
+`destroy` 하나이고 이유는 `event_server.rs` 헤더에, 장은 **PLAN-DEFERRED §11**에
+있다 — 그것은 호출자 모델을 원한다. `destroy`가 다른 모든 클라이언트에 대해
+채널을 끝내기 때문이다. §10은 pull 공급자 쪽이었고 위 §4.1로 졸업했다. 둘은
+언제나 방아쇠가 다른 두 장이었으나, 이 문단은 2026-08-18까지 둘 다 §10이라고
+적고 있었다.
 
 ## 5. CosLifeCycle & CosProperty / 생명주기·프로퍼티 — F5
 

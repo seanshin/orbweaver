@@ -50,7 +50,7 @@ is the adoption, not this file.
 | §6 CosCollections | a foreign client expecting `CosCollection` by name; or a result set that genuinely cannot be bounded |
 | §7 Federated Naming / Trading Links | the first configuration with **more than one naming/trading domain behind one MCP face** |
 | §8 Security Service beyond CSIv2 | four separate triggers, one per part — see §8; the earliest is F5 tenancy wanting policy by **domain membership** rather than per call |
-| §10 CosEvent supplier-side pull | a named `PullSupplier` in this workspace — something that *is* one, whose clock the channel would then hold a thread on |
+| ~~§10 CosEvent supplier-side pull~~ | **FIRED 2026-08-25** — graduated to `PLAN-SERVICES` §4.1. The row stays struck rather than deleted: a trigger table that silently loses its fired rows cannot be read as a record of what this file's triggers have ever done, and this is the first one |
 | §11 CosEvent `destroy` | a caller model in the event servant — the operation is unauthenticated and ends the channel for every other client |
 | §12 CosNaming chaining to a foreign context | a federation requirement (§7's trigger, seen from the naming servant) — chaining is *possible* today, which is a reason it can be built, not a reason to |
 
@@ -630,6 +630,16 @@ v1은 CORBASec이 아니라 기존 어휘의 최소 답: (1) 레지스트리 항
 
 ## 10. CosEvent — the supplier side of pull / 이벤트 — pull의 공급자 쪽
 
+> **GRADUATED 2026-08-25 → `PLAN-SERVICES.md` §4.1.** The first chapter to
+> leave this file under §9. What stays here is what §9 says stays: the reason
+> it was deferred, and **the v1 sketch, corrected**, so the disagreement the
+> trigger produced is recorded rather than quietly lost. Everything
+> forward-looking — batch unit, named oracle — is in `PLAN-SERVICES` §4.1,
+> because §0 is explicit that the move *is* the adoption and this file is not.
+>
+> *졸업 2026-08-25 → `PLAN-SERVICES.md` §4.1. §9 아래 이 파일을 떠난 첫 장이다.
+> 여기 남는 것은 §9가 남으라고 한 것 — 유예 사유와, **정정된 v1 스케치**다.*
+
 **What it is.** `SupplierAdmin::obtain_pull_consumer` and the
 `ProxyPullConsumer` it would return: the channel *pulls* from a supplier —
 `PullSupplier::pull` is specified to block until the supplier has something.
@@ -648,15 +658,49 @@ is a `PullSupplier` (grep, 2026-08-19: only the servant's own proxy and the
 sweep's note that the interface is client-implemented). Answered
 `NO_IMPLEMENT` with this reason; measured in the generated coverage block.
 
-**Un-defer trigger.** A named `PullSupplier` in this workspace. **v1 sketch:**
-one thread per connected supplier with a per-supplier deadline the channel
-owns; a supplier that blocks past it is disconnected with the same
-`disconnected_for_failure` accounting the push path has.
+**Un-defer trigger — fired 2026-08-25.** A named `PullSupplier` in this
+workspace. It fired on the project owner's request that the four models be
+creatable, under D023 §2's proposed rule that the owner naming a consumer fires
+a trigger; D021 §2 carries the argument, which is that a deferral phrased *"until
+something asks"* is called the moment something asks, and that the opposite
+reading makes this particular trigger **unreachable by construction** — nobody
+writes a pull supplier against a channel that cannot obtain a pull consumer. It
+is now satisfied literally too: `event_server::PullSupplierServant` is one.
+
+**v1 sketch — wrong, and recorded as wrong.** It read *"one thread per
+connected supplier with a per-supplier deadline the channel owns."* What landed
+is **one** round-robin thread calling `try_pull`, never the blocking `pull`.
+The sketch's whole design followed from assuming the blocking call: with a
+non-blocking one there is nothing for the extra threads to wait on, and a fixed
+thread count is a bound **the channel owns** where a per-connection count is one
+a *client* sets — which was the sketch's own stated objection, arriving through
+the mechanism it proposed. The deadline it wanted turned out to be the existing
+`DEFAULT_PUSH_TIMEOUT`. What it did not foresee is the cost that replaced it: an
+interval the channel has to invent (`DEFAULT_SOURCE_POLL`, 100 ms), which is a
+real price and is named rather than hidden. `MAX_CONSECUTIVE_FAILURES` and
+`disconnected_for_failure` carried over as the sketch expected; failures land in
+a new `pull_failures`, and **no drop cause joined the split**, because a
+`ProxyPullConsumer` holds no queue.
 
 **무엇.** 채널이 공급자에서 *당기는* 쪽. 소비자 쪽 pull은 2026-08-18부터 서빙.
 **왜 유예.** 원래 사유는 두 주장이었고 하나만 측정을 견뎠다; 공급자 쪽은 채널이
 남의 시계에 스레드를 하나씩 붙잡는 일이며 이 작업공간에 `PullSupplier`인 것이
-없다. **방아쇠.** 이름 붙은 `PullSupplier` 하나.
+없었다.
+
+**방아쇠 — 2026-08-25 발화.** 네 모델을 생성 가능하게 하라는 소유자의 요청으로
+당겨졌다(D023 §2). 논거는 D021 §2에 있다: "무언가 물을 때까지"라는 유예는 물은
+순간 판돈이 불린 것이며, 반대로 읽으면 이 방아쇠는 **구조적으로 도달 불가능**
+해진다 — pull consumer를 얻을 수 없는 채널을 상대로 pull supplier를 쓰는 사람은
+없기 때문이다. 이제 문자 그대로도 충족된다: `PullSupplierServant`가 그것이다.
+
+**v1 스케치 — 틀렸고, 틀린 것으로 기록한다.** "공급자마다 스레드 하나"가 아니라
+`try_pull`을 도는 **하나의** 라운드로빈 스레드다. 스케치의 설계 전체가 *막는*
+호출을 가정한 데서 나왔다. 막지 않는 호출에서는 여분의 스레드가 기다릴 것이
+없고, 고정 스레드 수는 **채널이 소유하는** 한계인 반면 연결당 수는 *클라이언트*가
+정하는 한계다 — 그것이 스케치 자신의 반대 이유였는데, 스케치가 제안한 기구를
+통해 되돌아왔다. 원하던 데드라인은 이미 있던 `DEFAULT_PUSH_TIMEOUT`이었다.
+예견하지 못한 것은 그것을 대신한 비용이다: 채널이 발명해야 하는 간격
+(`DEFAULT_SOURCE_POLL`, 100 ms). 실제 대가이고, 숨기지 않고 이름한다.
 
 ## 11. CosEvent — `destroy` / 이벤트 — `destroy`
 
