@@ -1,18 +1,23 @@
-//! Self-consistency proof for the first-party CosEvent push channel: OUR
-//! supplier and OUR consumer through OUR channel, one process, loopback —
-//! then a deliberately dead consumer that must be cut loose without the live
-//! one missing an event, with every drop counted and printed.
+//! Self-consistency proof for the first-party CosEvent channel: OUR supplier
+//! and OUR consumer through OUR channel, one process, loopback — then a
+//! deliberately dead consumer that must be cut loose without the live one
+//! missing an event, with every drop counted and printed, and finally OUR
+//! `PullSupplier` that the channel has to go and **ask**.
 //!
 //! Self-consistency only: it proves the halves agree, not that either matches
-//! the specification. The independent check is omniORB's python consumer
-//! attaching to this channel (below).
+//! the specification. The independent checks are omniORB's python consumer
+//! attaching to this channel and omniORB's python *supplier* being pulled from
+//! by it (below).
 //!
-//! Usage: `spike-events [ior-out-path] [--hold]`
+//! Usage: `spike-events [ior-out-path] [--hold] [--source-endian big|little]`
 //!
 //! Default IOR path is `spikes/events.ior`. With `--hold` the server keeps
 //! running after the checks so an external client can attach; the process is
 //! stopped by killing it — there is no remote shutdown, and `destroy` is
-//! refused by design.
+//! refused by design. `--source-endian` sets the byte order the channel asks
+//! its suppliers in, which is in practice the order pulled events are captured
+//! in, so the cross-ORB pull check can be run in both — an encoder that only
+//! works native-endian passes every local test and fails in the field.
 //!
 //! # Cross-ORB oracle (integration's job, not run here)
 //!
@@ -66,11 +71,25 @@
 //! printed `received: [57, 58]` then `PASS` — an ORB we did not write
 //! narrowed our channel, connected its own servant, and decoded two events
 //! our channel pushed to it.
+//!
+//! # The other cross-ORB direction: omniORB as a supplier we pull from
+//!
+//! `spikes/event_pull_supplier.py` is the mirror of that check and the peer
+//! oracle for the supplier side of pull: an omniORB `CosEventComm::PullSupplier`
+//! servant, handed to `for_suppliers().obtain_pull_consumer()` and connected
+//! with `connect_pull_supplier`, which **our** channel then fetches from with
+//! `try_pull` and fans out to a consumer of the peer's own. Run it against
+//! `--hold` in both byte orders:
+//!
+//! ```text
+//! cargo run -q --bin spike-events -- /tmp/ev.ior --hold --source-endian big &
+//! python3 spikes/event_pull_supplier.py /tmp/ev.ior
+//! ```
 
 use orbweaver_cdr::Endian;
 use orbweaver_giop::event_server::{
-    ChannelHandle, EventChannelServer, MAX_CONSECUTIVE_FAILURES, PUSH_CONSUMER_ID,
-    PushConsumerServant, client,
+    ChannelHandle, EventChannelServer, EventSource, MAX_CONSECUTIVE_FAILURES, PUSH_CONSUMER_ID,
+    PullSupplierServant, PushConsumerServant, client,
 };
 use orbweaver_giop::server::Server;
 use orbweaver_giop::typecode::TypeCode;
@@ -85,13 +104,30 @@ const T: Duration = Duration::from_secs(5);
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let hold = args.iter().any(|a| a == "--hold");
+    // The byte order the channel asks its suppliers in. A supplier replies in
+    // the order it was asked in, so this is the order pulled events are
+    // captured in, and the cross-ORB pull check is meant to be run in both.
+    let source_endian = match args.iter().position(|a| a == "--source-endian") {
+        Some(i) => match args.get(i + 1).map(String::as_str) {
+            Some("big") => Endian::Big,
+            Some("little") => Endian::Little,
+            other => {
+                println!(
+                    "event-channel: FAIL — --source-endian wants big or little, got {other:?}"
+                );
+                return std::process::ExitCode::FAILURE;
+            }
+        },
+        None => Endian::native(),
+    };
     let out_path = args
         .iter()
-        .find(|a| !a.starts_with("--"))
-        .cloned()
+        .enumerate()
+        .find(|(i, a)| !(a.starts_with("--") || *i > 0 && args[i - 1] == "--source-endian"))
+        .map(|(_, a)| a.clone())
         .unwrap_or_else(|| "spikes/events.ior".into());
 
-    match run(&out_path, hold) {
+    match run(&out_path, hold, source_endian) {
         Ok(()) => {
             println!("\nevent-channel: PASS");
             std::process::ExitCode::SUCCESS
@@ -162,7 +198,44 @@ fn attach(channel: &Ior, consumer: &Ior) -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
-fn run(out_path: &str, hold: bool) -> Result<(), Box<dyn std::error::Error>> {
+/// A `CosEventComm::PullSupplier` of our own on its own loopback server — the
+/// thing the channel has to go and ask, rather than one that calls.
+struct Supplier {
+    ior: Ior,
+    source: EventSource,
+}
+
+fn start_supplier(key: &[u8]) -> Supplier {
+    let server = Server::bind("127.0.0.1:0", key.to_vec()).expect("bind supplier");
+    let port = server.local_addr().expect("addr").port();
+    let servant = PullSupplierServant::new(key.to_vec());
+    let ior = servant.ior("127.0.0.1", port);
+    let source = servant.source();
+    std::thread::spawn(move || {
+        let _ = server.serve_shared(&servant, || false);
+    });
+    Supplier { ior, source }
+}
+
+/// Attaches `supplier` to a fresh ProxyPullConsumer: the channel will now come
+/// and ask it for events.
+fn attach_supplier(channel: &Ior, supplier: &Ior) -> Result<(), Box<dyn std::error::Error>> {
+    let mut conn = Connection::connect(channel, T)?;
+    let admin = client::for_suppliers(&mut conn)?;
+    drop(conn);
+    let mut conn = Connection::connect(&admin, T)?;
+    let proxy = client::obtain_pull_consumer(&mut conn)?;
+    drop(conn);
+    let mut conn = Connection::connect(&proxy, T)?;
+    client::connect_pull_supplier(&mut conn, supplier)?;
+    Ok(())
+}
+
+fn run(
+    out_path: &str,
+    hold: bool,
+    source_endian: Endian,
+) -> Result<(), Box<dyn std::error::Error>> {
     let server = Server::bind("127.0.0.1:0", b"EventChannel".to_vec())?;
     let port = server.local_addr()?.port();
     let channel = EventChannelServer::new("127.0.0.1", port, b"EventChannel".to_vec());
@@ -171,8 +244,9 @@ fn run(out_path: &str, hold: bool) -> Result<(), Box<dyn std::error::Error>> {
     // A short push timeout so the dead-consumer phase is measured in
     // milliseconds, not connect-timeout multiples.
     let _delivery = channel.start_delivery_with(Duration::from_millis(500));
+    handle.set_source_endian(source_endian);
     std::fs::write(out_path, channel_ior.to_stringified()?)?;
-    println!("listening on 127.0.0.1:{port}");
+    println!("listening on 127.0.0.1:{port} (asking suppliers {source_endian:?}-endian)");
     println!("IOR written to {out_path}");
     println!("READY");
     let stop = Arc::new(AtomicBool::new(false));
@@ -309,12 +383,75 @@ fn run(out_path: &str, hold: bool) -> Result<(), Box<dyn std::error::Error>> {
     )?;
     ok("drops were counted by cause and reported, none silent, none miscounted");
 
+    // ── phase 3: the fourth side of the 2×2 — a supplier the channel asks ──
+    // The consumer here is the same live one: an event fetched from a
+    // `PullSupplier` must be indistinguishable, downstream, from one that was
+    // pushed in. That sameness is the design, so it is what is measured.
+    let pull_supplier = start_supplier(b"PullSupplier");
+    const K: u32 = 5;
+    for i in 0..K {
+        pull_supplier
+            .source
+            .offer(&TypeCode::ULong, source_endian, move |e| e.put_u32(2000 + i))?;
+    }
+    attach_supplier(&channel_ior, &pull_supplier.ior)?;
+    require(
+        handle.wait_until(T, |s| s.sourced == u64::from(K)),
+        "phase 3: the channel did not fetch every offered event",
+    )?;
+    require(
+        handle.wait_until(T, |s| s.delivered == u64::from(N + M + K)),
+        "phase 3: fetched events did not reach the consumer",
+    )?;
+    let pulled: Vec<u32> = live
+        .sink
+        .snapshot()
+        .iter()
+        .skip((N + M) as usize)
+        .map(|a| a.value_decoder().get_u32().unwrap_or(u32::MAX))
+        .collect();
+    require(
+        pulled == (2000..2000 + K).collect::<Vec<u32>>(),
+        "phase 3: the fetched events arrived out of order or corrupted",
+    )?;
+    // The design decision, as a number rather than a paragraph: `pull` blocks
+    // and `try_pull` does not, and a shared round may not be held by one
+    // silent supplier.
+    require(
+        pull_supplier.source.pull_calls() == 0,
+        "phase 3: the channel must never call the blocking pull",
+    )?;
+    require(
+        pull_supplier.source.try_pull_calls() >= u64::from(K),
+        "phase 3: the channel must have asked with try_pull at least once per event",
+    )?;
+    let stats = handle.stats();
+    require(
+        stats.pull_failures == 0 && stats.pull_suppliers_connected == 1,
+        "phase 3: the supplier should still be connected with no failures",
+    )?;
+    require(
+        stats.split_adds_up(),
+        "phase 3: the per-cause drop counters must still account for every drop",
+    )?;
+    println!(
+        "  pull report: sourced={} try_pull={} pull={} pull_failures={} suppliers_connected={}",
+        stats.sourced,
+        pull_supplier.source.try_pull_calls(),
+        pull_supplier.source.pull_calls(),
+        stats.pull_failures,
+        stats.pull_suppliers_connected
+    );
+    ok("channel pulled 5 events out of a PullSupplier with try_pull, in order, none blocking");
+
     drop(supplier);
 
     if hold {
         println!(
             "HOLDING — channel stays up; a ulong event is pushed once a second. \
-             Point a CosEventComm consumer at {out_path}"
+             Point a CosEventComm consumer at {out_path}, or a CosEventComm \
+             PullSupplier at its SupplierAdmin — the channel asks \
+             {source_endian:?}-endian and will come and fetch"
         );
         hold_and_tick(&handle);
     }
