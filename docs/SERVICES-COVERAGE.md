@@ -459,7 +459,7 @@ which used to be silent.
 
 _`CORBA::Object` pseudo-operations probed and counted apart: `_is_a`, `_non_existent`._
 
-### CosEvent — 18 declared, 14 served / 선언 18, 서빙 14
+### CosEvent — 18 declared, 17 served / 선언 18, 서빙 17
 
 | Interface | Operation | Answer, per object probed | Class |
 |---|---|---|---|
@@ -469,7 +469,7 @@ _`CORBA::Object` pseudo-operations probed and counted apart: `_is_a`, `_non_exis
 | `CosEventChannelAdmin::ConsumerAdmin` | `obtain_push_supplier` | ConsumerAdmin → `reply` | served |
 | `CosEventChannelAdmin::ConsumerAdmin` | `obtain_pull_supplier` | ConsumerAdmin → `reply` | served |
 | `CosEventChannelAdmin::SupplierAdmin` | `obtain_push_consumer` | SupplierAdmin → `reply` | served |
-| `CosEventChannelAdmin::SupplierAdmin` | `obtain_pull_consumer` | SupplierAdmin → `NO_IMPLEMENT` | deferred (`NO_IMPLEMENT`) |
+| `CosEventChannelAdmin::SupplierAdmin` | `obtain_pull_consumer` | SupplierAdmin → `reply` | served |
 | `CosEventChannelAdmin::ProxyPushSupplier` | `connect_push_consumer` | ProxyPushSupplier → `MARSHAL` | served |
 | `CosEventComm::PushSupplier` | `disconnect_push_supplier` | ProxyPushSupplier → `reply` | served |
 | `CosEventChannelAdmin::ProxyPushConsumer` | `connect_push_supplier` | ProxyPushConsumer → `MARSHAL` | served |
@@ -479,27 +479,27 @@ _`CORBA::Object` pseudo-operations probed and counted apart: `_is_a`, `_non_exis
 | `CosEventComm::PullSupplier` | `pull` | ProxyPullSupplier → `user Disconnected` | served |
 | `CosEventComm::PullSupplier` | `try_pull` | ProxyPullSupplier → `user Disconnected` | served |
 | `CosEventComm::PullSupplier` | `disconnect_pull_supplier` | ProxyPullSupplier → `reply` | served |
-| `CosEventChannelAdmin::ProxyPullConsumer` | `connect_pull_supplier` | ProxyPushConsumer → `NO_IMPLEMENT` | deferred (`NO_IMPLEMENT`) |
-| `CosEventComm::PullConsumer` | `disconnect_pull_consumer` | ProxyPushConsumer → `NO_IMPLEMENT` | deferred (`NO_IMPLEMENT`) |
+| `CosEventChannelAdmin::ProxyPullConsumer` | `connect_pull_supplier` | ProxyPullConsumer → `MARSHAL` | served |
+| `CosEventComm::PullConsumer` | `disconnect_pull_consumer` | ProxyPullConsumer → `reply` | served |
 
 _`CORBA::Object` pseudo-operations probed and counted apart: `_is_a`, `_non_existent`._
 
-### IFR — 44 declared, 9 served / 선언 44, 서빙 9
+### IFR — 44 declared, 19 served / 선언 44, 서빙 19
 
 | Interface | Operation | Answer, per object probed | Class |
 |---|---|---|---|
 | `CORBA::Repository` | `lookup_id` | Repository (root) → `MARSHAL` | served |
-| `CORBA::Repository` | `get_canonical_typecode` | Repository (root) → `NO_IMPLEMENT` | deferred (`NO_IMPLEMENT`) |
-| `CORBA::Repository` | `get_primitive` | Repository (root) → `NO_IMPLEMENT` | deferred (`NO_IMPLEMENT`) |
+| `CORBA::Repository` | `get_canonical_typecode` | Repository (root) → `reply` | served |
+| `CORBA::Repository` | `get_primitive` | Repository (root) → `reply` | served |
 | `CORBA::Repository` | `create_string` | Repository (root) → `NO_PERMISSION` | refused (`NO_PERMISSION`) |
 | `CORBA::Repository` | `create_wstring` | Repository (root) → `NO_PERMISSION` | refused (`NO_PERMISSION`) |
 | `CORBA::Repository` | `create_sequence` | Repository (root) → `NO_PERMISSION` | refused (`NO_PERMISSION`) |
 | `CORBA::Repository` | `create_array` | Repository (root) → `NO_PERMISSION` | refused (`NO_PERMISSION`) |
 | `CORBA::Repository` | `create_fixed` | Repository (root) → `NO_PERMISSION` | refused (`NO_PERMISSION`) |
-| `CORBA::Container` | `lookup` | Repository (root) → `NO_IMPLEMENT`; InterfaceDef (gc10::Both) → `NO_IMPLEMENT` | deferred (`NO_IMPLEMENT`) |
-| `CORBA::Container` | `contents` | Repository (root) → `NO_IMPLEMENT`; InterfaceDef (gc10::Both) → `NO_IMPLEMENT` | deferred (`NO_IMPLEMENT`) |
-| `CORBA::Container` | `lookup_name` | Repository (root) → `NO_IMPLEMENT`; InterfaceDef (gc10::Both) → `NO_IMPLEMENT` | deferred (`NO_IMPLEMENT`) |
-| `CORBA::Container` | `describe_contents` | Repository (root) → `NO_IMPLEMENT`; InterfaceDef (gc10::Both) → `NO_IMPLEMENT` | deferred (`NO_IMPLEMENT`) |
+| `CORBA::Container` | `lookup` | Repository (root) → `MARSHAL`; InterfaceDef (gc10::Both) → `MARSHAL` | served |
+| `CORBA::Container` | `contents` | Repository (root) → `reply`; InterfaceDef (gc10::Both) → `reply` | served |
+| `CORBA::Container` | `lookup_name` | Repository (root) → `MARSHAL`; InterfaceDef (gc10::Both) → `MARSHAL` | served |
+| `CORBA::Container` | `describe_contents` | Repository (root) → `reply`; InterfaceDef (gc10::Both) → `reply` | served |
 | `CORBA::Container` | `create_module` | Repository (root) → `NO_PERMISSION`; InterfaceDef (gc10::Both) → `NO_PERMISSION` | refused (`NO_PERMISSION`) |
 | `CORBA::Container` | `create_constant` | Repository (root) → `NO_PERMISSION`; InterfaceDef (gc10::Both) → `NO_PERMISSION` | refused (`NO_PERMISSION`) |
 | `CORBA::Container` | `create_struct` | Repository (root) → `NO_PERMISSION`; InterfaceDef (gc10::Both) → `NO_PERMISSION` | refused (`NO_PERMISSION`) |
@@ -526,12 +526,12 @@ _`CORBA::Object` pseudo-operations probed and counted apart: `_is_a`, `_non_exis
 | `CORBA::Contained` | `_set_name` | InterfaceDef (gc10::Both) → `NO_PERMISSION` | refused (`NO_PERMISSION`) |
 | `CORBA::Contained` | `_get_version` | InterfaceDef (gc10::Both) → `reply` | served |
 | `CORBA::Contained` | `_set_version` | InterfaceDef (gc10::Both) → `NO_PERMISSION` | refused (`NO_PERMISSION`) |
-| `CORBA::Contained` | `_get_defined_in` | InterfaceDef (gc10::Both) → `NO_IMPLEMENT` | deferred (`NO_IMPLEMENT`) |
+| `CORBA::Contained` | `_get_defined_in` | InterfaceDef (gc10::Both) → `reply` | served |
 | `CORBA::Contained` | `_get_absolute_name` | InterfaceDef (gc10::Both) → `reply` | served |
-| `CORBA::Contained` | `_get_containing_repository` | InterfaceDef (gc10::Both) → `NO_IMPLEMENT` | deferred (`NO_IMPLEMENT`) |
-| `CORBA::Contained` | `describe` | InterfaceDef (gc10::Both) → `NO_IMPLEMENT` | deferred (`NO_IMPLEMENT`) |
+| `CORBA::Contained` | `_get_containing_repository` | InterfaceDef (gc10::Both) → `reply` | served |
+| `CORBA::Contained` | `describe` | InterfaceDef (gc10::Both) → `reply` | served |
 | `CORBA::Contained` | `move` | InterfaceDef (gc10::Both) → `NO_PERMISSION` | refused (`NO_PERMISSION`) |
-| `CORBA::IDLType` | `_get_type` | InterfaceDef (gc10::Both) → `NO_IMPLEMENT` | deferred (`NO_IMPLEMENT`) |
+| `CORBA::IDLType` | `_get_type` | InterfaceDef (gc10::Both) → `reply` | served |
 
 _`CORBA::Object` pseudo-operations probed and counted apart: `_is_a`, `_non_existent`._
 
@@ -584,11 +584,11 @@ _`CORBA::Object` pseudo-operations probed and counted apart: `_is_a`, `_non_exis
 | Service | Declared | Served | Deferred `NO_IMPLEMENT` | Refused `NO_PERMISSION` | Not dispatched `BAD_OPERATION` | Probes | Unmeasured |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | CosNaming | 14 | 14 | 0 | 0 | 0 | 16 | 0 |
-| CosEvent | 18 | 14 | 4 | 0 | 0 | 28 | 0 |
-| IFR | 44 | 9 | 10 | 25 | 0 | 66 | 0 |
+| CosEvent | 18 | 17 | 1 | 0 | 0 | 28 | 0 |
+| IFR | 44 | 19 | 0 | 25 | 0 | 66 | 0 |
 | MoE enterprise | 16 | 16 | 0 | 0 | 0 | 28 | 0 |
 | MoE control plane | 14 | 10 | 1 | 0 | 3 | 21 | 0 |
-| **total** | **106** | **63** | **15** | **25** | **3** | **159** | **0** |
+| **total** | **106** | **76** | **2** | **25** | **3** | **159** | **0** |
 
 _Declared_ counts each `interface::operation` once however many objects it was probed on; an operation is _served_ if any object dispatched it. `MARSHAL` on a 64-zero-byte probe proves dispatch, not correctness (§9). / _선언_은 객체 수와 무관하게 `인터페이스::연산`을 한 번씩 센다.
 
