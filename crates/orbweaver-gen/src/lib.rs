@@ -1606,16 +1606,21 @@ mod tests {
             }
             let g = emit(&r, "g");
             let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
-            // Two more files whose declarations the wire cannot carry and
+            // Three more files whose declarations the wire cannot carry and
             // which cannot say "deferred" in their names. `31-native-type`
             // must not, because a `native` is not deferred — there is no wire
             // form waiting to be implemented. `32-valuebase` is about the
             // keyword rather than the deferral, and the keyword is what had
-            // no corpus file. Named here rather than matched by a looser
-            // pattern, so the exemption stays a list of files somebody
-            // decided about.
-            let deferred =
-                stem.contains("deferred") || stem == "31-native-type" || stem == "32-valuebase";
+            // no corpus file. `34-corba-principal` must not for `31`'s reason:
+            // `Principal` was **withdrawn** from CORBA, so nothing is waiting
+            // to be implemented there either — and naming it "deferred" to get
+            // through this line would be a filename telling the gate a lie.
+            // Named here rather than matched by a looser pattern, so the
+            // exemption stays a list of files somebody decided about.
+            let deferred = stem.contains("deferred")
+                || stem == "31-native-type"
+                || stem == "32-valuebase"
+                || stem == "34-corba-principal";
             // This filter used to exempt every constant, because constants were
             // a named non-goal: "the registry records the type but not the
             // value". The registry records the value now, `14-modules-constants`

@@ -114,10 +114,18 @@ fn the_coverage_gaps_over_the_corpus_are_the_known_ones() {
     // The other `prop/unmeasured` class, pinned by id: a `sequence<T>` whose
     // element the wire cannot carry has exactly one value — the empty one — so
     // every case the sampler draws for it is the same case, and saying so is
-    // the whole point of the rule. Both entries arrived on 2026-08-21 with the
-    // corpus files for `native` and `ValueBase`; before them the corpus had no
-    // sequence of an unmarshallable element, so this arm of `gap_reason` had
-    // never run over the corpus at all.
+    // the whole point of the rule. The first two entries arrived on 2026-08-21
+    // with the corpus files for `native` and `ValueBase`; before them the
+    // corpus had no sequence of an unmarshallable element, so this arm of
+    // `gap_reason` had never run over the corpus at all.
+    //
+    // The third arrived on 2026-08-25 for a different reason: the element type
+    // was already unmarshallable and `why_unsupported` already had a sentence
+    // for it — "`Principal` is withdrawn from CORBA and is not marshalled" —
+    // but the registry answered `TypeCode::Void` for `::CORBA::Principal`, so
+    // `sequence<::CORBA::Principal>` was a **sequence of `void`** and the
+    // sampler drew it happily. The arm was unreachable from any contract, not
+    // absent. See `corpus/golden/34-corba-principal.idl`.
     let empty_sequences: Vec<&str> = unmeasured
         .iter()
         .filter(|(_, m)| !m.contains("recursive"))
@@ -125,7 +133,7 @@ fn the_coverage_gaps_over_the_corpus_are_the_known_ones() {
         .collect();
     assert_eq!(
         empty_sequences,
-        ["IDL:gn31/Roster:1.0", "IDL:gvb32/Cargo:1.0"],
+        ["IDL:gn31/Roster:1.0", "IDL:gvb32/Cargo:1.0", "IDL:gp34/Roll:1.0"],
         "the set of sequences that can only be empty changed:\n  {}",
         unmeasured.iter().map(|(s, m)| format!("{s}: {m}")).collect::<Vec<_>>().join("\n  ")
     );
@@ -170,6 +178,18 @@ fn the_coverage_gaps_over_the_corpus_are_the_known_ones() {
     // directions. Propagating the element's limit through the sequence made
     // the leg report itself unmeasured for a type whose every existing value
     // does cross, and cost 128 round trips the CDR leg had taken.
+    //
+    // 2026-08-25 added three from `34-corba-principal`, and they are the same
+    // story a fourth time in the one spelling that has no declaration behind
+    // it at all. `::CORBA::Principal` is predeclared by the front end and the
+    // registry answered `TypeCode::Void` for it, so this leg ran for
+    // `gp34::Envelope` — as a struct whose first member is `void`, marshalling
+    // **zero bytes** — and crossed, and counted. The registry answers
+    // `TypeCode::Principal` now and the mapping has no form for it, so the
+    // three declarations that reach one say so here. Note which id is absent
+    // for the reason two were absent above: `gp34::Roll` is a
+    // `sequence<::CORBA::Principal>` and its only value is the empty one,
+    // which AnyJSON carries; it is on the `prop/unmeasured` list instead.
     assert_eq!(
         unmapped,
         [
@@ -183,6 +203,9 @@ fn the_coverage_gaps_over_the_corpus_are_the_known_ones() {
             "IDL:gn31/Slot:1.0",
             "IDL:gvb32/Envelope:1.0",
             "IDL:gvb32/Manifest:1.0",
+            "IDL:gp34/Caller:1.0",
+            "IDL:gp34/Envelope:1.0",
+            "IDL:gp34/Manifest:1.0",
             "IDL:gcdr/Column:1.0",
             "IDL:gcdr/Ledger:1.0",
             "IDL:gcdr/Memo:1.0",

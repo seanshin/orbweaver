@@ -1,0 +1,77 @@
+// 34 — `::CORBA::Principal` is a name the front end predeclares and the wire
+// does not carry, and until 2026-08-25 the registry called it **`void`**.
+//
+// This is the shape of the defect, not a description of it: `struct S {
+// ::CORBA::Principal who; long n; }` was accepted by `sidl-validate` with two
+// unrelated advisories, and both emitters produced a member that marshals
+// **zero bytes** — `("who", "who", "void")` in Python, `pub who: ()` in Rust.
+// A peer that writes a Principal there hands us nothing and every field after
+// it is mis-parsed. Nothing was red.
+//
+// It is the same defect that had already been fixed for the sibling name.
+// `sema.rs` predeclares four names inside module `CORBA`, and the registry
+// answered exactly one of them — `TypeCode` — because the fix was scoped to
+// the keyword that reported it rather than to the table it lived in.
+// `Principal` is the next line of that table. The rule now has a home
+// (`orbweaver_idl::sema::PREDECLARED_CORBA`) and a sweep over it
+// (`orbweaver-registry`'s
+// `every_predeclared_corba_name_reaches_a_typecode_or_is_refused`): every
+// predeclared name reaches a `TypeCode` the registry means, or is refused.
+// The other two — `Object` and `ValueBase` — are refused as scoped names,
+// because `object` and `valuebase` are IDL keywords and cannot be the tail of
+// one; their keyword spellings are covered by `corpus/golden/16` and `32`.
+//
+// Golden rather than negative because the *oracle accepts the file*, which is
+// what decided the repair. `omniidl -b dump` on this file, omniORB 4.3.4,
+// measured 2026-08-25, exits 0 and prints the member with its type intact:
+//
+//     module gp34 {
+//
+//       struct Envelope {
+//         CORBA::Principal sender;
+//         string routing;
+//       };
+//       ...
+//
+// So refusing the name in the front end would be a divergence from a
+// conformant compiler over a file it parses, and a `corpus/divergences.tsv`
+// row for no gain. `Principal` was withdrawn from CORBA — it left the GIOP
+// request header after 1.0 and CORBA 3.x removed it — and "this version
+// marshals no value for it" is a *wire* answer, which is where it is now
+// given: the registry records `TypeCode::Principal`, `orbweaver-dynamic`
+// refuses it by name, and both emitters skip the declaration rather than
+// serving a member that writes nothing.
+//
+// What this file does **not** yet pin: S4 does not warn on it the way it warns
+// on a native or a valuetype. Making it a fifth family means one published
+// refusal head in `orbweaver-dynamic` and both emitters using it, because
+// `crates/orbweaver-gen/tests/deferred_wire_agreement.rs` holds S4's set and
+// the emitters' §4.4 skips equal — three crates, one change. Recorded here
+// rather than half-done, so the gap is a sentence somebody can act on instead
+// of a silence.
+module gp34 {
+  // ── unservable: reaches ::CORBA::Principal ──────────────────────────────
+  // as a member, which is the shape that produced the `void`
+  struct Envelope { ::CORBA::Principal sender; string routing; };
+  // as a return type and as a parameter
+  interface Gateway {
+    ::CORBA::Principal whoami();
+    void stamp(in ::CORBA::Principal caller);
+  };
+  // through a sequence element
+  typedef sequence<::CORBA::Principal> Roll;
+  // through a typedef of the name itself
+  typedef ::CORBA::Principal Caller;
+  // one hop further out, so the cascade is executed and not just the direct case
+  struct Manifest { Envelope sealed; long weight; };
+
+  // ── servable: the negative controls ─────────────────────────────────────
+  // The sibling predeclared name is servable and must stay so: it is
+  // `tk_TypeCode`, and this file would pass just as well if the fix had
+  // broken it.
+  struct Described { ::CORBA::TypeCode what; string label; };
+  // A reference to an unservable interface is still an IOR.
+  struct Desk { Gateway agent; };
+  struct Plain { long a; string b; };
+  interface Lookup { Plain find(in string key); };
+};
