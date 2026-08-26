@@ -35,7 +35,7 @@ pub const MAX_DEPTH: usize = 64;
 
 /// The words the depth refusal opens with.
 ///
-/// Published for the same reason [`orbweaver_cdr::IMPLAUSIBLE_LENGTH`] is: the
+/// Published for the same reason [`crate::IMPLAUSIBLE_LENGTH`] is: the
 /// agent-reach sweep in `orbweaver-test` counts how many fed documents were
 /// refused for depth rather than for shape, and until 2026-08-24 it counted by
 /// matching a retyped copy of this sentence. A rewording here would have zeroed

@@ -28,6 +28,16 @@
 
 #![deny(missing_docs)]
 
+// A JSON reader and writer, moved down here from `orbweaver-dynamic` on
+// 2026-08-26 (D026 §5 S1). It has nothing to do with CDR and everything to do
+// with *height*: the parser is `std`-only, and every crate that wants it was
+// reaching it through `orbweaver-dynamic`, which sits above `giop`, `registry`
+// and `trading`. That put the seed loader — one file, compiled a second time
+// inside a fixture's own crate by `#[path]` — out of reach of the three
+// fixtures that live below `dynamic`. Nothing moved with it, because nothing
+// had to: see this module's own header.
+pub mod json;
+
 use std::fmt;
 use std::sync::Arc;
 

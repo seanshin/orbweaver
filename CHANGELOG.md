@@ -536,6 +536,51 @@ records what changed and, where it matters, what it changes on the wire.
   `orbweaver-dynamic`'s JSON parser is above them too. The structural fix is
   named in the README: move that parser down to `orbweaver-cdr`.
 
+- **That structural fix, done.** `orbweaver_dynamic::json` now lives in
+  `orbweaver-cdr`. Measured before moving anything, because the fix had been
+  read off the graph rather than performed: `orbweaver-cdr` declares **no
+  dependencies at all**, so no cycle was possible; and the parser imports
+  `std::collections::BTreeMap` and `std::fmt::Write` and *nothing else* — no
+  `crate::`, no `orbweaver_*` — so there was no half-of-AnyJSON to weigh. The
+  file moved by `git mv`, with one rustdoc link retargeted.
+
+  **`spike_names` is migratable, and that is measured rather than argued.**
+  A temporary `#[path]` include of `state.rs` was built inside
+  `orbweaver-giop` both ways: spelled `orbweaver_cdr::json` it builds; spelled
+  `orbweaver_dynamic::json` it fails with `E0433: cannot find module or crate
+  orbweaver_dynamic`. So the move is what unblocks it, not something already
+  true. `spike_events` is in the same crate and follows. **`spike_ifr` is still
+  blocked** — `orbweaver-registry` has `orbweaver-cdr` but not
+  `orbweaver-trading`, which `state.rs` also imports.
+
+  **The re-export at the old path is kept, and the reason is a count.**
+  `orbweaver_dynamic::json` had 60 references across 44 files in six crates,
+  and two of those crates cannot spell the new path: `orbweaver-forge` (7) has
+  no `orbweaver-cdr` dependency, `orbweaver-console` (3 in `src/`) has it only
+  as a dev-dependency. Rewriting either **adds a `cargo tree` edge**, so the
+  alternative to the re-export is a wider graph rather than a tidier one. A
+  `pub use` is one item under two paths and cannot drift, which is the case
+  CLAUDE.md describes as *"nothing left to test"* — the argument is recorded at
+  the re-export and no gate guards it.
+
+  Pure move, and checked as one: `cargo tree --workspace` is **byte-identical**
+  before and after, and the workspace runs **1940 passed / 0 failed over 148
+  test binaries** in both directions. (`cargo test --workspace` also prints
+  doc-test sections, and those are *not* a stable count: cargo skips doc-tests
+  whose fingerprint is fresh, so the baseline re-ran 2 sections and the
+  post-move run re-ran 13 — touching the bottom crate invalidates everything
+  downstream. The binary count is the figure; the doc-test section count is an
+  artifact of a warm `target/`.)
+
+  *`json`이 `orbweaver-cdr`로 내려갔다. 옮기기 전에 측정했다 — `orbweaver-cdr`은
+  의존성이 하나도 없고, 파서는 `std`만 쓴다. `spike_names`의 이동 가능성은
+  논증이 아니라 측정이다: `orbweaver_cdr`로 쓰면 빌드되고 `orbweaver_dynamic`으로
+  쓰면 E0433으로 실패한다. `spike_ifr`은 여전히 막혀 있다. 옛 경로의 재수출은
+  유지한다 — 없애면 `cargo tree`에 간선이 늘기 때문이며, `pub use`는 한 항목의 두
+  경로라 어긋날 수 없다. `cargo tree`는 전후 바이트 동일, 테스트는 148개 바이너리
+  1940통과/0실패로 양쪽 동일. 문서 테스트 섹션 수는 따뜻한 `target/`의 산물이지
+  수치가 아니다.*
+
   **`spike_events` cannot be measured by this oracle at all**: its output is
   not a function of its inputs (10 runs of the untouched binary, 9 gave
   `dropped=3`, 1 gave `dropped=2`). Not diagnosed, and not claimed to be. The
