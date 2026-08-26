@@ -172,18 +172,24 @@ for name in $NAMES; do
     ;;
 
   lifecycle)
-    emit "$name" SKIPPED "a redirect emitted for a NAME rather than for an object"
+    emit "$name" SKIPPED "decision X: the reference Orb::server hands out is not indirect"
     skip "no test removes a target under a live caller and finds the caller" \
       "unable to tell, because today it can tell immediately." \
-      "waits on: a second endpoint and a redirect for a NAME. O1 landed, so" \
-      "removal has an implementation and a test — Orb::shutdown, measured" \
-      "from a peer's own socket — but the TRANSPARENCY of the removal did" \
-      "not move: a caller of a removed server has nowhere else for its" \
-      "request to go. LOCATION_FORWARD is served for objects and nothing" \
-      "emits it for a name, and nothing re-publishes, so a moved target" \
-      "leaves its name pointing at a dead address. Note what IS measured" \
-      "under location above: a target moving under a live caller is" \
-      "invisible. Moving is the half of this row that works; removing is not."
+      "THE BLOCKER CHANGED on 2026-08-26 and this leg did not. It no longer" \
+      "waits on a redirect emitted for a NAME: that is built and measured," \
+      "crates/orbweaver-giop/tests/forward_for_a_name.rs — a servant holding" \
+      "names and no objects, 7 tests, both byte orders, 3 negative controls." \
+      "It waits on decision X, D029 6.1's lifecycle subsection: that the" \
+      "reference Orb::server hands out is INDIRECT, its profile carrying a" \
+      "name-resolving endpoint and a name rather than the servant's own" \
+      "address. Until then a client holds the backend's own address, and no" \
+      "redirect can reach it once that address is dead — a forward is a" \
+      "reply and a reply needs a listener, so it can never be emitted by the" \
+      "party that went away. O1 landed, so removal has an implementation and" \
+      "a test — Orb::shutdown, measured from a peer's own socket — but the" \
+      "TRANSPARENCY of the removal did not move. Note what IS measured under" \
+      "location above: a target moving under a live caller is invisible." \
+      "Moving is the half of this row that works; removing is not."
     ;;
 
   *)
