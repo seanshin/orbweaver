@@ -210,11 +210,15 @@ mod serve {
     use orbweaver_idl::include::SearchPath;
     use orbweaver_registry::{Contract, Registry, Strictness};
 
-    /// The object key a served Python object answers to.
+    /// The **root** object key a served Python object answers to.
     ///
-    /// One servant per bridge process, so one key, and `Dispatch::knows`
-    /// accepts everything — which is what its own default documentation calls
-    /// right for a single-servant process.
+    /// One bridge process, so one root — but no longer one *object*. Since the
+    /// seam gained a home (2026-08-26) this is the default object's key and the
+    /// prefix of every other, so a Python servant holding many objects answers
+    /// under `pyservant/<Interface>/<oid>` too, and can mint a reference to any
+    /// of them. `Dispatch::knows` is scoped to keys this home derived rather
+    /// than accepting everything, which is the same rule a generated Rust
+    /// skeleton applies through `<I>Refs::oid_of`.
     const KEY: &[u8] = b"pyservant";
 
     /// Asks the parent process, over the pipes it started us with.
@@ -283,7 +287,13 @@ mod serve {
 
         static GONE: AtomicBool = AtomicBool::new(false);
         let parent = Parent { stdin: std::io::stdin(), stdout: std::io::stdout(), gone: &GONE };
-        let mut servant = PyServant::new(&registry, interface, parent)?;
+        // The home, taken from the bound server rather than assembled: the port
+        // is only knowable after a port-zero bind, and the root key has to be
+        // the one the listener was bound with or a minted reference addresses
+        // an object this server will refuse. `ObjectHome::of` reads both off
+        // the server so the two cannot disagree.
+        let home = orbweaver_gen::rt::ObjectHome::of(&server, host).map_err(|e| e.to_string())?;
+        let mut servant = PyServant::new(&registry, interface, parent)?.with_home(home);
 
         // The banner, before a single call can arrive and after the listener
         // exists. A caller told the IOR too early dials a closed port, and

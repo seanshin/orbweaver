@@ -59,6 +59,28 @@ pub trait References {
     /// valid. Returning `None` is the whole point: a handle nobody issued
     /// cannot be turned into an address by guessing.
     fn resolve(&self, handle: &str) -> Option<orbweaver_giop::Ior>;
+
+    /// The same, told what **the contract** declares this reference's type to
+    /// be.
+    ///
+    /// [`from_json`] has always known it — the arm that decodes a reference
+    /// matches `TypeCode::ObjRef { id, .. }` — and threw it away, so a table
+    /// could only ever answer with an address it had already been given. A
+    /// table that *mints* needs the type, because the repository id a minted
+    /// reference advertises is a fact of the contract and must never be a
+    /// string the far side of a seam spelled: a servant that could name the
+    /// type could name the wrong one, and a caller would narrow against it.
+    ///
+    /// Defaulted to [`References::resolve`], so every existing implementation
+    /// keeps its behaviour exactly and this is not a second question for the
+    /// tables that do not mint.
+    ///
+    /// *계약이 선언한 타입을 함께 준다 — 최소한 하나의 표는 주소를 **만들어야**
+    /// 하고, 그 저장소 id는 계약의 사실이지 심 저편이 적어 보낸 문자열이 아니다.*
+    fn resolve_as(&self, handle: &str, declared_type: &str) -> Option<orbweaver_giop::Ior> {
+        let _ = declared_type;
+        self.resolve(handle)
+    }
 }
 
 /// A reference table with no session and no expiry, for tests and for the
@@ -509,9 +531,13 @@ fn from_json_at(tc: &TypeCode, j: &Json, h: &dyn References, at: &Path<'_>) -> R
 
         TypeCode::TypeCode => Value::TypeCode(Box::new(tc_from_json(j, p)?)),
 
-        TypeCode::ObjRef { .. } => match j.get("_ref") {
+        // `id` is bound rather than discarded: it is what the **contract**
+        // declares this reference to be, and a table that mints an address
+        // rather than looking one up must take the repository id from here and
+        // never from the document. See [`References::resolve_as`].
+        TypeCode::ObjRef { id, .. } => match j.get("_ref") {
             Some(Json::Null) => Value::ObjRef(None),
-            Some(Json::String(handle)) => match h.resolve(handle) {
+            Some(Json::String(handle)) => match h.resolve_as(handle, id) {
                 Some(ior) => Value::ObjRef(Some(ior)),
                 // A handle we never issued is the whole point of handles: it
                 // cannot be turned into an address by guessing.

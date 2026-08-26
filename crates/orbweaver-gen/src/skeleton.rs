@@ -350,7 +350,14 @@ fn emit_refs(s: &mut String, name: &str, id: &str) {
     let _ = writeln!(s, "    /// The repository id minted references advertise.");
     let _ = writeln!(s, "    pub const TYPE_ID: &'static str = \"{id}\";");
     let _ = writeln!(s, "    /// What separates the root key from the oid.");
-    let _ = writeln!(s, "    pub const KEY_INFIX: &'static str = \"/{name}/\";");
+    // Spelled by `seam::key_infix` and not by a format string here, because a
+    // foreign servant derives the same infix at run time and the two must
+    // address the same objects by construction rather than by agreement.
+    let _ = writeln!(
+        s,
+        "    pub const KEY_INFIX: &'static str = \"{}\";",
+        crate::seam::key_infix(name)
+    );
     let _ = writeln!(s, "    /// The scheme rooted at `home`, with the generated infix.");
     let _ = writeln!(s, "    pub fn new(__home: __rt::ObjectHome) -> Self {{");
     let _ = writeln!(s, "        Self {{ home: __home, infix: Self::KEY_INFIX.to_owned() }}");

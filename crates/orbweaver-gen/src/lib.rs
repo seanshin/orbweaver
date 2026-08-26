@@ -87,7 +87,9 @@ pub mod java;
 pub mod pyservant;
 pub mod python;
 pub mod rt;
+pub mod seam;
 pub mod skeleton;
+pub mod surface;
 pub mod targets;
 
 use std::collections::BTreeMap;

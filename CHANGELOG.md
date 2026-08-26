@@ -346,6 +346,89 @@ records what changed and, where it matters, what it changes on the wire.
   되돌려 놓는다 — 여기서는 도달 불가, 배포에서는 도달, 그리고 마감 시한과 같은
   하나의 미결 질문이다.*
 
+- **The servant seam stops being Python's, and a foreign servant stops being a
+  singleton leaf (D032 §3, D029 §6.1.1 item 5).** Two things, and the second
+  is only reachable because of the first.
+
+  **Where the seam encoded Python.** `pyservant.rs` was 400 lines with no Python
+  decision in any of them, and two places where the language reached into rows
+  D032 §3 says may not differ per language. It computed a foreign servant's
+  callable surface with `python::client_operations`, so a Java servant would
+  have resolved its **contract** through the Python emitter — and nothing would
+  have been red, the function being language-neutral all along: the pin's scope
+  was a module and the fact's scope is the workspace. And the seam's **protocol**
+  lived in three comments (`pyservant.rs`, `py_bridge.rs`, `python_rt.py`) plus
+  hand-typed string literals at every site that read a key, in two languages.
+  Now: `orbweaver_gen::seam` (`ForeignServant`, `Answerer`, `ObjectIdentity`,
+  `SeamReferences`, `protocol()`), `surface::callable_operations`, and
+  `pyservant.rs` a type alias and a paragraph saying why it is one. What was
+  genuinely per-language turned out to be `Answerer::ask` and a runtime that
+  speaks AnyJSON v1.
+
+  **The protocol is a value both implementations publish**, the discipline
+  `server::serve_one_ordering()` established: `seam::protocol()` is built from
+  the constants the Rust dispatcher reads with, `_rt.seam_protocol()` from the
+  constants the Python runtime reads with (21 sites rewritten so those are the
+  only spelling of a seam key in it), and
+  `crates/orbweaver-gen/tests/the_seam_is_one_protocol.rs` asserts they are
+  equal, reporting divergences **by path with both values** because the consumer
+  of that answer is somebody writing the third binding. Readable by a program
+  that is not the emitter: `cargo run -q -p orbweaver-gen --bin seam-protocol`.
+  **A new language enrols by adding one function and one row.**
+
+  **An object reference now crosses.** Measured before anything was built, over
+  `corpus/golden/16-object-refs.idl`, the leak was three things rather than the
+  one D029 §6.1.1 recorded: a foreign servant could not mint a reference, could
+  not tell **which object it was** (two calls to two different object keys
+  produced byte-identical call documents), and claimed **every** key in the
+  process. Not a leaf — a *singleton* leaf. The value representation gained one
+  shared addition rather than a per-language one:
+  `anyjson::References::resolve_as` hands the decoder's **declared** repository
+  id to the table, which `from_json` had always known and thrown away, so a
+  minted reference advertises the id the *contract* names and the far side,
+  which spells only an oid, cannot mint the wrong type at all. On the seam:
+  `ForeignServant::with_home`, `oid` in every call document, `knows` scoped to
+  the home, and `oid:<oid>` where a reference goes. `<I>Refs::KEY_INFIX` and the
+  seam's own infix are now one function called twice, so a caller holding a
+  reference minted by either servant is served by the other.
+
+  **Measured: 126 cells byte-identical** —
+  `crates/orbweaver-gen/tests/a_reference_crosses_the_seam.rs` serves
+  `corpus/golden/26-object-identity.idl` twice, once by the generated Rust
+  skeleton and once by the seam, over 3 GIOP versions × 2 byte orders × 3
+  objects × 7 calls, minted references included, with the minted IOR also
+  compared *decoded*. Six negative controls, each run red: minting disabled (18
+  of 126, exactly the reference-returning cells), the oid removed (7 of 10
+  tests), `knows` claiming everything (1 of 10), the key infix disagreeing with
+  the generated constant (6 of 10), the Python runtime reading `"operation"`
+  instead of `"op"` (named as `call.operation: "op" vs "operation"`), and the
+  seam resolving its contract through `crate::python` again (named by file and
+  line).
+
+  **Reachable, not only testable**: `orbweaver-py-bridge --serve` takes an
+  `ObjectHome` off the bound server, and `_rt.Servant.own_oid()` /
+  `_rt.ObjectRef.own(oid)` are the far side's half — measured through a process
+  boundary by `python_servant_wire.rs`, which drives the real bridge from
+  Python, omniORB and JacORB.
+
+  **Still open and stated as one thing**: a reference *arriving* is a handle the
+  far side cannot invoke. That is the inbound half and it needs a call
+  travelling the other way through the seam, for which this protocol has no
+  message. What a Java binding owes is the serving half of a runtime it already
+  has (`java_rt.java` is the third implementation of AnyJSON v1); what a C
+  binding owes is a runtime from nothing, in a language with no exceptions and
+  no dictionary — which is where "a reply is a document" gets tested first.
+
+  *서버트 심이 파이썬의 것이기를 그만둔다. 언어를 걷어내고 보니 언어별인 것은
+  함수 하나였다. 프로토콜은 주석이 아니라 **값**이며, 각 구현이 자기가 읽는 상수로
+  같은 문서를 만들고 게이트가 같은지 본다 — 새 언어는 함수 하나와 행 하나를
+  더한다. **객체 참조가 심을 건너다**: 구멍은 하나가 아니라 셋이었고 — 참조를
+  만들 수 없고, 자신이 어느 객체인지 모르고, 모든 키를 자기 것이라 주장했다 —
+  잎이 아니라 **단일 객체** 잎이었다. 저편은 oid만 말하고 타입은 계약이 정하므로
+  틀린 타입으로 만드는 일은 표현 불가능하다. **126칸 바이트 동일**, 부정 대조군 6개
+  전부 붉게 확인. **남은 것은 하나**: 도착하는 참조는 저편이 호출할 수 없는
+  핸들이며, 그것은 심을 반대 방향으로 지나는 호출을 필요로 한다.*
+
 - **A third target: Java clients, and the suite accepts it (D030 §5 L2, D032
   §4).** `orbweaver_gen::java` emits client stubs, the types they carry and a
   hand-written runtime (`_Rt.java`), and `spikes/bindings/java.manifest` is the
