@@ -4041,6 +4041,15 @@ hr "transparency ledger — what a caller can still tell (D029 §6, D031 H2)"
 #
 # Read the third column. "measured by N group(s)" is the cheap column — it says
 # somebody looked. `unmeasured:` is the one a next batch is scoped from.
+#
+# WHAT THIS DOES NOT DO YET, so the next reader does not have to find out by
+# trying: (1) D031 H3 — there is no `--ledger` flag and no machine-readable
+# emission, so commissioning the next batch still means a human reading this
+# text; (2) D029 §5 O0 — nothing here CHANGES a hidden property under a live
+# caller. Every group this ledger counts was written for another reason and is
+# being re-read; two transparencies have no group at all and will not get one
+# until O0 lands. A first ledger that mostly re-reads green work is cheap and
+# honest, and it is not the same thing as a leak hunt.
 tp_unmeasured_names=""
 tp_measured_names=""
 if [ "$tp_load_err" = 1 ]; then
