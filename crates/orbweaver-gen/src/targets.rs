@@ -91,10 +91,26 @@ pub const TARGETS: &[Target] = &[
         escape: crate::python::python_name,
         emit_text: emit_python,
     },
+    Target {
+        language: "java",
+        words: crate::java::reserved_words,
+        escape: crate::java::java_name,
+        emit_text: emit_java,
+    },
 ];
 
 fn emit_rust(r: &Registry) -> String {
     crate::emit(r, "contract").source
+}
+
+fn emit_java(r: &Registry) -> String {
+    // Every file, for the reason the Python arm gives one line down, plus one
+    // Java has of its own: a Java package **is** a directory, so an IDL module
+    // named for a Java keyword is escaped in the directory name, in the
+    // `package` line and in every fully qualified reference to something inside
+    // it. A check that read one file would report the module position covered
+    // off whichever of the three it happened to read.
+    crate::java::emit_java(r, "contract").files.values().cloned().collect::<Vec<_>>().join("\n")
 }
 
 fn emit_python(r: &Registry) -> String {

@@ -42,6 +42,10 @@ path = "src/bin/gen_corpus.rs"
 name = "gen-python"
 path = "src/bin/gen_python.rs"
 
+[[bin]]
+name = "gen-java"
+path = "src/bin/gen_java.rs"
+
 # D032 §4 clause 5, for one language at a time, so the acceptance suite can run
 # it as that language's clause-5 cell. Takes `--language`, looks it up in
 # `targets::TARGETS`, and has no language name of its own.
