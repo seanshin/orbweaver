@@ -117,19 +117,27 @@ for name in $NAMES; do
     ;;
 
   language)
-    emit "$name" SKIPPED "a servant seam that can be swapped under one live connection"
+    emit "$name" SKIPPED "a Python servant mountable in a server the test owns"
     skip "no test changes the servant's LANGUAGE under a live caller." \
-      "waits on: a fixture holding a Rust servant and a Python servant behind" \
-      "ONE object key on ONE endpoint, swapped mid-connection. Today the" \
-      "Python seam reaches the wire two ways and neither can be swapped:" \
-      "\`orbweaver-py-bridge --serve\` binds its OWN listener in its own" \
-      "process, so a swap is a different endpoint and therefore a move; and" \
-      "\`PyServant\` is a \`Dispatch\` taking \`&mut self\`, so a second servant" \
-      "cannot be held beside it behind one key without a dispatcher that owns" \
-      "both. What exists measures the other shape — orbweaver-gen's" \
-      "python_servant.rs compares a Python and a Rust servant over separate" \
-      "runs, which measures that two servants agree and not that a caller" \
-      "could not tell them apart."
+      "waits on: a Python servant that can be mounted as a \`Dispatch\` in a" \
+      "server the caller's test owns. \`PyServant\` IS such a \`Dispatch\` and a" \
+      "bilingual dispatcher holding it beside a Rust servant is a few lines —" \
+      "that is NOT what this waits on. What it waits on is a real Python" \
+      "process reachable from one: the only route today is" \
+      "\`orbweaver-py-bridge --serve\`, which BINDS ITS OWN LISTENER, so the" \
+      "Python servant arrives as an endpoint rather than as a servant and a" \
+      "swap becomes a move. The alternative — this script speaking the seam's" \
+      "JSON protocol to a python3 child of its own — is refused: that protocol" \
+      "has one home (py_bridge's \`Parent\` and _rt's \`Bridge\`) and a second" \
+      "implementation of it here is the very drift CLAUDE.md's one-home rule" \
+      "forbids. The change is therefore in orbweaver-gen, which another batch" \
+      "holds this wave: a serve path that hands back a \`Dispatch\` instead of" \
+      "binding. Measured 2026-08-26." \
+      "what exists instead: orbweaver-gen's python_servant.rs compares a" \
+      "Python and a Rust servant over SEPARATE runs — 19 calls x 3 GIOP" \
+      "versions x 2 orders, byte-identical. That measures that two servants" \
+      "agree, which is not the same claim as a caller being unable to tell" \
+      "them apart, because no caller was there when the language changed."
     ;;
 
   activation)
