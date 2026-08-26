@@ -53,6 +53,14 @@ path = "src/bin/gen_java.rs"
 name = "binding-words"
 path = "src/bin/binding_words.rs"
 
+# The servant seam's protocol, as data, for a reader that is not this emitter.
+# A binding in a new language is written against what this prints rather than
+# against Rust source, and its own copy is compared to it by
+# `tests/the_seam_is_one_protocol.rs`.
+[[bin]]
+name = "seam-protocol"
+path = "src/bin/seam_protocol.rs"
+
 # The Python target's seam. A separate process rather than an extension module:
 # the wire stays in Rust and CPython gains no dependency. See
 # docs/decisions/D007-python-wire-seam.md, which is where that decision's
