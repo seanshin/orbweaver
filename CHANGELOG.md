@@ -1135,6 +1135,39 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Fixed / 수정
 
+- **The differential and the gate over it named the same four directories, so
+  neither could report the one they both missed.** `corpus/services/` — the
+  contracts that exist to be *served*, and therefore the ones a foreign ORB is
+  most likely to compile — was outside `spikes/differential.sh`'s enumeration
+  and outside `ENUMERATED` in
+  `every_corpus_file_met_both_front_ends.rs` from the day it was created. The
+  two lists agreed with each other and both were short; a gate that mirrors the
+  list of the thing it gates is only as wide as what somebody put in both.
+
+  The measured cost: `corpus/services/ir-subset.idl` is **rejected by JacORB
+  3.9** — `Undefined name: CORBA.ParameterDescription.TypeCode` at line 159,
+  the third instance of the cause already measured under
+  `34-corba-principal.idl`, JacORB predeclaring no `CORBA` scope — and the
+  divergence **could not be written down**, because the staleness loop fails
+  any row naming a file the script never checks. The directory is now
+  enumerated in both places (98 files through both front ends, was 95), the row
+  is recorded citing the existing measurement rather than restating it, and
+  nothing was loosened to let it in: the fix is that the files are checked.
+  The header of `corpus/divergences.tsv` stopped naming the directories at all,
+  since a third copy of that list is the one that drifts — and it had.
+
+  Demonstrated red before it was recorded:
+  `differential.sh --require omniidl,jacorb_idl` exit 1, *"1 corpus file(s)
+  diverge with no recorded reason: ir-subset.idl — omniidl=accept
+  jacorb_idl=reject"*; and with `ir-subset.idl`'s row cut from the record, the
+  membership gate panicked with *"1 corpus file(s) have never been through both
+  front ends"*.
+
+  *differential과 그 위의 게이트가 같은 네 디렉터리를 적고 있었으므로, 둘 다
+  놓친 하나를 어느 쪽도 보고할 수 없었다. 서빙되기 위해 존재하는 계약들이 바로
+  그 디렉터리였다. 느슨하게 만든 것은 없다 — 파일들이 실제로 검사되는 것이
+  수정이다.*
+
 - **Two shipped layers told a peer to wait for a release that cannot come, for
   a type CORBA removed in 2002.** `anyjson::from_json` answered a peer-fed
   document naming a `Principal` with `"principal cannot cross yet"`, and the

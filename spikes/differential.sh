@@ -129,7 +129,19 @@ recorded_verdict() {
 seen_keys=""
 
 # ── The corpus, with the verdict each file is filed under ────────────────────
-files_accept=$(ls corpus/golden/*.idl corpus/requirements/generated/*.idl spikes/*.idl 2>/dev/null)
+#
+# These directories are named literally, and the gate over the record —
+# `crates/orbweaver-test/tests/every_corpus_file_met_both_front_ends.rs` —
+# keeps the same list in its `ENUMERATED`. **Change one and change the other**:
+# a directory in the script but not the gate is ungated, and a directory in
+# neither is invisible to both while they agree with each other. That is what
+# happened to `corpus/services/` — the contracts that exist to be served, which
+# are the files a foreign ORB is most likely to compile — for as long as the
+# directory existed. `ir-subset.idl` diverges, and the divergence could not even
+# be *written down*: the staleness loop below fails any row naming a file this
+# script never checked.
+files_accept=$(ls corpus/golden/*.idl corpus/requirements/generated/*.idl \
+  corpus/services/*.idl spikes/*.idl 2>/dev/null)
 files_reject=$(ls corpus/negative/*.idl 2>/dev/null)
 
 ours_wrong=""     # we disagree with the corpus, which the oracles uphold
