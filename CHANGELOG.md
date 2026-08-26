@@ -169,6 +169,120 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **A third target: Java clients, and the suite accepts it (D030 §5 L2, D032
+  §4).** `orbweaver_gen::java` emits client stubs, the types they carry and a
+  hand-written runtime (`_Rt.java`), and `spikes/bindings/java.manifest` is the
+  suite's second instance. The verdict is the suite's: **cells run 3, skipped 3,
+  red 0**, with `client × little` read from omniORB, `client × big` read from
+  JacORB, and clause 6 met in the client direction — every one of those an order
+  read off GIOP §15.4.1's flag byte rather than inferred from a peer's host.
+
+  **The `client × jacorb` cell is the gap Python's own manifest names.** That
+  file says nothing drives generated Python at a JacORB server, *"and that is
+  precisely the cell that would give the client direction a big-endian reading
+  off a foreign peer's flag byte — D030 §3.1's 'not established by that batch and
+  not by this one', as a cell rather than a sentence."* It is established here
+  for Java: 12 generated calls against `spikes/jacorb/Server.java` through the
+  recording tap, JacORB's replies BE and omniORB's LE. Python's row is untouched
+  — closing a gap for one binding does not close it for another.
+
+  **No `org.omg.CORBA` anywhere, and that is a licence position rather than a
+  taste.** JDK 11 removed CORBA (JEP 320), so the only `org.omg.CORBA` on a
+  machine like this is JacORB's jar, and JacORB is an **LGPL fixture, never a
+  dependency**. Generated Java speaks AnyJSON v1 over pipes to
+  `orbweaver-py-bridge`, which owns the wire — the same seam D007 settled for
+  Python, and it needed no second protocol. `client-jacorb.sh` asserts
+  `cargo tree --workspace` is clean on every run, reading the producer's exit
+  status before anything it printed.
+
+  Scope, stated rather than discovered: **clients only.** A Java servant needs
+  the bridge's serving direction to carry a dispatch into a Java process, which
+  is the seam `pyservant.rs` implements for one language and has not been
+  generalised; all three servant cells are counted `SKIPPED` naming that.
+
+  *세 번째 대상: Java 클라이언트, 그리고 스위트가 그것을 받아들였다. 판정은
+  스위트의 것이다 — 실행 3칸, 건너뜀 3칸, 빨강 0. `client × little`은 omniORB에서,
+  `client × big`은 JacORB에서 **플래그 바이트를 읽어** 얻었고, 클라이언트 방향의 절
+  6이 충족됐다. 이 `client × jacorb` 칸은 Python 매니페스트가 스스로 지목한 바로 그
+  구멍이며, Java에 대해 성립했다 — 한 바인딩의 구멍을 메웠다고 다른 바인딩의 구멍이
+  메워지지는 않으므로 Python의 행은 그대로 둔다. `org.omg.CORBA`는 어디에도 없다:
+  JDK 11이 CORBA를 제거했으므로 이 기계의 유일한 구현은 JacORB의 jar이고, JacORB는
+  의존성이 아니라 픽스처다. 범위는 **클라이언트 전용**이며 서번트 3칸은 이유를
+  이름으로 부르는 SKIPPED다.*
+
+- **`corpus/golden/28-target-keywords.idl` grew Java's positions and a
+  template-locals section, and the coverage instrument stopped reading its own
+  runtime.** Measured before the section existed: **17 of 59** words the Java
+  emitter escapes were executed by the corpus, every one of them by accident,
+  because it is also a Rust or Python keyword. After: **38 of 59**, and the 21
+  remaining are the 20 words IDL reserves too plus `_`, each with a row in
+  `spikes/bindings/keywords-not-executed.tsv`.
+
+  Java's four **contextual** keywords are in the type-name position on purpose:
+  `record`, `var`, `sealed` and `permits` are legal as variable names and fatal
+  as class names, which is exactly where an IDL type lands, so a list holding
+  only the 50 reserved words would have said Java was covered while
+  `public final class record` failed to compile.
+
+  The template-locals section is D030 §5 L2's third consequence, executed rather
+  than asserted: JacORB 3.9's own stub template writes `catch (java.io.IOException
+  e)` into the same scope as an operation's parameters, so **the hazard is every
+  identifier the template puts in scope, not the reserved words**. This emitter
+  answers it by construction — every local, parameter and field it binds begins
+  with `_`, and an IDL identifier can never begin with one — and the section
+  names contract members `e`, `o`, `v`, `name`, `value`, `invoker` so the claim
+  is compiled rather than believed. Writing it found the second form of the same
+  hazard: an escaped member name **is** `_` plus the IDL name, so a constructor
+  parameter spelled `_class` for the member `class` assigned the field to itself,
+  silently and only for members whose names are Java keywords. Two prefixes are
+  needed because one of them is already the escape.
+
+  And the instrument's own defect: `targets::keyword_coverage` read the
+  **verbatim runtime** along with the generated files, and both mappings escape
+  with a leading underscore — so `java_rt.java`'s local `_default` made `default`
+  read as covered by a contract that never names it, and `python_rt.py`'s
+  `_lambda` did the same. A runtime is the same bytes for every contract and
+  cannot be evidence about any of them; `targets::without_runtime` excludes it.
+  Python's clause-5 verdict is unchanged at 28 of 37 by that fix, which is what
+  makes it a repair rather than a re-tuning.
+
+  *28번 계약이 Java의 위치들과 **템플릿 지역 변수** 절을 얻었다. 이전: 59개 중 17개
+  실행 — 전부 우연히(Rust·Python 예약어이기도 해서). 이후: 38개, 남은 21개는 IDL도
+  예약하는 20개와 `_`이며 각각 이유가 있는 행을 갖는다. Java의 **문맥 키워드** 넷은
+  타입 이름 자리에 둔다 — 변수 이름으로는 합법이고 클래스 이름으로는 치명적이며, IDL
+  타입이 앉는 자리가 바로 거기다. 위험은 예약어가 아니라 **템플릿이 스코프에 넣는 모든
+  식별자**이고, 이 방출기는 모든 지역 이름을 `_`로 시작시켜 구조적으로 막는다 — 그리고
+  그것을 쓰다 같은 위험의 두 번째 형태를 찾았다: 이스케이프된 멤버 이름 자체가 `_` +
+  IDL 이름이므로, 생성자 매개변수를 같은 철자로 쓰면 필드가 자기 자신에게 대입된다.
+  계측기 자체의 결함도 있었다 — 커버리지 검사가 **런타임을 함께 읽고** 있었고, 런타임은
+  어떤 계약에 대해서도 증거가 될 수 없다. 이 수정으로 Python의 판정은 28/37 그대로이며,
+  그것이 이 수정이 조정이 아니라 수리인 이유다.*
+
+- **The Java emitter's cross-implementation oracle
+  (`crates/orbweaver-gen/tests/java_target.rs`).** Value → Rust `to_json` → Java
+  `_fromJson` → Java `_toJson` → Rust `from_json` → CDR, compared as **bytes** in
+  both byte orders, over the whole golden corpus at once, plus every stub method
+  driven by name through `_Rt.Loopback`. Measured 2026-08-26: **131 values and
+  167 calls cross, both orders, over 37 golden contracts**; not measured and said
+  out loud — 48 items the emitter refuses with a published sentence, 2 types this
+  sweep has no witness for, 52 operations whose arguments or multi-value result
+  the driver does not build.
+
+  First pass: **89 failures, four root causes**, two of them in the emitter. A
+  typedef's Java type was the alias *holder class* rather than the aliased type,
+  so `typedef string Name` produced `String cannot be cast to ShortName` in 20
+  contracts at once; and `::CORBA::TypeCode` as a member reached a catch-all and
+  was refused by Java while Rust and Python both carry it — one contract of 37.
+  The catch-all is gone and `descriptor` is exhaustive over `TypeCode`, so a
+  thirty-fourth construct is a build error rather than a silent divergence.
+
+  *Java 대상의 교차 구현 오라클. 값 → Rust → Java → Rust → CDR을 **바이트로**, 양쪽
+  순서로, 골든 코퍼스 전체에 대해 한 번에 비교한다. 2026-08-26 측정: 37개 계약에서
+  값 131개·호출 167개가 양쪽 순서로 건넌다. 1차 통과에서 실패 89건 → **근본원인 4개**,
+  그중 둘은 방출기의 것: typedef의 Java 타입이 별칭 홀더 클래스였고(20개 계약),
+  `::CORBA::TypeCode`가 포괄 분기로 떨어져 Java만 거부했다(37개 중 1개). 이제 그
+  match는 망라적이며, 서른네 번째 구문은 조용한 어긋남이 아니라 빌드 오류다.*
+
 - **One acceptance suite, parameterised by language — `spikes/binding_suite.sh`
   (D032 §5 B3, D033 §3.1).** A binding is accepted by passing a suite, not by
   being written, and the suite is one suite rather than a copy per language: a
