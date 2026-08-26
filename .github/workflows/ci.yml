@@ -141,6 +141,45 @@ jobs:
     name: interop harness (omniORB + JacORB)
     runs-on: ubuntu-latest
     steps:
+      # This job ran the runner out of disk on 2026-08-25 and stayed that way
+      # for EIGHT consecutive pushes, including the one tagged v0.7.0. It did
+      # not fail like a check failing: the runner process itself died with
+      #
+      #   Unhandled exception. System.IO.IOException: No space left on device
+      #     : '/home/runner/actions-runner/cached/.../Worker_*.log'
+      #
+      # so the `harness` step is left reading `in_progress` with a null
+      # conclusion forever, `gh run view --log-failed` answers `log not found`,
+      # and the only place the cause is written is the check-run annotation.
+      # A red that takes an API call to read is a red nobody reads, and this one
+      # meant the interop harness had not run in CI at all for a day — which by
+      # this project's own rule is an unmeasured check, and an unmeasured check
+      # is a failure, never a pass. Local runs stayed green throughout, which is
+      # exactly why it went unnoticed.
+      #
+      # ubuntu-latest ships ~30 GB of toolchains this job never touches. Freeing
+      # them is the cheap half; the load-bearing half is the reporting below, so
+      # that the NEXT time this crosses, it crosses as a legible number in the
+      # log rather than as a runner crash.
+      - name: reclaim runner disk, and report it
+        run: |
+          echo "--- before:"; df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost /usr/local/.ghcup \
+                      /usr/share/swift "$AGENT_TOOLSDIRECTORY" || true
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          echo "--- after:"; df -h / | tail -1
+          # A floor, not a figure: this asserts the reclaim happened, and says
+          # nothing about whether the job will fit. The number the next reader
+          # wants is the one `df` prints after the harness, below.
+          avail=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+          echo "available: ${avail}G"
+          if [ "$avail" -lt 20 ]; then
+            echo "::error::only ${avail}G free after reclaiming — the interop job"
+            echo "::error::has historically needed more than this, and a runner"
+            echo "::error::that dies on ENOSPC reports no failing step at all"
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - uses: actions/cache@v4
         with:
@@ -249,3 +288,16 @@ jobs:
         env:
           JAVA_HOME_21: ${{ env.JAVA_HOME }}
         run: ./spikes/run_checks.sh
+
+      # `always()`, because the reading that matters is the one taken after a
+      # run that died. This is the figure that was missing for eight pushes:
+      # the failure mode leaves no failing step and no fetchable log, so the
+      # margin has to be printed by a step that runs even when the one before
+      # it did not finish. A report, not a gate — the gate is the floor above,
+      # and this is what tells the next reader whether that floor still holds.
+      - name: what the job left on the disk
+        if: always()
+        run: |
+          df -h / | tail -1
+          echo "--- the four that grow:"
+          du -sh target ~/.cargo /tmp/opy spikes/jacorb 2>/dev/null || true
