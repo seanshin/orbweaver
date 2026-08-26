@@ -288,6 +288,18 @@ records what changed and, where it matters, what it changes on the wire.
   the tree mounts `ExpertLocator` on a served POA, so which variant production
   would run is undecided, and a deployment on either refusing variant leaks.
 
+  **One line is owed in `spikes/run_checks.sh` and this batch does not own that
+  file.** Each leak-test group carries a static `tp_measures_nothing`
+  declaration while its leg is a counted `SKIPPED`, and `leak_leg` **fails** a
+  `MEASURED` row whose group still declares it — deliberately, so a leg that
+  starts measuring cannot be swallowed by a stale declaration. The activation
+  leg now measures, so the harness is red on that group until the bare
+  `tp_measures_nothing` between `bears_on activation` and `leak_leg activation`
+  (line 4318 as written) is deleted. The alternative was to leave a counted
+  `SKIPPED` naming a blocker that no longer exists, which is the
+  green-while-measuring-nothing class. `spikes/leak_tests.sh`'s verdict prints
+  the fix in the words the harness itself will print.
+
   *활성화 행이 지목한 곳에 구멍은 없었다. `select`는 구멍이 아니라 **계약**이며,
   거르기로는 애초에 막히지 않는다 — T에 답하고 T+ε에 걸기 때문이다. 코드가 적어
   둔 사유(*"호출자가 `prefetch`하라는 신호"*)는 따로 거짓이었다: `prefetch`는
