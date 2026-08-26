@@ -2072,6 +2072,65 @@ mod tests {
         }
     }
 
+    /// **`select` is residency-blind, and that is the contract.**
+    ///
+    /// D029 §6.1's Activation row named this operation as the load-state leak
+    /// until 2026-08-26 and the answer was that it is not one; `select`'s own
+    /// documentation carries the four arguments. This is the decision as a
+    /// property, so that a future batch which "closes the leak" by filtering
+    /// here has to delete a test that says why not, rather than adding a
+    /// conjunct to `to_query_text` and finding nothing red.
+    ///
+    /// Three claims, and the first is the one that makes the other two a
+    /// choice rather than an accident:
+    ///
+    /// 1. The grammar **has** the field — `residency == RESIDENT` parses — so
+    ///    the omission is by omission and not for want of data, which is the
+    ///    phrase the row used and the reason it read as an oversight.
+    /// 2. No text this operation can build names it, whatever the argument.
+    /// 3. The same store answers `select` identically with an expert RESIDENT
+    ///    and with it OFFLOADED. That is the property; 1 and 2 are how it is
+    ///    obtained.
+    #[test]
+    fn select_is_residency_blind_and_the_grammar_is_not() {
+        // 1 — the field exists, and an offer's residency is a live value in
+        // the very store `select` reads.
+        assert!(
+            Query::parse("residency == RESIDENT").is_ok(),
+            "the omission is a choice: the grammar has the field"
+        );
+
+        // 2 — and no argument makes this operation name it.
+        for qos in [
+            Constraints { required: "math".into(), max_latency_ms: 200.0, max_cost: 2.5 },
+            Constraints { required: String::new(), max_latency_ms: 0.0, max_cost: 0.0 },
+            Constraints { required: "RESIDENT".into(), max_latency_ms: 1.0, max_cost: 1.0 },
+        ] {
+            let text = qos.to_query_text().expect("well-formed");
+            assert!(
+                !text.contains("residency"),
+                "select must not filter on residency — {qos:?} produced {text:?}"
+            );
+        }
+
+        // 3 — the property itself, over the operation rather than the text.
+        let svc = routed();
+        let (g, qos) = open(10);
+        let offloaded = keys(&svc.select(&g, &qos).unwrap());
+        svc.prefetch("expert-b").unwrap();
+        svc.complete_load("expert-b").unwrap();
+        assert_eq!(
+            svc.with_store(|s| s.get("expert-b").map(|o| o.residency)),
+            Some(Residency::Resident),
+            "the mirror moved, so the store `select` reads has a different value in it"
+        );
+        assert_eq!(
+            keys(&svc.select(&g, &qos).unwrap()),
+            offloaded,
+            "the same question, the same answer: residency is not a selection criterion"
+        );
+    }
+
     /// An argument that cannot be turned into a query literal is the caller's
     /// problem, and it is a different exception from the store's gap.
     #[test]
