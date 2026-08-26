@@ -83,6 +83,7 @@
 
 #![deny(missing_docs)]
 
+pub mod java;
 pub mod pyservant;
 pub mod python;
 pub mod rt;

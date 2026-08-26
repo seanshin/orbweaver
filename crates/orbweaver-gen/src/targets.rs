@@ -91,10 +91,29 @@ pub const TARGETS: &[Target] = &[
         escape: crate::python::python_name,
         emit_text: emit_python,
     },
+    Target {
+        language: "java",
+        words: crate::java::reserved_words,
+        escape: crate::java::java_name,
+        emit_text: emit_java,
+    },
 ];
 
 fn emit_rust(r: &Registry) -> String {
     crate::emit(r, "contract").source
+}
+
+fn emit_java(r: &Registry) -> String {
+    // Every file, for the reason the Python arm gives below, plus one Java has
+    // of its own: a Java package **is** a directory, so an IDL module named for
+    // a Java keyword is escaped in the directory name, in the `package` line
+    // and in every fully qualified reference to something inside it. A check
+    // that read one file would report the module position covered off whichever
+    // of the three it happened to read.
+    //
+    // Every file **except the hand-written runtime** — see [`without_runtime`].
+    let generated = crate::java::emit_java(r, "contract");
+    without_runtime(&generated.files, "contract/_Rt.java")
 }
 
 fn emit_python(r: &Registry) -> String {
@@ -102,7 +121,39 @@ fn emit_python(r: &Registry) -> String {
     // and nowhere else — an IDL module whose name is a Python keyword is
     // precisely that case, and it is one of the five the corpus file records as
     // measured NOT to survive.
-    crate::python::emit_python(r, "contract").files.values().cloned().collect::<Vec<_>>().join("\n")
+    let generated = crate::python::emit_python(r, "contract");
+    without_runtime(&generated.files, "_rt.py")
+}
+
+/// Everything the emitter wrote **for this contract**, with the verbatim
+/// runtime left out.
+///
+/// # Why the runtime is excluded, measured 2026-08-26
+///
+/// `keyword_coverage` asks whether a word's *escaped spelling* appears in what
+/// the emitter wrote, and the escape in both of these mappings is a leading
+/// underscore — which is also how a hand-written runtime spells its own private
+/// names. So a runtime local called `_default` makes `default` read as covered
+/// in a contract that never names it, and a runtime docstring mentioning
+/// `_lambda` does the same for `lambda`. Both exist: one in `java_rt.java` and
+/// one in `python_rt.py`, found by adding a second target and reading why
+/// `default` was the one IDL keyword the Java run did not complain about.
+///
+/// That is the clause-5 defect wearing the instrument's own coat — *"a word
+/// covered by accident is what this instrument exists to end"* — and the fix is
+/// not to rename the runtime's locals, which would come back the next time
+/// somebody wrote one. The runtime is shipped verbatim and is the same bytes
+/// for every contract, so it cannot be evidence about any contract.
+///
+/// *런타임은 계약과 무관하게 같은 바이트로 실려 나가므로 어떤 계약에 대한 증거도 될 수
+/// 없다. 이스케이프가 선행 밑줄이라 런타임의 지역 이름이 커버리지로 오독된다.*
+fn without_runtime(files: &std::collections::BTreeMap<String, String>, runtime: &str) -> String {
+    files
+        .iter()
+        .filter(|(name, _)| name.as_str() != runtime)
+        .map(|(_, text)| text.clone())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The target with this name, if this crate emits for it.

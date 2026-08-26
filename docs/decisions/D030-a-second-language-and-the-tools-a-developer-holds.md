@@ -225,6 +225,40 @@ Three things follow, and the third is the one that changes L2's scope.
 (3) `28-target-keywords.idl`은 예약어만이 아니라 **템플릿 지역 변수** 절을 가져야
 하고, 그 목록은 우리 템플릿을 읽어야만 알 수 있다.*
 
+> **L2's client half landed 2026-08-26, and the suite is what says so.** This
+> document's status is unchanged — it is still PROPOSED, and a batch does not
+> approve the decision it works under — but a proposal that has been executed
+> should say what came back. `spikes/binding_suite.sh --language java` reports
+> cells run 3, skipped 3, red 0; the **client direction meets §3's three clauses
+> in full**, which Python's client direction does not: `client × little` read
+> from omniORB and `client × big` read from JacORB, each read off §15.4.1's flag
+> byte rather than inferred from the peer's host, and the refusal sentences
+> equal to the published heads by a test that computes them from the same
+> function.
+>
+> Two of the three consequences above are now measured rather than predicted.
+> (1) The hazard is indeed every identifier the template puts in scope, and the
+> emitter answers it by construction — every local it binds begins with `_`,
+> which no IDL identifier can — but writing it found a **second form**: an
+> escaped member name *is* `_` plus the IDL name, so one prefix is not enough
+> and the constructor's parameter needed a different one. (3)
+> `28-target-keywords.idl` has its template-locals section, and Java's coverage
+> went from 17 of 59 executed by accident to 38 of 59 with the residue named.
+>
+> The scope line above — *clients only, until L1 proves the servant seam* — held
+> and is why all three servant cells are a counted SKIPPED rather than a gap
+> nobody wrote down. §3.1's table is **not** edited by this: it records where
+> **Python** stands, and Java closing a cell for itself does not move Python's
+> client column.
+>
+> *L2의 클라이언트 절반이 2026-08-26에 착지했다. 이 문서의 상태는 그대로다 — 배치는
+> 자기가 따르는 결정을 승인하지 않는다 — 그러나 실행된 제안은 무엇이 돌아왔는지를
+> 말해야 한다. Java의 **클라이언트 방향은 §3의 세 절을 모두 충족한다**: 양쪽 순서를
+> 피어의 호스트가 아니라 플래그 바이트에서 읽었다. 위 세 귀결 중 둘이 이제 예측이
+> 아니라 측정이며, (1)에는 **두 번째 형태**가 있었다 — 이스케이프된 멤버 이름 자체가
+> `_` + IDL 이름이므로 접두사 하나로는 부족하다. §3.1의 표는 **Python**이 어디에
+> 서 있는지를 적은 것이므로 이 착지로 수정하지 않는다.*
+
 ### L3 — the developer tools that are missing, and they are not an IDE
 
 Measured: twenty-plus binaries, zero editor integration. But the gap that costs

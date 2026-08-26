@@ -1,0 +1,114 @@
+# Java's entry in the acceptance suite — the SECOND instance of D032 §5 B3.
+#
+# This file is data. `spikes/binding_suite.sh` reads it and contains no language
+# name of its own; everything Java-specific about Java's acceptance is here or in
+# `spikes/bindings/java/`. Read `spikes/bindings/python.manifest` first: it is
+# the first instance and the shape this follows rather than reinvents.
+#
+# ── What a row is / 행의 뜻 ────────────────────────────────────────────────────
+#
+#   cell   <direction> <peer> <command>   clause 1, measured in that cell
+#   waits  <direction> <peer> <reason>    a cell nobody supplies, with a real
+#                                         reason; the SKIPPED itself is printed
+#                                         whether or not this row exists
+#   clause <name>      <command>          clauses 3/4/5 — no peer, no wire
+#
+# Only `observed` counts toward clause 2, and `observed` means a byte was read
+# off GIOP §15.4.1's flag byte of what the peer actually wrote.
+#
+# ── Three cells, and every other square named / 세 칸과, 이름 붙은 나머지 ────
+#
+# The grid is (direction × peer), and **its width is not this file's to state**:
+# `spikes/bindings/AXES` owns the peers, and it gained `c` on 2026-08-26 after
+# this manifest was written — which is the axis working as designed and the
+# reason no count of squares is repeated here. Three cells have runners and every
+# other square has a `waits` row.
+#
+# **The whole servant row is absent, and deliberately**: D030 §5 L2 scopes the
+# second language to CLIENTS, because a
+# generated servant must be *called by* the ORB and that needs the bridge's
+# serving direction to carry a dispatch into Java — the seam `pyservant.rs`
+# implements for exactly one language today. Generalising it is its own batch,
+# and attempting both in one is how a batch lands half-measured.
+#
+# The client cells against the two ORB peers and against ourselves are supplied,
+# and both foreign ones read a peer's flag byte — including `client × jacorb`,
+# which is the cell Python's manifest states as its own gap:
+#
+#   "Nothing drives generated Python at a JacORB server, and that is precisely
+#    the cell that would give the client direction a big-endian reading off a
+#    foreign peer's flag byte — D030 §3.1's 'not established by that batch and
+#    not by this one', as a cell rather than a sentence."
+#
+# It is established here, for Java. Python's row stays as it is: this batch did
+# not touch that language, and closing a gap for one binding is not closing it
+# for another. *한 바인딩의 구멍을 메웠다고 다른 바인딩의 구멍이 메워지지는 않는다.*
+#
+# ── The licence boundary / 라이선스 경계 ────────────────────────────────────
+#
+# JacORB and omniORB are **fixtures, never dependencies**: separate processes,
+# read from over TCP. The generated Java imports no `org.omg.CORBA` — it cannot,
+# since JDK 11 removed one (JEP 320) and the only one on this machine is
+# JacORB's jar — and `client-jacorb.sh` asserts `cargo tree --workspace` is clean
+# on every run, reading the producer's exit status before anything it printed.
+
+# ── clause 1, over the grid ──────────────────────────────────────────────────
+
+# Generated Java calls a C++ target through orbweaver-py-bridge, with a
+# recording tap in the path so the reply's byte order is READ rather than
+# inferred from the host. The Python cell of the same name reports `claimed` and
+# says why; this one puts the tap there.
+cell	client	omniorb	spikes/bindings/java/client-omniorb.sh
+
+# Generated Java calls JacORB's own `spike::Echo` server. The strongest cell in
+# this grid: a foreign peer that writes big-endian, in the direction D030 §3.1
+# records as not established.
+cell	client	jacorb	spikes/bindings/java/client-jacorb.sh
+
+# The cross-implementation sweep: every value and every call the golden corpus
+# declares, through generated Java and back, compared as CDR bytes in both
+# orders. Both ends ours, so it can never satisfy clause 6 — which is why `peer`
+# is an axis — and it reports no wire observation at all, because `_Rt.Loopback`
+# has no socket in it.
+cell	client	self	spikes/bindings/java/client-self.sh
+
+# ── the servant row, stated so it is printed rather than remembered ──────────
+
+waits	servant	omniorb	a Java SERVANT, which needs the bridge's serving direction to carry a dispatch into a Java process. D030 §5 L2 scopes this language to clients on purpose: a generated client marshals a request and everything it needs is a function it calls, while a generated servant must be CALLED BY the ORB. `crates/orbweaver-gen/src/pyservant.rs` is that seam for one language and it is not language-neutral yet; generalising it is a batch of its own, and D030 §2's table is why the two are not one job.
+waits	servant	jacorb	as servant/omniorb above. Note what is NOT missing: JacORB already drives a Python servant behind our ORB (spikes/bindings/python/servant-jacorb.sh), so the peer, the tap and the byte-order reading all exist — what is missing is the Java half of the seam, not the fixture.
+waits	servant	self	as servant/omniorb above. This one would be the cheapest of the three and is still not supplied, because a self cell that existed while the foreign ones did not would report a seam we had never run against anybody else.
+
+# ── the C peer, which arrived on the axis after this manifest was written ────
+#
+# `spikes/AXES` gained `peer c` from another batch on 2026-08-26, and that is the
+# axis working as designed: *"a new peer makes every existing binding's gap
+# visible on the next run, rather than being visible only to whoever added the
+# peer."* Java's two `c` cells print as SKIPPED whether or not these rows exist;
+# the rows are here because the absence has a cause worth stating rather than a
+# blank to be read as an oversight.
+
+waits	client	c	`spikes/c_peer.c` is a first-party C peer that links no ORB. Nothing has driven generated Java at it, and the cell is cheap rather than free: the peer's own axis row says it shares no reading with `crates/`, so a cell here would be a THIRD independent implementation of the same call in one run — which is the strongest form of clause 6 this grid can offer and is worth doing deliberately rather than as an afterthought to a Java batch.
+waits	servant	c	as `servant/omniorb`: the Java half of the seam is what is missing, not the peer. A C peer calling a Java servant needs both this row's peer and that row's seam.
+
+# ── clauses 3, 4 and 5 — language-scoped, no peer and no wire ────────────────
+
+# Clause 3, in two halves, because a Java caller can meet a refusal in two
+# places. The RUNTIME's sentences must equal the published heads — held by
+# computing the expected text from the same `orbweaver-dynamic` function rather
+# than by a literal, since Java cannot import a Rust constant — and a peer-fed
+# document must actually reach them (`_Rt.Any.open()`). The EMITTER's refusal is
+# the half a caller meets before any document arrives.
+clause	refusals-equal-the-published-heads	ORBWEAVER_JAVA_HOME="${ORBWEAVER_JAVA_HOME:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home}" cargo test -q -p orbweaver-gen --test java_target -- a_peer_fed_form_reads_as_a_description_and_refuses_as_a_value
+clause	the-emitter-refuses-in-the-published-words	cargo test -q -p orbweaver-gen --test java_target -- the_emitter_refuses_a_deferred_construct_in_the_published_words
+
+# Clause 4, in two halves: the exception a reply names arrives as itself, and
+# every name a caller reaches is the one the emitter gave it — which in Java
+# includes two positions no other target has, the package and the `Package`
+# suffix an interface's nested scope takes.
+clause	an-exception-arrives-as-what-the-reply-named	ORBWEAVER_JAVA_HOME="${ORBWEAVER_JAVA_HOME:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home}" cargo test -q -p orbweaver-gen --test java_target -- a_generated_stub_raises_what_the_reply_names
+clause	a-stub-is-found-by-the-name-the-emitter-gave-it	ORBWEAVER_JAVA_HOME="${ORBWEAVER_JAVA_HOME:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home}" cargo test -q -p orbweaver-gen --test java_target -- a_stub_is_looked_up_by_the_name_the_emitter_gave_it
+
+# Clause 5. `--language` is passed through rather than the binary knowing which
+# language it is for; `binding-words` looks the target up in
+# `orbweaver_gen::targets::TARGETS`.
+clause	keyword-escaping-is-executed	cargo run -q -p orbweaver-gen --bin binding-words -- --language java --allow spikes/bindings/keywords-not-executed.tsv --idl corpus/golden/28-target-keywords.idl
