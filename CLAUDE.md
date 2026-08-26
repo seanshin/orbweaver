@@ -407,6 +407,11 @@ python3 spikes/plan_numbers.py  # every hand-typed count in the plan documents b
                                 # today's computed figure — a report, not a gate
 python3 spikes/bilingual_drift.py  # sections whose EN and KO halves were last edited
                                 # days apart — a report, not a gate
+python3 spikes/entry_cost.py    # what a newcomer must name to serve an object and to
+                                # call one, and how short the shortest path is — a
+                                # report, not a gate (D027 E4). No threshold for "too
+                                # many items to learn" is defensible, which is why it
+                                # is not one
 ```
 
 Fixture setup: `brew install omniorb` (interop peer and oracle only);

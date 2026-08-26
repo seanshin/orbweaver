@@ -31,16 +31,17 @@ today**, not from the C++ mapping.
 > 에 **"일방향, §5 그대로"** 로 답했다. 승인된 것은 **모양**이며 넓힐 면허가
 > 아니다: §5의 "제안하지 않는 것" 목록은 그대로 구속력을 갖는다.*
 
-> **Direction, 2026-08-25.** The user designated **ORB composition the primary
-> goal** on reading §1–§3. That is a decision about *priority* and it is
-> recorded here as one; the `STATUS` line above stays PROPOSED because what it
-> gates is the **shape** in §5 — four named responsibilities and a refusal to
-> copy anything else — and that is a separate question the approval phrase
-> settles. Work sequenced against this direction is in §8.
+> **Direction, 2026-08-25** — the day before the approval above, kept because
+> it records that priority and shape were settled separately and a day apart.
+> The user designated **ORB composition the primary goal** on reading §1–§3.
+> That was a decision about *priority*; the `STATUS` line stayed PROPOSED
+> through that day because what it gates is the **shape** in §5, which the
+> approval phrase settled on 2026-08-26. Work sequenced against the direction
+> is in §8.
 >
-> *사용자가 §1–§3을 읽고 **ORB 구성을 1차 목표로 지정**했다. 그것은 우선순위에
-> 대한 결정이며 그렇게 기록한다. 위의 `STATUS`가 제안으로 남는 이유는 그것이
-> 가로막는 것이 §5의 **모양**이고, 그것은 별개의 질문이기 때문이다.*
+> *승인 전날의 기록이며, **우선순위와 모양이 하루 간격으로 따로** 정해졌다는
+> 사실 때문에 남긴다. 그날 `STATUS`가 제안으로 남았던 이유는 그것이 가로막는 것이
+> §5의 모양이고, 그것은 다음 날 승인 문구가 정했기 때문이다.*
 
 ---
 

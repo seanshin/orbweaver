@@ -26,15 +26,33 @@ ORBs ship.
 
 ## 1. What a newcomer meets today, measured / 오늘 신규 사용자가 만나는 것
 
-| | measured 2026-08-26 |
-|---|---|
-| `orbweaver-giop` public surface | **87 public types, 324 public functions** |
-| `orbweaver-object` | 36 types, 108 functions |
-| Doctests in `orbweaver-giop` | **zero** |
-| Doctests in the whole workspace | ~14 (`forge` 1, `gen` 2, `idl` 8, `object` 3) |
-| `examples/` directories | **none, in any crate** |
-| Smallest binary that serves an object | `spike_server.rs`, **483 lines** |
-| README | 412 lines; its code blocks are `console` and `idl` |
+| | measured 2026-08-26 | corrected by E4, same day |
+|---|---|---|
+| `orbweaver-giop` public surface | 87 types, 324 functions | **92 / 336** — a counting rule, stated in `entry_cost.py` |
+| `orbweaver-object` | 36 / 108 | **37 / 101** |
+| Doctests in `orbweaver-giop` | zero | **zero** — holds |
+| Doctests in the whole workspace | ~14 (`forge` 1, `gen` 2, `idl` 8, `object` 3) | **two**, both in `orbweaver-object`, one of them `compile_fail` |
+| `examples/` directories | none, in any crate | holds |
+| Smallest binary that serves an object | `spike_server.rs`, 483 lines | line count right, **measure wrong** — see §5 E4 |
+| README | 412 lines; code blocks are `console` and `idl` | holds |
+
+> **The doctest figure was wrong and the correction strengthens the argument.**
+> I counted **fences**, not doctests. `cargo test --doc --workspace` runs
+> **two** tests. `orbweaver-idl` has **zero**, not eight — its eight fences are
+> all ```` ```text ````, which rustdoc never compiles. Across the tree there
+> are 128 doc fences and **57 of them are ```` ```text ````**. So "zero in
+> `orbweaver-giop`" is right, and it is also zero in **ten of the twelve
+> crates**. Verified independently after E4 reported it: `Doc-tests` runs
+> print `0 passed` for every crate but one.
+>
+> That I reached for the countable proxy instead of running the thing is the
+> defect this document's own §4 is about: a fence is a restated intention and a
+> doctest is a compiled fact, and only one of them can be counted by grep.
+>
+> *doctest가 아니라 **울타리**를 셌다. 실제로는 **둘**이고, `orbweaver-idl`은
+> 여덟이 아니라 **영**이다 — 그 여덟은 전부 rustdoc이 컴파일하지 않는 ```` ```text ````
+> 이다. 열두 크레이트 중 **열 곳이 영**이므로 §1의 논거는 §1이 적은 것보다 강하다.
+> 셀 수 있는 대리물에 손을 뻗은 것이 바로 이 문서 §4가 말하는 결함이다.*
 
 The crate a user of the ORB touches first has **324 public functions and not one
 compiled example.** The README tells a reader what the project *is* — accurately
