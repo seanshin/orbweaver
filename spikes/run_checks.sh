@@ -11,6 +11,12 @@ cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 fail_total=0
 skipped=0
+# Of the SKIPPED groups, how many stood a RECORDING of another day in the place
+# of a live run. `skipped` keeps counting every skip, exactly as D010 §2
+# requires; this counts the subset that made a claim from a recording, because
+# "no fixture here" and "a measurement of twelve days ago" are different claims
+# and the verdict line used to print them as one.
+replays=0
 
 # ── One harness at a time, machine-wide ──────────────────────────────────────
 # The fixtures are killed by pattern (`pkill -f echo_server.py`) and the logs
@@ -67,6 +73,164 @@ need() { command -v "$1" >/dev/null 2>&1 || { echo "missing tool: $1"; exit 2; }
 # first. bash's /dev/tcp needs no package. Two groups need it, so it lives here
 # rather than inside whichever one happened to want it first.
 port_open() { (exec 3<>/dev/tcp/127.0.0.1/"$1") >/dev/null 2>&1; }
+
+# ── What a diagnostic print owes when the failure is not the shape it expected ─
+#
+# Measured 2026-08-25: the concurrent-dispatch group printed `FAIL run 5 of 5`
+# and then SIX LINES CONTAINING NO INFORMATION, because its extract was
+# `grep -A3 "^failures:" | head -6` and cargo's first `failures:` section is
+# followed by a blank line and a header. A group whose whole argument is *"one
+# green run is not evidence"* produced a red run that was not evidence either.
+#
+# That group was repaired in place, and the shape was then swept: **94 more
+# extracts in this file could print nothing** — 58 of them pattern-filtered
+# (`grep FAIL`, `grep -A3 panicked`, `grep -E "left:|right:"`), which is empty
+# for every failure that is not the one anticipated, and 36 of them a `tail` of
+# a capture that is empty when the producer never printed at all. One of those
+# 36 carries a comment recording the day it fired with nothing to read.
+#
+# The previous sweep counted 73 of these, because it counted the EARLY EXIT ON A
+# PIPE. That is the wrong boundary: `grep "no response|closed|error" <<<"$x" |
+# sed` has no early exit and prints nothing just as completely, and a `tail` of
+# an empty capture prints one blank line. Scoped to the rule instead of to the
+# form, the class is 94 — and it does not stop at `FAIL` branches either.
+# Twelve more sites print an empty value under an **ok**: `ok   codeset
+# negotiated with a second peer:` followed by nothing is the instance this file
+# already repaired once, and its own comment at that site says so. Those twelve
+# are repaired here too, with their verdicts deliberately unchanged: turning an
+# `ok` that measured nothing into a `FAIL` is a different decision from making
+# it say so, and only the second one is a diagnostics change.
+#
+# So the decision of what to say when an extract is empty lives HERE, once,
+# rather than being retyped ninety-four times with ninety-four wordings — the
+# `pub(crate)` lesson from CLAUDE.md, in shell. Three things are owed:
+#   1. when the expected shape is absent, SAY SO and show the tail instead;
+#   2. no early-exit form on a pipe (`head`, `grep -q`, `grep -m1`) — the
+#      extract is a herestring in and a herestring out, so nothing can SIGPIPE
+#      a producer and nothing can hand `pipefail` a status to misread;
+#   3. bounded, because an unbounded dump buries the next group.
+#
+#   diag <what-was-looked-for> <whole-output> <extract> [keep] [tail]
+#     $1  what the extract looked for, in words, for the fallback sentence
+#     $2  the whole output the extract came from
+#     $3  the extract, which is allowed to be empty — that is the point
+#     $4  lines of the extract to print   (default 6)
+#     $5  lines of tail to print instead  (default 8)
+diag() {
+  local looked="$1" whole="$2" got="$3" keep="${4:-6}" tailn="${5:-8}"
+  if [ -n "$got" ]; then
+    sed -n "1,${keep}p" <<<"$got" | sed 's/^/       | /'
+  elif [ -n "$whole" ]; then
+    echo "       (no $looked in the output — last $tailn line(s) instead:)"
+    tail -"$tailn" <<<"$whole" | sed 's/^/       | /'
+  else
+    echo "       (it printed nothing at all)"
+  fi
+  return 0
+}
+
+# The same rule where the intent is "show me some of it" rather than "find the
+# interesting lines". A slice of an empty capture is one blank line, which reads
+# as a diagnostic that ran and found nothing worth saying rather than as a
+# producer that never said anything — and those are different failures.
+#   diag_out <whole-output> [lines] [head|tail]
+diag_out() {
+  local whole="$1" n="${2:-8}" from="${3:-tail}"
+  if [ -z "$whole" ]; then
+    echo "       (it printed nothing at all)"
+  elif [ "$from" = head ]; then
+    sed -n "1,${n}p" <<<"$whole" | sed 's/^/       | /'
+  else
+    tail -"$n" <<<"$whole" | sed 's/^/       | /'
+  fi
+  return 0
+}
+
+# And the file half: a log a fixture may never have written to. `-s` is the
+# whole check, because a log that does not exist and a log that exists empty are
+# one absence to a reader and both used to print as silence. This is the shape
+# `fixture_died` has had since Phase 0 — it is the only diagnostic in this file
+# that always said "the fixture wrote nothing at all" — generalised so the other
+# eight log dumps can have it too.
+#   diag_log <path> [lines] [head|tail]
+diag_log() {
+  local p="$1" n="${2:-8}" from="${3:-tail}"
+  if [ ! -s "$p" ]; then
+    echo "       ($p is empty or absent — the producer wrote nothing at all)"
+  elif [ "$from" = head ]; then
+    sed -n "1,${n}p" "$p" | sed 's/^/       | /'
+  else
+    tail -"$n" "$p" | sed 's/^/       | /'
+  fi
+  return 0
+}
+
+# ── How old is a SKIPPED? ────────────────────────────────────────────────────
+#
+# D010 §2 already makes every skip a counted group naming its fixture, and that
+# works. What none of them said is WHEN the claim was last true, so a skip that
+# is eleven days old and one that is eleven months old print the same line and
+# decay at the same invisible rate. D026 §5's S4.
+#
+# Every date printed below is COMPUTED, never typed. A date literal in a shell
+# string is `A floor is not a figure` in its purest form — right on the day it
+# is written, silently wrong every day after, and nothing recompiles a sentence.
+# There were two such literals here (the NAT second-host probe's
+# "last measured 2026-08-14" and the SSLIOP residue's prose) and they are gone.
+#
+# Where no date can be computed the line says `date not recorded` rather than
+# inventing one. That is the honest answer for a fixture that lives outside the
+# tree entirely — omniNames, an OIDC issuer, docker.
+days_since() {
+  python3 -c 'import sys,datetime
+d=datetime.date.fromisoformat(sys.argv[1])
+print((datetime.date.today()-d).days)' "$1" 2>/dev/null
+}
+# The tree's own date for a file. Read as "the last time this fixture changed",
+# which is NOT the same as "the last time it was measured" and is never labelled
+# as if it were: a probe edited without being re-run moves this date and
+# overstates its own freshness. It is a decay clock with a stated limit, and a
+# stated limit beats a literal that only ever understates.
+git_date() { git -C "$ROOT" log -1 --format=%cs -- "$1" 2>/dev/null; }
+
+#   skip <kind> <datespec> <line> [line...]
+#     kind      absent  the fixture is not here and nothing stood in for it
+#               replay  a RECORDING of a specific day stood in for a live run
+#     datespec  ""              nothing in the tree can date this claim
+#               @YYYY-MM-DD     a date read out of a recording's own stamp
+#               git:<path>      the tree's date for the fixture that would run it
+#     line...   the group's own text, one argument per line, naming its fixture
+skip() {
+  local kind="$1" spec="$2"; shift 2
+  echo "  SKIPPED  $1"; shift
+  while [ "$#" -gt 0 ]; do echo "           $1"; shift; done
+  skip_age "$kind" "$spec"
+}
+
+# The count and the age belong to this file; the TEXT does not always. Nine
+# skips are announced by the script being run rather than by the harness — the
+# five capture probes, `differential.sh`, `perm_fallback.sh` and the three
+# JacORB wide-text scripts each print their own `  SKIPPED` line, and printing
+# a second one here would be two spellings of one fact. So those call this
+# directly and add only the age.
+#   skip_age <kind> <datespec>
+skip_age() {
+  local kind="$1" spec="$2" when="" whence="" ago=""
+  case "$spec" in
+    @*)    when="${spec#@}"; whence="last measured" ;;
+    git:*) when=$(git_date "${spec#git:}")
+           whence="not measured in this run; ${spec#git:} last changed" ;;
+  esac
+  if [ -n "$when" ]; then
+    ago=$(days_since "$when")
+    echo "           age: $whence $when${ago:+, $ago day(s) ago}"
+  else
+    echo "           age: date not recorded"
+  fi
+  skipped=$((skipped+1))
+  [ "$kind" = replay ] && replays=$((replays+1))
+  return 0
+}
 
 # ── Kill this run's fixtures, and only this run's ────────────────────────────
 # `pkill -f echo_server.py` matches by command line, which is every checkout on
@@ -196,7 +360,7 @@ if [ "$fmt_rc" -eq 0 ]; then
   echo "  ok   cargo fmt --all --check"
 else
   echo "  FAIL cargo fmt --all --check (exit $fmt_rc)"
-  grep -E "^Diff in " <<<"$fmt_out" | head -8 | sed 's/^/    | /'
+  diag "a 'Diff in' line" "$fmt_out" "$(grep -E "^Diff in " <<<"$fmt_out")" 8
   fail_total=$((fail_total+1))
 fi
 
@@ -221,7 +385,8 @@ hr "unit tests (CDR + GIOP)"
 ut_out=$(cargo test --workspace --quiet 2>&1); ut_rc=$?
 if [ "$ut_rc" -ne 0 ] || grep -q "^error" <<<"$ut_out"; then
   echo "  FAIL cargo test --workspace (exit $ut_rc)"
-  grep -E "^(error|test result: FAILED|failures:)" <<<"$ut_out" | head -12 | sed 's/^/    | /'
+  diag "an error line or a FAILED suite" "$ut_out" \
+       "$(grep -E "^(error|test result: FAILED|failures:)" <<<"$ut_out")" 12
   fail_total=$((fail_total+1))
 else
   echo "  ok   cargo test --workspace"
@@ -246,7 +411,7 @@ if [ "$tree_rc" -ne 0 ]; then
   fail_total=$((fail_total+1))
 elif grep -qiE "omniorb|jacorb" <<<"$tree_out"; then
   echo "  FAIL an ORB fixture has become a dependency"
-  grep -inE "omniorb|jacorb" <<<"$tree_out" | head -5 | sed 's/^/    | /'
+  sed -n '1,5p' <<<"$(grep -inE "omniorb|jacorb" <<<"$tree_out")" | sed 's/^/    | /'
   fail_total=$((fail_total+1))
 else
   echo "  ok   no ORB fixture appears in cargo tree"
@@ -283,7 +448,7 @@ hr "union case labels — a peer's bytes, not only our own"
 ulc_out=$(python3 spikes/union_label_capture.py 2>&1); ulc_rc=$?
 printf '%s\n' "$ulc_out" | sed 's/^  /  /'
 if [ "$ulc_rc" -eq 2 ]; then
-  skipped=$((skipped+1))
+  skip_age absent git:spikes/union_label_capture.py
 elif [ "$ulc_rc" -ne 0 ]; then
   echo "  FAIL the recorded peer bytes no longer match the live peer"
   fail_total=$((fail_total+1))
@@ -309,7 +474,7 @@ fi
 udc_out=$(python3 spikes/union_default_capture.py 2>&1); udc_rc=$?
 printf '%s\n' "$udc_out"
 if [ "$udc_rc" -eq 2 ]; then
-  skipped=$((skipped+1))
+  skip_age absent git:spikes/union_default_capture.py
 elif [ "$udc_rc" -ne 0 ]; then
   echo "  FAIL the recorded default-label bytes no longer match the live peer"; fail_total=$((fail_total+1))
 fi
@@ -340,7 +505,7 @@ hr "valuetype and abstract interface TypeCodes — a peer's bytes, not our readi
 vtc_out=$(python3 spikes/valuetype_capture.py 2>&1); vtc_rc=$?
 printf '%s\n' "$vtc_out"
 if [ "$vtc_rc" -eq 2 ]; then
-  skipped=$((skipped+1))
+  skip_age absent git:spikes/valuetype_capture.py
 elif [ "$vtc_rc" -ne 0 ]; then
   echo "  FAIL the recorded valuetype bytes no longer match the live peer"
   fail_total=$((fail_total+1))
@@ -382,7 +547,7 @@ hr "a native and a ValueBase — the refusal and the bytes, asked of the peer"
 ntc_out=$(python3 spikes/native_capture.py 2>&1); ntc_rc=$?
 printf '%s\n' "$ntc_out"
 if [ "$ntc_rc" -eq 2 ]; then
-  skipped=$((skipped+1))
+  skip_age absent git:spikes/native_capture.py
 elif [ "$ntc_rc" -ne 0 ]; then
   echo "  FAIL the recorded native/ValueBase answers no longer match the live peer"
   fail_total=$((fail_total+1))
@@ -411,7 +576,7 @@ if cb_out=$(cargo run -q --release -p orbweaver-test --bin call-bench -- --sampl
   echo "  ok   both paths measured on four shapes and agreed on every answer"
 else
   echo "  FAIL a series was not measured, or the two paths disagreed"
-  printf '%s\n' "$cb_out" | tail -5 | sed 's/^/       /'
+  diag_out "$cb_out" 5
   fail_total=$((fail_total+1))
 fi
 
@@ -428,7 +593,7 @@ if grep -q "test result: ok" <<<"$gl_out"; then
   echo "  ok   the blessed emitted corpus still matches, lints included"
 else
   echo "  FAIL generated code no longer matches its blessed form"
-  printf '%s\n' "$gl_out" | grep -A3 panicked | head -5 | sed 's/^/       /'
+  diag "a panic" "$gl_out" "$(grep -A3 panicked <<<"$gl_out")" 5
   fail_total=$((fail_total+1))
 fi
 
@@ -456,7 +621,8 @@ if af_out=$(cargo run -q --release -p orbweaver-test --bin agent-fuzz -- --cases
   echo "  ok   50k documents over 7 agent-boundary targets: no panic, no unbounded allocation"
 else
   echo "  FAIL a document an agent could send panics or buys memory"
-  printf '%s\n' "$af_out" | grep -E "FAIL|reproduce with" | head -4 | sed 's/^/       /'
+  diag "a FAIL or a reproduce-with line" "$af_out" \
+       "$(grep -E "FAIL|reproduce with" <<<"$af_out")" 4
   fail_total=$((fail_total+1))
 fi
 # A zero reach is a green that measured nothing.
@@ -485,7 +651,7 @@ if [ "$ev_rc" -eq 1 ] && grep -q "amount_minor" <<<"$ev_out" \
   echo "  ok   both header-only breaking changes are named and the release is refused"
 else
   echo "  FAIL a breaking change in a shared header does not reach the differ (exit $ev_rc)"
-  printf '%s\n' "$ev_out" | head -3 | sed 's/^/       /'; ev_fail=1
+  diag_out "$ev_out" 3 head; ev_fail=1
 fi
 # The negative control, or the check above could pass for the wrong reason.
 cargo run -q --bin idl-diff -- \
@@ -522,8 +688,8 @@ if dynany_out=$(RUSTFLAGS="-D warnings" cargo test -p orbweaver-dynamic \
   printf '%s\n' "$dynany_out" | grep -E "uncovered:" | sed 's/^ *uncovered:/  note uncovered:/'
 else
   echo "  FAIL a corpus type does not survive a DynAny walk"
-  printf '%s\n' "$dynany_out" | grep -E "differs on the wire|the walk failed|is invalid" \
-    | head -3 | sed 's/^/       /'
+  diag "a wire difference, a failed walk or an invalid value" "$dynany_out" \
+       "$(grep -E "differs on the wire|the walk failed|is invalid" <<<"$dynany_out")" 3
   fail_total=$((fail_total+1))
 fi
 # An array's length is a number in an agent's document since D008, and the
@@ -553,7 +719,7 @@ if RUSTFLAGS="-C overflow-checks=on" CARGO_TARGET_DIR=target/overflow-checked \
   echo "  ok   20k fuzz cases with overflow checks on: no arithmetic panic"
 else
   echo "  FAIL an arithmetic overflow is reachable from peer bytes"
-  tail -5 /tmp/orbweaver-oflow.log | sed 's/^/       /'
+  diag_log /tmp/orbweaver-oflow.log 5
   fail_total=$((fail_total+1))
 fi
 # And the allocation half: twelve bytes declared 64 MiB and got it, before one
@@ -595,11 +761,12 @@ case "$np_out" in
   *"naming-peer: measured"*)
     echo "  ok   omniORB drove bind_context/rebind_context/destroy against OUR server" ;;
   *"naming-peer: SKIPPED"*)
-    echo "  SKIPPED  omniORBpy absent — the three deferrals are unmeasured, not passing"
-    skipped=$((skipped+1)) ;;
+    skip absent git:crates/orbweaver-giop/tests/naming_lifecycle_from_a_peer.rs \
+         "omniORBpy absent — the three deferrals are unmeasured, not passing" ;;
   *)
     echo "  FAIL the peer's view of bind_context/destroy"
-    printf '%s\n' "$np_out" | grep -E "^ *(left|right):" | head -2 | sed 's/^/       /'
+    diag "an assertion's left/right" "$np_out" \
+         "$(grep -E "^ *(left|right):" <<<"$np_out")" 2
     fail_total=$((fail_total+1)) ;;
 esac
 # Structural, and cheap: the naming servant must still contain no outbound
@@ -632,7 +799,7 @@ if [ "$f5_up" -eq 1 ]; then
       echo "  ok   omniORB called all 16 declared operations of golden 23 on our servant" ;;
     *)
       echo "  FAIL cross-ORB F5"
-      printf '%s\n' "$f5_out" | grep -E "FAIL|BLOCKED" | head -3 | sed 's/^/       /'
+      diag "a FAIL or BLOCKED line" "$f5_out" "$(grep -E "FAIL|BLOCKED" <<<"$f5_out")" 3
       f5_fail=1 ;;
   esac
 else
@@ -653,7 +820,7 @@ for pull_profile in "" "--release"; do
     pull_out=$(cargo test -q -p orbweaver-giop $pull_profile --test event_pull_model 2>&1)
     if [ $? -ne 0 ] || ! grep -q "test result: ok\." <<<"$pull_out"; then
       pull_fail=$((pull_fail+1))
-      printf '%s\n' "$pull_out" | tail -6 | sed 's/^/       /'
+      diag_out "$pull_out" 6
     fi
   done
 done
@@ -671,12 +838,18 @@ hr "codeset advertising — a conversion is offered only where one is needed"
 # the row is unblocked. ~3 s, no long-lived fixture, no port.
 cpa_out=$(python3 spikes/codeset_peer_probe.py 2>&1); cpa_rc=$?
 if [ "$cpa_rc" -eq 1 ]; then
-  printf '%s\n' "$cpa_out" | tail -3 | sed 's/^/       /'
+  diag_out "$cpa_out" 3
   echo "  FAIL a peer advertises ISO-8859-1 without UTF-8 — D009 §8 row 4 is unblocked"
   fail_total=$((fail_total+1))
 elif [ "$cpa_rc" -eq 2 ]; then
-  printf '%s\n' "$cpa_out" | tail -2 | sed 's/^/       /'
-  skipped=$((skipped+1))
+  # This skip was counted and never announced: the probe prints no SKIPPED line
+  # of its own, so the group showed two tail lines and bumped the counter, and a
+  # reader of the verdict had no group to attach the number to. D010 §2 wants a
+  # counted skip to NAME its fixture, so now it does.
+  skip absent git:spikes/codeset_peer_probe.py \
+       "spikes/codeset_peer_probe.py could not reach a peer configuration (exit 2) —" \
+       "D009 §8 row 4's condition is unmeasured, not passing"
+  diag_out "$cpa_out" 2
 else
   echo "  ok   every peer configuration still reaches UTF-8; the empty conversion list holds"
 fi
@@ -691,7 +864,7 @@ hr "wide characters — the value's own order, not the message's"
 wcc_out=$(python3 spikes/wide_char_capture.py 2>&1); wcc_rc=$?
 printf '%s\n' "$wcc_out" | tail -3
 if [ "$wcc_rc" -eq 2 ]; then
-  skipped=$((skipped+1))
+  skip_age absent git:spikes/wide_char_capture.py
 elif [ "$wcc_rc" -ne 0 ]; then
   echo "  FAIL the recorded wide-character bytes no longer match the live peer"
   fail_total=$((fail_total+1))
@@ -729,8 +902,12 @@ gate_refused=""
 for f in corpus/golden/*.idl corpus/services/*.idl corpus/pragma/*.idl; do
   gout=$(cargo run -q --bin idl-diff -- "$f" "$f" 2>&1); grc=$?
   if [ "$grc" -ne 0 ]; then
+    # `head -2 | tail -1` is `sed -n 2p` with two early-exit forms in it, and
+    # when idl-diff printed nothing the row read `rc=2: ` with a blank after
+    # the colon — a refusal that names a file and says nothing about it.
+    gline=$(sed -n '2p' <<<"$gout")
     gate_refused="$gate_refused
-       $(basename "$f") rc=$grc: $(printf '%s' "$gout" | head -2 | tail -1)"
+       $(basename "$f") rc=$grc: ${gline:-(idl-diff printed nothing at all)}"
   fi
 done
 if [ -z "$gate_refused" ]; then
@@ -773,7 +950,8 @@ if cargo test --workspace --release --no-fail-fast >/tmp/orbweaver-release.log 2
   echo "  ok   $(grep -cE '^test result: ok' /tmp/orbweaver-release.log) release suite(s) green"
 else
   echo "  FAIL the release profile is not clean; a profile nobody can run is a profile nobody runs"
-  grep -E "^test .*FAILED|panicked at" /tmp/orbweaver-release.log | head -4 | sed 's/^/       /'
+  diag "a FAILED test or a panic" "$(tail -40 /tmp/orbweaver-release.log 2>/dev/null)" \
+       "$(grep -E "^test .*FAILED|panicked at" /tmp/orbweaver-release.log)" 4
   fail_total=$((fail_total+1))
 fi
 
@@ -871,11 +1049,11 @@ case "$ssliop_rc" in
     fi
     ;;
   3)
-    echo "  SKIPPED  spikes/ssliop.sh measured nothing (exit 3): $ssliop_verdict"
-    echo "           its fixture is spikes/ssliop_peer.py, the certificates in spikes/tls/, and a"
-    echo "           build of spike-ssliop; SSLIOP against a peer is unmeasured, not passing (D010 B3)"
-    grep -E '^  FAIL' <<<"$ssliop_out" | tail -4 | sed 's/^/       /'
-    skipped=$((skipped+1))
+    skip absent git:spikes/ssliop.sh \
+         "spikes/ssliop.sh measured nothing (exit 3): $ssliop_verdict" \
+         "its fixture is spikes/ssliop_peer.py, the certificates in spikes/tls/, and a" \
+         "build of spike-ssliop; SSLIOP against a peer is unmeasured, not passing (D010 B3)"
+    diag "a FAIL line" "$ssliop_out" "$(grep -E '^  FAIL' <<<"$ssliop_out" | tail -4)" 4
     ;;
   *)
     # A script that could not be run at all reaches no verdict, and calling
@@ -883,10 +1061,10 @@ case "$ssliop_rc" in
     # failure — an unmeasured check is never a pass — but a different one.
     if [ -z "$ssliop_verdict" ]; then
       echo "  FAIL spikes/ssliop.sh could not be run at all (exit $ssliop_rc) — B3 was NOT measured"
-      printf '%s\n' "$ssliop_out" | tail -3 | sed 's/^/       | /'
+      diag_out "$ssliop_out" 3
     else
       echo "  FAIL spikes/ssliop.sh refuted a B3 claim (exit $ssliop_rc): $ssliop_verdict"
-      grep -E '^  FAIL' <<<"$ssliop_out" | tail -6 | sed 's/^/       /'
+      diag "a FAIL line" "$ssliop_out" "$(grep -E '^  FAIL' <<<"$ssliop_out" | tail -6)" 6
     fi
     ssl_fail=1
     ;;
@@ -909,7 +1087,7 @@ else
   echo "  SKIPPED  no omniORBpy sslTP and no JacORB SSL here, so a TAG_SSL_SEC_TRANS produced by"
   echo "           THEIR encoder stays unmeasured, not passing (D010 B3, spikes/tls/PEER-STATUS.md)"
 fi
-skipped=$((skipped+1))
+skip_age absent git:spikes/tls/PEER-STATUS.md
 [ "$ssl_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
 hr "orbweaver-idl — our parser against the oracle"
@@ -921,7 +1099,9 @@ if cargo test -p orbweaver-idl --quiet >/dev/null 2>&1; then
   echo "  ok   rejects the syntactic negatives, including unescaped keywords"
 else
   echo "  FAIL our parser disagrees with the oracle"
-  cargo test -p orbweaver-idl 2>&1 | grep -E "we do not|accepted them" | head -3 | sed 's/^/       /'
+  idl_re=$(cargo test -p orbweaver-idl 2>&1)
+  diag "a 'we do not' or 'accepted them' line" "$idl_re" \
+       "$(grep -E "we do not|accepted them" <<<"$idl_re")" 3
   fail_total=$((fail_total+1))
 fi
 
@@ -948,7 +1128,7 @@ clean_out=$(cargo run -q --bin idl-check -- corpus/golden/*.idl corpus/requireme
 if [ -z "$clean_out" ]; then
   echo "  ok   accepts every golden, benchmark and fixture file the oracle accepts"
 else
-  echo "$clean_out" | head -5 | sed 's/^/  FAIL /'
+  sed -n '1,5p' <<<"$clean_out" | sed 's/^/  FAIL /'
   fail_total=$((fail_total+1))
 fi
 
@@ -962,7 +1142,7 @@ dout=$(bash spikes/differential.sh 2>&1); drc=$?
 printf '%s\n' "$dout"
 if [ "$drc" -ne 0 ]; then fail_total=$((fail_total+1)); fi
 # An absent oracle is unmeasured, not passing, and the verdict has to say so.
-if grep -q "SKIPPED" <<<"$dout"; then skipped=$((skipped+1)); fi
+if grep -q "SKIPPED" <<<"$dout"; then skip_age absent git:spikes/differential.sh; fi
 
 # ── Assumption C ─────────────────────────────────────────────────────────────
 hr "assumption C — IDL 4 @annotation acceptance in a deployed compiler"
@@ -992,7 +1172,7 @@ if start_server; then
     echo "  ok   both byte orders interoperated"
   else
     echo "  FAIL see /tmp/orbweaver-a.log"
-    printf '%s' "$interop" | grep -E "^  FAIL" | head -3 | sed 's/^/     /'
+    diag "a FAIL line" "$interop" "$(grep -E "^  FAIL" <<<"$interop")" 3
     fail_total=$((fail_total+1))
   fi
 else
@@ -1017,7 +1197,7 @@ if start_server; then
   if [ "$adv_rc" -ne 0 ]; then
     echo "  FAIL spike-dump could not read the published address (exit $adv_rc) — R7 is UNMEASURED here,"
     echo "       which is a failure and not a 'confirmed'"
-    tail -3 <<<"$adv_raw" | sed 's/^/       | /'
+    diag_out "$adv_raw" 3
     fail_total=$((fail_total+1))
   else
     case "$adv" in
@@ -1045,7 +1225,8 @@ if start_server -ORBendPoint giop:tcp::24404 -ORBendPointPublish giop:tcp:127.0.
     echo "  ok   endpoint rewriting works — mitigation for R7 is available"
   else
     echo "  FAIL endpoint rewriting did not produce a reachable reference"
-    grep -E "no response|closed|error" <<<"$rewritten" | sed 's/^/       /'
+    diag "a no-response, closed or error line" "$rewritten" \
+         "$(grep -E "no response|closed|error" <<<"$rewritten")" 6
     fail_total=$((fail_total+1))
   fi
 else
@@ -1120,8 +1301,7 @@ else
       echo "  FAIL JacORB could not reassemble our fragments"; ffail=1
     fi
   else
-    echo "  SKIPPED  JacORB half — fixture absent"
-    skipped=$((skipped+1))
+    skip absent git:spikes/jacorb/setup.sh "JacORB half — fixture absent"
   fi
   echo "  note our *receiver* has no independent validation: no available peer emits"
   echo "       GIOP fragments, so it is covered by round-trip against our own emitter"
@@ -1138,7 +1318,7 @@ if start_rust_server; then
     echo "  ok   an object reference survives as a value and is callable"
   else
     echo "  FAIL object model against omniORB"
-    printf '%s' "$out" | grep FAIL | head -3 | sed 's/^/       /'
+    diag "a FAIL line" "$out" "$(grep FAIL <<<"$out")" 3
     fail_total=$((fail_total+1))
   fi
 else
@@ -1167,7 +1347,7 @@ for peer in omni jacorb; do
     label="omniORB"
   else
     if [ ! -d "$ROOT/spikes/jacorb/classes" ] || [ ! -x "$JH_CHECK/bin/java" ]; then
-      echo "  SKIPPED  JacORB half — fixture absent"; skipped=$((skipped+1)); continue
+      skip absent git:spikes/jacorb/setup.sh "JacORB half — fixture absent"; continue
     fi
     got=$(cd "$ROOT/spikes/jacorb" && "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Client ../server.ior 2>&1 | grep -c "ping() -> 42")
     label="JacORB"
@@ -1199,13 +1379,21 @@ case "$permout" in
   *"test result: ok. 2 passed"*)
     echo "  ok   status 4 at 1.2, 3 below, 3 from the temporary servant — raw off the wire, both byte orders"
     if grep -q "UNMEASURED: omniORB" <<<"$permout"; then
-      echo "  SKIPPED  omniORB half — fixture absent"; skipped=$((skipped+1))
+      skip absent git:crates/orbweaver-gen/tests/object_identity.rs \
+           "omniORB half — fixture absent"
     else
       echo "  ok   omniORB followed a LOCATION_FORWARD_PERM from a generated skeleton, five calls answered by the new object"
-      printf '%s' "$permout" | grep "requests at the OLD reference" | head -2 | sed 's/^/       /'
+      perm_counts=$(grep "requests at the OLD reference" <<<"$permout")
+      if [ -n "$perm_counts" ]; then
+        sed -n '1,2p' <<<"$perm_counts" | sed 's/^/       /'
+      else
+        echo "       (the test printed no request count for the old reference — the ok above"
+        echo "        stands on its own assertions, not on a number shown here)"
+      fi
     fi ;;
   *) echo "  FAIL LOCATION_FORWARD_PERM"
-     printf '%s' "$permout" | grep -E "panicked|left:|right:" | head -4 | sed 's/^/       /'
+     diag "a panic or an assertion's left/right" "$permout" \
+          "$(grep -E "panicked|left:|right:" <<<"$permout")" 4
      fail_total=$((fail_total+1)) ;;
 esac
 # The pool half (b77c9fb): Sent::Forward carries Forward, Pool::invoke_tracking
@@ -1219,7 +1407,8 @@ case "$poolout" in
   *"test result: ok. 2 passed"*)
     echo "  ok   pool: permanent reported only for 1.2 x permanent — 12 scripted cells (both reply orders) + real Server, native" ;;
   *) echo "  FAIL pool forward reporting"
-     printf '%s' "$poolout" | grep -E "panicked|left:|right:" | head -4 | sed 's/^/       /'
+     diag "a panic or an assertion's left/right" "$poolout" \
+          "$(grep -E "panicked|left:|right:" <<<"$poolout")" 4
      fail_total=$((fail_total+1)) ;;
 esac
 # The chain half (adf0867): Pool::attempt accumulates hops into a private
@@ -1235,7 +1424,8 @@ case "$chainout" in
   *"test result: ok. 3 passed"*)
     echo "  ok   pool: a permanent->temporary chain restarts at the permanent hop, not the original — 3 shapes x both reply orders, 0 extra dials" ;;
   *) echo "  FAIL forward chain"
-     printf '%s' "$chainout" | grep -E "panicked|left:|right:" | head -4 | sed 's/^/       /'
+     diag "a panic or an assertion's left/right" "$chainout" \
+          "$(grep -E "panicked|left:|right:" <<<"$chainout")" 4
      fail_total=$((fail_total+1)) ;;
 esac
 # cd9f88f: a permanent forward is the object moving, so it is shared by every
@@ -1258,7 +1448,8 @@ case "$cloneout" in
   *"test result: ok. 6 passed"*)
     echo "  ok   a permanent forward is seen by every clone of the reference — 3 requests at the old address down to 1, both reply orders; two independent references cost one forward each, once (D013); the temporary cache stays per handle" ;;
   *) echo "  FAIL reference clones and a permanent forward"
-     printf '%s' "$cloneout" | grep -E "panicked|left:|right:" | head -4 | sed 's/^/       /'
+     diag "a panic or an assertion's left/right" "$cloneout" \
+          "$(grep -E "panicked|left:|right:" <<<"$cloneout")" 4
      fail_total=$((fail_total+1)) ;;
 esac
 # A caller's version cap across a hop and a restart (adf0867): move_to
@@ -1272,7 +1463,8 @@ case "$capout" in
   *"test result: ok. 1 passed"*)
     echo "  ok   cap_version survives a forward and a restart — 1.1 read off every request at both peers, both request orders" ;;
   *) echo "  FAIL cap_version across a forward"
-     printf '%s' "$capout" | grep -E "panicked|left:|right:" | head -4 | sed 's/^/       /'
+     diag "a panic or an assertion's left/right" "$capout" \
+          "$(grep -E "panicked|left:|right:" <<<"$capout")" 4
      fail_total=$((fail_total+1)) ;;
 esac
 
@@ -1294,7 +1486,7 @@ pfout=$(./spikes/perm_fallback.sh --expect-temporary reask --expect-permanent st
 printf '%s\n' "$pfout" | grep -E '^  (ok|FAIL|SKIPPED|\.\.) ' | cut -c1-150
 case "$pfrc" in
   0) ;;
-  2) skipped=$((skipped+1)) ;;
+  2) skip_age absent git:spikes/perm_fallback.sh ;;
   *) fail_total=$((fail_total+1)) ;;
 esac
 
@@ -1309,7 +1501,7 @@ if start_server_omni_echo 2>/dev/null || start_server; then
     echo "  ok   omniORB agrees with the TypeCode we derived for spike::Ragged"
   else
     echo "  FAIL omniORB disagrees with our derived TypeCode"
-    printf '%s' "$rc" | grep -E "derived|returned" | head -2 | sed 's/^/       /'
+    diag "a derived/returned line" "$rc" "$(grep -E "derived|returned" <<<"$rc")" 2
     fail_total=$((fail_total+1))
   fi
 else
@@ -1338,8 +1530,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   fi
   fkill "classes Server"
 else
-  echo "  SKIPPED  JacORB half — fixture absent"
-  skipped=$((skipped+1))
+  skip absent git:spikes/jacorb/setup.sh "JacORB half — fixture absent"
 fi
 
 # ── Naming: resolve a target the way a deployment does ───────────────────────
@@ -1355,8 +1546,10 @@ rm -rf /tmp/orbweaver-names && mkdir -p /tmp/orbweaver-names
 # not start"**, which is a misdiagnosis rather than a failure. Found by running
 # the ORB group standalone; nothing in a whole-harness run would have shown it.
 if ! command -v omniNames >/dev/null 2>&1; then
-  echo "  SKIPPED  omniNames is not installed — naming is unmeasured, not passing"
-  skipped=$((skipped+1))
+  # No date: omniNames is a package on the machine, not a file in this tree,
+  # so nothing here can say when it last answered. `date not recorded` is the
+  # honest line and an invented one would be worse than none.
+  skip absent "" "omniNames is not installed — naming is unmeasured, not passing"
   names_up=-1
 else
   ( omniNames -start 2809 -logdir /tmp/orbweaver-names >/tmp/orbweaver-names/out.log 2>&1 & )
@@ -1388,7 +1581,12 @@ else
   else
     nm=$(cargo run -q --bin spike-naming 2>&1)
     if grep -q "naming: PASS" <<<"$nm"; then
-      printf '%s\n' "$nm" | grep "^  ok" | sed 's/^/  /'
+      nm_oks=$(grep "^  ok" <<<"$nm")
+      if [ -n "$nm_oks" ]; then
+        sed 's/^/  /' <<<"$nm_oks"
+      else
+        echo "    ok   spike-naming: PASS, but it listed no '  ok' lines to show"
+      fi
       # The default in corbaloc::host is GIOP 1.0, so this path only works
       # because of the version negotiation from batch 1. Assert it rather than
       # let a silent upgrade to 1.2 hide a regression.
@@ -1398,7 +1596,8 @@ else
         echo "  FAIL expected GIOP 1.0 for a corbaloc URL with no version"; fail_total=$((fail_total+1))
       fi
     else
-      echo "  FAIL naming resolution"; printf '%s' "$nm" | grep -iE "fail|error" | head -3 | sed 's/^/       /'
+      echo "  FAIL naming resolution"
+      diag "a fail or error line" "$nm" "$(grep -iE "fail|error" <<<"$nm")" 3
       fail_total=$((fail_total+1))
     fi
   fi
@@ -1430,10 +1629,10 @@ sleep 0.5
 rm -rf /tmp/orbweaver-rir-names && mkdir -p /tmp/orbweaver-rir-names
 if ! command -v omniNames >/dev/null 2>&1; then
   # D010 §2: a counted SKIPPED naming its fixture, never a note and never an ok.
-  echo "  SKIPPED  omniNames is not installed (fixture: omniNames on 2809, plus"
-  echo "           spikes/register_name.py) — the ORB's initial-references table is"
-  echo "           unmeasured, not passing"
-  skipped=$((skipped+1))
+  skip absent "" \
+       "omniNames is not installed (fixture: omniNames on 2809, plus" \
+       "spikes/register_name.py) — the ORB's initial-references table is" \
+       "unmeasured, not passing"
 else
   ( omniNames -start 2809 -logdir /tmp/orbweaver-rir-names \
       >/tmp/orbweaver-rir-names/out.log 2>&1 & )
@@ -1468,7 +1667,7 @@ else
   elif [ "$rir_reg" -ne 1 ]; then
     echo "  FAIL nothing could be bound into the naming service — the ORB table is"
     echo "       UNMEASURED, not passing"
-    tail -6 /tmp/orbweaver-rir-reg.log 2>/dev/null | sed 's/^/       | /'
+    diag_log /tmp/orbweaver-rir-reg.log 6
     rir_fail=1
   else
     # ── A. our table, a URL with no address, and a foreign servant answering ──
@@ -1481,7 +1680,7 @@ else
       echo "  FAIL our ORB could not bootstrap through its own table (exit $rir_rc) — the"
       echo "       fixture was verified up first, so this is a refuted claim and not an"
       echo "       unmeasured one"
-      tail -8 <<<"$rir_out" | sed 's/^/       | /'
+      diag_out "$rir_out" 8
       rir_fail=1
     elif [ "$rir_oks" -lt 9 ]; then
       echo "  FAIL spike-rir exited 0 over $rir_oks checks (floor 9) — it measured less than it has"
@@ -1557,9 +1756,9 @@ else
 
     # ── E. the same three states asked of the peer, re-taken live ──
     if ! python3 -c "import CORBA, omniORB" >/dev/null 2>&1; then
-      echo "  SKIPPED  omniORBpy absent (fixture: spikes/rir_peer.py needs it) — the peer half"
-      echo "           of the three-state claim is unmeasured, not passing"
-      skipped=$((skipped+1))
+      skip absent git:spikes/rir_peer.py \
+           "omniORBpy absent (fixture: spikes/rir_peer.py needs it) — the peer half" \
+           "of the three-state claim is unmeasured, not passing"
     else
       rp_out=$(python3 spikes/rir_peer.py 2>&1); rp_rc=$?
       rp_legs=$(sed -n 's/^rir-peer: every leg answered as expected (\([0-9][0-9]*\) legs)$/\1/p' <<<"$rp_out")
@@ -1577,11 +1776,11 @@ else
         3)
           echo "  FAIL the rir peer measured NOTHING (exit 3) — omniORBpy imported but no leg"
           echo "       reached the peer, so no claim was refuted and there is no defect to chase"
-          tail -3 <<<"$rp_out" | sed 's/^/       | /'
+          diag_out "$rp_out" 3
           rir_fail=1 ;;
         *)
           echo "  FAIL omniORB no longer answers the three states as recorded (exit $rp_rc)"
-          tail -10 <<<"$rp_out" | sed 's/^/       | /'
+          diag_out "$rp_out" 10
           rir_fail=1 ;;
       esac
     fi
@@ -1606,8 +1805,8 @@ jacorb_ready=0
 if [ ! -d "$ROOT/spikes/jacorb/classes" ] || [ ! -x "$JH/bin/java" ]; then
   # Not a pass. An absent fixture means the claim is unmeasured, and the
   # summary says so rather than letting silence read as success.
-  echo "  SKIPPED  fixture absent — run spikes/jacorb/setup.sh (needs JDK 21)"
-  skipped=$((skipped+1))
+  skip absent git:spikes/jacorb/setup.sh \
+       "fixture absent — run spikes/jacorb/setup.sh (needs JDK 21)"
 else
   jacorb_ready=1
   jfail=0
@@ -1616,7 +1815,8 @@ else
     if grep -q "failures: 0" <<<"$out"; then
       echo "  ok   JacORB client -> our server, 5/5"
     else
-      echo "  FAIL JacORB client -> our server"; printf '%s' "$out" | grep FAIL | head -3 | sed 's/^/       /'
+      echo "  FAIL JacORB client -> our server"
+      diag "a FAIL line" "$out" "$(grep FAIL <<<"$out")" 3
       jfail=1
     fi
     # JacORB is big-endian where omniORB was little-endian, so this exercises a
@@ -1635,8 +1835,8 @@ fi
 
 hr "second peer — our client -> JacORB server"
 if [ "$jacorb_ready" -eq 0 ]; then
-  echo "  SKIPPED  fixture absent — run spikes/jacorb/setup.sh (needs JDK 21)"
-  skipped=$((skipped+1))
+  skip absent git:spikes/jacorb/setup.sh \
+       "fixture absent — run spikes/jacorb/setup.sh (needs JDK 21)"
 else
   jfail=0
   fkill "classes Server"
@@ -1666,7 +1866,8 @@ else
         jfail=1
       fi
     else
-      echo "  FAIL our client -> JacORB server"; printf '%s' "$out" | grep "  FAIL" | head -3 | sed 's/^/       /'
+      echo "  FAIL our client -> JacORB server"
+      diag "a FAIL line" "$out" "$(grep "  FAIL" <<<"$out")" 3
       jfail=1
     fi
   else
@@ -1693,7 +1894,7 @@ hr "GIOP 1.1 against JacORB — version from the wire, then wide text each way: 
 g11=$(./spikes/jacorb_giop11.sh 2>&1); g11_rc=$?
 printf '%s\n' "$g11" | grep -E "^  (ok|FAIL|info|SKIPPED)" | cut -c1-150
 if [ "$g11_rc" -eq 2 ]; then
-  skipped=$((skipped+1))
+  skip_age absent git:spikes/jacorb_giop11.sh
 elif [ "$g11_rc" -ne 0 ]; then
   echo "  FAIL GIOP 1.1 against JacORB — see /tmp/orbweaver-giop11"
   fail_total=$((fail_total+1))
@@ -1710,7 +1911,7 @@ fi
 w11=$(./spikes/jacorb_wchar11.sh 2>&1); w11_rc=$?
 printf '%s\n' "$w11" | grep -E "^  (ok|FAIL|info|SKIPPED)" | cut -c1-150
 if [ "$w11_rc" -eq 2 ]; then
-  skipped=$((skipped+1))
+  skip_age absent git:spikes/jacorb_wchar11.sh
 elif [ "$w11_rc" -ne 0 ]; then
   echo "  FAIL 1.1 wchar against JacORB — see /tmp/orbweaver-wchar11"
   fail_total=$((fail_total+1))
@@ -1729,7 +1930,7 @@ fi
 wr=$(./spikes/wide_rust.sh 2>&1); wr_rc=$?
 printf '%s\n' "$wr" | grep -E "^  (ok|FAIL|info|SKIPPED)" | cut -c1-150
 if [ "$wr_rc" -eq 2 ]; then
-  skipped=$((skipped+1))
+  skip_age absent git:spikes/wide_rust.sh
 elif [ "$wr_rc" -ne 0 ]; then
   echo "  FAIL wide.idl from our Rust stack — see /tmp/orbweaver-wide-rust"
   fail_total=$((fail_total+1))
@@ -1744,7 +1945,8 @@ s4_fail=0
 if ! cargo run -q --bin sidl-validate -- corpus/golden/*.idl \
      corpus/requirements/generated/*.idl spikes/*.idl >/tmp/orbweaver-s4.log 2>&1; then
   echo "  FAIL the gate rejected IDL both oracles accept"
-  grep "error:" /tmp/orbweaver-s4.log | head -3 | sed 's/^/       /'
+  diag "an 'error:' line" "$(tail -40 /tmp/orbweaver-s4.log 2>/dev/null)" \
+       "$(grep "error:" /tmp/orbweaver-s4.log)" 3
   s4_fail=1
 else
   echo "  ok   accepts all $(ls corpus/golden/*.idl corpus/requirements/generated/*.idl spikes/*.idl | wc -l | tr -d ' ') valid files"
@@ -1817,11 +2019,12 @@ hr "contract-check — seeded round-trip property plus annotation contract advic
 cc_out=$(cargo run -q -p orbweaver-test --bin contract-check -- corpus/golden/*.idl 2>&1)
 cc_rc=$?
 if [ "$cc_rc" -ne 0 ]; then
-  printf '%s\n' "$cc_out" | grep -i "defect\|error" | head -3 | sed 's/^/       /'
+  diag "a defect or error line" "$cc_out" "$(grep -i "defect\|error" <<<"$cc_out")" 3
   echo "  FAIL byte instability in the marshalling core"
   fail_total=$((fail_total+1))
 else
-  echo "  ok   $(printf '%s\n' "$cc_out" | tail -2 | head -1)"
+  cc_line=$(sed -n '1p' <<<"$(tail -2 <<<"$cc_out")")
+  echo "  ok   ${cc_line:-(contract-check exited 0 and printed no summary line)}"
 fi
 # A property case that produced no value ran nothing, and until 2026-08-19 it
 # fell through a bare `continue`: golden 15's TreeSeq was `[]` on every valued
@@ -1829,7 +2032,7 @@ fi
 # It is a `prop/unmeasured` finding now (1b6b4c8). Captured then matched.
 if grep -q "prop/unmeasured" <<<"$cc_out"; then
   echo "  FAIL a property case produced no value and therefore ran nothing"
-  printf '%s\n' "$cc_out" | grep "prop/unmeasured" | head -3 | sed 's/^/       /'
+  sed -n '1,3p' <<<"$(grep "prop/unmeasured" <<<"$cc_out")" | sed 's/^/       /'
   fail_total=$((fail_total+1))
 else
   echo "  ok   every property case produced a value (no prop/unmeasured)"
@@ -1896,7 +2099,8 @@ fi
 # every time is green and worthless and the exit code cannot tell you which.
 wf_out=$(cargo run -q --release -p orbweaver-test --bin wire-fuzz -- --cases 20000 2>&1)
 if grep -q "wire-fuzz: PASS" <<<"$wf_out"; then
-  echo "  ok   $(printf '%s' "$wf_out" | head -1 | sed 's/^wire-fuzz: //')"
+  wf_head=$(sed -n '1p' <<<"$wf_out")
+  echo "  ok   ${wf_head#wire-fuzz: }"
   printf '%s' "$wf_out" | sed -n '2,3p' | sed 's/^  /  ok   /'
   # A target that reached nothing is green and worthless, and only a reader of
   # this line can turn the binary's own warning into a failure. Matched on the
@@ -1912,7 +2116,7 @@ if grep -q "wire-fuzz: PASS" <<<"$wf_out"; then
   # The overflow note is not a failure; it is the scope of the green above it.
   printf '%s' "$wf_out" | grep "overflow-checks" | sed 's/^ */  note /'
 else
-  printf '%s' "$wf_out" | grep "FAIL" | head -3 | sed 's/^/       /'
+  diag "a FAIL line" "$wf_out" "$(grep "FAIL" <<<"$wf_out")" 3
   echo "  FAIL a decoder panicked on bytes a peer can send"
   fail_total=$((fail_total+1))
 fi
@@ -1933,7 +2137,7 @@ if start_server; then
     echo "  ok   a refused call leaves the connection usable"
   else
     echo "  FAIL a dynamically built call did not work against omniORB"
-    printf '%s' "$dv" | grep "FAIL" | head -3 | sed 's/^/       /'
+    diag "a FAIL line" "$dv" "$(grep "FAIL" <<<"$dv")" 3
     dyn_fail=1
   fi
 else
@@ -1957,7 +2161,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
       echo "  ok   JacORB answered them too — a second, independent decoder"
     else
       echo "  FAIL a dynamically built call did not work against JacORB"
-      printf '%s' "$dv" | grep "FAIL" | head -3 | sed 's/^/       /'
+      diag "a FAIL line" "$dv" "$(grep "FAIL" <<<"$dv")" 3
       dyn_fail=1
     fi
   else
@@ -1965,8 +2169,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   fi
   fkill "classes Server"
 else
-  echo "  SKIPPED  JacORB half — fixture absent"
-  skipped=$((skipped+1))
+  skip absent git:spikes/jacorb/setup.sh "JacORB half — fixture absent"
 fi
 [ "$dyn_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
@@ -1989,7 +2192,7 @@ if start_server; then
     printf '%s' "$mv" | grep "JSON message(s) contain no host" | sed 's/^  ok /  ok  /'
   else
     echo "  FAIL the MCP boundary did not hold"
-    printf '%s' "$mv" | grep "FAIL" | head -4 | sed 's/^/       /'
+    diag "a FAIL line" "$mv" "$(grep "FAIL" <<<"$mv")" 4
     mcp_fail=1
   fi
 else
@@ -2008,10 +2211,19 @@ if start_server; then
   cargo build -q --bin orbweaver-mcp-server --bin spike-dump 2>/dev/null
   mout=$(python3 spikes/mcp_session.py spikes/echo.ior spikes/echo.idl 2>&1)
   if grep -q "mcp session: PASS" <<<"$mout"; then
-    printf '%s\n' "$mout" | grep "^  ok" | head -11
+    # This grep IS the group's whole green output. Empty means the session
+    # passed and the harness showed nothing for it, which reads as a group that
+    # ran no checks.
+    mcp_oks=$(grep "^  ok" <<<"$mout")
+    if [ -n "$mcp_oks" ]; then
+      sed -n '1,11p' <<<"$mcp_oks"
+    else
+      echo "  ok   mcp session: PASS, but it printed no '  ok' lines for this harness to"
+      echo "       show — the verdict is the peer's, the detail is missing"
+    fi
   else
     echo "  FAIL the stdio transport did not behave"
-    printf '%s' "$mout" | grep "FAIL" | head -4 | sed 's/^/       /'
+    diag "a FAIL line" "$mout" "$(grep "FAIL" <<<"$mout")" 4
     stdio_fail=1
   fi
 else
@@ -2032,7 +2244,7 @@ if [ "$sb_rc" -eq 0 ] && grep -q "search-bench: PASS" <<<"$sb"; then
   printf '%s' "$sb" | grep "search-bench: PASS" | sed 's/^/  ok   /'
 else
   echo "  FAIL the frozen search baseline did not hold"
-  printf '%s' "$sb" | tail -4 | sed 's/^/       /'
+  diag_out "$sb" 4
   fail_total=$((fail_total+1))
 fi
 # v2 widens the index (attributes, nested ai_desc, compound descriptions). v1
@@ -2043,7 +2255,7 @@ if [ $? -eq 0 ] && grep -q "search-bench: PASS" <<<"$sb2"; then
   printf '%s' "$sb2" | grep "search-bench: PASS" | sed 's/^/  ok   v2 /'
 else
   echo "  FAIL the widened search set did not hold"
-  printf '%s' "$sb2" | tail -4 | sed 's/^/       /'
+  diag_out "$sb2" 4
   fail_total=$((fail_total+1))
 fi
 # D003's arm: embeddings arrive through a process boundary or not at all. With
@@ -2060,10 +2272,13 @@ if [ -n "${VOYAGE_API_KEY:-}" ]; then
     sbv=$(cargo run -q -p orbweaver-mcp --bin search-bench -- --vectors "$vf" \
           corpus/queries/search-v2.tsv corpus/golden/*.idl spikes/echo.idl 2>&1)
     if [ $? -eq 0 ]; then
-      printf '%s' "$sbv" | grep "search-bench: PASS" | sed 's/^/  ok   vector /'
+      sbv_pass=$(grep "search-bench: PASS" <<<"$sbv")
+      # Reached on exit 0 alone, so unlike the two gates above there is nothing
+      # here that has already proved the line exists.
+      echo "  ok   vector ${sbv_pass:-(the bench exited 0 and printed no PASS line)}"
     else
       echo "  FAIL vector search regressed a gate"
-      printf '%s' "$sbv" | tail -4 | sed 's/^/       /'
+      diag_out "$sbv" 4
       fail_total=$((fail_total+1))
     fi
   else
@@ -2071,9 +2286,9 @@ if [ -n "${VOYAGE_API_KEY:-}" ]; then
     fail_total=$((fail_total+1))
   fi
 else
-  echo "  SKIPPED  VOYAGE_API_KEY absent — the synonym class, and the injection class against a"
-  echo "           real embedding model (I3), are unmeasured, not passing"
-  skipped=$((skipped+1))
+  skip absent git:spikes/embed.sh \
+       "VOYAGE_API_KEY absent — the synonym class, and the injection class against a" \
+       "real embedding model (I3), are unmeasured, not passing"
 fi
 
 # ── Wire hardening: stream E ─────────────────────────────────────────────────
@@ -2088,7 +2303,7 @@ if start_server; then
     echo "  ok   omniORB: OBJECT_HERE for the real key, UNKNOWN for a corrupted one, GIOP 1.0/1.1/1.2"
   else
     echo "  FAIL locate against omniORB"
-    printf '%s' "$lv" | grep FAIL | head -3 | sed 's/^/       /'
+    diag "a FAIL line" "$lv" "$(grep FAIL <<<"$lv")" 3
     loc_fail=1
   fi
 else
@@ -2111,7 +2326,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
       echo "  ok   JacORB agrees on all six answers — a second, independent locate responder"
     else
       echo "  FAIL locate against JacORB"
-      printf '%s' "$lv" | grep FAIL | head -3 | sed 's/^/       /'
+      diag "a FAIL line" "$lv" "$(grep FAIL <<<"$lv")" 3
       loc_fail=1
     fi
   else
@@ -2119,8 +2334,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   fi
   fkill "classes Server"
 else
-  echo "  SKIPPED  JacORB half — fixture absent"
-  skipped=$((skipped+1))
+  skip absent git:spikes/jacorb/setup.sh "JacORB half — fixture absent"
 fi
 [ "$loc_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
@@ -2137,7 +2351,7 @@ if start_server; then
     echo "  ok   omniORB: a dead first profile does not cost the call; exhaustion counts endpoints"
   else
     echo "  FAIL failover against omniORB"
-    printf '%s' "$fv" | grep FAIL | head -3 | sed 's/^/       /'
+    diag "a FAIL line" "$fv" "$(grep FAIL <<<"$fv")" 3
     fo_fail=1
   fi
 else
@@ -2160,7 +2374,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
       echo "  ok   JacORB: same behaviour from the second, independent peer"
     else
       echo "  FAIL failover against JacORB"
-      printf '%s' "$fv" | grep FAIL | head -3 | sed 's/^/       /'
+      diag "a FAIL line" "$fv" "$(grep FAIL <<<"$fv")" 3
       fo_fail=1
     fi
   else
@@ -2168,8 +2382,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   fi
   fkill "classes Server"
 else
-  echo "  SKIPPED  JacORB half — fixture absent"
-  skipped=$((skipped+1))
+  skip absent git:spikes/jacorb/setup.sh "JacORB half — fixture absent"
 fi
 [ "$fo_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
@@ -2186,7 +2399,7 @@ if start_server; then
     echo "  ok   omniORB: cancel ignored at 1.2, refused cleanly at 1.0/1.1, never desynchronized"
   else
     echo "  FAIL cancel against omniORB"
-    printf '%s' "$cv" | grep FAIL | head -3 | sed 's/^/       /'
+    diag "a FAIL line" "$cv" "$(grep FAIL <<<"$cv")" 3
     can_fail=1
   fi
 else
@@ -2209,7 +2422,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
       echo "  ok   JacORB: coherent too — the second peer's cancel policy measured"
     else
       echo "  FAIL cancel against JacORB"
-      printf '%s' "$cv" | grep FAIL | head -3 | sed 's/^/       /'
+      diag "a FAIL line" "$cv" "$(grep FAIL <<<"$cv")" 3
       can_fail=1
     fi
   else
@@ -2217,8 +2430,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   fi
   fkill "classes Server"
 else
-  echo "  SKIPPED  JacORB half — fixture absent"
-  skipped=$((skipped+1))
+  skip absent git:spikes/jacorb/setup.sh "JacORB half — fixture absent"
 fi
 [ "$can_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
@@ -2234,7 +2446,7 @@ if grep -q "naming-server: PASS" <<<"$ns"; then
   echo "  ok   our client against our server: bind/resolve/unbind/AlreadyBound/NotFound/nested"
 else
   echo "  FAIL naming server self-consistency"
-  printf '%s' "$ns" | grep FAIL | head -3 | sed 's/^/       /'
+  diag "a FAIL line" "$ns" "$(grep FAIL <<<"$ns")" 3
   ns_fail=1
 fi
 rm -f "$NS_IOR" /tmp/orbweaver-names-hold.log
@@ -2278,7 +2490,7 @@ if grep -q "expert-service: PASS" <<<"$ex"; then
   fi
 else
   echo "  FAIL expert service"
-  printf '%s' "$ex" | grep -i "FAIL" | head -3 | sed 's/^/       /'
+  diag "a FAIL line" "$ex" "$(grep -i "FAIL" <<<"$ex")" 3
   fail_total=$((fail_total+1))
 fi
 
@@ -2296,7 +2508,8 @@ ap_out=$(cargo test -q -p orbweaver-registry --test approval_replay 2>&1)
 if grep -q "^test result: ok" <<<"$ap_out"; then
   echo "  ok   an approval replays byte-identically, invalidates on an edited byte, and refuses a nameless row"
 else
-  echo "  FAIL the approval store's replay property"; printf '%s\n' "$ap_out" | grep -A3 panicked | head -6 | sed 's/^/       /'
+  echo "  FAIL the approval store's replay property"
+  diag "a panic" "$ap_out" "$(grep -A3 panicked <<<"$ap_out")" 6
   fail_total=$((fail_total+1))
 fi
 if ls corpus/evolution/*/*.approvals.tsv corpus/golden/*.approvals.tsv >/dev/null 2>&1; then
@@ -2317,7 +2530,7 @@ if [ "$mv_rc" -eq 0 ] && grep -q "MeasuredCapability" <<<"$mv_out"; then
   echo "  ok   moe v1.0 -> golden 22 is additive (exit 0) and names MeasuredCapability"
 else
   echo "  FAIL golden 22 is no longer an additive revision of moe v1.0 (exit $mv_rc)"
-  printf '%s\n' "$mv_out" | head -3 | sed 's/^/       /'; mv_fail=1
+  diag_out "$mv_out" 3 head; mv_fail=1
 fi
 mv_ctl=$(cargo run -q --bin idl-diff -- corpus/evolution/moe/v1.0/moe.idl \
          corpus/evolution/moe/v1.1-in-place/moe.idl 2>&1); mv_ctl_rc=$?
@@ -2375,7 +2588,7 @@ if [ "${n_lk:-0}" = "6" ]; then
 else
   # A renamed or deleted test is unmeasured, which is a failure, never a pass.
   echo "  FAIL the content-seat leak property is failing or no longer measured"
-  printf '%s\n' "$lk" | grep -A3 panicked | head -6 | sed 's/^/       /'
+  diag "a panic" "$lk" "$(grep -A3 panicked <<<"$lk")" 6
   fail_total=$((fail_total+1))
 fi
 # The rule is a type, not a grep: `audit_entry` takes an `AuditReason`, and a
@@ -2383,12 +2596,21 @@ fi
 # explanatory comment and, measured, missed a real violation — green, and
 # measuring nothing. What a compiler cannot see is a *third* constructor
 # appearing, so that is what is counted here.
+ctor_lines=$(grep -n 'AuditReason(std::borrow::Cow::' crates/orbweaver-mcp/src/guard.rs)
 ctors=$(grep -c 'AuditReason(std::borrow::Cow::' crates/orbweaver-mcp/src/guard.rs)
 if [ "$ctors" = "2" ]; then
   echo "  ok   AuditReason has exactly two constructors; a Denied reaches the ledger through one"
 else
   echo "  FAIL AuditReason has $ctors constructor(s), not 2 — a new way into the ledger"
-  grep -n 'AuditReason(std::borrow::Cow::' crates/orbweaver-mcp/src/guard.rs | sed 's/^/       /'
+  # Zero is one of the two ways this goes red, and the old dump printed
+  # NOTHING for it — a FAIL saying "0 constructor(s)" with a blank space where
+  # the evidence goes.
+  if [ -n "$ctor_lines" ]; then
+    sed 's/^/       | /' <<<"$ctor_lines"
+  else
+    echo "       (guard.rs matches the constructor pattern nowhere at all, so this is a"
+    echo "        rename or a removal rather than a third way into the ledger)"
+  fi
   fail_total=$((fail_total+1))
 fi
 
@@ -2472,7 +2694,8 @@ hr "service coverage — what the five servants actually serve"
 # rows already measured.
 cov=$(./spikes/service_sweep.sh --raw 2>&1)
 if grep -q "service-sweep: PASS" <<<"$cov"; then
-  printf '%s' "$cov" | grep '^TOTAL' | sed 's/^/  ok   /'
+  cov_total=$(grep '^TOTAL' <<<"$cov")
+  echo "  ok   ${cov_total:-(the sweep passed and printed no TOTAL row)}"
   # docs/SERVICES-COVERAGE.md §8 is generated from these same rows, so the
   # document is checked against the wire rather than transcribed from it —
   # the counts it used to carry by hand went stale in four days (D010 A5).
@@ -2480,11 +2703,15 @@ if grep -q "service-sweep: PASS" <<<"$cov"; then
   # "FAIL docs/SERVICES-COVERAGE.md §8 no longer says what the wire says"
   # with the one-line diff; regenerated -> ok.
   ct_out=$(printf '%s\n' "$cov" | python3 spikes/coverage_tables.py --check 2>&1); ct_rc=$?
-  printf '%s\n' "$ct_out" | head -12
+  # coverage_tables.py --check decides this group, so silence from it is the
+  # one thing that must not print as silence.
+  [ -n "$ct_out" ] || ct_out="  (spikes/coverage_tables.py --check printed nothing at all)"
+  sed -n '1,12p' <<<"$ct_out"
   [ "$ct_rc" -eq 0 ] || fail_total=$((fail_total+1))
 else
   echo "  FAIL service coverage sweep"
-  printf '%s' "$cov" | grep -E 'FAIL|ABSENT|UNMEASURED|BLOCKED' | head -8 | sed 's/^/       /'
+  diag "a FAIL/ABSENT/UNMEASURED/BLOCKED row" "$cov" \
+       "$(grep -E 'FAIL|ABSENT|UNMEASURED|BLOCKED' <<<"$cov")" 8
   fail_total=$((fail_total+1))
 fi
 
@@ -2521,7 +2748,7 @@ if start_server; then
         echo "  ok   $(printf '%s' "$pyrun" | grep -c '^  ok') generated call(s) completed \
 over the wire, no Rust stub involved" ;;
       *) echo "  FAIL the Python client did not complete its calls"
-         printf '%s' "$pyrun" | tail -12 | sed 's/^/       /'
+         diag_out "$pyrun" 12
          fail_total=$((fail_total+1)) ;;
     esac
   else
@@ -2592,11 +2819,12 @@ fi
 hr "corpus/include — resolution, prefix scope across a file boundary, guards, cycles"
 inc=$(cargo test -q -p orbweaver-idl --test include_corpus 2>&1)
 if grep -q "^test result: ok" <<<"$inc"; then
-  echo "  ok   $(printf '%s' "$inc" | grep -oE '[0-9]+ passed' | head -1) over \
+  inc_n=$(sed -n '1p' <<<"$(grep -oE '[0-9]+ passed' <<<"$inc")")
+  echo "  ok   ${inc_n:-(the suite printed no pass count)} over \
 $(awk 'NF && $1 !~ /^#/' corpus/include/cases.tsv | wc -l | tr -d ' ') manifest case(s)"
 else
   echo "  FAIL corpus/include"
-  printf '%s' "$inc" | grep -A3 panicked | head -8 | sed 's/^/       /'
+  diag "a panic" "$inc" "$(grep -A3 panicked <<<"$inc")" 8
   fail_total=$((fail_total+1))
 fi
 
@@ -2612,7 +2840,7 @@ if [ -x spikes/estate/run.sh ]; then
     printf '%s\n' "$est" | sed 's/^/  /'
     echo "  ok   estate: every stage measured"
   else
-    printf '%s\n' "$est" | tail -20 | sed 's/^/  /'
+    diag_out "$est" 20
     echo "  FAIL estate: see docs/pipeline-runs/2026-08-14-estate.md"
     fail_total=$((fail_total+1))
   fi
@@ -2629,11 +2857,12 @@ hr "registered-contract diff — an undeclared breaking change is refused"
 # the other, which is why both landed.
 rd=$(cargo test -q -p orbweaver-forge --test registered_diff 2>&1)
 if grep -q "^test result: ok" <<<"$rd"; then
-  echo "  ok   $(printf '%s' "$rd" | grep -oE '[0-9]+ passed' | head -1) — refuses a breaking
+  rd_n=$(sed -n '1p' <<<"$(grep -oE '[0-9]+ passed' <<<"$rd")")
+  echo "  ok   ${rd_n:-(the suite printed no pass count)} — refuses a breaking
        regeneration, silent on an additive one, and silent when nothing is registered"
 else
   echo "  FAIL registered-contract diff"
-  printf '%s' "$rd" | grep -A3 panicked | head -6 | sed 's/^/       /'
+  diag "a panic" "$rd" "$(grep -A3 panicked <<<"$rd")" 6
   fail_total=$((fail_total+1))
 fi
 
@@ -2668,7 +2897,7 @@ if [ "$sd_code" -eq 3 ] && grep -q "open_barrier" <<<"$sd_err"; then
   echo "  ok   a scope no issued token can satisfy exits 3 and names the operation that goes dark"
 else
   echo "  FAIL a drifted scope was not reported as an outage (exit $sd_code)"
-  printf '%s' "$sd_err" | head -3 | sed 's/^/       /'
+  diag_out "$sd_err" 3 head
   sd_fail=1
 fi
 if cargo run -q -p orbweaver-mcp --bin orbweaver-mcp-server -- \
@@ -2700,9 +2929,9 @@ if grep -q "nat rewriting: PASS" <<<"$nat"; then
   echo "  ok   unrewritten IOR fails to dial, rewritten one completes; key, version and"
   echo "       an undecodable profile all survive untouched"
   if grep -q "unmeasured (skipped): [1-9]" <<<"$nat"; then
-    echo "  SKIPPED  the container probe has never run here — no docker, and it is"
-    echo "           counted rather than read as evidence"
-    skipped=$((skipped+1))
+    skip absent git:spikes/nat/Dockerfile \
+         "the container probe has never run here — no docker, and it is" \
+         "counted rather than read as evidence"
   fi
   # The second-host probe (spikes/nat/vm/run.sh) HAS executed — five passes on
   # 2026-08-14 across a multipass VM, transcript in docs/PHASE6.md — but it
@@ -2715,17 +2944,26 @@ if grep -q "nat rewriting: PASS" <<<"$nat"; then
     if grep -q "PASS" <<<"$natvm"; then
       echo "  ok   a real second host: the naive IOR is refused, the rewritten one answers (multipass VM)"
     else
-      echo "  FAIL the second-host probe did not hold"; printf '%s' "$natvm" | tail -3 | sed 's/^/       /'
+      echo "  FAIL the second-host probe did not hold"
+      diag_out "$natvm" 3
       fail_total=$((fail_total+1))
     fi
   else
-    echo "  SKIPPED  the second-host probe (multipass VM, spikes/nat/vm/run.sh) is not run here —"
-    echo "           ORBWEAVER_NAT_VM=1 with multipass installed runs it; last measured 2026-08-14 (PHASE6)"
-    skipped=$((skipped+1))
+    # `last measured 2026-08-14` used to be typed here. It was true when it was
+    # written and nothing recomputes it, which is the defect CLAUDE.md calls a
+    # floor quoted as a figure. The date now comes from the tree. Its stated
+    # limit: it is the day the probe last LANDED, which is the day PHASE6
+    # records it running — edit run.sh without re-running it and the date moves
+    # and overstates freshness. A limit that is written down beats a literal
+    # that can only ever understate.
+    skip absent git:spikes/nat/vm/run.sh \
+         "the second-host probe (multipass VM, spikes/nat/vm/run.sh) is not run here —" \
+         "ORBWEAVER_NAT_VM=1 with multipass installed runs it; the transcript of the" \
+         "run it stands on is in docs/PHASE6.md"
   fi
 else
   echo "  FAIL NAT rewriting"
-  printf '%s' "$nat" | grep -i "FAIL" | head -3 | sed 's/^/       /'
+  diag "a FAIL line" "$nat" "$(grep -i "FAIL" <<<"$nat")" 3
   fail_total=$((fail_total+1))
 fi
 
@@ -2750,12 +2988,16 @@ if [ -x "$ROOT/spikes/end_to_end.sh" ]; then
       # Counted SKIPPED, naming the fixture, until E2E_MODEL=1 runs it live.
       if [ "${E2E_MODEL:-0}" != "1" ]; then
         e2e_date=$(awk '$1=="date"{print $2; exit}' "$ROOT/spikes/e2e/recorded/pipeline.log" 2>/dev/null)
-        echo "  SKIPPED  S1–S3 not run live here — replayed from the recording of ${e2e_date:-?}; the fixture is"
-        echo "           E2E_MODEL=1 with a producer command and its key (PLAN §8 AI quality, per release)"
-        skipped=$((skipped+1))
+        # `replay`, not `absent`: this run DID make the S1–S3 claim, out of a
+        # recording of another day. The date is the recording's own stamp, read
+        # out of it a line above — the only skip in this file whose date is a
+        # measurement rather than a proxy for one.
+        skip replay "@${e2e_date}" \
+             "S1–S3 not run live here — replayed from a recording; the fixture is" \
+             "E2E_MODEL=1 with a producer command and its key (PLAN §8 AI quality, per release)"
       fi ;;
     *) echo "  FAIL the end-to-end path did not hold"
-       printf '%s\n' "$e2e" | grep FAIL | head -4 | sed 's/^/       /'
+       diag "a FAIL line" "$e2e" "$(grep FAIL <<<"$e2e")" 4
        fail_total=$((fail_total+1)) ;;
   esac
 else
@@ -2777,7 +3019,9 @@ cargo run -q --bin repository-ids -- corpus/pragma/*.idl 2>/dev/null \
 for f in corpus/pragma/*.idl; do
   base=$(basename "$f"); out="$rid_work/$base.d"; mkdir -p "$out"
   if ! log=$(omniidl -bpython -C"$out" "$f" 2>&1); then
-    echo "  FAIL omniidl rejected $base: $(printf '%s' "$log" | head -1)"; rid_fail=1; continue
+    echo "  FAIL omniidl rejected $base: ${log%%$'\n'*}"
+    [ -n "$log" ] || echo "       (omniidl exited non-zero and printed nothing at all)"
+    rid_fail=1; continue
   fi
   grep -rhoE '"IDL:[^"]*"' "$out" 2>/dev/null | tr -d '"' | grep -v '^IDL:omg.org/' \
     | sort -u | sed "s|^|$base	|"
@@ -2825,7 +3069,7 @@ else
     *"0 unclassified, 0 unreadable lines"*)
       echo "  ok   the console read every record the emitter wrote: $(printf '%s' "$obs" | sed -n 2p | sed 's/^ *//')" ;;
     *) echo "  FAIL the console could not read the emitter's records"
-       printf '%s' "$obs" | head -3 | sed 's/^/       /'; obs_fail=1 ;;
+       diag_out "$obs" 3 head; obs_fail=1 ;;
   esac
   # The operator's page must not attack the operator: a repository id is chosen
   # by whoever we ingested it from.
@@ -2852,14 +3096,18 @@ mx=$(cargo run -q --bin spike-mux 2>&1)
 if grep -q "mux: PASS" <<<"$mx"; then
   echo "  ok   self-test: pipelining, tombstones, and a refusal below GIOP 1.2"
 else
-  echo "  FAIL mux self-test"; printf '%s' "$mx" | grep -i fail | head -3 | sed 's/^/       /'
+  echo "  FAIL mux self-test"
+  diag "a fail line" "$mx" "$(grep -i fail <<<"$mx")" 3
   mx_fail=1
 fi
 if start_server; then
   mxp=$(cargo run -q --bin spike-mux -- spikes/echo.ior 12 1.2 2>&1)
   if grep -q "mux: PASS" <<<"$mxp"; then
-    echo "  ok   omniORB at 1.2: $(printf '%s' "$mxp" | grep -o 'out-of-order [0-9]*' | head -1 | sed 's/^/replies /')"
-    printf '%s' "$mxp" | grep -E 'FRAGMENTS|UNMEASURED' | head -2 | sed 's/^/       /'
+    mx_ooo=$(sed -n '1p' <<<"$(grep -o 'out-of-order [0-9]*' <<<"$mxp")")
+    echo "  ok   omniORB at 1.2: ${mx_ooo:+replies }${mx_ooo:-(the spike reported no out-of-order count)}"
+    # Legitimately empty — a peer that volunteered no fragments and left nothing
+    # unmeasured has nothing to say here — so this one is silent on purpose.
+    sed -n '1,2p' <<<"$(grep -E 'FRAGMENTS|UNMEASURED' <<<"$mxp")" | sed 's/^/       /'
   else
     echo "  FAIL multiplexing against omniORB"; mx_fail=1
   fi
@@ -2935,7 +3183,7 @@ if grep -q "concurrency: PASS" <<<"$cy"; then
   echo "  ok   $(printf '%s' "$cy" | grep 'cap behaviour' | sed 's/^ *//') — over the cap gets §9.4.7's goodbye"
 else
   echo "  FAIL concurrent serving"
-  printf '%s' "$cy" | grep -i "FAIL" | head -3 | sed 's/^/       /'
+  diag "a FAIL line" "$cy" "$(grep -i "FAIL" <<<"$cy")" 3
   cc_fail=1
 fi
 [ "$cc_fail" -eq 0 ] || fail_total=$((fail_total+1))
@@ -2954,7 +3202,7 @@ if grep -q "tenant-service: PASS" <<<"$tn"; then
   echo "  ok   two tenants, $(printf '%s' "$tn" | grep -c '  ok    ') checks: minting, refusals, retire, policy, per-tenant audit"
 else
   echo "  FAIL tenant service"
-  printf '%s' "$tn" | grep -i "FAIL" | head -3 | sed 's/^/       /'
+  diag "a FAIL line" "$tn" "$(grep -i "FAIL" <<<"$tn")" 3
   fail_total=$((fail_total+1))
 fi
 
@@ -2972,7 +3220,7 @@ if grep -q "ifr-facade: PASS" <<<"$ifr"; then
   echo "  ok   our client against our facade: lookup_id, describe_interface, is_a, refusals"
 else
   echo "  FAIL IFR facade self-consistency"
-  printf '%s' "$ifr" | grep FAIL | head -3 | sed 's/^/       /'
+  diag "a FAIL line" "$ifr" "$(grep FAIL <<<"$ifr")" 3
   ifr_fail=1
 fi
 rm -f "$IFR_IOR" /tmp/orbweaver-ifr-hold.log
@@ -3006,9 +3254,9 @@ if [ "$ifr_up" -eq 1 ]; then
   fi
 
   if [ "$ir_stubs" -eq 0 ]; then
-    echo "  SKIPPED  omniORBpy IR stubs absent (fixture: omniORBpy's omniORB.ir_idl) — the"
-    echo "           cross-ORB half is unmeasured, not passing"
-    skipped=$((skipped+1))
+    skip absent "" \
+         "omniORBpy IR stubs absent (fixture: omniORBpy's omniORB.ir_idl) — the" \
+         "cross-ORB half is unmeasured, not passing"
   else
     # The snippet's verdict is its exit code too, not a line bash matches:
     # every expectation is asserted inside python, so a mismatch is exit 1 and
@@ -3036,7 +3284,7 @@ except CORBA.NO_PERMISSION:
       echo "  ok   omniORB's IR client decoded our FullInterfaceDescription and was refused a write"
     else
       echo "  FAIL cross-ORB IR client (exit $ifr_rc)"
-      tail -6 <<<"$ifr_out" | sed 's/^/       | /'
+      diag_out "$ifr_out" 6
       ifr_fail=1
     fi
   fi
@@ -3056,9 +3304,9 @@ except CORBA.NO_PERMISSION:
   # Absent stubs are told from a failed walk by `$ir_stubs` above — one probe,
   # one exit code, for all three legs of this group.
   if [ "$ir_stubs" -eq 0 ]; then
-    echo "  SKIPPED  omniORBpy IR stubs absent (fixture: omniORBpy's omniORB.ir_idl) — the"
-    echo "           containment walk is unmeasured, not passing"
-    skipped=$((skipped+1))
+    skip absent git:spikes/ifr_walk_peer.py \
+         "omniORBpy IR stubs absent (fixture: omniORBpy's omniORB.ir_idl) — the" \
+         "containment walk is unmeasured, not passing"
   else
     walk_out=$(python3 spikes/ifr_walk_peer.py "$IFR_IOR" 2>&1); walk_rc=$?
     # 51 is a FLOOR on the legs the script counted, not today's figure: exit 0
@@ -3067,7 +3315,7 @@ except CORBA.NO_PERMISSION:
     walk_legs=$(sed -n 's/^walk: every leg answered (\([0-9][0-9]*\) legs)$/\1/p' <<<"$walk_out")
     if [ "$walk_rc" -ne 0 ]; then
       echo "  FAIL omniORB's IR client could not walk our repository (exit $walk_rc)"
-      printf '%s\n' "$walk_out" | tail -10 | sed 's/^/       | /'
+      diag_out "$walk_out" 10
       ifr_fail=1
     elif [ -z "$walk_legs" ] || [ "$walk_legs" -lt 51 ]; then
       echo "  FAIL the walk exited 0 over ${walk_legs:-no} legs (floor 51) — it measured less than it has"
@@ -3096,9 +3344,9 @@ except CORBA.NO_PERMISSION:
   # Conflating them is how a run whose every leg came back COMM_FAILURE reads
   # as a pass, which is exactly what the un-gated version of this probe did.
   if [ "$ir_stubs" -eq 0 ]; then
-    echo "  SKIPPED  omniORBpy IR stubs absent (fixture: omniORBpy's omniORB.ir_idl) — every"
-    echo "           definition kind is unmeasured, not passing"
-    skipped=$((skipped+1))
+    skip absent git:spikes/dk_peer.py \
+         "omniORBpy IR stubs absent (fixture: omniORBpy's omniORB.ir_idl) — every" \
+         "definition kind is unmeasured, not passing"
   else
     dk_out=$(python3 spikes/dk_peer.py "$IFR_IOR" 2>&1); dk_rc=$?
     # 10 is a FLOOR — nine definitions plus the leg that checks the expected
@@ -3125,11 +3373,11 @@ except CORBA.NO_PERMISSION:
         echo "  FAIL the def_kind probe measured NOTHING (exit 3) — it never reached the facade,"
         echo "       so no claim was refuted and there is no wire defect to chase; the holding"
         echo "       facade stopped answering after it wrote READY"
-        tail -3 <<<"$dk_out" | sed 's/^/       | /'
+        diag_out "$dk_out" 3
         ifr_fail=1 ;;
       *)
         echo "  FAIL omniORB's IR client did not name our definition kinds (exit $dk_rc)"
-        tail -12 <<<"$dk_out" | sed 's/^/       | /'
+        diag_out "$dk_out" 12
         ifr_fail=1 ;;
     esac
   fi
@@ -3153,7 +3401,7 @@ if grep -q "ingest: PASS" <<<"$ing"; then
   echo "       ingested metadata with no .idl file opened"
 else
   echo "  FAIL ingestion self-consistency"
-  printf '%s' "$ing" | grep -i FAIL | head -3 | sed 's/^/       /'
+  diag "a FAIL line" "$ing" "$(grep -i FAIL <<<"$ing")" 3
   fail_total=$((fail_total+1))
 fi
 
@@ -3192,7 +3440,7 @@ if grep -q "event-channel: PASS" <<<"$ev"; then
   esac
 else
   echo "  FAIL event channel self-consistency"
-  printf '%s' "$ev" | grep FAIL | head -3 | sed 's/^/       /'
+  diag "a FAIL line" "$ev" "$(grep FAIL <<<"$ev")" 3
   ev_fail=1
 fi
 rm -f "$EV_IOR" /tmp/orbweaver-events-hold.log
@@ -3213,17 +3461,17 @@ if [ "$ev_up" -eq 1 ]; then
   # did not, non-zero-and-noisy it could not run).
   if ! python3 -c "import CosEventComm, CosEventComm__POA, CosEventChannelAdmin" \
        >/dev/null 2>&1; then
-    echo "  SKIPPED  omniORBpy CosEventComm/CosEventChannelAdmin stubs absent (fixture:"
-    echo "           spikes/event_consumer.py needs them) — the cross-ORB half is"
-    echo "           unmeasured, not passing"
-    skipped=$((skipped+1))
+    skip absent git:spikes/event_consumer.py \
+         "omniORBpy CosEventComm/CosEventChannelAdmin stubs absent (fixture:" \
+         "spikes/event_consumer.py needs them) — the cross-ORB half is" \
+         "unmeasured, not passing"
   else
     ev_out=$(python3 spikes/event_consumer.py "$EV_IOR" 2>&1); ev_rc=$?
     if [ "$ev_rc" -eq 0 ]; then
       echo "  ok   omniORB's PushConsumer received events from OUR channel"
     else
       echo "  FAIL cross-ORB consumer (exit $ev_rc)"
-      tail -6 <<<"$ev_out" | sed 's/^/       | /'
+      diag_out "$ev_out" 6
       ev_fail=1
     fi
   fi
@@ -3232,7 +3480,7 @@ else
   # fired once with nothing to read, right after the self-consistency spike
   # had failed on a race, and did not reproduce on the next run.
   echo "  FAIL the holding event channel never came up within 12s; its log:"
-  tail -5 /tmp/orbweaver-events-hold.log 2>/dev/null | sed 's/^/       | /'
+  diag_log /tmp/orbweaver-events-hold.log 5
   ev_fail=1
 fi
 kill "$EV_PID" >/dev/null 2>&1 || true
@@ -3264,10 +3512,10 @@ hr "event channel — omniORB is the pull supplier and OUR channel does the aski
 # PID this group holds would be cargo's and the channel would outlive the kill.
 pull_fail=0
 if ! python3 -c "import CosEventComm, CosEventComm__POA, CosEventChannelAdmin" >/dev/null 2>&1; then
-  echo "  SKIPPED  omniORBpy CosEventComm/CosEventChannelAdmin stubs absent (fixture:"
-  echo "           spikes/event_pull_supplier.py needs them) — the pull direction is unmeasured,"
-  echo "           not passing"
-  skipped=$((skipped+1))
+  skip absent git:spikes/event_pull_supplier.py \
+       "omniORBpy CosEventComm/CosEventChannelAdmin stubs absent (fixture:" \
+       "spikes/event_pull_supplier.py needs them) — the pull direction is unmeasured," \
+       "not passing"
 elif ! cargo build -q --bin spike-events >/dev/null 2>&1; then
   echo "  FAIL spike-events did not build, so the pull direction was NOT measured"
   pull_fail=1
@@ -3299,7 +3547,7 @@ else
     pull_want=$(tr '[:lower:]' '[:upper:]' <<<"${pull_e:0:1}")${pull_e:1}
     if [ "$pull_up" -ne 1 ]; then
       echo "  FAIL the holding channel (--source-endian $pull_e) never came up within 20s; its log:"
-      tail -6 "$PULL_LOG" 2>/dev/null | sed 's/^/       | /'
+      diag_log "$PULL_LOG" 6
       pull_fail=1
     elif [ "$pull_said" != "$pull_want" ]; then
       echo "  FAIL --source-endian $pull_e did not take: the channel says it asks"
@@ -3316,7 +3564,7 @@ else
         echo "       consumer models got them in order"
       else
         echo "  FAIL --source-endian $pull_e: the pull direction (exit $pull_rc)"
-        printf '%s\n' "$pull_out" | tail -8 | sed 's/^/       | /'
+        diag_out "$pull_out" 8
         pull_fail=1
       fi
     fi
@@ -3401,8 +3649,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   fi
   fkill "classes Server"
 else
-  echo "  SKIPPED  JacORB half — fixture absent"
-  skipped=$((skipped+1))
+  skip absent git:spikes/jacorb/setup.sh "JacORB half — fixture absent"
 fi
 # D010 B2: identity through a real provider. Until 2026-08-19 this was a
 # `note`, which the verdict line does not count; a class-B row lands as a
@@ -3416,10 +3663,12 @@ if [ -n "${ORBWEAVER_IDP_URL:-}" ] && ! grep -q "advertises no mechanism list" <
   echo "  FAIL an identity provider and a CSIv2 peer are configured and nothing here measures them yet (D010 B2)"
   fail_total=$((fail_total+1))
 else
-  echo "  SKIPPED  no peer advertises CSIv2 and no issuer is configured (ORBWEAVER_IDP_URL) — identity"
-  echo "           through a real provider is unmeasured, not passing (D010 B2; CSIv2 encoding is"
-  echo "           unit-tested in both byte orders, PLAN §4.8)"
-  skipped=$((skipped+1))
+  # No date: both halves of this fixture — a peer that advertises CSIv2 and an
+  # OIDC issuer — are outside the tree, so nothing here can date the claim.
+  skip absent "" \
+       "no peer advertises CSIv2 and no issuer is configured (ORBWEAVER_IDP_URL) — identity" \
+       "through a real provider is unmeasured, not passing (D010 B2; CSIv2 encoding is" \
+       "unit-tested in both byte orders, PLAN §4.8)"
 fi
 [ "$id_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
@@ -3449,7 +3698,7 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
       echo "  ok   and under -D warnings: no unsafe, no undocumented item"
     else
       echo "  FAIL generated code does not survive its own lint declarations"
-      head -5 /tmp/orbweaver-gend.log | sed 's/^/       /'
+      diag_log /tmp/orbweaver-gend.log 5 head
       gen_fail=1
     fi
     # The serving direction. Everything above measures a generated *client*
@@ -3463,12 +3712,12 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
         echo "       a oneway then a twoway on one connection, both user exceptions by class"
       else
         echo "  FAIL omniORB's python client could not drive the generated skeleton"
-        printf '%s' "$skel" | tail -5 | sed 's/^/       /'
+        diag_out "$skel" 5
         gen_fail=1
       fi
     else
-      echo "  SKIPPED  omniORBpy absent — the serving direction is unmeasured, not passing"
-      skipped=$((skipped+1))
+      skip absent git:crates/orbweaver-gen/tests/skeleton_wire.rs \
+           "omniORBpy absent — the serving direction is unmeasured, not passing"
     fi
     # A generated servant's system exceptions, read by class by an ORB we did
     # not write. This is where the transposed completion status was caught:
@@ -3483,12 +3732,12 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
         echo "       did_not_run() as COMPLETED_NO — §4.11.4's ordinal, retry-safe"
       else
         echo "  FAIL omniORB did not see the servant's system exceptions as sent"
-        printf '%s\n' "$flt" | tail -5 | sed 's/^/       /'
+        diag_out "$flt" 5
         gen_fail=1
       fi
     else
-      echo "  SKIPPED  omniORBpy absent — the servant-fault claims are unmeasured"
-      skipped=$((skipped+1))
+      skip absent git:crates/orbweaver-gen/tests/servant_faults.rs \
+           "omniORBpy absent — the servant-fault claims are unmeasured"
     fi
     # §8 in the reading that catches a dropped bound: the two paths must refuse
     # alike. Byte equality only ever samples values both paths accepted, so a
@@ -3501,7 +3750,7 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
       echo "       encode and decode, stub and skeleton, argument and reply direction"
     else
       echo "  FAIL a declared bound is enforced by one path and not the other"
-      printf '%s\n' "$bo" | grep -A3 "panicked" | head -6 | sed 's/^/       /'
+      diag "a panic" "$bo" "$(grep -A3 "panicked" <<<"$bo")" 6
       gen_fail=1
     fi
     # D010 A3: the checked-in f_27_bounds stub through Bridge::connect_static
@@ -3513,7 +3762,7 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
       echo "  ok   a real generated stub through the guard: the content seat sees its payload, the ledger does not"
     else
       echo "  FAIL guarded_stub — the static path's content seat or ledger property"
-      printf '%s\n' "$gs" | grep -A3 "panicked" | head -6 | sed 's/^/       /'
+      diag "a panic" "$gs" "$(grep -A3 "panicked" <<<"$gs")" 6
       gen_fail=1
     fi
     # §8's rule in the direction nothing checked: a skeleton's reply bytes
@@ -3522,7 +3771,7 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
     ora=$(cargo test -q -p orbweaver-gen --test skeleton_oracle -- --nocapture 2>&1)
     if grep -q "FAILED" <<<"$ora"; then
       echo "  FAIL a generated skeleton's replies are not the dynamic path's bytes"
-      printf '%s\n' "$ora" | grep -A4 "disagree" | head -8 | sed 's/^/       /'
+      diag "a 'disagree' line" "$ora" "$(grep -A4 "disagree" <<<"$ora")" 8
       gen_fail=1
     else
       n_cmp=$(printf '%s' "$ora" | grep -o '[0-9]* comparison' | grep -o '[0-9]*' \
@@ -3537,10 +3786,15 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
         echo "  ok   the generated stub calls omniORB: 10/10 cases, both byte orders"
         echo "  ok   I1: the same stub through the guard — exposure, ai_authz scope and audit bind it"
         echo "  ok   I1: a refused call never reaches the wire; the audit holds nothing dialable"
-        printf '%s' "$so" | grep "I4:" | sed 's/^  ok   /  ok   /' | head -5
+        i4=$(grep "I4:" <<<"$so")
+        if [ -n "$i4" ]; then
+          sed -n '1,5p' <<<"$i4"
+        else
+          echo "       (static-oracle reported no I4: line — those claims were not shown)"
+        fi
       else
         echo "  FAIL static did not equal dynamic"
-        printf '%s' "$so" | grep "FAIL" | head -3 | sed 's/^/       /'
+        diag "a FAIL line" "$so" "$(grep "FAIL" <<<"$so")" 3
         gen_fail=1
       fi
     else
@@ -3549,11 +3803,12 @@ if cargo run -q --bin gen-corpus -- --out "$GEN_OUT" --workspace "$ROOT" \
     cleanup
   else
     echo "  FAIL generated code does not compile"
-    head -5 /tmp/orbweaver-genc.log | sed 's/^/       /'
+    diag_log /tmp/orbweaver-genc.log 5 head
     gen_fail=1
   fi
 else
-  echo "  FAIL generation failed"; head -3 /tmp/orbweaver-gen.log | sed 's/^/       /'
+  echo "  FAIL generation failed"
+  diag_log /tmp/orbweaver-gen.log 3 head
   gen_fail=1
 fi
 rm -rf "$(dirname "$GEN_OUT")"
@@ -3575,7 +3830,7 @@ if start_evolution_server; then
     echo "  ok   an added operation on an un-updated server gives BAD_OPERATION"
   else
     echo "  FAIL a §5.3 verdict did not match what the wire did"
-    printf '%s' "$out" | grep "  FAIL" | head -3 | sed 's/^/       /'
+    diag "a FAIL line" "$out" "$(grep "  FAIL" <<<"$out")" 3
     ev_fail=1
   fi
 else
@@ -3588,7 +3843,7 @@ if start_evolution_server --updated; then
     echo "  ok   after the additive release, old and new clients are both served"
   else
     echo "  FAIL the additive release did not behave as 'compatible' predicts"
-    printf '%s' "$out" | grep "  FAIL" | head -2 | sed 's/^/       /'
+    diag "a FAIL line" "$out" "$(grep "  FAIL" <<<"$out")" 2
     ev_fail=1
   fi
 else
@@ -3615,6 +3870,12 @@ fi
 hr "verdict"
 if [ "$skipped" -gt 0 ]; then
   echo "  $skipped check group(s) SKIPPED — those claims are unmeasured, not passing"
+  # `skipped` still counts every skip, which is the number D010 §2 makes
+  # load-bearing and which nothing here changes. What is added is the split: a
+  # fixture that is not here and a recording of another day standing in for a
+  # live run are different claims, and this line used to print them as one.
+  echo "  of those, $replays replayed a recording of another day and $((skipped-replays)) found no fixture at all;"
+  echo "  each SKIPPED above carries its own age, or says the date is not recorded"
 fi
 if [ "$fail_total" -eq 0 ]; then
   echo "  all measured checks green"
