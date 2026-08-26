@@ -346,7 +346,7 @@ measure_pair() {
 # of. So the count is asserted, and asserted as `-ne` rather than `-lt`: a floor
 # proves nothing about the figure, and here the figure IS the coverage claim —
 # three GIOP versions x two byte orders, plus the re-dial case.
-EXPECT_TESTS=7
+EXPECT_TESTS=8
 EXPECT_ORDER_CELLS=6
 
 measure_pair "temporary — ServantLocator raises ForwardRequest (status 3)" 3

@@ -66,7 +66,7 @@
 //! is why the two are printed side by side rather than collapsed.
 
 use orbweaver_cdr::Endian;
-use orbweaver_giop::{Connection, Ior, ReplyStatus, Version};
+use orbweaver_giop::{Connection, Ior, LocateResult, ReplyStatus, Version};
 use std::time::Duration;
 
 /// Long enough that a loaded machine does not look like a broken forward.
@@ -282,5 +282,85 @@ fn a_second_dial_of_the_same_reference_is_forwarded_again() {
         );
         assert_eq!(conn.endpoint().1, dest_port, "round {round}");
         println!("cell round={round} landed={}", conn.endpoint().1);
+    }
+}
+
+/// What the foreign ORB answers to a `LocateRequest` — the forward, or not, one
+/// message earlier.
+///
+/// D029 §6.1's Location row records that this ORB could once *name*
+/// `OBJECT_FORWARD` and not serve it: a probe against a moved object answered
+/// `Unknown` — "nowhere" — so a caller using the side-effect-free probe §9.4.5
+/// exists to provide was told its reference named nothing. That was closed on
+/// our **serving** side. This is the **reading** side, against a foreign peer,
+/// and it had never been measured at all.
+///
+/// The assertion is deliberately weak in one direction and strong in the other.
+/// §9.4.5 does not require a server to forward a probe: answering
+/// `OBJECT_HERE` and forwarding the subsequent request is conforming, and so is
+/// forwarding the probe. What is not defensible — and what this asserts — is
+/// answering `UNKNOWN_OBJECT` for a reference the very next request is
+/// forwarded on. That tells the caller its reference is dead, which is a
+/// falsehood about location, and it is exactly the defect the row records
+/// having closed on our own side.
+///
+/// # What omniORB 4.3.4 actually answers (measured 2026-08-26)
+///
+/// `OBJECT_HERE`, under **both** of the peer's forwarding mechanisms — the
+/// `ServantLocator` and the operation — and therefore under both statuses. It
+/// does not forward the probe.
+///
+/// That is conforming, and it is worth writing down anyway, because it settles
+/// what the probe is worth against this peer: **nothing, for learning about a
+/// move.** A caller that wants to know whether its reference still points at a
+/// live target gets `here` from a forwarder that will redirect every request it
+/// sends. The move is discoverable only by spending the invocation.
+///
+/// Two consequences, neither of which is a defect in this ORB:
+///
+/// 1. Our `OBJECT_FORWARD`-on-a-`LocateRequest` serving path — the third item
+///    D029 §6.1's Location row records closing — has **no foreign peer that
+///    exercises the reading side of it**. We send that status and follow it;
+///    what we have never seen is another ORB sending it to us. This test is
+///    where that gap is written down.
+/// 2. `Connection::locate` returning `Here` is not evidence that a subsequent
+///    invoke will not be forwarded, and no caller should treat it that way.
+#[test]
+#[ignore = "needs the two live omniORB peers; run via spikes/foreign_forward.sh"]
+fn a_probe_of_the_foreign_forwarder_is_not_told_nowhere() {
+    let (ior, _dest_host, dest_port) = fixture();
+    let mut conn = Connection::connect(&ior, DIAL).expect("dial the forwarder");
+    let probe = conn.locate().expect("the peer did not answer the LocateRequest");
+
+    let described = match &probe {
+        LocateResult::Unknown => "unknown".to_string(),
+        LocateResult::Here => "here".to_string(),
+        LocateResult::Forward(f) => format!(
+            "forward(permanent={},to={})",
+            f.is_permanent(),
+            f.ior().primary().map(|p| p.port).unwrap_or(0)
+        ),
+    };
+    println!("cell locate={described} dest_port={dest_port}");
+
+    assert!(
+        !matches!(probe, LocateResult::Unknown),
+        "the foreign peer answered UNKNOWN_OBJECT to a probe of a reference it \
+         forwards every request on. A caller using the side-effect-free probe \
+         would be told its reference names nothing, which is a falsehood about \
+         location — the same defect D029 §6.1 records having closed on this \
+         ORB's own serving side"
+    );
+
+    // If it forwarded the probe, the address it named must be the destination:
+    // a forward given one message earlier is worth something only if it is the
+    // same move the request path would have made.
+    if let LocateResult::Forward(f) = &probe {
+        let p = f.ior().primary().expect("forwarded-to IOR has no profile");
+        assert_eq!(
+            p.port, dest_port,
+            "the probe was forwarded somewhere other than where the request \
+             path lands"
+        );
     }
 }
