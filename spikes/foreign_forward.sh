@@ -108,10 +108,44 @@ command -v cargo >/dev/null 2>&1 || {
 }
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/fwdfgn-XXXXXX")
-pids=()
+
+# Every peer's PID goes to a FILE under $work, and cleanup reads the files.
+#
+# It used to go into a bash array, and that array was empty at cleanup time on
+# every single run: `start_peer` is called as `at=$(start_peer ...)`, so its
+# body executes in a command-substitution subshell and `pids+=(...)` appended to
+# a copy that died with it. The trap then killed nothing, and each invocation of
+# this script — every green run and every negative control — left FOUR omniORB
+# processes behind. Found by running `pgrep -f foreign_forward_peer.py` after a
+# green run, not by reading the trap, which looks correct and is correct; what
+# was wrong was where the data lived.
+#
+# The fix is not a cleverer array. It is to keep the fact somewhere a subshell
+# cannot lose it. `$work` is made by the parent and written by every child, so
+# the parent can always enumerate what it started — and killing by PID rather
+# than by pattern is exactly what lets this run beside a harness that kills by
+# pattern, which is the argument for taking no lock in the first place.
+peer_pids() {
+  local f
+  for f in "$work"/*.pid; do
+    [ -e "$f" ] || continue
+    cat "$f" 2>/dev/null
+  done
+}
 cleanup() {
-  for p in "${pids[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null; done
-  for p in "${pids[@]:-}"; do [ -n "$p" ] && wait "$p" 2>/dev/null; done
+  local p waited=0 alive
+  for p in $(peer_pids); do kill "$p" 2>/dev/null; done
+  # Sleeping, deadline-bounded. A kill is a request; returning before the peers
+  # are really gone hands whatever runs next a machine with orphans on it.
+  while [ "$waited" -lt 50 ]; do
+    alive=0
+    for p in $(peer_pids); do
+      kill -0 "$p" 2>/dev/null && alive=1
+    done
+    [ "$alive" -eq 0 ] && break
+    sleep 0.1
+    waited=$((waited + 1))
+  done
   if [ -n "$keep" ]; then echo "kept: $work"; else rm -rf "$work"; fi
 }
 trap cleanup EXIT
@@ -139,10 +173,11 @@ wait_ready() {
 start_peer() {
   # start_peer <name> <log> <args...>  ->  echoes "<host> <port>"
   local name="$1" log="$2"; shift 2
+  # The `.pid` file lands in $work (the log does too), which is what cleanup
+  # enumerates. Writing it here rather than returning it is the whole point:
+  # this function's stdout is captured, so its side effects on shell state are
+  # thrown away and only its files survive.
   ( exec python3 "$ROOT/spikes/foreign_forward_peer.py" "$@" >"$log" 2>&1 & echo $! >"$log.pid" )
-  sleep 0.1
-  local pid; pid=$(cat "$log.pid" 2>/dev/null)
-  [ -n "$pid" ] && pids+=("$pid")
   local ready
   if ! ready=$(wait_ready "$log"); then
     fail "the $name peer did not become ready within 25s — the leg is unmeasured, which is a failure"
@@ -184,12 +219,18 @@ printf '\n\033[1mforeign forward — omniORB redirects our client to another add
 # which makes it a foreign confirmation of a rule this ORB also implements.
 measure_pair() {
   local label="$1" perm_at_1_2="$2"; shift 2
-  local dest_ior="$work/$label-dest.ior" fwd_ior="$work/$label-fwd.ior"
+  # The label is a sentence for the reader; the filenames get a slug of it. The
+  # first version used the label directly and produced paths with spaces,
+  # parentheses and a comma in them — which worked, and would have gone on
+  # working right up until some later line forgot one pair of quotes.
+  local slug
+  slug=$(tr -c 'a-zA-Z0-9' '-' <<<"$label" | tr -s '-' | cut -c1-24)
+  local dest_ior="$work/$slug-dest.ior" fwd_ior="$work/$slug-fwd.ior"
   local dest_at fwd_at dest_host dest_port fwd_host fwd_port
 
   printf '\n  \033[1m%s\033[0m\n' "$label"
 
-  if ! dest_at=$(start_peer "destination ($label)" "$work/$label-dest.log" \
+  if ! dest_at=$(start_peer "destination ($label)" "$work/$slug-dest.log" \
         --role dest --out-ior "$dest_ior" --tag dest); then
     return 1
   fi
@@ -212,7 +253,7 @@ measure_pair() {
   elif [ -n "$break_it" ]; then
     fwd_args+=(--break "$break_it")
   fi
-  if ! fwd_at=$(start_peer "forwarder ($label)" "$work/$label-fwd.log" "${fwd_args[@]}"); then
+  if ! fwd_at=$(start_peer "forwarder ($label)" "$work/$slug-fwd.log" "${fwd_args[@]}"); then
     return 1
   fi
   fwd_host=${fwd_at% *}; fwd_port=${fwd_at#* }
@@ -332,7 +373,7 @@ measure_pair() {
   # client and from the octets, and this is here so a reader can see the two
   # accounts side by side (D034 §5.1).
   local fwd_says
-  fwd_says=$(grep -cE 'preinvoke|operation call' "$work/$label-fwd.log" 2>/dev/null)
+  fwd_says=$(grep -cE 'preinvoke|operation call' "$work/$slug-fwd.log" 2>/dev/null)
   echo "  ..   the forwarder's own log says it forwarded $fwd_says time(s) — printed, not counted"
   return 0
 }
