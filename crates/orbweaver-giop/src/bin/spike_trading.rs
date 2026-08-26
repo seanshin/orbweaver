@@ -22,7 +22,7 @@
 
 use std::io::Write;
 
-use orbweaver_giop::server::Server;
+use orbweaver_giop::orb::Orb;
 use orbweaver_giop::trading_server::TradingServer;
 use orbweaver_giop::{Ior, Result};
 use orbweaver_trading::service_type::{PropertyKind, PropertyMode, PropertySchema, ServiceType};
@@ -72,7 +72,12 @@ fn main() -> std::process::ExitCode {
 
 fn run(out: &str, port: u16, hold: bool) -> Result<u32> {
     let key = b"TradingService".to_vec();
-    let server = Server::bind(&format!("127.0.0.1:{port}"), key.clone())?;
+    // A binary is its own crate root, so D019 step 4's `pub(crate)` on
+    // `Server::bind` reaches it where the crate's own modules are unaffected.
+    // That asymmetry is why a sweep over `crates/` that excludes this crate
+    // misses exactly the files that break.
+    let orb = Orb::new();
+    let server = orb.server(&format!("127.0.0.1:{port}"), key.clone())?;
     let bound = server.local_addr()?.port();
 
     let trader = TradingServer::new("127.0.0.1", bound, key);
