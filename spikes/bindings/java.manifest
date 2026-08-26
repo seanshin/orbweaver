@@ -27,9 +27,11 @@
 # **The whole servant row is absent, and deliberately**: D030 §5 L2 scopes the
 # second language to CLIENTS, because a
 # generated servant must be *called by* the ORB and that needs the bridge's
-# serving direction to carry a dispatch into Java — the seam `pyservant.rs`
-# implements for exactly one language today. Generalising it is its own batch,
-# and attempting both in one is how a batch lands half-measured.
+# serving direction to carry a dispatch into Java. The seam that carries it was
+# `pyservant.rs`, for one language; since 2026-08-26 it is `orbweaver_gen::seam`
+# and it names no language, so what is missing here is the JAVA half and not the
+# seam. The row stays absent until that half exists — a manifest that enrolled a
+# cell it cannot run would be the counted-SKIPPED rule working in reverse.
 #
 # The client cells against the two ORB peers and against ourselves are supplied,
 # and both foreign ones read a peer's flag byte — including `client × jacorb`,
@@ -74,7 +76,7 @@ cell	client	self	spikes/bindings/java/client-self.sh
 
 # ── the servant row, stated so it is printed rather than remembered ──────────
 
-waits	servant	omniorb	a Java SERVANT, which needs the bridge's serving direction to carry a dispatch into a Java process. D030 §5 L2 scopes this language to clients on purpose: a generated client marshals a request and everything it needs is a function it calls, while a generated servant must be CALLED BY the ORB. `crates/orbweaver-gen/src/pyservant.rs` is that seam for one language and it is not language-neutral yet; generalising it is a batch of its own, and D030 §2's table is why the two are not one job.
+waits	servant	omniorb	a Java SERVANT, which needs the bridge's serving direction to carry a dispatch into a Java process. D030 §5 L2 scopes this language to clients on purpose: a generated client marshals a request and everything it needs is a function it calls, while a generated servant must be CALLED BY the ORB. The seam is `crates/orbweaver-gen/src/seam.rs` and since 2026-08-26 it names no language: what this cell waits on is a Java Answerer over the bridge's pipes and a Host/dispatchCall in `java_rt.java` — the serving half of a runtime Java already has, since `java_rt.java` is the third implementation of AnyJSON v1. The protocol it must speak is a value, printed by `cargo run -p orbweaver-gen --bin seam-protocol` and asserted equal per language by `crates/orbweaver-gen/tests/the_seam_is_one_protocol.rs`, which is the one place a new binding enrols. D030 §2's table is why client and servant are not one job.
 waits	servant	jacorb	as servant/omniorb above. Note what is NOT missing: JacORB already drives a Python servant behind our ORB (spikes/bindings/python/servant-jacorb.sh), so the peer, the tap and the byte-order reading all exist — what is missing is the Java half of the seam, not the fixture.
 waits	servant	self	as servant/omniorb above. This one would be the cheapest of the three and is still not supplied, because a self cell that existed while the foreign ones did not would report a seam we had never run against anybody else.
 

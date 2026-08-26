@@ -249,7 +249,7 @@ feature to add.
 |---|---|---|
 | **Location** | where the target runs | **measured, with a known leak**: `LOCATION_FORWARD` and `_PERM` are served and followed, and R7 rewrites an IOR for a dialable address — but `Connection::move_to` restored a hand-written field list and dropped two configured limits across every forward until today, so the *caller's* limits changed when the object moved. Fixed; the class is the leak to watch. **A second instance, found 2026-08-26 and not fixed**: `moe::Router::select` returns `ExpertSeq` — N object references, each an `Ior` stored verbatim from `register_expert` and marshalled inline with host, port and object key. A caller learns where every candidate expert runs, which is exactly what this row says it must not be able to tell. `corpus/golden/22`'s own comment beside the operation already says so — *"widening reach by N addresses at once is precisely the case §4.7's bearer-address rule exists for"* — and §4.7's rule is the authority half of the same fact. Recorded, not changed: `select` is served and has consumers. **A third thing under this row, closed 2026-08-26 and not one of the two leaks above**: the probe path *lied*. See the `LocateRequest` subsection below for what moved and why the row's status sentence is unchanged. |
 | **Backend** | what implements it | mostly held: a servant is behind a POA and a reference; but `spike_experts`' server root key collides with its derived registry key, which is a backend detail reaching a name. |
-| **Language** | what it is written in | **the construction leak is closed; three narrower ones remain** (2026-08-26). A Python servant is dispatched into by `orbweaver_gen::pyservant`, and `tests/python_servant.rs` compares one against the generated Rust servant for the same contract — 19 calls × 3 GIOP versions × 2 byte orders, **byte-identical replies**, with a negative control that perturbs five answers and asserts each is seen. **The peer half is now measured in both byte orders (2026-08-26):** omniORB's client little-endian, and JacORB's big-endian — the order taken from §15.4.1's flag byte on every request rather than from the peer's language — with the Python servant's 11 replies byte-identical to a Rust servant's for the same driver run, at IIOP 1.2 and 1.1. What remains is listed in §6.1.1 and none of it is the old *"cannot be a target at all"*. |
+| **Language** | what it is written in | **the construction leak is closed; three narrower ones remain** (2026-08-26). A Python servant is dispatched into by `orbweaver_gen::pyservant`, and `tests/python_servant.rs` compares one against the generated Rust servant for the same contract — 19 calls × 3 GIOP versions × 2 byte orders, **byte-identical replies**, with a negative control that perturbs five answers and asserts each is seen. **The peer half is now measured in both byte orders (2026-08-26):** omniORB's client little-endian, and JacORB's big-endian — the order taken from §15.4.1's flag byte on every request rather than from the peer's language — with the Python servant's 11 replies byte-identical to a Rust servant's for the same driver run, at IIOP 1.2 and 1.1. What remains is listed in §6.1.1 and none of it is the old *"cannot be a target at all"*. **Later the same day the seam stopped being one language's and a foreign servant stopped being a singleton leaf** — §6.1.1's item 5 is closed and its reason was wrong as written; the seam is `orbweaver_gen::seam`, its protocol is a value both implementations publish and are asserted against (`tests/the_seam_is_one_protocol.rs`), and a foreign servant is told which object it is, answers for its own keys only, and can hand out a reference to a neighbour — 126 cells byte-identical against the generated Rust skeleton, four controls each run red. **What is left under this row is now one thing and it is stated as one**: a reference *arriving* is a handle the far side cannot invoke, which needs a call travelling the other way through the seam. |
 | **Activation / load** | whether it is loaded right now | **closed at the POA 2026-08-26, and the row's own diagnosis was wrong.** This row named `moe::Router::select` as the leak. `select` is a **contract, not a leak**, and the argument is from corpus/golden/22 rather than from convenience: `Constraints` declares no residency member, so filtering would apply a constraint nobody expressed; the contract already gives load state two homes where it is a *value a caller asks for* (`ExpertLoader::status`, `//@ ai_effect: read_only` with no `ai_authz`, and `Capability::state` through `Expert::describe`); `Router` being `//@ ai_desc: Control-plane gate` settles that its callers **may know**, which is a right to be *told* and not a licence for a side channel; and — decisively — **a filter could not have closed it.** `select` answers at T and the caller dials at T+ε, so an expert RESIDENT at T can be evicted before the dial, and a reference obtained from `Expert::delegate`, from an earlier call or from a string never went through the operation at all. A filter changes how *often* a caller can tell, never *whether*. The reason the code gave for the omission was separately false and is corrected: *"the caller's cue to `prefetch`"* names an action the cued caller generally cannot take — `prefetch` is `oneway`, it lives on `ExpertLoader`, an object `Router` never hands over, and it is gated `//@ ai_authz: moe.loader.residency`, which `moe.router.select` does not imply. **The leak was one layer down, in what the *reference* does across an eviction**: `residency::MissPolicy`'s two variants both answered `Located::Unknown` for an OFFLOADED expert, the POA turned that into `OBJECT_NOT_EXIST`, and the same reference invoked twice by the same caller answered differently. `MissPolicy::Activate` closes it — demand-load inside `locate`, answer `Located::Here` — and being a POA-level fact it holds for *any* target, which is what this criterion asks and what a fix inside one application contract could never have given. The refusal that had ruled demand loading out is kept verbatim and quoted in `MissPolicy`'s rustdoc: every clause of it is about **cost**, and priority zero ranks a cost below a leak. **What is not closed, and is not to be looked for elsewhere:** (1) **time** — a demand-loaded call is slower and a caller with a clock can tell; in one process the only alternatives are forwarding to a node where the target is loaded (there is no second node) or making every call as slow as the slowest, and in this repository a load is two map writes so the latency is not measurable here either; (2) **nothing in the tree mounts `ExpertLocator` on a served POA**, so which variant a deployment runs is undecided and a deployment on either refusing variant still leaks; (3) `Router::dispatch` is still refused (D006 option E, its reason false as written — see D006's 2026-08-26 amendment) and is still not the operation that would have closed this. |
 | **Lifecycle stability** | that the above survives add / remove / move / load / evict at runtime | **was "partly unmeasurable"; as of 2026-08-26 it is measurable and leaking for a reason that is now named.** O1 landed: `Orb::shutdown` stops the servers and pools the ORB created, and `crates/orbweaver-giop/tests/orb_stops_what_it_handed_out.rs` measures what a peer mid-call observes across it — from the peer's own socket, three GIOP versions × two byte orders, with four negative controls that were each run red. So *"removed at runtime"* now has an implementation and a test. **What did not move is the transparency of the removal**: a caller of a removed server can tell immediately, because there is nowhere else for its request to go, and closing that needs a second endpoint and a redirect — `LOCATION_FORWARD` served for a *name* rather than for an object, which is item 3 of the event-channel subsection below and which O1 does not touch. The argument and the refusal (graceful, at request granularity; immediate refused; *not* `run()`) are `docs/decisions/D034-stopping-what-the-orb-handed-out.md`; the bound is the rustdoc on `Orb::shutdown` and is not restated in either. Also measured that day and not changed: **17 of this workspace's 63 serve sites pass `|| false`** — seventeen processes that are still stopped only by being killed. They are now *fixable* rather than fixed. |
 
@@ -661,12 +661,83 @@ closing next.
 | 2 | A raise the operation does not declare: Rust's generated fault enum has no variant for one, Python can raise anything | only when the author erred, and then `UNKNOWN` + OMG minor 1, which is §4.11's own mapping |
 | 3 | A system exception with no completion status: Rust's `#[must_use] Raising` warns, Python's seam refuses at runtime | only when the author erred, and then a refusal rather than a guessed "safe to retry" |
 | 4 | **An object reference argument reaches a Python servant as an opaque handle it cannot invoke** — §4.5 emits no IOR, so a reference crosses as a token into the bridge's table | on any contract that passes a reference the servant must *use*: the Python servant cannot, the Rust one can |
-| 5 | **A Python servant cannot mint a new object reference**, having no POA on its side | on any operation whose contract returns a reference the servant creates |
+| 5 | ~~**A Python servant cannot mint a new object reference**, having no POA on its side~~ — **closed 2026-08-26, see below** | ~~on any operation whose contract returns a reference the servant creates~~ |
 
 4 and 5 are one fact from two sides: **the seam carries values, and an object
 reference is the one value whose meaning is a capability rather than data.**
 They are the language transparency that is left, and they are a smaller and
 more specific claim than the row above used to make.
+
+##### 5 is closed, and it was three things rather than one (2026-08-26)
+
+**Item 5 as written understated the leak, and the understatement was in the
+reason.** *"Having no POA on its side"* names the wrong absence: the far side
+never needed a POA, because §4.7 forbids it holding an address at all. What it
+needed was for **this** side to mint one on its behalf. Measured before
+anything was built, over `corpus/golden/16-object-refs.idl`:
+
+```text
+MINT  -> refused IDL:omg.org/CORBA/MARSHAL:1.0 completed=No
+OID   -> call 0 = {"args":{"name":"x"},"id":"IDL:gc16/Registry:1.0","op":"lookup"}
+OID   -> call 1 = {"args":{"name":"x"},"id":"IDL:gc16/Registry:1.0","op":"lookup"}
+KNOWS a key from another home -> true
+```
+
+The two call documents were addressed to **two different object keys** and are
+identical. So the leak was three, not one: a foreign servant could not mint a
+reference, **could not tell which object it was**, and **claimed every key in
+the process**. It was not a leaf, it was a *singleton* leaf — and the two
+findings this table never had are the ones that make the first fixable, since
+a reference to a neighbour is meaningless to a servant that has no neighbours.
+
+Closed by `orbweaver_gen::seam` (which is `pyservant.rs` with the language
+taken out of it) and by one addition to the shared value representation:
+`anyjson::References::resolve_as` hands the decoder's **declared** repository
+id to the table, which `from_json` had always known and thrown away. The far
+side names an oid and never a type, so minting the *wrong* type is
+unrepresentable rather than checked.
+
+**Measured by `crates/orbweaver-gen/tests/a_reference_crosses_the_seam.rs`,
+which also retires clause 3 of the *what is still not measured* list below**:
+`corpus/golden/26-object-identity.idl` — chosen because it is the contract 24
+could not be, holding per-call identity, a reference minted to a sibling, and a
+oneway that still has an identity — served twice, once by the generated Rust
+skeleton and once by the seam, over **3 GIOP versions × 2 byte orders × 3
+objects × 7 calls = 126 cells, byte-identical, minted references included**,
+with the minted IOR also compared *decoded*. Four negative controls, each run
+red: minting disabled (18 of 126, exactly the reference-returning cells), the
+oid removed from the call document (7 of 10 tests), `knows` claiming every key
+again (1 of 10), and the key infix spelled differently from the generated
+`<I>Refs::KEY_INFIX` (6 of 10).
+
+**Item 4 stands, and is now the whole of what this table says.** A reference
+*arriving* is still a handle the far side cannot invoke. That is the inbound
+half, and it is a different kind of work: it needs a call travelling the *other*
+way through the seam, which this protocol has no message for. Naming it that
+way rather than as *"references do not work"* is the point of re-measuring.
+
+*항목 5는 적힌 대로는 구멍을 **과소평가**했고, 과소평가는 사유에 있었다 —
+*"자기 쪽에 POA가 없어서"*는 없는 것을 잘못 지목한다. 저편에는 애초에 POA가 필요
+없다. §4.7이 주소를 쥐는 것 자체를 금하기 때문이다. 필요한 것은 **이쪽**이 대신
+만들어 주는 일이었다. 만들기 전에 재보니 구멍은 하나가 아니라 셋이었다: 외국어
+서번트는 참조를 만들 수 없었고, **자기가 어느 객체인지 알 수 없었으며**, 프로세스
+안의 **모든 키를 자기 것이라 주장했다.** 잎이 아니라 **단일 객체** 잎이었다 —
+그리고 이 표에 없던 두 발견이야말로 첫 번째를 고칠 수 있게 만든다. 이웃이 없는
+서번트에게 이웃에 대한 참조는 뜻이 없기 때문이다.
+
+`orbweaver_gen::seam`(언어를 걷어낸 `pyservant.rs`)과 공유 값 표현에 대한 한 가지
+추가로 닫았다: `anyjson::References::resolve_as`가 디코더의 **선언된** 저장소
+id를 표에 넘긴다 — `from_json`이 늘 알고 있었고 버려 온 값이다. 저편은 oid만
+말하고 타입은 말하지 않으므로, **틀린 타입으로 만드는 일은 검사 대상이 아니라
+표현 불가능**하다.
+
+`a_reference_crosses_the_seam.rs`가 잰다 — 24가 될 수 없었던 계약인
+`corpus/golden/26-object-identity.idl`을 생성된 러스트 스켈레톤과 심이 각각
+서빙하고, **GIOP 3버전 × 바이트 순서 2 × 객체 3 × 호출 7 = 126칸이 바이트 동일**,
+만들어진 참조 포함, 그 IOR은 **디코드해서도** 비교한다. 아래 *아직 재지 않은 것*의
+3항(계약이 하나)도 이로써 해소된다. 부정 대조군 4개 전부 붉게 확인했다. **항목
+4는 남는다** — 도착하는 참조는 여전히 저편이 **호출할 수 없는** 핸들이며, 그것은
+심을 **반대 방향으로** 지나는 호출이 필요하고 이 프로토콜에는 그런 메시지가 없다.*
 
 *1–3은 서번트 작성자가 **틀릴 수 있는 방식**의 차이이지 올바른 서번트가 내놓는
 답의 차이가 아니다. 4와 5는 **서번트가 아예 할 수 없는 일**의 차이이며, 한 사실의
