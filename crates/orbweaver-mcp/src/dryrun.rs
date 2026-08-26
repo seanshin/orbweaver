@@ -246,6 +246,14 @@ impl Would {
             Some(Denied::EffectUnstated { .. }) => Would::NeedEffect,
             Some(Denied::QuotaExhausted { .. }) => Would::Exhausted,
             Some(Denied::Intercepted { .. }) => Would::Refuse,
+            // Not a **policy** answer at all: the gate allowed it and the
+            // request named the wrong kind of thing. It is unreachable from a
+            // survey — nothing here calls `describe_type` — and it is
+            // classified rather than left to a catch-all because a `_ =>` arm
+            // is how the next variant gets silently rendered as something it
+            // is not. `Refuse` is the honest bucket: a refusal this crate's
+            // own gates did not produce.
+            Some(Denied::NotAType { .. }) => Would::Refuse,
         }
     }
 

@@ -236,7 +236,68 @@ impl<'a> Session<'a> {
                     Err(e) => rpc::result(id, rpc::tool_error(e.to_string())),
                 }
             }
+            // ---- D024 §5, the contract tools. ----------------------------
+            //
+            // Each is a missing-argument check and then one `Bridge` call.
+            // The gate is *inside* that call and not here, deliberately: a
+            // transport that decided anything would be a second policy nobody
+            // remembers to audit, which is the rule this module opens with.
+            //
+            // A missing argument answers before the gate runs — the same order
+            // `invoke_operation` uses, and for the same reason: a request that
+            // does not say what it wants has not asked a question the policy
+            // can have an opinion about.
+            "validate_contract" => {
+                let Some(source) = args.get("source").and_then(Json::as_str) else {
+                    return rpc::result(
+                        id,
+                        rpc::tool_error("validate_contract needs a \"source\""),
+                    );
+                };
+                Self::answer(id, self.bridge.validate_contract(source, &args))
+            }
+            "diff_contract" => {
+                let (Some(released), Some(proposed)) = (
+                    args.get("released").and_then(Json::as_str),
+                    args.get("proposed").and_then(Json::as_str),
+                ) else {
+                    return rpc::result(
+                        id,
+                        rpc::tool_error("diff_contract needs a \"released\" and a \"proposed\""),
+                    );
+                };
+                Self::answer(id, self.bridge.diff_contract(released, proposed, &args))
+            }
+            "describe_type" => {
+                let Some(target) = args.get("id").and_then(Json::as_str) else {
+                    return rpc::result(id, rpc::tool_error("describe_type needs an \"id\""));
+                };
+                Self::answer(id, self.bridge.describe_type(target, &args))
+            }
+            "preview_generation" => {
+                let Some(source) = args.get("source").and_then(Json::as_str) else {
+                    return rpc::result(
+                        id,
+                        rpc::tool_error("preview_generation needs a \"source\""),
+                    );
+                };
+                Self::answer(id, self.bridge.preview_generation(source, &args))
+            }
             other => rpc::result(id, rpc::tool_error(format!("no tool named {other:?}"))),
+        }
+    }
+
+    /// One rendering for every contract tool's answer.
+    ///
+    /// A refusal is content carrying `isError`, never a JSON-RPC error, for the
+    /// reason [`rpc::tool_error`] states: the request was understood and
+    /// denied, and a protocol error would invite a retry of the same thing.
+    /// `Denied`'s `Display` is handed over verbatim, so the refusal an agent
+    /// reads here is the fact *and* the remedy, the same as for a call.
+    fn answer(id: Json, result: Result<Json, crate::policy::Denied>) -> Json {
+        match result {
+            Ok(v) => rpc::result(id, rpc::tool_content(&v)),
+            Err(e) => rpc::result(id, rpc::tool_error(e.to_string())),
         }
     }
 }
@@ -296,7 +357,13 @@ mod tests {
         else {
             panic!("{:?}", out[2])
         };
-        assert_eq!(tools.len(), 3);
+        // The triad plus D024 §5's four contract tools. The list itself is
+        // pinned by name and order in `rpc::tests`; this asserts only that the
+        // handshake hands over the same number the definitions carry, computed
+        // rather than retyped.
+        let Json::Array(defined) = rpc::tool_definitions() else { panic!() };
+        assert_eq!(tools.len(), defined.len());
+        assert_eq!(tools.len(), 7);
     }
 
     #[test]

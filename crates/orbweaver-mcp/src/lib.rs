@@ -39,6 +39,7 @@
 
 #![deny(missing_docs)]
 
+pub mod contract;
 pub mod deployment;
 pub mod dryrun;
 pub mod embed;
@@ -59,7 +60,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbweaver_dynamic::json::Json;
 use orbweaver_dynamic::{anyjson, invoke};
 use orbweaver_giop::Connection;
-use orbweaver_registry::{AttributeSig, Entry, OperationSig, ParamDirection, Registry};
+use orbweaver_registry::{AttributeSig, OperationSig, ParamDirection, Registry};
 
 use embed::{VectorIndex, Via};
 use handles::{CapabilityTable, SharedTable};
@@ -376,6 +377,125 @@ impl<'a> Bridge<'a> {
     /// `describe_interface(id)`.
     pub fn describe(&self, id: &str) -> Result<Json, Denied> {
         describe_interface(self.registry, &self.exposure, id)
+    }
+
+    /// **The gate every D024 §5 contract tool passes**, and the only way any
+    /// of them is reached.
+    ///
+    /// It is [`interceptor::Chain::run`] — the same call `invoke_operation`
+    /// makes, on the same chain, with the same unwinding — over a
+    /// [`interceptor::CallContext`] whose `target` is
+    /// [`contract::CONTRACT_TOOLS_ID`], whose `operation` is the tool's name,
+    /// and whose `arguments` are the agent's own, unmapped, so that a stage in
+    /// [`interceptor::SEAT_SAFETY_CONTENT`] sees the IDL text.
+    ///
+    /// `registry` is the tool surface's own catalog
+    /// ([`contract::contract_tools_registry`]) and not the deployment's,
+    /// because the contract being called is the tool contract: that is where
+    /// the `ai_effect` the approval stage reads is written, and it is what
+    /// keeps four synthetic operations out of an operator's estate.
+    ///
+    /// `approval` is [`Approval::default`] for the reason
+    /// [`crate::session`] gives about `invoke_operation`: an approval never
+    /// comes from the agent's own request. None of the four needs one — they
+    /// are annotated `read_only` — but the value is not special-cased here,
+    /// so a tool that ever stated a different effect would be gated without
+    /// this function changing.
+    ///
+    /// On `Ok` the caller owes the chain a [`interceptor::Chain::completed`],
+    /// which [`Bridge::run_contract_tool`] pays.
+    fn gate_contract_tool(&mut self, tool: &str, args: &Json) -> Result<(), Denied> {
+        let ctx = interceptor::CallContext {
+            registry: contract::contract_tools_registry(),
+            caller: self.caller.as_ref(),
+            target: contract::CONTRACT_TOOLS_ID,
+            operation: tool,
+            approval: Approval::default(),
+            arguments: Some(args),
+        };
+        self.chain.run(&ctx)
+    }
+
+    /// Runs one contract tool through the gate and records what became of it.
+    ///
+    /// The shape mirrors [`Bridge::invoke`] deliberately: gate, act, tell the
+    /// chain. A tool that returned without the `completed` call would be
+    /// uncounted and unaudited on its way out, which is the half of §4.5 that
+    /// is easy to forget because nothing goes red when it is missing.
+    fn run_contract_tool(
+        &mut self,
+        tool: &str,
+        args: &Json,
+        act: impl FnOnce(&mut Self) -> Json,
+    ) -> Result<Json, Denied> {
+        self.gate_contract_tool(tool, args)?;
+        let answer = act(self);
+        let ctx = interceptor::CallContext {
+            registry: contract::contract_tools_registry(),
+            caller: self.caller.as_ref(),
+            target: contract::CONTRACT_TOOLS_ID,
+            operation: tool,
+            approval: Approval::default(),
+            arguments: Some(args),
+        };
+        // A contract tool that produced an answer completed, whatever the
+        // answer says: `ok: false` is a *finding*, not a failed call, and
+        // counting it as a failure would tell the promotion statistics that a
+        // working tool is a bad path.
+        self.chain.completed(&ctx, interceptor::CallOutcome::Ok);
+        Ok(answer)
+    }
+
+    /// `validate_contract(source)` — D024 §5, wrapping S4.
+    pub fn validate_contract(&mut self, source: &str, args: &Json) -> Result<Json, Denied> {
+        self.run_contract_tool("validate_contract", args, |_| contract::validate_contract(source))
+    }
+
+    /// `diff_contract(released, proposed)` — D024 §5, wrapping the §5.3 differ.
+    pub fn diff_contract(
+        &mut self,
+        released: &str,
+        proposed: &str,
+        args: &Json,
+    ) -> Result<Json, Denied> {
+        self.run_contract_tool("diff_contract", args, |_| {
+            contract::diff_contract(released, proposed)
+        })
+    }
+
+    /// `preview_generation(source)` — D024 §5, wrapping `gen`.
+    pub fn preview_generation(&mut self, source: &str, args: &Json) -> Result<Json, Denied> {
+        self.run_contract_tool("preview_generation", args, |_| contract::preview_generation(source))
+    }
+
+    /// `describe_type(id)` — D024 §5, what [`Bridge::describe`] does for an
+    /// interface, for a **type**.
+    ///
+    /// **Two gates, and the second is not a duplicate of the first.** The chain
+    /// decides whether this agent may use this tool at all; then
+    /// [`contract::type_is_reachable`] decides whether *this type* is one the
+    /// exposure's interfaces reach. The chain cannot ask the second question —
+    /// it was asked about the tool, and this is a question about the argument —
+    /// and without it a tool the operator allowed once would enumerate the data
+    /// model of every interface the operator did not allow.
+    ///
+    /// The refusal is the same for a type that is not reachable and for one
+    /// that does not exist, exactly as [`Bridge::describe`]'s is: a refusal
+    /// that told them apart would be an oracle for what sits behind the gate.
+    pub fn describe_type(&mut self, target: &str, args: &Json) -> Result<Json, Denied> {
+        let answer = self.run_contract_tool("describe_type", args, |bridge| {
+            let reachable = contract::type_is_reachable(bridge.registry, &bridge.exposure, target);
+            match (reachable, bridge.registry.typecode(target)) {
+                (true, Some(tc)) => contract::describe_type_json(bridge.registry, target, tc),
+                _ => Json::Null,
+            }
+        })?;
+        // Refused *after* the chain ran and recorded the decision, so the
+        // second gate's refusals are as visible in the ledger as the first's.
+        match answer {
+            Json::Null => Err(contract::undescribable(self.registry, &self.exposure, target)),
+            answer => Ok(answer),
+        }
     }
 
     /// Whether this session may call `operation` on what `handle` names.
@@ -1168,11 +1288,11 @@ fn describe_interface(registry: &Registry, exposure: &Exposure, id: &str) -> Res
     ]))
 }
 
-fn annotations(map: &BTreeMap<String, String>) -> Json {
+pub(crate) fn annotations(map: &BTreeMap<String, String>) -> Json {
     Json::Object(map.iter().map(|(k, v)| (k.clone(), s(v))).collect())
 }
 
-fn type_name(tc: &orbweaver_giop::typecode::TypeCode) -> String {
+pub(crate) fn type_name(tc: &orbweaver_giop::typecode::TypeCode) -> String {
     use orbweaver_giop::typecode::TypeCode as T;
     match tc {
         T::Struct { name, .. }
@@ -1278,14 +1398,14 @@ fn invoke_operation(
 /// The catalog entry kinds a deployment might expose, for a bridge that wants
 /// to build an allowlist from the registry rather than by hand.
 ///
-/// Returns interfaces only: a bare type is not callable, and exposing one would
-/// mean nothing.
+/// **Moved to [`Registry::exposable_interfaces`] on 2026-08-26** and kept here
+/// as a one-line delegate, because it was the whole of `orbweaver-forge`'s
+/// source dependency on this crate and that edge had to be reversed before the
+/// boundary could reach the pipeline it exposes. The reasoning is written at
+/// the new home; nothing about the answer changed, which is why this is a
+/// delegate rather than a deprecation.
 pub fn exposable_interfaces(registry: &Registry) -> Vec<String> {
-    registry
-        .ids()
-        .filter(|id| matches!(registry.get(id), Some(Entry::Interface(_))))
-        .cloned()
-        .collect()
+    registry.exposable_interfaces()
 }
 
 #[cfg(test)]

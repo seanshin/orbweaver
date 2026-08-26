@@ -476,6 +476,39 @@ impl Registry {
         self.entries.keys()
     }
 
+    /// The catalog entry kinds a deployment might expose, for a bridge that
+    /// wants to build an allowlist from the registry rather than by hand.
+    ///
+    /// Returns interfaces only: a bare type is not callable, and exposing one
+    /// would mean nothing.
+    ///
+    /// # Why this lives here and not at the agent boundary
+    ///
+    /// It was `orbweaver_mcp::exposable_interfaces` until 2026-08-26, and it
+    /// was **the entire source-level reason `orbweaver-forge` depended on
+    /// `orbweaver-mcp`** — one call, in S5. That edge pointed the wrong way:
+    /// the boundary crate sat *upstream* of the pipeline it exists to expose,
+    /// so `orbweaver-mcp` could not call S4, `idl-diff` or `gen` without a
+    /// cycle, and D024 §5's four contract tools could not be written where the
+    /// tool surface is. It also put the annotate-or-assume sentence out of
+    /// reach of its own owner in the other direction.
+    ///
+    /// The question this answers — *which entries in this catalog could be
+    /// exposed at all* — is a property of the catalog and of nothing else. It
+    /// reads a `Registry` and returns ids; it knows no `Exposure`, no caller
+    /// and no policy. Asking the owner is what CLAUDE.md's *where a fact lives*
+    /// rule prescribes, and the owner is the registry.
+    ///
+    /// `orbweaver_mcp::exposable_interfaces` remains as a re-export, so no
+    /// caller had to move with it.
+    ///
+    /// *이 함수 하나가 forge → mcp 의존의 전부였고, 그 방향이 경계 크레이트를
+    /// 파이프라인보다 위에 두어 D024 §5의 네 도구를 쓸 수 없게 만들고 있었다.
+    /// 질문 자체가 카탈로그의 속성이므로 집은 여기다.*
+    pub fn exposable_interfaces(&self) -> Vec<String> {
+        self.ids().filter(|id| matches!(self.get(id), Some(Entry::Interface(_)))).cloned().collect()
+    }
+
     /// Registers `entry` under `id` with a remote provenance, or refuses.
     ///
     /// This is the *only* way an entry enters the registry without IDL behind

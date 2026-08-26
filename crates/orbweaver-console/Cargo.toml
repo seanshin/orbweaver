@@ -20,6 +20,10 @@ orbweaver-mcp = { path = "../orbweaver-mcp" }
 orbweaver-giop = { path = "../orbweaver-giop", default-features = false }
 orbweaver-dynamic = { path = "../orbweaver-dynamic" }
 orbweaver-idl = { path = "../orbweaver-idl" }
+# For `effect::SILENCE` and `effect::NO_ASSUMPTION` alone: the catalog legend
+# is one of four layers that say what an operation with no `ai_effect` means,
+# and since 2026-08-26 that sentence has one home rather than four.
+orbweaver-forge = { path = "../orbweaver-forge" }
 
 [dev-dependencies]
 # The tests fabricate an IOR that advertises a CSIv2 mechanism list — the

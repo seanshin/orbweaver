@@ -178,6 +178,33 @@ pub enum Denied {
         /// readers who already have the arguments.
         reason: String,
     },
+    /// `describe_type` was asked about a repository id the caller **can
+    /// already see** and that is not a type.
+    ///
+    /// **The variant that exists because a refusal misdirected.** The first
+    /// version of `describe_type` answered every undescribable id with
+    /// [`Denied::InterfaceNotExposed`], which is right for a type nothing
+    /// exposed reaches — a refusal there must not confirm what sits behind the
+    /// gate. It is wrong for an **exposed interface**: an agent that asked
+    /// `describe_type` for `IDL:bank/Account:1.0` was told *"is not exposed"*
+    /// about a contract the operator had just exposed, and would go hunting
+    /// through the allowlist for a problem that is in the request. That is the
+    /// RC-4 misdirection this file already refuses once, in
+    /// [`Denied::EffectUnstated`]'s note — arriving by a third road.
+    ///
+    /// It leaks nothing: it is answered **only** for an id the exposure
+    /// already exposes, so the caller could have learned the same thing from
+    /// `describe_interface`. Everything else — a type nothing reaches, an id
+    /// nobody declared — keeps the one indistinguishable answer.
+    ///
+    /// Found by driving the shipped binary rather than by a unit test, which
+    /// is the lesson `tests/serving_audit.rs` opens with.
+    NotAType {
+        /// Repository id.
+        id: String,
+        /// What the catalog says it is, in IDL's own word.
+        kind: String,
+    },
     /// A consumption budget is spent ([`crate::quota`], §4.5 #2).
     ///
     /// **The one variant that is not about permission.** Every other refusal
@@ -319,15 +346,26 @@ impl Denied {
                 }
                 out
             }
-            // The sentence S4 writes for the same condition, in this crate's
-            // wording. See the module note in `crate::guard` on where this fact
-            // lives: `orbweaver-forge`'s `sidl/missing-ai_effect` fix hint says
-            // it too and neither crate depends on the other.
+            // **The sentence S4 writes for the same condition, and now
+            // literally the same sentence.** It used to be this crate's own
+            // wording, and the comment here said why: "neither crate depends
+            // on the other". That stopped being true on 2026-08-26, when the
+            // `orbweaver-forge -> orbweaver-mcp` edge was reversed so the
+            // boundary could reach the pipeline it exposes — which also put
+            // the sentence's owner within reach.
+            //
+            // The offer stays **two values** where S4 offers three, and
+            // `effect::OFFER_GATE` carries the argument at its own site: a
+            // remedy is read by the agent that was just refused, and the
+            // choice its operator faces is a pole, not a menu. `None` for the
+            // flag for the same reason — naming `--assume-effect` here would
+            // address a reader who cannot run it.
             Denied::EffectUnstated { id, operation } => format!(
-                "annotate the operation (`//@ ai_effect: read_only` or `//@ ai_effect: \
-                 destructive`), or an operator declares what this exposure assumes for the \
-                 operations that state none; until one of those happens {id}.{operation} has \
-                 nobody's statement to rest on"
+                "{}; until one of those happens {id}.{operation} has nobody's statement to rest on",
+                orbweaver_forge::effect::annotate_or_assume(
+                    &orbweaver_forge::effect::OFFER_GATE,
+                    None
+                )
             ),
             // Names the stage and **not one word the stage wrote**, for the
             // reason `crate::guard::audit_reason` gives: that prose is the only
@@ -336,6 +374,15 @@ impl Denied {
             Denied::Intercepted { stage, .. } => format!(
                 "the {stage} stage was installed by this deployment, so what would satisfy it is \
                  an operator's answer and not this bridge's"
+            ),
+            // The one remedy that points at another tool, and it is not a way
+            // around a gate: nothing was denied here by policy. The contract
+            // is what makes this id an interface, and naming the tool that
+            // describes one is telling the caller what it asked for exists
+            // elsewhere — not how to get past a refusal.
+            Denied::NotAType { id, kind } => format!(
+                "the contract declares {id} as {kind} and not as a type, so there is no type for \
+                 describe_type to describe; describe_interface is what reads an interface"
             ),
             Denied::QuotaExhausted { budget, window, renews: true, .. } => format!(
                 "the budget {budget} is spent for window {window:?} and the host is what opens \
@@ -433,6 +480,9 @@ impl Denied {
             ),
             Denied::OperationNotExposed { id, operation } => {
                 write!(f, "{id} is exposed but {operation:?} is not among its allowed operations")
+            }
+            Denied::NotAType { id, kind } => {
+                write!(f, "{id} is {kind}, not a type")
             }
             Denied::MissingScope { id, operation, required } => write!(
                 f,
@@ -795,8 +845,20 @@ pub(crate) fn effect_refusal(
 }
 
 /// The `ai_effect` values that need no human.
-fn is_harmless(value: &str) -> bool {
-    matches!(value.trim(), "read_only" | "readonly" | "idempotent" | "safe")
+///
+/// **Published, and one line.** This predicate is the gate's own — it is what
+/// [`effect_refusal`] asks before letting a call through — and it had two
+/// hand-kept mirrors in other crates (`orbweaver_forge::annotate::
+/// UNGATED_EFFECTS` and `orbweaver_test::contract::UNGATED_EFFECTS`), each
+/// documented as a mirror and each free to fall behind it. The list now has
+/// one home in [`orbweaver_forge::effect::UNGATED`], which every layer that
+/// needs it reads, so the three cannot disagree.
+///
+/// It is `pub` because a classifier outside this crate that wants to know what
+/// the gate will let through must be able to **ask** rather than to retype —
+/// CLAUDE.md's *a classifier is a sentence too*.
+pub fn is_harmless(value: &str) -> bool {
+    orbweaver_forge::effect::is_harmless(value)
 }
 
 /// The scopes `ai_authz` asks for, comma-separated in the annotation.

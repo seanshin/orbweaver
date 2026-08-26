@@ -121,12 +121,33 @@ pub fn parse_request(line: &str) -> Result<Request, Json> {
     })
 }
 
-/// The three tools, as MCP describes them to a client.
+/// The seven tools, as MCP describes them to a client.
 ///
 /// The descriptions are what an agent reads before choosing, so they say what
 /// the tool is *for* rather than what it does mechanically — and
 /// `invoke_operation` says plainly that a reference is a handle, because an
 /// agent that expects to pass an address will otherwise try.
+///
+/// # Two groups, and the line between them
+///
+/// The first three are the **estate** triad: find a contract, read it, call it.
+/// Every one of them names something that exists in the catalog.
+///
+/// The last four are D024 §5's **contract** tools: validate IDL, diff it,
+/// describe a type, preview what would be generated. Three of them take IDL
+/// text the agent wrote and name nothing in the catalog at all;
+/// `describe_type` is the one that reads the catalog, and it is gated twice for
+/// that reason (see [`crate::Bridge::describe_type`]).
+///
+/// **Every one of them returns findings rather than a verdict** — D024 §3, and
+/// the reason is stated there: the caller is a generator that will quote the
+/// answer back, so `{"ok": false}` throws away the position and the fix hint at
+/// the boundary where they matter most. The descriptions say so, because an
+/// agent that expects a boolean will write code that reads one.
+///
+/// **Registration is deliberately not among them** (D024 §5): an agent that can
+/// register a contract can change what other agents see, and that is
+/// `exposure`'s decision.
 pub fn tool_definitions() -> Json {
     let string_prop = |desc: &str| obj([("type", s("string")), ("description", s(desc))]);
 
@@ -211,6 +232,92 @@ pub fn tool_definitions() -> Json {
                         ]),
                     ),
                     ("required", Json::Array(vec![s("handle"), s("operation")])),
+                ]),
+            ),
+        ]),
+        // ---- D024 §5, the contract tools. --------------------------------
+        // Every description below says "findings" and none says "valid" or
+        // "ok", because an agent that expects a boolean writes code that reads
+        // one and then has nothing to repair from.
+        obj([
+            ("name", s("validate_contract")),
+            (
+                "description",
+                s("Check IDL you have written. Returns findings — each with a rule, a line and \
+                   column, and a concrete fix where the rule admits one — plus a repair_prompt \
+                   that states every cause once. Never a bare verdict. Constructs this wire \
+                   cannot carry are errors here, and say whether that is not-yet or never."),
+            ),
+            (
+                "inputSchema",
+                obj([
+                    ("type", s("object")),
+                    ("properties", obj([("source", string_prop("The IDL text to check"))])),
+                    ("required", Json::Array(vec![s("source")])),
+                ]),
+            ),
+        ]),
+        obj([
+            ("name", s("diff_contract")),
+            (
+                "description",
+                s("Compare a proposed contract against a released one. Returns every change with \
+                   the verdict it carries — compatible, server-first, conditionally breaking or \
+                   BREAKING — and the reason for that verdict, plus the same findings and \
+                   repair_prompt validate_contract returns. Both sides are IDL text."),
+            ),
+            (
+                "inputSchema",
+                obj([
+                    ("type", s("object")),
+                    (
+                        "properties",
+                        obj([
+                            ("released", string_prop("The IDL of the contract already released")),
+                            ("proposed", string_prop("The IDL of the contract being proposed")),
+                        ]),
+                    ),
+                    ("required", Json::Array(vec![s("released"), s("proposed")])),
+                ]),
+            ),
+        ]),
+        obj([
+            ("name", s("describe_type")),
+            (
+                "description",
+                s("What describe_interface does for an interface, for a type. Returns the type's \
+                   name, the module it is defined in, and its shape — the members of a struct, \
+                   the cases of a union, the enumerators of an enum, what a typedef aliases. Use \
+                   it when a member's type is a name you cannot look up. Only types an exposed \
+                   interface actually reaches are visible."),
+            ),
+            (
+                "inputSchema",
+                obj([
+                    ("type", s("object")),
+                    (
+                        "properties",
+                        obj([("id", string_prop("Repository id, e.g. IDL:bank/Money:1.0"))]),
+                    ),
+                    ("required", Json::Array(vec![s("id")])),
+                ]),
+            ),
+        ]),
+        obj([
+            ("name", s("preview_generation")),
+            (
+                "description",
+                s("What would be generated for a contract, for both targets, and — the half that \
+                   matters — what would be skipped and why. A construct this wire cannot carry is \
+                   skipped silently at generation time, so check here before assuming a type you \
+                   declared will exist in the client."),
+            ),
+            (
+                "inputSchema",
+                obj([
+                    ("type", s("object")),
+                    ("properties", obj([("source", string_prop("The IDL text to preview"))])),
+                    ("required", Json::Array(vec![s("source")])),
                 ]),
             ),
         ]),
@@ -320,14 +427,80 @@ mod tests {
         }
     }
 
+    /// **The pin.** It asserted the triad until 2026-08-26 and now asserts the
+    /// triad *followed by* D024 §5's four, in order, and nothing else.
+    ///
+    /// The order is part of the assertion, not an accident of writing: an agent
+    /// reads this list top to bottom before choosing, and the estate tools come
+    /// first because finding a contract is what most sessions do.
+    ///
+    /// The negative half is the one that earns its place — **`register_contract`
+    /// is named here as a tool that must never appear.** D024 §5 excludes
+    /// registration because an agent that can register a contract can change
+    /// what other agents see, which is `exposure`'s decision; a list that only
+    /// checked what it contained would let a fifth tool arrive without anybody
+    /// re-reading that paragraph.
     #[test]
-    fn the_tool_list_advertises_exactly_the_triad() {
+    fn the_tool_list_advertises_the_triad_and_the_four_contract_tools() {
         let Json::Array(tools) = tool_definitions() else { panic!() };
         let names: Vec<&str> = tools.iter().filter_map(|t| t.get("name")?.as_str()).collect();
-        assert_eq!(names, ["search_interfaces", "describe_interface", "invoke_operation"]);
+        assert_eq!(
+            names,
+            [
+                "search_interfaces",
+                "describe_interface",
+                "invoke_operation",
+                "validate_contract",
+                "diff_contract",
+                "describe_type",
+                "preview_generation",
+            ]
+        );
         for t in &tools {
             assert!(t.get("description").is_some(), "{t}");
             assert!(t.get("inputSchema").is_some(), "{t}");
+        }
+        for forbidden in ["register_contract", "register", "compile_idl"] {
+            assert!(
+                !names.contains(&forbidden),
+                "{forbidden} is deliberately not a tool; see D024 §5 before adding it"
+            );
+        }
+    }
+
+    /// The four contract tools are exactly the four the gate has a contract
+    /// for, computed from that contract rather than retyped here — so a tool
+    /// advertised with no operation behind it (which would be refused at every
+    /// call by `OperationNotExposed`, confusingly) cannot ship.
+    #[test]
+    fn every_advertised_contract_tool_is_declared_by_the_gates_own_contract() {
+        let Json::Array(tools) = tool_definitions() else { panic!() };
+        let names: Vec<&str> = tools.iter().filter_map(|t| t.get("name")?.as_str()).collect();
+        let registry = crate::contract::contract_tools_registry();
+        for tool in crate::contract::CONTRACT_TOOLS {
+            assert!(names.contains(&tool), "{tool} is declared and not advertised");
+            assert!(
+                registry.resolve_operation(crate::contract::CONTRACT_TOOLS_ID, tool).is_some(),
+                "{tool} is advertised and the tool contract does not declare it"
+            );
+        }
+    }
+
+    /// D024 §3: the answer is findings, and the description has to say so
+    /// before the agent calls rather than after.
+    #[test]
+    fn every_contract_tool_promises_findings_rather_than_a_verdict() {
+        let Json::Array(tools) = tool_definitions() else { panic!() };
+        for tool in crate::contract::CONTRACT_TOOLS {
+            let t = tools
+                .iter()
+                .find(|t| t.get("name").and_then(Json::as_str) == Some(tool))
+                .unwrap_or_else(|| panic!("{tool} is advertised"));
+            let desc = t.get("description").and_then(Json::as_str).unwrap_or("");
+            assert!(
+                desc.contains("Returns") || desc.contains("what would be"),
+                "{tool} must say what it returns: {desc}"
+            );
         }
     }
 

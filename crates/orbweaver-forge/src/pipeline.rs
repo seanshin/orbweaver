@@ -1536,8 +1536,8 @@ pub struct Registration {
     /// Every valid item's IDL, loaded into one in-process catalog.
     pub registry: Registry,
     /// The repository ids an operator could choose to expose — interfaces
-    /// only, as [`orbweaver_mcp::exposable_interfaces`] defines the term.
-    /// This is a menu, never a grant.
+    /// only, as [`orbweaver_registry::Registry::exposable_interfaces`] defines
+    /// the term. This is a menu, never a grant.
     pub exposable: Vec<String>,
 }
 
@@ -1647,7 +1647,7 @@ pub fn register(report: &BatchReport, out_dir: &Path) -> Result<Registration, Re
             .map_err(|e| RegisterError::Registry { id: item.id.clone(), message: e.message })?;
     }
 
-    let exposable = orbweaver_mcp::exposable_interfaces(&registry);
+    let exposable = registry.exposable_interfaces();
 
     let path = out_dir.join(EXPOSURE_TODO_FILE);
     let io = |e: std::io::Error| RegisterError::Io { path: path.clone(), message: e.to_string() };

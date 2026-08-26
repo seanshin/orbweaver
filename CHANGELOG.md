@@ -169,6 +169,114 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **The second half of the agent boundary: four IDL tools, and the edge that
+  had to be reversed to write them** (D024 §5, 2026-08-26). The MCP surface
+  advertised three tools — find a contract, read it, call it — and the whole
+  S1–S5 pipeline reached an agent through none of them. It now advertises
+  seven: `validate_contract` (S4), `diff_contract` (the §5.3 differ),
+  `describe_type` (the registry), `preview_generation` (`gen`).
+
+  **The blocker was a dependency pointing the wrong way.** `orbweaver-forge`
+  depended on `orbweaver-mcp`, so the boundary crate sat *upstream* of the
+  pipeline it exists to expose and could not call S4 or `gen` without a cycle.
+  The whole source-level coupling was **one function** — `exposable_interfaces`,
+  a pure question about a catalog — which moved to
+  `Registry::exposable_interfaces`; `orbweaver-forge`'s dependency on
+  `orbweaver-mcp` became a dev-dependency, and `orbweaver-mcp` now depends on
+  `orbweaver-forge` and `orbweaver-gen`. The same inversion is what let the
+  annotate-or-assume sentence acquire an owner (below): two tasks, one root
+  cause.
+
+  **Every tool returns findings, never a verdict** (D024 §3) — `Report::to_json`
+  plus `repair_prompt`, because the caller is a generator that will quote the
+  answer back and `{"ok": false}` throws away the position and the fix at the
+  boundary where they matter most. `preview_generation` reports both targets and
+  **what would be skipped and why**, in the §4.4 sentences `orbweaver-dynamic`
+  already owns.
+
+  **Each passes through the same interceptor chain as `invoke_operation`**,
+  which is what makes this a trust-boundary change. The tool surface is itself
+  a contract — `IDL:orbweaver/ContractTools:1.0`, four operations, each
+  annotated `//@ ai_effect: read_only` — so every stage answers out of
+  machinery that already existed with nothing special-cased, and an operator
+  allowlists the tools (or one of them) with the `--expose` grammar they
+  already use. **They are default-deny like everything else here.** What each
+  stage means for a tool that takes IDL text rather than an object id is argued
+  stage by stage in `orbweaver-mcp/src/contract.rs`.
+
+  `describe_type` is gated **twice**, and the second gate is not a duplicate:
+  the chain decides whether this agent may use the tool, and
+  `type_is_reachable` decides whether *this type* is one an exposed interface
+  reaches. Without it a tool allowed once would enumerate the data model of
+  every interface the operator did not allow — a question the chain cannot ask,
+  because it was asked about the tool and this is about the argument. Refusals
+  do not distinguish "not reachable" from "does not exist", exactly as
+  `describe_interface`'s do not.
+
+  **`describe_type` and the IFR's `Contained::describe` agree, and the way two
+  answers agree is by being one answer**: `ifr::contained_of` was a private
+  method and is now published, so the name/`defined_in`/version triple is one
+  function both halves call. `describe_type_agrees_with_the_ifr.rs` proves the
+  rest end to end over real GIOP in both byte orders. They agreed on every
+  field of every case on first measurement — an honest result, and not a strong
+  one, since the derived fields agree by construction.
+
+  The tool-list pin now asserts the triad followed by the four, in order, and
+  **names `register_contract` as a tool that must never appear**: D024 §5
+  excludes registration because an agent that can register a contract can
+  change what other agents see.
+
+  **One defect found by driving the shipped binary, with the whole suite
+  green.** `describe_type` answered every id it would not describe with
+  `Denied::InterfaceNotExposed`, so asking it about `IDL:bank/Account:1.0` —
+  an interface passed to `--expose` on the same command line — replied *"is not
+  exposed"*, sending the reader into the allowlist after a problem that was in
+  the request. That is the RC-4 misdirection this codebase already refuses
+  once, arriving by a third road. `Denied::NotAType { id, kind }` now answers
+  it, **only for an id the exposure already exposes** — so it leaks nothing the
+  caller could not have got from `describe_interface` — while a type nothing
+  reaches and an id nobody declared keep the one indistinguishable answer. The
+  compiler asked for the new variant's remedy and for its classification in
+  `dryrun::Would::of`, which is that exhaustive match doing the job it was
+  written for.
+
+  *에이전트 경계의 나머지 절반. 막고 있던 것은 반대로 향한 의존이었다 — 함수
+  하나가 전부였고, 그것을 옮기자 두 과제의 공통 원인이 사라졌다. 모든 도구는
+  판정이 아니라 진단을 돌려주고, 모두 같은 인터셉터 체인을 지난다.*
+
+- **The annotate-or-assume sentence has one home** (`orbweaver_forge::effect`,
+  2026-08-26). An operation whose contract states no `ai_effect` has exactly
+  two ways out, and **six sites said so in four vocabularies**: S4's
+  `sidl/missing-ai_effect` fix (three values), S3's `s3/missing-ai_effect` fix
+  (three, byte-identical — equal by luck, in another file), S3's
+  `s3/effect-unknown` (four, the only site naming `safe`), the gate's
+  `Denied::remedy` (two), the server's startup summary (none, names the flag),
+  the console's catalog legend (none, and no remedy at all).
+
+  **The difference in what each offers is real and survives**: it is a
+  parameter, not a fork. S3 and S4 speak to a contract's author and offer the
+  author's three values; the gate speaks to a refused caller and offers the two
+  poles, because a remedy is not a menu of ways past a gate; the server and the
+  console speak to an operator who is not editing the contract and name the
+  flag instead. Flattening three into two would have been a regression dressed
+  as a cleanup.
+
+  The **vocabulary** went the same way: `policy::is_harmless` — the predicate
+  the gate actually asks — had two hand-kept mirrors, one of which carried a
+  doc comment admitting it was a mirror. They are now the same constant, so
+  there is **nothing left to test** about their agreement; the drift is
+  impossible rather than detectable.
+
+  `orbweaver-test/tests/one_home_for_the_effect_sentence.rs` computes every
+  expectation by **calling the function the layer is supposed to call**, in the
+  shape `one_home_for_a_wire_refusal.rs` established — and two existing tests
+  that had retyped these sentences went red on the way in, which is the rule
+  catching itself.
+
+  *여섯 군데가 네 가지 어휘로 말하고 있었고 아무것도 빨갛지 않았다 — 사실의
+  범위는 워크스페이스인데 고정이 없었기 때문이다. 계층마다 제시하는 값이 다른
+  것은 실제 차이이므로 매개변수로 남는다.*
+
 - **The trading service is open: `CosTrading::Lookup::query` answers a client
   that is not ours.** D022 T3 and T4. `PLAN-SERVICES` §3 deferred the standard
   facade *until a foreign trading client is named*, and the naming is measured
