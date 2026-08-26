@@ -27,6 +27,7 @@ use orbweaver_giop::{IiopProfile, Ior, Version};
 use orbweaver_registry::Registry;
 
 pub mod expert_service;
+pub mod plane;
 pub mod policy;
 pub mod residency;
 pub mod tenant_service;
