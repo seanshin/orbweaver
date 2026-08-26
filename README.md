@@ -32,8 +32,8 @@ needs a number. Numbers do not live here, because a number copied into a second
 file drifts from the first one silently.
 
 이 README는 여섯 가지 질문에 답하고, 수치가 필요한 것은 해당 문서로 넘깁니다.
-수치는 여기 살지 않습니다 — 두 번째 파일로 복사된 수치는 조용히 어긋나기
-때문입니다.
+수치 자체는 여기 적지 않습니다. 한 번 옮겨 적은 수치는 원본이 바뀌어도 따라
+바뀌지 않고, 어긋났다는 사실을 알려 줄 장치도 없기 때문입니다.
 
 | | Question | 질문 | Section |
 |---|---|---|---|
@@ -84,8 +84,8 @@ TCP 위의 GIOP/IIOP, IOR, TypeCode, POA, IDL 4.2 프런트엔드, 인터페이�
 `orbweaver-mcp`가 서빙 중인 객체를 AI 에이전트에게 호출 가능한 도구로 노출하되,
 기본 거부 정책과 인터셉터 체인 뒤에 둡니다.
 
-둘이 별개의 프로젝트가 아니라 하나인 이유는 이것입니다 — **IDL은 기계가 기계의
-출력을 검사할 수 있을 만큼 엄격한 계약 언어입니다.** 모델은 그럴듯하지만 틀릴 수
+둘을 하나로 묶는 것은 **IDL이 기계가 기계의 출력을 검사할 수 있을 만큼 엄격한
+계약 언어**라는 점입니다. 모델은 그럴듯하지만 틀릴 수
 있는 IDL을 쓰고, IDL 컴파일러는 틀린 IDL을 매번 거부합니다. 생성은 확률적으로,
 검증은 결정론적으로. 나머지는 전부 이 비대칭에서 따라 나옵니다.
 
@@ -112,10 +112,10 @@ each name the leaks found in them so far, including the ones still open.
 대상이 런타임에 추가·제거·이동·적재·축출되어도 이 성질이 유지된다.*
 
 기준의 집은 [`D029`](docs/decisions/D029-what-a-complete-orb-would-mean.md)
-§6이며 다른 어디에도 다시 적지 않습니다. 실무적 귀결은 이것입니다 — **투명성은
-확인하는 것이 아니라 구멍을 사냥하는 것입니다.** 구멍을 막는 변경이 기능을 더하는
-변경보다 앞서고, D029 §6.1의 다섯 행은 각자 지금까지 발견된 구멍을 — 아직 열려
-있는 것까지 — 이름으로 적고 있습니다.
+§6이며 다른 어디에도 다시 적지 않습니다. 여기서 따라 나오는 것이 **투명성은
+확인하는 것이 아니라 구멍을 사냥하는 것**이라는 원칙입니다. 구멍을 막는 변경이
+기능을 더하는 변경보다 앞서고, D029 §6.1의 다섯 행은 각자 지금까지 발견된
+구멍을 — 아직 열려 있는 것까지 — 이름으로 적고 있습니다.
 
 ---
 
@@ -541,8 +541,8 @@ Phase 0–3.5 완료, Phase 4 대부분 착지, Phase 5 절반. 남은 작업은
 행이고, 오늘 측정 불가한 것은 막고 있는 픽스처를 이름으로 적은 `SKIPPED`
 그룹입니다. 하네스는 실행마다 투명성별 원장을 출력합니다 — 측정됨, 빨강, 또는
 그룹 자신의 말로 적은 미측정 사유. 점수는 내지 않으며 내서도 안 됩니다. 미측정
-목록이 줄어드는 것은 어떤 실행이 구멍을 막았을 때만 진전이며, 아무도 보지 않을
-때와 똑같아 보이기 때문입니다.
+목록이 줄어든 것은 어떤 실행이 실제로 구멍을 막았을 때만 진전입니다. 아무도
+들여다보지 않아서 줄어든 것과 겉으로는 구별되지 않습니다.
 
 ---
 
@@ -669,7 +669,7 @@ Two decisions are load-bearing enough to name here:
 completion criterion, and [`D034`](docs/decisions/D034-stopping-what-the-orb-handed-out.md)
 holds what `Orb::shutdown` promises and refuses.
 
-결정 두 건은 여기 이름을 적어 둘 만큼 하중을 지탱합니다 —
+결정 두 건은 여기에 이름을 적어 둘 만큼 자주 쓰입니다 —
 [`D029`](docs/decisions/D029-what-a-complete-orb-would-mean.md) §6이 완성
 기준을, [`D034`](docs/decisions/D034-stopping-what-the-orb-handed-out.md)가
 `Orb::shutdown`이 약속하는 것과 거절하는 것을 담고 있습니다.
