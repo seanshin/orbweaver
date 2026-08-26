@@ -16,18 +16,24 @@
 # Only `observed` counts toward clause 2, and `observed` means a byte was read
 # off GIOP §15.4.1's flag byte of what the peer actually wrote.
 #
-# ── Three cells and three `waits` / 세 칸과 세 대기 행 ───────────────────────
+# ── Three cells, and every other square named / 세 칸과, 이름 붙은 나머지 ────
 #
-# The grid is (direction × peer) = 2 × 3. **The whole servant row is absent, and
-# deliberately**: D030 §5 L2 scopes the second language to CLIENTS, because a
+# The grid is (direction × peer), and **its width is not this file's to state**:
+# `spikes/bindings/AXES` owns the peers, and it gained `c` on 2026-08-26 after
+# this manifest was written — which is the axis working as designed and the
+# reason no count of squares is repeated here. Three cells have runners and every
+# other square has a `waits` row.
+#
+# **The whole servant row is absent, and deliberately**: D030 §5 L2 scopes the
+# second language to CLIENTS, because a
 # generated servant must be *called by* the ORB and that needs the bridge's
 # serving direction to carry a dispatch into Java — the seam `pyservant.rs`
 # implements for exactly one language today. Generalising it is its own batch,
 # and attempting both in one is how a batch lands half-measured.
 #
-# The three client cells are all supplied, and two of them read a foreign peer's
-# flag byte — including `client × jacorb`, which is the cell Python's manifest
-# states as its own gap:
+# The client cells against the two ORB peers and against ourselves are supplied,
+# and both foreign ones read a peer's flag byte — including `client × jacorb`,
+# which is the cell Python's manifest states as its own gap:
 #
 #   "Nothing drives generated Python at a JacORB server, and that is precisely
 #    the cell that would give the client direction a big-endian reading off a
@@ -71,6 +77,18 @@ cell	client	self	spikes/bindings/java/client-self.sh
 waits	servant	omniorb	a Java SERVANT, which needs the bridge's serving direction to carry a dispatch into a Java process. D030 §5 L2 scopes this language to clients on purpose: a generated client marshals a request and everything it needs is a function it calls, while a generated servant must be CALLED BY the ORB. `crates/orbweaver-gen/src/pyservant.rs` is that seam for one language and it is not language-neutral yet; generalising it is a batch of its own, and D030 §2's table is why the two are not one job.
 waits	servant	jacorb	as servant/omniorb above. Note what is NOT missing: JacORB already drives a Python servant behind our ORB (spikes/bindings/python/servant-jacorb.sh), so the peer, the tap and the byte-order reading all exist — what is missing is the Java half of the seam, not the fixture.
 waits	servant	self	as servant/omniorb above. This one would be the cheapest of the three and is still not supplied, because a self cell that existed while the foreign ones did not would report a seam we had never run against anybody else.
+
+# ── the C peer, which arrived on the axis after this manifest was written ────
+#
+# `spikes/AXES` gained `peer c` from another batch on 2026-08-26, and that is the
+# axis working as designed: *"a new peer makes every existing binding's gap
+# visible on the next run, rather than being visible only to whoever added the
+# peer."* Java's two `c` cells print as SKIPPED whether or not these rows exist;
+# the rows are here because the absence has a cause worth stating rather than a
+# blank to be read as an oversight.
+
+waits	client	c	`spikes/c_peer.c` is a first-party C peer that links no ORB. Nothing has driven generated Java at it, and the cell is cheap rather than free: the peer's own axis row says it shares no reading with `crates/`, so a cell here would be a THIRD independent implementation of the same call in one run — which is the strongest form of clause 6 this grid can offer and is worth doing deliberately rather than as an afterthought to a Java batch.
+waits	servant	c	as `servant/omniorb`: the Java half of the seam is what is missing, not the peer. A C peer calling a Java servant needs both this row's peer and that row's seam.
 
 # ── clauses 3, 4 and 5 — language-scoped, no peer and no wire ────────────────
 
