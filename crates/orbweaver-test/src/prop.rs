@@ -608,12 +608,19 @@ fn excerpt(text: &str) -> String {
 
 /// Why a type is not taken across AnyJSON, or `None` when it is.
 ///
-/// The list is the mapping's own, and the four constructs the wire cannot
-/// carry take their head from [`orbweaver_dynamic::deferred_wire_head`] and
-/// [`orbweaver_dynamic::unmarshallable_wire_head`] rather than from a literal
+/// The list is the mapping's own, and the five constructs the wire cannot
+/// carry take their head from [`orbweaver_dynamic::deferred_wire_head`],
+/// [`orbweaver_dynamic::unmarshallable_wire_head`] and
+/// [`orbweaver_dynamic::withdrawn_wire_head`] rather than from a literal
 /// here — the tail is this layer's, because "the property did not measure it"
 /// is not what `from_json` tells a peer. What is left to `from_json_at`'s own
-/// `"cannot cross yet"` is `void`, `null` and `Principal`.
+/// `"cannot cross yet"` is `void` and `null`.
+///
+/// `Principal` was on that last list until 2026-08-26 and was the arm that
+/// still wrote its own sentence here, one release after the sweep that
+/// collapsed the other four. It survived the sweep because the sweep's gate
+/// classifies a sentence before demanding a head, and a family with no head
+/// yet reads as "not about a wire family" in every layer at once.
 ///
 /// It said otherwise until 2026-08-24, and the sentence had gone false: it
 /// quoted `from_json` as answering `"cannot cross yet"` for a `fixed`, which
@@ -649,9 +656,10 @@ fn json_unmapped(tc: &TypeCode) -> Option<String> {
                 name, id
             ))
         )),
-        TypeCode::Principal => {
-            Some("`Principal` has no AnyJSON form (withdrawn from CORBA)".into())
-        }
+        TypeCode::Principal => Some(format!(
+            "{}, so it has no AnyJSON form either",
+            orbweaver_dynamic::withdrawn_wire_head(&orbweaver_dynamic::principal_subject())
+        )),
         TypeCode::Void | TypeCode::Null => {
             Some("`void` where a type belongs has no AnyJSON value form".into())
         }
@@ -1267,7 +1275,10 @@ fn why_unsupported(tc: &TypeCode) -> String {
         TypeCode::TypeCode => {
             "a bare `TypeCode` has no `Value` representation in the dynamic path".into()
         }
-        TypeCode::Principal => "`Principal` is withdrawn from CORBA and is not marshalled".into(),
+        TypeCode::Principal => format!(
+            "{}, so the sampler has no value to generate",
+            orbweaver_dynamic::withdrawn_wire_head(&orbweaver_dynamic::principal_subject())
+        ),
         TypeCode::Recursive(_) => "the type is recursive and has no finite expansion".into(),
         TypeCode::Struct { members, .. } | TypeCode::Except { members, .. } => members
             .iter()

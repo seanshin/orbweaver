@@ -143,11 +143,18 @@ flowchart TB
 `Chain::standard` deliberately does not install — the reason is written at the
 seat, in `mcp/interceptor.rs`.
 
-## 5. What D019 proposes, on the same paths / D019가 제안하는 것
+## 5. What D019 settles, on the same paths / D019가 정하는 것
 
 The four responsibilities of [`decisions/D019`](decisions/D019-the-orb-has-no-object.md)
-§5, drawn where they attach. Green is the object; the red node is §2's break,
-closed by step 1.
+§5, drawn where they attach — **approved 2026-08-26, one-way**: the ORB becomes
+the only public way to a transport and a root POA. Green is the object; the red
+node is §2's break, closed by step 1.
+
+Steps 1–3 have landed. Step 4 is the one that makes the diagram true rather
+than intended, and it is the only one touching two crates at once.
+
+*§5의 네 책임을 붙는 자리에 그렸다 — **2026-08-26 승인, 일방향**. 1–3은
+착지했고, 그림을 의도가 아니라 사실로 만드는 것은 4단계다.*
 
 ```mermaid
 flowchart TB

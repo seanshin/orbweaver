@@ -230,13 +230,24 @@ pub fn descriptor(tc: &TypeCode) -> Result<String, String> {
         // native could honestly have — omniORB's own Python back end ignores
         // the declaration and leaves the type mapping dangling.
         TypeCode::Native { name, id, .. } => return Err(crate::unmarshallable_native(name, id)),
+        // The fifth family. `("principal",)` was available — `_desc_of` builds
+        // exactly that from a peer's `{"kind":"principal"}` — and wrong for the
+        // reason `("objref", id)` was wrong above: the runtime would have
+        // carried the descriptor into `to_json`, which has no arm for it, and
+        // the caller would have met "no AnyJSON form for 'principal'" at the
+        // first call instead of the boundary at generation.
+        TypeCode::Principal => return Err(crate::withdrawn_principal()),
         // D008: a TypeCode is a value, and its AnyJSON form is the structural
         // one. Python holds it as `_rt.TypeCode` — the document, kept whole so
         // relaying it is exact — and `_rt._desc_of` reads that document as a
         // descriptor, which is this function run backwards: `("ref", id)` for
         // anything with a body, synthesised when the package never declared it.
         TypeCode::TypeCode => "\"typecode\"".into(),
-        other => return Err(format!("no AnyJSON form for {other:?}")),
+        // Exhaustive, and the compiler is what made it so — see the same note
+        // at the end of [`crate::rust_type`]. These two mappers *are* the two
+        // lists of what a target cannot express; `crossable` and
+        // `representable` ask them at every node, and neither list may end in
+        // a sentence about a construct nobody has thought about.
     })
 }
 

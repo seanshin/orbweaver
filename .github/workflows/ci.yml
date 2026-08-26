@@ -58,13 +58,42 @@ jobs:
       # later, so it is checked mechanically rather than trusted to review.
       - name: licence boundary
         run: |
-          if cargo tree --workspace | grep -qiE "omniorb|jacorb|\btao\b"; then
+          # Capture, check the producer's exit status, then match with a
+          # herestring. Both halves matter and both were wrong here until
+          # 2026-08-26.
+          #
+          # `cargo tree | grep -q` is the form CLAUDE.md documents as lying in
+          # two independent ways: `grep -q` exits on first match and SIGPIPEs
+          # the producer, and under `pipefail` a producer that fails makes the
+          # pipeline fail, which an `if` reads as "no match". The harness swept
+          # 76 of these on 2026-08-25 and **this file was not in the sweep** —
+          # the sweep was scoped to a file when the rule is about a shape.
+          #
+          # Even without `pipefail` (GitHub Actions runs `bash -e`, not `-eo
+          # pipefail`) the second half bit: a `cargo tree` that could not run
+          # at all prints nothing, `grep` finds nothing and exits 1, the `if`
+          # is false, and the step printed "cargo tree is free of ORB
+          # fixtures". **The one rule this project calls non-negotiable had a
+          # CI gate that reported a boundary it had never measured.**
+          # The assignment sits inside `if !` on purpose: under `bash -e` a
+          # failing command substitution aborts the step before the next line
+          # runs, so a plain `tree_out=$(...)` would exit with cargo's status
+          # and never print *why*. The exit code would be right and the
+          # diagnosis would be missing, which is the shape a red gate is
+          # supposed to avoid.
+          if ! tree_out=$(cargo tree --workspace); then
+            echo "::error::cargo tree --workspace did not run — the licence boundary was NOT measured"; exit 1
+          fi
+          if grep -qiE "omniorb|jacorb|\btao\b" <<<"$tree_out"; then
             echo "::error::an ORB fixture has become a dependency"; exit 1
           fi
-          if cargo tree -p orbweaver-giop --no-default-features | grep -q encoding_rs; then
+          if ! ndf_out=$(cargo tree -p orbweaver-giop --no-default-features); then
+            echo "::error::cargo tree --no-default-features did not run — NOTICE's promise was NOT measured"; exit 1
+          fi
+          if grep -q encoding_rs <<<"$ndf_out"; then
             echo "::error::--no-default-features still pulls encoding_rs; NOTICE is wrong"; exit 1
           fi
-          echo "cargo tree is free of ORB fixtures"
+          echo "cargo tree ran and is free of ORB fixtures ($(wc -l <<<"$tree_out") lines read)"
 
   # ── The differential oracle: two independent deployed IDL compilers. ───────
   differential:

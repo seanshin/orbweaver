@@ -336,6 +336,17 @@ fn to_json_at(tc: &TypeCode, v: &Value, h: &mut dyn References, at: &Path<'_>) -
             return fail(p, crate::unmarshallable_wire_sentence(&what));
         }
 
+        // The fifth family, which this layer had no arm for either: a
+        // `Principal` fell to the mismatch arm below and was refused with
+        // `"Struct([]) is not a value of principal"` — the same shape the
+        // native's refusal had before it got an arm, a true sentence about the
+        // wrong problem. Its own head, not §4.4's and not a native's: see
+        // [`crate::withdrawn_wire_sentence`] for why three heads and not two.
+        (t, _) if crate::withdrawn_wire_name(t).is_some() => {
+            let what = crate::withdrawn_wire_name(t).expect("just matched");
+            return fail(p, crate::withdrawn_wire_sentence(&what));
+        }
+
         (t, v) => return fail(p, format!("{v:?} is not a value of {}", type_name(t))),
     })
 }
@@ -529,6 +540,18 @@ fn from_json_at(tc: &TypeCode, j: &Json, h: &dyn References, at: &Path<'_>) -> R
         other if crate::unmarshallable_wire_name(other).is_some() => {
             let what = crate::unmarshallable_wire_name(other).expect("just matched");
             return fail(p, crate::unmarshallable_wire_sentence(&what));
+        }
+
+        // And the fifth, on the way in — the second place in this workspace
+        // where the word below was **live in the product** for a withdrawn
+        // type. A peer whose document named a `Principal` was answered
+        // `"principal cannot cross yet"`, which promises a version in which it
+        // does; CORBA 3.0 removed the type and no such version is coming. The
+        // native arm above was written for this exact sentence a release
+        // earlier, over a different `TypeCode`.
+        other if crate::withdrawn_wire_name(other).is_some() => {
+            let what = crate::withdrawn_wire_name(other).expect("just matched");
+            return fail(p, crate::withdrawn_wire_sentence(&what));
         }
 
         other => return fail(p, format!("{} cannot cross yet", type_name(other))),

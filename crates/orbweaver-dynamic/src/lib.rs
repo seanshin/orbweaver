@@ -519,6 +519,117 @@ pub fn unmarshallable_wire_sentence(what: &str) -> String {
     )
 }
 
+/// The OMG-assigned repository id of `::CORBA::Principal`, for the subject of a
+/// refusal.
+///
+/// **Measured, and the measurement is the reason this is a constant rather than
+/// something read off a `TypeCode`.** `omniidl -b python` on
+/// `typedef ::CORBA::Principal PA;` (omniORB 4.3.4, 2026-08-26) writes
+/// `_d_PA = omniORB.tcInternal.tv_Principal` and gives the name **no**
+/// `_NP_RepositoryId` of its own: `tk_Principal` is a primitive `TypeCode`
+/// kind (13) and carries no id on the wire, exactly as `tk_long` carries none.
+/// So there is no id to *read*, and [`TypeCode::Principal`] has no field to
+/// hold one.
+///
+/// It is still in the subject, because the subject's job is to be greppable —
+/// the other four families put an id there for the same reason, and a reader
+/// who meets this refusal and searches for the id must land on the CORBA 2.x
+/// `interface Principal` this name is the remains of, not on a guess.
+pub const PRINCIPAL_ID: &str = "IDL:omg.org/CORBA/Principal:1.0";
+
+/// How `::CORBA::Principal` is spelled as the subject of a refusal.
+///
+/// "predeclared type" rather than a keyword, because that is what separates it
+/// from the other four: nothing in a contract *declares* a `Principal`. The
+/// front end predeclares the name ([`orbweaver_idl::sema::PREDECLARED_CORBA`]),
+/// a contract only ever uses it, and a refusal that called it a `native` would
+/// be describing the mechanism by which omniidl happens to predeclare it rather
+/// than what the author wrote.
+pub fn principal_subject() -> String {
+    construct_subject("predeclared type", "::CORBA::Principal", PRINCIPAL_ID)
+}
+
+/// How a construct the specification **withdrew** is named in a refusal, or
+/// `None` for a construct some version of CORBA still defines — including the
+/// three [`deferred_wire_name`] answers for and the one
+/// [`unmarshallable_wire_name`] does.
+///
+/// The fifth family, and the reason it is neither of the two above.
+///
+/// §4.4's three have a wire form the specification defines and this version has
+/// not implemented — the answer changes when we implement it. A `native` has no
+/// wire form to implement in any version, because it names a type only a
+/// language mapping knows. `::CORBA::Principal` is a third thing: the wire
+/// **did** carry one, GIOP 1.0 put a `Principal` in every request header, GIOP
+/// 1.1 dropped the field and CORBA 3.0 removed the type. So the answer is not
+/// "not yet" (nothing is coming) and not "there was never anything to marshal"
+/// (there was, and peers marshalled it for a decade) — it is that the
+/// specification took it back.
+///
+/// Aliases are followed for the same reason as the other two: a `typedef`
+/// renames a construct without restoring a wire form to it.
+pub fn withdrawn_wire_name(tc: &TypeCode) -> Option<String> {
+    match resolved(tc) {
+        TypeCode::Principal => Some(principal_subject()),
+        _ => None,
+    }
+}
+
+/// The head every "the specification withdrew this" refusal shares, whichever
+/// layer raises it — the fifth family's counterpart of [`deferred_wire_head`]
+/// and [`unmarshallable_wire_head`].
+///
+/// # Why the wording differs from the other four, in one sentence each
+///
+/// §4.4's head says *this version* does not marshal it, which invites the
+/// reader to wait for a version that will. A native's head says *no version*
+/// marshals one because there is nothing to marshal, which invites the reader
+/// to change the contract. Neither is true here: a `Principal` was marshalled,
+/// by every conformant ORB, until the specification removed it — so the head
+/// names the removal and dates it, because "withdrawn" without the dates reads
+/// as this project's opinion rather than as the OMG's edit.
+///
+/// The word **"yet"** must never appear in it, for the native's reason. The
+/// section §4.4 is not named in it at all, for a stronger version of the same
+/// reason: §4.4 is a list of things this project owes, and this is not one of
+/// them. Where a layer's *tail* names the section — [`withdrawn_wire_sentence`]
+/// does — it names it to deny it.
+///
+/// *다섯 번째 계열. 미뤄진 것도, 애초에 와이어 형식이 없던 것도 아니다 —
+/// 명세가 도로 가져간 것이다. 그래서 문장은 철회를 말하고 연도를 댄다.*
+pub fn withdrawn_wire_head(what: &str) -> String {
+    format!(
+        "{what} was withdrawn from CORBA: GIOP 1.0 carried one in every request header, GIOP 1.1 \
+         dropped that field and CORBA 3.0 removed the type — so this version marshals no value \
+         for one, and no later version will"
+    )
+}
+
+/// The whole sentence a **peer-fed** document or stream is refused with.
+///
+/// Two tails, because a reader has to be told two things this head does not
+/// say.
+///
+/// D008's asymmetry applies here exactly as it does to §4.4's three: `tc_to_json`
+/// writes `{"kind":"principal"}` and `tc_from_json` reads it back, so a peer's
+/// `any` that merely *describes* a `Principal` crosses whole and only the value
+/// behind it stops. A refusal that said only "withdrawn" would read as the name
+/// being unmentionable, and a reader would stop sending the description too.
+///
+/// And the denial: a reader who has met §4.4 in this project's other refusals
+/// will search for it here, so the sentence says the section does not apply
+/// rather than staying silent about it. §4.4's deferrals wait on this project;
+/// a type the specification has removed waits on nobody, and the fix is to
+/// change the contract rather than to change the release.
+pub fn withdrawn_wire_sentence(what: &str) -> String {
+    format!(
+        "{}; the TypeCode describing it reads, the value behind it does not. This is not one of \
+         docs/PLAN.md §4.4's deferrals: those wait on this project, and a type the specification \
+         has removed waits on nobody",
+        withdrawn_wire_head(what)
+    )
+}
+
 /// How a type is named inside this crate's own diagnostics — "expected a value
 /// of type …", "… has no component 3", "cannot decode … yet".
 ///
@@ -893,6 +1004,17 @@ fn encode_at(
             let what = unmarshallable_wire_name(t).expect("just matched");
             p.fail(unmarshallable_wire_sentence(&what))
         }
+        // The fifth, and the one that had no arm here at all: a `Principal`
+        // fell to `wrong_kind` below and was refused with "expected a value of
+        // type principal, got a struct" — a true sentence about the wrong
+        // problem, and one that names no boundary. Like a native and unlike
+        // §4.4's three, the write direction keeps no tail of its own: both
+        // directions are the same fact, because a type the specification has
+        // removed is not waiting on either half.
+        (t, _) if withdrawn_wire_name(t).is_some() => {
+            let what = withdrawn_wire_name(t).expect("just matched");
+            p.fail(withdrawn_wire_sentence(&what))
+        }
 
         (t, v) => wrong_kind(p, t, v),
     }
@@ -1113,6 +1235,17 @@ fn decode_at(d: &mut Decoder<'_>, tc: &TypeCode, p: &Path<'_>, wide: WideCodec) 
         other if unmarshallable_wire_name(other).is_some() => {
             let what = unmarshallable_wire_name(other).expect("just matched");
             return p.fail(unmarshallable_wire_sentence(&what));
+        }
+        // And the fifth, on the way in — which is where this one was **losing
+        // in the product** until 2026-08-26. A peer-fed `Principal` fell to the
+        // line below and was answered `"cannot decode principal yet"`: "yet"
+        // promises a later version, and there is no later version in which a
+        // withdrawn type comes back. Same word, same defect, same arm as the
+        // native's a release earlier — found by asking what the *fifth* family
+        // says rather than by asking what a `Principal` says.
+        other if withdrawn_wire_name(other).is_some() => {
+            let what = withdrawn_wire_name(other).expect("just matched");
+            return p.fail(withdrawn_wire_sentence(&what));
         }
         other => return p.fail(format!("cannot decode {} yet", describe(other))),
     })
