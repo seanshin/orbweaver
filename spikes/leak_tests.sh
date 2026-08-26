@@ -10,13 +10,16 @@
 # comes from a test that held a live caller while the property changed
 # underneath it; every `SKIPPED` names the specific thing its test waits on.
 #
-# WHY IT IS A SCRIPT AND NOT FIVE HARNESS GROUPS. It would be five harness
-# groups if this batch owned `run_checks.sh`, and it does not — that file is
-# held. The wiring is one group per transparency and is written out at the
-# bottom of this file, ready to paste. Until then the Rust half is still gated:
-# `cargo test --workspace` is the harness's first group and it runs these tests.
-# The SKIPPED half is NOT gated and is not counted by the harness's verdict,
-# which is this script's own honest limit and is printed in its verdict.
+# WHY IT IS A SCRIPT AND NOT FIVE HARNESS GROUPS. It began as one because the
+# batch that wrote it did not own `run_checks.sh`. **The wiring has since
+# landed** — the harness has one group per transparency, each calling
+# `leak_leg <name>`, which reads the `--raw` rows below — so the SKIPPED half is
+# gated now and this paragraph's old "until then" is gone. One consequence is
+# live and is printed in the verdict: `leak_leg` FAILS a MEASURED row whose
+# group still carries the static `tp_measures_nothing` declaration it was given
+# while its leg was a skip. The activation leg started measuring on 2026-08-26
+# and its declaration is still there, so the harness is red until one line is
+# deleted; see the verdict for which.
 #
 # THE FIVE NAMES ARE NOT WRITTEN HERE. `spikes/transparency.py` reads them from
 # D029 §6.1, which owns them. A name that arrives without a handler is a
@@ -237,14 +240,24 @@ echo ""
 echo "  The SKIPPED are the column a next batch is scoped from. They are claims"
 echo "  that are UNMEASURED, not claims that passed."
 echo ""
-echo "  This script's own limit: the SKIPPED count above is not counted by"
-echo "  run_checks.sh, because wiring these in means editing that file and this"
-echo "  batch does not own it. The groups to paste, one per transparency:"
+echo "  The wiring this footer used to say was missing LANDED: run_checks.sh has"
+echo "  one group per transparency and leak_leg reads the rows above, so the"
+echo "  SKIPPED are counted by the harness verdict."
 echo ""
-echo "      hr \"leak test — a move under a live caller (D029 §5 O0)\""
-echo "      bears_on location"
-echo "      ...  ./spikes/leak_tests.sh --raw, one group per row"
+echo "  ONE EDIT IS OWED IN run_checks.sh AND THIS SCRIPT CANNOT MAKE IT."
+echo "  The activation leg went from SKIPPED to MEASURED on 2026-08-26. Each"
+echo "  leg's group carries a static \`tp_measures_nothing\` declaration while"
+echo "  its leg is a skip, and leak_leg FAILS a MEASURED row whose group still"
+echo "  declares it — deliberately, so a leg that starts measuring cannot be"
+echo "  swallowed by a stale declaration. So run_checks.sh will report"
 echo ""
-echo "  Until then the two measured legs ARE gated — cargo test --workspace is"
-echo "  the harness's first group and runs them — and the three SKIPPED are not."
+echo "      FAIL this group declares tp_measures_nothing and the leak test for"
+echo "           activation MEASURED (...) — the declaration is now understating"
+echo "           the run; delete it so the ledger can count this leg"
+echo ""
+echo "  The fix is that message: delete the bare \`tp_measures_nothing\` line"
+echo "  between \`bears_on activation\` and \`leak_leg activation\` (line 4318"
+echo "  when this was written). The batch that closed the activation leak did"
+echo "  not own run_checks.sh and left the red rather than leaving a SKIPPED"
+echo "  that named a blocker it had removed."
 exit $(( fails > 0 ? 1 : 0 ))
