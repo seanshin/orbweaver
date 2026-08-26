@@ -385,6 +385,8 @@ concrete trigger that would un-defer it, and the v1 we would build — in
 | CosNotification | the heavyweight Event superset (structured events, filters, QoS admin) — plain CosEvent serves every named consumer; revisit only if filtering moves server-side |
 | Time / PSS / Concurrency / Collections | no consumer names them; adopt-on-demand |
 | Federated Naming / Trading Link | tenancy (F5) may name the requirement; until then out |
+| Relationship / Containment / Reference / CompoundLifeCycle / ObjectIdentity | **added 2026-08-26**, and they are not "no consumer" — the relationships, the traversal and the identity test all exist in the tree and the standard's names for them do not. Five modules of two specifications; reasoned and triggered in [`PLAN-DEFERRED`](PLAN-DEFERRED.md) §13–§17 |
+| Externalization / Query / Licensing | **added 2026-08-26** — three unrelated reasons, one each: a per-element remote stream against a blob that is opaque on purpose, a language service whose type tags admit only SQL-92 and OQL-93, and a metering mechanism we have under a principal we do not. [`PLAN-DEFERRED`](PLAN-DEFERRED.md) §18–§20 |
 
 행별 이유. **트랜잭션(OTS)** — 반쪽 구현들의 무덤이고, 컨트롤 플레인에서 객체 간
 원자성을 필요로 하는 것이 없다. 장식용 `Current`보다 정직한 부재가 낫다.
@@ -393,6 +395,12 @@ concrete trigger that would un-defer it, and the v1 we would build — in
 옮겨갈 때에만 다시 본다. **Time / PSS / Concurrency / Collections** — 이름을 대는
 소비자가 없다. 필요해지면 그때 채택한다. **연합 네이밍 / 트레이딩 링크** — 테넌시
 (F5)가 요구를 명명할 수 있으나, 그전까지는 범위 밖이다.
+**관계 / 포함 / 참조 / 복합 생명주기 / 객체 동일성**(2026-08-26 추가) — "소비자 없음"이
+아니다. 관계도, 순회도, 동일성 검사도 **나무 안에 이미 있고 표준의 이름만 없다**. 두
+명세의 다섯 모듈이며 사유와 방아쇠는 [`PLAN-DEFERRED`](PLAN-DEFERRED.md) §13–§17에 있다.
+**외부화 / 질의 / 라이선싱**(2026-08-26 추가) — 서로 무관한 세 사유가 하나씩이다:
+일부러 불투명한 블롭을 상대로 한 원소 단위 원격 스트림, 표지가 SQL-92와 OQL-93만
+허용하는 언어 서비스, 그리고 기구는 있으나 주체가 없는 계량. §18–§20.
 
 ## 8.1 Operations absent without a reason, 2026-08-14 — 12건 / 이유 없는 부재
 

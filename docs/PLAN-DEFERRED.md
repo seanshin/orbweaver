@@ -7,8 +7,13 @@
 
 ## 0. What this document is / 이 문서의 성격
 
-PLAN-SERVICES §8 excludes seven service areas in four table rows. A table row
-is enough to record a decision and **not** enough to resume from: a future
+PLAN-SERVICES §8 excludes seven service areas in four table rows — **fifteen
+areas in six rows since 2026-08-26**, when §13–§20 gave a reason and a trigger
+to the eight services D023 §1 found carrying neither an implementation nor an
+exclusion. (This sentence counts that table, so the two move together; it is
+amended rather than rewritten because what it says about *four rows* was true
+when this file was written and is what the next paragraph argues against.) A
+table row is enough to record a decision and **not** enough to resume from: a future
 batch that reads "no consumer names them; adopt-on-demand" starts from a blank
 page, re-derives the reasoning, and — the real cost — re-derives it *worse*,
 because the reasons that were obvious the day the row was written are gone.
@@ -53,6 +58,14 @@ is the adoption, not this file.
 | ~~§10 CosEvent supplier-side pull~~ | **FIRED 2026-08-25** — graduated to `PLAN-SERVICES` §4.1. The row stays struck rather than deleted: a trigger table that silently loses its fired rows cannot be read as a record of what this file's triggers have ever done, and this is the first one |
 | §11 CosEvent `destroy` | a caller model in the event servant — the operation is unauthenticated and ends the channel for every other client |
 | §12 CosNaming chaining to a foreign context | a federation requirement (§7's trigger, seen from the naming servant) — chaining is *possible* today, which is a reason it can be built, not a reason to |
+| §13 CosRelationships | the first operation that must answer an **inverse** question (which models are over this base, which compositions bind this expert); or the first operation that **destroys** a target — either one ends "the graph only grows" |
+| §14 CosContainment | the first object destroyed while something else still names it — §13's second trigger seen from the lifetime-bound end |
+| §15 CosReference | the first decision that must know **how many** holders name a target rather than that it exists — eviction counts calls in flight, never compositions |
+| §16 CosCompoundLifeCycle | a **second** operation traversing the same three roles: one traversal is a behaviour, two are a policy |
+| §17 CosObjectIdentity | the first caller that must **refute** identity — one that acts on a `false` from a test documented as confirm-only |
+| §18 CosExternalization | the `ExpertLoader` blob must be read by something that did not write it — a second loader, another host, or a loader version change |
+| §19 CosQuery | an operation whose parameter is a query **in a language the caller names**; or a foreign client expecting `QueryEvaluator` and speaking SQL-92 or OQL-93 |
+| §20 CosLicensingManager | a registry entry whose use is metered for somebody who is not the operator (**the weakest trigger of the eight — §20 says so at the site**); or the first requirement that a granted seat be revocable mid-call |
 
 ---
 
@@ -748,6 +761,603 @@ leave the process is visible before it does.
 대한 세 연산은 서빙된다; 외부 컨텍스트만 남았고, 가능하다는 것은 지을 수 있다는
 이유이지 지어야 할 이유가 아니다 — 서번트에 `Connection`이 없다는 것은 이제
 테스트다. **방아쇠.** §7의 것.
+
+---
+
+## The eight that had no chapter — §13–§20 / 장이 없던 여덟
+
+Added 2026-08-26. D023 §1 cross-checked all twenty-one CORBAservices against
+the three plan documents and found a third row beside *served* and *deferred
+with a reason*: eight services with **neither an implementation nor an
+exclusion**. Re-measured the same day by grepping both plan documents for each
+name — **zero hits for all eight**, and the two that look like hits are not:
+`Query` appeared only as the trader's constraint query, D003's vector query and
+§4's "no query story", and `Reference` only as an ordinary object reference.
+This file's premise is that an exclusion carries a reason; these eight had no
+reason because nobody had decided anything about them.
+
+**They were absent together because five of them are one specification.**
+`CosObjectIdentity`, `CosRelationships`, `CosContainment` and `CosReference`
+are four modules of the *Relationship Service*, and `CosCompoundLifeCycle` is
+the half of the *Life Cycle Service* built on top of it. That is the root cause
+and it is worth naming: this was not eight oversights but one document nobody
+opened, which is exactly the shape the batch discipline exists to surface. The
+remaining three — `CosExternalization`, `CosQuery`, `CosLicensingManager` —
+are independent and are absent for three unrelated reasons.
+
+**Nothing here is owed an implementation.** D023 §6 is the fence and it is this
+section's whole discipline: *no service in §1's third row becomes an
+implementation because it appeared here.* Each gets a reason and a trigger, and
+every v1 sketch below refuses the standard interface. D018 §4.1's sentence is
+the reason the fence exists — *writing a thing down makes it feel owed* — and a
+plan document is exactly how that discipline breaks.
+
+*2026-08-26 추가. D023 §1이 찾은 세 번째 줄 — 구현도 제외도 없는 서비스 여덟.
+같은 날 두 계획 문서를 이름별로 다시 grep 했고 **여덟 전부 0건**이었다. 걸린 것처럼
+보이는 둘도 아니다: `Query`는 트레이더의 제약 질의·D003의 벡터 질의로만, `Reference`는
+평범한 객체 참조로만 나온다. **여덟이 함께 없었던 것은 그중 다섯이 한 명세이기
+때문이다** — `CosObjectIdentity`·`CosRelationships`·`CosContainment`·`CosReference`는
+관계 서비스의 네 모듈이고, `CosCompoundLifeCycle`은 그 위에 지어진 생명주기 서비스의
+절반이다. 누락 여덟 건이 아니라 아무도 열지 않은 문서 하나였다. 나머지 셋은 서로
+무관한 이유로 없다. **여기 있는 어떤 것도 구현을 빚지지 않는다** — D023 §6이 울타리이고,
+아래 모든 v1 스케치는 표준 인터페이스를 거부한다.*
+
+---
+
+## 13. CosRelationships — the relationships exist and the service does not / 관계 서비스
+
+**What it is.** The Relationship Service's core: relationships and roles as
+**first-class objects**, not as pointers held by the things they relate.
+`RelationshipFactory::create` takes named roles and returns a `Relationship`
+object; each `Role` object holds its `related_object` and answers
+`get_other_related_object` / `get_other_role`, so **every relationship is
+navigable from both ends**. `RoleFactory` declares `min_cardinality`,
+`max_cardinality` and `related_object_types`, and `check_minimum_cardinality`
+is the integrity operation; `link` / `unlink` are mutators on the *role* rather
+than on either related object. Level two is `CosGraphs` — `Node`, `Traversal`,
+`TraversalCriteria` — traversal over the graph the roles form.
+
+**Why deferred, and the measurement is in the tree rather than in this file.**
+`crates/orbweaver-object/src/tenant_service.rs` (module documentation, *The
+three relationships a manifest holds*, landed 2026-08-25) writes the role,
+cardinality and integrity rule for each of `Manifest::base_model` (N:1,
+immutable), `::experts` (1:N, append-only) and `::policy_domain` (N:1,
+replaceable), and opens by recording that the standard has a service for
+exactly this and that the module implements none of it. Two of its measurements
+are this chapter's reason, and they are cited rather than restated because that
+module is their home — a rule whose home is somebody else's document drifts
+from the code on the next change:
+
+- **Dangling is impossible rather than detected.** Creation materialises its
+  target, mutation requires an existing one, and no operation destroys a
+  target, so the graph only grows. Referential integrity — the thing a `Role`
+  object exists to enforce — has nothing to find here.
+- **Nothing on the wire navigates any of the three.** The relationships have no
+  inverse role and no navigation operation, which that module names as *the
+  half `CosRelationship` would have carried*.
+
+So the service's two contributions are, today, one unenforceable and one
+unbuilt. Adopting it would mint an object with its own key and its own
+lifecycle per link, to supply a back-pointer nobody follows — and it would move
+the integrity rules out of the code that enforces them and into a service that
+would have to be told about them, which is the direction that batch refused on
+purpose.
+
+**Trigger — two, both observable in this tree without anyone naming a
+consumer.** (1) **The first operation that must answer an inverse question**:
+given a base, which models are over it; given a `PolicyDomain`, which models it
+governs; given an expert, which compositions bind it. Observable as a declared
+operation in a contract. (2) **The first operation that destroys a target.**
+The moment one exists, "the graph only grows" stops being true and the
+integrity check that has nothing to find acquires something.
+
+**v1 sketch.** Not `CosRelationships`. The inverse is an **index, not an
+object**: the tenant service already holds every manifest, so the reverse
+direction is *derived* from that one copy rather than stored a second time
+where it can disagree with the first — one fact, one home. Roles stay implicit
+and cardinality stays the rule the module already documents, that `bind_expert`
+appends to a set with no maximum while `set_policy` replaces a member that is
+always exactly one, which is why they are two operations with two `ai_authz`
+scopes rather than one `update`. The standard's `Relationship` and `Role`
+objects only if a foreign client names them, per the IFR-facade rule
+(`PLAN-SERVICES` §7). **One honest note, recorded because it argues against
+this chapter's own verdict:** that module also records a finding — the `create`
+path does not apply `bind_expert`'s two integrity checks — pinned as a
+measurement of today's behaviour and deliberately not repaired. A relationship
+service would have made those two paths one path. That is a real argument *for*
+the service, it is written here rather than omitted, and it is not enough:
+making the two paths agree is a batch in the crate, not a service.
+
+**요지.** 관계 서비스의 핵심은 관계와 역할이 **일급 객체**라는 것이다 — 양쪽 끝에서
+탐색 가능하고, 카디널리티와 타입 제약을 `Role`이 강제한다. 유예 사유는 이 파일이 아니라
+나무에 있다: `tenant_service.rs`의 모듈 문서(2026-08-25 착지)가 세 관계의 역할·
+카디널리티·무결성 규칙을 적었고, 그 두 측정이 곧 사유다 — **댕글링은 탐지되는 것이
+아니라 불가능하다**(생성이 대상을 만들고, 변경이 존재를 요구하고, 무엇도 대상을 파괴하지
+않으므로 그래프는 자라기만 한다), 그리고 **와이어의 어떤 연산도 셋 중 무엇도 탐색하지
+않는다**(역방향 역할도 탐색 연산도 없으며, 그것이 `CosRelationship`이 날랐을 절반이다).
+따라서 서비스의 두 기여는 오늘 하나는 강제 불가이고 하나는 미착공이다. 방아쇠는 둘:
+**역방향 질문에 답해야 하는 첫 연산**, 그리고 **대상을 파괴하는 첫 연산**. v1은 표준이
+아니라 **객체가 아닌 색인** — 역방향을 저장하지 않고 같은 자료에서 파생한다. 정직한
+단서 하나를 기록한다: 같은 모듈이 `create`가 `bind_expert`의 무결성 검사 둘을 적용하지
+않는다는 **발견**을 고정해 두었고, 관계 서비스라면 두 경로가 하나였을 것이다 — 이 장의
+판정에 반대하는 논거이므로 빼지 않고 적는다. 그래도 충분하지 않다. 두 경로를 맞추는 것은
+서비스가 아니라 크레이트 안의 배치다.
+
+---
+
+## 14. CosContainment — the lifetime bound is already structural / 포함 관계
+
+**What it is.** A standard *specialization* of §13, in the same document:
+`ContainsRole` and `ContainedInRole`, one-to-many, with the contained end
+exactly one. Naming a relationship "containment" buys one thing a bare
+reference does not have — the contained object's lifetime is bounded by its
+container's, so destroying the container is **defined** over the contained set.
+
+**Why deferred.** The bound it names is already enforced, and enforced more
+strongly than a service could. Objects here live in the tenant service's own
+maps; an entry's lifetime *is* the object's lifetime, and no wire operation can
+outlive its owner. Rust ownership is the containment enforcement and a compiler
+checks it, where `check_minimum_cardinality` is a call somebody has to remember
+to make. And the operation containment exists to define has no instance:
+`retire` takes out the model and nothing it points at, and nothing in the
+contract destroys a `PolicyDomain` or an `EnterpriseExpert` at all
+(`tenant_service.rs`, same module documentation as §13).
+
+**Trigger.** The first object destroyed while something else still names it —
+§13's second trigger seen from the lifetime-bound end. Concretely, an operation
+that removes a `PolicyDomain` or an expert from the tenant service's maps. That
+single event makes three things true at once: the graph stops only growing, a
+dangling reference becomes possible for the first time, and *cascade or refuse*
+becomes a decision somebody has to write down. Observable in this tree.
+
+**v1 sketch.** Not `CosContainment`. A destroying operation states its
+propagation in its own contract — refuse while referenced (`BAD_INV_ORDER`, the
+answer `PLAN-SERVICES` §3 already uses for "no such edge") or cascade with the
+cascade enumerated — and §13's derived index is what makes *while referenced*
+answerable at all. Two roles as objects only on a foreign client's demand.
+
+**요지.** §13의 표준 특수화이며, 포함이 참조보다 더하는 것은 **수명 종속** 하나다 —
+컨테이너를 파괴하면 포함된 것들에 대해 무엇이 일어나는지가 정의된다. 유예 사유: 그
+종속은 이미 강제되어 있고, 서비스보다 강하게 강제된다 — 객체는 테넌트 서비스의 맵 안에
+살고 항목의 수명이 곧 객체의 수명이며, 이것을 검사하는 것은 잊을 수 있는 호출이 아니라
+컴파일러다. 그리고 포함이 정의하려는 연산에 사례가 없다: `retire`는 모델만 거두고 그것이
+가리키는 것은 건드리지 않으며, 계약의 무엇도 `PolicyDomain`이나 익스퍼트를 파괴하지
+않는다. 방아쇠는 **다른 것이 아직 이름하고 있는데 파괴되는 첫 객체** — 그 한 사건이
+세 가지를 동시에 참으로 만든다(그래프가 자라기만 하는 것이 끝나고, 댕글링이 처음으로
+가능해지고, *연쇄냐 거부냐*가 누군가 적어야 할 결정이 된다). v1은 표준이 아니라
+파괴하는 연산이 자기 계약에 전파 규칙을 적는 것이며, §13의 파생 색인이 "아직 참조 중"을
+답할 수 있게 하는 것이다.
+
+---
+
+## 15. CosReference — the shape is present three times over / 참조 관계
+
+**What it is.** The other standard specialization in the same document:
+`ReferencesRole` / `ReferencedByRole`, many-to-many, and — the distinction from
+§14 that is the whole reason the spec ships both — **neither end's lifetime is
+bounded by the other's**.
+
+**Why deferred.** The shape is present three times and the service is absent
+for §13's reason. `Manifest::experts` is exactly a `ReferencesRole`: a model
+references many experts by capability id, many models of many tenants name the
+same base, and many of a tenant's models may name one domain
+(`tenant_service.rs`, as §13). Each is a **string, never a reference**, so a
+holder of a manifest can read all three names and reach none of the objects —
+which is the same fact `COMPONENTS.md`'s gap row reports from the other end,
+that `bind_expert` and `set_policy` take references no operation of the contract
+returns. The link has no object because nothing asks the far end a question.
+
+**Trigger.** The reference count becomes load-bearing: the first decision that
+must know **how many** holders name a target rather than merely that it exists.
+The nearest concrete instance is eviction, and the precision matters — the
+residency machine refuses `EVICT` on `ACTIVE` with the named guard refusal
+`NoInflight` (§5), which counts *calls in flight*, not *compositions that bind
+the expert*. An expert with no inflight call and three manifests binding it is
+evictable today and that is **correct**, because eviction is not destruction.
+It becomes this chapter's trigger the day a decision must tell "nobody is
+calling it" apart from "nobody is composing it". Observable in the residency
+machine's own inputs, and it is not a claim that anything is wrong today.
+
+**v1 sketch.** Not `CosReference`. §13's derived index answers *how many*, and
+the count is a number the deciding operation reads — not a `ReferencedByRole`
+object that has to be kept in step with the manifests it summarises, which
+would be a second copy of a fact whose first copy is authoritative. If the
+count must ever be enforced rather than reported, it is enforced where the
+decision is made, the way `NoInflight` already is.
+
+**요지.** 같은 문서의 다른 표준 특수화이며, §14와 갈리는 지점은 **어느 쪽 수명도 상대에
+종속되지 않는다**는 것이다. `Manifest::experts`가 정확히 `ReferencesRole`이고, 같은
+모양이 base와 domain에서 세 번 반복된다 — 그런데 셋 다 **참조가 아니라 문자열**이므로
+매니페스트를 든 쪽은 이름 셋을 다 읽고도 객체에는 하나도 닿지 못한다. `COMPONENTS.md`의
+공백 행이 반대편에서 보고하는 것과 같은 사실이다. 방아쇠는 **참조 수가 결정을 지탱하게
+되는 순간** — 대상이 존재하는지가 아니라 **몇이** 이름하는지를 알아야 하는 첫 결정이다.
+가장 가까운 사례는 축출이고 정밀함이 중요하다: `ACTIVE`에서의 `EVICT`를 막는
+`NoInflight`는 *진행 중인 호출*을 세지 *조합*을 세지 않는다. 진행 중 호출이 없고 세
+매니페스트가 묶고 있는 익스퍼트는 오늘 축출 가능하며 그것이 **옳다** — 축출은 파괴가
+아니기 때문이다. "아무도 부르지 않는다"와 "아무도 조합하지 않는다"를 구분해야 하는 날
+이 장의 방아쇠가 된다. 오늘 무엇이 틀렸다는 주장이 아니다. v1은 §13의 파생 색인이
+그 수를 답하는 것이며, 별도의 역할 객체를 두어 매니페스트와 보조를 맞추는 일이 아니다.
+
+---
+
+## 16. CosCompoundLifeCycle — the criteria are decided and were unwritten / 복합 생명주기
+
+**What it is.** The Life Cycle Service's half that defines `copy`, `move` and
+`remove` **over a relationship graph**: `Node`, `Role`, `Relationship` and
+`PropagationCriteriaFactory`, with a per-role traversal criterion of *deep*
+(copy the target too), *shallow* (drop the link), *none* or *inhibit*. Plus
+`CosLifeCycleContainment` and `CosLifeCycleReference`, which fix the criteria
+for §14's and §15's relationships.
+
+**Why deferred.** The operation exists and its criteria are already decided —
+they were merely unwritten until 2026-08-25. `clone_model` *is*
+`CosCompoundLifeCycle::copy`, and `tenant_service.rs` measured what it does
+with each of the three roles: all three are traversed with **reference**
+semantics and none with *deep* or *shallow* — the base is neither followed nor
+copied, no adapter is duplicated, and the clone joins the source's policy
+domain rather than getting one of its own. So this service's contribution here
+would be to make a fixed choice configurable, and there is exactly **one**
+traversing operation, so there is nothing for a criterion to disagree with. A
+criteria factory serving one caller is machinery in the place of a decision.
+
+This is also the paragraph `PLAN-SERVICES` §5 was missing and D023 §3's R2
+asked for: the standard's `copy`/`move` are defined over relationships and ours
+are not, and what ours do instead is now measured and written where it is
+enforced.
+
+**Trigger.** A **second** operation that traverses the same three roles. One
+operation's traversal is a behaviour; two operations' traversals are a policy,
+and the moment the two differ somebody has to name the criteria to say why.
+`retire` is the visible candidate — it is *shallow* on all three today, and a
+`retire` that must reclaim a base nothing else is over would be the first
+*deep* removal in the tree. Observable as a diff between two operations.
+A weaker second trigger, **flagged rather than dressed up**: a caller wanting a
+clone with different semantics than the one `clone_model` fixes. That one's
+subject is outside this project in D023 §2's sense — in practice the owner is
+the only party who could bring it — so it is recorded as the weaker half and
+the first trigger is the one to watch.
+
+**v1 sketch.** Not `CosCompoundLifeCycle`. Propagation stays a property of each
+operation's contract, named in the documentation beside the code that performs
+it the way `clone_model`'s three now are, plus a **test per role per
+operation**, so a criterion that changes turns a test red instead of leaving a
+sentence stale — which is the shape the existing
+`clone_model_traverses_all_three_relationships_by_reference` already takes.
+`PropagationCriteria` as data only if a second operation genuinely needs a
+different criterion for the same role, which is a question its batch can answer
+and this file cannot.
+
+**요지.** 생명주기 서비스에서 `copy`/`move`/`remove`를 **관계 그래프 위에** 정의하는
+절반이며, 역할마다 *deep*/*shallow*/*none*/*inhibit* 전파 기준을 붙인다. 유예 사유:
+연산은 이미 있고 기준도 이미 정해져 있었다 — 다만 2026-08-25까지 적히지 않았을 뿐이다.
+`clone_model`이 곧 그 `copy`이고, 측정 결과 세 역할 **전부 reference 의미**로 순회하며
+*deep*도 *shallow*도 아니다(base를 따라가지도 복사하지도 않고, 어댑터를 복제하지 않고,
+클론은 원본의 정책 도메인에 합류한다). 따라서 이 서비스의 기여는 고정된 선택을 설정
+가능하게 만드는 것뿐인데, 순회하는 연산이 **하나뿐**이라 기준이 어긋날 상대가 없다.
+이것은 `PLAN-SERVICES` §5에 빠져 있던 문단이기도 하다 — 표준의 `copy`/`move`는 관계
+위에 정의되고 우리 것은 아니며, 대신 무엇을 하는지가 이제 강제되는 자리에 적혀 있다.
+방아쇠는 **같은 세 역할을 순회하는 두 번째 연산**이다. 하나의 순회는 동작이고 둘의
+순회는 정책이다. 더 약한 두 번째 방아쇠(다른 의미의 클론을 원하는 호출자)는 D023 §2의
+뜻에서 주체가 이 프로젝트 밖이므로 **약한 쪽이라고 표시해** 둔다. v1은 표준이 아니라
+전파를 각 연산의 계약에 적고 **역할×연산마다 테스트**를 두는 것이다 — 기준이 바뀌면
+문장이 낡는 대신 테스트가 빨개진다.
+
+---
+
+## 17. CosObjectIdentity — we serve the weaker thing, on purpose / 객체 동일성
+
+**What it is.** The smallest module in the suite, and it too lives in the
+Relationship Service document: one interface, `IdentifiableObject`, with a
+readonly `constant_random_id` — an `unsigned long` attribute **of the object** —
+and `is_identical(other)`. It exists precisely because `CORBA::Object`'s own
+identity operations are deliberately too weak to build a relationship graph on.
+
+**Why deferred — and the reason is that what we have is the weaker thing, not
+this.** `orbweaver-object` serves `_is_equivalent` and `_hash`
+(`is_equivalent`, `reference_hash`, `crates/orbweaver-object/src/lib.rs`), and
+they are not what this module declares:
+
+| | ours | `CosObjectIdentity` |
+|---|---|---|
+| `_is_equivalent` vs `is_identical` | may answer `false` for two references that *do* denote one object — it confirms identity and can never refute it, which the doc comment records against the specification rather than leaving to intuition | must both confirm **and** refute |
+| `_hash` vs `constant_random_id` | FNV-1a over the **first profile's** host, port and object key — a hash of the *reference*, documented as existing to bucket references and not to compare them | an attribute of the *object*, constant for its lifetime |
+
+The gap is not theoretical. `reference_hash` reads a profile, so two references
+that denote one object through different profiles hash differently — and D013
+§2.2 is the measurement that this situation is real rather than hypothetical:
+omniORB's `_is_equivalent` answered **true** for two independently created
+proxies to one object while each still paid its own location forward. Our own
+answer comes from comparing one profile's host, port and key, so it too can say
+`false` where `is_identical` would have to say `true`. That is the standard's
+licence being used, not a defect.
+
+The second reason is that nothing needs the stronger operation: the confirm-only
+guarantee is exactly right for the lookups that use it. **Whether any current
+caller acts on a `false` is unmeasured by this chapter** — reading the call
+sites is the trigger's first step, not a claim this file makes.
+
+**Trigger.** The first caller that must **refute** identity: one that
+deduplicates references, keys a map by reference, or decides from a `false`
+that two references are different objects. Observable by reading the call sites
+of `is_equivalent`, and it needs nobody to name a consumer.
+
+**v1 sketch.** Not `IdentifiableObject`. The near-term answer is naming, and it
+is **not this file's to do**: D023 §3's R3 puts the doc comments gaining the
+standard's vocabulary — that `_is_equivalent` is CORBA's confirm-only test,
+that `is_identical` is the stronger operation this project does not serve, and
+that `_hash` is not `constant_random_id` — in a batch with a crate footprint,
+following D019 step 2's shape of naming and routing rather than new behaviour.
+If a caller ever must genuinely refute, the answer is **not** a random id the
+client is asked to trust: the POA already mints object keys, two references to
+one object share one key, and so the honest identity test is key equality
+decided at the server. `IdentifiableObject` as a facade only if a foreign
+client names it.
+
+**요지.** 스위트에서 가장 작은 모듈이며 이것 역시 관계 서비스 문서에 산다 —
+`IdentifiableObject` 하나에 `constant_random_id`(객체의 속성)와 `is_identical`뿐이다.
+`CORBA::Object`의 동일성 연산이 관계 그래프를 짓기에는 **일부러** 약하기 때문에 존재한다.
+유예 사유는 우리가 가진 것이 바로 그 **약한 쪽**이라는 것이다: `is_equivalent`는 같은
+객체를 가리키는 두 참조에 `false`를 답할 수 있고 — 동일성을 **확인**할 수는 있어도
+**반박**할 수는 없으며, 문서 주석이 이를 명세에 대고 적어 두었다 — `reference_hash`는
+첫 프로파일의 호스트·포트·키에 대한 FNV-1a, 즉 *참조*의 해시이며 비교가 아니라 버킷팅을
+위해 있다고 적혀 있다. 간극은 관념이 아니다: D013 §2.2가 그 상황이 실재함을 측정했다 —
+omniORB의 `_is_equivalent`는 독립 생성된 두 프록시에 **참**을 답하면서도 각자 자기 포워드를
+치렀다. 두 번째 사유는 더 강한 연산을 필요로 하는 것이 없다는 것이며, **오늘의 호출자 중
+`false`에 근거해 행동하는 것이 있는지는 이 장이 측정하지 않았다** — 호출 지점을 읽는 것이
+방아쇠의 첫 걸음이지 이 파일의 주장이 아니다. 방아쇠는 **동일성을 반박해야 하는 첫
+호출자**다. v1은 표준 인터페이스가 아니라 이름 붙이기이고, 그 이름 붙이기는 **이 파일의
+몫이 아니다** — D023 §3의 R3가 크레이트 발자국을 가진 배치에 두었다. 정말로 반박이
+필요해지면 답은 클라이언트가 믿어야 하는 난수 id가 아니라 **서버에서의 오브젝트 키 동등성**
+이다. POA가 이미 키를 발행하고, 한 객체를 가리키는 두 참조는 한 키를 공유한다.
+
+---
+
+## 18. CosExternalization — the blob is opaque and that is the content / 외부화
+
+**What it is.** `CosExternalization` — `Stream::externalize` / `internalize`
+with `begin_context` / `end_context`, plus `StreamFactory` and
+`FileStreamFactory`; and `CosStream` — `Streamable` (`external_form_id`,
+`externalize_to_stream`, `internalize_from_stream`) and `StreamIO`, a **typed
+per-element** read/write interface (`write_string`, `write_object`,
+`read_long`, …). With compound externalization it writes down a whole
+relationship graph. It is CORBA's answer to "record this object graph so
+something else can reconstitute it."
+
+**Why deferred.** Three reasons.
+
+1. **`StreamIO` is a remote call per element.** Externalizing a struct of ten
+   members is ten round trips to a stream object — the same chatty shape §6
+   rejects for remote iterators, refused for the same latency reason. CDR
+   already writes a value graph down in one buffer, and AnyJSON already carries
+   one across the agent boundary.
+2. **The one place we persist an object's state is opaque on purpose.** §4
+   records that the residency machine's `PERSISTENT` lifespan blob is a
+   `Vec<u8>` preserved across evict and reload, *with the opacity being the
+   entire content of the TRANSIENT/PERSISTENT distinction*; `residency.rs` says
+   the same at the field itself. `Streamable` is precisely the demand that it
+   stop being opaque — that every object publish a typed external form and an
+   `external_form_id` others may read. Adopting it spends the distinction to
+   buy a format nobody is waiting for.
+3. **`external_form_id` is a second identity scheme for types.** We have one
+   and it is checked against an oracle — repository ids, diffed against
+   `omniidl` (`corpus/pragma/`, the `repository-ids` binary). A parallel format
+   identifier maintained by hand beside it is the classifier defect CLAUDE.md
+   names: two lists of the same fact, drifting silently, with nothing that
+   compiles either.
+
+**Trigger.** The blob must be read by something that did not write it —
+precisely: a second implementation of the `ExpertLoader` blob seam, a
+requirement that a `PERSISTENT` blob move between hosts, or a loader version
+change that must read the previous version's blob. Any one of those makes a
+**format** owed, and a format others must read is what `Streamable` names.
+Observable as a second loader or a deployment topology, not as a request.
+
+**v1 sketch.** Not `CosExternalization`. If a format becomes owed it is **one
+format with one home**, the loader's, versioned, with the version in the blob's
+leading bytes so a loader that cannot read one **refuses loudly rather than
+misparsing** — `orbweaver-giop`'s own promise, and the property D027 §3 refuses
+to trade for convenience. No `StreamIO`: the unit is a whole blob, never an
+element, because the per-element round trip is the reason this chapter exists.
+Compound externalization over a relationship graph is §13's and §16's question
+and inherits their answers rather than reopening them here.
+
+**요지.** 객체 그래프를 스트림에 적어 다른 곳에서 되살리는 CORBA의 답이며, `Streamable`과
+**원소 단위 타입 인터페이스** `StreamIO`가 핵심이다. 유예 사유 셋: (1) **`StreamIO`는
+원소마다 원격 호출**이다 — 멤버 열 개짜리 구조체를 외부화하면 왕복 열 번이며, §6이 원격
+반복자에 대해 거부한 바로 그 형태다. CDR은 이미 값 그래프를 버퍼 하나에 적고, AnyJSON은
+이미 그것을 에이전트 경계 너머로 나른다. (2) **객체 상태를 영속화하는 단 한 곳이 일부러
+불투명하다** — §4가 적었듯 `PERSISTENT` 블롭의 **불투명함 자체가 TRANSIENT/PERSISTENT
+구분의 내용 전부**인데, `Streamable`은 정확히 그것을 그만두라는 요구다. (3)
+**`external_form_id`는 타입에 대한 두 번째 신원 체계**다 — 우리에게는 오라클에 대고 검사되는
+하나(리포지터리 id, `omniidl`과 대조)가 이미 있고, 그 옆에 손으로 유지되는 형식 식별자는
+CLAUDE.md가 이름한 분류자 결함이다. 방아쇠는 **그 블롭을 쓰지 않은 무언가가 읽어야 할 때** —
+두 번째 로더, 호스트 간 이동, 또는 이전 버전 블롭을 읽어야 하는 로더 버전 변경. v1은 표준이
+아니라 **집 하나짜리 형식 하나**이며, 선두 바이트에 버전을 두어 읽을 수 없는 로더가
+오파싱 대신 **시끄럽게 거부**하게 한다. `StreamIO`는 없다 — 단위는 원소가 아니라 블롭
+전체다. 왕복이 이 장이 존재하는 이유이기 때문이다.
+
+---
+
+## 19. CosQuery — a filter is not a calculator / 질의 서비스
+
+**What it is.** `CosQuery` plus `CosQueryCollection`: `QueryEvaluator` with
+`evaluate(query, ql_type, params)`, `QueryableCollection`, and a `QueryManager`
+that `create`s `Query` objects with `prepare` / `execute` / `get_status` /
+`get_result`. Crucially, **the service defines no query language of its own.**
+`QueryLanguageType` and its subtypes — `SQLQuery`, `SQL_92Query`, `OQL`,
+`OQL_93`, `OQL_93_Basic` — are empty marker interfaces used as type tags, and
+`ql_types` is the readonly attribute by which a server declares *which of those
+named languages* it speaks. Results come back as `CosQueryCollection`
+collections, which is §6's remote-collection-with-iterator shape.
+
+**Why deferred — and this is the sentence D023 §5 asked for, written from the
+two grammars rather than from intuition.**
+
+> **The trader's query is not `CosQuery`, and the reason is not that ours is
+> smaller.** `CosQuery` defines no language: implementing `QueryEvaluator`
+> means declaring through `ql_types` that you speak SQL-92 or OQL-93, so there
+> is no version of the interface behind which our constraint language could be
+> served — it is not one of the languages the tags admit. And the distance is a
+> difference in kind rather than in size. Our constraint is a **predicate over
+> one offer at a time**: eight productions, six comparison operators, three
+> connectives, exactly one built-in (`EXIST`), **no arithmetic of any kind**,
+> evaluated over a **closed set of ten fixed struct fields** rather than names
+> looked up in a property bag. It decides which of the stored offers come back
+> and it can compute nothing. SQL-92 and OQL-93 are **expression languages over
+> collections**: their select list constructs values that were never stored,
+> they join across collections, they aggregate, and they nest queries inside
+> queries. Ours has one collection, no join, no aggregate and no subquery — the
+> single nested form, `WITH`, is evaluated against the *same one offer*. Even
+> projection is outside the grammar: the wire's `SpecifiedProps` is a separate
+> parameter naming the same ten fields, applied after the predicate has already
+> chosen whole offers, and what comes back is offers with their properties,
+> never a constructed tuple. The two languages answer different questions —
+> *which of the things I stored match* against *what value can I compute from
+> what I stored*. **A trader's constraint is a filter; `CosQuery` is a
+> calculator.** They are not the same service at two sizes, and the trader's
+> query growing will not turn it into this one.
+
+Three further reasons, shorter. The result shape is a `CosQueryCollection` with
+an iterator, which is §6's chapter and inherits its verdict. A `Query` object
+with `prepare`/`execute`/`get_status`/`get_result` is a **stateful remote
+cursor**, which is server-held per-client state with a lifecycle nobody
+requires. And accepting a query language over the wire means accepting a
+*parser* over the wire, with all the refusal-quality obligations S4 carries, in
+a language we do not otherwise implement.
+
+**Trigger.** An operation whose parameter is a query **in a language the caller
+names** — the moment a client submits query text and we must answer *which
+language is that*, `ql_types` is the question being asked and the service is the
+shape of the answer. D003's catalog is the plausible route: a vector-and-metadata
+search a client composes rather than one we compose for it. Second, weaker and
+the same class as §6's: a foreign client expecting `QueryEvaluator` by name
+**and** speaking SQL-92 or OQL-93, since one without the other is not this
+trigger. Both observable without the owner naming a consumer.
+
+**v1 sketch.** Not `CosQuery`. If a client must submit query text, it submits
+**the constraint language we already have**, named as itself and versioned, with
+S4-style positioned errors — which the engine already produces and which every
+refusal in the grammar already carries. `ql_types` would then honestly report a
+language that is not SQL-92 and not OQL-93, which is precisely why the standard
+interface is the wrong wrapper: it exists to let a client *choose* between two
+languages it already knows, and offering a third under that name would be the
+decorative dishonesty this project rejects elsewhere. Paging, if a result set
+ever exceeds its bound, is §6's one `(items, next_cursor)` shape and not a
+`Query` object.
+
+**요지.** `CosQuery`는 **자기 질의 언어를 정의하지 않는다** — `QueryLanguageType`의
+하위 타입들은 빈 표지 인터페이스이고, `ql_types`는 서버가 SQL-92냐 OQL-93이냐를
+선언하는 속성이다. D023 §5가 요구한 문장은 이것이다: **트레이더의 질의는 `CosQuery`가
+아니며, 이유는 우리 것이 더 작아서가 아니다.** 그 인터페이스를 구현한다는 것은 표지가
+허용하는 두 언어 중 하나를 말한다는 뜻이므로, 우리 제약 언어를 그 뒤에 세울 수 있는
+판본은 없다. 그리고 거리는 크기가 아니라 **종류**의 차이다. 우리 제약은 **한 번에 오퍼
+하나에 대한 술어**다 — 생성 규칙 여덟, 비교 연산자 여섯, 접속사 셋, 내장 함수 정확히
+하나(`EXIST`), **산술은 일절 없음**, 그리고 프로퍼티 가방의 이름이 아니라 **고정된 구조체
+필드 열 개의 닫힌 집합** 위에서 평가된다. 저장된 오퍼 중 무엇이 돌아올지를 정할 뿐 아무것도
+계산하지 못한다. SQL-92와 OQL-93은 **컬렉션 위의 식 언어**다 — select 목록이 저장된 적
+없는 값을 구성하고, 컬렉션을 조인하고, 집계하고, 질의 안에 질의를 중첩한다. 우리에게는
+컬렉션이 하나, 조인도 집계도 부질의도 없다(유일한 중첩 형태 `WITH`는 *같은 오퍼 하나*에
+대해 평가된다). 사영조차 문법 밖이다 — 와이어의 `SpecifiedProps`는 술어가 이미 오퍼
+전체를 고른 뒤에 같은 열 개 이름에 적용되는 별개 파라미터이고, 돌아오는 것은 구성된
+튜플이 아니라 프로퍼티를 단 오퍼다. 두 언어는 다른 질문에 답한다 — *저장한 것 중 무엇이
+맞는가* 대 *저장한 것으로 무엇을 계산할 수 있는가*. **트레이더의 제약은 필터이고
+`CosQuery`는 계산기다.** 한 서비스의 두 크기가 아니며, 트레이더의 질의가 자란다고 저것이
+되지 않는다. 짧은 사유 셋 더: 결과가 반복자 달린 컬렉션이라 §6의 판정을 물려받고,
+`Query` 객체는 아무도 요구하지 않는 **상태 있는 원격 커서**이며, 와이어로 질의 언어를
+받는다는 것은 와이어로 **파서**를 받는다는 뜻이다. 방아쇠는 **호출자가 언어를 지목하는
+질의를 파라미터로 받는 연산** — 그 순간 `ql_types`가 곧 물어지는 질문이 된다. v1은
+표준이 아니라 이미 있는 제약 언어를 자기 이름으로 버전과 함께 받는 것이다.
+
+---
+
+## 20. CosLicensingManager — the mechanism is here and the principal is not / 라이선싱
+
+**What it is.** `LicenseServiceManager` hands out a producer-specific licence
+service, and on it `start_use`, `check_use` and `end_use`. A use is started
+against a **producer's** licence, periodically re-checked, and released;
+`check_use` may answer with an action of *continue* or *terminate* plus a
+notification, so a licence can **end a use already in progress**, and
+`ChallengeData` carries the producer's authentication of the request.
+
+**Why deferred.** Two reasons that point in opposite directions, which is why
+the chapter was worth writing rather than being a "no consumer" row.
+
+1. **The mechanism is already here, and the service's subject is not.** The MCP
+   boundary's interceptor chain has named `SEAT_QUOTA` since F4 and
+   `orbweaver-mcp::quota` fills it: a budget of `limit` calls counted against a
+   `Scope` — the whole bridge, a caller, a caller's interface, a caller's
+   operation — with a stated `Renewal`, refused as `QuotaExhausted` and reaching
+   a stub as `TRANSIENT` when it renews. `start_use` and `end_use` are seat
+   acquisition and release, and we have them. What differs is the **principal**:
+   licensing meters use on behalf of a producer *who is not the operator*,
+   while a quota is the operator's own limit on the operator's own resource.
+   `ChallengeData` exists because the producer does not trust the deployment,
+   and that mistrust is the entire service. Same mechanism, different party,
+   and the party is the subject.
+2. **`check_use` wants a clock, and this stack refuses one twice.** A periodic
+   re-check that can terminate a use in progress is a timer. `quota.rs` records
+   that nothing in that crate reads a clock — windows advance only when the host
+   opens one, which is why a per-window, a per-batch and a whole-process budget
+   are the same code and all three replay identically — and it names a gate as
+   the worst possible place for a non-reproducible answer. §3 declines the Time
+   Service to protect the same property in the trading engine. A licence check
+   on our own clock would be the first clock inside a gate.
+
+**Trigger, and it is the weakest of the eight — said here rather than dressed
+up.** The nominal trigger is a registry entry whose use must be metered for
+somebody who is not the operator: a model, base or expert supplied under terms
+the deployment must enforce and report. That is observable as a registry entry
+with an external licensor — but it is a **commercial fact about a deployment**,
+so in practice the owner is the only party who could bring it, which by D023
+§2's own diagnosis makes it a trigger whose subject is outside this project.
+Recorded as observable in principle and unreachable in practice, which is worth
+more than a trigger that reads well and cannot fire.
+
+The second trigger is sharper and lives in the tree: **the first requirement
+that a granted seat be revocable mid-call** — that something already dispatched
+be stopped because its entitlement ended. That is `check_use`'s *terminate*,
+and the quota chain has no such thing: it decides before the call and never
+during it. Observable as a requirement on the interceptor chain.
+
+**v1 sketch.** Not `CosLicensingManager`. A licensor label on the registry
+entry beside the existing `Scope`, so metering stays **one mechanism with two
+configurations** rather than two mechanisms that can disagree — the §1 argument
+about two filters, in its cheapest form. The report is the audit ledger, which
+already carries a line per permitted and refused call; what makes it evidence a
+third party can check is §8's append-only hash chain, and the order of that
+argument carries over unchanged — the chain is free and solves detection, a
+detached signature costs key management and solves only attribution, so the
+expensive half waits until somebody must verify independently. No `check_use`
+timer: if revocation is ever owed it arrives as a window the host opens, which
+keeps the replay property that made the quota trustworthy in the first place.
+The standard's three operations only if a foreign client names them.
+
+**요지.** 생산자의 라이선스에 대고 사용을 시작·주기적 재확인·해제하는 서비스이며,
+`check_use`는 *계속*이나 *종료*로 답할 수 있어 **이미 진행 중인 사용을 끝낼 수** 있다.
+유예 사유 둘은 서로 반대 방향을 가리키며, 그래서 이 장은 "소비자 없음" 한 줄이 아니라
+쓸 가치가 있었다. (1) **기구는 이미 있고, 서비스의 주체가 없다** — F4 이래 인터셉터
+체인의 `SEAT_QUOTA`를 `orbweaver-mcp::quota`가 채운다: `Scope`(브리지 전체·호출자·
+호출자의 인터페이스·호출자의 연산)에 대고 세는 `limit` 예산, 명시된 `Renewal`,
+`QuotaExhausted` 거부, 갱신되면 스텁에는 `TRANSIENT`. `start_use`/`end_use`는 좌석의
+획득과 해제이고 우리에게 있다. 다른 것은 **주체**다 — 라이선싱은 **운영자가 아닌
+생산자**를 대신해 사용을 계량하고, 쿼터는 운영자가 자기 자원에 두는 자기 한계다.
+`ChallengeData`가 존재하는 이유는 생산자가 배포처를 믿지 않기 때문이며, 그 불신이
+서비스의 전부다. 같은 기구, 다른 당사자, 그리고 당사자가 곧 주제다. (2) **`check_use`는
+시계를 원하고 이 스택은 시계를 두 번 거부한다** — `quota.rs`는 그 크레이트가 시계를 읽지
+않으며 윈도는 호스트가 열 때만 넘어간다고 적고(그래서 세 가지 구성이 같은 코드이고 셋 다
+동일하게 재현된다), 재현 불가능한 답이 있기에 가장 나쁜 곳으로 **게이트 안**을 이름한다.
+§3이 트레이딩 엔진의 같은 성질을 지키려 시간 서비스를 거절한 것과 같다. **방아쇠는 여덟
+중 가장 약하며, 꾸미지 않고 여기 적는다**: 운영자가 아닌 누군가를 위해 계량되어야 하는
+레지스트리 항목 — 관측 가능하지만 **배포의 상업적 사실**이므로 실제로는 소유자만이 가져올
+수 있고, D023 §2의 진단대로 주체가 프로젝트 밖인 방아쇠다. 원리상 관측 가능하고 실무상
+도달 불가라고 기록하는 편이, 잘 읽히지만 당겨질 수 없는 방아쇠보다 낫다. 더 날카로운 두
+번째 방아쇠는 나무 안에 있다: **이미 부여된 좌석을 호출 도중에 회수해야 하는 첫 요구** —
+`check_use`의 *종료*이며, 쿼터 체인에는 그런 것이 없다(호출 전에 정하고 호출 중에는 결코
+정하지 않는다). v1은 표준이 아니라 기존 `Scope` 옆의 라이선서 라벨이며, 계량을 **두
+기구가 아니라 한 기구의 두 구성**으로 남긴다. 보고는 감사 원장이고, 제3자가 검사할 수 있게
+만드는 것은 §8의 추가 전용 해시 체인이며 그 논증의 **순서**가 그대로 넘어온다.
+
+---
 
 ## 9. How a chapter graduates / 한 장이 졸업하는 법
 
