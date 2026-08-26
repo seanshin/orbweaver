@@ -130,6 +130,27 @@ NO_IMPLEMENT 1`, 이전은 `dispatched 24 / NO_IMPLEMENT 4`), 인터페이스 �
 스윕을 돌리지 않았다** — 픽스처와 머신 전역 락이 필요하다 — 따라서 전체 추정치는
 **여기서 미측정이며, 통과로 넘기지 않고 미측정으로 보고한다.**
 
+## What the harness can say about D029 §6 / 하네스가 §6에 대해 말할 수 있는 것
+
+The completion criterion's home is
+[`D029`](decisions/D029-what-a-complete-orb-would-mean.md) §6 and the five
+transparencies and their leaks live in its §6.1. **Neither is restated here.**
+What belongs here is the status of the *instrument*: since 2026-08-26 the
+harness declares, per transparency, which groups measure it and what is named
+unmeasured (D031 H1/H2), so the answer stops being a reading assembled by hand.
+
+| | Status |
+|---|---|
+| the five names | ✅ one home, `docs/decisions/D029-...md` §6.1, read by `spikes/transparency.py`; a harness tag naming anything else fails the run by name |
+| the ledger | ✅ printed before the verdict, computed from the run; no score, and an untagged run reads as `NONE measured`, not as a pass |
+| groups declaring | ◐ ten, measured 2026-08-26 — three of the five transparencies have at least one declaring group and two have none. Recompute rather than quote this: `python3 spikes/transparency.py --check spikes/run_checks.sh`, and the ledger of any run is the live answer |
+| leak tests per transparency | ❌ D029 §5 O0. The ledger reads what exists; the two transparencies nothing declares need a group that changes the hidden property under a live caller, and that group does not exist yet |
+
+완성 기준의 집은 D029 §6, 다섯 투명성과 그 구멍의 집은 §6.1이며 **여기서 다시 적지
+않는다.** 여기에 사는 것은 *계기*의 상태다: 2026-08-26부터 하네스는 투명성별로 어느
+그룹이 그것을 재는지와 무엇이 미측정인지를 스스로 밝힌다(D031 H1/H2). 위 표의 개수는
+인용하지 말고 다시 계산한다 — 어느 실행이든 원장이 살아 있는 답이다.
+
 ## Reading this honestly / 정직한 독해
 
 The wire→bridge spine (cdr→giop→idl→registry→dynamic→mcp→gen) is implemented
