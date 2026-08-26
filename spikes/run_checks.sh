@@ -4207,11 +4207,23 @@ fi
 # One run of the producer for all five groups. Its own exit status is read
 # first: 0 means every leg held, 1 means a leg was refuted (the legs below say
 # which), and anything else means it could not measure at all.
+#
+# The rows are SIFTED out of the output rather than taken as the whole of it.
+# Measured 2026-08-26 while wiring this in: `--raw` is documented as one TSV row
+# per transparency, and on a RED leg its `run_tests` prints the failure extract
+# to stdout as well — so the stream is well-formed exactly when nothing is wrong
+# and carries four extra lines when something is. A consumer that trusted the
+# line count would have reported `8 row(s)` on the one run that mattered.
+# `spikes/leak_tests.sh` is another batch's file today, so this is named here and
+# worked around rather than fixed there: the sift is by shape, and a line that is
+# not `<name>\t<verdict>\t<detail>` is not a row.
 leak_raw=$(./spikes/leak_tests.sh --raw 2>&1); leak_rc=$?
+leak_rows=$(awk -F'\t' 'NF>=2 && $1 ~ /^[a-z]+$/ &&
+                        $2 ~ /^(MEASURED|RED|SKIPPED|NOHANDLER)$/' <<<"$leak_raw")
 leak_ok=0
-if { [ "$leak_rc" -eq 0 ] || [ "$leak_rc" -eq 1 ]; } && [ -n "$leak_raw" ]; then
+if { [ "$leak_rc" -eq 0 ] || [ "$leak_rc" -eq 1 ]; } && [ -n "$leak_rows" ]; then
   leak_ok=1
-  echo "  ok   spikes/leak_tests.sh ran (exit $leak_rc) and printed $(grep -c . <<<"$leak_raw") row(s)"
+  echo "  ok   spikes/leak_tests.sh ran (exit $leak_rc) and printed $(grep -c . <<<"$leak_rows") well-formed row(s)"
 else
   echo "  FAIL spikes/leak_tests.sh did not run (exit $leak_rc); every leg below is"
   echo "       therefore unmeasured, which is a failure and never a pass"
@@ -4240,7 +4252,7 @@ leak_leg() {
     fail_total=$((fail_total+1))
     return 0
   fi
-  row=$(awk -F'\t' -v n="$name" '$1==n {v=$2; d=$3} END{printf "%s\t%s", v, d}' <<<"$leak_raw")
+  row=$(awk -F'\t' -v n="$name" '$1==n {v=$2; d=$3} END{printf "%s\t%s", v, d}' <<<"$leak_rows")
   verdict=${row%%	*}
   detail=${row#*	}
   case "$verdict" in
@@ -4348,7 +4360,7 @@ bears_on lifecycle
 os_out=$(./spikes/orb_shutdown.sh 2>&1); os_rc=$?
 case "$os_rc" in
   0)
-    echo "  ok   $(grep -E '^held ' <<<"$os_out" | sed 's/^/ /' | tr -d '\n') — both byte orders, verdict from the peer's socket"
+    echo "  ok   $(grep -E '^held ' <<<"$os_out") — both byte orders, verdict from the peer's socket"
     diag "the per-order peer lines" "$os_out" "$(grep -E '^  (peer|fixture) ' <<<"$os_out")" 4
     ;;
   1)
