@@ -253,6 +253,40 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   status before staging, and read the gate's complaint as true until measured
   otherwise. The verdict line counts
   SKIPPED; prose after an `ok` is not counted and reads as coverage.
+- **A control that names a live subject stops being a control when the subject
+  moves — and the pair guarding it breaks in opposite directions, one of them
+  silently.** Measured 2026-08-26 in `ledger_control.sh`. Controls 2 and 8
+  demonstrate one property of the transparency ledger — *a group that declares
+  a transparency and measures none of it must not flip the row to measured* —
+  and both demonstrated it by typing the name `activation`. The pin outlived
+  its fact twice in one day: activation went from undeclared to
+  declared-and-measuring-nothing, the string was edited to match, then the
+  activation leg started actually measuring and its `tp_measures_nothing` came
+  off. **Control 2 went red; control 8 went green while exercising nothing** —
+  and 8's whole job is to prove 2 is not tuned-until-quiet, which it did by
+  asserting a flip that no longer had anything to flip. Four of its five
+  assertions are still green in that vacuum, so only the loud half would ever
+  have been looked at. Computing the name instead of typing it is the **wrong**
+  repair and was tried first: it makes the control's existence depend on what
+  the project happens to still be waiting on, which is the thing that broke.
+  **Synthesise the subject**, and make the stripping control refuse when the
+  strip removed nothing. *살아 있는 대상을 이름으로 박은 대조군은 대상이 움직이면
+  대조군이기를 그만두고, 그것을 지키는 짝은 반대 방향으로 깨진다 — 하나는 빨갛게,
+  하나는 아무것도 실행하지 않은 채 조용히 초록으로. 이름을 계산하는 것은 틀린
+  수리다. 대상을 **합성**하고, 벗겨내는 대조군은 벗길 것이 없으면 거절하게 한다.*
+- **Indistinguishability is evidence about transparency only beside a
+  demonstration that distinguishing is possible.** Measured 2026-08-26: the
+  test that a caller cannot tell one backend from another stayed **green** when
+  `Dispatch::knows`'s default was made a blanket `false`, because a server that
+  serves nothing answers both keys identically too. A *cannot tell* assertion
+  passes in every world where nothing happens, so it is only worth something
+  next to a counted companion showing the two answers **can** differ — which is
+  why that group's control count is what it is. Same shape as the rule above,
+  one level up: a green that means *nothing occurred* reads exactly like a
+  green that means *the property held*. *구별불가능성은 구별이 가능하다는 시연이
+  옆에 있을 때만 투명성의 증거다 — 아무 일도 일어나지 않는 세계에서도 통과하기
+  때문이다. **아무것도 일어나지 않았다**는 초록과 **성질이 지켜졌다**는 초록은
+  똑같이 보인다.*
 
 ### Where a fact lives / 사실이 사는 곳
 
