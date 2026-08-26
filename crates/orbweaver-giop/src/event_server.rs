@@ -335,6 +335,7 @@ use orbweaver_cdr::{Encoder, Endian};
 use crate::guarded::{Guarded, Section};
 use crate::server::{Dispatch, DispatchBody, Request, SharedDispatch, SystemException};
 use crate::typecode::{self, Any, TypeCode};
+use crate::naming::{NameComponent, NamingContext};
 use crate::{Connection, IiopProfile, Ior, Result, Version, codeset};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2754,6 +2755,159 @@ impl EventChannelServer {
         }
         Ok(())
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Publication — how a channel is found without being handed over (D021 E3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The `kind` every channel binding carries, and the whole of this module's
+/// claim on a naming context.
+///
+/// # The mapping, stated once
+///
+/// **A channel named *N* is bound as the single [`NameComponent`]
+/// `{ id: N, kind: "EventChannel" }`, directly in the context the deployer
+/// hands to [`publish_channels`].** That is the decision; the rest of this
+/// comment is why it is that and not one of the three alternatives.
+///
+/// *채널 N은 배포자가 넘긴 컨텍스트에 `{ id: N, kind: "EventChannel" }`
+/// 한 컴포넌트로 바인딩된다.*
+///
+/// # Why the name goes in `id` verbatim
+///
+/// The map from channel name to binding must be **injective**, for exactly the
+/// reason [`is_channel_name_safe`] gives for keys: two names that produce one
+/// binding are two channels a client cannot tell apart, and it would find out
+/// by receiving somebody else's events. `id` is a `string` on the wire with no
+/// escaping of its own — [`write_name`] puts it out whole — so *N* travels
+/// verbatim and distinct names stay distinct. Note that this is a property of
+/// the **binary** `Name`: a channel name may contain `.`, which
+/// [`is_channel_name_safe`] has no reason to forbid and which is the id/kind
+/// separator in the *stringified* form. That form is produced by
+/// [`stringify_name`], which escapes `.`, `/` and `\`, so the two layers
+/// compose — but a client that builds the string by concatenation rather than
+/// asking for it will get a different name for a channel called `a.b`. Hence
+/// [`channel_binding_name`], which hands back the structured form and never a
+/// string.
+///
+/// [`write_name`]: crate::naming::write_name
+/// [`stringify_name`]: crate::naming::stringify_name
+///
+/// # Why `kind` is a constant, and why there is no sub-context
+///
+/// The context is the deployer's and may hold anything else. A constant `kind`
+/// partitions channel bindings into their own subspace of a shared context
+/// without asking for a sub-context — and a sub-context is not free: it has a
+/// lifecycle (`bind_new_context` fails on a second run, `destroy` requires it
+/// empty), so it would turn re-publication into a state machine to get wrong.
+/// `kind` costs nothing and carries the same separation. It is a constant and
+/// not derived from the name, so it cannot affect the injectivity argued above.
+///
+/// The alternative worth naming: an **empty** kind, which is what most
+/// deployments type by habit. It was rejected because a channel name is
+/// constrained only by object-key safety — a channel may legally be called
+/// `NameService` — and an empty kind would put it in the same subspace as
+/// every other binding in the root, where the collision is a silent overwrite
+/// rather than a diagnostic.
+pub const CHANNEL_BINDING_KIND: &str = "EventChannel";
+
+/// The CosNaming name a channel called `channel` is published under.
+///
+/// The mapping decision lives on [`CHANNEL_BINDING_KIND`]; this is it in code,
+/// and it is the function a client should call rather than build the name
+/// itself. Pure — it dials nothing and takes no lock — which is what lets the
+/// mapping be tested without a wire under it.
+///
+/// It does **not** check [`is_channel_name_safe`]: a name that is not safe
+/// never became a channel, so a caller asking for one is asking what a channel
+/// that cannot exist would be called, and the honest answer is the name it
+/// would have had.
+pub fn channel_binding_name(channel: &str) -> Vec<NameComponent> {
+    vec![NameComponent { id: channel.to_owned(), kind: CHANNEL_BINDING_KIND.to_owned() }]
+}
+
+/// One channel's publication: what was bound, under what name, and to what.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishedChannel {
+    /// The channel's name on the [`EventChannelServer`].
+    pub channel: String,
+    /// The CosNaming name it is bound under — [`channel_binding_name`].
+    pub name: Vec<NameComponent>,
+    /// The reference bound there — [`EventChannelServer::channel_ior_named`].
+    pub ior: Ior,
+}
+
+/// Binds every channel of `server` into `ctx`, so a client can reach a channel
+/// holding a name instead of having been handed its IOR.
+///
+/// # Who calls this, and why it is not a method
+///
+/// **The deployer**, not the servant. Binding a name is an outbound call, and
+/// a servant that makes an outbound call is the shape [`crate::guarded`] exists
+/// to police — the same sentence this module already applies to
+/// `disconnect_pull_supplier`. A method on [`EventChannelServer`] would read as
+/// the channel publishing itself, and the next person to need publication on
+/// some other trigger would reach for it from inside a dispatch arm, where the
+/// registry lock is held and the tripwire fires. A free function taking both
+/// servants says what is true: this is the wiring between two servants, and it
+/// belongs to whoever holds both. Nothing on the dispatch path calls it.
+///
+/// *바인딩은 아웃바운드 호출이므로 서번트가 아니라 **배포자**의 일이다. 두
+/// 서번트를 모두 쥔 쪽이 부른다.*
+///
+/// The lock rule is kept **structurally** rather than by care: every channel's
+/// name and reference is copied out first, through
+/// [`EventChannelServer::channel_names`] and
+/// [`EventChannelServer::channel_ior_named`], each of which takes the registry
+/// lock and drops it before returning an owned value. The loop that dials
+/// holds nothing. `crate::guarded::complaints_about` around a call to this
+/// function is empty, and that is a test, not a claim.
+///
+/// # `rebind`, not `bind`
+///
+/// [`NamingContext::rebind`] — so publication is **idempotent**. Two reasons,
+/// and the second is the one that matters:
+///
+/// - CosNaming has no transaction, so a run that fails on the third of five
+///   channels leaves two bound. With `rebind` the remedy is to run it again;
+///   with `bind` the remedy would be to unbind first, which opens a window in
+///   which the name resolves to nothing.
+/// - **A channel that moves keeps its name.** Re-publishing a channel served
+///   from a new address is the whole of what location transparency costs here,
+///   and `bind` would raise `AlreadyBound` at exactly that moment.
+///
+/// # What it does not do
+///
+/// It does not create a channel — [`EventChannelServer::create_channel`] does,
+/// in Rust, and D021 §6 refuses a channel factory on the wire. It does not
+/// unbind: a channel this server no longer has stays bound until somebody
+/// unbinds it, which is §2.5.1's separation of destroying a thing from
+/// unbinding its name, and is what omniNames measurably does.
+///
+/// # Errors
+///
+/// The first bind that fails, with the channels before it already bound and
+/// the ones after it not. The returned vector is only ever the complete set.
+pub fn publish_channels(
+    server: &EventChannelServer,
+    ctx: &mut NamingContext,
+) -> Result<Vec<PublishedChannel>> {
+    // Snapshot first. Nothing below this block holds the registry lock, which
+    // is what makes the no-lock-across-an-outbound-call rule structural here.
+    let snapshot: Vec<(String, Ior)> = server
+        .channel_names()
+        .into_iter()
+        .filter_map(|name| server.channel_ior_named(&name).map(|ior| (name, ior)))
+        .collect();
+
+    let mut published = Vec::with_capacity(snapshot.len());
+    for (channel, ior) in snapshot {
+        let name = channel_binding_name(&channel);
+        ctx.rebind(&name, &ior)?;
+        published.push(PublishedChannel { channel, name, ior });
+    }
+    Ok(published)
 }
 
 /// The event-service operations this server knows about and does not serve.
