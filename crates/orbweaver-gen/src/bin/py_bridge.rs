@@ -31,8 +31,8 @@
 //! target that re-implemented them would be a second ORB with a second set of
 //! alignment bugs. Linking Rust into CPython instead would be a new dependency
 //! class and a build-system commitment, which `docs/decisions/` says is not
-//! adopted by writing code; `D007-python-wire-seam.md` states the options and
-//! is PROPOSED.
+//! adopted by writing code. `D007-python-wire-seam.md` states the options, and
+//! is where that decision's status lives — it is not restated here.
 //!
 //! # What the bridge is not
 //!

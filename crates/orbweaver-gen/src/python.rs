@@ -21,9 +21,11 @@
 //! exactly once, in Rust.
 //!
 //! The seam is a process boundary rather than an FFI boundary on purpose, and
-//! the alternatives are compared in `docs/decisions/D007-python-wire-seam.md`,
-//! left PROPOSED because an extension module is a new dependency class and
-//! this project does not adopt one of those by writing code.
+//! the alternatives are compared in `docs/decisions/D007-python-wire-seam.md` —
+//! which is where that decision's status lives, and is deliberately not
+//! restated here. The reason the seam is a process is that an extension module
+//! is a new dependency class, and this project does not adopt one of those by
+//! writing code.
 //!
 //! # What a generated Python file may contain
 //!
