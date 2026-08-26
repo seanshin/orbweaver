@@ -555,21 +555,105 @@ pub struct Reconciled {
 
 /// What the locator does when a request arrives for an OFFLOADED expert.
 ///
-/// Both answers refuse the request. **Loading synchronously inside a request
-/// is not offered**, and the omission is the argument: a demand load is
-/// exactly the latency §11 says prefetch exists to hide, it would hold a
-/// dispatch thread for the whole weight copy, and — being unbounded and
-/// unobservable to the caller — it is how a control plane leaks into the data
-/// plane's time budget. The honest answer to "this expert is in storage" is
-/// to say so now and load it in the next window, not to make the caller wait
-/// inside a `locate`.
+/// # Two of these three refuse, and refusing is what a caller can tell
 ///
-/// `OBJECT_NOT_EXIST` is a slightly wrong-shaped way to say it — the expert
-/// exists, it is merely not in memory — but it is what [`Located::Unknown`]
-/// produces and it is the honest half-truth available today. Saying "not
-/// here, try again" properly needs either a `TRANSIENT` system exception or a
-/// `Located` variant for retry-after, and adding one without a client that
-/// acts on it would be decoration.
+/// [`Refuse`](Self::Refuse) and [`RefuseAndPrefetch`](Self::RefuseAndPrefetch)
+/// answer [`Located::Unknown`], which the POA turns into `OBJECT_NOT_EXIST`.
+/// **That is the load-state leak of D029 §6.1's Activation row, in one
+/// expression**: the same reference, invoked twice by the same caller, answers
+/// differently across an eviction that happened underneath it, so the caller
+/// learns *whether the target is loaded right now* — the one thing that row
+/// says it must not be able to tell. Nothing about `moe::Router::select`
+/// creates it and nothing about `select` can close it; a reference obtained
+/// any other way leaks identically.
+///
+/// The refusal below was written before that criterion existed and it is kept
+/// verbatim, because it is a real position and it is right about everything
+/// except its rank:
+///
+/// > **Loading synchronously inside a request is not offered**, and the
+/// > omission is the argument: a demand load is exactly the latency §11 says
+/// > prefetch exists to hide, it would hold a dispatch thread for the whole
+/// > weight copy, and — being unbounded and unobservable to the caller — it is
+/// > how a control plane leaks into the data plane's time budget. The honest
+/// > answer to "this expert is in storage" is to say so now and load it in the
+/// > next window, not to make the caller wait inside a `locate`.
+/// >
+/// > `OBJECT_NOT_EXIST` is a slightly wrong-shaped way to say it — the expert
+/// > exists, it is merely not in memory — but it is what [`Located::Unknown`]
+/// > produces and it is the honest half-truth available today. Saying "not
+/// > here, try again" properly needs either a `TRANSIENT` system exception or
+/// > a `Located` variant for retry-after, and adding one without a client that
+/// > acts on it would be decoration.
+///
+/// # Why a third variant rather than an edit
+///
+/// Every clause of that paragraph is about **cost**. Not one of them is an
+/// argument that the caller *should* be able to tell, and the paragraph's own
+/// second half concedes the answer it gives is a half-truth. Priority zero
+/// (D029 §6) ranks the two: *a proposal that closes a leak outranks one that
+/// adds a capability*, and a cost is not a counter-argument to a leak — it is
+/// the price of closing one. So the refusal keeps its variants, its reasoning
+/// and its default, and [`Activate`](Self::Activate) is added beside it, so a
+/// deployment's choice between latency and transparency is **made and named**
+/// instead of being the only behaviour available.
+///
+/// Note also what the refusal cannot buy. Refusing does not remove the wait:
+/// it moves the wait into the caller, which must now notice, prefetch, poll
+/// and retry — and `moe::ExpertLoader::prefetch` is `oneway` with no
+/// completion, on an object `moe::Router` never hands over. The refusal saves
+/// a dispatch thread and spends a round of application code that cannot in
+/// general be written.
+///
+/// **The one clause that is not answered by rank is "unbounded", and it is
+/// answered by not being answered here.** A demand load with no ceiling holds
+/// a dispatch thread for as long as the load takes, and the obvious guard is a
+/// deadline after which the locator gives up. This variant does not have one,
+/// deliberately: in this repository a load is a state transition and an opaque
+/// blob, so a deadline could never elapse and the test for it would assert
+/// against a branch nothing can reach — *"adding one without a client that
+/// acts on it would be decoration"*, which is the refusal's own standard,
+/// applied to the fix rather than to the refusal. A deployment with a real
+/// weight copy needs the bound and needs to decide what the expiry **answers**,
+/// and that second half is the harder one: `OBJECT_NOT_EXIST` puts the leak
+/// straight back, so the honest expiry is `TRANSIENT` or a `Located` variant
+/// carrying a retry-after — the same two the paragraph above already named,
+/// still with no client that acts on either. Named here so it is a decision
+/// somebody takes rather than an omission somebody inherits.
+///
+/// *비용이 아니라 "무한정"인 절만은 순위로 답해지지 않으며, 여기서 답하지
+/// **않음**으로써 답한다: 이 저장소에서 적재는 상태 전이와 불투명 블롭이므로
+/// 마감 시한은 결코 만료될 수 없고, 그 테스트는 도달 불가능한 분기를 겨눈다 —
+/// *"그것에 반응하는 클라이언트 없이 더하는 것은 장식"*이라는 거절문 자신의 기준을
+/// 수정 쪽에 적용한 것이다. 진짜 가중치 복사가 있는 배포는 한계가 필요하고, 만료가
+/// **무엇을 답하는가**를 정해야 한다 — `OBJECT_NOT_EXIST`는 구멍을 그대로 되돌려
+/// 놓는다.*
+///
+/// # What [`Activate`](Self::Activate) does not close
+///
+/// **Time.** A demand-loaded call is slower than a resident one, and a caller
+/// with a clock can tell. That is not closeable in one process — the only
+/// alternatives are to forward to a node where the target is loaded (there is
+/// no second node here) or to make every call as slow as the slowest, which
+/// closes the channel by destroying the service. It is recorded rather than
+/// hidden, and it is the honest limit of the closure.
+///
+/// **And in this repository, time is not even measurable.** The module docs
+/// say what a load is here: a state transition plus an opaque blob, with no
+/// accelerator, no weight file and no data plane. A demand load costs two map
+/// writes. So the latency the refusal is about is real in a deployment and
+/// absent from every test in this workspace, which is the reason the cost
+/// clause cannot be checked here and must not be presented as though it had
+/// been.
+///
+/// *두 변형은 거절하며, **거절이야말로 호출자가 알아챌 수 있는 것**이다. 같은
+/// 참조가 축출 전후로 다르게 답하므로 호출자는 대상이 지금 적재되어 있는지를
+/// 배운다 — 활성화 행이 알 수 없어야 한다고 적은 바로 그것이다. 기존 거절문은
+/// 그대로 인용해 남긴다: 그 논거는 전부 **비용**에 대한 것이고, 비용은 구멍에
+/// 대한 반론이 아니라 구멍을 막는 값이다. 그래서 변형을 고치지 않고 하나를
+/// **더한다** — 지연과 투명성 사이의 선택이 유일한 동작이 아니라 명시된 선택이
+/// 되도록. 닫히지 않는 것은 **시간**이며, 이 저장소에서는 적재가 맵 쓰기 두
+/// 번이므로 그 시간조차 측정되지 않는다.*
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MissPolicy {
     /// Refuse, and change nothing. Loading stays entirely with the
@@ -580,6 +664,24 @@ pub enum MissPolicy {
     /// waiting for it. Still a control-plane-rate transition: it is driven by
     /// a request (ms), never by a token.
     RefuseAndPrefetch,
+    /// Load it now and serve the request, so the caller cannot tell the
+    /// target had been evicted.
+    ///
+    /// OFFLOADED is driven through PREFETCHING to RESIDENT and answered
+    /// [`Located::Here`]; PREFETCHING — a load already underway — is completed
+    /// and answered the same way, which is the case the two refusing variants
+    /// treat as a miss even though the expert is already on its way in.
+    ///
+    /// **An id this loader has never registered is still
+    /// [`Located::Unknown`].** That is not a load state and refusing it leaks
+    /// nothing: the object genuinely does not exist, and inventing one on
+    /// demand would answer for references nobody ever minted.
+    ///
+    /// Still not a per-token hook. This is driven by a *request*, at
+    /// millisecond rate, exactly as [`RefuseAndPrefetch`](Self::RefuseAndPrefetch)
+    /// already is — §5's rule is about token period, and neither variant
+    /// reaches it.
+    Activate,
 }
 
 /// A [`ServantLocator`] backed by an [`ExpertLoader`].
@@ -604,6 +706,25 @@ impl ServantLocator for ExpertLocator<'_> {
         };
         match self.loader.status(name) {
             Some(Residency::Resident | Residency::Active) => Located::Here,
+            // The closure. Both arms end RESIDENT, so the reply the caller
+            // gets is the reply a resident expert would have given — which is
+            // the whole of what "cannot tell" means here.
+            Some(state @ (Residency::Offloaded | Residency::Prefetching))
+                if self.miss == MissPolicy::Activate =>
+            {
+                if state == Residency::Offloaded && self.loader.request_prefetch(name).is_err() {
+                    return Located::Unknown;
+                }
+                match self.loader.complete_load(name) {
+                    // A refusal here is the machine saying this edge does not
+                    // exist from where the expert actually is, and answering
+                    // `Here` anyway would activate an id the loader does not
+                    // consider loaded — the store/machine drift
+                    // `mirror_residency` exists to prevent, on the POA side.
+                    Ok(_) => Located::Here,
+                    Err(_) => Located::Unknown,
+                }
+            }
             Some(Residency::Offloaded) if self.miss == MissPolicy::RefuseAndPrefetch => {
                 // A request, not a load: this returns immediately, and the
                 // caller is refused regardless of whether it succeeded.
@@ -611,8 +732,9 @@ impl ServantLocator for ExpertLocator<'_> {
                 Located::Unknown
             }
             // OFFLOADED under `Refuse`, PREFETCHING (a load is already
-            // underway and waiting for it is the thing we refuse to do), or
-            // an id this loader has never heard of.
+            // underway and waiting for it is the thing the two refusing
+            // variants refuse to do), or an id this loader has never heard
+            // of — the last of which is `Unknown` under every policy.
             _ => Located::Unknown,
         }
     }
