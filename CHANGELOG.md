@@ -2819,6 +2819,57 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Known limits / 알려진 한계
 
+- **A servant that does not override `Dispatch::knows` answers for every object
+  key, including keys nobody activated — decided, gated, and deliberately not
+  changed.** Found by a hand-written C peer dialling `spike-server`, which
+  serves `ping` on a key nothing ever activated. The default is wrong, and not
+  because accepting every key is never right: it is exactly right for
+  `orbweaver_gen`'s `Servants` multiplexer and for `PyServant`. It is wrong
+  because **meaning it and forgetting it are spelled the same way.** CORBA 3.4
+  §15.3.8.6 makes this a `RequestProcessingPolicy` with three values and a
+  stated default of `USE_ACTIVE_OBJECT_MAP_ONLY`; accepting every key is
+  `USE_DEFAULT_SERVANT`, which the specification requires a POA to be *created
+  with* and to have a servant *registered* for, and which cannot be reached by
+  omission. Here omission is the only way anyone reaches it — and two other
+  crates had already written the opposite reading down
+  (`orbweaver_object::RequestProcessingPolicy`'s `SPEC_DEFAULT`, and
+  `orbweaver_gen`'s emitted servant trait, whose `knows` is required with no
+  default). **Nothing changed on the wire.** Added: `UnknownKeyPolicy`,
+  `default_knows_policy()` as the one home for what the trait defaults enact,
+  and `key_policy_of()`, which measures a servant instead of letting it declare.
+  The argument lives on `Dispatch::knows`; the measurement is
+  `crates/orbweaver-giop/tests/a_key_nobody_activated.rs`. **Why it was not
+  changed**: 26 of the workspace's 72 `Dispatch`/`SharedDispatch`
+  implementations inherit the default, and the production ones —
+  `orbweaver-gen`'s `PyServant`, `spike-server` itself — live in crates the GIOP
+  crate does not own. Two more, `spikes/e2e/servant.rs` and
+  `spikes/estate/servant.rs`, check the key in `dispatch_body` rather than in
+  `knows`, so their probe path still answers `ObjectHere` for a key their own
+  POA calls `Unknown`. D029 §6.1's Backend row records all of it as its second
+  named leak.
+
+  *`Dispatch::knows`를 재정의하지 않은 서번트는 아무도 활성화하지 않은 키를
+  포함해 **모든** 객체 키에 답한다 — 결정했고, 고정했고, 의도적으로 바꾸지
+  않았다.* 손으로 쓴 C 피어가 `spike-server`에 걸어 찾았다. 기본값은 틀렸다.
+  모든 키를 받는 것이 결코 옳지 않아서가 아니다 — `Servants` 다중화기와
+  `PyServant`에는 정확히 옳다. **그렇게 의도한 것과 잊은 것의 철자가 같기
+  때문에** 틀렸다. CORBA 3.4 §15.3.8.6은 이것을 값 셋과 명시된 기본값
+  `USE_ACTIVE_OBJECT_MAP_ONLY`를 가진 `RequestProcessingPolicy`로 정한다.
+  모든 키를 받는 것은 `USE_DEFAULT_SERVANT`이며, 명세는 POA를 그 정책으로
+  *생성*하고 서번트를 *등록*할 것을 요구한다 — 누락으로는 도달할 수 없다.
+  여기서는 누락이 그곳에 이르는 유일한 길이다. 다른 두 크레이트는 이미 반대
+  방향으로 적어 두었다(`orbweaver_object::RequestProcessingPolicy`의
+  `SPEC_DEFAULT`, 그리고 기본 구현 없이 `knows`를 요구하는 `orbweaver_gen`의
+  방출 서번트 트레이트). **와이어에서 바뀐 것은 없다.** 추가: `UnknownKeyPolicy`,
+  트레이트 기본값이 무엇을 시행하는지에 대한 한 집인 `default_knows_policy()`,
+  그리고 선언을 믿는 대신 서번트를 재는 `key_policy_of()`. 논거는
+  `Dispatch::knows`에, 측정은
+  `crates/orbweaver-giop/tests/a_key_nobody_activated.rs`에 있다. **바꾸지 않은
+  이유**: 워크스페이스의 `Dispatch`/`SharedDispatch` 구현 72개 중 26개가 그
+  기본값을 물려받으며, 그중 제품 코드인 것들은 GIOP 크레이트가 소유하지 않은
+  크레이트에 있다. 추가로 두 곳은 키를 `knows`가 아니라 `dispatch_body`에서
+  검사하므로, 자기 POA가 `Unknown`이라 부르는 키에 대해 탐침 경로가 여전히
+  `ObjectHere`를 답한다. D029 §6.1 백엔드 행이 두 번째 구멍으로 기록한다.
 - **A `TAG_SSL_SEC_TRANS` component produced by omniORB's or JacORB's own
   encoder is still unmeasured, and stays named as such.** Everything else B3
   claims is measured, but a component with the association-option bits and port
