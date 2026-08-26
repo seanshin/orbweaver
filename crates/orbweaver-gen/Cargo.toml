@@ -22,6 +22,10 @@ orbweaver-cdr = { path = "../orbweaver-cdr" }
 orbweaver-giop = { path = "../orbweaver-giop", default-features = false }
 orbweaver-idl = { path = "../orbweaver-idl" }
 orbweaver-registry = { path = "../orbweaver-registry" }
+# The servant seam's own documents. `python_servant.rs` builds AnyJSON v1 by
+# hand — the answers a Python servant would send — and drives `PyServant` with
+# them, so it needs the JSON type and the value mapping directly.
+orbweaver-dynamic = { path = "../orbweaver-dynamic" }
 # The guard a stub crosses the trust boundary through (PLAN §7.4 I1). A test
 # dependency only: the generated code stands on `rt` alone, and `guarded_stub.rs`
 # is what proves a *checked-in* stub's payload reaches the guard's content seat.

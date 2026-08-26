@@ -50,6 +50,7 @@ use orbweaver_cdr::Encoder;
 use orbweaver_dynamic::anyjson::{self, LocalReferences};
 use orbweaver_dynamic::json::Json;
 use orbweaver_giop::codeset::{CodeSetId, WideCodec};
+use orbweaver_giop::Version;
 use orbweaver_giop::server::{Completion, Dispatch, DispatchBody, Request, SystemException};
 use orbweaver_giop::typecode::TypeCode;
 use orbweaver_registry::{OperationSig, ParamDirection, Registry};
@@ -162,16 +163,38 @@ impl<A: Answerer> PyServant<A> {
 
     /// The wide-character codec **this request** implies.
     ///
-    /// Not [`orbweaver_dynamic`]'s default, which is GIOP 1.2 and would write a
-    /// 1.1 peer's `wstring` in the wrong form: 1.2 counts octets and 1.1 counts
-    /// characters, so the same string is a different field.
+    /// Not [`orbweaver_dynamic`]'s fixed default, which is GIOP 1.2 and would
+    /// write a 1.1 peer's `wstring` in the wrong form: 1.2 counts octets and
+    /// 1.1 counts characters, so the same string is a different field.
     /// `tests/wide_follows_the_connection.rs` records that a stub answering
     /// from a constant could not be refuted by our own round trip, because both
     /// ends applied the same constant. A dynamic servant has the same exposure
     /// and avoids it the same way — by asking the request.
-    fn wide(request: &Request) -> Result<WideCodec, SystemException> {
-        WideCodec::new(request.version, CodeSetId::UTF_16)
-            .map_err(|_| SystemException::marshal())
+    ///
+    /// # Why GIOP 1.0 falls back rather than failing
+    ///
+    /// There is no 1.0 wide form to ask for: `wchar` arrived in GIOP 1.1, so
+    /// [`WideCodec::new`] refuses the pair, and an earlier version of this
+    /// function turned that refusal into `MARSHAL` — for **every** operation on
+    /// a 1.0 connection, including ones with no text in them at all, and
+    /// including `_is_a`. The comparison in `tests/python_servant.rs` found it
+    /// on its first run: nineteen calls diverging on 1.0 and none on 1.1 or
+    /// 1.2, which is what a whole-batch comparison is for.
+    ///
+    /// The fallback is not a choice this module gets to make freshly. A
+    /// generated Rust skeleton marshals through the *stream's* codec, and
+    /// [`Request::narrow_codec`] builds that with `WideCodec::new(...).ok()` —
+    /// so on 1.0 the stream has no wide codec and `Cdr` falls back to the form
+    /// §9.3.1.6 fixes for an encapsulation, which is 1.2's. Answering anything
+    /// else here would make a Python servant and a Rust one disagree on a 1.0
+    /// connection, which is precisely the leak this file exists to close. If
+    /// that shared fallback is wrong it is wrong in both languages, and it is
+    /// one question rather than two.
+    fn wide(request: &Request) -> WideCodec {
+        WideCodec::new(request.version, CodeSetId::UTF_16).unwrap_or_else(|_| {
+            WideCodec::new(Version::V1_2, CodeSetId::UTF_16)
+                .expect("1.2 with UTF-16 is always a valid pair")
+        })
     }
 }
 
@@ -181,7 +204,7 @@ impl<A: Answerer> Dispatch for PyServant<A> {
         request: &Request,
         out: &mut Encoder,
     ) -> Result<DispatchBody, SystemException> {
-        let wide = Self::wide(request)?;
+        let wide = Self::wide(request);
 
         // Object-lifetime pseudo-operations are answered **here**, never in
         // Python, and that is a transparency decision rather than an
