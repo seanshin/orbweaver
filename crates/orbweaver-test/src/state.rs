@@ -409,27 +409,165 @@ fn residency(at: &AtOwned<'_>) -> Result<Residency> {
 
 // ---- the estate the population is placed in ----
 
-/// A node the estate declares, and the region it is in.
+/// A node the operator declared, and the region it is in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeededNode {
-    /// The node's name, as a `placement_node` would spell it.
+    /// The node's name.
     pub name: String,
     /// The residency region it sits in.
     pub region: String,
 }
 
-/// The seeded MoE estate: nodes, tenants, policy domains.
+/// **Domain A** — the nodes an operator declared to the tenant control plane.
+///
+/// Closed, and default-deny: `PolicyDomain::check_residency` refuses a name
+/// this does not list, so membership has to be decidable or the refusal is not
+/// one. Its authority is the operator, out of band, because
+/// `corpus/golden/23`'s contract declares no member for a node's region and
+/// guessing one from the name would make `check_residency` answer confidently
+/// about nodes nobody described.
 #[derive(Debug, Clone)]
-pub struct MoeEstate {
-    /// Every node any seeded offer may legally be placed on.
+pub struct DeclaredEstate {
+    /// Every node the operator declared, with its region.
     pub nodes: Vec<SeededNode>,
     /// A node name deliberately **not** declared, for showing a residency
     /// check refuse default-deny.
     pub undeclared_probe: String,
+}
+
+impl DeclaredEstate {
+    /// Whether the operator declared this node.
+    pub fn declares(&self, node: &str) -> bool {
+        self.nodes.iter().any(|n| n.name == node)
+    }
+}
+
+/// **Domain B** — the node names experts report about themselves.
+///
+/// Open, and unvalidated: `moe::Capability.placement_node` is a string member
+/// of the published contract that the expert fills in, stored verbatim and
+/// queried by the trader as an opaque value. Nothing may close it — a set
+/// whose membership is decided by the thing being admitted is not a closed
+/// set, and turning `heartbeat` into admission control would be a change to
+/// what the contract *does*, not to what a seed *says*.
+///
+/// The list is therefore the vocabulary **this seed** uses, so a typo in an
+/// offer is catchable. It is not an admission list and adding a name to it
+/// grants nothing.
+#[derive(Debug, Clone)]
+pub struct ReportedPlacement {
+    /// The node names this seed's offers report, each with the deployment it
+    /// belongs to.
+    pub nodes: Vec<(String, String)>,
+}
+
+impl ReportedPlacement {
+    /// Whether this seed states an offer may report this node name.
+    pub fn states(&self, node: &str) -> bool {
+        self.nodes.iter().any(|(n, _)| n == node)
+    }
+
+    /// The node name this deployment's experts report.
+    ///
+    /// By deployment, never by position: *"the second one in the list"* is not
+    /// a fact this file states, and a fixture that took it that way would
+    /// silently start reporting somebody else's node the day an entry was
+    /// added above it.
+    pub fn node_for(&self, deployment: &str) -> Option<&str> {
+        self.nodes.iter().find(|(_, d)| d == deployment).map(|(n, _)| n.as_str())
+    }
+}
+
+/// One capability a tenant holds, as its manifest describes it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeededCapability {
+    /// The capability word, from the estate's vocabulary.
+    pub name: String,
+    /// What it costs.
+    pub cost: f64,
+    /// The adapter delta that implements it over the shared base model.
+    pub adapter_delta: String,
+}
+
+/// One grant inside a policy domain: a subject may use a capability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeededGrant {
+    /// Who is granted.
+    pub subject: String,
+    /// What they are granted.
+    pub capability: String,
+}
+
+/// One policy domain and everything it grants.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeededPolicyDomain {
+    /// The domain's name, as a manifest's `policy_domain` spells it.
+    pub name: String,
+    /// What it grants. Empty is the default-deny domain, and is a statement.
+    pub grants: Vec<SeededGrant>,
+}
+
+/// One tenant of the MoE estate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeededTenant {
+    /// The tenant id, as a manifest's `tenant_id` spells it.
+    pub id: String,
+    /// The region this tenant's models must stay in.
+    pub residency_region: String,
+    /// The capabilities this tenant's experts provide.
+    pub capabilities: Vec<SeededCapability>,
+    /// This tenant's policy domains.
+    pub policy_domains: Vec<SeededPolicyDomain>,
+}
+
+impl SeededTenant {
+    /// The named capability, if this tenant holds it.
+    pub fn capability(&self, name: &str) -> Option<&SeededCapability> {
+        self.capabilities.iter().find(|c| c.name == name)
+    }
+
+    /// The named policy domain, if this tenant has one.
+    pub fn policy_domain(&self, name: &str) -> Option<&SeededPolicyDomain> {
+        self.policy_domains.iter().find(|d| d.name == name)
+    }
+
+    /// The tenant's domain that grants **nothing** — what a default-deny
+    /// `authorize` is refused under.
+    ///
+    /// By role, not by name and not by position. A caller that reached for
+    /// `policy_domains[0]` would be asserting the file's member order, which
+    /// is not a fact the file states — `Json::Object` is a `BTreeMap` here and
+    /// a `dict` in the Python reader, and neither may depend on order. A
+    /// caller that reached for the literal `"acme-default"` would be retyping
+    /// a name the seed owns.
+    pub fn default_domain(&self) -> Option<&SeededPolicyDomain> {
+        self.policy_domains.iter().find(|d| d.grants.is_empty())
+    }
+
+    /// The tenant's domain that grants **something** — what makes a positive
+    /// `authorize` answer positive. See [`SeededTenant::default_domain`] for
+    /// why this is by role.
+    pub fn granting_domain(&self) -> Option<&SeededPolicyDomain> {
+        self.policy_domains.iter().find(|d| !d.grants.is_empty())
+    }
+}
+
+/// The seeded MoE estate: **two** node domains, tenants, policy domains.
+#[derive(Debug, Clone)]
+pub struct MoeEstate {
+    /// Domain A: what the operator declared.
+    pub declared_estate: DeclaredEstate,
+    /// Domain B: what experts report about themselves.
+    pub reported_placement: ReportedPlacement,
     /// The three capability words the MoE fixtures use.
     pub capability_vocabulary: Vec<String>,
+    /// The capability that stays in the vocabulary and out of every grant, so
+    /// a refusal shown against it is refusing something.
+    pub ungranted_capability: String,
     /// The shared base model every tenant's experts adapt.
     pub base_model: String,
+    /// The tenants, in the order the file states them.
+    pub tenants: Vec<SeededTenant>,
 }
 
 impl MoeEstate {
@@ -439,25 +577,89 @@ impl MoeEstate {
         let doc = load(FILE)?;
         let root = At::new(FILE, &doc);
 
+        let domains = root.field("node_domains")?;
+
+        let declared = domains.field("declared_estate")?;
         let mut nodes = Vec::new();
-        for n in root.field("nodes")?.items()? {
+        for n in declared.field("nodes")?.items()? {
             nodes.push(SeededNode {
                 name: n.field("name")?.as_ref().string()?,
                 region: n.field("region")?.as_ref().string()?,
             });
         }
+        let declared_estate = DeclaredEstate {
+            nodes,
+            undeclared_probe: declared.field("undeclared_probe")?.as_ref().string()?,
+        };
+
+        let reported = domains.field("reported_placement")?;
+        let mut reported_nodes = Vec::new();
+        for n in reported.field("nodes")?.items()? {
+            reported_nodes.push((
+                n.field("name")?.as_ref().string()?,
+                n.field("deployment")?.as_ref().string()?,
+            ));
+        }
+        let reported_placement = ReportedPlacement { nodes: reported_nodes };
+
+        let mut tenants = Vec::new();
+        for t in root.field("tenants")?.items()? {
+            let mut capabilities = Vec::new();
+            for c in t.field("capabilities")?.items()? {
+                capabilities.push(SeededCapability {
+                    name: c.field("name")?.as_ref().string()?,
+                    cost: c.field("cost")?.as_ref().f64()?,
+                    adapter_delta: c.field("adapter_delta")?.as_ref().string()?,
+                });
+            }
+            let mut policy_domains = Vec::new();
+            for d in t.field("policy_domains")?.items()? {
+                let mut grants = Vec::new();
+                for g in d.field("grants")?.items()? {
+                    grants.push(SeededGrant {
+                        subject: g.field("subject")?.as_ref().string()?,
+                        capability: g.field("capability")?.as_ref().string()?,
+                    });
+                }
+                policy_domains
+                    .push(SeededPolicyDomain { name: d.field("name")?.as_ref().string()?, grants });
+            }
+            tenants.push(SeededTenant {
+                id: t.field("id")?.as_ref().string()?,
+                residency_region: t.field("residency_region")?.as_ref().string()?,
+                capabilities,
+                policy_domains,
+            });
+        }
 
         Ok(MoeEstate {
-            nodes,
-            undeclared_probe: root.field("_undeclared_node_probe")?.as_ref().string()?,
+            declared_estate,
+            reported_placement,
             capability_vocabulary: root.field("capability_vocabulary")?.as_ref().strings()?,
+            ungranted_capability: root.field("ungranted_capability")?.as_ref().string()?,
             base_model: root.field("base_model")?.as_ref().string()?,
+            tenants,
         })
     }
 
-    /// Whether the estate declares this node.
-    pub fn declares(&self, node: &str) -> bool {
-        self.nodes.iter().any(|n| n.name == node)
+    /// The named tenant, if the estate states one.
+    pub fn tenant(&self, id: &str) -> Option<&SeededTenant> {
+        self.tenants.iter().find(|t| t.id == id)
+    }
+
+    /// Every grant every tenant makes, as `(tenant, domain, subject,
+    /// capability)`.
+    pub fn grants(&self) -> Vec<(&str, &str, &str, &str)> {
+        self.tenants
+            .iter()
+            .flat_map(|t| {
+                t.policy_domains.iter().flat_map(move |d| {
+                    d.grants.iter().map(move |g| {
+                        (t.id.as_str(), d.name.as_str(), g.subject.as_str(), g.capability.as_str())
+                    })
+                })
+            })
+            .collect()
     }
 }
 

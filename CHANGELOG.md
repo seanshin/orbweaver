@@ -226,6 +226,64 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **The seed migration D026 §5 S1 owed, and the three answers D028 §4 M3
+  ordered.** The seed corpus landed without its migration — *"byte-identity:
+  not run, zero fixtures migrated"* — because all five fixtures lived in crates
+  other batches held. It has now been run, and the reasons three fixtures still
+  cannot be migrated are structural rather than scheduling.
+
+  **The key collision is fixed.** `spike_experts` bound its `Server` to
+  `b"MoE/registry"` and handed `ExpertService` the base `b"MoE"`, from which it
+  derives `MoE/registry` — the same bytes by two routes, and nothing could go
+  red because a `Server`'s key is read only by `Server::ior`, which that fixture
+  never calls. `expert_service::MOE_BASE_KEY` is now the one spelling and a
+  single `plane()` builds the server and servant together, so neither identity
+  can be chosen without the other.
+
+  **The node namespaces are two domains, not one vocabulary spelled twice** —
+  the outcome D028 predicted as *"the cheaper answer"*, and it changed no
+  fixture code. **A** is the operator's declared estate: out of band, closed,
+  because `check_residency`'s default-deny is not a refusal unless membership
+  is decidable. **B** is reported placement: `moe::Capability.placement_node`,
+  written by the expert about itself, open, because a set whose membership is
+  decided by the thing being admitted is not closed — checking it against the
+  estate would turn `heartbeat` into admission control, a change to what the
+  contract *does*. `moe-estate.json`'s first version listed the union of both
+  under one `nodes` key and a gate passed over it; what that gate asserted was
+  the one-domain answer, compiled in as bookkeeping, over a list built to make
+  it pass.
+
+  **`vision` was never a defect** — absent-by-decision in the tenancy world,
+  pinned and `Resident` in the placement world, two questions about two
+  objects. What was wrong is that no document said so. Both decisions are in
+  `corpus/state/README.md`, EN and KO.
+
+  **Migrated:** `spike_tenants` fully (tenants, regions, capabilities, costs,
+  adapter deltas, policy domains, the grant, declared nodes) — **byte-identical**;
+  `spike_experts` in its shared half — one added line, and that line exists
+  because a seeded value reaching no output cannot be shown reaching anything,
+  which made its first negative control come back green.
+
+  **Not migrated, and why:** `orbweaver-test` sits *above* every crate the
+  fixtures live in, so a fixture cannot name it without a cycle, and Cargo has
+  no bin-only dependency. `orbweaver-object`'s two reach the loader by
+  `#[path]` — one file, two compilations, no copy to drift. The three in
+  `orbweaver-giop` and `orbweaver-registry` cannot reach it at all, because
+  `orbweaver-dynamic`'s JSON parser is above them too. The structural fix is
+  named in the README: move that parser down to `orbweaver-cdr`.
+
+  **`spike_events` cannot be measured by this oracle at all**: its output is
+  not a function of its inputs (10 runs of the untouched binary, 9 gave
+  `dropped=3`, 1 gave `dropped=2`). Not diagnosed, and not claimed to be. The
+  oracle's own determinism check had been two consecutive runs, both of which
+  landed on the 1/10 variant — two runs is not evidence.
+
+  *시드 이전이 **돌았다**. 키 충돌은 철자 하나로 고정되었고, 노드 이름공간의 답은
+  **두 도메인**이며(픽스처 코드는 한 줄도 바뀌지 않았다), `vision`은 애초에 결함이
+  아니라 **다르다고 적은 문서가 없었던 것**이다. 둘은 이전, 셋은 불가 — 이유는
+  일정이 아니라 로더가 픽스처보다 의존성 그래프 **위에** 있다는 구조다.
+  `spike_events`는 출력이 입력의 함수가 아니어서 이 오라클로 잴 수 없다.*
+
 - **A leak test per transparency, and the harness now counts the ones that do
   not exist** (D029 §5 O0, D031 H2/H4). `crates/orbweaver-test/tests/what_a_caller_can_tell.rs`
   is the first instrument in this project that holds a **live caller** while the

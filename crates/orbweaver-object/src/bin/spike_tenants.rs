@@ -36,12 +36,53 @@
 //! makes a `get_manifest` on a stale reference answer `OBJECT_NOT_EXIST`.
 //! Stopped by killing the process.
 
+//! # Where this fixture's population comes from
+//!
+//! D026 §4: *a fixture states where its population came from, and a population
+//! that more than one fixture uses has one home.* Every tenant, region,
+//! capability, cost, adapter delta, policy domain, grant and declared node
+//! below is **loaded from `corpus/state/moe-estate.json`**, which
+//! `spike_experts` and `spikes/seed_trading_client.py` read too. Nothing about
+//! the population is retyped here.
+//!
+//! What is *not* from the seed, and is invented here on purpose: the two model
+//! versions (`1.0`, `2.0`), the request and trace ids, and the one inference
+//! tensor. Those exercise paths rather than describing a world, and D026 §3 is
+//! explicit that a seeded population must not become the only population.
+//!
+//! ## Where the loader lives, and why `#[path]`
+//!
+//! The loader's home is `crates/orbweaver-test/src/state.rs` and it is reached
+//! by including that file, not by `use orbweaver_test::state`. The reason is
+//! the dependency graph and it is not a preference: `orbweaver-test` depends
+//! on `orbweaver-giop`, `orbweaver-registry` and `orbweaver-dynamic`, so it
+//! sits **above** every crate the five fixtures live in — a fixture cannot
+//! name it without a cycle. Cargo has no bin-only dependency either, so a
+//! `dev-dependency` (which reaches tests, examples and benches) does not reach
+//! a `[[bin]]`.
+//!
+//! Including the file keeps the population's home singular — one file, two
+//! compilations, no second copy to drift — which is the property D026 §4 asks
+//! for. It is a workaround for the graph and it is written down as one:
+//! `corpus/state/README.md`, *What the migration could not do*, records the
+//! structural fix and which fixtures are still blocked by it.
+#[allow(dead_code)]
+#[path = "../../../orbweaver-test/src/state.rs"]
+mod state;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+use state::MoeEstate;
 
 use orbweaver_giop::orb::Orb;
 use orbweaver_giop::server::{BAD_OPERATION, Server};
 use orbweaver_giop::{Connection, Error, Ior, Reply};
+// The repository id of `::moe::Expert` has one home, and it is the servant
+// crate that publishes it — not a literal retyped in each fixture that names
+// the type. `spike_experts` already used this constant; this fixture typed the
+// string, and the two agreed by luck.
+use orbweaver_object::expert_service::EXPERT_ID;
 use orbweaver_object::tenant_service::{
     Activation, BAD_INV_ORDER, BAD_PARAM, CallContext, Capability, ENTERPRISE_EXPERT_ID, Manifest,
     NO_PERMISSION, OBJECT_NOT_EXIST, TenantService,
@@ -76,14 +117,33 @@ impl Report {
     }
 }
 
-fn manifest(tenant: &str, version: &str, region: &str, domain: &str) -> Manifest {
+/// A manifest for `tenant`, with the base model and residency region the seed
+/// states for it. Only the version and the policy domain are the caller's.
+fn manifest(estate: &MoeEstate, tenant: &str, version: &str, domain: &str) -> Manifest {
+    let t = estate
+        .tenant(tenant)
+        .unwrap_or_else(|| panic!("corpus/state/moe-estate.json states the tenant `{tenant}`"));
     Manifest {
-        tenant_id: tenant.to_owned(),
-        base_model: "llama-70b".to_owned(),
+        tenant_id: t.id.clone(),
+        base_model: estate.base_model.clone(),
         experts: Vec::new(),
         policy_domain: domain.to_owned(),
         version: version.to_owned(),
-        residency_region: region.to_owned(),
+        residency_region: t.residency_region.clone(),
+    }
+}
+
+/// A manifest naming a tenant through *another* tenant's factory — the one
+/// case that must not be built from the seed's own tenant record, because what
+/// it is testing is a manifest whose contents the caller has no right to.
+fn foreign_manifest(estate: &MoeEstate, tenant: &str, version: &str, domain: &str) -> Manifest {
+    Manifest {
+        tenant_id: tenant.to_owned(),
+        base_model: estate.base_model.clone(),
+        experts: Vec::new(),
+        policy_domain: domain.to_owned(),
+        version: version.to_owned(),
+        residency_region: "eu-west".to_owned(),
     }
 }
 
@@ -209,29 +269,89 @@ fn run(out: &[&str; 2], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
     let svc = TenantService::new("127.0.0.1", port, "MoE");
     let mut r = Report { failures: 0 };
 
+    // The population, loaded rather than invented. A failure here is a seed
+    // failure and says so: an unmeasured check is a failure, and a fixture
+    // that quietly fell back to values of its own would be measuring a
+    // population no other reader has.
+    let estate = MoeEstate::load()?;
+    let acme = estate.tenant("acme").ok_or("the seed states the tenant `acme`")?;
+    let globex = estate.tenant("globex").ok_or("the seed states the tenant `globex`")?;
+    // By role rather than by name: the domain that grants nothing is what
+    // default-deny is shown under, and the one that grants something is what
+    // `set_policy` swaps to. Both spellings stay in the seed.
+    let acme_default = acme.default_domain().ok_or("acme has a domain that grants nothing")?;
+    let acme_strict = acme.granting_domain().ok_or("acme has a domain that grants something")?;
+    let globex_default = globex.default_domain().ok_or("globex has a default domain")?;
+    let grant = acme_strict.grants.first().ok_or("acme's granting domain grants something")?;
+
     // ── out of band: what the contract declares no operation for ────────────
     // A factory per tenant, the adapters (no weights exist here — PLAN-MOE §5)
     // and the node → region table (a deployment fact no member carries).
-    let factory_a = svc.provision_factory("acme").ok_or("acme is a usable tenant id")?;
-    let factory_b = svc.provision_factory("globex").ok_or("globex is a usable tenant id")?;
-    let expert_a = svc
-        .provision_expert("acme", "math", "llama-70b", 1.5, b"acme-delta")
-        .ok_or("acme/math provisions")?;
-    let code_a = svc
-        .provision_expert("acme", "code", "llama-70b", 2.0, b"acme-code-delta")
-        .ok_or("acme/code provisions")?;
-    let expert_b = svc
-        .provision_expert("globex", "math", "llama-70b", 3.0, b"globex-delta")
-        .ok_or("globex/math provisions")?;
-    svc.declare_node("gpu-eu-1", "eu-west");
-    svc.declare_node("gpu-us-1", "us-east");
+    let factory_a = svc.provision_factory(&acme.id).ok_or("acme is a usable tenant id")?;
+    let factory_b = svc.provision_factory(&globex.id).ok_or("globex is a usable tenant id")?;
+    // One expert per capability the tenant states, in the order the seed
+    // states them — a JSON array has an order and this one is load-bearing:
+    // the manifest's `experts` sequence comes back in bind order, and the
+    // check below compares it against the same list rather than a retyped one.
+    let provision = |tenant: &state::SeededTenant| -> Vec<(String, Ior)> {
+        tenant
+            .capabilities
+            .iter()
+            .filter_map(|c| {
+                svc.provision_expert(
+                    &tenant.id,
+                    &c.name,
+                    &estate.base_model,
+                    c.cost as f32,
+                    c.adapter_delta.as_bytes(),
+                )
+                .map(|ior| (c.name.clone(), ior))
+            })
+            .collect()
+    };
+    let acme_experts = provision(acme);
+    let globex_experts = provision(globex);
+    if acme_experts.len() != acme.capabilities.len()
+        || globex_experts.len() != globex.capabilities.len()
+    {
+        return Err("every seeded capability provisions an expert".into());
+    }
+    // The prose below says "a two-element experts sequence", and prose does
+    // not compile. Refused here rather than checked as an `ok` line, so the
+    // demand costs no output and cannot be read as coverage: a seed that grew
+    // acme a third capability would leave the sentence false and the check
+    // green, which is the drift this whole batch is about.
+    if acme_experts.len() != 2 {
+        return Err(format!(
+            "this fixture's window-1 check reads '…and a two-element experts sequence round \
+             trips', but the seed states {} capabilities for `{}`. Move the sentence with the \
+             seed.",
+            acme_experts.len(),
+            acme.id
+        )
+        .into());
+    }
+    let expert_a = acme_experts[0].1.clone();
+    let expert_b = globex_experts[0].1.clone();
+    for n in &estate.declared_estate.nodes {
+        svc.declare_node(&n.name, &n.region);
+    }
 
     println!("serving  {}", server.local_addr()?);
     println!("factory  acme   {}", String::from_utf8_lossy(&key_of(&factory_a)?));
     println!("factory  globex {}", String::from_utf8_lossy(&key_of(&factory_b)?));
     println!("expert   acme   {}", String::from_utf8_lossy(&key_of(&expert_a)?));
     println!("expert   globex {}", String::from_utf8_lossy(&key_of(&expert_b)?));
-    println!("nodes    gpu-eu-1=eu-west, gpu-us-1=us-east");
+    println!(
+        "nodes    {}",
+        estate
+            .declared_estate
+            .nodes
+            .iter()
+            .map(|n| format!("{}={}", n.name, n.region))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     // Published before the checks run, so a harness waiting on a file is
     // waiting on something that exists as early as it can.
     for (path, ior) in out.iter().zip([&factory_a, &factory_b]) {
@@ -247,7 +367,7 @@ fn run(out: &[&str; 2], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
     serve_window(&server, &svc, &factory_a, &mut r, |r| {
         on(r, "acme's factory", &factory_a, |r, c| {
             match c.invoke("create", |e| {
-                manifest("acme", "1.0", "eu-west", "acme-default").write_to(e)
+                manifest(&estate, &acme.id, "1.0", &acme_default.name).write_to(e)
             }) {
                 Ok(reply) => match reference_in(reply) {
                     Ok(ior) => {
@@ -261,13 +381,15 @@ fn run(out: &[&str; 2], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
             // A second acme model, whose only job is to mint the second policy
             // domain the window-2 `set_policy` swaps to.
             let ok = c
-                .invoke("create", |e| manifest("acme", "2.0", "eu-west", "acme-strict").write_to(e))
+                .invoke("create", |e| {
+                    manifest(&estate, &acme.id, "2.0", &acme_strict.name).write_to(e)
+                })
                 .is_ok();
-            r.check(ok, "acme create(2.0) mints the acme-strict domain");
+            r.check(ok, &format!("acme create(2.0) mints the {} domain", acme_strict.name));
             // A manifest naming somebody else, through acme's own factory.
-            let got = exception_id(
-                c.invoke("create", |e| manifest("globex", "9.9", "eu-west", "x").write_to(e)),
-            );
+            let got = exception_id(c.invoke("create", |e| {
+                foreign_manifest(&estate, &globex.id, "9.9", "x").write_to(e)
+            }));
             r.eq(
                 got.as_str(),
                 NO_PERMISSION,
@@ -278,7 +400,7 @@ fn run(out: &[&str; 2], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
         on(r, "globex's factory", &factory_b, |r, c| {
             match c
                 .invoke("create", |e| {
-                    manifest("globex", "1.0", "us-east", "globex-default").write_to(e)
+                    manifest(&estate, &globex.id, "1.0", &globex_default.name).write_to(e)
                 })
                 .and_then(reference_in)
             {
@@ -319,13 +441,17 @@ fn run(out: &[&str; 2], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
         on(r, "acme's model", &model_a, |r, c| {
             match c.invoke_nullary("get_manifest").and_then(manifest_in) {
                 Ok(m) => {
-                    r.eq(m.tenant_id.as_str(), "acme", "get_manifest().tenant_id");
-                    r.eq(m.residency_region.as_str(), "eu-west", "get_manifest().residency_region");
+                    r.eq(m.tenant_id.as_str(), acme.id.as_str(), "get_manifest().tenant_id");
+                    r.eq(
+                        m.residency_region.as_str(),
+                        acme.residency_region.as_str(),
+                        "get_manifest().residency_region",
+                    );
                     r.check(m.experts.is_empty(), "…and an empty experts sequence round trips");
                 }
                 Err(e) => r.check(false, &format!("get_manifest: {e}")),
             }
-            for (what, ex) in [("math", &expert_a), ("code", &code_a)] {
+            for (what, ex) in &acme_experts {
                 let arg = ex.clone();
                 let ok =
                     c.invoke("bind_expert", move |e| put_reference(e, Some(&arg)).unwrap()).is_ok();
@@ -338,9 +464,13 @@ fn run(out: &[&str; 2], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
             );
             r.eq(got.as_str(), NO_PERMISSION, "bind_expert(globex's expert) is NO_PERMISSION");
             match c.invoke_nullary("get_manifest").and_then(manifest_in) {
+                // The expectation is the bind list itself, not a retyped copy
+                // of it: a fixture that types `["math", "code"]` beside a
+                // population it also typed is one author agreeing with
+                // themselves, which is the shape D026 §5 S1 exists to remove.
                 Ok(m) => r.eq(
                     m.experts,
-                    vec!["math".to_owned(), "code".to_owned()],
+                    acme_experts.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
                     "…and a two-element experts sequence round trips",
                 ),
                 Err(e) => r.check(false, &format!("get_manifest: {e}")),
@@ -354,16 +484,24 @@ fn run(out: &[&str; 2], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
         let mut from_a = None;
         on(r, "acme's expert", &expert_a, |r, c| {
             match c.invoke_nullary("get_tenant_id").and_then(string_in) {
-                Ok(t) => r.eq(t.as_str(), "acme", "get_tenant_id()"),
+                Ok(t) => r.eq(t.as_str(), acme.id.as_str(), "get_tenant_id()"),
                 Err(e) => r.check(false, &format!("get_tenant_id: {e}")),
             }
             match c.invoke_nullary("adapter_delta").and_then(octets_in) {
-                Ok(d) => r.eq(d.as_slice(), &b"acme-delta"[..], "adapter_delta() is the tenant's"),
+                Ok(d) => r.eq(
+                    d.as_slice(),
+                    acme.capabilities[0].adapter_delta.as_bytes(),
+                    "adapter_delta() is the tenant's",
+                ),
                 Err(e) => r.check(false, &format!("adapter_delta: {e}")),
             }
             match c.invoke_nullary("base").and_then(reference_in) {
                 Ok(ior) => {
-                    r.eq(ior.type_id.as_str(), "IDL:moe/Expert:1.0", "base() is a ::moe::Expert");
+                    // `EXPERT_ID`, not the literal. This was a retyped string
+                    // here and the constant in `spike_experts`, agreeing by
+                    // luck — the data-shaped form of CLAUDE.md's "a sentence
+                    // many layers say is a fact".
+                    r.eq(ior.type_id.as_str(), EXPERT_ID, "base() is a ::moe::Expert");
                     from_a = Some(ior);
                 }
                 Err(e) => r.check(false, &format!("base: {e}")),
@@ -389,7 +527,7 @@ fn run(out: &[&str; 2], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
             match c.invoke_nullary("describe").and_then(capability_in) {
                 Ok(cap) => r.eq(
                     cap,
-                    Capability { id: "llama-70b".into(), cost: 0.0 },
+                    Capability { id: estate.base_model.clone(), cost: 0.0 },
                     "describe() — cost 0.0, because the manifest carries none",
                 ),
                 Err(e) => r.check(false, &format!("describe: {e}")),
@@ -434,14 +572,25 @@ fn run(out: &[&str; 2], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
 
     // ── between the windows: what no wire operation may do ──────────────────
     println!("\nbetween windows — out of band, because the contract declares no operation");
-    let granted = svc.grant("acme", "acme-strict", "svc-acme", "math");
-    r.check(granted, "grant(acme-strict, svc-acme → math) — no wire operation exists for this");
-    let strict = svc.policy_reference("acme", "acme-strict").ok_or("acme-strict exists")?;
-    let default_a = svc.policy_reference("acme", "acme-default").ok_or("acme-default exists")?;
-    let default_b =
-        svc.policy_reference("globex", "globex-default").ok_or("globex-default exists")?;
-    r.eq(svc.base_crossings("acme"), 1, "acme's base crossing was counted");
-    r.eq(svc.base_crossings("globex"), 1, "globex's base crossing was counted");
+    let granted = svc.grant(&acme.id, &acme_strict.name, &grant.subject, &grant.capability);
+    r.check(
+        granted,
+        &format!(
+            "grant({}, {} → {}) — no wire operation exists for this",
+            acme_strict.name, grant.subject, grant.capability
+        ),
+    );
+    let strict = svc
+        .policy_reference(&acme.id, &acme_strict.name)
+        .ok_or_else(|| format!("{} exists", acme_strict.name))?;
+    let default_a = svc
+        .policy_reference(&acme.id, &acme_default.name)
+        .ok_or_else(|| format!("{} exists", acme_default.name))?;
+    let default_b = svc
+        .policy_reference(&globex.id, &globex_default.name)
+        .ok_or_else(|| format!("{} exists", globex_default.name))?;
+    r.eq(svc.base_crossings(&acme.id), 1, "acme's base crossing was counted");
+    r.eq(svc.base_crossings(&globex.id), 1, "globex's base crossing was counted");
 
     let [model_a, model_b] = models.as_slice() else {
         // An unmeasured check is a failure, never a pass: without both models
@@ -454,11 +603,11 @@ fn run(out: &[&str; 2], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
     // ── window 2: policy, residency, and a real retire ──────────────────────
     println!("\nwindow 2 — the wire is open again");
     serve_window(&server, &svc, &factory_a, &mut r, |r| {
-        on(r, "acme-default", &default_a, |r, c| {
+        on(r, &acme_default.name, &default_a, |r, c| {
             match c
                 .invoke("authorize", |e| {
-                    e.put_str("svc-acme");
-                    e.put_str("math");
+                    e.put_str(&grant.subject);
+                    e.put_str(&grant.capability);
                 })
                 .and_then(boolean_in)
             {
@@ -472,11 +621,11 @@ fn run(out: &[&str; 2], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
             // the policy lifts every other gate.
             let arg = strict.clone();
             let ok = c.invoke("set_policy", move |e| put_reference(e, Some(&arg)).unwrap()).is_ok();
-            r.check(ok, "set_policy(acme-strict)");
+            r.check(ok, &format!("set_policy({})", acme_strict.name));
             match c.invoke_nullary("get_manifest").and_then(manifest_in) {
                 Ok(m) => r.eq(
                     m.policy_domain.as_str(),
-                    "acme-strict",
+                    acme_strict.name.as_str(),
                     "…and the manifest names the domain that was set",
                 ),
                 Err(e) => r.check(false, &format!("get_manifest: {e}")),
@@ -488,33 +637,64 @@ fn run(out: &[&str; 2], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
             r.eq(got.as_str(), NO_PERMISSION, "set_policy(globex's domain) is NO_PERMISSION");
         });
 
-        on(r, "acme-strict", &strict, |r, c| {
+        on(r, &acme_strict.name, &strict, |r, c| {
             match c
                 .invoke("authorize", |e| {
-                    e.put_str("svc-acme");
-                    e.put_str("math");
+                    e.put_str(&grant.subject);
+                    e.put_str(&grant.capability);
                 })
                 .and_then(boolean_in)
             {
                 Ok(v) => r.eq(v, true, "authorize() reflects the policy that was set"),
                 Err(e) => r.check(false, &format!("authorize: {e}")),
             }
+            // The seed names the word nobody is granted rather than this
+            // fixture picking one, because the refusal below is a
+            // demonstration only while that stays true — and `vision` is
+            // exactly the word `spike_experts` registers as a pinned, resident
+            // expert. Two worlds, not a contradiction:
+            // `corpus/state/README.md`, *The two worlds `vision` lives in*.
+            // `the_ungranted_capability_is_granted_by_nobody` is what goes red
+            // if a grant ever appears.
             match c
                 .invoke("authorize", |e| {
-                    e.put_str("svc-acme");
-                    e.put_str("vision");
+                    e.put_str(&grant.subject);
+                    e.put_str(&estate.ungranted_capability);
                 })
                 .and_then(boolean_in)
             {
                 Ok(v) => r.eq(v, false, "…and only for what was granted"),
                 Err(e) => r.check(false, &format!("authorize: {e}")),
             }
-            for (node, want, why) in [
-                ("gpu-eu-1", true, "in the manifest's region"),
-                ("gpu-us-1", false, "in another region — refused"),
-                ("gpu-nowhere", false, "undeclared — refused, default-deny"),
-            ] {
-                match c.invoke("check_residency", move |e| e.put_str(node)).and_then(boolean_in) {
+            // Domain A, exhaustively: every node the operator declared, plus
+            // the one deliberately not declared. Both the expectation and the
+            // reason are *derived from the estate* rather than typed beside
+            // it, so a seed that moved `gpu-us-1` into `eu-west` would change
+            // what this fixture expects instead of leaving it asserting the
+            // old answer. Nothing here consults domain B: a node an expert
+            // reports about itself is not a node the operator declared, and
+            // resolving one against the other is the question neither domain
+            // can answer.
+            let mut residency: Vec<(String, bool, &str)> = estate
+                .declared_estate
+                .nodes
+                .iter()
+                .map(|n| {
+                    if n.region == acme.residency_region {
+                        (n.name.clone(), true, "in the manifest's region")
+                    } else {
+                        (n.name.clone(), false, "in another region — refused")
+                    }
+                })
+                .collect();
+            residency.push((
+                estate.declared_estate.undeclared_probe.clone(),
+                false,
+                "undeclared — refused, default-deny",
+            ));
+            for (node, want, why) in residency {
+                let arg = node.clone();
+                match c.invoke("check_residency", move |e| e.put_str(&arg)).and_then(boolean_in) {
                     Ok(v) => r.eq(v, want, &format!("check_residency({node}) — {why}")),
                     Err(e) => r.check(false, &format!("check_residency({node}): {e}")),
                 }

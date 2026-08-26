@@ -211,6 +211,7 @@ name = "orbweaver-object"
 version = "0.1.0"
 dependencies = [
  "orbweaver-cdr",
+ "orbweaver-dynamic",
  "orbweaver-giop",
  "orbweaver-idl",
  "orbweaver-registry",

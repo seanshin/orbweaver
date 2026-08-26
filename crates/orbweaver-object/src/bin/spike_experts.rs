@@ -55,15 +55,50 @@
 //! question gets a complete answer, and the answer is the one that was
 //! measured fastest. A v1.0 `heartbeat` in between must not erase it.
 
+//! # Where this fixture's population comes from
+//!
+//! D026 §4, and the corollary is the load-bearing half: *a fixture may still
+//! invent a population, and says so.* So this one says so.
+//!
+//! **From `corpus/state/moe-estate.json`:** the node these experts report
+//! (`reported_placement`, deployment `control-plane`) and the capability
+//! vocabulary their specializations are drawn from. Those are the two facts
+//! `spike_tenants` and `spikes/seed_trading_client.py` also touch, and the
+//! ones the seed batch found disagreeing.
+//!
+//! **Invented here, deliberately:** the four experts themselves — their names,
+//! memory footprints, loads, latencies and the v1.1 measurements. No other
+//! fixture uses them, and what they exist for is *paths* rather than a world:
+//! the footprints are chosen so the §6 policy pass evicts exactly one expert,
+//! and the two p50s so the ordered router has a wrong answer available to it.
+//! Dragging them into a shared file to satisfy a rule would make the seed the
+//! only population, which D026 §3 forbids and which `wire-fuzz` and the
+//! property tests exist to prevent.
+//!
+//! **The cost is invented too, and that is a decision.** `moe::Capability.cost`
+//! here is what an expert reports *about itself*; the tenancy seed's
+//! `capabilities[].cost` is what a tenant's manifest declares. They are the
+//! same split as the two node domains — self-reported versus operator-declared
+//! — so joining them would be the merge `corpus/state/README.md` argues
+//! against, one field over.
+//!
+//! The loader is reached the same way `spike_tenants` reaches it, and for the
+//! same reason; that fixture's *Where the loader lives* has the argument.
+#[allow(dead_code)]
+#[path = "../../../orbweaver-test/src/state.rs"]
+mod state;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+use state::MoeEstate;
 
 use orbweaver_giop::orb::Orb;
 use orbweaver_giop::server::{BAD_OPERATION, Server};
 use orbweaver_giop::{Connection, Error, IiopProfile, Ior, Version};
 use orbweaver_object::expert_service::{
-    BAD_PARAM, Capability, Constraints, EXPERT_ID, ExpertService, GateSignal, MeasuredCapability,
-    NO_IMPLEMENT, NO_PERMISSION, TRANSIENT, residency_from_ordinal,
+    BAD_PARAM, Capability, Constraints, EXPERT_ID, ExpertService, GateSignal, MOE_BASE_KEY,
+    MeasuredCapability, NO_IMPLEMENT, NO_PERMISSION, TRANSIENT, residency_from_ordinal,
 };
 use orbweaver_object::get_reference;
 use orbweaver_object::residency::Applied;
@@ -114,7 +149,12 @@ fn expert_ref(name: &str) -> Ior {
     }
 }
 
-fn capability(id: &str, mem: u64, load: f32) -> Capability {
+/// A `moe::Capability` as an expert of this deployment would report one.
+///
+/// `node` comes from the seed's **reported placement** domain — the one this
+/// fixture shares with anything else. Everything else here is this fixture's
+/// own; see the module docs for which and why.
+fn capability(id: &str, mem: u64, load: f32, node: &str) -> Capability {
     Capability {
         id: id.to_owned(),
         cost: 1.5,
@@ -127,7 +167,11 @@ fn capability(id: &str, mem: u64, load: f32) -> Capability {
         // Likewise invented, and likewise ignored: the store owns routing
         // history and a heartbeat cannot rewrite it.
         route_freq: 99.0,
-        placement_node: "gpu-04".into(),
+        // Self-reported, and nothing validates it — domain B. The value is
+        // the seed's so the three fixtures that model placement stop each
+        // holding a private spelling of it; the *absence* of a check against
+        // the operator's declared estate is the decision, not an omission.
+        placement_node: node.to_owned(),
         contract_version: "moe/1.0".into(),
     }
 }
@@ -233,15 +277,58 @@ fn names(experts: &[Ior]) -> Vec<String> {
         .collect()
 }
 
+/// The listening server and the servant it serves, built together — the one
+/// place either identity is chosen.
+///
+/// They come back as a pair because the defect they replaced was a pair that
+/// disagreed (D028 §1): the server was bound to `b"MoE/registry"` on one line
+/// and the servant handed the base `b"MoE"` on the next, from which it derives
+/// `MoE/registry` — the same bytes arrived at twice, by two routes, with
+/// nothing able to notice. A caller that cannot obtain one half without the
+/// other cannot re-open that gap, and the gate below builds this real pair
+/// rather than retyping either half of it.
+fn plane(policy: LoadingPolicy, cold_below: u64) -> Result<(Server, ExpertService), Error> {
+    let server = Orb::new().server("127.0.0.1:0", MOE_BASE_KEY.to_vec())?;
+    let port = server.local_addr()?.port();
+    let svc = ExpertService::new("127.0.0.1", port, MOE_BASE_KEY, policy, cold_below);
+    Ok((server, svc))
+}
+
 fn run(out: &[&str; 3], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
     // §6's knobs, and the cold threshold in FREQ_SCALE units: "fewer than two
     // hits' worth of history left".
     let policy = LoadingPolicy { affinity_weight: 1, low_watermark: 100, high_watermark: 400 };
     let cold_below = 2 * FREQ_SCALE;
 
-    let server = Orb::new().server("127.0.0.1:0", b"MoE/registry".to_vec())?;
-    let port = server.local_addr()?.port();
-    let svc = ExpertService::new("127.0.0.1", port, b"MoE", policy, cold_below);
+    // The shared half of the population, loaded rather than invented: the node
+    // this deployment's experts report about themselves, and the vocabulary
+    // their specializations come from. The rest is this fixture's own and the
+    // module docs say which.
+    let estate = MoeEstate::load()?;
+    let node = estate
+        .reported_placement
+        .node_for("control-plane")
+        .ok_or("the seed states a reported-placement node for the `control-plane` deployment")?
+        .to_owned();
+    // The three words this fixture declares out of band, checked against the
+    // seed's vocabulary before anything is served. Refused rather than
+    // reported as an `ok` line: it costs no output, so it cannot be read as
+    // coverage, and a word the vocabulary does not know would otherwise reach
+    // the offer store and make `specializations_come_from_the_stated_vocabulary`
+    // a claim about the seed only.
+    let specializations = ["code", "math", "vision"];
+    for s in specializations {
+        if !estate.capability_vocabulary.iter().any(|w| w == s) {
+            return Err(format!(
+                "this fixture declares the specialization `{s}`, which is not in the seed's \
+                 capability vocabulary {:?}. One of the two moved without the other.",
+                estate.capability_vocabulary
+            )
+            .into());
+        }
+    }
+
+    let (server, svc) = plane(policy, cold_below)?;
     let registry_ior = svc.registry_ior();
     let loader_ior = svc.loader_ior();
     let router_ior = svc.router_ior();
@@ -258,6 +345,16 @@ fn run(out: &[&str; 3], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
     println!(
         "policy   affinity {}, watermarks {}/{}, cold below {cold_below}",
         policy.affinity_weight, policy.low_watermark, policy.high_watermark
+    );
+    // The one line this migration adds, and the only difference from the
+    // pre-migration output. It is here because a seeded value that reaches no
+    // output cannot be shown reaching anything: `placement_node` is reported
+    // into the offer store and printed by nothing, so changing it in the seed
+    // moved no counter and the negative control came back GREEN — a control
+    // that cannot fail is not a control. Now it can.
+    println!(
+        "placement {node} (reported — the seed's `control-plane` deployment, domain B; nothing \
+         checks it against a declared estate, by decision)"
     );
     // Published before the checks run, so a harness waiting on a file is
     // waiting on something that exists as early as it can.
@@ -280,7 +377,7 @@ fn run(out: &[&str; 3], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
         // Three experts, registered with the footprints they start at.
         for (name, mem) in [("expert-code", 30u64), ("expert-math", 200), ("expert-vision", 100)] {
             let reference = expert_ref(name);
-            let cap = capability(name, mem, 0.25);
+            let cap = capability(name, mem, 0.25, &node);
             let ok = reg
                 .invoke("register_expert", |e| {
                     reference.write_to(e).expect("an IOR always encodes");
@@ -291,7 +388,7 @@ fn run(out: &[&str; 3], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
         }
         // Re-announcing an existing expert is heartbeat's job, not register's.
         let reference = expert_ref("expert-code");
-        let cap = capability("expert-code", 30, 0.25);
+        let cap = capability("expert-code", 30, 0.25, &node);
         let got = exception_id(reg.invoke("register_expert", |e| {
             reference.write_to(e).expect("an IOR always encodes");
             cap.write_to(e);
@@ -301,7 +398,7 @@ fn run(out: &[&str; 3], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
         // The heartbeat: expert-code now occupies twice what it registered,
         // and this is the number the policy will decide on later.
         let reference = expert_ref("expert-code");
-        let cap = capability("expert-code", 60, 0.9);
+        let cap = capability("expert-code", 60, 0.9, &node);
         let ok = reg
             .invoke("heartbeat", |e| {
                 reference.write_to(e).expect("an IOR always encodes");
@@ -522,11 +619,12 @@ fn run(out: &[&str; 3], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
 
     // ── out of band again: the property the contract has no member for ──────
     println!("\nafter the policy — out of band, because moe::Capability declares no member");
-    for (name, spec) in
-        [("expert-code", "code"), ("expert-math", "math"), ("expert-vision", "vision")]
-    {
+    // The words are the seed's — checked against its vocabulary before READY —
+    // and the expert each belongs to is this fixture's own naming.
+    for spec in specializations {
+        let name = format!("expert-{spec}");
         r.check(
-            svc.declare_specialization(name, spec),
+            svc.declare_specialization(&name, spec),
             &format!("declare_specialization({name}, {spec}) — PLAN-MOE §4.5's gap, from inside"),
         );
     }
@@ -611,7 +709,7 @@ fn run(out: &[&str; 3], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
         };
         let reference = expert_ref("expert-math-b");
         let m = MeasuredCapability {
-            base: capability("expert-math-b", 120, 0.3),
+            base: capability("expert-math-b", 120, 0.3, &node),
             specialization: "math".into(),
             latency_p50_ms: 8.0,
         };
@@ -653,7 +751,7 @@ fn run(out: &[&str; 3], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
         };
         let reference = expert_ref("expert-math");
         let m = MeasuredCapability {
-            base: capability("expert-math", 200, 0.25),
+            base: capability("expert-math", 200, 0.25, &node),
             specialization: "math".into(),
             latency_p50_ms: 12.0,
         };
@@ -667,7 +765,7 @@ fn run(out: &[&str; 3], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
         // Then the old shape again. It has no member for either fact, so it
         // cannot withdraw them — the measurement must survive this call.
         let reference = expert_ref("expert-math");
-        let cap = capability("expert-math", 200, 0.5);
+        let cap = capability("expert-math", 200, 0.5, &node);
         let ok = reg
             .invoke("heartbeat", |e| {
                 reference.write_to(e).expect("an IOR always encodes");
@@ -733,4 +831,58 @@ fn pick_fastest(svc: &ExpertService, q: &Query) -> Result<String, Vec<String>> {
             Err(set_aside)
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use orbweaver_giop::server::SharedDispatch;
+
+    /// **The gate for D028 §1's third finding.**
+    ///
+    /// The defect was not that `MoE/registry` is a bad key — it is a fine key.
+    /// It was that this fixture reached the same bytes by two routes: the
+    /// server's own identity, typed here, and the registry face's key, derived
+    /// by [`ExpertService::new`] from a base typed on the next line. Nothing
+    /// could go red over it, because a `Server`'s key is read only by
+    /// `Server::ior` and this fixture publishes the service's references.
+    ///
+    /// So the check is not "the key is not `MoE/registry`" — that is a
+    /// spelling, and a spelling gate goes green the moment somebody picks a
+    /// different pair of colliding names. It is *the server's identity is not
+    /// one of the three the servant answers for*, asked of the servant itself,
+    /// which is the property the two spellings were violating.
+    ///
+    /// And it asks it of [`plane`] — the real pair the fixture serves — rather
+    /// than of two constants retyped here. A gate that retypes the choice it
+    /// is checking is green over exactly the change it exists to refuse.
+    #[test]
+    fn the_servers_identity_is_not_one_of_the_faces_it_serves() {
+        let (server, svc) = plane(
+            LoadingPolicy { affinity_weight: 1, low_watermark: 100, high_watermark: 400 },
+            2 * FREQ_SCALE,
+        )
+        .expect("the control plane binds a loopback port");
+        let identity = server.object_key();
+        assert!(
+            !SharedDispatch::knows(&svc, identity),
+            "the server binds {:?} as its own identity and the servant it serves also answers \
+             to that key — the same bytes arrived at twice. The three faces are {:?}, {:?}, {:?}.",
+            String::from_utf8_lossy(identity),
+            String::from_utf8_lossy(svc.registry_key()),
+            String::from_utf8_lossy(svc.loader_key()),
+            String::from_utf8_lossy(svc.router_key()),
+        );
+        // …and the faces really are derived from that identity, so the
+        // assertion above is about a collision that can happen rather than
+        // about two unrelated byte strings.
+        assert!(
+            svc.registry_key().starts_with(identity),
+            "the faces no longer derive from the key the server binds, so this check has \
+             stopped being about a collision: identity {:?}, registry {:?}",
+            String::from_utf8_lossy(identity),
+            String::from_utf8_lossy(svc.registry_key()),
+        );
+        assert!(SharedDispatch::knows(&svc, svc.registry_key()));
+    }
 }

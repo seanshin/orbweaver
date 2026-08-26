@@ -160,6 +160,26 @@ pub const ROUTER_ID: &str = "IDL:moe/Router:1.0";
 /// `register_expert`, `deregister` and `heartbeat` take.
 pub const EXPERT_ID: &str = "IDL:moe/Expert:1.0";
 
+/// The object-key base the MoE control plane is served under, and the **one**
+/// place it is spelled.
+///
+/// D028 §1: *"a key collides with itself."* `spike_experts` bound its
+/// [`Server`](orbweaver_giop::server::Server) to `b"MoE/registry"` and handed
+/// [`ExpertService::new`] the base `b"MoE"`, from which the registry face's
+/// key is derived — **the same bytes arrived at twice, by two routes.**
+/// Nothing was red, because a `Server`'s own key is read only by
+/// `Server::ior` and that fixture publishes `ExpertService`'s references
+/// instead; so the two identities were free to agree by accident, and equally
+/// free to stop agreeing.
+///
+/// A caller that spells the base once cannot make them collide. The derived
+/// keys are `<base>/registry`, `<base>/loader` and `<base>/router`, and
+/// [`ExpertService::knows`](orbweaver_giop::server::SharedDispatch::knows)
+/// answers for those three and not for the base — which is what
+/// `the_servers_identity_is_not_one_of_the_faces_it_serves` in `spike_experts`
+/// asserts, so a second spelling goes red rather than merely differing.
+pub const MOE_BASE_KEY: &[u8] = b"MoE";
+
 /// `BAD_PARAM`: an argument named an expert this service does not know, or
 /// re-registered one it already does.
 pub const BAD_PARAM: &str = "IDL:omg.org/CORBA/BAD_PARAM:1.0";
