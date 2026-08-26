@@ -322,6 +322,40 @@ struct Inner {
     /// exactly as it did before D019 step 4.
     config: crate::orb::OrbConfig,
     state: Guarded<State>,
+    /// Raised by [`Pool::close`] and by
+    /// [`Orb::shutdown`](crate::orb::Orb::shutdown) (D034 §6). Deliberately the
+    /// same [`StopFlag`](crate::server::StopFlag) type the server side uses:
+    /// one flag, raised once, never lowered, with no I/O between raising it and
+    /// the next `acquire` seeing it.
+    closed: crate::server::StopFlag,
+}
+
+/// A non-owning view of a [`Pool`], for the ORB's list of handouts.
+///
+/// Weak rather than a clone for the same reason the server side is weak: an ORB
+/// that kept a strong reference to every pool it ever handed out would keep
+/// their sockets alive after the last real holder let go, which is a leak
+/// dressed as a lifecycle.
+#[derive(Debug)]
+pub(crate) struct PoolWatch {
+    inner: std::sync::Weak<Inner>,
+}
+
+impl PoolWatch {
+    /// Closes the pool if it is still alive; answers whether it was.
+    ///
+    /// A dead `Weak` means every holder has let go, which closed the sockets
+    /// already — so there is nothing for a shutdown to do and nothing it
+    /// failed to do.
+    pub(crate) fn close(&self) -> bool {
+        match self.inner.upgrade() {
+            Some(inner) => {
+                Pool { inner }.close();
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 impl Pool {
@@ -340,8 +374,56 @@ impl Pool {
                 limits,
                 config,
                 state: Guarded::new("the connection pool", State::default()),
+                closed: crate::server::StopFlag::default(),
             }),
         }
+    }
+
+    /// A non-owning view of this pool, for the ORB's list of handouts.
+    pub(crate) fn watch(&self) -> PoolWatch {
+        PoolWatch { inner: Arc::downgrade(&self.inner) }
+    }
+
+    /// Stops this pool: **no further connection is dialled, and every pooled
+    /// connection is dropped** (D034 §6).
+    ///
+    /// Idempotent, and cloning does not escape it — a `Pool` clone shares the
+    /// same `Inner`, so closing through one clone closes all of them.
+    ///
+    /// # What this does not do
+    ///
+    /// **A call already in flight on a [`Mux`] a caller holds is not aborted.**
+    /// The caller owns that call; aborting it is the immediate shutdown D034 §4
+    /// refuses, one layer down, and it has the same problem — there is nothing
+    /// honest to put on the wire for a call that was started and abandoned. It
+    /// completes, or it fails on the timeout it already had. What close
+    /// guarantees is narrower and sayable: **nobody new gets a connection, and
+    /// nothing new is dialled.**
+    ///
+    /// # Where the sockets close
+    ///
+    /// Outside the [`Guarded`] section, via [`Pool::clear`], for the reason
+    /// that module exists: `guarded::assert_nothing_held` is called by
+    /// `Connection::connect` and by every `invoke`, and closing is a syscall.
+    /// A close that ran inside a section would be the exact violation
+    /// [`crate::guarded`] was written to catch.
+    ///
+    /// *닫힌 뒤에는 아무도 새 연결을 얻지 못하고 새로 걸지도 않는다. 이미 진행 중인
+    /// 호출은 중단하지 않는다 — 시작해 놓고 버린 호출에 대해 와이어에 정직하게 쓸
+    /// 말이 없기 때문이다.*
+    pub fn close(&self) {
+        // Raised before the map is emptied, never after: between the two, an
+        // `acquire` that had already passed the check could otherwise file a
+        // freshly dialled connection into a map we had just emptied, and that
+        // connection would outlive the close with nothing left to drop it.
+        self.inner.closed.raise();
+        self.clear();
+    }
+
+    /// Whether [`Pool::close`] — or the [`Orb`](crate::orb::Orb) that handed
+    /// this pool out — has stopped it.
+    pub fn is_closed(&self) -> bool {
+        self.inner.closed.raised()
     }
 
     /// The limits in force.
@@ -380,6 +462,13 @@ impl Pool {
     }
 
     fn acquire_connection(&self, ior: &Ior) -> Result<Mux> {
+        // The one choke point (D034 §6): `acquire`, `invoke`, `invoke_with`,
+        // `invoke_tracking`, `invoke_oneway` and every `Reference` call funnel
+        // through here, so refusing here is refusing all of them. Checked
+        // before anything is dialled and before the section is entered.
+        if self.inner.closed.raised() {
+            return Err(Error::Stopped { what: "a pooled connection" });
+        }
         // Every endpoint this IOR names, in the order `Connection::connect`
         // would dial them, so a pooled hit on a later endpoint counts as a hit
         // rather than sending us to dial the first one again.

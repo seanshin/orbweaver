@@ -169,6 +169,46 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **The ORB can stop what it handed out** (D029 §5 O1; decision
+  [`D034`](docs/decisions/D034-stopping-what-the-orb-handed-out.md)).
+  `Orb::shutdown`, `Orb::is_shutdown`, `Orb::wait_until_stopped(deadline)`,
+  `Server::stop_flag`, `Server::stop_requested`, `ServerStats::serving`,
+  `Pool::close`, `Pool::is_closed`, `Error::Stopped`.
+
+  D019 step 4 made `Orb::server` and `Orb::pool` the only public way to obtain
+  transport, and **that created the gap rather than revealing it**: before it,
+  the caller held every `Server` it built and stopping was its own business.
+  D019 §5's refusal of *"`ORB::run`/`shutdown` semantics"* is intact in the half
+  that was refused — `run`, an event-loop model with a main thread parked in the
+  ORB. Nothing about the serving model moves: the caller still owns the thread,
+  `serve_shared` still takes the caller's own predicate, the ORB joins nothing,
+  and its flag is OR'd with that predicate **with neither privileged**.
+
+  **Shutdown is graceful and the unit of grace is one request, not one
+  connection.** A request already inside the servant is answered in full; a
+  request whose bytes had arrived but which had not been read is left unread;
+  every live connection ends with `CloseConnection` (§9.4.10). The third makes
+  the second obligatory rather than tidy — §9.4.7 makes that goodbye mean *"not
+  processed, re-send elsewhere"*, so a request read after the flag and then
+  dropped would make the goodbye a lie about a request that had been processed,
+  and a peer acting correctly on it would run the operation twice. Immediate
+  shutdown is **refused, not deferred**: GIOP has no message meaning *"I started
+  this and stopped"*.
+
+  The bound is on `Orb::shutdown`'s rustdoc and is deliberately restated
+  nowhere. Measured from a peer's own socket — three GIOP versions × two byte
+  orders, values compared decoded — in
+  `crates/orbweaver-giop/tests/orb_stops_what_it_handed_out.rs`, with four
+  negative controls each run red.
+
+  **No behaviour change by default**, and that is a property of the expression
+  rather than a claim about it: an ORB nobody asks to stop never raises its
+  half. `orbweaver-object` 124 tests before and after; `orbweaver-giop` 438 →
+  448, the ten being exactly the new file.
+
+  *ORB가 내어준 것을 거둘 수 있다. 거절된 절반은 `run`이다 — 서빙 모델은 움직이지
+  않는다. 우아함의 단위는 연결이 아니라 요청 하나이며, 즉시 종료는 미룬 것이 아니라
+  거절했다: 시작해 놓고 멈췄다는 뜻의 GIOP 메시지가 없기 때문이다.*
 - **The second protocol direction: a request our ORB decoded, carried into a
   Python servant and back.** `orbweaver-gen` emitted Python **clients** for six
   phases and could not emit a servant, so a target's language decided whether

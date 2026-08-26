@@ -99,6 +99,13 @@ path = "src/bin/spike_mux.rs"
 name = "spike-half-reply"
 path = "src/bin/spike_half_reply.rs"
 
+# The fixture `spikes/orb_shutdown_peer.py` dials: a server stopped by its ORB
+# while a request is inside its servant (D029 §5 O1, D034). The measurement is
+# the peer's exit code, not this one's.
+[[bin]]
+name = "spike-orb-shutdown"
+path = "src/bin/spike_orb_shutdown.rs"
+
 # Dials IIOP over TLS for `spikes/ssliop.sh` part B. Behind `ssliop` because
 # it is the only binary that needs the TLS stack; without the feature the
 # runner reports its fifteen cases UNMEASURED and exits 3, which is not a pass.

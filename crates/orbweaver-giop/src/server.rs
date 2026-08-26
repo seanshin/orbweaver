@@ -103,12 +103,22 @@
 //! every connection thread has finished, so a returned `serve` means no
 //! thread is left behind. A peer that starts a message and then stalls is
 //! bounded too, by [`Server::set_message_timeout`].
+//!
+//! **Two things can raise it, and neither is privileged** (D034): the `stop`
+//! predicate the caller passes, and [`Server::stop_flag`] — which the
+//! [`Orb`](crate::orb::Orb) that handed out this server also holds, so
+//! [`Orb::shutdown`](crate::orb::Orb::shutdown) reaches every server it
+//! created. What a peer mid-call observes across that is the bound stated on
+//! `Orb::shutdown`, and the argument for it is D034. Before D034 the ORB gave
+//! transport and could not take it back; measured that day, **17 of this
+//! workspace's 63 serve sites passed `|| false`** and could only be stopped by
+//! killing the process.
 
 use orbweaver_cdr::{Decoder, Encoder, Endian};
 use std::io::Write;
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 pub use crate::Forward;
@@ -920,6 +930,57 @@ pub const STOP_POLL: Duration = Duration::from_millis(50);
 /// messages is not affected and may idle forever.
 pub const DEFAULT_MESSAGE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// A raised-once request that a [`Server`] stop serving (D034).
+///
+/// Cloning shares the flag, which is the whole point: the
+/// [`Orb`](crate::orb::Orb) that handed out a [`Server`] keeps one of these and
+/// so does the `Server`, and either can raise it.
+///
+/// # Raised once, never lowered
+///
+/// There is no `lower`. D034 §7: a lowerable flag produces a connection thread
+/// that has already written its `CloseConnection` and finds the service running
+/// again, with no way to take the goodbye back. Restarting means a new
+/// [`Server`], because it already meant a new listener.
+///
+/// # The commit point
+///
+/// [`StopFlag::raise`] is a single `Release` store with **no I/O and no lock
+/// between it and the loops observing it** — no socket to write, no
+/// [`Guarded`](crate::guarded::Guarded) section to enter. That is what lets
+/// [`Orb::shutdown`](crate::orb::Orb::shutdown) state its bound as a number of
+/// requests rather than as a duration nobody can hold to. See D034 §3.1.
+///
+/// *올린 뒤 내리지 않는다. 올리는 것과 관측하는 것 사이에 I/O도 락도 없다 — 그래서
+/// 한계를 시간이 아니라 요청 개수로 말할 수 있다.*
+#[derive(Debug, Clone, Default)]
+pub struct StopFlag {
+    raised: Arc<AtomicBool>,
+}
+
+impl StopFlag {
+    /// Asks every serving loop watching this flag to stop. Idempotent.
+    pub fn raise(&self) {
+        self.raised.store(true, Ordering::Release);
+    }
+
+    /// Whether the flag is up.
+    pub fn raised(&self) -> bool {
+        self.raised.load(Ordering::Acquire)
+    }
+
+    /// A non-owning view, for the ORB's list of handouts.
+    ///
+    /// The ORB holds these rather than clones so that **a [`Server`] that has
+    /// been dropped prunes itself**. That is sound rather than convenient:
+    /// [`Server::serve_shared`] takes `&self`, so no serving loop can outlive
+    /// the `Server` it serves — a dead `Weak` therefore means *already
+    /// stopped*, and there is nothing for a shutdown to do about it.
+    pub(crate) fn watch(&self) -> Weak<AtomicBool> {
+        Arc::downgrade(&self.raised)
+    }
+}
+
 #[derive(Debug, Default)]
 struct Counters {
     accepted: AtomicU64,
@@ -928,6 +989,7 @@ struct Counters {
     peak: AtomicU64,
     dispatching: AtomicU64,
     peak_dispatching: AtomicU64,
+    serving: AtomicU64,
 }
 
 /// A live view of one [`Server`]'s connection counters.
@@ -993,6 +1055,28 @@ impl ServerStats {
         self.counters.peak_dispatching.load(Ordering::Relaxed)
     }
 
+    /// How many serving loops ([`Server::serve`] / [`Server::serve_shared`])
+    /// are running on this server right now.
+    ///
+    /// **This is the counter that makes "nothing it started outlives it" a
+    /// measurement rather than a claim**, and it is separate from
+    /// [`ServerStats::active`] on purpose:
+    /// [`Orb::wait_until_stopped`](crate::orb::Orb::wait_until_stopped) needs
+    /// to know that the *accept loop* has gone, not only that the connection
+    /// threads have. `active() == 0` is reached the moment the last connection
+    /// thread drops its slot, while the accept loop may still be inside its
+    /// final [`STOP_POLL`] sleep.
+    pub fn serving(&self) -> u64 {
+        self.counters.serving.load(Ordering::Acquire)
+    }
+
+    /// Counts one serving loop in, and out again on drop — including the drop
+    /// that unwinding a panicking servant performs.
+    fn serving_now(&self) -> ServingLoop<'_> {
+        self.counters.serving.fetch_add(1, Ordering::AcqRel);
+        ServingLoop { counters: &self.counters }
+    }
+
     /// Counts one request into the servant, and out again on drop — including
     /// the drop an unwinding panic performs.
     fn dispatching_now(&self) -> Dispatching<'_> {
@@ -1038,6 +1122,19 @@ struct Slot {
 impl Drop for Slot {
     fn drop(&mut self) {
         self.stats.counters.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// One serving loop, counted out on drop — including the drop that unwinding
+/// out of `thread::scope` performs when a servant panicked.
+#[derive(Debug)]
+struct ServingLoop<'a> {
+    counters: &'a Counters,
+}
+
+impl Drop for ServingLoop<'_> {
+    fn drop(&mut self) {
+        self.counters.serving.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -1096,6 +1193,11 @@ pub struct Server {
     /// the stop flag again. [`STOP_POLL`] is this field's default.
     stop_poll: Duration,
     stats: ServerStats,
+    /// The ORB's half of the stop decision (D034). OR'd with the caller's own
+    /// predicate in [`Server::serve_shared`], with neither privileged — an ORB
+    /// nobody asks to stop never raises it, so this field changes nothing for
+    /// every existing caller.
+    stop: StopFlag,
 }
 
 impl Server {
@@ -1126,6 +1228,7 @@ impl Server {
             message_timeout: DEFAULT_MESSAGE_TIMEOUT,
             stop_poll: STOP_POLL,
             stats: ServerStats::default(),
+            stop: StopFlag::default(),
         })
     }
 
@@ -1153,6 +1256,30 @@ impl Server {
     /// while the server is serving.
     pub fn stats(&self) -> ServerStats {
         self.stats.clone()
+    }
+
+    /// This server's half of the ORB-level stop (D034), clonable and usable
+    /// from another thread.
+    ///
+    /// The [`Orb`](crate::orb::Orb) that handed this server out holds a
+    /// non-owning view of the same flag, so
+    /// [`Orb::shutdown`](crate::orb::Orb::shutdown) raises it. A caller that
+    /// wants to stop *one* server rather than all of them raises this one.
+    pub fn stop_flag(&self) -> StopFlag {
+        self.stop.clone()
+    }
+
+    /// Whether this server has been asked to stop — by its ORB or through
+    /// [`Server::stop_flag`].
+    ///
+    /// This is a **question, not a return value**. [`Server::serve_shared`]
+    /// answers `Ok(())` whether it was the ORB's flag or the caller's own
+    /// predicate that ended it, because the two are the same event and a
+    /// distinct return would make callers branch on a difference with no
+    /// consequence (D034 §5). A supervisor deciding whether to rebind is the
+    /// one reader for whom the answer matters, and it asks here.
+    pub fn stop_requested(&self) -> bool {
+        self.stop.raised()
     }
 
     /// How many connections are served at once before further ones are
@@ -1297,6 +1424,18 @@ impl Server {
         S: Fn() -> bool + Sync,
     {
         let servant: &dyn SharedDispatch = dispatch;
+        // Counted for the whole loop, so
+        // `Orb::wait_until_stopped` can tell "the connection threads have
+        // ended" from "the accept loop has ended too". Dropped on the way out
+        // of every path, including an unwinding panic.
+        let _serving = self.stats.serving_now();
+        // **The ORB's flag and the caller's predicate, OR'd, with neither
+        // privileged** (D034 §2). An ORB nobody asks to stop never raises its
+        // half, so for every caller that existed before D034 this reads exactly
+        // as `stop()` did — which is what makes "no behaviour change by
+        // default" a property of the expression rather than a claim about it.
+        let orb_stop = self.stop.clone();
+        let stop = move || orb_stop.raised() || stop();
         let stop = &stop;
         let outcome = std::thread::scope(|scope| -> Result<()> {
             // Polled rather than blocking, so a raised flag is noticed
