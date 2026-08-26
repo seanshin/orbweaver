@@ -27,13 +27,16 @@
 //! wire can carry the shape and that an inbound one survives — not a policy for
 //! filling it.
 //!
-//! **What is written down rather than closed.** `Dispatch::serve_one` asks
-//! `knows` before it asks `redirect`, so a moved object is still
-//! `OBJECT_NOT_EXIST` on the *request* path unless its servant keeps answering
-//! `knows`. That is pinned below by `a_moved_object_is_still_refused_on_the_
-//! request_path`, which is a **characterisation** test: it records today's
-//! behaviour so that closing it is a deliberate act with a red test to notice
-//! it, not a silent one.
+//! **What was written down rather than closed, and is now closed.**
+//! `Dispatch::serve_one` used to ask `knows` before `redirect`, so a moved
+//! object was still `OBJECT_NOT_EXIST` on the *request* path unless its servant
+//! kept answering `knows` — a lie it had to tell to be forwarded at all. The
+//! characterisation test that pinned it, `a_moved_object_is_still_refused_on_
+//! the_request_path`, went red as designed when the order was changed later the
+//! same day and is now `a_moved_object_is_forwarded_on_the_request_path_too`,
+//! asserting the opposite. The argument for the order lives in
+//! `orbweaver_giop::server::serve_one_ordering`, and what a name-keyed redirect
+//! still cannot do is `tests/forward_for_a_name.rs`.
 //!
 //! Every value assertion here compares **decoded values**. The one place a
 //! buffer is compared byte for byte is `an_empty_context_list_is_the_zero_that_
@@ -243,20 +246,23 @@ struct Moved {
 
 impl Dispatch for Moved {
     fn dispatch(&mut self, _request: &Request, _out: &mut Encoder) -> Result<(), SystemException> {
-        // Unreachable while `knows` is false — `serve_one` refuses first. Kept
-        // honest rather than `unreachable!()`, because which of the two answers
-        // this servant gives on the request path is exactly what
-        // `a_moved_object_is_still_refused_on_the_request_path` measures.
+        // Unreachable: `redirect` answers `Some` for every request, so
+        // `serve_one` forwards before it gets here. Kept honest rather than
+        // `unreachable!()` — this arm reaching the wire is precisely the
+        // regression `a_moved_object_is_forwarded_on_the_request_path_too`
+        // exists to catch, and it should fail as a wrong answer rather than as
+        // a panic in a serving thread.
         Err(SystemException::object_not_exist())
     }
 
     fn knows(&self, _object_key: &[u8]) -> bool {
+        // The truth: this servant hosts nothing. Before the 2026-08-26 reorder
+        // a moving servant had to lie here — answer `true` for a key it no
+        // longer serves — to get its own `redirect` consulted at all.
         false
     }
 
     fn redirect(&mut self, _request: &Request) -> Option<Forward> {
-        // Offered, and — measured below — not taken, because `serve_one` asks
-        // `knows` first. This servant exists to make that visible.
         Some(Forward::Permanent(self.to.clone()))
     }
 
@@ -339,39 +345,52 @@ fn a_client_probing_a_moved_object_is_told_where_it_went() {
     shut_down(&stop, addr, thread);
 }
 
-/// **What this batch did not close, pinned so that closing it is deliberate.**
+/// **The second half of the same root cause, closed 2026-08-26.** This test was
+/// `a_moved_object_is_still_refused_on_the_request_path` and asserted
+/// `OBJECT_NOT_EXIST`; it was a characterisation test whose own panic message
+/// said that a forward here *is the fix*. This is that fix, so it now asserts
+/// the opposite, and it is no longer a characterisation of anything.
 ///
-/// The same servant that answers `OBJECT_FORWARD` to a probe answers
-/// `OBJECT_NOT_EXIST` to an ordinary request, because `Dispatch::serve_one`
-/// asks `knows` before it asks `redirect` and `knows` is false for a key that
-/// has moved. So `knows` gates the forward on the invocation path exactly as it
-/// used to gate it on the probe path — one root cause, two messages, and only
-/// one of them fixed here.
+/// The servant is unchanged — the identical `Moved`, whose `knows` is `false`
+/// and whose `redirect` was already offering a `Forward` nobody asked for. What
+/// changed is [`serve_one_ordering`]: `redirect` is asked first. A caller that
+/// probes and a caller that simply invokes are now told the same thing.
 ///
-/// This is a **characterisation** test, not an approval. It goes red when
-/// `serve_one` is reordered, which is the point: whoever closes the second half
-/// gets a failing test naming this file rather than a silent behaviour change,
-/// and `Dispatch::locate`'s rustdoc says the same thing in prose.
+/// **The destination is a live second server on purpose.** Asserting only that
+/// a `LOCATION_FORWARD` came back would measure the message and not the
+/// property; what location transparency claims is that the caller *gets its
+/// answer*, having said nothing about where. So the test requires the reply,
+/// and then requires that the connection ended up somewhere other than where it
+/// dialled — a forward the client did not follow would satisfy the first half
+/// alone.
 #[test]
-fn a_moved_object_is_still_refused_on_the_request_path() {
-    let destination = ior_at("elsewhere.example", 7007, b"new-key");
-    let (addr, stop, thread) = serving(Moved { to: destination });
+fn a_moved_object_is_forwarded_on_the_request_path_too() {
+    let (dest_addr, dest_stop, dest_thread) = serving(Stationary);
+    let destination = ior_at("127.0.0.1", dest_addr.port(), b"probe-key");
+    let (addr, stop, thread) = serving(Moved { to: destination.clone() });
 
     for endian in BOTH_ORDERS {
         let mut conn = dial(addr, b"probe-key", endian);
-        let answer = conn.invoke("ping", |_: &mut Encoder| {});
-        match answer {
-            Err(orbweaver_giop::Error::SystemException { ref id, .. })
-                if id.contains("OBJECT_NOT_EXIST") => {}
-            other => panic!(
-                "{endian:?}: `knows` still gates the request path; if this now forwards, \
-                 that is the fix — update `Dispatch::locate`'s rustdoc and D029's Location \
-                 row with it. Got {other:?}"
-            ),
-        }
+        let reply = conn.invoke("ping", |_: &mut Encoder| {}).unwrap_or_else(|e| {
+            panic!(
+                "{endian:?}: the caller must be served through the forward, not told \
+                 the object does not exist. Got {e:?}"
+            )
+        });
+        assert_eq!(
+            reply.status,
+            ReplyStatus::NoException,
+            "{endian:?}: the reply must come from the destination servant"
+        );
+        assert_eq!(
+            conn.forwarded(),
+            Some(&Forward::Permanent(destination.clone())),
+            "{endian:?}: the client must have followed a permanent forward to get there"
+        );
     }
 
     shut_down(&stop, addr, thread);
+    shut_down(&dest_stop, dest_addr, dest_thread);
 }
 
 /// The negative control for the hook: a servant that does not override
