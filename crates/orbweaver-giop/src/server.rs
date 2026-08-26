@@ -383,17 +383,7 @@ pub fn decode_request(msg: RawMessage) -> Result<Request> {
     })
 }
 
-fn read_service_contexts(d: &mut Decoder<'_>) -> Result<Vec<crate::ServiceContext>> {
-    let n = d.get_u32()?;
-    let n = d.validate_count(n, 8)?;
-    let mut out = Vec::with_capacity(n);
-    for _ in 0..n {
-        let id = d.get_u32()?;
-        let data = d.get_octet_seq()?.to_vec();
-        out.push(crate::ServiceContext { id, data });
-    }
-    Ok(out)
-}
+use crate::read_service_contexts;
 
 fn message_header(e: &mut Encoder, version: Version, endian: Endian, ty: MsgType) -> usize {
     e.put_bytes(MAGIC);
@@ -410,12 +400,52 @@ fn message_header(e: &mut Encoder, version: Version, endian: Endian, ty: MsgType
     at
 }
 
-/// Encodes a `Reply` whose body is written by `write_body`.
+/// Encodes a `Reply` whose body is written by `write_body`, carrying no
+/// service contexts.
+///
+/// The overwhelming majority of replies carry none, and this is the signature
+/// every caller in this workspace uses. [`encode_reply_with_contexts`] is the
+/// same encoder with the list supplied.
 pub fn encode_reply<F>(
     version: Version,
     endian: Endian,
     request_id: u32,
     status: ReplyStatus,
+    codec: Option<std::sync::Arc<dyn orbweaver_cdr::TextCodec>>,
+    write_body: F,
+) -> Result<Vec<u8>>
+where
+    F: FnOnce(&mut Encoder),
+{
+    encode_reply_with_contexts(version, endian, request_id, status, &[], codec, write_body)
+}
+
+/// Encodes a `Reply` carrying `contexts`.
+///
+/// §9.4.3.1 gives a reply header an `IOP::ServiceContextList` in every GIOP
+/// version; until this function existed the encoder wrote a hard-coded zero
+/// there and **the list was not a field, it was a constant** — so the wire
+/// could not carry what the specification says it must, in the one direction
+/// where this ORB is the sender.
+///
+/// The position is version-conditional in the same way [`crate::encode_request`]
+/// is: 1.0 and 1.1 marshal `service_context, request_id, reply_status`; 1.2
+/// marshals `request_id, reply_status, service_context`. An empty list is
+/// byte-identical to the zero that used to be written there, in either layout —
+/// asserted, not assumed, by `an_empty_context_list_is_the_zero_that_was_there`
+/// in `tests/locate_forward_and_reply_contexts.rs`.
+///
+/// **This is not an attachment API.** It is the encoder being able to express
+/// the shape the specification defines; nothing in this workspace passes a
+/// non-empty list, and the question of *who may* is `docs/PLAN-DEFERRED.md`
+/// §21's, not this function's.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_reply_with_contexts<F>(
+    version: Version,
+    endian: Endian,
+    request_id: u32,
+    status: ReplyStatus,
+    contexts: &[crate::ServiceContext],
     codec: Option<std::sync::Arc<dyn orbweaver_cdr::TextCodec>>,
     write_body: F,
 ) -> Result<Vec<u8>>
@@ -442,15 +472,17 @@ where
     if version.is_1_2_layout() {
         e.put_u32(request_id);
         e.put_u32(status_code);
-        e.put_u32(0); // empty ServiceContextList
+        crate::write_contexts(&mut e, contexts);
     } else {
-        e.put_u32(0);
+        crate::write_contexts(&mut e, contexts); // 1.0/1.1 put the list first
         e.put_u32(request_id);
         e.put_u32(status_code);
     }
 
     // See encode_request: the body must align from where it will land in the
-    // message, not from the start of its own buffer.
+    // message, not from the start of its own buffer. `reply_body_start` is the
+    // same computation for a caller that does not have this encoder in hand,
+    // and `reply_body_start_agrees_with_the_encoder` pins the two together.
     let body_start = if version.aligns_body() { e.len().div_ceil(8) * 8 } else { e.len() };
     // §7.1: the answer goes back in the codeset the question was asked in.
     // On the body only — the reply header carries no text.
@@ -467,6 +499,42 @@ where
     let size = (e.len() - HEADER_LEN) as u32;
     e.patch_u32(size_at, size);
     e.finish().map_err(Error::Cdr)
+}
+
+/// Where a reply body lands in the finished message, for a servant writing
+/// into a detached buffer.
+///
+/// CDR aligns from the first byte of the 12-byte GIOP message header, so a body
+/// composed anywhere other than in the message itself has to be told where it
+/// will land. [`Server::handle_request`] does exactly that, and it carried the
+/// answer as the literal `HEADER_LEN + 12` beside a comment saying the constant
+/// was only right while the context list stayed empty. That comment was
+/// correct, and it is the shape of a fact with two homes: the encoder computes
+/// this offset from its own bytes, the dispatch path retyped it, and the day
+/// anything put a context on a reply the retyped copy would have silently
+/// shifted every body byte. This is the one home; `handle_request` calls it.
+///
+/// It is deliberately computed the way [`encode_reply_with_contexts`] computes
+/// it — by writing the header and asking how long it is — rather than by adding
+/// up field widths, because a `ServiceContextList`'s length is not a sum: each
+/// entry's `u32` id realigns to 4 after the previous entry's octet sequence.
+pub fn reply_body_start(
+    version: Version,
+    endian: Endian,
+    contexts: &[crate::ServiceContext],
+) -> usize {
+    let mut e = Encoder::new(endian);
+    let _size_at = message_header(&mut e, version, endian, MsgType::Reply);
+    if version.is_1_2_layout() {
+        e.put_u32(0); // request_id — width only; the value cannot change the length
+        e.put_u32(0); // reply_status, likewise
+        crate::write_contexts(&mut e, contexts);
+    } else {
+        crate::write_contexts(&mut e, contexts);
+        e.put_u32(0);
+        e.put_u32(0);
+    }
+    if version.aligns_body() { e.len().div_ceil(8) * 8 } else { e.len() }
 }
 
 /// Encodes a `LOCATION_FORWARD` or `LOCATION_FORWARD_PERM` reply, whose body
@@ -513,16 +581,53 @@ pub fn encode_system_exception(
     })
 }
 
-/// Outcome of a `LocateRequest`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u32)]
+/// Outcome of a `LocateRequest` — §9.4.6's `LocateStatusType`, **with the body
+/// each status obliges**. (CORBA 2.x numbered the same clause §15.4.4; this
+/// crate uses the 3.x numbering throughout.)
+///
+/// `ObjectForward` carries its [`Forward`] rather than naming a number, and
+/// that is the whole point of the type. It used to be a bare `#[repr(u32)]`
+/// discriminant next to an encoder that wrote no body at all, so
+/// `LocateStatus::ObjectForward` was a status this ORB **could name and could
+/// not serve**: §9.4.6 requires the reply to carry the IOR to go to instead,
+/// and nothing in the signature obliged anyone to supply one. Putting the IOR
+/// inside the variant makes that unrepresentable rather than detectable — there
+/// is no longer a way to say "forward" without saying where.
+///
+/// Reusing [`Forward`] rather than adding a second temporary/permanent pair is
+/// deliberate: `OBJECT_FORWARD` / `OBJECT_FORWARD_PERM` on a `LocateReply` and
+/// `LOCATION_FORWARD` / `LOCATION_FORWARD_PERM` on a `Reply` are **one fact
+/// asked at two moments**, and the version rule that downgrades a permanent
+/// forward for a pre-1.2 peer is the same rule. One home for it: see
+/// [`Forward::reply_status`], whose argument [`LocateStatus::code`] mirrors.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocateStatus {
     /// We do not know this object.
-    UnknownObject = 0,
+    UnknownObject,
     /// The object is here; go ahead and invoke.
-    ObjectHere = 1,
-    /// The object moved; the body holds an IOR.
-    ObjectForward = 2,
+    ObjectHere,
+    /// The object moved; the reply body holds the reference to use instead.
+    ObjectForward(Forward),
+}
+
+impl LocateStatus {
+    /// The `LocateStatusType` value this goes out as to a `version` peer.
+    ///
+    /// `OBJECT_FORWARD_PERM` is 3 and arrived with GIOP 1.2; the 1.0/1.1
+    /// `LocateStatusType` stops at 2. A permanent forward to an older peer
+    /// therefore travels as `OBJECT_FORWARD`, which is true — the object *is*
+    /// over there — and loses only the permission to forget the old reference.
+    /// The alternative is refusing to answer a peer that asked a legal
+    /// question, which is how a probe becomes worse than no probe. Exactly
+    /// [`Forward::reply_status`]'s argument, at the other message.
+    pub const fn code(&self, version: Version) -> u32 {
+        match self {
+            LocateStatus::UnknownObject => 0,
+            LocateStatus::ObjectHere => 1,
+            LocateStatus::ObjectForward(Forward::Permanent(_)) if version.is_1_2_layout() => 3,
+            LocateStatus::ObjectForward(_) => 2,
+        }
+    }
 }
 
 /// A decoded `LocateRequest`.
@@ -556,22 +661,45 @@ pub fn decode_locate_request(msg: RawMessage) -> Result<LocateRequest> {
     Ok(LocateRequest { request_id, object_key, version, endian })
 }
 
-/// Encodes a `LocateReply`.
+/// Encodes a `LocateReply`, including the body its status obliges.
 ///
 /// Note the asymmetry with [`encode_reply`]: §9.4.6 marshals a `LocateReply`
 /// body immediately after the header with **no** 8-byte alignment, unlike a
 /// `Reply` in GIOP 1.2. Applying the `Reply` rule here shifts every byte of an
-/// `OBJECT_FORWARD` body.
+/// `OBJECT_FORWARD` body. That is why the IOR below is written onto *this*
+/// encoder with no `align_to` in front of it — and why it is nonetheless not
+/// alignment-free: the IOR's own fields align from the first byte of the
+/// 12-byte message header, which this encoder has been counting from since
+/// `message_header`, while each tagged profile inside it is an encapsulation
+/// that restarts alignment at its own first byte. Both origins are already
+/// `Ior::write_to`'s job; the only thing this function must not do is insert a
+/// padding run before handing over.
+///
+/// `UnknownObject` and `ObjectHere` carry no body, which is why this used to be
+/// a bodyless encoder that still accepted an `ObjectForward` and silently
+/// truncated it.
 pub fn encode_locate_reply(
     version: Version,
     endian: Endian,
     request_id: u32,
-    status: LocateStatus,
+    status: &LocateStatus,
 ) -> Result<Vec<u8>> {
     let mut e = Encoder::new(endian);
     let size_at = message_header(&mut e, version, endian, MsgType::LocateReply);
     e.put_u32(request_id);
-    e.put_u32(status as u32);
+    e.put_u32(status.code(version));
+    match status {
+        // §9.4.6: the body of an OBJECT_FORWARD reply is the IOR, inline — not
+        // an encapsulation, the same shape a LOCATION_FORWARD reply body has
+        // (§9.3.6), which is why `encode_location_forward` writes it the same
+        // way.
+        LocateStatus::ObjectForward(to) => to.ior().write_to(&mut e)?,
+        // Exhaustive on purpose, with no `_` arm: LOC_SYSTEM_EXCEPTION (3 in
+        // 1.0/1.1, 4 in 1.2) and LOC_NEEDS_ADDRESSING_MODE (5) both carry
+        // bodies too, and whoever adds one of them should be made to come here
+        // rather than discover this function wrote a header and stopped.
+        LocateStatus::UnknownObject | LocateStatus::ObjectHere => {}
+    }
     let size = (e.len() - HEADER_LEN) as u32;
     e.patch_u32(size_at, size);
     e.finish().map_err(Error::Cdr)
@@ -665,6 +793,45 @@ pub trait Dispatch {
         true
     }
 
+    /// What to answer a §9.4.5 `LocateRequest` for `object_key`.
+    ///
+    /// The default is the answer this server gave before the method existed —
+    /// [`LocateStatus::ObjectHere`] when [`Dispatch::knows`] accepts the key and
+    /// [`LocateStatus::UnknownObject`] when it does not — so every servant in
+    /// and outside this workspace keeps its current behaviour byte for byte.
+    ///
+    /// A servant that has *moved* an object overrides this and returns
+    /// [`LocateStatus::ObjectForward`]. Before, it could not: `knows` is a
+    /// boolean, and a moved object answering `false` told the client
+    /// **UNKNOWN_OBJECT** — that the object does not exist — when the truth was
+    /// that it exists elsewhere. That is a wrong answer, not a missing feature.
+    ///
+    /// `&self`, like `knows` and unlike [`Dispatch::redirect`], because a locate
+    /// is a probe: §9.4.5's whole value is that it cannot have side effects, and
+    /// a hook taking `&mut self` invites one.
+    ///
+    /// **This does not read [`Dispatch::redirect`], and cannot.** `redirect`
+    /// answers about a `Request` — it is handed the operation and the body — and
+    /// there is no honest `Request` to synthesise from an object key alone.
+    ///
+    /// **What a servant that overrides this still cannot do, measured
+    /// 2026-08-26.** [`Dispatch::serve_one`] asks `knows` *before* it asks
+    /// `redirect`, so a servant whose `knows` returns `false` for a moved key
+    /// answers `OBJECT_NOT_EXIST` to an ordinary `Request` no matter what
+    /// `redirect` would have said — `knows` gates the forward on the invocation
+    /// path exactly as it used to gate it here. A caller that probes first is
+    /// therefore served correctly and a caller that does not is not, which is
+    /// the same defect this method closes, one message later. Closing it means
+    /// reordering `serve_one`, which changes what an existing servant's
+    /// `redirect` is asked about, and that is a decision this batch did not
+    /// take. The workaround until then: a servant that has moved an object
+    /// keeps `knows` returning `true` for the moved key and answers both
+    /// messages, this one with `ObjectForward` and `redirect` with the same
+    /// [`Forward`].
+    fn locate(&self, object_key: &[u8]) -> LocateStatus {
+        if self.knows(object_key) { LocateStatus::ObjectHere } else { LocateStatus::UnknownObject }
+    }
+
     /// A reference to redirect this request to, instead of serving it.
     ///
     /// Returning `Some` produces a `LOCATION_FORWARD`, which §9.4.3.2 requires
@@ -718,6 +885,10 @@ impl<D: Dispatch + ?Sized> Dispatch for &mut D {
 
     fn knows(&self, object_key: &[u8]) -> bool {
         (**self).knows(object_key)
+    }
+
+    fn locate(&self, object_key: &[u8]) -> LocateStatus {
+        (**self).locate(object_key)
     }
 
     fn forward(&mut self, request: &Request) -> Option<crate::Ior> {
@@ -785,6 +956,13 @@ pub trait SharedDispatch: Sync {
     /// Whether this servant answers to `object_key`.
     fn knows(&self, _object_key: &[u8]) -> bool {
         true
+    }
+
+    /// What to answer a §9.4.5 `LocateRequest` for `object_key`. See
+    /// [`Dispatch::locate`], including why it does not consult `redirect` and
+    /// what a servant that overrides it still cannot do on the request path.
+    fn locate(&self, object_key: &[u8]) -> LocateStatus {
+        if self.knows(object_key) { LocateStatus::ObjectHere } else { LocateStatus::UnknownObject }
     }
 
     /// A reference to redirect this request to, instead of serving it — the
@@ -882,6 +1060,13 @@ impl<D: Dispatch + Send> SharedDispatch for Serialized<D> {
 
     fn knows(&self, object_key: &[u8]) -> bool {
         lock(&self.servant).knows(object_key)
+    }
+
+    /// Under the same mutex as everything else on this path: a probe that read
+    /// the servant while a request was mid-flight could answer `ObjectHere`
+    /// about a key that very look was retiring.
+    fn locate(&self, object_key: &[u8]) -> LocateStatus {
+        lock(&self.servant).locate(object_key)
     }
 
     fn forward(&self, request: &Request) -> Option<crate::Ior> {
@@ -1594,12 +1779,12 @@ impl Server {
             match msg.msg_type {
                 MsgType::LocateRequest => {
                     let lr = decode_locate_request(msg)?;
-                    let status = if servant.knows(&lr.object_key) {
-                        LocateStatus::ObjectHere
-                    } else {
-                        LocateStatus::UnknownObject
-                    };
-                    let out = encode_locate_reply(lr.version, lr.endian, lr.request_id, status)?;
+                    // Was `knows()` inline here, which could only ever say
+                    // here-or-nowhere. A servant that has moved an object can
+                    // now say so, and a client that asked before spending a
+                    // request is answered before spending one.
+                    let status = servant.locate(&lr.object_key);
+                    let out = encode_locate_reply(lr.version, lr.endian, lr.request_id, &status)?;
                     s.write_all(&out)?;
                 }
                 MsgType::Request => {
@@ -1655,21 +1840,14 @@ impl Server {
 
     fn handle_request(&self, req: &Request, d: &dyn SharedDispatch) -> Result<Option<Vec<u8>>> {
         // Servants write into a detached buffer, so it too must know where it
-        // will land. A 1.0 reply body starts immediately after the header.
-        //
-        // GIOP 1.0/1.1 put the service context list before `request_id` and
-        // `reply_status`; 1.2 puts it after. Both therefore measure
-        // 4 + 4 + 4 = 12 bytes here — but only because the list we emit is
-        // empty. This was written as a version branch with the same value in
-        // both arms, which read as though the difference had been accounted
-        // for; it has not. Emitting any reply service context makes the two
-        // layouts differ and this constant wrong.
-        let reply_header_len = HEADER_LEN + 12;
-        let body_start = if req.version.aligns_body() {
-            reply_header_len.div_ceil(8) * 8
-        } else {
-            reply_header_len
-        };
+        // will land. This used to be the literal `HEADER_LEN + 12` — right only
+        // while the reply's service context list stayed empty, as the comment
+        // beside it said. That made the offset a fact with two homes: the
+        // encoder computed it from its own bytes and this path retyped it, so
+        // the day anything attached a context here every body byte would have
+        // shifted with nothing red. `reply_body_start` is the one home, and it
+        // is passed the same list this path emits.
+        let body_start = reply_body_start(req.version, req.endian, &[]);
         let mut out = Encoder::continuing_at(req.endian, body_start);
         // Counted around the servant call and nothing else, so the number
         // excludes the framing either side of it. It does *not* exclude a
@@ -2006,7 +2184,7 @@ mod tests {
     #[test]
     fn locate_reply_is_not_body_aligned() {
         let wire =
-            encode_locate_reply(Version::V1_2, Endian::Big, 3, LocateStatus::ObjectHere).unwrap();
+            encode_locate_reply(Version::V1_2, Endian::Big, 3, &LocateStatus::ObjectHere).unwrap();
         assert_eq!(wire.len(), HEADER_LEN + 8, "no padding may follow the locate header");
         assert_eq!(u32::from_be_bytes([wire[8], wire[9], wire[10], wire[11]]), 8);
         assert_eq!(u32::from_be_bytes([wire[12], wire[13], wire[14], wire[15]]), 3);

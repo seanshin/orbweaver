@@ -39,7 +39,8 @@ answers *did this break*; none answers *what can a caller still tell*.
 
 ## 2. What must not happen / 해서는 안 되는 것
 
-- **Do not reorder the 81 groups.** They are in historical order, each landed
+- **Do not reorder the groups** — 81 when this was written, 91 today, and the
+  count is not the point. They are in historical order, each landed
   with its own negative control, and several share fixtures started by an
   earlier group — the IFR `--hold` fixture serves three. Reordering is a large
   change with **no measurement behind it** and it would put the instrument at
@@ -136,7 +137,7 @@ merge only after the verdict* — is what makes the loop honest rather than fast
 
 ## 6. What this document does not claim / 주장하지 않는 것
 
-It does not claim the 81 groups are badly organised — §2 refuses to reorder
+It does not claim the groups are badly organised — §2 refuses to reorder
 them and §3 says six of them already measure transparencies without knowing
 it. It does not claim the ledger will find anything new on its first run: the
 likely first result is that it prints what four batch reports said today, which

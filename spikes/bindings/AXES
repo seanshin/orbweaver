@@ -65,9 +65,30 @@ direction	servant	-	a peer calls generated code in the binding's language
 peer	omniorb	foreign	omniORB, run as a separate process and read from (LGPL fixture, never a dependency)
 peer	jacorb	foreign	JacORB, likewise (LGPL fixture); the only peer here that writes big-endian
 peer	self	ours	our own ORB at both ends — measures the seam, and can never satisfy clause 6
-# D033 §3.4: C's peer does not exist yet and is not another ORB. When a
-# hand-written C peer speaking GIOP lands, it is added here and every binding's
-# grid gains its column on the next run.
+peer	c	independent	spikes/c_peer.c — first-party C, no ORB linked; shares no code with crates/ and no reading with them either
+#
+# `independent` is a third property, decided 2026-08-26 when the C peer landed
+# and its author correctly refused to answer this by declaring it.
+#
+# It is neither `foreign` nor `ours`. It shares **no code** with `crates/`, so a
+# coding error on our side is not mirrored on the other — that is real evidence
+# and more than `self` can offer. But it shares **the same reading of the same
+# specification, by the same process**, and CLAUDE.md's rule decides the rest:
+# *a convention both ends apply cannot be refuted by a round trip.* A misreading
+# is exactly such a convention. So:
+#
+#   `independent` refutes coding errors and does NOT satisfy clause 6.
+#
+# The precedent that will be cited against this is `spikes/ssliop_peer.py`,
+# which is ours and did close D010 §4 B3. It does not contradict this — it
+# illustrates it. What was foreign in that measurement was **OpenSSL's TLS**,
+# not the GIOP; the GIOP half was ours at both ends there too. The foreignness
+# has to be in the thing under test.
+#
+# For C this costs nothing: clause 6 for C's client direction is satisfied by
+# omniORB, which generated C dials the same way generated Python does. What the
+# C peer bought is the **runtime**, not the oracle — the wire layer a generated
+# stub needs, written and measured before any emitter depends on it.
 
 # ── order ────────────────────────────────────────────────────────────────────
 # Clause 2. A cell reports the order it READ out of GIOP §15.4.1's flag byte of
