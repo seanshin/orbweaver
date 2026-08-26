@@ -125,7 +125,85 @@ each name the leaks found in them so far, including the ones still open.
 
 ## Why CORBA, and why now / 왜 CORBA인가, 왜 지금인가
 
-Not nostalgia. Four reasons, in the order they actually mattered.
+Not nostalgia. The project started from **0** below; **1–4** are why the answer
+turned out to be reachable rather than merely appealing.
+
+#### 0. Models started calling each other, and nothing said who was calling
+
+The premise this project began from. When one program calls another and a person
+wrote both, trust is arranged out of band: someone read the docs, someone issued
+a key, someone will notice when it misbehaves. **That arrangement is what stops
+working when the caller is a model** — because the caller is chosen at runtime,
+the callee may be a model too, and there is no human in the loop at the moment
+of the call to supply the judgement the design assumed.
+
+What is actually needed between two models is not transport. It is four things,
+and each of them is an *identity* or a *proof*:
+
+**0.1 — The callee must be nameable without being located.** An agent must be
+able to hold something that says *this target*, not *this URL*. A URL is an
+address: it says where to send bytes and nothing about what is there, it breaks
+when the thing moves, and two of them pointing at the same object are not
+comparable. CORBA's unit is the **object reference**, and it is the opposite: it
+carries a repository id (*what interface this is*), an object key (*which
+instance*), and an address that is allowed to change underneath it — the caller
+holding the reference does not have to notice. That is why `LOCATION_FORWARD`
+exists in the wire protocol rather than in a load balancer. Handing an agent a
+reference hands it a **capability**: the authority to invoke a specific target,
+separable from knowing where that target runs.
+
+**0.2 — The callee must be able to describe itself, in a form a machine can
+check.** An agent that has never seen an interface must be able to learn it at
+the moment of the call and then invoke it *correctly*, and "correctly" has to be
+decidable by something other than the model's confidence. CORBA has carried this
+since 1996: the **Interface Repository** answers *what operations does this have,
+with what parameter types, raising what*, and `TypeCode` makes the answer a value
+rather than prose. Combined with the **Dynamic Invocation Interface**, a caller
+discovers and invokes with no generated code. The 2025 rediscovery of this idea
+is MCP's `tools/list`; the difference is that IDL's description is a **type**, so
+a wrong call is a marshalling failure rather than a plausible-looking mistake.
+
+**0.3 — The caller must be able to prove who it is, through intermediaries.**
+Agents call through other agents. A chain of three where the middle one is
+trusted to *say* who the first one was is not proof, it is a convention, and it
+fails exactly when it matters. CORBA specifies this instead of leaving it to a
+header: **CSIv2** carries an authenticated identity and, separately, an asserted
+one for delegation, so *acting as* and *claiming to be* are different fields on
+the wire rather than the same string. In this repository that is
+`crates/orbweaver-giop/src/csiv2.rs`. It is honest to say what is not done: TLS
+and token exchange are still open (Phase 5 is half landed), so today the
+mechanism is specified and carried, not yet secured end to end.
+
+**0.4 — The contract must say what a call *does*, before it is made.** An agent
+deciding whether to call needs to know whether the operation is destructive,
+whether retrying is safe, what permission it requires, and whether an argument is
+personal data. IDL types the *shape* and says nothing about the *meaning*, which
+is the gap **SIDL** exists to close — `//@ ai_effect`, `//@ ai_authz`,
+`//@ ai_idempotent`, `//@ ai_pii` — so an authorisation decision reads the
+contract rather than guessing from the operation's name. And because the
+declaration is in the contract, the enforcement point can sit outside both
+parties: `orbweaver-mcp`'s interceptor chain refuses by default, records
+`ALLOW caller=… target=… operation=…` for what it permits, and can run a call as
+a **dry run** that reports what would have happened without doing it.
+
+**0.5 — Why an existing object model rather than a new protocol.** The four
+requirements above are not exotic; every one of them can be assembled today out
+of OpenAPI plus OAuth plus a gateway plus a schema registry plus a convention
+about headers. The reason to start from CORBA is that there they are **one
+object model, already specified, with independent implementations to check
+against** — the reference, the repository, the identity token and the
+interception point are defined in relation to each other rather than bolted
+together per deployment. That is also what makes the work *falsifiable*: a
+mistake shows up as a stock omniORB or JacORB refusing our bytes, which is a
+harsher reviewer than any test written by the same author as the code.
+
+The wager, stated plainly so it can be judged: **the properties agents need from
+each other are the ones distributed-object systems spent the 1990s specifying,
+and the reason CORBA lost was ergonomics for human programmers — a cost an agent
+does not pay.** Verbosity, strictness, and a compiler that refuses are burdens to
+a person typing and assets to a model generating.
+
+#### And why it is reachable in 2026 / 그리고 왜 2026년에 가능한가
 
 **1. CORBA already shipped what agent tooling is reinventing.** The Model
 Context Protocol standardised runtime tool discovery in 2025: a client calls
@@ -154,7 +232,76 @@ rather than by people. In that world a contract that is verbose but precise
 beats one that is terse but ambiguous. The strictness humans fled from is the
 precision agents need.
 
-향수가 아닙니다. 실제로 중요했던 순서대로 네 가지입니다.
+향수가 아닙니다. 프로젝트는 아래 **0번**에서 시작했고, **1–4번**은 그 답이
+매력적일 뿐 아니라 실제로 **도달 가능한** 이유입니다.
+
+**0. 모델들이 서로를 호출하기 시작했는데, 누가 거는지를 말해 주는 것이 없었다.**
+이 프로젝트가 출발한 전제입니다. 한 프로그램이 다른 프로그램을 호출하고 양쪽을
+사람이 썼을 때, 신뢰는 대역 밖에서 마련됩니다 — 누군가 문서를 읽었고, 누군가 키를
+발급했고, 오작동하면 누군가 알아챌 것입니다. **호출자가 모델이 되는 순간 그 배치가
+작동을 멈춥니다.** 호출자는 런타임에 정해지고, 피호출자도 모델일 수 있으며,
+그 설계가 전제한 판단을 공급해 줄 사람이 호출 시점에 없기 때문입니다.
+
+두 모델 사이에 실제로 필요한 것은 전송이 아닙니다. 네 가지이고, 각각이 **신원**
+아니면 **증명**입니다.
+
+**0.1 — 피호출자는 위치를 몰라도 지칭될 수 있어야 한다.** 에이전트는 *이 URL*이
+아니라 *이 대상*이라고 말하는 무언가를 들 수 있어야 합니다. URL은 주소입니다 —
+바이트를 어디로 보낼지만 말하고 거기 무엇이 있는지는 말하지 않으며, 대상이
+옮겨가면 깨지고, 같은 객체를 가리키는 두 URL은 비교되지 않습니다. CORBA의 단위인
+**객체 참조**는 정반대입니다. 리포지터리 ID(*어떤 인터페이스인가*), 객체
+키(*어느 인스턴스인가*), 그리고 **밑에서 바뀌어도 되는** 주소를 함께 싣습니다.
+참조를 든 호출자는 그 변화를 알아챌 필요가 없습니다. `LOCATION_FORWARD`가 로드
+밸런서가 아니라 **와이어 프로토콜 안에** 있는 이유가 이것입니다. 에이전트에게
+참조를 건네는 것은 **능력(capability)**을 건네는 것입니다 — 특정 대상을 호출할
+권한을, 그 대상이 어디서 도는지 아는 것과 분리해서.
+
+**0.2 — 피호출자는 자기를 기술할 수 있어야 하고, 그 기술은 기계가 검사할 수 있는
+형태여야 한다.** 한 번도 본 적 없는 인터페이스를 호출 시점에 배우고 **정확히**
+호출할 수 있어야 하며, 그 "정확히"는 모델의 확신이 아닌 다른 것이 판정해야 합니다.
+CORBA는 1996년부터 이것을 갖고 있습니다 — **인터페이스 리포지터리**가 *이것에는
+어떤 연산이 있고, 파라미터 타입은 무엇이며, 무엇을 raise 하는가*에 답하고,
+`TypeCode`가 그 답을 산문이 아니라 **값**으로 만듭니다. **동적 호출
+인터페이스(DII)**와 합치면 생성된 코드 없이 발견하고 호출합니다. 2025년에 이
+발상을 다시 찾은 것이 MCP의 `tools/list`이며, 차이는 IDL의 기술이 **타입**이라는
+점입니다. 잘못된 호출이 그럴듯해 보이는 실수가 아니라 마샬링 실패가 됩니다.
+
+**0.3 — 호출자는 중간 경유자를 지나서도 자기가 누구인지 증명할 수 있어야 한다.**
+에이전트는 다른 에이전트를 거쳐 호출합니다. 셋으로 이어진 사슬에서 가운데가 첫
+번째가 누구였는지 **말해 주는 것을 믿는** 구조는 증명이 아니라 관례이고, 하필
+중요한 순간에 무너집니다. CORBA는 이것을 헤더 관례에 맡기지 않고 명세합니다 —
+**CSIv2**가 인증된 신원과, 위임을 위한 주장된 신원을 **따로** 싣습니다. *~로서
+행위한다*와 *~라고 주장한다*가 같은 문자열이 아니라 와이어 위의 다른 필드입니다.
+이 저장소에서는 `crates/orbweaver-giop/src/csiv2.rs`입니다. 안 된 것을 밝혀
+두는 편이 정직합니다 — TLS와 토큰 교환은 아직 열려 있어(Phase 5 절반 착지), 오늘
+이 메커니즘은 명세되고 실려 다니지만 종단 간으로 보호되지는 않습니다.
+
+**0.4 — 계약은 호출이 *무엇을 하는지*를 호출 전에 말해야 한다.** 호출할지 말지
+정하는 에이전트는 그 연산이 파괴적인지, 재시도가 안전한지, 어떤 권한이 필요한지,
+인자가 개인정보인지를 알아야 합니다. IDL은 *형태*에 타입을 붙일 뿐 *의미*는 말하지
+않으며, 그 간극을 메우려고 **SIDL**이 있습니다 — `//@ ai_effect`, `//@ ai_authz`,
+`//@ ai_idempotent`, `//@ ai_pii`. 그래서 인가 판단이 연산 이름에서 추측하는 대신
+계약을 읽습니다. 그리고 선언이 계약 안에 있으므로 집행 지점을 양쪽 바깥에 둘 수
+있습니다 — `orbweaver-mcp`의 인터셉터 체인은 기본적으로 거부하고, 허용한 것은
+`ALLOW caller=… target=… operation=…`으로 기록하며, 호출을 **드라이런**으로 돌려
+실제로 하지 않은 채 무슨 일이 일어났을지 보고할 수 있습니다.
+
+**0.5 — 왜 새 프로토콜이 아니라 기존 객체 모델인가.** 위 네 가지는 특별하지
+않습니다. 오늘도 OpenAPI + OAuth + 게이트웨이 + 스키마 레지스트리 + 헤더에 대한
+관례를 조립하면 전부 만들 수 있습니다. CORBA에서 출발할 이유는, 거기서는 그것들이
+**하나의 객체 모델로 이미 명세되어 있고, 대조할 독립 구현이 존재한다**는
+점입니다 — 참조, 리포지터리, 신원 토큰, 인터셉션 지점이 배포마다 붙여 맞추는 것이
+아니라 서로에 대한 관계로 정의되어 있습니다. 그리고 그것이 이 작업을 **반증
+가능하게** 만듭니다. 실수는 순정 omniORB나 JacORB가 우리 바이트를 거부하는 것으로
+드러나며, 그쪽이 코드와 같은 사람이 쓴 어떤 테스트보다 가혹한 검토자입니다.
+
+판정받을 수 있도록 내기를 분명히 적어 둡니다 — **에이전트가 서로에게 필요로 하는
+성질은 분산 객체 시스템이 1990년대를 들여 명세한 바로 그것이고, CORBA가 패배한
+이유는 인간 프로그래머에게의 사용성인데, 그 비용은 에이전트가 치르지 않는다.**
+장황함, 엄격함, 거부하는 컴파일러는 타이핑하는 사람에게는 짐이고 생성하는
+모델에게는 자산입니다.
+
+**그리고 왜 2026년에 가능한가.** 실제로 중요했던 순서대로 네 가지입니다.
 
 **1. 에이전트 도구 생태계가 다시 만들고 있는 것을 CORBA는 이미 출하했습니다.**
 MCP는 2025년에 런타임 도구 발견을 표준화했습니다 — 클라이언트가 `tools/list`를
