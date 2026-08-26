@@ -494,8 +494,13 @@ dead and the caller fails one hop later. Repairing *that* is liveness detection,
 a fifth and much larger decision. X also re-opens **D013**, which decided
 reference identity assuming an IOR names an object.
 
-The argument in full, beside the tests that check its claims, is that file's
-module documentation. **No new wire shape was added** — a forward produced by a
+**The obvious alternative is refused there rather than missed**: a *tombstone* —
+leaving the removed server's ORB listening at the same address to answer
+forwards — contradicts D034 (a shutdown keeping a listener never returns its
+port), does not survive the cases "removed" usually means (crash, eviction,
+machine loss), and is unbounded, since nothing can know when the last client
+holding a reference has gone. The argument in full, beside the tests that check
+its claims, is that file's module documentation. **No new wire shape was added** — a forward produced by a
 name resolving is byte-for-byte the message produced by an object moving, which
 `the_forward_a_name_produces_is_the_same_message_an_object_move_produces`
 checks over three versions and both orders rather than asserting. That is why no
@@ -543,7 +548,12 @@ IOR이 무엇인지의 문제다. `corbaname:`도 답이 아니다 — 클라이
 고치는 것은 생존 감지이며 다섯 번째이자 훨씬 큰 결정이다. X는 IOR이 객체를
 가리킨다는 전제 위에서 참조 동일성을 정한 **D013**도 다시 연다.
 
-*전체 논증은 그 파일의 모듈 문서에 있고, 그 주장들을 검사하는 테스트가 옆에 있다.
+*뻔한 대안은 그 파일에서 놓친 것이 아니라 **거절했다**: *툼스톤* — 제거된 서버의
+ORB를 같은 주소에 계속 띄워 포워드만 답하게 하는 것 — 은 D034에 반하고(듣기를
+유지하는 종료는 포트를 결코 돌려주지 않는다), "제거"가 보통 뜻하는 경우들(크래시,
+축출, 머신 소멸)에서 살아남지 못하며, 참조를 든 마지막 클라이언트가 언제 사라지는지
+아무도 알 수 없으므로 무한히 쌓인다. 전체 논증은 그 파일의 모듈 문서에 있고, 그
+주장들을 검사하는 테스트가 옆에 있다.
 **새로운 와이어 모양은 추가되지 않았다** — 이름 해석이 낳은 포워드는 객체 이동이
 낳은 메시지와 바이트 단위로 같으며,
 `the_forward_a_name_produces_is_the_same_message_an_object_move_produces`가 버전

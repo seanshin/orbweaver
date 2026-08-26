@@ -46,8 +46,24 @@
 //! a key. Nothing in GIOP lets a third party answer a TCP connection to an
 //! address nobody is bound to.
 //!
-//! **So `corbaname:` is not the answer, and it is worth saying why**, because it
-//! is the first thing that comes to mind. A `corbaname:` URL is resolved on the
+//! **The obvious alternative, refused rather than missed: a tombstone.** Leave
+//! the removed server's ORB listening at the same address, hosting nothing,
+//! answering every request with a forward. It is a real design and it is a
+//! worse one, for three reasons that are each fatal on their own. It means the
+//! process has **not** stopped, which contradicts the whole of D034 — a
+//! shutdown that keeps a listener is a shutdown that never returns its port,
+//! its file descriptors, or its memory. It does not survive the cases "removed"
+//! usually means: process death, a crash, an evicted container, a machine that
+//! went away — none of which leave anything behind to be a tombstone. And it is
+//! **unbounded**: every server ever removed must be tombstoned for as long as
+//! any client might still hold its reference, which nothing can know, so the
+//! tombstones accumulate for the lifetime of the deployment. An indirection
+//! that is entered *before* the first call has none of these properties, which
+//! is the argument for X below and against this.
+//!
+//! **So `corbaname:` is not the answer either, and it is worth saying why**,
+//! because it is the first thing that comes to mind. A `corbaname:` URL is
+//! resolved on the
 //! *client*, once, at bind time; what the client holds afterwards is the
 //! resolved IOR, which is exactly as dead as before. `corbaname:` moves the
 //! moment of resolution earlier. It does not make the reference indirect. The
