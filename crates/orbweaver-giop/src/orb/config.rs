@@ -30,15 +30,21 @@
 //! stall). It is the same class, on the same struct, three lines down; leaving
 //! it out would have been scoping to the list instead of to the rule.
 //!
-//! ## Already configurable, and folded in when the ORB owns the transport (5)
+//! ## Already configurable, and still Rust-only (5)
 //!
 //! `pool::Limits` — `DEFAULT_MAX_TOTAL`, `DEFAULT_MAX_PER_ENDPOINT`,
 //! `DEFAULT_SOFT_IN_FLIGHT`, `DEFAULT_MAX_IDLE`, `DEFAULT_CONNECT_TIMEOUT` —
-//! is the one cluster that already had a configuration object
-//! (`Pool::with_limits`). It reaches a deployment only through Rust, which is
-//! the same gap; but a `-ORB…` flag for a pool limit has nothing to apply
-//! itself to until the ORB hands out the transport, which is **D019 step 4**.
-//! Folding them in early would produce keys that parse and change nothing.
+//! is the one cluster that already had a configuration object. It reaches a
+//! deployment only through Rust, which is the same gap; this step said a
+//! `-ORB…` flag for a pool limit had nothing to apply itself to until the ORB
+//! handed out the transport.
+//!
+//! **D019 step 4 landed and that precondition is now met** — a pool comes from
+//! [`Orb::pool`](crate::orb::Orb::pool) and carries an `OrbConfig` — but the
+//! five keys were *not* added with it, deliberately: step 4's own rule is that
+//! it changes no behaviour by default, and five new keys are five new
+//! behaviours to negative-control. They are named here so the next reader sees
+//! a decision rather than an omission.
 //!
 //! ## Configurable in Rust, no way in from outside (5)
 //!
@@ -79,12 +85,14 @@
 //! of §8 does not spend the same half hour.
 //!
 //! And a gap the sweep found that is not about configuration at all:
-//! `DEFAULT_MAX_MESSAGE_SIZE` has a setter on `Connection` (`lib.rs:2043`) and
-//! **none on `Server`** (`server.rs:1103` hard-codes it into `bind`). The
-//! serving side's most important resource cap is the one with no way to change
-//! it in-process either. That is a missing setter rather than a missing key,
-//! it is in `server.rs`, and it is reported rather than added here because a
-//! new public setter is API surface this batch was not scoped to add.
+//! `DEFAULT_MAX_MESSAGE_SIZE` had a setter on `Connection` and **none on
+//! `Server`**, which hard-coded it into `bind`. The serving side's most
+//! important resource cap was the one with no way to change it in-process
+//! either. **Closed by D019 step 4**, and closed without adding the public
+//! setter that was reported here: `Server::bind` became `pub(crate)`, so the
+//! field is reached by `Server::apply_orb_config` from the one constructor
+//! there now is. A number that only a deployment can know did not need a
+//! second Rust door; it needed the door it already had to be connected.
 //!
 //! # What must not move, and why that is not a detail
 //!
@@ -180,10 +188,17 @@ pub const UNIMPLEMENTED_ORB_ARGUMENTS: &[(&str, &str)] = &[
     ),
     // §8.5.1.2. This is transport, and handing out the transport is D019
     // step 4 — the step that is gated on the §5 shape being approved.
+    // §8.5.1.2. The ORB owns the transport since D019 step 4 — `Orb::server`
+    // is now the only way to a listener — so the old reason for this refusal
+    // ("construct a Server directly") stopped being true and stopped being
+    // possible in the same commit. What remains is a real limit and a
+    // different one: the argument takes a *list* of endpoints, and a `Server`
+    // holds one `TcpListener`. A key that accepted a list and bound its first
+    // element would be the worst of the three options.
     (
         "-ORBListenEndpoints",
-        "the ORB does not own the transport yet; construct a Server \
-      directly (CORBA 3.4 §8.5.1.2, D019 step 4)",
+        "a Server listens on one endpoint and this argument takes a list; \
+      pass the address to Orb::server (CORBA 3.4 §8.5.1.2)",
     ),
     // §8.5.3.3. Needs the four-step resolution order of §8.5.3.4, which needs
     // more than one source of initial references; there is one today.

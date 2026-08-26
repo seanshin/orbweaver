@@ -46,7 +46,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use orbweaver_giop::server::{BAD_OPERATION, Server};
+use orbweaver_giop::orb::Orb;
+use orbweaver_giop::server::BAD_OPERATION;
 use orbweaver_giop::{Connection, Error, Ior, Reply};
 use orbweaver_idl::ast::{Definition, InterfaceMember, Spec};
 use orbweaver_object::get_reference;
@@ -264,7 +265,7 @@ fn every_declared_operation_of_the_f5_contract_answers() {
          SERVICES-COVERAGE.md both have to move with it"
     );
 
-    let server = Server::bind("127.0.0.1:0", b"MoE".to_vec()).expect("bound");
+    let server = Orb::new().server("127.0.0.1:0", b"MoE".to_vec()).expect("bound");
     let port = server.local_addr().expect("an address").port();
     let svc = TenantService::new("127.0.0.1", port, "MoE");
 

@@ -272,8 +272,18 @@ is what tells a reader the case exists and is unanswered.
 
 ### Step 4 — the ORB hands out the transport and the root POA
 
-- **The measurement that sizes it.** Twelve files construct `Pool`, `Server` or
-  `Poa` by hand today — `giop/src/bin/{spike_concurrent,spike_mux,spike_events,spike_names,spike_nat}.rs`,
+- **Landed 2026-08-26.** The count was re-measured rather than trusted and it
+  had moved: **thirteen** files, the twelve below plus
+  `orbweaver-test/src/bin/call_bench.rs`. `Poa` is not among them — no spike
+  binary ever constructed a POA, and `Poa::new`'s only callers were
+  `orbweaver-object`'s own unit tests, which is why closing it cost nothing.
+  Thirty-one files were touched in all, because closing `Server::bind` reaches
+  every integration test in six crates as well as the spikes.
+
+  *열세 개였다. 세어 보았기 때문에 안다.*
+
+- **The measurement that sized it, as written 2026-08-25.** Twelve files
+  construct `Pool`, `Server` or `Poa` by hand today — `giop/src/bin/{spike_concurrent,spike_mux,spike_events,spike_names,spike_nat}.rs`,
   `object/src/bin/{spike_server,spike_wide,spike_experts,spike_tenants}.rs`,
   `registry/src/bin/{spike_ifr,spike_ingest}.rs`, `forge/src/bin/sidl_infer.rs`
   — across a workspace of 38 spike binaries. Each becomes a caller.

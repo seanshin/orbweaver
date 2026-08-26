@@ -49,7 +49,8 @@
 
 use std::time::Duration;
 
-use orbweaver_giop::server::{BAD_OPERATION, MARSHAL, Server};
+use orbweaver_giop::orb::Orb;
+use orbweaver_giop::server::{BAD_OPERATION, MARSHAL};
 use orbweaver_giop::typecode::TypeCode;
 use orbweaver_giop::{Connection, Error};
 use orbweaver_registry::ifr::{
@@ -144,7 +145,7 @@ fn run(ior_path: &str, idl_paths: &[&str], hold: bool) -> Fallible {
     }
     println!("repository holds {} interfaces", ifr::interface_ids(&registry).len());
 
-    let server = Server::bind("127.0.0.1:0", ROOT.to_vec())?;
+    let server = Orb::new().server("127.0.0.1:0", ROOT.to_vec())?;
     let port = server.local_addr()?.port();
     let facade = RepositoryServer::new("127.0.0.1", port, ROOT.to_vec(), registry);
     let keys = facade.clone();

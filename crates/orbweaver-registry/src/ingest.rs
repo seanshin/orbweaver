@@ -1141,7 +1141,8 @@ mod tests {
         ATTR_NORMAL, AttributeDescription, ExceptionDescription, OP_NORMAL, OperationDescription,
         PARAM_IN, ParameterDescription, RepositoryServer, registry_from_idl,
     };
-    use orbweaver_giop::server::Server;
+    use orbweaver_giop::orb::Orb;
+
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -1974,7 +1975,7 @@ mod tests {
     #[test]
     fn a_registry_round_trips_through_our_own_facade_over_the_wire() {
         let served = registry_from_idl(IDL).expect("golden-shaped IDL loads");
-        let server = Server::bind("127.0.0.1:0", b"InterfaceRepository".to_vec()).unwrap();
+        let server = Orb::new().server("127.0.0.1:0", b"InterfaceRepository".to_vec()).unwrap();
         let port = server.local_addr().unwrap().port();
         let facade =
             RepositoryServer::new("127.0.0.1", port, b"InterfaceRepository".to_vec(), served);

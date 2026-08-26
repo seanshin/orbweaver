@@ -66,8 +66,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
 use orbweaver_cdr::Endian;
-use orbweaver_gen::rt::{self, Forward, ObjRef, ObjectHome, Server};
-use orbweaver_giop::pool::Pool;
+use orbweaver_gen::rt::{self, Forward, ObjRef, ObjectHome};
+use orbweaver_giop::orb::Orb;
 use orbweaver_giop::{Connection, Ior, Version};
 
 use emitted::f_26_object_identity::gc26::{
@@ -183,7 +183,7 @@ struct Live {
 
 impl Live {
     fn start<S: DirectoryServant + Send + 'static>(servant: S) -> Self {
-        let server = Server::bind("127.0.0.1:0", ROOT.to_vec()).expect("bind");
+        let server = Orb::new().server("127.0.0.1:0", ROOT.to_vec()).expect("bind");
         let addr = server.local_addr().expect("addr");
         let ior = server.ior(TYPE_ID, "127.0.0.1").expect("ior");
         let home = ObjectHome::of(&server, "127.0.0.1").expect("home");
@@ -345,7 +345,7 @@ fn reference_caches_a_forward_and_restarts_at_the_original_after_a_temporary_one
             let old = original.reference("old");
             let new = landing.reference("new");
 
-            let pool = Pool::new();
+            let pool = Orb::new().pool();
             let mut r = pool.reference(old.clone());
             r.set_endian(endian);
             let mut client = DirectoryClient::new(r);

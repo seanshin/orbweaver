@@ -3069,7 +3069,8 @@ pub fn interface_ids(registry: &Registry) -> Vec<RepositoryId> {
 mod tests {
     use super::*;
     use orbweaver_cdr::Endian;
-    use orbweaver_giop::server::{BAD_OPERATION, OBJECT_NOT_EXIST, Server};
+    use orbweaver_giop::orb::Orb;
+    use orbweaver_giop::server::{BAD_OPERATION, OBJECT_NOT_EXIST};
     use orbweaver_giop::{Connection, Error};
     use std::collections::BTreeMap;
     use std::sync::Arc;
@@ -3115,7 +3116,7 @@ mod tests {
 
     impl Served {
         fn start() -> Self {
-            let server = Server::bind("127.0.0.1:0", ROOT.to_vec()).unwrap();
+            let server = Orb::new().server("127.0.0.1:0", ROOT.to_vec()).unwrap();
             let port = server.local_addr().unwrap().port();
             let ifr = Arc::new(facade(port));
             let root = ifr.root_ior();

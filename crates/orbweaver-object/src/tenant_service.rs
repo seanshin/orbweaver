@@ -1700,7 +1700,8 @@ impl Dispatch for TenantService {
 mod tests {
     use super::*;
     use orbweaver_cdr::Endian;
-    use orbweaver_giop::server::Server;
+
+    use orbweaver_giop::orb::Orb;
     use orbweaver_giop::{Connection, Error, Reply};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -2448,7 +2449,7 @@ mod tests {
 
     impl Served {
         fn start(mut svc: TenantService) -> (Self, u16) {
-            let server = Server::bind("127.0.0.1:0", b"MoE".to_vec()).unwrap();
+            let server = Orb::new().server("127.0.0.1:0", b"MoE".to_vec()).unwrap();
             let port = server.local_addr().unwrap().port();
             svc.publish_at("127.0.0.1", port);
             let probe = svc.provision_factory("probe").unwrap();

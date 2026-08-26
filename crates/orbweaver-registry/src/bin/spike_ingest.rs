@@ -69,7 +69,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use orbweaver_cdr::{Decoder, Encoder, Endian};
-use orbweaver_giop::server::{Dispatch, DispatchBody, Request, Server, SystemException};
+use orbweaver_giop::orb::Orb;
+use orbweaver_giop::server::{Dispatch, DispatchBody, Request, SystemException};
 use orbweaver_giop::typecode::TypeCode;
 use orbweaver_giop::{Connection, Error as GiopError, Ior};
 use orbweaver_registry::ifr::{
@@ -393,7 +394,7 @@ fn ingest_local_idl() -> Result<Registry, Box<dyn std::error::Error>> {
 
 fn self_facade() -> Result<Ior, Box<dyn std::error::Error>> {
     let registry = ingest_local_idl()?;
-    let server = Server::bind("127.0.0.1:0", b"InterfaceRepository".to_vec())?;
+    let server = Orb::new().server("127.0.0.1:0", b"InterfaceRepository".to_vec())?;
     let port = server.local_addr()?.port();
     let facade =
         RepositoryServer::new("127.0.0.1", port, b"InterfaceRepository".to_vec(), registry);
@@ -675,7 +676,7 @@ impl Dispatch for TrackManager {
 }
 
 fn legacy_target() -> Result<Ior, Box<dyn std::error::Error>> {
-    let server = Server::bind("127.0.0.1:0", b"tms/TrackManager".to_vec())?;
+    let server = Orb::new().server("127.0.0.1:0", b"tms/TrackManager".to_vec())?;
     let ior = server.ior(SUBJECT, "127.0.0.1")?;
     std::thread::spawn(move || {
         let _ = server.serve(&mut TrackManager, || false);
@@ -699,7 +700,7 @@ const HOSTILE_INFIX: &[u8] = b"hostile/";
 
 impl HostileRepository {
     fn start() -> Result<Ior, Box<dyn std::error::Error>> {
-        let server = Server::bind("127.0.0.1:0", HOSTILE_ROOT.to_vec())?;
+        let server = Orb::new().server("127.0.0.1:0", HOSTILE_ROOT.to_vec())?;
         let port = server.local_addr()?.port();
         let root = server.ior(ifr::REPOSITORY_ID, "127.0.0.1")?;
         let mut servant = HostileRepository { port };

@@ -97,6 +97,22 @@ pub const DEFAULT_FRAGMENT_THRESHOLD: usize = 1024 * 1024;
 /// connection open and grow the reassembly buffer without bound.
 pub const MAX_FRAGMENTS: usize = 4096;
 
+/// The five numbers a [`Connection`] carries on a deployment's behalf.
+///
+/// Grouped into a value for one reason, and it is not tidiness: they have to
+/// survive [`Connection::move_to`], which replaces the whole connection, and a
+/// hand-maintained list of fields to copy back across is exactly what silently
+/// dropped `max_message_size` and `fragment_threshold` on every forward before
+/// D019 step 4. One value moves as one thing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ConnectionLimits {
+    max_message_size: usize,
+    fragment_threshold: usize,
+    max_fragments: usize,
+    max_forward_hops: u8,
+    follow_timeout: Duration,
+}
+
 /// A GIOP protocol version.
 ///
 /// `Hash` because [`pool`] keys connections on it: two references to one
@@ -1236,6 +1252,22 @@ pub struct RawMessage {
 /// with each fragment's payload, and the result aligns exactly as an
 /// unfragmented message would have.
 pub fn read_message(stream: &mut impl Read, max_size: usize) -> Result<RawMessage> {
+    read_message_limited(stream, max_size, MAX_FRAGMENTS)
+}
+
+/// [`read_message`], with the fragment ceiling supplied rather than compiled in.
+///
+/// The size ceiling was always a parameter and the fragment ceiling was not, so
+/// a deployment that lowered one could not lower the other — the two halves of
+/// the same reassembly bound, one configurable and one not. Every caller that
+/// owns a [`Connection`], a `Mux` or a [`Server`](server::Server) passes that
+/// object's number here; [`read_message`] keeps the compiled default for
+/// callers that have no ORB to ask, which is why it still exists.
+pub fn read_message_limited(
+    stream: &mut impl Read,
+    max_size: usize,
+    max_fragments: usize,
+) -> Result<RawMessage> {
     let first = read_one_message(stream, max_size)?;
     // A `Fragment` continues something. Arriving first it continues nothing,
     // and handing it back as a message makes every caller responsible for a
@@ -1270,8 +1302,8 @@ pub fn read_message(stream: &mut impl Read, max_size: usize) -> Result<RawMessag
     let mut count = 0usize;
     loop {
         count += 1;
-        if count > MAX_FRAGMENTS {
-            return Err(Error::MessageTooLarge { declared: count, limit: MAX_FRAGMENTS });
+        if count > max_fragments {
+            return Err(Error::MessageTooLarge { declared: count, limit: max_fragments });
         }
         let next = read_one_message(stream, max_size)?;
         if next.msg_type != MsgType::Fragment {
@@ -1739,6 +1771,15 @@ pub struct Connection {
     codeset_context_pending: bool,
     /// Body size above which outbound messages are fragmented.
     fragment_threshold: usize,
+    /// Most fragments accepted for one inbound logical message.
+    /// [`MAX_FRAGMENTS`] is this field's default.
+    max_fragments: usize,
+    /// How many `LOCATION_FORWARD` hops [`Connection::invoke`] follows.
+    /// [`MAX_FORWARD_HOPS`] is this field's default.
+    max_forward_hops: u8,
+    /// How long a dial this connection makes *itself* — following a forward,
+    /// or a §9.6 restart — waits. [`FOLLOW_TIMEOUT`] is this field's default.
+    follow_timeout: Duration,
     /// Largest number of fragments any one reply arrived in.
     max_reply_fragments: usize,
     /// The redirect most recently followed, if any. See
@@ -1939,6 +1980,9 @@ impl Connection {
             caller_converts_chars: false,
             codeset_context_pending,
             fragment_threshold: DEFAULT_FRAGMENT_THRESHOLD,
+            max_fragments: MAX_FRAGMENTS,
+            max_forward_hops: MAX_FORWARD_HOPS,
+            follow_timeout: FOLLOW_TIMEOUT,
             max_reply_fragments: 1,
             forwarded: None,
             // The profile alone until the constructor that has the whole
@@ -2053,6 +2097,49 @@ impl Connection {
         self.max_message_size = bytes;
     }
 
+    /// The five deployment numbers this connection is carrying.
+    ///
+    /// Read as a group rather than field by field because the one place that
+    /// needs them — [`Connection::move_to`] — needs *all* of them, and a
+    /// carry-over list maintained by hand is how the two that already had
+    /// setters came to be dropped across a forward without anything going red.
+    fn orb_limits(&self) -> ConnectionLimits {
+        ConnectionLimits {
+            max_message_size: self.max_message_size,
+            fragment_threshold: self.fragment_threshold,
+            max_fragments: self.max_fragments,
+            max_forward_hops: self.max_forward_hops,
+            follow_timeout: self.follow_timeout,
+        }
+    }
+
+    fn set_orb_limits(&mut self, l: ConnectionLimits) {
+        self.max_message_size = l.max_message_size;
+        self.fragment_threshold = l.fragment_threshold;
+        self.max_fragments = l.max_fragments;
+        self.max_forward_hops = l.max_forward_hops;
+        self.follow_timeout = l.follow_timeout;
+    }
+
+    /// Applies a deployment's configuration to this connection (D019 step 4).
+    ///
+    /// This is the client half of *the configuration reaches the transport*.
+    /// Every field an [`OrbConfig`](crate::orb::OrbConfig) leaves unset answers
+    /// the compiled constant at the accessor, so an
+    /// [`OrbConfig::new`](crate::orb::OrbConfig::new) applied here writes each
+    /// field back to the value it already held — which is what makes
+    /// *"an unconfigured ORB changes nothing"* a property of the code rather
+    /// than a claim.
+    pub(crate) fn apply_orb_config(&mut self, cfg: &crate::orb::OrbConfig) {
+        self.set_orb_limits(ConnectionLimits {
+            max_message_size: cfg.max_message_size(),
+            fragment_threshold: cfg.fragment_threshold(),
+            max_fragments: cfg.max_fragments(),
+            max_forward_hops: cfg.max_forward_hops(),
+            follow_timeout: cfg.follow_timeout(),
+        });
+    }
+
     /// Overrides the outbound fragmentation threshold.
     pub fn set_fragment_threshold(&mut self, bytes: usize) {
         self.fragment_threshold = bytes;
@@ -2157,13 +2244,15 @@ impl Connection {
         self.stream.write_all(&msg).inspect_err(|_| self.poisoned = true)?;
         self.stream.flush().inspect_err(|_| self.poisoned = true)?;
 
-        let raw = match read_message(&mut self.stream, self.max_message_size) {
-            Ok(m) => m,
-            Err(e) => {
-                self.poisoned = true;
-                return Err(e);
-            }
-        };
+        let raw =
+            match read_message_limited(&mut self.stream, self.max_message_size, self.max_fragments)
+            {
+                Ok(m) => m,
+                Err(e) => {
+                    self.poisoned = true;
+                    return Err(e);
+                }
+            };
         let (reply_id, result) = decode_locate_reply(raw).inspect_err(|_| self.poisoned = true)?;
         if reply_id != id {
             self.poisoned = true;
@@ -2251,7 +2340,7 @@ impl Connection {
         // is where holding a lock hurts most. See `crate::guarded`.
         guarded::assert_nothing_held("an invocation");
         let mut fallback = Fallback::Reuse;
-        for _ in 0..MAX_FORWARD_HOPS {
+        for _ in 0..self.max_forward_hops {
             // Before anything is allocated or written: the `CodeSets` context
             // and the octets that follow it must describe the same bytes.
             // Checked per attempt rather than at connect time so the failure
@@ -2340,11 +2429,11 @@ impl Connection {
         // downgrade to cleartext if the new IOR advertises no TLS endpoint.
         #[cfg(feature = "ssliop")]
         let next = match &self.tls_config {
-            Some(cfg) => Self::connect_tls(ior, FOLLOW_TIMEOUT, cfg.clone())?,
-            None => Self::connect(ior, FOLLOW_TIMEOUT)?,
+            Some(cfg) => Self::connect_tls(ior, self.follow_timeout, cfg.clone())?,
+            None => Self::connect(ior, self.follow_timeout)?,
         };
         #[cfg(not(feature = "ssliop"))]
-        let next = Self::connect(ior, FOLLOW_TIMEOUT)?;
+        let next = Self::connect(ior, self.follow_timeout)?;
         let endian = self.endian;
         let converting = self.caller_converts_chars;
         let origin = self.origin.clone();
@@ -2359,7 +2448,16 @@ impl Connection {
         // caller cannot see: it wrote its octets before the
         // redirect existed.
         let before = self.char_codeset.agreed().map(|c| c.id());
+        // The five ORB numbers are the deployment's decision, so they survive a
+        // hop for the same reason the version cap does — `*self = next` would
+        // otherwise silently restore the compiled defaults on the far side of a
+        // redirect the caller cannot see. Two of them (`max_message_size`,
+        // `fragment_threshold`) had public setters before D019 step 4 and were
+        // already being lost here; the loss was invisible because nothing
+        // measured a limit *after* a forward.
+        let limits = self.orb_limits();
         *self = next;
+        self.set_orb_limits(limits);
         self.endian = endian;
         self.origin = origin;
         self.forwarded = forwarded;
@@ -2489,13 +2587,15 @@ impl Connection {
         // From here on the whole request is with the peer, so nothing below
         // is *unsent* except the one message that says so: an EOF, a reset or
         // a timeout while waiting is a request whose completion is unknown.
-        let raw = match read_message(&mut self.stream, self.max_message_size) {
-            Ok(m) => m,
-            Err(e) => {
-                self.poisoned = true;
-                return Err(AttemptFailed::unknown(e));
-            }
-        };
+        let raw =
+            match read_message_limited(&mut self.stream, self.max_message_size, self.max_fragments)
+            {
+                Ok(m) => m,
+                Err(e) => {
+                    self.poisoned = true;
+                    return Err(AttemptFailed::unknown(e));
+                }
+            };
         self.max_reply_fragments = self.max_reply_fragments.max(raw.fragments);
         match raw.msg_type {
             MsgType::Reply => {

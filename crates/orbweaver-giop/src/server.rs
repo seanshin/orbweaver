@@ -114,7 +114,7 @@ use std::time::Duration;
 pub use crate::Forward;
 use crate::{
     DEFAULT_MAX_MESSAGE_SIZE, Error, HEADER_LEN, MAGIC, MsgType, RawMessage, ReplyStatus, Result,
-    Version, fragment_message, read_message,
+    Version, fragment_message, read_message_limited,
 };
 
 /// Repository ID for an operation name no interface of this object declares.
@@ -1089,23 +1089,64 @@ pub struct Server {
     object_key: Vec<u8>,
     max_message_size: usize,
     fragment_threshold: usize,
+    max_fragments: usize,
     max_connections: usize,
     message_timeout: Duration,
+    /// How long the accept loop and a quiet connection wait before looking at
+    /// the stop flag again. [`STOP_POLL`] is this field's default.
+    stop_poll: Duration,
     stats: ServerStats,
 }
 
 impl Server {
     /// Binds to `addr` and adopts `object_key` as the servant's identity.
-    pub fn bind(addr: &str, object_key: Vec<u8>) -> Result<Self> {
+    ///
+    /// # Not the public way in (D019 step 4)
+    ///
+    /// This is `pub(crate)`. A [`Server`] is obtained from
+    /// [`Orb::server`](crate::orb::Orb::server), and that is deliberately the
+    /// **only** way: the eight numbers a deployment owns live on the ORB, and
+    /// while a consumer could bind a listener without one, every such site was
+    /// a place the configuration provably did not arrive. D019 §3 measured the
+    /// cost of the second path — `-ORBmaxMessageSize` parsed, was held, and
+    /// changed nothing on the wire, because nothing that touched the wire had
+    /// been given it. Closing this door is what makes that impossible rather
+    /// than merely fixed.
+    ///
+    /// *두 번째 길이 있으면 설정은 그 길로 새어나간다. 문을 닫는 것이 고치는 것과
+    /// 다른 점이다.*
+    pub(crate) fn bind(addr: &str, object_key: Vec<u8>) -> Result<Self> {
         Ok(Self {
             listener: TcpListener::bind(addr)?,
             object_key,
             max_message_size: DEFAULT_MAX_MESSAGE_SIZE,
             fragment_threshold: crate::DEFAULT_FRAGMENT_THRESHOLD,
+            max_fragments: crate::MAX_FRAGMENTS,
             max_connections: DEFAULT_MAX_CONNECTIONS,
             message_timeout: DEFAULT_MESSAGE_TIMEOUT,
+            stop_poll: STOP_POLL,
             stats: ServerStats::default(),
         })
+    }
+
+    /// Applies a deployment's configuration to this server (D019 step 4).
+    ///
+    /// The serving half of *the configuration reaches the transport*. Every
+    /// unset field of an [`OrbConfig`](crate::orb::OrbConfig) answers the
+    /// compiled constant at its accessor, so applying an unconfigured one
+    /// writes each field back to the value `bind` just gave it.
+    ///
+    /// `max_connections` goes through [`Server::set_max_connections`] rather
+    /// than to the field, so the clamp that refuses a zero cap applies to a
+    /// configuration file exactly as it applies to a Rust caller — a limit
+    /// whose guard depends on which door it came through is not a guard.
+    pub(crate) fn apply_orb_config(&mut self, cfg: &crate::orb::OrbConfig) {
+        self.max_message_size = cfg.max_message_size();
+        self.fragment_threshold = cfg.fragment_threshold();
+        self.max_fragments = cfg.max_fragments();
+        self.set_max_connections(cfg.max_connections());
+        self.message_timeout = cfg.message_timeout();
+        self.stop_poll = cfg.stop_poll();
     }
 
     /// A handle on this server's connection counters, clonable and readable
@@ -1299,7 +1340,7 @@ impl Server {
                         }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(STOP_POLL);
+                        std::thread::sleep(self.stop_poll);
                     }
                     Err(e) => eprintln!("orbweaver: accept failed: {e}"),
                 }
@@ -1367,7 +1408,8 @@ impl Server {
                     return Ok(());
                 }
             }
-            let msg = match read_message(&mut s, self.max_message_size) {
+            let msg = match read_message_limited(&mut s, self.max_message_size, self.max_fragments)
+            {
                 Ok(m) => m,
                 Err(Error::Io(e))
                     if matches!(
@@ -1548,7 +1590,7 @@ impl Server {
     /// would be gone. Peeking leaves every byte where it was, so the message
     /// is then read with the timeout that bounds a *stalled* peer instead.
     fn await_message(&self, s: &TcpStream, stop: &dyn Fn() -> bool) -> Result<Waiting> {
-        s.set_read_timeout(Some(STOP_POLL))?;
+        s.set_read_timeout(Some(self.stop_poll))?;
         let mut probe = [0u8; 1];
         let waiting = loop {
             match s.peek(&mut probe) {
@@ -1596,7 +1638,11 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::encode_request;
+    // The serving path reads with `read_message_limited` since D019 step 4, so
+    // this is no longer in scope from `super`. These tests frame a fixed buffer
+    // rather than a configured connection, so the compiled default is the right
+    // ceiling for them and `read_message` is the function that supplies it.
+    use crate::{encode_request, read_message};
 
     /// Every version must survive our own encoder feeding our own decoder.
     /// This is weaker evidence than an interop run, but it catches a whole

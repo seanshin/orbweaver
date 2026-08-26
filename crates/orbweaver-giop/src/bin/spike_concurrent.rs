@@ -33,7 +33,8 @@
 
 use orbweaver_giop::naming::{NameComponent, NamingContext};
 use orbweaver_giop::naming_server::NamingServer;
-use orbweaver_giop::server::{DEFAULT_MAX_CONNECTIONS, Server, ServerStats};
+use orbweaver_giop::orb::Orb;
+use orbweaver_giop::server::{DEFAULT_MAX_CONNECTIONS, ServerStats};
 use orbweaver_giop::{DEFAULT_MAX_MESSAGE_SIZE, IiopProfile, Ior, MsgType, Version, read_message};
 use std::io::Read;
 use std::net::TcpStream;
@@ -114,7 +115,7 @@ struct Served {
 }
 
 fn serve_naming(cap: usize) -> Result<Served, Box<dyn std::error::Error>> {
-    let mut server = Server::bind("127.0.0.1:0", b"NameService".to_vec())?;
+    let mut server = Orb::new().server("127.0.0.1:0", b"NameService".to_vec())?;
     server.set_max_connections(cap);
     let port = server.local_addr()?.port();
     let ns = NamingServer::new("127.0.0.1", port, b"NameService".to_vec());

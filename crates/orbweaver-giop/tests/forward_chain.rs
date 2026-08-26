@@ -24,7 +24,7 @@
 //! *decodes* and nothing can vary what it encodes.
 
 use orbweaver_cdr::{Encoder, Endian};
-use orbweaver_giop::pool::Pool;
+use orbweaver_giop::orb::Orb;
 use orbweaver_giop::server::{
     Request, decode_request, encode_close_connection, encode_location_forward, encode_reply,
 };
@@ -226,7 +226,7 @@ fn a_permanent_then_temporary_chain_restarts_at_the_permanent_hop() {
             original(perm_ior.clone(), reply_endian, Arc::clone(&orig_seen));
         let old = ior_at(orig_addr, b"old");
 
-        let pool = Pool::new();
+        let pool = Orb::new().pool();
         let mut r = pool.reference(old.clone());
         assert!(r.forwarded().is_none(), "{label}: nothing followed before any call");
 
@@ -328,7 +328,7 @@ fn a_temporary_then_permanent_chain_leaves_nothing_cached() {
         });
         let old = ior_at(orig_addr, b"old");
 
-        let pool = Pool::new();
+        let pool = Orb::new().pool();
         let mut r = pool.reference(old);
         assert_eq!(body_i32(&r.invoke("op", |_| {}).expect("the chain is followed")), 7, "{label}");
         assert_eq!(

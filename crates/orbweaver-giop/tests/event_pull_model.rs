@@ -39,7 +39,8 @@ use orbweaver_giop::event_server::{
     ALREADY_CONNECTED_ID, CORBA_OBJECT_ID, ChannelHandle, DISCONNECTED_ID, EventChannelServer,
     PROXY_PULL_SUPPLIER_ID, PROXY_PUSH_SUPPLIER_ID, client,
 };
-use orbweaver_giop::server::{Completion, Server};
+use orbweaver_giop::orb::Orb;
+use orbweaver_giop::server::Completion;
 use orbweaver_giop::typecode::{Any, TypeCode};
 use orbweaver_giop::{Connection, Error, Ior};
 
@@ -58,7 +59,7 @@ struct Channel {
 
 impl Channel {
     fn start() -> Self {
-        let server = Server::bind("127.0.0.1:0", b"EventChannel".to_vec()).unwrap();
+        let server = Orb::new().server("127.0.0.1:0", b"EventChannel".to_vec()).unwrap();
         let port = server.local_addr().unwrap().port();
         let channel = EventChannelServer::new("127.0.0.1", port, b"EventChannel".to_vec());
         let ior = channel.channel_ior();

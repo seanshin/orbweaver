@@ -35,7 +35,7 @@ use orbweaver_giop::event_server::{
     ChannelError, ChannelHandle, Delivery, EventChannelServer, EventSink, PullSupplierServant,
     PushConsumerServant, client, is_channel_name_safe,
 };
-use orbweaver_giop::server::Server;
+use orbweaver_giop::orb::Orb;
 use orbweaver_giop::typecode::{Any, TypeCode};
 use orbweaver_giop::{Connection, Ior};
 
@@ -57,7 +57,7 @@ impl Serving {
     /// outbound threads yet — so a test can create channels first and observe
     /// that starting later covers all of them.
     fn paused() -> Self {
-        let server = Server::bind("127.0.0.1:0", BASE.to_vec()).unwrap();
+        let server = Orb::new().server("127.0.0.1:0", BASE.to_vec()).unwrap();
         let port = server.local_addr().unwrap().port();
         let servant = Arc::new(EventChannelServer::new("127.0.0.1", port, BASE.to_vec()));
         let stop = Arc::new(AtomicBool::new(false));
@@ -152,7 +152,7 @@ struct Consumer {
 
 impl Consumer {
     fn start(key: &[u8]) -> Self {
-        let server = Server::bind("127.0.0.1:0", key.to_vec()).unwrap();
+        let server = Orb::new().server("127.0.0.1:0", key.to_vec()).unwrap();
         let port = server.local_addr().unwrap().port();
         let servant = Arc::new(PushConsumerServant::new(key.to_vec()));
         let ior = servant.ior("127.0.0.1", port);
@@ -181,7 +181,7 @@ struct Supplier {
 
 impl Supplier {
     fn start(key: &[u8]) -> Self {
-        let server = Server::bind("127.0.0.1:0", key.to_vec()).unwrap();
+        let server = Orb::new().server("127.0.0.1:0", key.to_vec()).unwrap();
         let port = server.local_addr().unwrap().port();
         let servant = Arc::new(PullSupplierServant::new(key.to_vec()));
         let ior = servant.ior("127.0.0.1", port);

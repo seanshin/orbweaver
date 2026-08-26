@@ -39,6 +39,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use orbweaver_giop::orb::Orb;
 use orbweaver_giop::server::{BAD_OPERATION, Server};
 use orbweaver_giop::{Connection, Error, Ior, Reply};
 use orbweaver_object::tenant_service::{
@@ -203,7 +204,7 @@ fn main() -> std::process::ExitCode {
 }
 
 fn run(out: &[&str; 2], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
-    let server = Server::bind("127.0.0.1:0", b"MoE".to_vec())?;
+    let server = Orb::new().server("127.0.0.1:0", b"MoE".to_vec())?;
     let port = server.local_addr()?.port();
     let svc = TenantService::new("127.0.0.1", port, "MoE");
     let mut r = Report { failures: 0 };

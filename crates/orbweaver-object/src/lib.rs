@@ -39,6 +39,60 @@ use policy::{
 /// Repository id every CORBA object answers to.
 pub const OBJECT_ID: &str = "IDL:omg.org/CORBA/Object:1.0";
 
+/// The ORB's fourth responsibility, on this side of the crate boundary: it
+/// hands out the root POA (D019 §5).
+///
+/// # Why this is a trait and not a method on `Orb`
+///
+/// `orbweaver-object` depends on `orbweaver-giop`, so [`Poa`] is a type the
+/// ORB's own crate cannot name. That direction is not incidental — the POA
+/// dispatches on a transport the GIOP layer owns, and reversing it would make
+/// the dependency graph cyclic. An extension trait is what Rust offers for
+/// *"this crate adds an operation to that crate's type"*, and the result reads
+/// the way D019 asks it to read: a consumer asks the ORB, rather than
+/// constructing a POA and a `Server` separately and hoping the two agree about
+/// the object key.
+///
+/// This is the honest shape rather than the one D019 §5 pictured, and the
+/// difference is worth stating: the ORB **hands out** a root POA, it does not
+/// *own* one. Nothing here is stored on the `Orb`, because a POA holds live
+/// servant state and an `Orb` that owned one would need interior mutability
+/// chosen before there is a caller that needs it — the same reason
+/// [`Orb`](orbweaver_giop::orb::Orb)'s initial references table does not have
+/// it either.
+///
+/// *크레이트 의존 방향이 한쪽이므로 확장 트레이트가 정직한 모양이다. ORB는 루트
+/// POA를 **내어주지만** 소유하지는 않는다.*
+pub trait OrbPoa {
+    /// `PortableServer::POA::create_POA` (CORBA 3.4 §15.3.8.5), minus the
+    /// policy list — policies are chosen here with [`Poa::with_lifespan`] and
+    /// its neighbours, which is the same set under Rust spelling.
+    ///
+    /// `type_id` is the repository id every reference this POA mints will
+    /// claim. The specification's `create_POA` has no such argument because a
+    /// C++ POA learns the type from the servant it activates; ours mints
+    /// references directly, so it has to be told.
+    fn create_poa(&self, name: &str, type_id: &str) -> Poa;
+
+    /// The root POA — `create_poa` under the `ObjectId` CORBA 3.4 §8.5.2
+    /// reserves for it, `RootPOA`.
+    ///
+    /// The name is the specification's and is not ours to invent; it is the
+    /// name a peer asks for with `corbaloc:rir:RootPOA`, and registering this
+    /// POA's reference under that key is what makes such a request resolvable.
+    fn root_poa(&self, type_id: &str) -> Poa;
+}
+
+impl OrbPoa for orbweaver_giop::orb::Orb {
+    fn create_poa(&self, name: &str, type_id: &str) -> Poa {
+        Poa::new(name, type_id)
+    }
+
+    fn root_poa(&self, type_id: &str) -> Poa {
+        Poa::new("RootPOA", type_id)
+    }
+}
+
 /// A servant's identity within a POA.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ObjectId(pub Vec<u8>);
@@ -159,7 +213,12 @@ pub struct Poa {
 
 impl Poa {
     /// A POA whose references claim `type_id`.
-    pub fn new(name: &str, type_id: &str) -> Self {
+    ///
+    /// `pub(crate)` since D019 step 4: a POA is obtained from the ORB, through
+    /// [`OrbPoa::create_poa`] or [`OrbPoa::root_poa`]. See [`OrbPoa`] for why
+    /// that is an extension trait in this crate rather than an inherent method
+    /// on `Orb`.
+    pub(crate) fn new(name: &str, type_id: &str) -> Self {
         Self {
             name: name.to_owned(),
             active: HashMap::new(),

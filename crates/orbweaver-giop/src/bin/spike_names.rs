@@ -56,7 +56,7 @@ use orbweaver_giop::naming::{NameComponent, NamingContext, ObjectUrl, read_name,
 use orbweaver_giop::naming_server::{
     ALREADY_BOUND_ID, NOT_FOUND_ID, NamingServer, WHY_MISSING_NODE,
 };
-use orbweaver_giop::server::Server;
+use orbweaver_giop::orb::Orb;
 use orbweaver_giop::{IiopProfile, Ior, Version};
 use std::time::Duration;
 
@@ -111,7 +111,7 @@ fn dummy(key: &[u8]) -> Ior {
 }
 
 fn run(out_path: &str, hold: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let server = Server::bind("127.0.0.1:0", b"NameService".to_vec())?;
+    let server = Orb::new().server("127.0.0.1:0", b"NameService".to_vec())?;
     let port = server.local_addr()?.port();
     let ns = NamingServer::new("127.0.0.1", port, b"NameService".to_vec());
     let root = ns.root_ior();

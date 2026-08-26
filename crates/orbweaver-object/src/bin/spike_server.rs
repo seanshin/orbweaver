@@ -39,7 +39,8 @@
 //! stays: it is what a human reads when the gate goes red.
 
 use orbweaver_cdr::Encoder;
-use orbweaver_giop::server::{Dispatch, Request, Server, SystemException};
+use orbweaver_giop::orb::Orb;
+use orbweaver_giop::server::{Dispatch, Request, SystemException};
 use orbweaver_giop::{Forward, IiopProfile, Ior, Version};
 use orbweaver_object::{ObjectOps, get_reference, is_equivalent, put_reference};
 use orbweaver_registry::{Registry, Strictness};
@@ -298,7 +299,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host = std::env::args().nth(2).unwrap_or_else(|| "127.0.0.1".into());
     let port = std::env::args().nth(3).unwrap_or_else(|| "0".into());
 
-    let mut server = Server::bind(&format!("127.0.0.1:{port}"), b"OrbweaverEcho".to_vec())?;
+    let mut server = Orb::new().server(&format!("127.0.0.1:{port}"), b"OrbweaverEcho".to_vec())?;
     // Neither available peer emits GIOP fragments, so the only way to test
     // fragment handling against an independent implementation is to make *us*
     // the fragmenting side and see whether they reassemble.

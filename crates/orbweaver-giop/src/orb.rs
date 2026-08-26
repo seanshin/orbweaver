@@ -66,12 +66,19 @@
 //! could answer all three. See [`Orb::string_to_object`] for why that is a
 //! decision and not a rename.
 //!
-//! # What this module is not, yet
+//! # The four responsibilities, complete
 //!
-//! D019 §5 proposes four responsibilities for this object. This has the first
-//! two: the initial references table and the two named conversions. The seven
-//! configuration numbers and the handing out of transport and root POA are
-//! separate batches, and the last is gated on the §5 shape being approved.
+//! D019 §5 proposes four responsibilities for this object and it now has all
+//! four: the initial references table (step 1), the two named conversions
+//! (step 2), the eight configuration numbers (step 3), and the transport
+//! (step 4 — [`Orb::server`] and [`Orb::pool`]). The root POA is handed out by
+//! `orbweaver_object::OrbPoa`, an extension trait in that crate, because
+//! `orbweaver-object` depends on this crate and not the other way round.
+//!
+//! **Four, and nothing beyond them.** §5's *"not proposed"* list is still
+//! binding: there is no `ORB_init` signature here, no `run`/`shutdown`, and no
+//! thread policies. Each would have to earn its place from a scattered fact or
+//! a fired trigger, as everything else here did.
 //!
 //! *ORB가 `resolve_initial_references`의 언어를 말할 줄 알면서 그것을 대조할
 //! 표를 갖고 있지 않았다. 이 모듈이 그 표다 — CORBA 3.4 §8.5.2가 정의한 평평한
@@ -253,12 +260,14 @@ impl Orb {
     /// `ORB_init`'s argument handling and the one the MCP `--config` batch
     /// proved is worth having.
     ///
-    /// The seven-plus-one numbers are held, not applied. Applying them means
-    /// handing them to a `Connection`, a `Server` and a `Pool`, which is the
-    /// ORB owning the transport — **D019 step 4**, and the step the §5 shape
-    /// approval gates. Until then a caller reads them off
-    /// [`Orb::config`] and applies what it constructs itself; the numbers now
-    /// have one home, which is what this step was for.
+    /// The seven-plus-one numbers are **applied**, as of D019 step 4. They
+    /// reach a [`Server`](crate::server::Server) through [`Orb::server`] and a
+    /// `Connection` through [`Orb::pool`], and those are the only ways to
+    /// obtain either — which is the point, and is why step 4 closed the
+    /// hand-built path in the same commit that connected the configuration.
+    /// Between step 3 and step 4 they were held and not applied, so
+    /// `-ORBmaxMessageSize 4096` parsed, validated, and changed nothing a peer
+    /// could observe.
     ///
     /// # Errors
     ///
@@ -513,6 +522,68 @@ impl Orb {
     /// which this delegates to and does not reimplement.
     pub fn object_to_string(&self, obj: &Ior) -> crate::Result<String> {
         obj.to_stringified()
+    }
+
+    /// A listening [`Server`] carrying this ORB's configuration — the fourth
+    /// responsibility D019 §5 names, and **the only way to obtain one**.
+    ///
+    /// [`Server::bind`] became `pub(crate)` with this method. That is the whole
+    /// mechanism, and it is worth saying why the door is closed rather than
+    /// merely signposted: D019 §3 measured an ORB whose eight numbers parsed,
+    /// validated and were *held*, while `-ORBmaxMessageSize 4096` changed
+    /// nothing a peer could observe — because every object that touches the
+    /// wire was constructed somewhere else. A second constructor is not a
+    /// convenience next to a configuration path; it is the configuration path's
+    /// leak. With one door there is nowhere for the numbers to fail to arrive.
+    ///
+    /// `host` is deliberately *not* an argument: binding and publishing are
+    /// different decisions and [`Server::ior`] keeps them apart, which is the
+    /// Phase 0 assumption D failure.
+    ///
+    /// # Behaviour on an unconfigured ORB
+    ///
+    /// [`Orb::new`] answers every one of the eight with the constant this crate
+    /// compiled before D019, so `Orb::new().server(addr, key)` is
+    /// byte-for-byte the old `Server::bind(addr, key)`. That is a property of
+    /// [`OrbConfig`]'s accessors rather than a claim: an unset field is never
+    /// read as a number at all.
+    ///
+    /// # Errors
+    ///
+    /// Whatever binding the listener answered — the address was taken, or is
+    /// not one this host can bind.
+    ///
+    /// *문이 하나면 설정이 도착하지 못할 곳이 없다.*
+    pub fn server(&self, addr: &str, object_key: Vec<u8>) -> crate::Result<crate::server::Server> {
+        let mut server = crate::server::Server::bind(addr, object_key)?;
+        server.apply_orb_config(&self.config);
+        Ok(server)
+    }
+
+    /// A client-side connection [`Pool`] carrying this ORB's configuration —
+    /// the calling half of the same responsibility, and the only way to obtain
+    /// one.
+    ///
+    /// The pool applies the five connection numbers to **every connection it
+    /// dials**, at the one moment they can be applied: `Mux::over` takes them
+    /// out of the `Connection` wholesale and a `Mux` has no setter. Before this
+    /// existed, a pooled call ran on the compiled defaults no matter what the
+    /// deployment had configured, and nothing was red — the numbers were on the
+    /// ORB and the ORB was not on the path.
+    pub fn pool(&self) -> crate::pool::Pool {
+        self.pool_with_limits(crate::pool::Limits::default())
+    }
+
+    /// [`Orb::pool`] with [`Limits`](crate::pool::Limits) of your own.
+    ///
+    /// The pool's own five limits are still Rust-only — there is no `-ORB…` key
+    /// for them. That is not an oversight and it is recorded in
+    /// [`config`]'s module docs: they were left for the step that gave the ORB
+    /// the transport, which is this one, and adding the keys is a separate
+    /// batch now that there is finally something for such a key to apply
+    /// itself to.
+    pub fn pool_with_limits(&self, limits: crate::pool::Limits) -> crate::pool::Pool {
+        crate::pool::Pool::with_limits_and_config(limits, self.config.clone())
     }
 }
 

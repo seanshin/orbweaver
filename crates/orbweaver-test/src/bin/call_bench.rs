@@ -87,7 +87,8 @@ use std::time::{Duration, Instant};
 
 use orbweaver_dynamic::Value;
 use orbweaver_dynamic::invoke::invoke;
-use orbweaver_gen::rt::{ObjectHome, Server};
+use orbweaver_gen::rt::ObjectHome;
+use orbweaver_giop::orb::Orb;
 use orbweaver_giop::{Connection, Ior};
 use orbweaver_registry::Registry;
 
@@ -508,7 +509,7 @@ fn run(
     registry.load(&spec).map_err(|e| e.to_string())?;
     check_stub_is_current(&registry, &root)?;
 
-    let server = Server::bind("127.0.0.1:0", KEY.to_vec()).map_err(|e| e.to_string())?;
+    let server = Orb::new().server("127.0.0.1:0", KEY.to_vec()).map_err(|e| e.to_string())?;
     let addr = server.local_addr().map_err(|e| e.to_string())?;
     let ior = server.ior(TYPE_ID, "127.0.0.1").map_err(|e| e.to_string())?;
     let home = ObjectHome::of(&server, "127.0.0.1").map_err(|e| e.to_string())?;

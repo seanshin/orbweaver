@@ -28,7 +28,7 @@ use orbweaver_forge::infer::{
 };
 use orbweaver_forge::pipeline::{BatchReport, ItemStatus, run_batch};
 use orbweaver_giop::Ior;
-use orbweaver_giop::server::Server;
+use orbweaver_giop::orb::Orb;
 use orbweaver_registry::ifr::{RepositoryServer, interface_ids};
 use orbweaver_registry::ingest::{Limits, ingest};
 use orbweaver_registry::{Entry, Registry, Strictness};
@@ -339,7 +339,7 @@ fn load_idl(paths: &[String]) -> Result<Registry, String> {
 /// `Origin::Ingested` with an empty annotation map, because the wire carries no
 /// annotations, whoever is on the other end of it.
 fn self_facade(registry: Registry) -> Result<Ior, String> {
-    let server = Server::bind("127.0.0.1:0", ROOT_KEY.to_vec()).map_err(|e| e.to_string())?;
+    let server = Orb::new().server("127.0.0.1:0", ROOT_KEY.to_vec()).map_err(|e| e.to_string())?;
     let port = server.local_addr().map_err(|e| e.to_string())?.port();
     let mut facade = RepositoryServer::new("127.0.0.1", port, ROOT_KEY.to_vec(), registry);
     let root = facade.root_ior();
