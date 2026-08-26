@@ -76,6 +76,10 @@ name = "spike-events"
 path = "src/bin/spike_events.rs"
 
 [[bin]]
+name = "spike-channel-by-name"
+path = "src/bin/spike_channel_by_name.rs"
+
+[[bin]]
 name = "spike-trading"
 path = "src/bin/spike_trading.rs"
 
