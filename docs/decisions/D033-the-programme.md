@@ -13,6 +13,26 @@ definition of *first complete* that decides when a batch may stop.
 > [`D029`](D029-what-a-complete-orb-would-mean.md) §6. Ordering below is by
 > what closes a leak, not by what is cheap.
 
+> **Observed 2026-08-26, reported and not acted on.** `D029` is **PROPOSED**,
+> and its §6 is what `CLAUDE.md` points every plan document at as priority
+> zero, what this document orders itself by, and what four other documents
+> cite as their governing rule. **A document whose content is in force as the
+> project's standard while its own status says proposed is a state worth
+> naming**, and naming it is all a batch may do: the STATUS line is the
+> owner's, and this project's approval discipline is the thing that would be
+> spent by a batch that promoted a document because it was already being
+> obeyed. Nothing here asks for it to change — an owner may well intend a
+> criterion to govern while its wording is still open, which is a different
+> thing from drift. It is recorded in a place `spikes/decision_status.py`
+> reads, so that if the status does change this sentence goes red rather than
+> quietly stale.
+>
+> *2026-08-26 관찰, 보고할 뿐 조치하지 않는다. `D029`는 **제안** 상태인데 그
+> §6은 이미 프로젝트의 기준으로 쓰이고 있다. **이름을 붙일 값이 있는 상태이며,
+> 이름을 붙이는 것이 배치가 할 수 있는 전부다** — STATUS 줄은 소유자의 것이고,
+> 이미 지켜지고 있다는 이유로 문서를 승격시키는 배치가 바로 그 승인 규율을
+> 소모한다. 이 문장은 `decision_status.py`가 읽는 자리에 둔다.*
+
 ---
 
 ## 1. Why a programme document, and why now / 왜 지금 이 문서인가
@@ -133,6 +153,41 @@ These are prerequisites, and **each pays off today with no language attached.**
 to `SERVICES-COVERAGE` §8 — the one thing today's trading batch could not
 finish, and it is a wiring problem now that the contract exists.
 
+> **Corrected 2026-08-26 later the same day. All three of Stage 1 moved, and
+> one of them exposes a defect in how its own finish line was written.**
+>
+> - **1.1 — first-complete.** D032 B1 landed; the divergence that was
+>   structurally unrecordable is recorded. D032 §2's first finding carries the
+>   verification.
+> - **1.2 — the finish line as written is met, and the item is not.** The
+>   trader is visible in `SERVICES-COVERAGE` §8 and `service_sweep.py` prints
+>   a `#SOURCES` row naming each service's origin, which is both clauses of the
+>   "first complete when" cell above. **But D032 B2, the proposal this row
+>   points at, is half done** — the sweep still names its inputs literally, so
+>   the *next* first-party contract is invisible for the reason the trader was.
+>   **This is a finding about §2, not about the trader:** a finish line can be
+>   satisfied by less than the proposal it was written for, and this one was,
+>   because it named an observable symptom rather than the mechanism. Recorded
+>   rather than repaired — rewriting the cell now would hide that it happened.
+>   The green half is **not measured by me**: `coverage_tables.py --check`
+>   needs a live sweep and this batch did not hold the harness lock, so §8's
+>   content is read from the document and the check's verdict is unmeasured
+>   here rather than reported green.
+> - **1.3 — first-complete, and its first reading refutes the prediction that
+>   commissioned it.** D031 line 74 expected the ledger to print *"four
+>   transparencies partly measured and one not."* It prints **three declaring
+>   and two with none**. The instrument's status, the recompute command and the
+>   ledger's seven negative controls are in `docs/COMPONENTS.md`'s D029 §6
+>   section and are not restated here. **The prediction being wrong in the
+>   pessimistic direction is the result**, and it is the ledger working: a
+>   reading assembled by hand was one transparency too generous about itself.
+>
+> *2026-08-26 정정 — 1.1 완료. 1.2는 **쓰인 결승선은 충족되었으나 항목은
+> 아니다**: D032 B2는 절반이고, 결승선이 기전이 아니라 관찰 가능한 증상을
+> 지명했기 때문이다. 이는 트레이더가 아니라 §2에 대한 발견이므로 고치지 않고
+> 기록한다. `--check`의 판정은 이 배치가 재지 않았다. 1.3 완료 — 그 첫 판독은
+> 넷/하나가 아니라 **셋/둘**이며, 예측이 낙관적이었다는 것이 곧 결과다.*
+
 ## 5. Stage 2 — the transparency closers / 투명성을 닫는 것
 
 Ordered by D029 §6.1. **These are the only items that move the criterion**;
@@ -148,6 +203,44 @@ everything else in this document is what lets them be measured.
 
 **2.1 comes first** and the reason is stated in D031 §4 H4: a leak test with
 nowhere to report lands as one more green group.
+
+> **Corrected 2026-08-26 later the same day. 2.5 landed; 2.1 has its first
+> instance; 2.3 and 2.4 are on an unmerged branch and this table listed none
+> of that.**
+>
+> - **2.5 — landed, and it is the only item here that has moved the
+>   criterion.** Where the Language transparency now stands is
+>   [`D029`](D029-what-a-complete-orb-would-mean.md) §6.1's Language row and
+>   §6.1.1, and is **not restated here**. Read against this row's own finish
+>   line, the honest reading is *met in substance, short in one clause*: the
+>   seam is measured against a generated Rust servant across GIOP versions and
+>   **both byte orders**, and by omniORB's client — but the peer leg is
+>   omniORB's native order only, which the batch named **unmeasured** rather
+>   than counted. This row asked for a foreign client at both byte orders and
+>   got one at one, for a reason that is a property of the peer. Left as
+>   written, because a row edited to match what was achieved stops being a
+>   finish line.
+> - **2.1 — not complete, and it has its first real instance.** Event E3 is a
+>   leak test for Location in this row's sense: it fails when the leak is
+>   reintroduced, and it was **shown to** — three negative controls, each run,
+>   each moving the counter, including one that removes the shutdown so the
+>   pre-move reference still works. Its remainder is named rather than implied:
+>   four leaks that stay open, recorded in D029 §6.1's Location material. The
+>   row itself stays ❌ — `docs/COMPONENTS.md` says so and that is where the
+>   instrument's status lives — because two transparencies still have no
+>   declaring group at all.
+> - **2.3 and 2.4 — this is where §3's 0.3 finding lands.** Both were built and
+>   neither is on `main`: they sit on the one sealed branch with no landed
+>   equivalent. **They are not unstarted and they are not done**, and that is a
+>   third state this table has no column for — which is precisely what makes
+>   0.3 worth triaging before Stage 2 is planned around them.
+>
+> *2026-08-26 정정 — 2.5 착지(무엇이 닫혔는지는 D029 §6.1과 §6.1.1). 다만 이
+> 행이 요구한 "양쪽 바이트 순서의 외부 피어" 중 피어 다리는 omniORB의 네이티브
+> 순서뿐이며 그것은 **미측정으로 명명**되었다. 행은 고치지 않는다 — 달성한 것에
+> 맞춰 고친 행은 더 이상 결승선이 아니다. 2.1은 미완이나 E3라는 첫 실례가 있고
+> 부정 대조군 셋이 실제로 붉어졌다. 2.3과 2.4는 만들어졌으나 `main`에 없다 —
+> 이 표에 열이 없는 세 번째 상태다.*
 
 ## 6. Stage 3 — C and Java, named essential by the owner / 소유자가 필수로 지명
 
@@ -175,6 +268,26 @@ Named so their absence is a decision rather than an oversight:
   point opposite ways at `Expert::process`, and the census that would have
   inverted D006 is four rather than zero. **That is the owner's decision**, not
   a batch, and it constrains what a deployment may put in a `Tensor`.
+
+  > **Updated 2026-08-26 — still not in this programme, and now cited rather
+  > than described.** The re-run and what it settles live in
+  > [`D006`](D006-plane-rule-tensor.md)'s *Amendment 2026-08-26* and in
+  > `orbweaver_object::plane::TENSOR_BEARING`, which a test computes from the
+  > contracts so the next operation to carry a `Tensor` joins the census on the
+  > next `cargo test`. Two things belong here because they change what a future
+  > batch may assume. The question that batch was given — *does
+  > `Router::dispatch` become served?* — was answered **no, it stays refused**,
+  > and **the answer was not the finding**: the finding was that `dispatch`'s
+  > stated reason was false in two places in the source, under a green harness.
+  > And the batch re-measured the neighbours of the shape it was handed, which
+  > is the only reason the count is four rather than one — CLAUDE.md's *scope
+  > it to the rule, not to the keyword*, holding for a third time. D006's
+  > STATUS is untouched and remains the owner's.
+  >
+  > *2026-08-26 갱신 — 여전히 이 프로그램 밖이며, 이제 서술이 아니라 인용이다.
+  > 주어진 질문의 답은 **아니오, 계속 거부**였고 **답은 발견이 아니었다** —
+  > 발견은 그 거부의 명시된 사유가 초록 하네스 아래에서 거짓이었다는 것이다.
+  > 넷이라는 수는 그 배치가 주어진 형태의 이웃까지 다시 쟀기 때문에 나왔다.*
 - **A second ORB core in any language.** D030 §4, unchanged. §6 is bindings.
 - **D027's E1–E3, D026's S1 migration, D028's M1/M3/M4.** All real, all
   cited in their homes, none of them closing a transparency or unblocking C and
