@@ -503,7 +503,8 @@ mod tests {
     #[test]
     fn a_hosted_expert_probes_the_same_offloaded_or_resident() {
         let h = host();
-        let key = h.reference("expert-a").expect("published").primary().expect("one").object_key.clone();
+        let key =
+            h.reference("expert-a").expect("published").primary().expect("one").object_key.clone();
         assert!(matches!(h.locate(&key), LocateStatus::ObjectHere), "resident");
         h.evict("expert-a", &pressure("expert-a")).expect("unpinned, idle, cold");
         assert_eq!(h.residency("expert-a"), Some(Residency::Offloaded), "the eviction took");
