@@ -26,6 +26,7 @@ use orbweaver_giop::server::{Completion, Request, SystemException};
 use orbweaver_giop::{IiopProfile, Ior, Version};
 use orbweaver_registry::Registry;
 
+pub mod expert_host;
 pub mod expert_service;
 pub mod plane;
 pub mod policy;
