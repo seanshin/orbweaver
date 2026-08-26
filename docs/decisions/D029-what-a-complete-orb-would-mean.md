@@ -250,27 +250,49 @@ feature to add.
 | **Location** | where the target runs | **measured, with a known leak**: `LOCATION_FORWARD` and `_PERM` are served and followed, and R7 rewrites an IOR for a dialable address — but `Connection::move_to` restored a hand-written field list and dropped two configured limits across every forward until today, so the *caller's* limits changed when the object moved. Fixed; the class is the leak to watch. **A second instance, found 2026-08-26 and not fixed**: `moe::Router::select` returns `ExpertSeq` — N object references, each an `Ior` stored verbatim from `register_expert` and marshalled inline with host, port and object key. A caller learns where every candidate expert runs, which is exactly what this row says it must not be able to tell. `corpus/golden/22`'s own comment beside the operation already says so — *"widening reach by N addresses at once is precisely the case §4.7's bearer-address rule exists for"* — and §4.7's rule is the authority half of the same fact. Recorded, not changed: `select` is served and has consumers. **A third thing under this row, closed 2026-08-26 and not one of the two leaks above**: the probe path *lied*. See the `LocateRequest` subsection below for what moved and why the row's status sentence is unchanged. |
 | **Backend** | what implements it | mostly held: a servant is behind a POA and a reference; but `spike_experts`' server root key collides with its derived registry key, which is a backend detail reaching a name. |
 | **Language** | what it is written in | **the construction leak is closed; three narrower ones remain** (2026-08-26). A Python servant is dispatched into by `orbweaver_gen::pyservant`, and `tests/python_servant.rs` compares one against the generated Rust servant for the same contract — 19 calls × 3 GIOP versions × 2 byte orders, **byte-identical replies**, with a negative control that perturbs five answers and asserts each is seen. **The peer half is now measured in both byte orders (2026-08-26):** omniORB's client little-endian, and JacORB's big-endian — the order taken from §15.4.1's flag byte on every request rather than from the peer's language — with the Python servant's 11 replies byte-identical to a Rust servant's for the same driver run, at IIOP 1.2 and 1.1. What remains is listed in §6.1.1 and none of it is the old *"cannot be a target at all"*. |
-| **Activation / load** | whether it is loaded right now | **leaks, and now measured (2026-08-26)**: the leak is `moe::Router::select`, and it is *residency-blind by omission rather than by absence of data*. `mirror_residency` keeps `Offer::residency` live in the very store `select` reads, and `orbweaver-trading`'s query grammar has a `residency` field, but `Constraints::to_query_text` never names it — so an OFFLOADED expert comes back in the sequence and dialling it answers `OBJECT_NOT_EXIST` where a resident one answers. `expert_service.rs:882-891` records this as intended: *"the caller's cue to `prefetch`"*. That makes the leak a **design choice written down**, not an oversight, which is the strongest form for it to be in before it is decided. `Router::dispatch` is *not* the operation that would close it — it is refused (D006 option E), and its own reason is now known to be false as written (see D006's 2026-08-26 amendment). The closer is a POA-level activation path, because the criterion says *any* target, and a fix inside one application contract closes it for one contract. |
+| **Activation / load** | whether it is loaded right now | **closed at the POA 2026-08-26, and the row's own diagnosis was wrong.** This row named `moe::Router::select` as the leak. `select` is a **contract, not a leak**, and the argument is from corpus/golden/22 rather than from convenience: `Constraints` declares no residency member, so filtering would apply a constraint nobody expressed; the contract already gives load state two homes where it is a *value a caller asks for* (`ExpertLoader::status`, `//@ ai_effect: read_only` with no `ai_authz`, and `Capability::state` through `Expert::describe`); `Router` being `//@ ai_desc: Control-plane gate` settles that its callers **may know**, which is a right to be *told* and not a licence for a side channel; and — decisively — **a filter could not have closed it.** `select` answers at T and the caller dials at T+ε, so an expert RESIDENT at T can be evicted before the dial, and a reference obtained from `Expert::delegate`, from an earlier call or from a string never went through the operation at all. A filter changes how *often* a caller can tell, never *whether*. The reason the code gave for the omission was separately false and is corrected: *"the caller's cue to `prefetch`"* names an action the cued caller generally cannot take — `prefetch` is `oneway`, it lives on `ExpertLoader`, an object `Router` never hands over, and it is gated `//@ ai_authz: moe.loader.residency`, which `moe.router.select` does not imply. **The leak was one layer down, in what the *reference* does across an eviction**: `residency::MissPolicy`'s two variants both answered `Located::Unknown` for an OFFLOADED expert, the POA turned that into `OBJECT_NOT_EXIST`, and the same reference invoked twice by the same caller answered differently. `MissPolicy::Activate` closes it — demand-load inside `locate`, answer `Located::Here` — and being a POA-level fact it holds for *any* target, which is what this criterion asks and what a fix inside one application contract could never have given. The refusal that had ruled demand loading out is kept verbatim and quoted in `MissPolicy`'s rustdoc: every clause of it is about **cost**, and priority zero ranks a cost below a leak. **What is not closed, and is not to be looked for elsewhere:** (1) **time** — a demand-loaded call is slower and a caller with a clock can tell; in one process the only alternatives are forwarding to a node where the target is loaded (there is no second node) or making every call as slow as the slowest, and in this repository a load is two map writes so the latency is not measurable here either; (2) **nothing in the tree mounts `ExpertLocator` on a served POA**, so which variant a deployment runs is undecided and a deployment on either refusing variant still leaks; (3) `Router::dispatch` is still refused (D006 option E, its reason false as written — see D006's 2026-08-26 amendment) and is still not the operation that would have closed this. |
 | **Lifecycle stability** | that the above survives add / remove / move / load / evict at runtime | **was "partly unmeasurable"; as of 2026-08-26 it is measurable and leaking for a reason that is now named.** O1 landed: `Orb::shutdown` stops the servers and pools the ORB created, and `crates/orbweaver-giop/tests/orb_stops_what_it_handed_out.rs` measures what a peer mid-call observes across it — from the peer's own socket, three GIOP versions × two byte orders, with four negative controls that were each run red. So *"removed at runtime"* now has an implementation and a test. **What did not move is the transparency of the removal**: a caller of a removed server can tell immediately, because there is nowhere else for its request to go, and closing that needs a second endpoint and a redirect — `LOCATION_FORWARD` served for a *name* rather than for an object, which is item 3 of the event-channel subsection below and which O1 does not touch. The argument and the refusal (graceful, at request granularity; immediate refused; *not* `run()`) are `docs/decisions/D034-stopping-what-the-orb-handed-out.md`; the bound is the rustdoc on `Orb::shutdown` and is not restated in either. Also measured that day and not changed: **17 of this workspace's 63 serve sites pass `|| false`** — seventeen processes that are still stopped only by being killed. They are now *fixable* rather than fixed. |
 
 *다섯 가지 각각은 **테스트로 반증 가능한 주장**이며, 그것이 이 작업의 방식이다.
 투명성은 확인하는 것이 아니라 **구멍을 사냥하는 것**이다.*
 
-**2026-08-26 측정 — 위치 행과 적재 행 두 곳이 갱신되었다.** 두 구멍 모두
-`moe::Router::select` 하나에 있다. (1) `select`는 `ExpertSeq`를 돌려주는데 그
-원소는 `register_expert`가 준 `Ior`를 그대로 담아 호스트·포트·객체 키를 인라인으로
-실어 보낸다 — 호출자가 후보 전문가 각각이 **어디서 도는지** 알게 되며, 이는 위치
-행이 알 수 없어야 한다고 적은 바로 그것이다. (2) `select`는 **데이터가 없어서가
-아니라 묻지 않아서** 적재 상태에 눈이 멀어 있다: `mirror_residency`가 `select`가
-읽는 바로 그 저장소에 `Offer::residency`를 최신으로 유지하고 질의 문법에는
-`residency` 필드가 있는데, `to_query_text`가 그 이름을 한 번도 쓰지 않는다. 그래서
-축출된 전문가가 목록에 돌아오고, 그것을 걸면 `OBJECT_NOT_EXIST`가 온다 —
-`expert_service.rs:882-891`은 이것을 *"호출자가 `prefetch`하라는 신호"*로 **의도된
-설계라고 적어 두었다.** `Router::dispatch`는 이 구멍을 막는 연산이 **아니다**:
-거절되어 있고(D006 E안), 그 거절 사유 자체가 오늘 거짓임이 밝혀졌다(D006
-2026-08-26 개정). 기준이 말하는 것은 *임의의* 대상이므로, 막는 자리는 응용 계약
-하나가 아니라 POA 수준의 활성화 경로다. 둘 다 **기록만 하고 바꾸지 않았다** —
-`select`는 서빙 중이고 소비자가 있다.
+**2026-08-26 측정 — 위치 행이 갱신되었다.** `select`는 `ExpertSeq`를 돌려주는데
+그 원소는 `register_expert`가 준 `Ior`를 그대로 담아 호스트·포트·객체 키를
+인라인으로 실어 보낸다 — 호출자가 후보 전문가 각각이 **어디서 도는지** 알게 되며,
+이는 위치 행이 알 수 없어야 한다고 적은 바로 그것이다. **기록만 하고 바꾸지
+않았다** — `select`는 서빙 중이고 소비자가 있다.
+
+**2026-08-26 — 적재 행은 같은 날 닫혔고, 이 행의 진단 자체가 틀렸다.** 이 행은
+적재 구멍도 `moe::Router::select`에 있다고 적었다. `select`는 **구멍이 아니라
+계약**이며, 논거는 편의가 아니라 corpus/golden/22이다: `Constraints`에는 잔류
+멤버가 없으므로 거르는 것은 아무도 표현하지 않은 제약을 적용하는 것이고, 계약은
+적재 상태에 이미 **호출자가 물어서 받는 값**으로서 집을 둘 준다
+(`ExpertLoader::status` — `//@ ai_effect: read_only`에 `ai_authz` 없음 — 과
+`Expert::describe`가 돌려주는 `Capability::state`). `Router`가
+`//@ ai_desc: Control-plane gate`라는 것은 그 호출자가 **알아도 된다**는 뜻이고,
+그것은 *들을* 권리이지 옆길로 새어 나온 것을 주워도 된다는 허가가 아니다. 그리고
+결정적으로 **거르기로는 애초에 막히지 않는다**: `select`는 T에 답하고 호출자는
+T+ε에 건다. T에 RESIDENT였던 전문가가 그 사이 축출될 수 있고, `Expert::delegate`나
+이전 호출이나 문자열에서 얻은 참조는 이 연산을 거친 적조차 없다. 거르기는 호출자가
+알아채는 **빈도**를 바꿀 뿐 **가부**를 바꾸지 못한다. 코드가 적어 둔 사유
+*"호출자가 `prefetch`하라는 신호"* 역시 따로 거짓이었고 바로잡았다: `prefetch`는
+`oneway`이고, `Router`가 결코 건네주지 않는 `ExpertLoader`에 있으며,
+`//@ ai_authz: moe.loader.residency`로 막혀 있는데 `moe.router.select`는 그것을
+함의하지 않는다. **구멍은 한 층 아래, 축출을 사이에 두고 *참조*가 하는 일에
+있었다**: `residency::MissPolicy`의 두 변형이 OFFLOADED 전문가에 대해
+`Located::Unknown`을 답하고 POA가 그것을 `OBJECT_NOT_EXIST`로 바꾸므로, 같은
+호출자가 같은 참조를 두 번 걸면 다르게 답했다. `MissPolicy::Activate`가 막는다 —
+`locate` 안에서 요구 적재하고 `Located::Here`를 답한다 — 그리고 이것은 POA 수준의
+사실이므로 *임의의* 대상에 대해 성립한다. 요구 적재를 배제했던 거절문은 그대로
+인용해 남겼다: 그 논거는 전부 **비용**이고, 0순위는 비용을 구멍보다 아래에 둔다.
+**닫히지 않은 것, 다른 데서 찾지 않도록 적어 둔다:** (1) **시간** — 요구 적재된
+호출은 더 느리고 시계를 든 호출자는 알아챈다. 한 프로세스 안에서 대안은 대상이
+적재된 노드로 전달하는 것(두 번째 노드가 없다)이거나 모든 호출을 가장 느린 호출만큼
+느리게 만드는 것뿐이며, 이 저장소에서 적재는 맵 쓰기 두 번이라 그 지연은 여기서
+측정되지도 않는다. (2) **트리의 어느 것도 `ExpertLocator`를 서빙되는 POA에 올리지
+않는다** — 배포가 어느 변형을 돌릴지는 미정이고, 거절하는 두 변형 중 하나로 도는
+배포는 여전히 샌다. (3) `Router::dispatch`는 여전히 거절되어 있고(D006 E안, 그
+사유는 적힌 대로는 거짓 — D006 2026-08-26 개정) 이 구멍을 막는 연산도 아니었다.
 
 **2026-08-26 측정 — 생애주기 행도 같은 날 옮겨졌다.** O1이 착지했다:
 `Orb::shutdown`이 ORB가 내어준 서버와 풀을 멈추고,
@@ -296,17 +318,27 @@ move a verdict.** §5 O0 landed and, on the same day, reached the harness:
 | Location | `what_a_caller_can_tell.rs` — a move under a live caller, and the caller's limits across it | measures |
 | Backend | the same file — the servant behind one reference replaced mid-session | measures |
 | Language | `spikes/leak_tests.sh`'s language leg | counted `SKIPPED`: waits on a Python servant mountable as a `Dispatch` in a server the test owns |
-| Activation / load | its activation leg | counted `SKIPPED`: waits on a POA-level activation path that reloads an evicted target |
+| Activation / load | its activation leg, over `crates/orbweaver-object/tests/what_a_caller_can_tell_about_load.rs` | **measures** (2026-08-26): one live `Connection`, one reference, the expert evicted underneath it, replies compared whole. Its control is in the tree — `the_refusing_miss_policies_are_the_leak` requires the same scenario to fail naming `OBJECT_NOT_EXIST` under the two refusing variants |
 | Lifecycle stability | `spikes/orb_shutdown.sh` (D034) measures the removal; the leak leg is a counted `SKIPPED` | waits on a redirect emitted for a **name** rather than for an object |
 
 Two things are worth stating rather than inferring. **A test existing does not
 move a row** — the two rows with a measuring leg are the two that already read
 *measured, with a known leak* and *mostly held*, and the leg refutes neither
-leak. And **the three skips are the valuable half**: each is a counted `SKIPPED`
+leak. And **the skips are the valuable half**: each is a counted `SKIPPED`
 naming one blocker, so D031's ledger prints them under this row on every run and
 the next batch is scoped from a sentence rather than from a reading. A leg that
 did not exist and a leg that cannot run yet used to print identically — as
 nothing.
+
+That is not a claim about a shape; it was **measured within the day**. There
+were three skips when this subsection was written and there are two: the
+activation leg's blocker — *"a POA-level activation path that reloads an evicted
+target"* — was a sentence a batch could be scoped from, and the batch scoped
+from it closed the leak and turned the leg green. It also found that the same
+skip's *other* sentence was wrong (it said the leak was `Router::select` and
+that a control-plane test would measure the property from a layer permitted to
+see it), which is the second thing a named blocker buys: a wrong sentence can be
+refuted, and an absence cannot.
 
 The controls are in the tree rather than in a commit message:
 `spikes/leak_controls.sh` puts each leak back and requires the test to see it,
@@ -318,10 +350,17 @@ a switch that has stopped working.
 않는다.* §5 O0*이 착지했고 같은 날 하네스에 닿았다. 두 가지는 추론이 아니라 명시해
 둘 값어치가 있다. **테스트가 생겼다는 것이 행을 옮기지는 않는다** — 재는 다리를 가진
 두 행은 이미 "알려진 구멍과 함께 측정됨", "대체로 유지됨"이라 적혀 있던 두 행이고,
-그 다리는 어느 구멍도 반증하지 않는다. 그리고 **스킵 셋이 값어치 있는 절반이다**:
+그 다리는 어느 구멍도 반증하지 않는다. 그리고 **스킵이 값어치 있는 절반이다**:
 각각이 장애물 하나를 이름 붙인 계수되는 `SKIPPED`이므로 D031의 원장이 매 실행마다 이
 행 아래에 그것을 찍고, 다음 배치는 읽기가 아니라 **문장**에서 범위를 잡는다. 존재하지
 않는 다리와 아직 돌 수 없는 다리는 예전에는 똑같이 — 아무것도 아닌 것으로 — 찍혔다.
+이것은 형태에 대한 주장이 아니라 **당일 안에 측정된 것**이다: 이 절을 쓸 때 스킵은
+셋이었고 지금은 둘이다. 활성화 다리의 장애물 문장 — *"축출된 대상을 되적재하는 POA
+수준의 활성화 경로"* — 에서 범위를 잡은 배치가 그 구멍을 닫고 다리를 초록으로 만들었다.
+같은 스킵의 **다른** 문장이 틀렸다는 것도 그 배치가 찾아냈다(구멍이 `Router::select`에
+있고 제어 평면에서 쓴 테스트는 볼 권한이 있는 계층에서 재는 것이 된다고 적혀 있었다).
+이름 붙인 장애물이 사 주는 두 번째 것이 이것이다 — **틀린 문장은 반박될 수 있고 부재는
+반박될 수 없다.**
 대조군은 커밋 메시지가 아니라 트리에 있다: `leak_controls.sh`가 각 구멍을 되돌려 넣고
 테스트가 그것을 보는지를 요구하며, 하네스에서 다리들보다 **먼저** 돈다 — 그래야 초록인
 다리가 구멍에 대한 증거이지 고장 난 스위치에 대한 증거가 아니다.*

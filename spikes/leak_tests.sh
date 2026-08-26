@@ -57,9 +57,21 @@ fi
 # run_tests <label> <test-name>...
 # Green only when the named tests all pass AND cargo itself ran.
 run_tests() {
+  run_tests_in orbweaver-test what_a_caller_can_tell "$@"
+}
+
+# run_tests_in <pkg> <test-target> <label> <test-name>...
+# The same check against a leak test that lives in another crate. The
+# activation leg's test is in `orbweaver-object`, because the property it
+# changes under the caller — a POA's activation set — is that crate's, and a
+# test in `orbweaver-test` would have to reach through a published surface
+# that does not exist rather than evict the thing directly.
+run_tests_in() {
+  local pkg="$1"; shift
+  local target="$1"; shift
   local label="$1"; shift
   local out rc
-  out=$(cargo test -q -p orbweaver-test --test what_a_caller_can_tell -- "$@" 2>&1); rc=$?
+  out=$(cargo test -q -p "$pkg" --test "$target" -- "$@" 2>&1); rc=$?
   local line
   line=$(grep -E '^test result:' <<<"$out" | head -1)
   if [ "$rc" -eq 0 ] && [ -n "$line" ]; then
@@ -154,21 +166,38 @@ for name in $NAMES; do
     ;;
 
   activation)
-    emit "$name" SKIPPED "a POA-level activation path that reloads an evicted target"
-    skip "no test evicts a target under a live caller, because an evicted" \
-      "target cannot answer yet." \
-      "waits on: a POA-level activation path — an evicted object being" \
-      "reloaded on demand so that evict-then-invoke ANSWERS. Until then a" \
-      "test asserting the caller cannot tell would be asserting the leak:" \
-      "dialling an OFFLOADED expert answers OBJECT_NOT_EXIST, and" \
-      "expert_service.rs records that as intended, the caller's cue to" \
-      "prefetch. NOT skipped for want of machinery — residency.rs has" \
-      "register/forget/pin/unpin/status and Offer::residency is live in the" \
-      "store Router::select reads. Those are driven FROM THE CONTROL PLANE," \
-      "which is a layer allowed to know load state, and a test written from" \
-      "there would measure the property from a layer permitted to see it." \
-      "D031's first ledger declined to tag those spikes for that reason and" \
-      "that decline is the standard this line keeps."
+    # The blocker this leg named until 2026-08-26 — "a POA-level activation
+    # path, an evicted object reloaded on demand so that evict-then-invoke
+    # ANSWERS" — is `MissPolicy::Activate`, and it landed. The leg's other
+    # sentence, that the leak is `Router::select` and that a test written from
+    # the control plane would measure it from a layer permitted to see it, was
+    # answered rather than worked around: `select` is a contract, the leak is
+    # in what the REFERENCE does across an eviction, and the caller below
+    # holds nothing but one.
+    if run_tests_in orbweaver-object what_a_caller_can_tell_about_load \
+         "an eviction under a live caller changed nothing the caller observed" \
+         a_caller_cannot_tell_an_evicted_expert_from_a_resident_one \
+         the_second_call_was_served_by_a_demand_load \
+         an_unregistered_id_is_still_unknown_under_every_policy; then
+      measured=$((measured+1)); emit "$name" MEASURED "an eviction under a live caller"
+    else
+      fails=$((fails+1)); emit "$name" RED "an eviction under a live caller"
+    fi
+    say "       control:    in the tree, not in a commit message —"
+    say "                   the_refusing_miss_policies_are_the_leak runs the same"
+    say "                   scenario under MissPolicy::Refuse and ::RefuseAndPrefetch"
+    say "                   and REQUIRES it to fail naming OBJECT_NOT_EXIST, so a"
+    say "                   green leg is evidence about a leak rather than about a"
+    say "                   switch that has stopped working."
+    say "       unmeasured: TIME. A demand-loaded call is slower than a resident"
+    say "                   one and a caller with a clock can tell. In this"
+    say "                   repository a load is two map writes, so the latency"
+    say "                   MissPolicy's refusal is about is real in a deployment"
+    say "                   and absent here. This leg compares BYTES."
+    say "       unmeasured: the miss policy a DEPLOYMENT chooses. Nothing in the"
+    say "                   tree mounts ExpertLocator on a served POA, so which"
+    say "                   variant production would run is undecided, and a"
+    say "                   deployment on either refusing variant leaks."
     ;;
 
   lifecycle)
