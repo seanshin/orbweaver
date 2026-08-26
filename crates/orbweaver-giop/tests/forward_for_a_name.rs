@@ -96,7 +96,9 @@
 //!
 //! X is **not** a successor registry, and this file deliberately does not build
 //! one. The mapping already has an owner: for a name it is CosNaming's
-//! `rebind`, which this ORB already serves 14/14 and which the successor already
+//! `rebind`, which this ORB already serves — `docs/SERVICES-COVERAGE.md` owns
+//! the count, which is deliberately not retyped here — and which the successor
+//! already
 //! calls as part of coming up. Nothing new is needed to *know* where a name
 //! points. What is missing is upstream of that, and it is a decision because it
 //! is four decisions wearing one coat:
