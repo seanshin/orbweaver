@@ -72,6 +72,8 @@ PLAN-SERVICES §8이 제외하는 것은 네 행의 일곱 영역이었고, **20
 | §18 CosExternalization | the `ExpertLoader` blob must be read by something that did not write it — a second loader, another host, or a loader version change |
 | §19 CosQuery | an operation whose parameter is a query **in a language the caller names**; or a foreign client expecting `QueryEvaluator` and speaking SQL-92 or OQL-93 |
 | §20 CosLicensingManager | a registry entry whose use is metered for somebody who is not the operator (**the weakest trigger of the eight — §20 says so at the site**); or the first requirement that a granted seat be revocable mid-call |
+| §21 Portable Interceptors | a service context that must survive a **reply** — today a reply cannot carry one and an inbound reply's are discarded on read; or the first policy the MCP chain enforces that must also apply to a call **not** made through the bridge. D018 §3.3's guess — *a foreign client that expects to register one* — is recorded at the site as **wrong on inspection** |
+| §22 BiDirectional GIOP | the first callback consumer that **cannot listen at all** — an endpoint with no server of its own, not a firewalled one. The nominal trigger (*a consumer whose callbacks cannot be dialled*) is **unreachable in this tree and §22 says so at the site**, per D015 §3.4 |
 
 ---
 
@@ -1360,6 +1362,505 @@ The standard's three operations only if a foreign client names them.
 정하지 않는다). v1은 표준이 아니라 기존 `Scope` 옆의 라이선서 라벨이며, 계량을 **두
 기구가 아니라 한 기구의 두 구성**으로 남긴다. 보고는 감사 원장이고, 제3자가 검사할 수 있게
 만드는 것은 §8의 추가 전용 해시 체인이며 그 논증의 **순서**가 그대로 넘어온다.
+
+---
+
+## The two ORB features that had no chapter — §21–§22 / 장이 없던 두 ORB 기능
+
+Added 2026-08-26. D018 §3.3 listed three absences carrying no decision at all —
+`def_kind`, the POA policies, and these two — and put these two third. **The
+first two landed and the third did not**, which D029 §3.3 re-measured today.
+Re-measured again before writing: this file's four `interceptor` hits (§2
+twice, §20 twice) are all the MCP boundary's own chain, and `bidirectional`,
+`BiDir` and `BI_DIR` appear in it nowhere at all.
+
+**D018 §3.3's own sentence needs one correction, and it is the reason this
+section exists rather than a footnote.** It said the two are *"in **no** plan
+document"*. That is not what a grep says. `PLAN.md` §1 excludes *bidirectional
+GIOP (needed for callback-style systems behind firewalls; revisit after v1)*
+from v1 scope, and `PLAN.md` §2.1's mechanism table lists **Portable
+Interceptors** with *"guardrails: authorization, dry-run, approval, audit
+logging, tracing"* as their value — both in the Korean twin as well. So neither
+was unmentioned; both were **mentioned in a form that cannot be resumed from**,
+which is §0's whole argument one layer up: a scope line records a decision and
+a motivation row records an intention, and neither carries a trigger. What was
+true, and what D029 §3.3 measured precisely, is that `PLAN-DEFERRED` had no
+chapter for either.
+
+**They are not services, which is why they were missed twice.** §13–§20's batch
+swept the twenty-one CORBAservices against three plan documents and could not
+have caught these: an interception chain and a transport mode are **ORB
+features**, so they sit in neither `PLAN-SERVICES` §8's exclusion table nor
+D023 §1's service map, and every instrument this project owns for finding an
+un-reasoned absence was pointed at the service list. That is the root cause,
+and it is not §13–§20's: those eight were absent together because five of them
+were one specification nobody opened; these two are absent because **the census
+had the wrong unit.**
+
+**They add no rows to `PLAN-SERVICES` §8.** That table's column is *Service*
+and these are not services, so §0's sentence counting its rows is deliberately
+untouched by this batch — the two documents' inventories still agree because
+neither document gained an inventory item.
+
+> **Priority zero, set 2026-08-26.** This section is subordinate to the ORB
+> completion criterion, whose home is
+> [`D029`](decisions/D029-what-a-complete-orb-would-mean.md) §6: *no leak in
+> the transparency that a caller can invoke any target holding only a
+> reference, without knowing its location, backend, language or load state, and
+> that this survives targets being added, removed, moved, loaded or evicted at
+> runtime.* The criterion is stated there and **not restated here** — what is
+> recorded below is only how these two chapters bear on it.
+>
+> *0순위 기준의 집은 D029 §6이며 여기서 다시 적지 않는다. 아래에 적는 것은 이 두
+> 장이 그 기준에 **어떻게 닿는지**뿐이다.*
+
+> **How these two bear on it, and they are not equals.** §22 is a
+> **location-transparency item**: bidirectional GIOP is the second answer to
+> the problem `spikes/nat_rewrite.sh` answers, and §22's job is to say which
+> half of D029 §6.1's Location row this project holds and which half it does
+> not. §21 closes **none** of §6.1's five leaks — it is a capability, and §6's
+> criterion ranks a capability below a leak, which is why D029 §5's re-ordering
+> already puts O3 fourth. Writing them in as peers would be the mistake §6
+> exists to prevent; they share a section because they were *missed* together,
+> not because they weigh the same.
+
+**Neither is owed an implementation.** D023 §6's fence and D018 §4.1's sentence
+apply here exactly as they applied to the eight: *writing a thing down makes it
+feel owed*, and a plan document is how that discipline breaks. Both v1 sketches
+below open by refusing the standard's interface, and §21's refuses it twice —
+once for the interface and once for the registration model.
+
+*2026-08-26 추가. D018 §3.3이 "결정이 아예 없는 부재" 셋 가운데 이 둘을 세 번째로
+놓았고, **앞의 둘은 착지했고 셋째는 하지 않았다**(D029 §3.3이 오늘 재측정). 쓰기 전에
+다시 쟀다: 이 파일의 `interceptor` 네 건은 전부 MCP 경계의 자체 체인(§2 두 번, §20 두
+번)이고 `bidirectional`·`BiDir`·`BI_DIR`은 아예 없다. **D018 §3.3의 문장 하나는
+고쳐야 하며, 그것이 이 절이 각주가 아니라 절인 이유다** — "**어떤** 계획 문서에도
+없다"고 했으나 grep은 다르게 말한다. `PLAN.md` §1은 v1 범위에서 *양방향 GIOP(방화벽
+뒤 콜백형 시스템에 필요; v1 이후 재검토)*를 제외하고, §2.1의 메커니즘 표는 **포터블
+인터셉터**를 *"가드레일: 인가, dry-run, 승인, 감사로그, 트레이싱"*이라는 가치와 함께
+싣는다 — 한국어 쌍둥이에도 똑같이 있다. 즉 둘은 언급되지 않은 것이 아니라 **재개할 수
+없는 형태로 언급**되어 있었고, 이는 §0의 논지를 한 층 위에서 되풀이한다: 범위 한 줄은
+결정을 기록하고 동기 표의 한 행은 의도를 기록하지만, 어느 쪽도 방아쇠를 싣지 않는다.
+참인 문장은 D029 §3.3이 정확히 측정한 것 — `PLAN-DEFERRED`에 두 장이 없었다 — 이다.
+**서비스가 아니어서 두 번 놓쳤다**: §13–§20 배치는 스물한 개 CORBAservices를 훑었고
+이 둘을 잡을 수 없었다. 인터셉션 체인과 전송 방식은 **ORB 기능**이라 `PLAN-SERVICES`
+§8의 제외 표에도 D023 §1의 서비스 지도에도 없고, 이유 없는 부재를 찾는 이 프로젝트의
+모든 계기가 서비스 목록을 향해 있었다. 근본원인이며 §13–§20의 것과 다르다: 그 여덟은
+다섯이 한 명세였기에 함께 없었고, 이 둘은 **인구조사의 단위가 틀렸기** 때문에 없다.
+따라서 **§8에 행을 더하지 않는다** — 그 표의 열은 *서비스*이고 이 둘은 아니므로 §8의
+행을 세는 §0의 문장은 일부러 건드리지 않는다. 0순위 기준의 집은 D029 §6이며 여기서
+다시 적지 않는다. **둘은 대등하지 않다**: §22는 **위치 투명성** 항목으로
+`spikes/nat_rewrite.sh`가 답하는 문제의 다른 쪽 답이며, §6.1의 Location 행에서 우리가
+쥔 절반과 쥐지 못한 절반을 말하는 것이 그 장의 일이다. §21은 다섯 구멍 중 **아무것도**
+막지 않는다 — 기능이며, 기준은 기능을 구멍보다 뒤에 둔다(D029 §5가 O3을 네 번째로 둔
+이유). 대등하게 적는 것이야말로 §6이 막으려는 실수다. 한 절에 있는 이유는 함께
+*놓쳤기* 때문이지 무게가 같아서가 아니다. **어느 쪽도 구현을 빚지지 않는다** — D023
+§6의 울타리와 D018 §4.1의 문장이 그대로 적용되며, 아래 두 v1 스케치는 표준
+인터페이스를 거부하고 §21은 두 번 거부한다(인터페이스 한 번, 등록 모델 한 번).
+
+---
+
+## 21. Portable Interceptors — one discipline, two chains that cross / 포터블 인터셉터
+
+**What it is.** CORBA 3.4 ch. 21. Three interceptor kinds, registered per-ORB
+through an `ORBInitializer` at initialization and **immutable afterwards**:
+`ClientRequestInterceptor` (`send_request`, `send_poll`, `receive_reply`,
+`receive_exception`, `receive_other`), `ServerRequestInterceptor`
+(`receive_request_service_contexts`, `receive_request`, `send_reply`,
+`send_exception`, `send_other`), and `IORInterceptor`, whose
+`establish_components` runs at POA creation and adds `TaggedComponent`s to
+every IOR that POA mints. Three supporting pieces carry the actual weight.
+`RequestInfo` exposes the request — operation, arguments, exceptions, and
+**`get_request_service_context` / `add_request_service_context`**, which is how
+OTS propagates a transaction, how CSIv2 carries a security token and how
+`SendingContextRunTime` finds its peer. `PortableInterceptor::Current` gives
+each request numbered **slots**, allocated at ORB init, so a thread-local set
+before a call can be read by an interceptor and pushed into a service context.
+A `Codec` from `CodecFactory` encapsulates the values that go into one. And a
+client interceptor may raise **`ForwardRequest`**, redirecting the call — a
+`LOCATION_FORWARD` the *ORB* originates rather than the servant. The ending
+interception points run only for the starting points that completed.
+
+**Why deferred — because D018 §3.3's question has an answer, and the answer is
+no.** D018 asked whether ours and the standard's are the same idea at different
+scopes. Read against `crates/orbweaver-mcp/src/interceptor.rs` — which already
+claims a relationship in its own words, *"the CORBA portable-interceptor shape,
+adapted to this call path"*, `send_request`/`receive_request` collapsing into
+`Interceptor::before` and `send_reply`/`send_exception` into
+`Interceptor::after` *"because this chain sits on one side of one call"* — the
+honest verdict is that **they share a discipline and differ in both of the
+things that decide what a chain is for: what it may read, and what it may do.**
+"Different scopes" is the wrong picture, because neither's coverage contains
+the other's. The scopes **cross**.
+
+1. **Ours is not on the ORB's request path at all.** `orbweaver-giop` has no
+   interception seam: `Invoker` (`crates/orbweaver-giop/src/lib.rs:1550`) is
+   three methods with no hook, and `Dispatch`
+   (`crates/orbweaver-giop/src/server.rs:625`) is the servant, not a seat in
+   front of it. The chain is entered from `orbweaver-mcp`'s `Guarded` and
+   `Bridge::invoke`, so **a call issued straight through `orbweaver_giop`
+   passes no stage**, while the standard's chain is per-ORB and sees every
+   request there is. In the other direction ours reads the contract, the
+   caller's `ai_authz` scopes, the host's approval and the arguments as an
+   AnyJSON document on both paths — facts that live above IDL and never reach
+   the wire, which no `ServerRequestInterceptor` can see. Two chains, each
+   holding what the other cannot.
+
+2. **The standard's chain exists to modify the message; ours is built so that
+   it cannot.** `add_request_service_context` is the capability everything
+   above rides on. Measured here: there is **no API to attach an arbitrary
+   service context to an outbound request** — the only production writer is the
+   codeset arm, inline in two private methods (`lib.rs:2506`, `mux.rs:1058`);
+   a reply **cannot carry one at all**, `encode_reply` hard-writing an empty
+   list (`server.rs:435`); and an inbound reply's contexts are read and thrown
+   away (`skip_service_contexts`, `lib.rs:1526`). Above that, `CallContext`
+   deliberately carries no `Connection`, for the three reasons the module
+   states: a stage that can dial can time out and stops being reproducible, can
+   be hung by the very target the caller is being protected from, and — the
+   decisive one — a stage that can send is a caller past its own gate. **A
+   chain that may not touch the message is not a smaller portable interceptor.
+   It is a different object.**
+
+3. **Two of the three kinds have no counterpart, and the third is not an
+   interceptor question here.** `IORInterceptor::establish_components` is how
+   the standard gets a component into an IOR; we publish components from the
+   servant side with no interceptor anywhere near it
+   (`codeset::server_component`, CSIv2's mech list). `PortableInterceptor::
+   Current`'s slots are the opposite of a `CallContext` whose whole design is
+   that a stage is a function of the contract and the request; `PICurrent`,
+   `PolicyCurrent` and `CodecFactory` exist in this tree only as string
+   literals in `orb.rs`'s `RESERVED_OBJECT_IDS`, a list whose own doc says it
+   **gates nothing** and that this ORB supplies none of them. And
+   **`ForwardRequest` has zero occurrences in the repository**: `LOCATION_
+   FORWARD` and `_PERM` are originated by the *servant* through
+   `Dispatch::redirect` and followed client-side up to `MAX_FORWARD_HOPS = 8`,
+   so the transparency the standard's exception serves is held without a chain
+   that can raise one.
+
+4. **What is genuinely shared is the discipline, and it was taken on purpose.**
+   `Chain::run` calls `before` in registration order, stops at the first
+   `Outcome::Refuse`, and calls `after` in reverse over the stages that ran —
+   the refuser included, a stage that did not run never — which the module
+   names as CORBA's own rule for portable interceptors, and which is why the
+   observers sit outermost. Ordered stages under stable names, insertable by a
+   deployment. That much is one idea. It is the **mechanism**, not the scope.
+
+5. **And the standard's chain wants a clock, which this stack has refused
+   twice.** Interception points are where every ORB measures latency; D004
+   fixes the trace record's `ts` as coming from the caller and says *there is
+   no clock in the interceptor chain and this decision does not add one*,
+   because replay determinism is what makes the ledger evidence. That is not a
+   reason the standard is wrong. It is another reason the two are not one chain
+   at two scopes.
+
+**Trigger — two, and D018 §3.3's guess is not one of them.** D018 supposed *a
+foreign client that expects to register one*. Recorded here as **wrong on
+inspection**: portable interceptors are registered in the ORB the registering
+program links, so a foreign client registers them in its own ORB and never in
+ours. There is no operation by which a peer could ask. The two that replace it:
+
+- **A service context that must survive a reply.** Today an inbound request's
+  contexts are parsed and exposed to a servant (`Request::service_contexts`,
+  `server.rs:286`) and only `code_sets()` reads them, while a reply's are
+  impossible to write and discarded on read. The first peer whose protocol
+  needs a context to come *back* — the shape OTS, CSIv2's `SAS` and
+  `SendingContextRunTime` all have — fires it. Observable **in this tree,
+  against the omniORB and JacORB fixtures the harness already runs**, and it
+  needs nobody to name a consumer. Note what it is: a **marshalling** gap that
+  the standard happens to expose through interceptors, which is why the sketch
+  below answers it without one.
+- **The first policy the MCP chain enforces that must also apply to a call not
+  made through the bridge.** Today policy coverage and the bridge are the same
+  set, so the question never arises. The day they differ, the gate has to move
+  onto the request path, and a gate on the request path is a
+  `ServerRequestInterceptor` whatever it is called. Observable as a requirement
+  on `orbweaver-giop`, in this tree, with nobody named.
+
+**v1 sketch.** Not `PortableInterceptor` — and not `ORBInitializer` either,
+which is the second refusal and the one that matters more. Neither trigger's
+answer is a port of ch. 21. **For the first**, the answer is not an interceptor
+at all: `encode_reply` gains a context list and `decode_reply` keeps one, so a
+context we do not understand is **preserved** exactly the way §9.7.2 already
+makes us preserve a `TaggedComponent` we do not understand — the same rule
+applied to the other carrier, testable against a peer's own bytes rather than
+against our own reading of them. **For the second**, one insertion point in
+`Dispatch` before the servant, taking the same `CallContext` the MCP chain
+takes, so the result is **one chain with two entry points** rather than two
+chains that can disagree — §1's and §20's argument about two filters, in a
+third place. Registration stays a builder on the `Server`, not an
+`ORBInitializer`: the standard's immutable-after-init rule buys a determinism
+that our connection-less, clock-less stages already have by construction, so
+adopting the ceremony would buy nothing and cost an ORB-lifetime coupling. No
+slots — a per-request mutable scratch space is the one addition that would make
+a stage stop being a function of its inputs. And **no `ForwardRequest`**, which
+is the sharpest refusal here: letting a *gate* originate a forward hands the
+policy layer a way to move a call, which is the "gate becomes a caller" that
+the connection-less `CallContext` exists to prevent — and `Dispatch::redirect`
+already gives that power to the servant, which is the place that should have it.
+
+**How this bears on priority zero (D029 §6).** It closes **none** of §6.1's
+five leaks. The one clause that touches the table is `ForwardRequest`, a
+location-transparency mechanism, and that transparency is already held without
+it. What this chapter *does* owe §6 is a leak that is **not** one of the five,
+named here so it is not mistaken for one: whether a call is gated depends on
+which API the caller used, because policy coverage tracks the bridge rather
+than the ORB. That is a leak in the guardrail, not in the transparency, and it
+is the second trigger above.
+
+**요지.** CORBA 3.4 21장. `ORBInitializer`로 **ORB마다** 등록되고 이후 불변인 세
+종류 — 클라이언트 요청 인터셉터(5지점), 서버 요청 인터셉터(5지점), 그리고 POA 생성
+시점에 IOR에 `TaggedComponent`를 얹는 `IORInterceptor`. 무게를 지는 것은 셋이다:
+`RequestInfo`의 **`add_request_service_context`**(OTS의 트랜잭션 전파, CSIv2의 보안
+토큰이 타는 길), 요청마다 번호 붙은 **슬롯**을 주는 `PortableInterceptor::Current`,
+그리고 서번트가 아니라 **ORB가** 일으키는 `LOCATION_FORWARD`인 **`ForwardRequest`**.
+**유예 사유는 D018 §3.3의 물음에 답이 있고 그 답이 "아니오"라는 것이다.** 우리 체인은
+스스로를 *"이 호출 경로에 맞춘 CORBA 포터블 인터셉터 형태"*라 적고 `send_request`/
+`receive_request`가 `before`로, `send_reply`/`send_exception`이 `after`로 접힌 이유를
+*"이 체인은 한 호출의 한쪽에 앉아 있기 때문"*이라 말한다. 정직한 판정은 **둘이 규율을
+공유하고, 체인의 용도를 정하는 두 가지 — 무엇을 읽을 수 있는가와 무엇을 할 수 있는가 —
+에서 갈린다**는 것이다. "범위가 다른 같은 생각"은 틀린 그림이다. 어느 쪽의 적용 범위도
+다른 쪽을 포함하지 않으며, 범위는 **교차한다**. (1) **우리 체인은 ORB의 요청 경로 위에
+있지 않다** — `orbweaver-giop`에 인터셉션 자리가 없고(`Invoker`는 훅 없는 세 메서드,
+`Dispatch`는 서번트 자신), 체인은 `orbweaver-mcp`의 `Guarded`와 `Bridge::invoke`에서만
+들어간다. 즉 `orbweaver_giop`로 곧장 낸 호출은 **어떤 스테이지도 지나지 않는다**. 반대
+방향으로는 계약·`ai_authz` 스코프·승인·양쪽 경로의 AnyJSON 인자를 읽는데, 이것들은 IDL
+위에 살며 와이어에 닿지 않으므로 어떤 서버 요청 인터셉터도 볼 수 없다. (2) **표준의
+체인은 메시지를 고치려고 있고, 우리 것은 고칠 수 없게 지어져 있다** — 임의의 서비스
+컨텍스트를 요청에 붙이는 **API가 없고**(유일한 프로덕션 기록자는 코드셋 갈래),
+`encode_reply`는 빈 목록을 못 박아 쓰며 들어온 리플라이의 컨텍스트는 읽고 버린다.
+그 위에서 `CallContext`는 **일부러 `Connection`을 싣지 않는다**: 다이얼할 수 있는
+스테이지는 시간 초과할 수 있어 재현성을 잃고, 보호 대상인 바로 그 타깃에 매달릴 수 있으며,
+결정적으로 **보낼 수 있는 스테이지는 자기 게이트를 지나친 호출자**다. 메시지를 못 건드리는
+체인은 작은 포터블 인터셉터가 아니라 **다른 물건**이다. (3) 세 종류 중 둘은 대응물이 없고
+하나는 여기서 인터셉터의 문제가 아니다 — 컴포넌트는 서번트 쪽에서 발행하고, 슬롯은 계약과
+요청의 함수라는 `CallContext`의 설계와 정반대이며(`PICurrent`·`PolicyCurrent`·
+`CodecFactory`는 "아무것도 통제하지 않는다"고 스스로 적은 예약 이름 목록의 문자열일
+뿐이다), **`ForwardRequest`는 저장소 전체에 0건**이고 포워드는 서번트가
+`Dispatch::redirect`로 일으켜 클라이언트가 8홉까지 따라간다. (4) **진짜로 공유하는 것은
+규율이고, 그것은 의도적으로 가져온 것이다** — 등록 순서로 들어가 첫 거부에서 멈추고, 실행된
+스테이지에 대해서만 역순으로 나오는 규칙을 모듈이 *CORBA 포터블 인터셉터의 규칙*이라 이름
+한다. 그것은 **기구**이지 범위가 아니다. (5) 표준의 체인은 **시계**를 원하고 이 스택은 두
+번 거부했다 — D004는 `ts`를 호출자에게서 받으며 *체인 안에 시계가 없고 이 결정이 시계를
+더하지 않는다*고 적는다. **방아쇠는 둘이며 D018의 추측은 그중 없다** — *등록하려는 외부
+클라이언트*는 **검토 결과 틀렸다**: 인터셉터는 등록하는 프로그램이 링크한 ORB에 등록되므로
+외부 클라이언트는 자기 ORB에 등록하지 우리 것에 하지 않는다. 대신 (a) **리플라이에서 살아
+남아야 하는 서비스 컨텍스트** — 오늘 요청 쪽은 파싱되어 서번트에 노출되지만 리플라이 쪽은
+쓸 수 없고 읽고 버려진다. 하네스가 이미 돌리는 omniORB·JacORB 픽스처로 **이 나무 안에서**
+관측 가능하며 아무도 지명할 필요가 없다. 정체는 **마샬링** 간극이고, 그래서 아래 스케치는
+인터셉터 없이 답한다. (b) **브리지를 거치지 않은 호출에도 적용돼야 하는 첫 정책** — 오늘은
+정책 범위와 브리지가 같은 집합이라 물음이 서지 않는다. 갈라지는 날 게이트는 요청 경로로
+내려가야 하고, 요청 경로 위의 게이트는 이름이 무엇이든 서버 요청 인터셉터다. **v1은
+`PortableInterceptor`가 아니고 `ORBInitializer`도 아니다**(둘째 거부가 더 중요하다).
+첫 방아쇠의 답은 인터셉터가 아예 아니다: `encode_reply`가 컨텍스트 목록을 갖고
+`decode_reply`가 그것을 보존하여, 이해하지 못하는 컨텍스트를 §9.7.2가 이미 이해하지 못하는
+`TaggedComponent`에 요구하는 그대로 **보존**한다 — 같은 규칙을 다른 운반체에 적용한 것이고,
+우리 판독이 아니라 **피어의 바이트**로 검증된다. 둘째의 답은 `Dispatch` 안의 삽입 지점
+하나이며, MCP 체인이 받는 것과 **같은 `CallContext`**를 받아 **두 체인이 아니라 입구가 둘인
+한 체인**으로 남긴다(§1과 §20의 "필터 둘" 논증, 세 번째 자리). 등록은 `ORBInitializer`가
+아니라 `Server`의 빌더로 남는다 — 불변성이 사는 결정성을 우리 스테이지는 연결도 시계도 없어
+이미 갖고 있으므로, 그 의례는 아무것도 사지 않고 ORB 수명 결합만 치른다. 슬롯 없음. 그리고
+**`ForwardRequest` 없음** — 게이트가 포워드를 일으키게 하는 것은 정책 계층에 호출을 옮길
+길을 주는 것이고, 연결 없는 `CallContext`가 막으려는 "게이트가 호출자가 된다"가 바로
+그것이다. `redirect`가 이미 그 힘을 **서번트**에게 주며, 그쪽이 가져야 할 자리다.
+**0순위(D029 §6)와의 관계**: §6.1의 다섯 구멍 중 **아무것도** 막지 않는다. 표에 닿는 유일한
+조항인 `ForwardRequest`가 섬기는 투명성은 그것 없이 이미 지켜진다. 이 장이 §6에 빚지는 것은
+**다섯에 속하지 않는 구멍** 하나를 이름하는 일이다 — 호출이 게이트를 지나는지가 호출자가 쓴
+API에 달려 있다는 것(정책 범위가 ORB가 아니라 브리지를 따라간다). 투명성이 아니라
+가드레일의 구멍이며, 위의 둘째 방아쇠가 그것이다.
+
+---
+
+## 22. BiDirectional GIOP — we hold one half of location transparency / 양방향 GIOP
+
+**What it is.** GIOP 1.2's answer to the callback problem. The client side sets
+`BiDirPolicy::BidirectionalPolicy` and sends a **`BI_DIR_IIOP` service
+context** on a request, carrying a `BiDirIIOPServiceContext` — a sequence of
+`ListenPoint {host, port}`. Once it is sent and accepted, the server may issue
+**requests** back down the connection the client opened, and the client
+dispatches them. Without it a GIOP connection is one-directional at the
+*request* level: replies come back, requests do not, and a server that must
+call an object the client handed it **dials a fresh connection** to the address
+in that object's IOR — which is precisely the address a firewalled or
+NAT-ed client does not have.
+
+**Why deferred. Not "no consumer" — the callback is in this tree and it
+dials.** The event channel's push side calls `Connection::connect(&job.
+consumer, timeout)` (`crates/orbweaver-giop/src/event_server.rs:1645`) and
+invokes `push` on it (`:1674`); the module states the shape itself — *this
+server acts as a client* (`:208`) — and records which references are dialled
+(`:374`: unlike a `PullConsumer`, a `PushConsumer` **is**). Connections are
+cached per delivery thread by proxy object key (`:1691`); the inbound
+connection is never one of them. So the reverse direction exists as a shape and
+is served by dialling, which is exactly the mechanism bidirectional GIOP
+replaces. Three reasons it stays deferred anyway:
+
+1. **The reverse direction is refused structurally, not left half-built.** A
+   client connection's reader accepts only `Reply` and `CloseConnection` and
+   **poisons the connection** on anything else (`lib.rs:2601`, `mux.rs:1343`);
+   the server loop answers anything outside `LocateRequest` / `Request` /
+   `CancelRequest` / `CloseConnection` / `MessageError` with a `MessageError`
+   and closes (`server.rs:1455`). **An inbound `Request` on a client connection
+   — the exact traffic this feature creates — is a fault today**, by
+   construction. That is the honest measure of the distance, and it is also why
+   nothing here is silently half-supporting the feature.
+2. **The defect it repairs cannot be produced on this machine.** D015 §3.4,
+   checked rather than repeated: *"No docker here, no second host … It cannot
+   be closed here."* `spikes/nat_rewrite.sh` measures the forward direction by
+   dialling and is explicit at its own site about what it does not show — its
+   publish-map assertion notes *"unmeasured here: whether anything answers
+   there. That needs the cluster"*, and its Docker and Kubernetes probes are
+   counted skips carrying *"it has never executed anywhere — do not read it as
+   evidence"*. On one machine on loopback **every callback IOR is dialable**,
+   so the leak is invisible by construction rather than by neglect.
+3. **The standard's own answer carries a hazard that needs a policy we would
+   have to invent.** A client can claim a `ListenPoint` for a host it does not
+   own, and a server that believes the claim will send requests intended for
+   that host down the claiming client's connection. omniORB and JacORB both
+   gate the feature behind an explicit policy for that reason, which means the
+   cheap-looking half (decode a context) and the expensive half (trust it) are
+   not the same batch.
+
+**Which half of location transparency we hold — against D029 §6.1's Location
+row.** R7 rewrites **the server's** IOR so that a client can dial it from where
+the client actually is; the target there is the server. Bidirectional GIOP is
+the same question with the target being **the client**: the reference the
+client handed the server has to be dialable from where the *server* is. So the
+forward half is measured and the reverse half is served by dialling and has
+never been tested against a peer that cannot be dialled. **Recorded as a
+finding and not repaired here**: §6.1's Location row reads on the forward half
+only, and the reverse half is not named in it — a decision's facts live in the
+decision, so this file names the gap rather than editing it.
+
+**Trigger — two, and the first is unreachable in this tree.**
+
+- **Nominal, and it cannot fire here.** *A consumer whose callbacks cannot be
+  dialled.* D018 §3.3 supposed this and named D015 §3.4 as the reason it cannot
+  be measured; **checked, and the claim holds** — the missing fixture is a NAT
+  between two hosts, §3.4 is class B with fixtures absent, and it says in its
+  own words that it cannot be closed here. Recorded as observable in principle
+  and **unreachable in practice**, at the site, on §20's precedent: that is
+  worth more than a trigger that reads well and cannot fire. This is the class
+  D023 §2 diagnoses — every deferral's trigger has a subject outside this
+  project — and the door it proposes, *the owner naming a consumer fires a
+  trigger*, is **PROPOSED and not approved**. It is cited here and relied on by
+  neither of this chapter's triggers, because the second one needs nobody.
+- **Sharper, in this tree, and it needs nobody.** *The first callback consumer
+  that cannot listen at all* — not a firewalled endpoint, an endpoint with no
+  server of its own. Every consumer this project has ever pushed to runs one:
+  `spikes/event_consumer.py` is an omniORB `PushConsumer` servant with its own
+  RootPOA and POAManager. D015 §3.5 records the one process class here that
+  cannot — *"Python is clients only"*. Observable as the first
+  `connect_push_consumer` whose caller has no POA to put a servant in.
+
+**And that second trigger has two answers, of which this chapter is the
+second-best — so this deferral gets *stronger* with time.** D030 L1 gives a
+non-Rust process a servant seam: a listener and a POA. If L1 lands, a Python
+consumer can be dialled and this trigger never fires for the only subject it
+has, leaving only the nominal trigger, which is unreachable here. Bidirectional
+GIOP would instead let a client be a target **with no listener at all** — a
+different answer, cheaper for the consumer and dearer for everyone's trust
+model. A deferral that ages into a firmer deferral is unusual enough to write
+down, because the reflex on re-measurement is to read a still-unfired trigger
+as evidence the chapter is owed sooner.
+
+**v1 sketch.** Not `BiDirPolicy`, and — the load-bearing refusal —
+**not bidirectionality as a mode**. Two steps, in this order, because the first
+is worth having whether or not the second is ever built.
+
+(a) **Decode and record; never act.** The `BI_DIR_IIOP` context read off an
+inbound request, named as an id beside `SERVICE_ID_CODE_SETS` and
+`SERVICE_ID_SAS`, and surfaced through the seam that already exists
+(`Request::service_contexts`, `server.rs:286`), so a capture from a peer that
+sends one is readable rather than opaque. This is the same *preserve what we do
+not understand* rule §9.7.2 already imposes on a `TaggedComponent`, and it is
+§21's first trigger seen from the other end — which is the argument for the two
+chapters sharing a section and not for them being one chapter.
+
+(b) **Reverse dispatch only behind an explicit per-connection opt-in**, naming
+which listen points are accepted and refusing any that the connection's own
+peer address does not corroborate. The threshold is a policy an operator has
+and the crate must not choose — `SEAT_QUOTA`'s line, in a second place. What it
+must not become is a global mode: the one-direction message guards in
+`lib.rs:2601` and `server.rs:1455` are a **correctness** property today, and
+relaxing them everywhere would trade a loud fault for a silent acceptance.
+
+**How this bears on priority zero (D029 §6).** It would close the reverse half
+of §6.1's **Location** row — *the caller must not be able to tell where the
+target runs* — for the case where the target is the process that opened the
+connection. **It does not follow that it should be built**: that transparency
+leaks only for a target that cannot be dialled, and D030 L1 closes exactly that
+for the only such target this tree has. A leak with a cheaper closure already
+proposed is not an argument for the dearer one.
+
+**요지.** GIOP 1.2가 콜백 문제에 내놓은 답. 클라이언트가
+`BiDirPolicy::BidirectionalPolicy`를 걸고 요청에 **`BI_DIR_IIOP` 서비스 컨텍스트**를
+실어 `ListenPoint {host, port}`의 시퀀스를 보내면, 그 뒤로 서버는 **클라이언트가 연
+연결로 요청을 되쏠 수** 있다. 그것이 없으면 GIOP 연결은 *요청* 수준에서 단방향이다 —
+리플라이는 돌아오지만 요청은 가지 않으며, 클라이언트가 건넨 객체를 불러야 하는 서버는
+그 객체 IOR의 주소로 **새 연결을 건다**. 방화벽·NAT 뒤 클라이언트에게 없는 바로 그
+주소다. **유예 사유는 "소비자 없음"이 아니다 — 콜백은 이 나무 안에 있고 다이얼한다**:
+이벤트 채널의 push 쪽은 `Connection::connect(&job.consumer, …)`
+(`event_server.rs:1645`)로 걸고 `push`를 부르며(`:1674`), 모듈이 스스로 *이 서버는
+클라이언트로 행동한다*(`:208`)고 적고 어떤 참조가 다이얼되는지 기록한다(`:374` —
+`PullConsumer`와 달리 `PushConsumer`는 **다이얼된다**). 연결은 배달 스레드마다 프록시
+오브젝트 키로 캐시되며(`:1691`) 들어온 연결은 결코 그중에 없다. 그래도 유예하는 이유
+셋: (1) **역방향은 반쯤 지어진 것이 아니라 구조적으로 거부된다** — 클라이언트 연결의
+리더는 `Reply`와 `CloseConnection`만 받고 나머지에 **연결을 오염**시키며
+(`lib.rs:2601`, `mux.rs:1343`), 서버 루프는 다섯 종류 밖의 메시지에 `MessageError`로
+답하고 닫는다(`server.rs:1455`). **클라이언트 연결로 들어온 `Request` — 이 기능이 만드는
+바로 그 트래픽 — 는 오늘 결함이다.** 거리를 재는 정직한 자이며, 아무것도 조용히 반쯤
+지원하고 있지 않다는 뜻이기도 하다. (2) **고치려는 결함을 이 기계에서 만들 수 없다** —
+D015 §3.4를 되풀이하지 않고 확인했다: *"여기엔 도커도 두 번째 호스트도 없다 … 여기서
+닫을 수 없다."* `spikes/nat_rewrite.sh`는 정방향을 다이얼로 재고 무엇을 못 보이는지
+자기 자리에서 밝힌다 — publish-map 단언은 *"여기서 측정되지 않음: 거기서 무언가 답하는지.
+그건 클러스터가 필요하다"*라 적고, 도커·쿠버네티스 프로브는 *"어디서도 실행된 적 없다 —
+증거로 읽지 말 것"*을 단 skip이다. 한 기계 루프백에서는 **모든 콜백 IOR이 다이얼 가능**
+하므로 구멍은 방치가 아니라 구성상 보이지 않는다. (3) **표준의 답 자체가 우리가 발명해야
+할 정책을 요구하는 위험을 진다** — 클라이언트는 자기 것이 아닌 호스트의 `ListenPoint`를
+주장할 수 있고, 그 주장을 믿는 서버는 그 호스트로 갈 요청을 주장한 클라이언트의 연결로
+보낸다. omniORB와 JacORB가 둘 다 명시적 정책 뒤에 두는 이유이며, 값싸 보이는 절반(컨텍스트
+해독)과 비싼 절반(그것을 신뢰)이 같은 배치가 아니라는 뜻이다. **우리가 쥔 위치 투명성의
+절반은 어느 쪽인가 — D029 §6.1의 Location 행에 대고.** R7은 **서버의** IOR을 고쳐
+클라이언트가 실제로 있는 자리에서 걸 수 있게 한다(대상이 서버다). 양방향 GIOP은 대상이
+**클라이언트**인 같은 물음이다 — 클라이언트가 건넨 참조가 *서버가 있는 자리*에서 걸려야
+한다. 즉 정방향 절반은 측정되었고, 역방향 절반은 다이얼로 서빙되며 걸 수 없는 피어를 상대로
+시험된 적이 없다. **고치지 않고 발견으로 기록한다**: §6.1의 Location 행은 정방향 절반만
+읽고 있고 역방향 절반은 그 행에 이름이 없다 — 결정의 사실은 결정에 살므로, 이 파일은 간극을
+이름할 뿐 고쳐 쓰지 않는다. **방아쇠는 둘이고 첫째는 이 나무에서 당겨질 수 없다.** 첫째
+(명목): *콜백을 걸 수 없는 소비자*. D018 §3.3이 그렇게 추측하며 D015 §3.4를 이유로 들었고,
+**확인했고 그 주장은 성립한다** — 없는 픽스처는 두 호스트 사이의 NAT이고, §3.4는 픽스처가
+없는 class B이며 여기서 닫을 수 없다고 스스로 적는다. §20의 선례대로 **원리상 관측 가능,
+실무상 도달 불가**라고 자리에서 적는다. 이는 D023 §2가 진단한 부류다 — 모든 유예의
+방아쇠는 주체가 이 프로젝트 밖에 있다 — 그리고 그것이 제안하는 문(*소유자가 소비자를
+지명하면 방아쇠가 당겨진다*)은 **승인이 아니라 제안**이다. 여기서는 인용할 뿐이며 이
+장의 두 방아쇠 어느 쪽도 그것에 기대지 않는다. 둘째는 아무도 필요 없기 때문이다. 둘째(더 날카롭고, 나무 안이며, 아무도 필요 없다):
+*아예 들을 수 없는 첫 콜백 소비자* — 방화벽 뒤가 아니라 **자기 서버가 없는** 종단점. 지금까지
+push한 소비자는 전부 서버를 돌린다(`spikes/event_consumer.py`는 자기 RootPOA와 POAManager를
+가진 omniORB `PushConsumer` 서번트다). 그렇게 할 수 없는 유일한 프로세스 부류를 D015 §3.5가
+적는다 — *"파이썬은 클라이언트 전용"*. 서번트를 놓을 POA가 없는 호출자의 첫
+`connect_push_consumer`로 관측된다. **그리고 그 둘째 방아쇠에는 답이 둘 있고 이 장은 차선이며,
+따라서 이 유예는 시간이 갈수록 *강해진다*.** D030 L1은 비-Rust 프로세스에 서번트 자리(리스너와
+POA)를 준다. L1이 착지하면 파이썬 소비자는 걸 수 있게 되고 이 방아쇠는 자기 유일한 주체를
+잃어 명목 방아쇠만 남으며, 그것은 여기서 도달 불가다. 양방향 GIOP은 대신 **리스너 없이**
+클라이언트를 대상이 되게 한다 — 소비자에게 싸고 모두의 신뢰 모형에 비싼 다른 답이다. 재측정
+때의 반사는 아직 당겨지지 않은 방아쇠를 "더 빨리 빚졌다"는 증거로 읽는 것이므로, 굳어지는
+유예는 적어 둘 값이 있다. **v1은 `BiDirPolicy`가 아니며, 무게를 지는 거부는 **양방향을
+모드로 만들지 않는다**는 것이다.** 두 단계이고 순서가 있다. (a) **해독하고 기록하되 결코
+행동하지 않는다** — 들어온 요청에서 `BI_DIR_IIOP` 컨텍스트를 읽어 `SERVICE_ID_CODE_SETS`·
+`SERVICE_ID_SAS` 옆에 이름을 주고 이미 있는 자리(`Request::service_contexts`,
+`server.rs:286`)로 노출하여, 그것을 보내는 피어의 캡처가 불투명이 아니라 읽히게 한다.
+§9.7.2가 이해 못 하는 `TaggedComponent`에 이미 부과하는 *이해 못 하는 것을 보존하라*와 같은
+규칙이고, §21의 첫 방아쇠를 반대편에서 본 것이다 — 두 장이 한 절을 쓰는 근거이지 한 장이 될
+근거는 아니다. (b) **역방향 디스패치는 연결마다 명시적 옵트인 뒤에만** — 어떤 listen point를
+받아들이는지 이름하고, 연결 자신의 피어 주소가 뒷받침하지 않는 것은 거부한다. 그 문턱은
+운영자가 가진 정책이고 크레이트가 골라서는 안 된다(`SEAT_QUOTA`의 선을 두 번째 자리에서).
+**전역 모드가 되어서는 안 된다**: `lib.rs:2601`과 `server.rs:1455`의 단방향 가드는 오늘
+**정확성** 성질이며, 그것을 전부 풀면 시끄러운 결함을 조용한 수용과 맞바꾸게 된다.
+**0순위(D029 §6)와의 관계**: §6.1 **Location** 행의 역방향 절반 — *호출자는 대상이 어디서
+도는지 알 수 없어야 한다* — 을, 대상이 연결을 연 프로세스인 경우에 대해 막는다. **그렇다고
+지어야 한다는 결론은 나오지 않는다**: 그 투명성은 걸 수 없는 대상에 대해서만 새고, 이 나무에
+있는 유일한 그런 대상에 대해서는 D030 L1이 더 싸게 막는다. 더 싼 닫음이 이미 제안된 구멍은
+더 비싼 닫음의 근거가 아니다.
 
 ---
 
