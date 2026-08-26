@@ -1,0 +1,45 @@
+{
+  "_note": "The MoE estate the expert population is placed in: nodes and their regions, tenants, policy domains and grants. Read corpus/state/README.md first.",
+  "_provenance": "Assembled 2026-08-26 from spike_tenants (crates/orbweaver-object/src/bin/spike_tenants.rs) and spike_experts. Those two fixtures are the only pair among D026 section 1's five whose populations overlap, and they disagree; see README 'Measured 2026-08-26'. This file is the union that makes every seeded offer legal, and it is the FIRST place the two vocabularies are written down together. It does not claim either fixture was changed to match it -- neither was.",
+
+  "nodes": [
+    { "name": "node-a",   "region": "eu-west", "_from": "the trading fixture's placement_node" },
+    { "name": "gpu-04",   "region": "eu-west", "_from": "spike_experts' Capability.placement_node" },
+    { "name": "gpu-eu-1", "region": "eu-west", "_from": "spike_tenants' declare_node" },
+    { "name": "gpu-us-1", "region": "us-east", "_from": "spike_tenants' declare_node" }
+  ],
+
+  "_undeclared_node_probe": "gpu-nowhere",
+  "_undeclared_node_probe_note": "Named so a residency check can be shown refusing default-deny. It is deliberately NOT in nodes above, and a loader that binds it has a defect.",
+
+  "base_model": "llama-70b",
+
+  "tenants": [
+    {
+      "id": "acme",
+      "residency_region": "eu-west",
+      "capabilities": [
+        { "name": "math", "cost": 1.5, "adapter_delta": "acme-delta" },
+        { "name": "code", "cost": 2.0, "adapter_delta": "acme-code-delta" }
+      ],
+      "policy_domains": [
+        { "name": "acme-default", "grants": [] },
+        { "name": "acme-strict",  "grants": [ { "subject": "svc-acme", "capability": "math" } ] }
+      ]
+    },
+    {
+      "id": "globex",
+      "residency_region": "us-east",
+      "capabilities": [
+        { "name": "math", "cost": 3.0, "adapter_delta": "globex-delta" }
+      ],
+      "policy_domains": [
+        { "name": "globex-default", "grants": [] }
+      ]
+    }
+  ],
+
+  "_capability_vocabulary_note": "math, code and vision are the three capability words the MoE fixtures use. vision appears here in NO tenant's capability list on purpose: spike_tenants asserts authorize('svc-acme','vision') is false, and that assertion is only meaningful while nobody has granted it. spike_experts meanwhile registers expert-vision as a pinned, Resident expert. The two are not in contradiction as long as they stay two populations -- they would be the moment they became one, and that is the finding this file exists to make sayable.",
+
+  "capability_vocabulary": ["code", "math", "vision"]
+}

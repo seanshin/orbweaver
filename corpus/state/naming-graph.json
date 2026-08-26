@@ -1,0 +1,55 @@
+{
+  "_note": "The naming graph spike_names serves. Read corpus/state/README.md first. Two readers share no code: orbweaver-test's loader (orbweaver_dynamic::json) and spikes/seed_naming_client.py (stdlib json, omniORB's CosNaming stubs).",
+  "_provenance": "Transcribed 2026-08-26 from crates/orbweaver-giop/src/bin/spike_names.rs, which still builds this graph inline. This file does not replace that code -- the fixture was not migrated (see README, 'What is not claimed here'). It STATES the graph, so that an ORB which is not ours can check the wire against a named population instead of against values typed a second time in the checking script.",
+
+  "reference_template": {
+    "_note": "Every value bound in this graph is this shape, differing only in object_key. RFC 5737 TEST-NET-1, deliberately undialable.",
+    "type_id": "IDL:spike/Echo:1.0",
+    "iiop_version": "1.2",
+    "host": "192.0.2.1",
+    "port": 4000
+  },
+
+  "contexts": [
+    { "path": ["spike"] },
+    { "path": ["depth1"] },
+    { "path": ["depth1", "depth2"] }
+  ],
+
+  "bindings": [
+    {
+      "path": [ { "id": "spike", "kind": "" }, { "id": "Echo", "kind": "" } ],
+      "object_key": "Echo",
+      "stringified": "spike/Echo"
+    },
+    {
+      "path": [ { "id": "spike", "kind": "" }, { "id": "Echo 2", "kind": "dev" } ],
+      "object_key": "Echo",
+      "stringified": "spike/Echo 2.dev",
+      "url_fragment": "spike/Echo%202.dev",
+      "_why": "A component whose id carries a space and a non-empty kind. The corbaname URL escaping is the assertion: a reader that stringifies this wrong produces a name the other end cannot resolve."
+    },
+    {
+      "path": [ { "id": "depth1", "kind": "" }, { "id": "depth2", "kind": "" }, { "id": "leaf", "kind": "" } ],
+      "object_key": "Leaf",
+      "stringified": "depth1/depth2/leaf"
+    }
+  ],
+
+  "absent": [
+    {
+      "path": [ { "id": "spike", "kind": "" }, { "id": "Gone", "kind": "" } ],
+      "stringified": "spike/Gone",
+      "_why": "Bound and then unbound. Absent is a stated property of this population, not the absence of a statement: a resolve here must raise NotFound with why=missing_node and rest=[Gone], which is a stronger claim than 'we did not check'.",
+      "expect_not_found_why": "missing_node",
+      "expect_not_found_rest": ["Gone"]
+    }
+  ],
+
+  "root_bindings": {
+    "_why": "list() over the root. Both are contexts, and there are exactly two -- a third would mean something bound a name this population does not state.",
+    "count": 2,
+    "names": ["depth1", "spike"],
+    "all_are_contexts": true
+  }
+}

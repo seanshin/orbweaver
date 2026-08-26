@@ -1,0 +1,128 @@
+{
+  "_note": "A stated population of MoE experts, offered through the trader. Read corpus/state/README.md first: this file has two readers that share no code (Rust via orbweaver_dynamic::json, Python via stdlib json), and the queries below are checked against a live wire rather than restated from it.",
+  "_scalars": "AnyJSON v1 spellings. 64-bit integers are strings; enumerators are names; null means nobody measured it, and is not a zero.",
+
+  "service_type": {
+    "name": "moe::Expert",
+    "interface_id": "IDL:moe/Expert:1.0",
+    "properties": [
+      { "name": "cost", "kind": "float", "mode": "normal" },
+      { "name": "placement_node", "kind": "text", "mode": "mandatory_readonly" }
+    ]
+  },
+
+  "offers": [
+    {
+      "id": "math-fast",
+      "specialization": "math",
+      "cost": 1.0,
+      "latency_p50": 2.0,
+      "latency_p99": 20.0,
+      "load": 0.25,
+      "residency": "RESIDENT",
+      "mem_footprint": "1048576",
+      "placement_node": "node-a",
+      "route_freq": "16"
+    },
+    {
+      "id": "math-slow",
+      "specialization": "math",
+      "cost": 2.0,
+      "latency_p50": 9.0,
+      "latency_p99": 40.0,
+      "load": 0.25,
+      "residency": "RESIDENT",
+      "mem_footprint": "1048576",
+      "placement_node": "node-a",
+      "route_freq": "16"
+    },
+    {
+      "id": "code-mid",
+      "specialization": "code",
+      "cost": 3.0,
+      "latency_p50": 5.0,
+      "latency_p99": 60.0,
+      "load": 0.25,
+      "residency": "RESIDENT",
+      "mem_footprint": "1048576",
+      "placement_node": "node-a",
+      "route_freq": "16"
+    },
+    {
+      "id": "untimed",
+      "specialization": "math",
+      "cost": 4.0,
+      "latency_p50": null,
+      "latency_p99": 80.0,
+      "load": 0.25,
+      "residency": "RESIDENT",
+      "mem_footprint": "1048576",
+      "placement_node": "node-a",
+      "route_freq": "16"
+    },
+    {
+      "id": "unlabelled",
+      "specialization": null,
+      "cost": 5.0,
+      "latency_p50": 7.0,
+      "latency_p99": 100.0,
+      "load": 0.25,
+      "residency": "RESIDENT",
+      "mem_footprint": "1048576",
+      "placement_node": "node-a",
+      "route_freq": "16"
+    }
+  ],
+
+  "_queries_note": "Each entry states a query and the answer this population makes correct. This is the half a fixture may NOT retype. An expected order written beside a hand-built population is one author agreeing with themselves: when the ranker regresses, the expectation and the population move together and the check stays green. Here the order is a property of THIS file, and a reader is expected to DERIVE it from the offers above and then check its derivation against expect_ids. A wrong derivation and a wrong ranker then cannot cancel, because they would both have to match a third statement written independently of each.",
+
+  "queries": [
+    {
+      "name": "every offer, unordered",
+      "constraint": "",
+      "preference": "",
+      "ordered": false,
+      "expect_ids": ["code-mid", "math-fast", "math-slow", "unlabelled", "untimed"]
+    },
+    {
+      "name": "math by cheapest",
+      "constraint": "specialization == 'math'",
+      "preference": "MIN cost",
+      "ordered": true,
+      "order_by": "cost",
+      "expect_ids": ["math-fast", "math-slow", "untimed"]
+    },
+    {
+      "name": "math under cost 3, cheapest first, TCL's own lowercase spelling",
+      "constraint": "specialization == 'math' and cost < 3",
+      "preference": "min cost",
+      "ordered": true,
+      "order_by": "cost",
+      "expect_ids": ["math-fast", "math-slow"]
+    },
+    {
+      "name": "the offer carrying no specialization at all",
+      "constraint": "not exist specialization",
+      "preference": "",
+      "ordered": false,
+      "expect_ids": ["unlabelled"]
+    },
+    {
+      "name": "a keyword inside a string literal stays a literal",
+      "constraint": "specialization == 'and'",
+      "preference": "",
+      "ordered": false,
+      "expect_ids": []
+    },
+    {
+      "name": "an unmeasured latency is unranked, so it goes last -- never first, and never dropped",
+      "_why": "untimed matches specialization == 'math' but carries no latency_p50, so the preference cannot place it. Two layers each say something true and they are not the same sentence, which is why this entry exists. The ENGINE sets such an offer aside (Selection::unranked): an unknown that merely sorted last still came first when every candidate was unknown, and a router taking the head preferred exactly the experts nobody had timed. The WIRE has one OfferSeq and no way to say 'unranked', so lookup.rs::matching_offers appends them after the ranked ones -- dropping them would make query report fewer matches than matched, which is the same false statement as truncating, and the caller could not tell the answer was short. The engine's argument is about being FIRST, and it survives: untimed is last. An expectation that read only the engine's half of this would say untimed is absent, and would be wrong.",
+      "constraint": "specialization == 'math'",
+      "preference": "MIN latency_p50",
+      "ordered": true,
+      "order_by": "latency_p50",
+      "expect_ids": ["math-fast", "math-slow", "untimed"],
+      "expect_unranked_last": ["untimed"]
+    }
+  ]
+}
