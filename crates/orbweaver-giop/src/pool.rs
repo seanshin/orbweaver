@@ -323,7 +323,7 @@ struct Inner {
     config: crate::orb::OrbConfig,
     state: Guarded<State>,
     /// Raised by [`Pool::close`] and by
-    /// [`Orb::shutdown`](crate::orb::Orb::shutdown) (D032 §6). Deliberately the
+    /// [`Orb::shutdown`](crate::orb::Orb::shutdown) (D034 §6). Deliberately the
     /// same [`StopFlag`](crate::server::StopFlag) type the server side uses:
     /// one flag, raised once, never lowered, with no I/O between raising it and
     /// the next `acquire` seeing it.
@@ -385,7 +385,7 @@ impl Pool {
     }
 
     /// Stops this pool: **no further connection is dialled, and every pooled
-    /// connection is dropped** (D032 §6).
+    /// connection is dropped** (D034 §6).
     ///
     /// Idempotent, and cloning does not escape it — a `Pool` clone shares the
     /// same `Inner`, so closing through one clone closes all of them.
@@ -393,7 +393,7 @@ impl Pool {
     /// # What this does not do
     ///
     /// **A call already in flight on a [`Mux`] a caller holds is not aborted.**
-    /// The caller owns that call; aborting it is the immediate shutdown D032 §4
+    /// The caller owns that call; aborting it is the immediate shutdown D034 §4
     /// refuses, one layer down, and it has the same problem — there is nothing
     /// honest to put on the wire for a call that was started and abandoned. It
     /// completes, or it fails on the timeout it already had. What close
@@ -462,7 +462,7 @@ impl Pool {
     }
 
     fn acquire_connection(&self, ior: &Ior) -> Result<Mux> {
-        // The one choke point (D032 §6): `acquire`, `invoke`, `invoke_with`,
+        // The one choke point (D034 §6): `acquire`, `invoke`, `invoke_with`,
         // `invoke_tracking`, `invoke_oneway` and every `Reference` call funnel
         // through here, so refusing here is refusing all of them. Checked
         // before anything is dialled and before the section is entered.

@@ -8,7 +8,7 @@
 //! 1. bind through [`Orb::server`] and publish the port;
 //! 2. serve on a thread, with **`|| false`** as the caller's own predicate —
 //!    the shape 17 of this workspace's 63 serve sites use, and the shape that
-//!    before D032 could not be stopped without killing the process;
+//!    before D034 could not be stopped without killing the process;
 //! 3. the servant signals when it is entered, and blocks;
 //! 4. the main thread calls [`Orb::shutdown`] on that signal, then releases;
 //! 5. report, and exit on the report.

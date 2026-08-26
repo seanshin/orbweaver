@@ -82,7 +82,7 @@
 //!
 //! # The fifth thing, and why it is not `run`
 //!
-//! [`Orb::shutdown`] exists (D032). D019 §5's refusal named
+//! [`Orb::shutdown`] exists (D034). D019 §5's refusal named
 //! *"`ORB::run`/`shutdown` semantics"* together, and **the half that was
 //! refused is `run`** — an event-loop model, a main thread parked in the ORB,
 //! which this ORB does not have and does not grow here. D029 §3.1 measured why
@@ -94,7 +94,7 @@
 //! `serve_shared` still takes the caller's own stop predicate, and the ORB
 //! joins nothing — it raises a flag that is OR'd with that predicate, with
 //! neither privileged. The bound this buys is on [`Orb::shutdown`]; the
-//! argument is D032.
+//! argument is D034.
 //!
 //! *거절된 절반은 `run`이다. 서빙 모델은 움직이지 않는다 — 호출자가 여전히 스레드를
 //! 소유하고, ORB는 아무것도 합류시키지 않는다.*
@@ -261,7 +261,7 @@ impl std::error::Error for InvalidName {}
 pub struct Orb {
     initial: BTreeMap<String, Ior>,
     config: OrbConfig,
-    /// What this ORB has handed out and can take back (D032).
+    /// What this ORB has handed out and can take back (D034).
     ///
     /// **Shared across clones**, unlike the two fields above. That asymmetry is
     /// the deliberate part: a clone that could not stop what the original
@@ -657,7 +657,7 @@ impl Orb {
     ///
     /// Whatever binding the listener answered — the address was taken, or is
     /// not one this host can bind — or [`Error::Stopped`](crate::Error::Stopped)
-    /// if [`Orb::shutdown`] has been called. See D032 §7 for why a stopped ORB
+    /// if [`Orb::shutdown`] has been called. See D034 §7 for why a stopped ORB
     /// refuses rather than obliges.
     ///
     /// *문이 하나면 설정이 도착하지 못할 곳이 없다.*
@@ -711,7 +711,7 @@ impl Orb {
     ///
     /// # On a stopped ORB
     ///
-    /// The pool is handed out **already closed** (D032 §6): it dials nothing
+    /// The pool is handed out **already closed** (D034 §6): it dials nothing
     /// and every call through it answers
     /// [`Error::Stopped`](crate::Error::Stopped).
     ///
@@ -736,7 +736,7 @@ impl Orb {
     /// and the answer to the design question D029 §5 O1 asked in writing first.
     ///
     /// The argument for this shape lives in
-    /// `docs/decisions/D032-stopping-what-the-orb-handed-out.md` and is not
+    /// `docs/decisions/D034-stopping-what-the-orb-handed-out.md` and is not
     /// repeated here. **The bound is here**, because the bound is this API's
     /// contract and its reader is holding this API.
     ///
@@ -764,7 +764,7 @@ impl Orb {
     /// never a bare TCP close with a request outstanding — §9.4.7 makes
     /// `CloseConnection` mean *"not processed, safe to re-send elsewhere"*, and
     /// that stays true only because the request after the flag is left
-    /// **unread** rather than read and dropped (D032 §3).
+    /// **unread** rather than read and dropped (D034 §3).
     ///
     /// # What a caller holding a `Server` sees
     ///
@@ -785,10 +785,10 @@ impl Orb {
     ///
     /// Calling it twice is harmless; there is no un-shutdown. Afterwards
     /// [`Orb::server`] refuses and [`Orb::pool`] hands out a closed pool, so
-    /// `shutdown` is a lifecycle rather than a suggestion (D032 §7).
+    /// `shutdown` is a lifecycle rather than a suggestion (D034 §7).
     ///
     /// *한계는 여기에 산다 — 한계는 이 API의 계약이고 그것을 필요로 하는 사람은 이
-    /// API를 들고 있기 때문이다. 논증은 D032에 있고 여기서 되풀이하지 않는다.*
+    /// API를 들고 있기 때문이다. 논증은 D034에 있고 여기서 되풀이하지 않는다.*
     pub fn shutdown(&self) -> Shutdown {
         // Raised **first**, and this ordering is what the race comments in
         // `server` and `pool_with_limits` depend on.
@@ -851,7 +851,7 @@ impl Orb {
     /// instructions after that — restoring the listener to blocking, returning
     /// through `thread::scope` — are not covered. That is a real gap of
     /// microseconds, not milliseconds, and it is written down rather than
-    /// smoothed over (D032 §9).
+    /// smoothed over (D034 §9).
     ///
     /// Returns `true` immediately if this ORB handed out no live server.
     ///

@@ -30,7 +30,7 @@
 //! mean *"not processed, re-send elsewhere"*, so a request read after the flag
 //! and then dropped would turn the goodbye into a lie about a request that had
 //! been processed, and a peer acting correctly on it would execute the
-//! operation twice. See `docs/decisions/D032-stopping-what-the-orb-handed-out.md`.
+//! operation twice. See `docs/decisions/D034-stopping-what-the-orb-handed-out.md`.
 //!
 //! # Both byte orders, and every version
 //!
@@ -211,7 +211,7 @@ fn a_peer_mid_call_gets_its_reply_and_then_the_goodbye() {
             let addr = server.local_addr().expect("bound address");
 
             // `|| false` on purpose. It is the shape 17 of this workspace's 63
-            // serve sites use, and before D032 it meant *this server cannot be
+            // serve sites use, and before D034 it meant *this server cannot be
             // stopped without killing the process*. If the ORB's flag were not
             // OR'd in, this test would hang rather than fail — which is why the
             // client's reads are bounded.
@@ -343,7 +343,7 @@ fn serves_and_returns(
 }
 
 /// The caller's predicate and the ORB's flag are the **same event**, and
-/// `serve` does not tell them apart (D032 §5). What a caller can ask is
+/// `serve` does not tell them apart (D034 §5). What a caller can ask is
 /// `Server::stop_requested`, and that is the one place the two differ.
 #[test]
 fn the_caller_can_ask_which_flag_it_was_and_gets_the_same_return_either_way() {
@@ -363,12 +363,12 @@ fn the_caller_can_ask_which_flag_it_was_and_gets_the_same_return_either_way() {
     orb.shutdown();
     assert!(server.stop_requested(), "the ORB asked");
     // `|| false` — the shape 17 of this workspace's serve sites use, and before
-    // D032 the shape that could not be stopped at all.
+    // D034 the shape that could not be stopped at all.
     assert!(serves_and_returns(server, || false), "the ORB's flag ends it, and the same Ok");
     assert!(asked.raised());
 }
 
-/// A stopped ORB **hands out no new transport** (D032 §7), or `shutdown` would
+/// A stopped ORB **hands out no new transport** (D034 §7), or `shutdown` would
 /// mean "stop the ones I have already given" and the next line could undo it.
 ///
 /// The two halves refuse differently on purpose and the difference is the
@@ -405,7 +405,7 @@ fn a_stopped_orb_hands_out_no_new_transport() {
 }
 
 /// A pool's close means **nobody new gets a connection**, and deliberately not
-/// *"calls in flight are aborted"* (D032 §6).
+/// *"calls in flight are aborted"* (D034 §6).
 ///
 /// Measured as the boundary rather than asserted as a sentence: a `Mux` taken
 /// before the close still carries a call, and an `acquire` after it does not
@@ -520,7 +520,7 @@ fn shutting_down_a_clone_stops_the_originals_servers() {
 
 /// Equality is equality of **configuration**, stated as a test because the
 /// hand-written `PartialEq` is the kind of thing a later reader would otherwise
-/// have to infer from its body (D032; `Orb`'s `PartialEq` docs).
+/// have to infer from its body (D034; `Orb`'s `PartialEq` docs).
 #[test]
 fn orb_equality_is_about_configuration_and_not_about_being_stopped() {
     let a = Orb::new();

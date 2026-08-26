@@ -100,7 +100,7 @@ name = "spike-half-reply"
 path = "src/bin/spike_half_reply.rs"
 
 # The fixture `spikes/orb_shutdown_peer.py` dials: a server stopped by its ORB
-# while a request is inside its servant (D029 §5 O1, D032). The measurement is
+# while a request is inside its servant (D029 §5 O1, D034). The measurement is
 # the peer's exit code, not this one's.
 [[bin]]
 name = "spike-orb-shutdown"

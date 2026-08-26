@@ -34,7 +34,7 @@ this is the end that applies none of ours.
 
 # The verdict is the exit code
 
-- **0** — exactly what D032 §3 says: a reply to request 1, then a
+- **0** — exactly what D034 §3 says: a reply to request 1, then a
   `CloseConnection` with an empty body, and **no reply to request 2**.
 - **1** — refuted. The transcript is in the JSON and says which third failed.
 - **3** — nothing measured (could not connect, could not read). Not a pass: an
@@ -211,7 +211,7 @@ def main():
                     msg = read_message(sock)
                 except ConnectionResetError:
                     # **A reset is an observation, not a failure to measure**,
-                    # and telling the two apart is not pedantry: D032 §3's third
+                    # and telling the two apart is not pedantry: D034 §3's third
                     # sentence is that a live connection ends with
                     # `CloseConnection` and never with a bare TCP close, so a
                     # reset here is precisely the thing being refuted. Filing it
@@ -234,7 +234,7 @@ def main():
         return UNMEASURED
 
     seen = report["seen"]
-    # The three sentences of D032 §3, each failing on its own.
+    # The three sentences of D034 §3, each failing on its own.
     answered_in_full = (
         len(seen) >= 1
         and seen[0]["kind"] == "reply"

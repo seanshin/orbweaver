@@ -104,12 +104,12 @@
 //! thread is left behind. A peer that starts a message and then stalls is
 //! bounded too, by [`Server::set_message_timeout`].
 //!
-//! **Two things can raise it, and neither is privileged** (D032): the `stop`
+//! **Two things can raise it, and neither is privileged** (D034): the `stop`
 //! predicate the caller passes, and [`Server::stop_flag`] — which the
 //! [`Orb`](crate::orb::Orb) that handed out this server also holds, so
 //! [`Orb::shutdown`](crate::orb::Orb::shutdown) reaches every server it
 //! created. What a peer mid-call observes across that is the bound stated on
-//! `Orb::shutdown`, and the argument for it is D032. Before D032 the ORB gave
+//! `Orb::shutdown`, and the argument for it is D034. Before D034 the ORB gave
 //! transport and could not take it back; measured that day, **17 of this
 //! workspace's 63 serve sites passed `|| false`** and could only be stopped by
 //! killing the process.
@@ -930,7 +930,7 @@ pub const STOP_POLL: Duration = Duration::from_millis(50);
 /// messages is not affected and may idle forever.
 pub const DEFAULT_MESSAGE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// A raised-once request that a [`Server`] stop serving (D032).
+/// A raised-once request that a [`Server`] stop serving (D034).
 ///
 /// Cloning shares the flag, which is the whole point: the
 /// [`Orb`](crate::orb::Orb) that handed out a [`Server`] keeps one of these and
@@ -938,7 +938,7 @@ pub const DEFAULT_MESSAGE_TIMEOUT: Duration = Duration::from_secs(30);
 ///
 /// # Raised once, never lowered
 ///
-/// There is no `lower`. D032 §7: a lowerable flag produces a connection thread
+/// There is no `lower`. D034 §7: a lowerable flag produces a connection thread
 /// that has already written its `CloseConnection` and finds the service running
 /// again, with no way to take the goodbye back. Restarting means a new
 /// [`Server`], because it already meant a new listener.
@@ -949,7 +949,7 @@ pub const DEFAULT_MESSAGE_TIMEOUT: Duration = Duration::from_secs(30);
 /// between it and the loops observing it** — no socket to write, no
 /// [`Guarded`](crate::guarded::Guarded) section to enter. That is what lets
 /// [`Orb::shutdown`](crate::orb::Orb::shutdown) state its bound as a number of
-/// requests rather than as a duration nobody can hold to. See D032 §3.1.
+/// requests rather than as a duration nobody can hold to. See D034 §3.1.
 ///
 /// *올린 뒤 내리지 않는다. 올리는 것과 관측하는 것 사이에 I/O도 락도 없다 — 그래서
 /// 한계를 시간이 아니라 요청 개수로 말할 수 있다.*
@@ -1193,7 +1193,7 @@ pub struct Server {
     /// the stop flag again. [`STOP_POLL`] is this field's default.
     stop_poll: Duration,
     stats: ServerStats,
-    /// The ORB's half of the stop decision (D032). OR'd with the caller's own
+    /// The ORB's half of the stop decision (D034). OR'd with the caller's own
     /// predicate in [`Server::serve_shared`], with neither privileged — an ORB
     /// nobody asks to stop never raises it, so this field changes nothing for
     /// every existing caller.
@@ -1258,7 +1258,7 @@ impl Server {
         self.stats.clone()
     }
 
-    /// This server's half of the ORB-level stop (D032), clonable and usable
+    /// This server's half of the ORB-level stop (D034), clonable and usable
     /// from another thread.
     ///
     /// The [`Orb`](crate::orb::Orb) that handed this server out holds a
@@ -1276,7 +1276,7 @@ impl Server {
     /// answers `Ok(())` whether it was the ORB's flag or the caller's own
     /// predicate that ended it, because the two are the same event and a
     /// distinct return would make callers branch on a difference with no
-    /// consequence (D032 §5). A supervisor deciding whether to rebind is the
+    /// consequence (D034 §5). A supervisor deciding whether to rebind is the
     /// one reader for whom the answer matters, and it asks here.
     pub fn stop_requested(&self) -> bool {
         self.stop.raised()
@@ -1430,8 +1430,8 @@ impl Server {
         // of every path, including an unwinding panic.
         let _serving = self.stats.serving_now();
         // **The ORB's flag and the caller's predicate, OR'd, with neither
-        // privileged** (D032 §2). An ORB nobody asks to stop never raises its
-        // half, so for every caller that existed before D032 this reads exactly
+        // privileged** (D034 §2). An ORB nobody asks to stop never raises its
+        // half, so for every caller that existed before D034 this reads exactly
         // as `stop()` did — which is what makes "no behaviour change by
         // default" a property of the expression rather than a claim about it.
         let orb_stop = self.stop.clone();

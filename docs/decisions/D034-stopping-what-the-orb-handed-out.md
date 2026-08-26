@@ -1,4 +1,4 @@
-# D032 — Stopping what the ORB handed out, and why that is not `run()`
+# D034 — Stopping what the ORB handed out, and why that is not `run()`
 
 **STATUS: PROPOSED** — drafted 2026-08-26 answering the design question
 [`D029`](D029-what-a-complete-orb-would-mean.md) §5 O1 asks *"first and in

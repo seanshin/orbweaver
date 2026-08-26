@@ -450,7 +450,7 @@ pub enum Error {
     },
     /// The [`Orb`](orb::Orb) that owns this transport has been stopped, or the
     /// [`Pool`](pool::Pool) has been closed, so no new transport is handed out
-    /// and no new connection is dialled (D032 §7).
+    /// and no new connection is dialled (D034 §7).
     ///
     /// **Not the same as a transport that failed**, which is why it is its own
     /// variant rather than an `Io` error: nothing was attempted. A caller that
@@ -576,7 +576,7 @@ impl fmt::Display for Error {
                 write!(
                     f,
                     "{what} was asked for after the ORB was stopped; \
-                     a stopped ORB hands out no new transport (D032 §7)"
+                     a stopped ORB hands out no new transport (D034 §7)"
                 )
             }
             #[cfg(feature = "ssliop")]

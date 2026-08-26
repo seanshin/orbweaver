@@ -224,7 +224,7 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   every capture from the live fixture (`spikes/*_capture.py`).
 - **Our own counters are not what a peer saw, and a two-process fixture must
   never let its own exit code vouch for the peer's.** Measured 2026-08-26
-  (D032 §5.1): with the ORB's shutdown deliberately broken to drop in-flight
+  (D034 §5.1): with the ORB's shutdown deliberately broken to drop in-flight
   work, `spike-orb-shutdown` printed `servers_stopped:1, went_quiet:true,
   serve_returned_ok:true` and **exited 0** — every number this side keeps said
   the shutdown was clean — while the peer on the other end of the same socket
@@ -425,7 +425,7 @@ cargo run -q --bin repository-ids -- corpus/pragma/*.idl   # ids, to diff agains
                                 # server under it — the peer imports no ORB and builds its
                                 # own §9.4 requests, both byte orders. Its exit code is the
                                 # measurement; the fixture's own counters are printed beside
-                                # it and never allowed to vouch for it (D032 §5.1)
+                                # it and never allowed to vouch for it (D034 §5.1)
 ./spikes/jacorb_giop11.sh · ./spikes/jacorb_wchar11.sh · ./spikes/wide_rust.sh
                                 # GIOP 1.1/1.2 wide text against JacORB, version asserted from bytes
 python3 spikes/union_label_capture.py · python3 spikes/union_default_capture.py

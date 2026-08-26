@@ -108,6 +108,34 @@ crates had written them again and one had gone false for three days.
 순서로 측정되고 그 거부가 우리와 **같은 문장**을 말할 때다. 그에 못 미치면 방출기이며
 그렇게 부른다.*
 
+### 3.1 Where Python stands against the rule, clause by clause (2026-08-26)
+
+The rule has three clauses, and a target that meets two of them is an emitter.
+Stated as clauses so that "Python is a target" is never asserted as one word.
+
+| Clause | Servant direction | Client direction |
+|---|---|---|
+| measured against **a peer that is not us** | **met** — omniORB (`omniorb_calls_a_python_servant`) and JacORB (`jacorb_calls_a_python_servant`), both calling a Python servant behind our ORB | **met** — the live leg recorded in `docs/pipeline-runs/2026-08-14-python-target.md` |
+| **in both byte orders** | **met, 2026-08-26** — little-endian by omniORB, big-endian by JacORB, and in each case the order is read out of §15.4.1's flag byte on the peer's own request rather than assumed from its language | **not established by that batch and not by this one.** `python_target.rs` walks both orders, but through `_rt.Loopback` with no peer in it; the live leg's peer is omniORB, which writes its native order. What is missing is the same shape as what JacORB just closed, one direction over |
+| **refusals say the same sentences ours do** | **met** — the five wire-refusal heads are `pub` in `orbweaver-dynamic` and the generated Python runtime reads them, with a gate that computes the expected text by calling the same function | same |
+
+**What the second order actually bought.** Not reassurance: the two servants'
+replies are compared as **bytes**, so this is the first measurement in which a
+padding byte or an alignment origin that differed between the Python seam and
+the Rust skeleton could have shown up under a peer that chose big-endian. It
+did not — 11 of 11 replies identical at IIOP 1.2 and 1.1 — and D029 §6.1.1
+records that the list of remaining language differences **did not grow**, along
+with the three things that leg still does not measure.
+
+*규칙에는 절이 셋이고, 둘만 충족한 대상은 방출기다. 서번트 방향은 세 절 모두
+충족한다 — 바이트 순서는 피어의 언어가 아니라 피어가 쓴 플래그 바이트에서 읽는다.
+**클라이언트 방향의 "양쪽 순서"는 아직 성립하지 않았다**: `python_target.rs`는 양쪽을
+돌지만 피어 없이 루프백이고, 살아 있는 다리의 피어는 자기 고유 순서로 쓰는
+omniORB다. 두 번째 순서가 사 준 것은 안심이 아니라 **바이트 비교**다 — 심과 스켈레톤
+사이의 패딩·정렬 차이가 드러날 수 있었던 첫 측정이며, 드러나지 않았다(1.2·1.1에서
+11/11 동일). 남은 차이 목록이 늘지 않았다는 것과 그 다리가 여전히 재지 못하는 세
+가지는 D029 §6.1.1에 있다.*
+
 ## 4. What must not happen / 해서는 안 되는 것
 
 - **No second ORB core until a consumer names one.** Proposition C above. The
@@ -159,6 +187,43 @@ reserved words are not Rust's or Python's, and `corpus/golden/28-target-keywords
 exists precisely because no emitter's escaping had been executed until it did.
 Adding a target means adding its keyword list to that file's coverage —
 CLAUDE.md says so already.
+
+**The prediction was too narrow, and the counter-example arrived before the
+target did (2026-08-26).** Building the JacORB fixture for §3.1's big-endian
+measurement meant running `org.jacorb.idl.parser` 3.9 over
+`corpus/golden/24-skeleton-surface.idl`, and the Java it emitted **did not
+compile**: `_GaugeStub.java` declares `catch (java.io.IOException e)` inside
+every operation's method body, in the same scope as that operation's own
+parameters, while every other local it writes is `_`-prefixed. So an IDL
+parameter named `e` is fatal — and 24 has one on purpose, because *"`e` is what
+a hand-written encoder would have called its encoder."* Two errors, nothing in
+the package builds.
+
+Three things follow, and the third is the one that changes L2's scope.
+
+1. **The hazard is not "reserved words", it is *every* identifier the emitter's
+   own template puts in scope** — a caught exception, a loop variable, a
+   temporary. Java's keyword list would not have caught this, because `e` is
+   not a Java keyword.
+2. **A production ORB's emitter has the defect**, which is worth knowing before
+   we claim our own does not: the fixture's IDL copy renames the parameter, and
+   a parameter name is not on the wire, so the workaround costs the measurement
+   nothing.
+3. **`28-target-keywords.idl` should grow a section for template-locals, not
+   just keywords**, when the Java emitter is written — and the honest way to
+   populate it is to read what our own templates put in scope, since that is
+   the list only we can know.
+
+*예측이 너무 좁았고, 반례가 대상보다 먼저 왔다(2026-08-26). §3.1의 빅엔디언 측정을
+위해 JacORB 픽스처를 세우며 `org.jacorb.idl.parser` 3.9을 24번 계약에 돌렸더니
+**컴파일되지 않는 Java**가 나왔다: 생성된 스텁이 연산의 매개변수와 같은 스코프에
+`catch (java.io.IOException e)`를 두는데, 다른 지역 변수는 모두 `_` 접두사를 붙인다.
+그래서 `e`라는 이름의 IDL 매개변수는 치명적이며, 24번은 바로 그 이름을 일부러 갖고
+있다. 따라오는 것 셋: (1) 위험은 "예약어"가 아니라 **방출기 자신의 템플릿이 스코프에
+넣는 모든 식별자**다 — `e`는 Java 예약어가 아니다, (2) 실제 운영 ORB의 방출기가 이
+결함을 갖고 있다(픽스처는 매개변수 이름을 바꿔 쓰며, 매개변수 이름은 와이어에 없다),
+(3) `28-target-keywords.idl`은 예약어만이 아니라 **템플릿 지역 변수** 절을 가져야
+하고, 그 목록은 우리 템플릿을 읽어야만 알 수 있다.*
 
 ### L3 — the developer tools that are missing, and they are not an IDE
 

@@ -44,13 +44,21 @@
 
 mod emitted;
 
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use orbweaver_cdr::Endian;
+use orbweaver_gen::rt::ObjectHome;
+use orbweaver_giop::orb::Orb;
 use orbweaver_giop::{Connection, Ior, Version};
 
-use emitted::f_24_skeleton_surface::gc24::GaugeClient;
+use emitted::f_24_skeleton_surface::gc24::{
+    Busy, GaugeClient, GaugeFault, GaugeRefs, GaugeServant, GaugeSkeleton, GaugeTarget, Reading,
+    Rejected,
+};
 
 const VERSIONS: [Version; 3] = [Version::V1_0, Version::V1_1, Version::V1_2];
 
@@ -440,13 +448,13 @@ print("OK")
 /// both orders in `python_servant.rs`. What is missing is specifically
 /// *foreign peer × big-endian*.
 ///
-/// What would close it: **JacORB**, which is already a fixture here
-/// (`spikes/jacorb/setup.sh`, the differential's second front end, the GIOP
-/// 1.1/1.2 wide-text measurements) and whose Java runtime emits big-endian.
-/// A driver of the same shape as [`OMNIORB_DRIVER`], run against the same
-/// servant, would measure the order omniORB cannot reach. It is not written
-/// here because this batch could not start that fixture; it is the next
-/// measurement this file wants.
+/// What closes it: **JacORB**, and it is now written —
+/// [`jacorb_calls_a_python_servant`], below, runs
+/// `spikes/jacorb/GaugeDriver.java` against this same servant and reads the
+/// byte order out of the request's flag byte rather than out of the language.
+/// This test keeps its own limit stated because it is still true *of this
+/// test*: the omniORB leg is little-endian in both directions and always will
+/// be on a little-endian host.
 #[test]
 fn omniorb_calls_a_python_servant() {
     if !omniorb_available() {
@@ -517,5 +525,637 @@ fn omniorb_calls_a_python_servant() {
             "the peer's output mentions {leak:?}, so the servant's implementation \
              reached its caller:\n{stdout}"
         );
+    }
+}
+
+// ── The other endianness ─────────────────────────────────────────────────────
+//
+// Everything below exists for one sentence in D030 §3 — *"in both byte
+// orders"* — and for the half of it omniORB cannot reach on a little-endian
+// host. The order is read out of the request's flag byte, never out of the
+// peer's language.
+
+/// The bare root key the Rust servant below is bound with, and the type it
+/// serves. Both halves of this comparison serve the same contract; only the
+/// key differs, and a key travels in the *request*, which is why the replies
+/// can be compared byte for byte at all.
+const RUST_KEY: &[u8] = b"gauge";
+const TYPE_ID: &str = "IDL:gc24/Gauge:1.0";
+
+/// The one edit the JacORB copy of the contract carries, and why it is safe.
+///
+/// `org.jacorb.idl.parser` 3.9 emits, for **every** operation, a stub method
+/// whose body contains `catch (java.io.IOException e)` — an unprefixed local in
+/// the same scope as the operation's own parameters, while every other local it
+/// writes is `_`-prefixed. So an IDL parameter named `e` produces Java that does
+/// not compile, and `corpus/golden/24-skeleton-surface.idl` has one on purpose:
+/// *"`e` is what a hand-written encoder would have called its encoder. The rule
+/// needs a case that would break without it."* It broke a third-party emitter
+/// too, which is the finding; two errors in `_GaugeStub.java`, and nothing in
+/// the package builds.
+///
+/// **A parameter name is not on the wire.** GIOP marshals an operation's
+/// arguments positionally and carries only the operation's name (§15.4.2), so
+/// renaming one changes no byte of any request, reply or exception this test
+/// compares — which is what makes the workaround a workaround and not a
+/// different measurement. The servants on the other side are still generated
+/// from the corpus file, unedited.
+const JACORB_CANNOT_COMPILE: &str = "long scale_all(in double e);";
+const JACORB_CAN_COMPILE: &str = "long scale_all(in double factor);";
+
+/// The jars `spikes/jacorb/setup.sh` fetches. Named here so an incomplete
+/// fixture is *absent* rather than a confusing `javac` failure.
+const JACORB_JARS: [&str; 5] = [
+    "jacorb.jar",
+    "jacorb-omgapi.jar",
+    "jacorb-idl-compiler.jar",
+    "jboss-rmi-api.jar",
+    "slf4j-api-1.7.36.jar",
+];
+
+// ── A recording relay ────────────────────────────────────────────────────────
+
+/// One GIOP message the tap saw, with the facts read out of its 12-byte header.
+#[derive(Clone)]
+struct Frame {
+    /// True for a message travelling peer → us.
+    from_client: bool,
+    /// §15.4.1's flag bit 0, inverted: the bit is *set* for little-endian, so
+    /// this is the byte order **the peer chose**, taken from the byte it wrote.
+    big: bool,
+    version: (u8, u8),
+    /// §15.4.1 message type: 0 Request, 1 Reply, 3 LocateRequest, 4 LocateReply.
+    mtype: u8,
+    bytes: Vec<u8>,
+}
+
+/// A TCP relay that records every GIOP message crossing it.
+///
+/// The same instrument `spikes/jacorb_giop11_tap.py` is, in Rust and inside the
+/// test that needs it: a peer's byte order and a servant's reply bytes are read
+/// off the wire rather than inferred from what came back. It changes nothing in
+/// flight.
+///
+/// **A message is recorded before it is forwarded**, so by the time either peer
+/// can act on a message the log already holds it — otherwise the driver could
+/// exit and be observed before the tap had filed its last reply, and the
+/// comparison would race.
+struct Tap {
+    addr: SocketAddr,
+    frames: Arc<Mutex<Vec<Frame>>>,
+    stop: Arc<AtomicBool>,
+    accept: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Tap {
+    fn start(target: SocketAddr) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind the tap");
+        let addr = listener.local_addr().expect("the tap's address");
+        let frames = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (f, s) = (frames.clone(), stop.clone());
+        let accept = std::thread::spawn(move || {
+            for client in listener.incoming() {
+                if s.load(Ordering::SeqCst) {
+                    break;
+                }
+                let Ok(client) = client else { break };
+                let Ok(server) = TcpStream::connect(target) else { continue };
+                let (client_back, server_back) = match (client.try_clone(), server.try_clone()) {
+                    (Ok(a), Ok(b)) => (a, b),
+                    _ => continue,
+                };
+                let up = f.clone();
+                let down = f.clone();
+                std::thread::spawn(move || relay(client, server, true, up));
+                std::thread::spawn(move || relay(server_back, client_back, false, down));
+            }
+        });
+        Self { addr, frames, stop, accept: Some(accept) }
+    }
+
+    fn frames(&self) -> Vec<Frame> {
+        self.frames.lock().expect("the tap's log").clone()
+    }
+
+    /// The peer's copy of an IOR: the same reference, dialled through the tap,
+    /// and optionally republished at another IIOP version — which is what makes
+    /// a peer whose outbound GIOP version follows the profile speak 1.1.
+    ///
+    /// Every component, `TAG_CODE_SETS` included, is carried over unchanged,
+    /// so the peer still negotiates against what the real server advertised.
+    fn through(&self, ior: &Ior, version: Option<Version>) -> Ior {
+        let mut out = ior.clone();
+        for p in &mut out.profiles {
+            p.host = self.addr.ip().to_string();
+            p.port = self.addr.port();
+            if let Some(v) = version {
+                p.version = v;
+            }
+        }
+        out
+    }
+}
+
+impl Drop for Tap {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let _ = TcpStream::connect(self.addr); // wake the accept loop
+        if let Some(t) = self.accept.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+fn relay(mut src: TcpStream, mut dst: TcpStream, from_client: bool, log: Arc<Mutex<Vec<Frame>>>) {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 65536];
+    loop {
+        let n = match src.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        buf.extend_from_slice(&chunk[..n]);
+        while buf.len() >= 12 {
+            if &buf[..4] != b"GIOP" {
+                buf.clear();
+                break;
+            }
+            let big = buf[6] & 1 == 0;
+            let raw: [u8; 4] = buf[8..12].try_into().expect("four bytes");
+            let size = if big { u32::from_be_bytes(raw) } else { u32::from_le_bytes(raw) } as usize;
+            if buf.len() < 12 + size {
+                break;
+            }
+            let bytes: Vec<u8> = buf.drain(..12 + size).collect();
+            let frame =
+                Frame { from_client, big, version: (bytes[4], bytes[5]), mtype: bytes[7], bytes };
+            log.lock().expect("the tap's log").push(frame);
+        }
+        if dst.write_all(&chunk[..n]).is_err() {
+            break;
+        }
+    }
+    let _ = dst.shutdown(std::net::Shutdown::Write);
+}
+
+// ── The Rust servant, over the same wire ─────────────────────────────────────
+
+/// A gauge, in Rust — the servant an application author writes today, and the
+/// thing the Python one has to be byte-identical to.
+///
+/// Held to the same shape as `skeleton_wire.rs`'s and `python_servant.rs`'s
+/// `Bench` deliberately: the claim is that the *other* servant answers the
+/// same, so the Rust half must be the ordinary one and not a special case.
+struct Bench {
+    samples: Vec<f64>,
+    label: String,
+    latest: Reading,
+    /// The negative control for the byte-identity comparison below, set from
+    /// the environment so a harness can make this group red without editing a
+    /// source file. A comparison with no way to fail is
+    /// green-while-measuring-nothing.
+    perturb: bool,
+}
+
+impl Default for Bench {
+    fn default() -> Self {
+        Self {
+            samples: Vec::new(),
+            label: "unset".into(),
+            latest: Reading { at: 0.0, sequence_no: 0, unit: String::new() },
+            perturb: std::env::var("ORBWEAVER_JACORB_PERTURB").is_ok(),
+        }
+    }
+}
+
+impl GaugeServant for Bench {
+    fn knows(&self, at: &GaugeTarget<'_>) -> bool {
+        at.is_default()
+    }
+
+    fn latest(&mut self, _at: &GaugeTarget<'_>) -> Result<Reading, GaugeFault> {
+        Ok(self.latest.clone())
+    }
+
+    fn label(&mut self, _at: &GaugeTarget<'_>) -> Result<String, GaugeFault> {
+        Ok(self.label.clone())
+    }
+
+    fn set_label(&mut self, _at: &GaugeTarget<'_>, value: String) -> Result<(), GaugeFault> {
+        self.label = value;
+        Ok(())
+    }
+
+    fn record(
+        &mut self,
+        _at: &GaugeTarget<'_>,
+        sample: f64,
+        unit: String,
+    ) -> Result<Reading, GaugeFault> {
+        if sample < 0.0 {
+            return Err(GaugeFault::Rejected(Rejected {
+                why: "a sample below zero is not a reading".into(),
+                code: 7,
+            }));
+        }
+        if unit.is_empty() {
+            return Err(GaugeFault::Busy(Busy {}));
+        }
+        self.samples.push(sample);
+        let sequence_no = self.samples.len() as i32 + i32::from(self.perturb);
+        self.latest = Reading { at: sample, sequence_no, unit: unit.clone() };
+        Ok(self.latest.clone())
+    }
+
+    fn scale_all(&mut self, _at: &GaugeTarget<'_>, e: f64) -> Result<i32, GaugeFault> {
+        for s in &mut self.samples {
+            *s *= e;
+        }
+        self.latest.at *= e;
+        Ok(self.samples.len() as i32)
+    }
+
+    fn reset(&mut self, _at: &GaugeTarget<'_>) -> Result<(), GaugeFault> {
+        self.samples.clear();
+        self.latest = Reading { at: 0.0, sequence_no: 0, unit: String::new() };
+        Ok(())
+    }
+
+    fn split(&mut self, _at: &GaugeTarget<'_>) -> Result<(f64, String), GaugeFault> {
+        Ok((self.latest.at, self.latest.unit.clone()))
+    }
+}
+
+/// Runs `f` against a live server whose dispatcher is the generated Rust
+/// skeleton, handing it the reference and the address to dial.
+///
+/// The stop flag is observed between accepts and the loop is woken with one
+/// throwaway connection — a sleeping, deadline-free wake instead of a spin.
+fn with_rust_servant<F: FnOnce(&Ior, SocketAddr)>(f: F) {
+    let server = Orb::new().server("127.0.0.1:0", RUST_KEY.to_vec()).expect("bind");
+    let addr = server.local_addr().expect("addr");
+    let ior = server.ior(TYPE_ID, "127.0.0.1").expect("ior");
+    let home = ObjectHome::of(&server, "127.0.0.1").expect("home");
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = stop.clone();
+    let t = std::thread::spawn(move || {
+        let mut skeleton = GaugeSkeleton::new(GaugeRefs::new(home), Bench::default());
+        server.serve(&mut skeleton, || flag.load(Ordering::SeqCst)).expect("serve");
+    });
+
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&ior, addr)));
+
+    stop.store(true, Ordering::SeqCst);
+    let _ = TcpStream::connect(addr);
+    t.join().expect("the server thread must not panic");
+    if let Err(p) = outcome {
+        std::panic::resume_unwind(p);
+    }
+}
+
+// ── The fixture ──────────────────────────────────────────────────────────────
+
+/// JacORB's IDL compiler and Java compiler, run once, and the driver they
+/// produce.
+///
+/// A fixture that is **absent** returns `None` and the caller says so; a
+/// fixture that is present and will not *start* panics. That split is
+/// `CLAUDE.md`'s: an unmeasured check is a failure, never a pass, and the only
+/// thing allowed to be silent is a machine that never had the fixture.
+struct JacorbFixture {
+    java: std::path::PathBuf,
+    classpath: String,
+    jacorb: std::path::PathBuf,
+    dir: TempDir,
+}
+
+impl JacorbFixture {
+    fn prepare() -> Option<Self> {
+        let jacorb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../spikes/jacorb")
+            .canonicalize()
+            .ok()?;
+        let home = std::env::var("JAVA_HOME_21").unwrap_or_else(|_| {
+            "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home".to_owned()
+        });
+        let java = std::path::Path::new(&home).join("bin/java");
+        let javac = std::path::Path::new(&home).join("bin/javac");
+        if !java.is_file() || !javac.is_file() {
+            return None;
+        }
+        let jars: Vec<std::path::PathBuf> =
+            JACORB_JARS.iter().map(|j| jacorb.join("lib").join(j)).collect();
+        if jars.iter().any(|j| !j.is_file()) {
+            return None;
+        }
+        let driver = jacorb.join("GaugeDriver.java");
+        if !driver.is_file() {
+            return None;
+        }
+
+        let dir = TempDir::new("orbweaver-jacorb-gauge")?;
+        let jar_path = jars.iter().map(|j| j.display().to_string()).collect::<Vec<_>>().join(":");
+
+        // The contract, with the one name JacORB's own emitter cannot compile.
+        let source = std::fs::read_to_string(contract()).expect("the corpus contract");
+        assert_eq!(
+            source.matches(JACORB_CANNOT_COMPILE).count(),
+            1,
+            "the corpus contract no longer contains {JACORB_CANNOT_COMPILE:?}; this copy \
+             exists only to rename that parameter and must not silently rename nothing"
+        );
+        let idl = dir.path().join("gauge24.idl");
+        std::fs::write(&idl, source.replace(JACORB_CANNOT_COMPILE, JACORB_CAN_COMPILE))
+            .expect("write the JacORB copy of the contract");
+
+        let generated = dir.path().join("gen");
+        let classes = dir.path().join("classes");
+        std::fs::create_dir_all(&generated).expect("mkdir gen");
+        std::fs::create_dir_all(&classes).expect("mkdir classes");
+
+        let idl_out = std::process::Command::new(&java)
+            .arg("-cp")
+            .arg(&jar_path)
+            .arg("org.jacorb.idl.parser")
+            .arg("-d")
+            .arg(&generated)
+            .arg(&idl)
+            .output()
+            .expect("run JacORB's IDL compiler");
+        assert!(
+            idl_out.status.success(),
+            "JacORB's IDL compiler would not run ({}):\n{}\n{}",
+            idl_out.status,
+            String::from_utf8_lossy(&idl_out.stdout),
+            String::from_utf8_lossy(&idl_out.stderr)
+        );
+
+        let mut sources: Vec<std::path::PathBuf> = std::fs::read_dir(generated.join("gc24"))
+            .expect("JacORB wrote no gc24 package")
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "java"))
+            .collect();
+        sources.sort();
+        sources.push(driver);
+        let javac_out = std::process::Command::new(&javac)
+            .arg("-nowarn")
+            .arg("-cp")
+            .arg(&jar_path)
+            .arg("-d")
+            .arg(&classes)
+            .args(&sources)
+            .output()
+            .expect("run javac");
+        assert!(
+            javac_out.status.success(),
+            "the JacORB driver would not compile ({}):\n{}\n{}",
+            javac_out.status,
+            String::from_utf8_lossy(&javac_out.stdout),
+            String::from_utf8_lossy(&javac_out.stderr)
+        );
+
+        let classpath = format!("{jar_path}:{}", classes.display());
+        Some(Self { java, classpath, jacorb, dir })
+    }
+
+    /// Runs the driver against one reference and returns what it printed.
+    fn run(&self, ior: &Ior, tag: &str) -> String {
+        let path = self.dir.path().join(format!("{tag}.ior"));
+        std::fs::write(&path, ior.to_stringified().expect("stringify")).expect("write the ior");
+        let out = std::process::Command::new(&self.java)
+            .arg("-cp")
+            .arg(&self.classpath)
+            .arg("GaugeDriver")
+            .arg(&path)
+            .current_dir(&self.jacorb)
+            .output()
+            .expect("run JacORB's client");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "JacORB's client exited {} against the {tag} servant\nstdout:\n{stdout}\nstderr:\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        stdout
+    }
+}
+
+/// What the peer must have printed, whichever language answered it.
+///
+/// The same list `omniorb_calls_a_python_servant` asserts, in the same words,
+/// because the two drivers were written to print the same sentences: a caller
+/// that cannot tell the servants apart cannot tell the transcripts apart.
+fn assert_transcript(stdout: &str, who: &str) {
+    for wanted in [
+        "label = driven by JacORB",
+        "record -> 21.5 1 C",
+        "scale_all -> 1",
+        "latest.at -> 43.0",
+        "split -> 43.0 C",
+        "Rejected a sample below zero is not a reading 7",
+        "Busy",
+        "after the oneway, sequence_no = 0",
+        "is_a NamingContext -> false",
+        "is_a Gauge -> true",
+        "non_existent -> false",
+        "OK",
+    ] {
+        assert!(
+            stdout.contains(wanted),
+            "JacORB's client did not report {wanted:?} against the {who} servant\n{stdout}"
+        );
+    }
+    for leak in ["Traceback", "python", "Python", "bridge", "orbweaver", "_rt"] {
+        assert!(
+            !stdout.contains(leak),
+            "the peer's output mentions {leak:?} against the {who} servant, so the \
+             implementation reached its caller:\n{stdout}"
+        );
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The orders seen in a set of frames, as words, so a failure names what was
+/// on the wire rather than a boolean.
+fn orders(frames: &[&Frame]) -> Vec<&'static str> {
+    let mut seen: Vec<&'static str> =
+        frames.iter().map(|f| f.big.then_some("big").unwrap_or("little")).collect();
+    seen.sort_unstable();
+    seen.dedup();
+    seen
+}
+
+fn versions(frames: &[&Frame]) -> Vec<String> {
+    let mut seen: Vec<String> =
+        frames.iter().map(|f| format!("{}.{}", f.version.0, f.version.1)).collect();
+    seen.sort();
+    seen.dedup();
+    seen
+}
+
+// ── The measurement ──────────────────────────────────────────────────────────
+
+/// **The half of D030 §3 omniORB cannot reach**: a foreign peer that writes
+/// big-endian, calling a Python servant behind our ORB — and the same calls,
+/// answered by a Rust servant, coming back as the same bytes.
+///
+/// Three things are asserted, and the first is the one that makes the other two
+/// worth anything:
+///
+/// 1. **The byte order is read off the wire.** Every request JacORB writes has
+///    its §15.4.1 flag bit inspected by the tap; "Java is big-endian" is a
+///    belief until that byte says so, and the expectation is settable from the
+///    environment (`ORBWEAVER_JACORB_EXPECT_ORDER=little`) precisely so the
+///    assertion can be made to go red on a wire that has not changed.
+/// 2. **The transcript.** JacORB's client gets the same answers omniORB's does,
+///    and nothing about the servant's language reaches it.
+/// 3. **Byte-identity between our two servants.** Every reply the Python
+///    servant sent, against every reply the Rust servant sent for the same
+///    driver run, compared byte for byte — which is `python_servant.rs`'s claim
+///    made from the other endianness, over a socket, with a foreign peer
+///    choosing the order.
+///
+/// The order is 1, 3, 2 rather than 1, 2, 3, and that is the negative control's
+/// doing. `ORBWEAVER_JACORB_PERTURB=1` makes the Rust servant answer one
+/// `sequence_no` the Python one would not; **both** the byte comparison and the
+/// transcript see it, because this contract's driver prints every value it
+/// receives, so a perturbation invisible to the transcript is not reachable
+/// through the servant trait at all. Running the bytes first is what makes the
+/// control a control *for the bytes* rather than for the printing.
+///
+/// Comparing raw bytes here is the exception `CLAUDE.md` names, not a breach of
+/// it: both replies are written by *our* encoder, so a difference in the bytes
+/// is a difference a caller could observe. The foreign peer's own bytes are
+/// never compared to anything — only read.
+#[test]
+fn jacorb_calls_a_python_servant() {
+    let Some(fixture) = JacorbFixture::prepare() else {
+        println!(
+            "UNMEASURED: the JacORB fixture is absent (JDK 21, or spikes/jacorb/lib) — \
+             foreign peer × big-endian is unmeasured, not passing; \
+             run spikes/jacorb/setup.sh --jars-only"
+        );
+        return;
+    };
+    let expect =
+        std::env::var("ORBWEAVER_JACORB_EXPECT_ORDER").unwrap_or_else(|_| "big".to_owned());
+
+    // 1.2 is JacORB's default. 1.1 is reached the way `spikes/jacorb_giop11.sh`
+    // reaches it: not by a property, but by republishing the profile, because a
+    // peer's outbound version follows the profile it dialled.
+    for version in [Version::V1_2, Version::V1_1] {
+        let Some(servant) = start_servant() else {
+            println!("UNMEASURED: python3 is not available; the Python servant was not started");
+            return;
+        };
+        let target: SocketAddr = {
+            let p = servant.ior().profiles.first().expect("the servant published a profile");
+            format!("{}:{}", p.host, p.port).parse().expect("the servant's address")
+        };
+
+        let python_frames;
+        let python_out;
+        {
+            let tap = Tap::start(target);
+            python_out = fixture.run(&tap.through(servant.ior(), Some(version)), "python");
+            python_frames = tap.frames();
+        }
+        drop(servant);
+
+        let mut rust_frames = Vec::new();
+        let mut rust_out = String::new();
+        with_rust_servant(|ior, addr| {
+            let tap = Tap::start(addr);
+            rust_out = fixture.run(&tap.through(ior, Some(version)), "rust");
+            rust_frames = tap.frames();
+        });
+
+        // ── what the flag byte said ──────────────────────────────────────────
+        let requests: Vec<&Frame> =
+            python_frames.iter().filter(|f| f.from_client && f.mtype == 0).collect();
+        let replies: Vec<&Frame> =
+            python_frames.iter().filter(|f| !f.from_client && f.mtype == 1).collect();
+        assert!(
+            !requests.is_empty() && !replies.is_empty(),
+            "the tap recorded no exchange at {version}; the fixture ran but measured nothing"
+        );
+        let request_orders = orders(&requests);
+        let reply_orders = orders(&replies);
+        println!(
+            "read off the wire at {version}: {} request(s) from JacORB, flag byte says {}; \
+             {} reply(ies) from our server, {}; GIOP {} in, {} out",
+            requests.len(),
+            request_orders.join(" and "),
+            replies.len(),
+            reply_orders.join(" and "),
+            versions(&requests).join(","),
+            versions(&replies).join(","),
+        );
+        assert_eq!(
+            request_orders,
+            vec![expect.as_str()],
+            "at {version} the peer's requests were {request_orders:?}, and the byte order \
+             is what this test exists to measure"
+        );
+        assert_eq!(
+            reply_orders, request_orders,
+            "at {version} our server answered in {reply_orders:?} a peer that wrote \
+             {request_orders:?}; §15.4.1 lets each message choose, and `server.rs` replies \
+             in the request's order"
+        );
+        let wire_version = format!("{}.{}", version.major, version.minor);
+        assert_eq!(
+            versions(&requests),
+            vec![wire_version.clone()],
+            "the profile was republished at IIOP {wire_version} and the peer did not follow it"
+        );
+
+        // ── the two servants, byte for byte ──────────────────────────────────
+        let python_replies: Vec<&Vec<u8>> = python_frames
+            .iter()
+            .filter(|f| !f.from_client && f.mtype == 1)
+            .map(|f| &f.bytes)
+            .collect();
+        let rust_replies: Vec<&Vec<u8>> = rust_frames
+            .iter()
+            .filter(|f| !f.from_client && f.mtype == 1)
+            .map(|f| &f.bytes)
+            .collect();
+        assert_eq!(
+            python_replies.len(),
+            rust_replies.len(),
+            "the two servants answered a different number of times at {version}: \
+             python {}, rust {}",
+            python_replies.len(),
+            rust_replies.len()
+        );
+        for (i, (p, r)) in python_replies.iter().zip(rust_replies.iter()).enumerate() {
+            assert_eq!(
+                hex(p),
+                hex(r),
+                "reply {i} of {} at {version} differs between the two servants, so a \
+                 caller can tell which language answered (D029 §6.1's Language row)",
+                python_replies.len()
+            );
+        }
+        println!(
+            "byte-identical at {version}: {} reply(ies), python servant vs rust servant, \
+             answering the same {}-endian peer",
+            python_replies.len(),
+            request_orders.join("/")
+        );
+
+        // Last, because it is the weakest of the three: a transcript is what a
+        // peer *decoded*, and the comparison above already refuses anything a
+        // peer could decode identically from different bytes. It is still
+        // asserted, because it is the only one that sees the servant's
+        // implementation leaking into what a caller reads.
+        assert_transcript(&python_out, "python");
+        assert_transcript(&rust_out, "rust");
     }
 }

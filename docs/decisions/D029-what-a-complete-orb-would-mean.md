@@ -78,11 +78,11 @@ ORB가 주기만 하고 거두지 못한다는 비대칭이 이제 스파이크�
 성질이다.*
 
 **Closed 2026-08-26 by O1**, whose design answer and refusal are
-[`D032`](D032-stopping-what-the-orb-handed-out.md) and whose bound is the
+[`D034`](D034-stopping-what-the-orb-handed-out.md) and whose bound is the
 rustdoc on `Orb::shutdown`. Neither is restated here; what §6.1's lifecycle row
 records is **how far the row moved**, which is less far than *closed*.
 
-*2026-08-26 O1이 닫았다. 설계의 답과 거절은 D032, 한계는 `Orb::shutdown`의
+*2026-08-26 O1이 닫았다. 설계의 답과 거절은 D034, 한계는 `Orb::shutdown`의
 러스트독에 있다 — 여기서 다시 적지 않는다.*
 
 ### 3.2 Seven policies exist as types, and nothing lets a caller choose one
@@ -164,7 +164,7 @@ Ordered by what a defect would cost.
 ### O1 — the ORB can stop what it handed out (`orbweaver-giop`, `orbweaver-object`)
 
 **Landed 2026-08-26.** The design question below was answered in writing first,
-in [`D032`](D032-stopping-what-the-orb-handed-out.md); the bound is the rustdoc
+in [`D034`](D034-stopping-what-the-orb-handed-out.md); the bound is the rustdoc
 on `Orb::shutdown`; the oracle asked for below was built and is
 `crates/orbweaver-giop/tests/orb_stops_what_it_handed_out.rs`. The paragraph
 that follows is left as it was written, because it is what was proposed and
@@ -249,9 +249,9 @@ feature to add.
 |---|---|---|
 | **Location** | where the target runs | **measured, with a known leak**: `LOCATION_FORWARD` and `_PERM` are served and followed, and R7 rewrites an IOR for a dialable address — but `Connection::move_to` restored a hand-written field list and dropped two configured limits across every forward until today, so the *caller's* limits changed when the object moved. Fixed; the class is the leak to watch. **A second instance, found 2026-08-26 and not fixed**: `moe::Router::select` returns `ExpertSeq` — N object references, each an `Ior` stored verbatim from `register_expert` and marshalled inline with host, port and object key. A caller learns where every candidate expert runs, which is exactly what this row says it must not be able to tell. `corpus/golden/22`'s own comment beside the operation already says so — *"widening reach by N addresses at once is precisely the case §4.7's bearer-address rule exists for"* — and §4.7's rule is the authority half of the same fact. Recorded, not changed: `select` is served and has consumers. |
 | **Backend** | what implements it | mostly held: a servant is behind a POA and a reference; but `spike_experts`' server root key collides with its derived registry key, which is a backend detail reaching a name. |
-| **Language** | what it is written in | **the construction leak is closed; three narrower ones remain** (2026-08-26). A Python servant is dispatched into by `orbweaver_gen::pyservant`, and `tests/python_servant.rs` compares one against the generated Rust servant for the same contract — 19 calls × 3 GIOP versions × 2 byte orders, **byte-identical replies**, with a negative control that perturbs five answers and asserts each is seen. What remains is listed in §6.1.1 and none of it is the old *"cannot be a target at all"*. |
+| **Language** | what it is written in | **the construction leak is closed; three narrower ones remain** (2026-08-26). A Python servant is dispatched into by `orbweaver_gen::pyservant`, and `tests/python_servant.rs` compares one against the generated Rust servant for the same contract — 19 calls × 3 GIOP versions × 2 byte orders, **byte-identical replies**, with a negative control that perturbs five answers and asserts each is seen. **The peer half is now measured in both byte orders (2026-08-26):** omniORB's client little-endian, and JacORB's big-endian — the order taken from §15.4.1's flag byte on every request rather than from the peer's language — with the Python servant's 11 replies byte-identical to a Rust servant's for the same driver run, at IIOP 1.2 and 1.1. What remains is listed in §6.1.1 and none of it is the old *"cannot be a target at all"*. |
 | **Activation / load** | whether it is loaded right now | **leaks, and now measured (2026-08-26)**: the leak is `moe::Router::select`, and it is *residency-blind by omission rather than by absence of data*. `mirror_residency` keeps `Offer::residency` live in the very store `select` reads, and `orbweaver-trading`'s query grammar has a `residency` field, but `Constraints::to_query_text` never names it — so an OFFLOADED expert comes back in the sequence and dialling it answers `OBJECT_NOT_EXIST` where a resident one answers. `expert_service.rs:882-891` records this as intended: *"the caller's cue to `prefetch`"*. That makes the leak a **design choice written down**, not an oversight, which is the strongest form for it to be in before it is decided. `Router::dispatch` is *not* the operation that would close it — it is refused (D006 option E), and its own reason is now known to be false as written (see D006's 2026-08-26 amendment). The closer is a POA-level activation path, because the criterion says *any* target, and a fix inside one application contract closes it for one contract. |
-| **Lifecycle stability** | that the above survives add / remove / move / load / evict at runtime | **was "partly unmeasurable"; as of 2026-08-26 it is measurable and leaking for a reason that is now named.** O1 landed: `Orb::shutdown` stops the servers and pools the ORB created, and `crates/orbweaver-giop/tests/orb_stops_what_it_handed_out.rs` measures what a peer mid-call observes across it — from the peer's own socket, three GIOP versions × two byte orders, with four negative controls that were each run red. So *"removed at runtime"* now has an implementation and a test. **What did not move is the transparency of the removal**: a caller of a removed server can tell immediately, because there is nowhere else for its request to go, and closing that needs a second endpoint and a redirect — `LOCATION_FORWARD` served for a *name* rather than for an object, which is item 3 of the event-channel subsection below and which O1 does not touch. The argument and the refusal (graceful, at request granularity; immediate refused; *not* `run()`) are `docs/decisions/D032-stopping-what-the-orb-handed-out.md`; the bound is the rustdoc on `Orb::shutdown` and is not restated in either. Also measured that day and not changed: **17 of this workspace's 63 serve sites pass `|| false`** — seventeen processes that are still stopped only by being killed. They are now *fixable* rather than fixed. |
+| **Lifecycle stability** | that the above survives add / remove / move / load / evict at runtime | **was "partly unmeasurable"; as of 2026-08-26 it is measurable and leaking for a reason that is now named.** O1 landed: `Orb::shutdown` stops the servers and pools the ORB created, and `crates/orbweaver-giop/tests/orb_stops_what_it_handed_out.rs` measures what a peer mid-call observes across it — from the peer's own socket, three GIOP versions × two byte orders, with four negative controls that were each run red. So *"removed at runtime"* now has an implementation and a test. **What did not move is the transparency of the removal**: a caller of a removed server can tell immediately, because there is nowhere else for its request to go, and closing that needs a second endpoint and a redirect — `LOCATION_FORWARD` served for a *name* rather than for an object, which is item 3 of the event-channel subsection below and which O1 does not touch. The argument and the refusal (graceful, at request granularity; immediate refused; *not* `run()`) are `docs/decisions/D034-stopping-what-the-orb-handed-out.md`; the bound is the rustdoc on `Orb::shutdown` and is not restated in either. Also measured that day and not changed: **17 of this workspace's 63 serve sites pass `|| false`** — seventeen processes that are still stopped only by being killed. They are now *fixable* rather than fixed. |
 
 *다섯 가지 각각은 **테스트로 반증 가능한 주장**이며, 그것이 이 작업의 방식이다.
 투명성은 확인하는 것이 아니라 **구멍을 사냥하는 것**이다.*
@@ -281,7 +281,7 @@ feature to add.
 즉시 알아차린다 — 요청이 갈 다른 곳이 없기 때문이다. 그것을 막으려면 두 번째
 엔드포인트와 리디렉션이 필요하고, 그것은 객체가 아니라 **이름**에 대한
 `LOCATION_FORWARD`이며 아래 이벤트 채널 절의 3번 항목이다. 논증과 거절(요청 단위의
-우아한 종료, 즉시 종료 거절, `run()` 아님)은 D032에 있고, 한계는 `Orb::shutdown`의
+우아한 종료, 즉시 종료 거절, `run()` 아님)은 D034에 있고, 한계는 `Orb::shutdown`의
 러스트독에 있으며 어느 쪽도 다시 적지 않는다. 같은 날 측정하고 **바꾸지 않은 것**:
 이 워크스페이스의 serve 지점 63개 중 **17개가 `|| false`를 넘긴다** — 여전히 죽여야만
 멈추는 프로세스 열일곱이다. 이제 *고칠 수 있게* 되었을 뿐 고쳐진 것은 아니다.
@@ -357,6 +357,41 @@ more specific claim than the row above used to make.
 양면이다 — 심(seam)은 값을 나르는데, 객체 참조는 데이터가 아니라 능력을 뜻하는
 유일한 값이다. 이것이 남은 언어 투명성이며, 위 행이 예전에 하던 주장보다 좁고
 구체적인 주장이다.*
+
+#### The list did not grow when a big-endian peer was added (2026-08-26)
+
+The five above were found against one foreign peer in one byte order, which is
+the shape of measurement that hides an order-dependent difference by
+construction. A second peer in the other order was added the same day —
+`spikes/jacorb_python_servant.sh` and `jacorb_calls_a_python_servant` in
+`crates/orbweaver-gen/tests/python_servant_wire.rs` — and **found no sixth**.
+That is a result and not a formality: the servants' replies were compared as
+*bytes*, so a padding byte or an alignment origin that differed between the two
+implementations would have been a difference this file had never been able to
+see, and the eleven replies were identical at IIOP 1.2 and at 1.1.
+
+**What is still not measured, named rather than left looking closed.**
+
+1. **One peer per order, not two peers per order.** Little-endian is omniORB's
+   and big-endian is JacORB's, so a difference that is really *"which ORB"*
+   rather than *"which order"* would be invisible. On a big-endian host omniORB
+   would swap sides and the pairing would be testable; nothing here has one.
+2. **GIOP 1.0 is unmeasured against JacORB.** 1.2 and 1.1 are measured by
+   republishing the IIOP profile; 1.0 is not, so the version whose reply header
+   differs most is measured against our own client only.
+3. **The comparison is of one contract.** `corpus/golden/24` was chosen because
+   it holds every hazard a dispatcher has, but 4 and 5 in the table above are
+   exactly the two things it cannot exercise — it passes and returns no object
+   reference, which is why they remain named there rather than measured here.
+
+*목록은 빅엔디언 피어를 더해도 늘지 않았다. 다섯 가지는 **한 피어, 한 바이트
+순서**에서 나온 것이고, 그 형태의 측정은 순서에 의존하는 차이를 구조적으로 숨긴다.
+같은 날 반대 순서의 두 번째 피어를 붙였고 **여섯 번째는 나오지 않았다.** 응답을
+**바이트로** 비교했으므로 패딩 한 바이트나 정렬 기준의 차이였다면 이 파일이 여태
+볼 수 없던 차이로 드러났을 것이다 — IIOP 1.2와 1.1에서 열한 개 응답이 동일했다.
+**아직 재지 않은 것:** (1) 순서마다 피어가 하나뿐이라 "어느 순서"가 아니라 "어느
+ORB"인 차이는 보이지 않는다, (2) JacORB에 대한 GIOP 1.0은 재지 않았다, (3) 계약이
+하나이며 위 표의 4·5는 바로 그 계약이 시험할 수 없는 두 가지다.*
 
 ### 6.2 What this criterion does to the order
 

@@ -19,7 +19,7 @@
 # `crates/orbweaver-giop/tests/orb_stops_what_it_handed_out.rs`, which runs in
 # `cargo test --workspace`. What this adds is provenance — a peer that applies
 # none of our conventions. Wiring it into the harness is left undone and named
-# in D032 §9.
+# in D034 §9.
 #
 # Exit: 0 all cases held · 1 refuted · 3 nothing measured.
 #
@@ -91,7 +91,7 @@ for endian in big little; do
     case "$peer_status" in
         0) held=$((held + 1)) ;;
         1)
-            echo "REFUTED     $endian: the peer did not see what D032 §3 says it must"
+            echo "REFUTED     $endian: the peer did not see what D034 §3 says it must"
             fail=$((fail + 1))
             ;;
         *)
