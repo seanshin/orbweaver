@@ -933,6 +933,65 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Measured / 측정
 
+- **A big-endian peer calls a Python servant, and the order comes off the flag
+  byte.** The servant seam landed with omniORB's client calling a Python
+  servant behind our ORB and named the half it could not reach: omniORB emits
+  its native order and `orbweaver-giop` replies in the *request's* order, so on
+  a little-endian host every byte of that exchange is little-endian, and D030
+  §3's *"both byte orders against a peer that is not us"* was **not met**.
+  JacORB reaches it. `spikes/jacorb/GaugeDriver.java` drives the same contract
+  through a recording relay inside
+  `crates/orbweaver-gen/tests/python_servant_wire.rs`, and the assertion is
+  over §15.4.1's flag bit of every request the peer actually wrote — never over
+  what the peer was told or what its language is said to do. Measured at IIOP
+  1.2 and 1.1: **12 requests from JacORB, big-endian; 11 replies from our
+  server, big-endian** — the twelfth request is the oneway, so §9.4.1's "no
+  reply at all" is now visible on a foreign wire — and the Python servant's
+  replies are **byte-identical to a Rust servant's for the same driver run,
+  11/11 at each version**. Comparing raw bytes is the exception `CLAUDE.md`
+  names, not a breach of it: both encoders are ours, so a difference in the
+  bytes is a difference a caller could observe; the peer's own bytes are read
+  and never compared. Two negative controls, both run:
+  `--expect-order little` makes the order assertion name what was on the wire
+  (`left: ["big"] right: ["little"]`), and `--perturb` makes a Rust servant
+  answer one `sequence_no` the Python one would not, which the byte comparison
+  catches as *reply 2 of 11* with both hex strings printed. **What this does
+  not close**, named rather than left looking closed: the *client* direction's
+  both-order test is a loopback with no peer in it and its live peer writes its
+  native order (D030 §3.1); GIOP 1.0 is unmeasured against JacORB; and there is
+  one peer per order, so a difference that is really "which ORB" rather than
+  "which order" would be invisible (D029 §6.1.1).
+  Group: `./spikes/jacorb_python_servant.sh`.
+
+  *빅엔디언 피어가 Python 서번트를 호출하며, 순서는 피어의 언어가 아니라 요청
+  헤더의 플래그 바이트에서 읽는다. IIOP 1.2·1.1에서 요청 12·응답 11이 모두
+  빅엔디언이고(열두 번째 요청은 oneway라 응답이 없다), Python 서번트와 Rust
+  서번트의 응답은 각 버전에서 11/11 바이트까지 동일하다. 부정 대조군 둘 다 붉게
+  만들었다. **닫히지 않은 것:** 클라이언트 방향의 양쪽 순서, JacORB에 대한 GIOP
+  1.0, 그리고 순서마다 피어가 하나뿐이라는 것.*
+
+- **JacORB's own IDL compiler emits Java that does not compile for a parameter
+  named `e`.** Found while building the fixture above.
+  `org.jacorb.idl.parser` 3.9 writes `catch (java.io.IOException e)` into every
+  operation's stub body, in the same scope as that operation's parameters,
+  while every other local it emits is `_`-prefixed — so
+  `long scale_all(in double e)` produces two compile errors and nothing in the
+  package builds. `corpus/golden/24-skeleton-surface.idl` has that parameter on
+  purpose (*"`e` is what a hand-written encoder would have called its
+  encoder"*), and it turns out to catch a third-party emitter too. The hazard
+  is **not** the reserved-word class `28-target-keywords.idl` covers — `e` is
+  not a Java keyword — it is every identifier an emitter's own template puts in
+  scope. Recorded in D030 §5 L2 against the prediction it falsifies. The
+  fixture's copy of the contract renames the parameter, which costs the
+  measurement nothing because a parameter name is not on the wire; a guard
+  asserts the corpus file still contains exactly the one string being replaced,
+  so the copy cannot silently rename nothing.
+
+  *JacORB 3.9의 IDL 컴파일러가 `e`라는 매개변수 이름에 대해 **컴파일되지 않는
+  Java**를 낸다 — 스텁 템플릿이 매개변수와 같은 스코프에 `catch (...IOException
+  e)`를 두기 때문이다. 예약어 위험이 아니라 **방출기 템플릿이 스코프에 넣는
+  식별자** 위험이며, `e`는 Java 예약어가 아니다.*
+
 - **The census that would have inverted D006 was taken once, and four
   operations crossed the line it drew.** `moe::Router::dispatch` **stays
   refused** — that was the question, and the answer is not the finding.
