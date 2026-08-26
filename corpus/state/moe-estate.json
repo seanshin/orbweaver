@@ -21,9 +21,10 @@
       "_authority": "the expert itself, in-band -- moe::Capability.placement_node, a string member of corpus/golden/22-moe-control-plane.idl written by the expert about itself in register_expert and heartbeat.",
       "_closed": false,
       "_note": "Stored verbatim in the offer store and queried by the trader as an opaque value (placement_node == 'node-a', ORDER BY placement_node). No layer validates it, and no layer may: a set whose membership is decided by the thing being admitted is not a closed set. This list is the vocabulary THIS SEED uses, so a typo in an offer is catchable -- it is not an admission list, and adding a name to it grants nothing.",
+      "_deployment_note": "Each entry carries the deployment it belongs to, because a reader needs to say WHICH reported node it means and 'the second one in the list' is not a fact this file states -- member order is a fact, list position as an identifier is a habit. A fixture asks for its deployment by name.",
       "nodes": [
-        { "name": "node-a", "_from": "the trading fixture's placement_node, and every offer in moe-experts.json" },
-        { "name": "gpu-04", "_from": "spike_experts' Capability.placement_node" }
+        { "name": "node-a", "deployment": "trading", "_from": "the trading fixture's placement_node, and every offer in moe-experts.json" },
+        { "name": "gpu-04", "deployment": "control-plane", "_from": "spike_experts' Capability.placement_node" }
       ],
       "_two_deployments_note": "node-a and gpu-04 are two deployments, not two spellings of one. Nothing states they are the same machines and nothing needs to; within this domain a name is whatever the expert reporting it says."
     }

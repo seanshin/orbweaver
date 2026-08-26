@@ -78,6 +78,11 @@ use state::MoeEstate;
 use orbweaver_giop::orb::Orb;
 use orbweaver_giop::server::{BAD_OPERATION, Server};
 use orbweaver_giop::{Connection, Error, Ior, Reply};
+// The repository id of `::moe::Expert` has one home, and it is the servant
+// crate that publishes it — not a literal retyped in each fixture that names
+// the type. `spike_experts` already used this constant; this fixture typed the
+// string, and the two agreed by luck.
+use orbweaver_object::expert_service::EXPERT_ID;
 use orbweaver_object::tenant_service::{
     Activation, BAD_INV_ORDER, BAD_PARAM, CallContext, Capability, ENTERPRISE_EXPERT_ID, Manifest,
     NO_PERMISSION, OBJECT_NOT_EXIST, TenantService,
@@ -492,7 +497,11 @@ fn run(out: &[&str; 2], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
             }
             match c.invoke_nullary("base").and_then(reference_in) {
                 Ok(ior) => {
-                    r.eq(ior.type_id.as_str(), "IDL:moe/Expert:1.0", "base() is a ::moe::Expert");
+                    // `EXPERT_ID`, not the literal. This was a retyped string
+                    // here and the constant in `spike_experts`, agreeing by
+                    // luck — the data-shaped form of CLAUDE.md's "a sentence
+                    // many layers say is a fact".
+                    r.eq(ior.type_id.as_str(), EXPERT_ID, "base() is a ::moe::Expert");
                     from_a = Some(ior);
                 }
                 Err(e) => r.check(false, &format!("base: {e}")),

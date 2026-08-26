@@ -456,14 +456,25 @@ impl DeclaredEstate {
 /// grants nothing.
 #[derive(Debug, Clone)]
 pub struct ReportedPlacement {
-    /// The node names this seed's offers report.
-    pub nodes: Vec<String>,
+    /// The node names this seed's offers report, each with the deployment it
+    /// belongs to.
+    pub nodes: Vec<(String, String)>,
 }
 
 impl ReportedPlacement {
     /// Whether this seed states an offer may report this node name.
     pub fn states(&self, node: &str) -> bool {
-        self.nodes.iter().any(|n| n == node)
+        self.nodes.iter().any(|(n, _)| n == node)
+    }
+
+    /// The node name this deployment's experts report.
+    ///
+    /// By deployment, never by position: *"the second one in the list"* is not
+    /// a fact this file states, and a fixture that took it that way would
+    /// silently start reporting somebody else's node the day an entry was
+    /// added above it.
+    pub fn node_for(&self, deployment: &str) -> Option<&str> {
+        self.nodes.iter().find(|(_, d)| d == deployment).map(|(n, _)| n.as_str())
     }
 }
 
@@ -584,7 +595,10 @@ impl MoeEstate {
         let reported = domains.field("reported_placement")?;
         let mut reported_nodes = Vec::new();
         for n in reported.field("nodes")?.items()? {
-            reported_nodes.push(n.field("name")?.as_ref().string()?);
+            reported_nodes.push((
+                n.field("name")?.as_ref().string()?,
+                n.field("deployment")?.as_ref().string()?,
+            ));
         }
         let reported_placement = ReportedPlacement { nodes: reported_nodes };
 
