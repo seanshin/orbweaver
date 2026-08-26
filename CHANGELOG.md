@@ -169,6 +169,40 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **The coverage sweep can see the trader, and now says which services it
+  measures from a fixture's files.** `CosTrading::Lookup` had been on the wire
+  since D022 T4 and outside `SERVICES-COVERAGE` §8 the whole time; the missing
+  piece was never the servant but a first-party contract to derive an operation
+  list from — `spikes/service_sweep.py` names its IDL inputs literally, and for
+  the standard services those inputs are omniORB's **installed**
+  `CosNaming.idl`, `CosEventComm.idl`, `CosEventChannelAdmin.idl` and `ir.idl`.
+  So **what the document reported about our own servants was derived from a
+  fixture's files**, and that fact lived in four literal paths inside one
+  function.
+
+  `corpus/services/trading-lookup-subset.idl` (written from the OMG
+  specification; omniORB's `CosTrading.idl` was not opened) closes the first
+  half: `spike-trading` joins the fixture list and the sweep measures **21
+  declared, 21 served, 0 unmeasured** on the trader — `query` with a nil
+  `offer_itr` for five matches under `how_many` 10, `NO_IMPLEMENT` for the same
+  query under `how_many` 2, `UnknownServiceType` for a type nothing declares.
+
+  The second half is `#SOURCES`: one row per service saying which file its
+  operation list came from and whether that file is `first-party` or a
+  `fixture`'s, classified by **where the file is** rather than by a hand-kept
+  label, and rendered into §8 by `coverage_tables.py`. Three services are
+  fixture-derived; the sweep names them every run instead of leaving it to a
+  sentence. A declaration source that cannot be read is now a counted
+  `UNMEASURED` naming the file rather than a traceback — a traceback is loud
+  for a person and leaves no row for the renderer, so the document would keep
+  whatever it last said.
+
+  *`CosTrading::Lookup`은 D022 T4부터 와이어에 있었지만 §8은 그것을 볼 수 없었다.
+  빠진 것은 서번트가 아니라 연산 목록을 끌어올 **일급 계약**이었다. 표준 서비스의
+  입력은 omniORB **설치본**의 IDL이므로, 우리 서번트에 관한 보고가 픽스처의
+  파일에서 파생되고 있었다. 이제 서비스마다 출처를 파일 위치로 분류해 매 실행
+  출력한다.*
+
 - **The harness gained a dimension: it now says what a caller can still tell**
   (D031 H1/H2, PROPOSED — the ledger lands, the decision's status is its own).
 
@@ -1156,6 +1190,39 @@ records what changed and, where it matters, what it changes on the wire.
   하나, **컴파일되고 틀리게 도는 것 셋**.*
 
 ### Fixed / 수정
+
+- **The differential and the gate over it named the same four directories, so
+  neither could report the one they both missed.** `corpus/services/` — the
+  contracts that exist to be *served*, and therefore the ones a foreign ORB is
+  most likely to compile — was outside `spikes/differential.sh`'s enumeration
+  and outside `ENUMERATED` in
+  `every_corpus_file_met_both_front_ends.rs` from the day it was created. The
+  two lists agreed with each other and both were short; a gate that mirrors the
+  list of the thing it gates is only as wide as what somebody put in both.
+
+  The measured cost: `corpus/services/ir-subset.idl` is **rejected by JacORB
+  3.9** — `Undefined name: CORBA.ParameterDescription.TypeCode` at line 159,
+  the third instance of the cause already measured under
+  `34-corba-principal.idl`, JacORB predeclaring no `CORBA` scope — and the
+  divergence **could not be written down**, because the staleness loop fails
+  any row naming a file the script never checks. The directory is now
+  enumerated in both places (98 files through both front ends, was 95), the row
+  is recorded citing the existing measurement rather than restating it, and
+  nothing was loosened to let it in: the fix is that the files are checked.
+  The header of `corpus/divergences.tsv` stopped naming the directories at all,
+  since a third copy of that list is the one that drifts — and it had.
+
+  Demonstrated red before it was recorded:
+  `differential.sh --require omniidl,jacorb_idl` exit 1, *"1 corpus file(s)
+  diverge with no recorded reason: ir-subset.idl — omniidl=accept
+  jacorb_idl=reject"*; and with `ir-subset.idl`'s row cut from the record, the
+  membership gate panicked with *"1 corpus file(s) have never been through both
+  front ends"*.
+
+  *differential과 그 위의 게이트가 같은 네 디렉터리를 적고 있었으므로, 둘 다
+  놓친 하나를 어느 쪽도 보고할 수 없었다. 서빙되기 위해 존재하는 계약들이 바로
+  그 디렉터리였다. 느슨하게 만든 것은 없다 — 파일들이 실제로 검사되는 것이
+  수정이다.*
 
 - **Two shipped layers told a peer to wait for a release that cannot come, for
   a type CORBA removed in 2002.** `anyjson::from_json` answered a peer-fed

@@ -73,11 +73,19 @@ echo "building"
 cargo build -q --bin spike-names --bin spike-events 2>&1 | sed 's/^/  /'
 cargo build -q -p orbweaver-registry --bin spike-ifr 2>&1 | sed 's/^/  /'
 cargo build -q -p orbweaver-object --bin spike-experts --bin spike-tenants 2>&1 | sed 's/^/  /'
+cargo build -q -p orbweaver-giop --bin spike-trading 2>&1 | sed 's/^/  /'
 
 echo "starting fixtures"
 start naming names.ior ./target/debug/spike-names "$RUN_DIR/names.ior" --hold
 start events events.ior ./target/debug/spike-events "$RUN_DIR/events.ior" --hold
 start ifr ifr.ior ./target/debug/spike-ifr "$RUN_DIR/ifr.ior" --hold
+# The trader has been on the wire since D022 T4; what it was waiting for was a
+# first-party `CosTrading` contract to derive an operation list from, not a
+# servant. `spike-trading` publishes exactly one object — the `Lookup` servant
+# at key `TradingService` — and `do_trading()` asserts that identity before it
+# sweeps, because a probe aimed elsewhere reports an unserved interface rather
+# than a failure.
+start trading trading.ior ./target/debug/spike-trading "$RUN_DIR/trading.ior" --hold
 # The spikes hold their own servants now, so the separate holder crate is
 # redundant — and it was strictly weaker: it published one tenant's factory,
 # so the isolation claim could not be measured from outside at all.

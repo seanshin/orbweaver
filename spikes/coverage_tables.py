@@ -57,12 +57,12 @@ KIND_LABEL = {
 # Every tag `service_sweep.py` emits, and the field count this renderer needs
 # to read one. A tag listed with None is read and deliberately not rendered —
 # it belongs to the sweep's own verdict, which the harness reads directly.
-TAGS = {"ROW": 7, "TOTAL": 3, "UNSERVED": 4, "UNPROBED": 4,
+TAGS = {"ROW": 7, "TOTAL": 3, "UNSERVED": 4, "UNPROBED": 4, "SOURCE": 4,
         "ANSWER": None, "UNMEASURED": None, "ABSENT": None}
 
 
 def parse(text):
-    """(services, unserved, unprobed, dropped, noise).
+    """(services, unserved, unprobed, sources, dropped, noise).
 
     `dropped` is every line tagged as a sweep row whose shape this renderer
     could not read — a measurement that exists and did not reach the tables.
@@ -73,6 +73,7 @@ def parse(text):
     services = OrderedDict()   # service -> {"rows": [...], "total": {...}}
     unserved = []
     unprobed = []
+    sources = []               # (service, origin, path) — where the declarations came from
     dropped = []
     noise = []
     for lineno, line in enumerate(text.splitlines(), 1):
@@ -110,7 +111,9 @@ def parse(text):
             unserved.append((parts[1], parts[2], parts[3]))
         elif tag == "UNPROBED":
             unprobed.append((parts[1], parts[2], parts[3]))
-    return services, unserved, unprobed, dropped, noise
+        elif tag == "SOURCE":
+            sources.append((parts[1], parts[2], parts[3]))
+    return services, unserved, unprobed, sources, dropped, noise
 
 
 def cell(s):
@@ -119,7 +122,7 @@ def cell(s):
 
 def render(text):
     """(document region, dropped rows, noise lines)."""
-    services, unserved, unprobed, dropped, noise = parse(text)
+    services, unserved, unprobed, sources, dropped, noise = parse(text)
     out = [BEGIN, ""]
     if not services:
         out += ["_The sweep produced no rows — an unmeasured document, not an empty service._", "", END]
@@ -182,6 +185,30 @@ def render(text):
     out.append("_Declared_ counts each `interface::operation` once however many objects it was probed on; "
                "an operation is _served_ if any object dispatched it. `MARSHAL` on a 64-zero-byte probe "
                "proves dispatch, not correctness (§9). / _선언_은 객체 수와 무관하게 `인터페이스::연산`을 한 번씩 센다.")
+    out.append("")
+
+    # ── where the declared half of every count came from ──────────────────
+    #
+    # The `Declared` column above is only as first-party as the file it was
+    # read out of, and for three of these services that file is omniORB's
+    # installed IDL — a fixture's, read as text under clause (b) of the
+    # licensing boundary. That was true before this section existed too; it
+    # was just not written anywhere a reader of this document would reach.
+    out.append("### Where each operation list was read from / 연산 목록을 읽어온 곳")
+    out.append("")
+    if sources:
+        out.append("| Service | Origin | File the declarations were read from |")
+        out.append("|---|---|---|")
+        for service, origin, path in sources:
+            out.append("| %s | %s | `%s` |" % (service, cell(origin), cell(path)))
+        out.append("")
+        out.append("_`fixture` means the operation list is derived from omniORB's **installed** "
+                   "IDL, not from a contract of ours: what this document reports about our own "
+                   "servants depends on a file this project does not ship. "
+                   "/ `fixture`는 우리 계약이 아니라 omniORB 설치본의 IDL에서 연산 목록을 "
+                   "끌어왔다는 뜻이다._")
+    else:
+        out.append("_The sweep reported no sources — an unmeasured provenance, not a first-party one._")
     out.append("")
 
     # ── unserved interfaces ───────────────────────────────────────────────

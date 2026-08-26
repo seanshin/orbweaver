@@ -33,20 +33,39 @@
 # ── Divergences that are NOT rows here ──────────────────────────────────────
 #
 # `corpus/include/` holds the multi-file cases, and `differential.sh` does not
-# examine that directory — it enumerates golden, negative, requirements and
-# spikes by name, and half of `corpus/include/` is leaf files that mean nothing
-# on their own. A row here for a file it never runs would be reported as a
-# stale exemption on every single run, so the two deliberate divergences that
-# directory carries live in `corpus/include/cases.tsv` beside the files they
-# describe, with the same columns and the same obligation to state a reason.
-# They point in opposite directions and both are named there:
+# examine that directory — it enumerates its input directories by name, and
+# half of `corpus/include/` is leaf files that mean nothing on their own. A row
+# here for a file it never runs would be reported as a stale exemption on every
+# single run, so the two deliberate divergences that directory carries live in
+# `corpus/include/cases.tsv` beside the files they describe, with the same
+# columns and the same obligation to state a reason. They point in opposite
+# directions and both are named there:
 #   service.idl      we ACCEPT what omniidl rejects  (unguarded double include)
 #   conditional.idl  we REFUSE what omniidl compiles (conditional compilation)
+#
+# Which directories those are is not restated here: the list lives in
+# `differential.sh` and is mirrored in `every_corpus_file_met_both_front_ends`,
+# and a third copy in this header would be the one that drifts. It did — this
+# header named four directories, and the reason it read as complete rather than
+# stale is exactly the reason `corpus/services/` was missing from both lists for
+# as long as it was: **a rule stated as "the ones it does not check" is only as
+# true as somebody's memory of what it checks.** `corpus/services/` joined the
+# enumeration on 2026-08-26, and `ir-subset.idl` below is the divergence that
+# had been unrecordable until it did.
 #
 # `corpus/include/`의 다중 파일 케이스는 `differential.sh`가 검사하지 않으므로
 # 여기에 행을 두면 매 실행마다 "더 이상 발생하지 않는 등록"으로 보고된다. 그
 # 두 건의 의도적 불일치는 파일 옆 `corpus/include/cases.tsv`에 같은 의무로
 # 기록되어 있다 — 한 건은 우리가 더 느슨하고, 한 건은 더 엄격하다.
+#
+# **어느 디렉터리를 검사하는지는 여기 다시 적지 않는다.** 목록은
+# `differential.sh`에 있고 `every_corpus_file_met_both_front_ends`가 그것을
+# 반영한다. 이 헤더의 세 번째 사본이 바로 어긋나는 쪽이다. 실제로 어긋났다 —
+# 네 디렉터리를 적어두었고, 그것이 낡았다기보다 완전해 보였다는 사실이야말로
+# `corpus/services/`가 양쪽 목록에서 오랫동안 빠져 있던 이유와 같다:
+# **"검사하지 않는 것"으로 진술된 규칙은 무엇을 검사하는지에 대한 기억만큼만
+# 참이다.** `corpus/services/`는 2026-08-26에 열거에 들어왔고, 아래
+# `ir-subset.idl` 행은 그때까지 기록할 수 없었던 불일치다.
 
 n02-identifier-clash.idl	jacorb_idl	accept	CORBA 3.4 §7.2.3 makes identifier collisions case-insensitive, so `Position position` is illegal. omniidl rejects it; JacORB 3.9 does not enforce the rule at all. We follow the specification and omniidl. This is the project's dominant generation failure, and finding that a widely deployed compiler accepts it is a reason to be stricter, not looser: IDL that builds under JacORB can fail under omniORB.
 n10-operation-name-clash.idl	jacorb_idl	accept	The same rule in its operation-name shape (`Blob blob()`). JacORB 3.9 does not enforce it; omniidl does. Same verdict, same reason.
@@ -70,3 +89,4 @@ n27-const-divide-by-zero.idl	jacorb_idl	accept	`const long RATE = 10 / 0;` is no
 n28-const-string-over-bound.idl	jacorb_idl	accept	`const string<3> TAG = "abcd";` — JacORB 3.9 discards the bound and writes `java.lang.String value = "abcd";`. Same shared reason as n23, and the quietest of the six: Java has no bounded string for the bound to survive into, so there is nothing for the target language to object to and the four-character value compiles and runs as the value of a three-character constant (measured 2026-08-25). This is the shape the divergence with n21 makes concrete in the other direction — there a `long double` became a Java `double`, here a bound stops existing — and both are the same trade: a declaration narrowed or widened by the mapping without a word. omniidl refuses it as "Length of bounded string constant exceeds bound". We follow omniidl.
 n29-const-enumerator-other-enum.idl	jacorb_idl	accept	`const Colour CHOICE = PEAR;` where `PEAR` belongs to `Fruit`. JacORB 3.9 resolves the enumerator correctly — it agrees that enumerators live in the enclosing scope, which is the rule that makes this file subtle — and then does not ask which enum it came from, emitting `n29.Colour value = n29.Fruit.PEAR;`. Same shared reason as n23, and the second of the two the target language catches: javac answers "incompatible types: Fruit cannot be converted to Colour" (measured 2026-08-25). The refusal exists, one stage late and in Java's vocabulary rather than IDL's, which is no use to a generator reading the front end's output. omniidl says it in IDL's: "Enumerator 'n29::PEAR' does not belong to enum 'n29::Colour'", and points at the declaration. We follow omniidl.
 n30-exception-as-type.idl	jacorb_idl	accept	An exception as the type of a struct member. JacORB 3.9 accepts it and builds the TypeCode without hesitating: `OutcomeHelper.type()` calls `create_struct_tc(…, new StructMember("refusal", create_exception_tc(DeniedHelper.id(), "Denied", …), null))` — a `tk_except` in a struct member's type slot, which CORBA 3.4 produces only for an exception. It compiles clean, so this is the third of the three nothing objects to. Same shared reason as n23. Worth recording rather than just exempting: this is the one of the six where **our own analyser had the same laxity until 2026-08-25** — `SymbolKind::is_type` listed `Exception` — so a second independently-written front end making the identical mistake is evidence about how easy the mistake is, not a reason to keep it. omniidl refuses: "'Denied' is not a type". We follow omniidl.
+ir-subset.idl	jacorb_idl	reject	The third instance of the cause measured under `34-corba-principal.idl` — JacORB 3.9 predeclares no `CORBA` scope — and the first one to be found in a contract that exists to be **served** rather than to pin a type. `struct ParameterDescription`'s `::CORBA::TypeCode type;` stops the parse at `ir-subset.idl, line:159(22): Undefined name: CORBA.ParameterDescription.TypeCode`, measured 2026-08-26; the scope in the message is where JacORB was searching, not what the file wrote, which is the reading `12-any-typecode.idl`'s row corrected on 2026-08-25. omniidl 4.3.4 accepts the file and so does our front end. The spelling is not ours to change: CLAUDE.md requires `::CORBA::TypeCode` because the unqualified name is itself a case clash, and the IFR facade this file describes cannot declare an operation signature without naming the type. We follow omniidl. What is new here is not the cause but where it was hiding: this divergence had existed since the file was written and could not be recorded, because `differential.sh` never enumerated `corpus/services/` and its staleness loop fails any row naming a file it does not check.

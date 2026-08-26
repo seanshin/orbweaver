@@ -63,8 +63,23 @@ fn root() -> PathBuf {
 /// from — the script names them literally. If the script grows a directory and
 /// this does not, the new directory's files are simply not gated, so the two
 /// lists are named together in the script's comment as well as here.
-const ENUMERATED: &[&str] =
-    &["corpus/golden", "corpus/requirements/generated", "corpus/negative", "spikes"];
+///
+/// The failure mode is not hypothetical and is worse than "not gated": the two
+/// lists agree with each other, so **both** can miss a directory and neither
+/// can say so. `corpus/services/` — the contracts that exist to be served, and
+/// the ones a foreign ORB is most likely to compile — was outside both from the
+/// day it was created until 2026-08-26. `ir-subset.idl` had been rejected by
+/// JacORB the whole time, and the divergence could not be recorded either,
+/// because `differential.sh`'s staleness loop fails any row naming a file it
+/// never checks. A gate that mirrors the thing it gates is only as wide as what
+/// somebody remembered to put in both.
+const ENUMERATED: &[&str] = &[
+    "corpus/golden",
+    "corpus/requirements/generated",
+    "corpus/services",
+    "corpus/negative",
+    "spikes",
+];
 
 fn idl_files(dir: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
