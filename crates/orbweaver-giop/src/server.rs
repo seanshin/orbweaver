@@ -787,8 +787,70 @@ pub trait Dispatch {
         self.dispatch(request, out).map(|()| DispatchBody::Return)
     }
 
-    /// Whether this servant answers to `object_key`. Defaults to accepting
-    /// everything, which is right for a single-servant process.
+    /// Whether this servant answers to `object_key`.
+    ///
+    /// # The default accepts every key, and that is a divergence rather than a choice
+    ///
+    /// **Decided 2026-08-26, and this is the one home for the decision.** The
+    /// sentence that used to stand here — *"defaults to accepting everything,
+    /// which is right for a single-servant process"* — is a preference, not an
+    /// argument, and measured against the specification and against this
+    /// workspace it is wrong. What the default is right *for* is
+    /// [`UnknownKeyPolicy::ServeAnyway`]; the defect is that nothing says so,
+    /// because a servant arrives at it by **not writing a method**.
+    ///
+    /// CORBA 3.4 §15.3.8.6 makes *what happens to an id the Active Object Map
+    /// does not hold* a policy with three values and a stated default, and the
+    /// stated default is `USE_ACTIVE_OBJECT_MAP_ONLY`: `OBJECT_NOT_EXIST`, with
+    /// nothing else consulted. Accepting every key is `USE_DEFAULT_SERVANT`,
+    /// which that same section requires a POA to be **created with** and to
+    /// have a servant **registered** for, and which raises `OBJ_ADAPTER` when it
+    /// has not been. In CORBA the permissive policy cannot be reached by
+    /// omission. Here omission is the only way anyone reaches it.
+    ///
+    /// This ORB has already written that reading down twice, in two other
+    /// crates, both times the other way — so the fact had three homes and this
+    /// one disagreed with both:
+    ///
+    /// * `orbweaver_object::RequestProcessingPolicy` sets its `SPEC_DEFAULT` to
+    ///   `UseActiveObjectMapOnly` and records of `UseDefaultServant` that there
+    ///   is **"No analogue here"** — while this method has been enacting it for
+    ///   every servant that inherits it.
+    /// * `orbweaver_gen`'s emitted servant trait declares its own `knows`
+    ///   **required, with no default**, and the emitted doc says why: an unknown
+    ///   key served *"as if it were the only object"* is what stopped a
+    ///   generated skeleton from ever holding more than one.
+    ///
+    /// # The single-servant argument does not survive the code
+    ///
+    /// *A single-object server has one key, so checking it is ceremony* is the
+    /// strongest case for the default, and it fails on its own terms:
+    /// [`Server`] **already holds that key**. `Orb::server` adopts it as the
+    /// servant's identity, [`Server::ior`] mints every published reference from
+    /// it, and no path compares an arriving `object_key` against it. The
+    /// identity such a server publishes is not the identity it enforces, and
+    /// the check it declines to make is one `==` against a field it owns.
+    ///
+    /// # What is *not* claimed
+    ///
+    /// That accepting every key is never right. It is exactly right for a
+    /// servant that means it — `orbweaver_gen`'s `Servants` multiplexer asks its
+    /// entries and `PyServant` bridges whatever arrives. The defect is that
+    /// meaning it and forgetting it are spelled the same way.
+    ///
+    /// # Why the default was not changed
+    ///
+    /// Because changing it changes what existing servants answer, and this
+    /// crate cannot make that change alone. Measured 2026-08-26: **26 of this
+    /// workspace's 72 `Dispatch`/`SharedDispatch` implementations inherit this
+    /// method**, and the production ones among them live in crates this one
+    /// does not own. `tests/a_key_nobody_activated.rs` names them, measures what
+    /// a caller sees today, and is the gate that goes red if this default moves
+    /// without them.
+    ///
+    /// [`locate`](Dispatch::locate) reads this method, so whatever it answers it
+    /// answers to a §9.4.5 probe as well — which is why the two paths cannot be
+    /// repaired independently.
     fn knows(&self, _object_key: &[u8]) -> bool {
         true
     }
@@ -951,6 +1013,12 @@ pub trait SharedDispatch: Sync {
     }
 
     /// Whether this servant answers to `object_key`.
+    ///
+    /// The default accepts every key. See [`Dispatch::knows`] for the decision
+    /// of 2026-08-26 about that default, which is the same decision for this
+    /// trait and is deliberately not restated here — including why CORBA 3.4
+    /// §15.3.8.6 makes it a divergence rather than a choice, and why it was not
+    /// changed. [`default_knows_policy`] is that fact as data.
     fn knows(&self, _object_key: &[u8]) -> bool {
         true
     }
@@ -1075,6 +1143,105 @@ pub enum ServeStep {
     Knows,
     /// [`SharedDispatch::dispatch_body`] — its bytes become the reply.
     Dispatch,
+}
+
+/// Which CORBA 3.4 §15.3.8.6 `RequestProcessingPolicy` a servant enacts for an
+/// object key it was never activated for.
+///
+/// The point of the type is that this is a **policy with a name in the
+/// specification**, and until 2026-08-26 this layer had it as a silence — see
+/// [`Dispatch::knows`] for the decision and its evidence, which is not restated
+/// here.
+///
+/// # Why two values and not §15.3.8.6's three
+///
+/// `USE_SERVANT_MANAGER` is a POA-level construct — this ORB spells it
+/// `orbweaver_object::UnknownIdPolicy::AskLocator` — and at *this* layer its
+/// wire effect does not arrive through `knows` at all. It arrives through
+/// [`Dispatch::redirect`], which [`serve_one_ordering`] puts **ahead** of
+/// `knows`, so a servant that forwards has already ended the request before
+/// this question is asked. What is left for `knows` to decide is exactly the
+/// two values below, and that is why nothing needs a `_` arm to cope with a
+/// third: there is no third at this layer, by construction rather than by
+/// omission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnknownKeyPolicy {
+    /// A key the servant was not activated for is refused, and the caller is
+    /// told `OBJECT_NOT_EXIST`.
+    ///
+    /// §15.3.8.6's `USE_ACTIVE_OBJECT_MAP_ONLY` — **the specification's own
+    /// default**, and the one `orbweaver_object::RequestProcessingPolicy`
+    /// records as this ORB's.
+    RefuseAsNotExist,
+    /// Every key reaches the servant.
+    ///
+    /// §15.3.8.6's `USE_DEFAULT_SERVANT`, which that section requires a POA to
+    /// be created with and to have a servant registered for — and which the
+    /// default bodies of [`Dispatch::knows`] and [`SharedDispatch::knows`]
+    /// enact by omission. [`default_knows_policy`] is that fact as data.
+    ServeAnyway,
+}
+
+/// The policy the default bodies of [`Dispatch::knows`] and
+/// [`SharedDispatch::knows`] enact, as data.
+///
+/// This exists to be the **one home** for that fact, in the same way and for
+/// the same reason as [`serve_one_ordering`]. Two trait defaults, this crate's
+/// prose and `tests/a_key_nobody_activated.rs` all mean this one sentence, and a
+/// sentence four places retype is a sentence that goes false in three of them.
+///
+/// The gate does not compare this against a literal — it computes what a caller
+/// on a socket should see **from this value**, and then goes and looks. So
+/// changing a default body without changing this is red, and changing this
+/// without changing a default body is red. Changing both together is green,
+/// which is correct and is also the dangerous case: the 26 implementations that
+/// inherit those bodies live in four other crates, and that test's failure
+/// message carries the list rather than leaving it to be rediscovered.
+pub const fn default_knows_policy() -> UnknownKeyPolicy {
+    UnknownKeyPolicy::ServeAnyway
+}
+
+/// Which [`UnknownKeyPolicy`] `servant` actually enacts — **measured, not
+/// declared**.
+///
+/// `activated` is a key the servant does answer to; the caller is claiming that
+/// much and nothing else. This asks the servant about several keys derived from
+/// it that nothing can have activated, and reports what the servant said.
+/// [`UnknownKeyPolicy::ServeAnyway`] is returned only when **every** probe is
+/// accepted, so a servant that answers to some keys and not others enacts
+/// [`UnknownKeyPolicy::RefuseAsNotExist`]: the policy is about whether an
+/// unknown key is refused, never about how many keys are known.
+///
+/// # Why a measurement rather than another trait method
+///
+/// A servant could have been asked to *declare* its policy through a further
+/// method, that method would have needed a default, and the default would have
+/// gone false for the first servant that overrode `knows` and not the
+/// declaration — the same defect one level up, and silent in the same way.
+/// Nothing here can go false, because the servant is asked.
+///
+/// # Why `SharedDispatch` and not both traits
+///
+/// A [`Dispatch`] servant is measured by putting it in a [`Serialized`], which
+/// is how [`Server`] reaches it in any case. Measuring the path the server
+/// actually uses is the more faithful answer, and one function is one home.
+pub fn key_policy_of<D: SharedDispatch + ?Sized>(
+    servant: &D,
+    activated: &[u8],
+) -> UnknownKeyPolicy {
+    // Adjacent, longer, shorter and empty. Adjacency matters: a servant that
+    // checks only a prefix of the key accepts a longer one, and a probe drawn
+    // from thin air would never have caught that.
+    let mut longer = activated.to_vec();
+    longer.push(0xA5);
+    let shorter = activated.get(..activated.len().saturating_sub(1)).unwrap_or(&[]).to_vec();
+    let unrelated = b"orbweaver/no-such-object".to_vec();
+    let probes = [longer, shorter, unrelated, Vec::new()];
+    if probes.iter().all(|k| servant.knows(k)) {
+        UnknownKeyPolicy::ServeAnyway
+    } else {
+        UnknownKeyPolicy::RefuseAsNotExist
+    }
 }
 
 /// What a servant did with one request, before the reply status is chosen.
