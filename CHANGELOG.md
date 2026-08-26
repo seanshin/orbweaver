@@ -169,6 +169,40 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **The coverage sweep can see the trader, and now says which services it
+  measures from a fixture's files.** `CosTrading::Lookup` had been on the wire
+  since D022 T4 and outside `SERVICES-COVERAGE` §8 the whole time; the missing
+  piece was never the servant but a first-party contract to derive an operation
+  list from — `spikes/service_sweep.py` names its IDL inputs literally, and for
+  the standard services those inputs are omniORB's **installed**
+  `CosNaming.idl`, `CosEventComm.idl`, `CosEventChannelAdmin.idl` and `ir.idl`.
+  So **what the document reported about our own servants was derived from a
+  fixture's files**, and that fact lived in four literal paths inside one
+  function.
+
+  `corpus/services/trading-lookup-subset.idl` (written from the OMG
+  specification; omniORB's `CosTrading.idl` was not opened) closes the first
+  half: `spike-trading` joins the fixture list and the sweep measures **21
+  declared, 21 served, 0 unmeasured** on the trader — `query` with a nil
+  `offer_itr` for five matches under `how_many` 10, `NO_IMPLEMENT` for the same
+  query under `how_many` 2, `UnknownServiceType` for a type nothing declares.
+
+  The second half is `#SOURCES`: one row per service saying which file its
+  operation list came from and whether that file is `first-party` or a
+  `fixture`'s, classified by **where the file is** rather than by a hand-kept
+  label, and rendered into §8 by `coverage_tables.py`. Three services are
+  fixture-derived; the sweep names them every run instead of leaving it to a
+  sentence. A declaration source that cannot be read is now a counted
+  `UNMEASURED` naming the file rather than a traceback — a traceback is loud
+  for a person and leaves no row for the renderer, so the document would keep
+  whatever it last said.
+
+  *`CosTrading::Lookup`은 D022 T4부터 와이어에 있었지만 §8은 그것을 볼 수 없었다.
+  빠진 것은 서번트가 아니라 연산 목록을 끌어올 **일급 계약**이었다. 표준 서비스의
+  입력은 omniORB **설치본**의 IDL이므로, 우리 서번트에 관한 보고가 픽스처의
+  파일에서 파생되고 있었다. 이제 서비스마다 출처를 파일 위치로 분류해 매 실행
+  출력한다.*
+
 - **The ORB owns the transport, and the configuration is live** (D019 step 4,
   the step the §5 shape approval gated; approved one-way 2026-08-26).
 

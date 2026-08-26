@@ -1,4 +1,4 @@
-# SERVICES-COVERAGE — what the five served services actually implement
+# SERVICES-COVERAGE — what the served services actually implement
 
 > Measured by `spikes/service_sweep.sh`, over the wire, against the running
 > servants. **§8 is generated from the sweep and diffed by the harness**; §3–§7
@@ -13,16 +13,23 @@
 
 ## 1. Why this document exists / 이 문서가 존재하는 이유
 
-`COMPONENTS.md` marks five services ✅ and every one of them implements a
+`COMPONENTS.md` marks a row of services ✅ and every one of them implements a
 *subset* of what its IDL declares — deliberately, with reasons in the servants'
 module docs. Nobody had produced the list. A reader of a ✅ therefore could not
 tell a **considered refusal** from an **omission**, and that difference is the
-whole distance between an honest ✅ and a misleading one.
+whole distance between an honest ✅ and a misleading one. How many services the
+sweep reaches is not written here: §8's totals table is generated from the run
+and counts them, and a number retyped in this paragraph would drift the first
+time one was added. It did — `CosTrading::Lookup` was on the wire from D022 T4
+and outside this document until 2026-08-26.
 
-`COMPONENTS.md`의 ✅ 다섯 줄은 각각 IDL이 선언한 것의 **부분집합**을 구현하며,
+`COMPONENTS.md`의 ✅ 줄들은 각각 IDL이 선언한 것의 **부분집합**을 구현하며,
 그 이유는 서번트 모듈 문서에 있다. 그러나 목록은 아무도 만들지 않았다. 그래서
 독자는 **숙고된 거부**와 **누락**을 구분할 수 없었고, 그 차이가 정직한 ✅과
-오해를 부르는 ✅ 사이의 거리 전부다.
+오해를 부르는 ✅ 사이의 거리 전부다. 서비스 **개수**는 여기 적지 않는다 —
+§8 합계표가 실행에서 생성되며 개수를 센다. 이 문단에 옮겨 적은 수는 서비스가
+하나 늘면 곧바로 어긋난다. 실제로 어긋났다: `CosTrading::Lookup`은 D022 T4부터
+와이어에 있었고 2026-08-26까지 이 문서 밖에 있었다.
 
 ## 2. Method / 방법
 
@@ -34,17 +41,21 @@ anything omniORB ships. Attributes are expanded into the `_get_`/`_set_`
 operations they become on the wire (§11.3.7), because that is the name a
 request actually carries.
 
-**Probed and found present** (the probe is part of the measurement, not an
-assumption): omniORB 4.3.4's own IDL directory at
-`/opt/homebrew/share/idl/omniORB`, containing `COS/CosNaming.idl`,
-`COS/CosEventComm.idl`, `COS/CosEventChannelAdmin.idl` and `ir.idl`.
-`CosEventChannelAdmin.idl` does not compile without `-I` at its own COS
-directory — the sweep passes it. The two project contracts are read from
-`corpus/golden/22-moe-control-plane.idl` and
-`corpus/golden/23-moe-enterprise.idl`, and are read **separately**: each
-declares its own `moe::Expert` and golden 22's carries a `delegate` that golden
-23's does not, so merging them would invent an operation neither servant's
-contract asks for.
+**Which file each service's list was read from is generated, not written
+here** — §8's *Where each operation list was read from* table, one row per
+service, marked `first-party` or `fixture` by where the file is. It says
+something a reader is owed and this section used to bury in a paragraph:
+**for the services with no first-party contract, what we report about our own
+servants is derived from omniORB's installed IDL.** Three services were in that
+position when this was written (2026-08-26); the sweep names them every run
+rather than depending on this sentence staying true, and the table is where to
+read it. The fixture directory is probed and found, not assumed
+(`resolve_idl_root()`), and `CosEventChannelAdmin.idl` does not compile without
+`-I` at its own COS directory — the sweep passes it.
+
+The two MoE contracts are read **separately**: each declares its own
+`moe::Expert` and golden 22's carries a `delegate` that golden 23's does not,
+so merging them would invent an operation neither servant's contract asks for.
 
 **Every classification is a real GIOP 1.2 request, not a reading of source.**
 A match table built by reading `match req.operation.as_str()` cannot catch an
@@ -64,9 +75,15 @@ degenerate by design and some have side effects.
 
 선언 목록은 IDL에서 **읽어낸다** — 손으로 타이핑한 목록은 명세에 대한 *주장*이지
 명세를 *읽은 것*이 아니다. `omniidl -b dump`를 외부 프로그램으로 실행해 텍스트
-출력만 읽는다(라이선스 경계 (b)항). 픽스처는 가정하지 않고 탐지했다:
-`/opt/homebrew/share/idl/omniORB`. 프로젝트 계약 두 개는 **따로** 읽는다 —
-둘 다 `moe::Expert`를 선언하며 내용이 다르기 때문이다. 분류는 전부 실제 GIOP
+출력만 읽는다(라이선스 경계 (b)항). **어느 서비스의 목록을 어느 파일에서 읽었는지는
+여기 적지 않고 §8이 생성한다** — 서비스마다 한 줄, 파일 위치로 `first-party`와
+`fixture`를 구분한다. 그 표가 말하는 것은 이 절이 문단 속에 묻어두었던 사실이다:
+**일급 계약이 없는 서비스에 대해서는, 우리 서번트에 관해 보고하는 내용이 omniORB
+설치본의 IDL에서 파생된다.** 작성 시점(2026-08-26) 기준 그런 서비스가 셋이며,
+스윕이 매 실행마다 이름을 찍으므로 이 문장이 계속 참인지에 기대지 않는다 —
+읽을 곳은 그 표다. 픽스처 디렉터리는 가정하지 않고
+탐지한다(`resolve_idl_root()`). MoE 계약 두 개는 **따로** 읽는다 — 둘 다
+`moe::Expert`를 선언하며 내용이 다르기 때문이다. 분류는 전부 실제 GIOP
 1.2 요청이며, 우리 클라이언트가 **아닌** 파이썬 표준 라이브러리로 말한다.
 프로브 본문은 0바이트 64개다 — 빈 본문은 모든 연산을 `MARSHAL`로 만들어 존재하는
 것처럼 보이게 하므로.
@@ -535,6 +552,34 @@ _`CORBA::Object` pseudo-operations probed and counted apart: `_is_a`, `_non_exis
 
 _`CORBA::Object` pseudo-operations probed and counted apart: `_is_a`, `_non_existent`._
 
+### CosTrading — 21 declared, 21 served / 선언 21, 서빙 21
+
+| Interface | Operation | Answer, per object probed | Class |
+|---|---|---|---|
+| `CosTrading::Lookup` | `query` | Lookup (trader) → `MARSHAL` | served |
+| `CosTrading::TraderComponents` | `_get_lookup_if` | Lookup (trader) → `reply` | served |
+| `CosTrading::TraderComponents` | `_get_register_if` | Lookup (trader) → `reply` | served |
+| `CosTrading::TraderComponents` | `_get_link_if` | Lookup (trader) → `reply` | served |
+| `CosTrading::TraderComponents` | `_get_proxy_if` | Lookup (trader) → `reply` | served |
+| `CosTrading::TraderComponents` | `_get_admin_if` | Lookup (trader) → `reply` | served |
+| `CosTrading::SupportAttributes` | `_get_supports_modifiable_properties` | Lookup (trader) → `reply` | served |
+| `CosTrading::SupportAttributes` | `_get_supports_dynamic_properties` | Lookup (trader) → `reply` | served |
+| `CosTrading::SupportAttributes` | `_get_supports_proxy_offers` | Lookup (trader) → `reply` | served |
+| `CosTrading::SupportAttributes` | `_get_type_repos` | Lookup (trader) → `reply` | served |
+| `CosTrading::ImportAttributes` | `_get_def_search_card` | Lookup (trader) → `reply` | served |
+| `CosTrading::ImportAttributes` | `_get_max_search_card` | Lookup (trader) → `reply` | served |
+| `CosTrading::ImportAttributes` | `_get_def_match_card` | Lookup (trader) → `reply` | served |
+| `CosTrading::ImportAttributes` | `_get_max_match_card` | Lookup (trader) → `reply` | served |
+| `CosTrading::ImportAttributes` | `_get_def_return_card` | Lookup (trader) → `reply` | served |
+| `CosTrading::ImportAttributes` | `_get_max_return_card` | Lookup (trader) → `reply` | served |
+| `CosTrading::ImportAttributes` | `_get_max_list` | Lookup (trader) → `reply` | served |
+| `CosTrading::ImportAttributes` | `_get_def_hop_count` | Lookup (trader) → `reply` | served |
+| `CosTrading::ImportAttributes` | `_get_max_hop_count` | Lookup (trader) → `reply` | served |
+| `CosTrading::ImportAttributes` | `_get_def_follow_policy` | Lookup (trader) → `reply` | served |
+| `CosTrading::ImportAttributes` | `_get_max_follow_policy` | Lookup (trader) → `reply` | served |
+
+_`CORBA::Object` pseudo-operations probed and counted apart: `_is_a`, `_non_existent`._
+
 ### MoE enterprise — 16 declared, 16 served / 선언 16, 서빙 16
 
 | Interface | Operation | Answer, per object probed | Class |
@@ -586,11 +631,26 @@ _`CORBA::Object` pseudo-operations probed and counted apart: `_is_a`, `_non_exis
 | CosNaming | 14 | 14 | 0 | 0 | 0 | 16 | 0 |
 | CosEvent | 18 | 17 | 1 | 0 | 0 | 28 | 0 |
 | IFR | 44 | 19 | 0 | 25 | 0 | 66 | 0 |
+| CosTrading | 21 | 21 | 0 | 0 | 0 | 23 | 0 |
 | MoE enterprise | 16 | 16 | 0 | 0 | 0 | 28 | 0 |
 | MoE control plane | 14 | 10 | 1 | 0 | 3 | 21 | 0 |
-| **total** | **106** | **76** | **2** | **25** | **3** | **159** | **0** |
+| **total** | **127** | **97** | **2** | **25** | **3** | **182** | **0** |
 
 _Declared_ counts each `interface::operation` once however many objects it was probed on; an operation is _served_ if any object dispatched it. `MARSHAL` on a 64-zero-byte probe proves dispatch, not correctness (§9). / _선언_은 객체 수와 무관하게 `인터페이스::연산`을 한 번씩 센다.
+
+### Where each operation list was read from / 연산 목록을 읽어온 곳
+
+| Service | Origin | File the declarations were read from |
+|---|---|---|
+| CosNaming | fixture | `/opt/homebrew/share/idl/omniORB/COS/CosNaming.idl` |
+| CosEvent | fixture | `/opt/homebrew/share/idl/omniORB/COS/CosEventComm.idl` |
+| CosEvent | fixture | `/opt/homebrew/share/idl/omniORB/COS/CosEventChannelAdmin.idl` |
+| IFR | fixture | `/opt/homebrew/share/idl/omniORB/ir.idl` |
+| CosTrading | first-party | `corpus/services/trading-lookup-subset.idl` |
+| MoE enterprise | first-party | `corpus/golden/23-moe-enterprise.idl` |
+| MoE control plane | first-party | `corpus/golden/22-moe-control-plane.idl` |
+
+_`fixture` means the operation list is derived from omniORB's **installed** IDL, not from a contract of ours: what this document reports about our own servants depends on a file this project does not ship. / `fixture`는 우리 계약이 아니라 omniORB 설치본의 IDL에서 연산 목록을 끌어왔다는 뜻이다._
 
 ### Interfaces no object claimed / 어떤 객체도 주장하지 않는 인터페이스
 
@@ -602,6 +662,7 @@ _Declared_ counts each `interface::operation` once however many objects it was p
 
 - **CosNaming** — 1 interface(s): `CosNaming::BindingIterator` (3 declared operation(s))
 - **IFR** — 21 interface(s): `CORBA::ModuleDef` (0 declared operation(s)), `CORBA::ConstantDef` (5 declared operation(s)), `CORBA::TypedefDef` (0 declared operation(s)), `CORBA::StructDef` (2 declared operation(s)), `CORBA::UnionDef` (5 declared operation(s)), `CORBA::EnumDef` (2 declared operation(s)), `CORBA::AliasDef` (2 declared operation(s)), `CORBA::NativeDef` (0 declared operation(s)), `CORBA::PrimitiveDef` (1 declared operation(s)), `CORBA::StringDef` (2 declared operation(s)), `CORBA::WstringDef` (2 declared operation(s)), `CORBA::FixedDef` (4 declared operation(s)), `CORBA::SequenceDef` (5 declared operation(s)), `CORBA::ArrayDef` (5 declared operation(s)), `CORBA::ExceptionDef` (3 declared operation(s)), `CORBA::AttributeDef` (5 declared operation(s)), `CORBA::OperationDef` (11 declared operation(s)), `CORBA::ValueMemberDef` (5 declared operation(s)), `CORBA::ValueDef` (19 declared operation(s)), `CORBA::ValueBoxDef` (2 declared operation(s)), `CORBA::AbstractInterfaceDef` (0 declared operation(s))
+- **CosTrading** — 5 interface(s): `CosTrading::Register` (0 declared operation(s)), `CosTrading::Link` (0 declared operation(s)), `CosTrading::Proxy` (0 declared operation(s)), `CosTrading::Admin` (0 declared operation(s)), `CosTrading::OfferIterator` (0 declared operation(s))
 
 <!-- END generated -->
 
