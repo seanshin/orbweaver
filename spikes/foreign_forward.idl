@@ -1,0 +1,24 @@
+// The contract for the foreign-forward leg: a foreign ORB forwards our client
+// to a different object at a different address, and our client calls it there.
+//
+// Deliberately one operation with one argument. This leg measures *where* the
+// call lands, not what it carries, and every extra member is a way for a
+// marshalling defect to be mistaken for a forwarding one.
+//
+// The reply is the address the answer came from, so the caller's own result
+// distinguishes "reached the destination" from "reached the forwarder" without
+// the harness having to trust either server's log.
+//
+// Identifier rule: no member, parameter or operation may share a name with a
+// type or an enclosing scope, ignoring case (CLAUDE.md). `foreign_forward`,
+// `Waypoint`, `where_am_i` and `note` are pairwise distinct under that rule.
+
+module foreign_forward {
+
+  interface Waypoint {
+    // Returns "<tag>@<host>:<port>" for the server that actually ran the call,
+    // with `note` echoed after a colon.
+    string where_am_i(in string note);
+  };
+
+};
