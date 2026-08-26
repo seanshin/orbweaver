@@ -224,20 +224,89 @@ Nothing in either fixture changed.
 
 ---
 
-## What is **not** claimed here
+## Migrated 2026-08-27, and what the migration could **not** do
 
-The five fixtures were **not migrated onto this seed**, so the byte-identity
-oracle D026 §5 S1 names was **not run**. All five live in `orbweaver-object`,
-`orbweaver-registry` and `orbweaver-giop`, and the batch that produced this
-directory was scoped to `corpus/state/`, `orbweaver-test` and new files under
-`spikes/`. The disagreements above were established **by reading**, which
-establishes that the populations differ and does *not* establish that migrating
-them preserves any fixture's output. That measurement is still owed.
+The byte-identity oracle D026 §5 S1 names has now been **run**. Two fixtures
+were migrated, three were not, and the reason three were not is structural
+rather than scheduling — which is the finding this section exists for.
+
+| fixture | migrated | byte-identity |
+|---|---|---|
+| `spike_tenants` | **yes** — tenants, regions, capabilities, costs, adapter deltas, policy domains, the grant, declared nodes | **identical** |
+| `spike_experts` | **partly** — the reported node and the capability vocabulary; its four experts stay invented, and its module docs say so | **one added line**, explained below |
+| `spike_names` | no — **blocked**, see below | identical (untouched) |
+| `spike_ifr` | not applicable — its population is `corpus/golden/*.idl` and already has a home | identical (untouched) |
+| `spike_events` | not applicable — `ulong`s and object keys, no named entity | **not comparable**, see below |
+
+**The one deliberate difference.** `spike_experts` prints one new line naming
+the node its experts report. It is there because a seeded value that reaches no
+output cannot be shown reaching anything: `placement_node` is reported into the
+offer store and printed by nothing, so the first run of that fixture's negative
+control — the seed changed under it — **came back green**. A control that
+cannot fail is not a control.
+
+### The blocker: the loader is above every fixture that owes it
+
+`orbweaver-test` depends on `orbweaver-giop`, `orbweaver-registry` and
+`orbweaver-dynamic`, so it sits **above** every crate the five fixtures live
+in. A fixture cannot `use orbweaver_test::state` without a dependency cycle,
+and Cargo has no bin-only dependency — a `dev-dependency` reaches tests,
+examples and benches, and **not** a `[[bin]]`.
+
+- `spike_tenants`, `spike_experts` (`orbweaver-object`) — reachable, because
+  `orbweaver-object → orbweaver-dynamic` is cycle-free. They include
+  `crates/orbweaver-test/src/state.rs` by `#[path]`: **one file, two
+  compilations, no second copy to drift.** That satisfies D026 §4 and is a
+  workaround for the graph, not a design.
+- `spike_names`, `spike_events` (`orbweaver-giop`) and `spike_ifr`
+  (`orbweaver-registry`) — **not reachable at all.** `orbweaver-dynamic`
+  depends on `orbweaver-giop` and `orbweaver-registry`, so the JSON parser the
+  loader needs is *above* them too. There is no placement of the loader that
+  those crates can see, and only `spike_names` has a population to share
+  (`naming-graph.json`, still built inline in Rust).
+
+**The structural fix, for whoever takes this next:** the binding constraint is
+that `orbweaver_dynamic::json` sits above `orbweaver-giop`. Move that parser
+down to `orbweaver-cdr` — which every crate in the workspace already depends
+on — and the loader can live somewhere all five fixtures can name, at which
+point `spike_names` becomes migratable and the `#[path]` includes become plain
+`use`. Nothing in this batch's footprint could do that.
+
+### `spike_events` cannot be measured by this oracle
+
+Its output is **not a function of its inputs**. Ten runs of the *unchanged*
+binary, with nothing in this batch touching it:
+
+- 9/10 — `dropped=3 (on_failure_disconnect=3) fanned_out=32`
+- 1/10 — `dropped=2 (on_failure_disconnect=2) fanned_out=31`
+
+A race between the third push failure disconnecting the channel and the last
+event being queued. **It is not diagnosed** and is not claimed to be — measured
+2026-08-27 on one machine, 1 in 10. The consequence is that the byte-identity
+oracle cannot be applied to that fixture, and a later migration would have been
+blamed for the race.
+
+Note how nearly this was missed: the oracle's own determinism check was **two
+consecutive runs**, and both landed on the 1/10 variant, so it reported *"the
+oracle is deterministic"*. Two runs is not evidence.
 
 **A seeded population must not become the only population** (D026 §3). Nothing
 here retires an ad-hoc case; the property tests and `wire-fuzz` exist because a
-fixed population is a fixed set of paths.
+fixed population is a fixed set of paths, and each migrated fixture's module
+docs name what it still invents and why.
 
-*다섯 픽스처는 이 시드로 **이전되지 않았고**, 따라서 바이트 동일성 오라클은
-**돌지 않았다** — 셋 다 이 배치의 범위 밖 크레이트에 있다. 위의 불일치는 **읽어서**
-확인한 것이며, 이전이 출력을 보존하는지는 아직 측정되지 않았다.*
+*바이트 동일성 오라클이 **돌았다**. 둘은 이전되었고(`spike_tenants` 완전,
+`spike_experts` 공유분만) 셋은 아니며, 아닌 이유는 일정이 아니라 **구조**다:
+로더의 집인 `orbweaver-test`가 다섯 픽스처가 사는 모든 크레이트보다 **위에**
+있어서 픽스처가 순환 없이 이름을 부를 수 없고, Cargo에는 바이너리 전용 의존성이
+없다(`dev-dependency`는 `[[bin]]`에 닿지 않는다). `orbweaver-object`의 둘은
+`orbweaver-dynamic`을 통해 닿으므로 `#[path]`로 **파일 하나를 두 번 컴파일**한다 —
+사본이 없으므로 어긋남이 불가능하다. `orbweaver-giop`·`orbweaver-registry`의 셋은
+**아예 닿지 못한다**: 필요한 JSON 파서가 그들보다 위에 있다. **구조적 해법**은
+`orbweaver_dynamic::json`을 모두가 의존하는 `orbweaver-cdr`로 내리는 것이며, 그때
+`spike_names`가 이전 가능해지고 `#[path]`는 평범한 `use`가 된다.*
+
+*`spike_events`는 이 오라클로 잴 수 없다 — 출력이 입력의 함수가 아니다. 손대지
+않은 바이너리를 열 번 돌려 두 가지 결과가 나왔다(9/10과 1/10). **진단되지 않았고**
+진단되었다고 주장하지 않는다. 하마터면 놓칠 뻔했다: 오라클의 결정성 확인이 **연속
+두 번**이었고 둘 다 소수 쪽에 떨어져 "결정적"이라고 보고했다. 두 번은 증거가 아니다.*
