@@ -206,6 +206,28 @@ for minor in 0 1 2; do
   done
 done
 
+# ── the recording, re-taken ─────────────────────────────────────────────────
+#
+# crates/orbweaver-giop/tests/foreign_forward_bytes.rs holds three replies
+# omniORB wrote on a named day, and is the gate that fires where omniORB is not
+# installed. A recording nobody re-takes is a claim about the past, so this
+# regenerates them from the live fixture and compares the decoded values.
+#
+# Skipped under --break for the obvious reason: a control that removes the
+# forward makes the re-take fail for a reason that is not drift, and counting
+# it would inflate the control's own count with a finding it did not make.
+if [ -z "$break_it" ]; then
+  rec=$(python3 "$ROOT/spikes/foreign_forward_capture.py" \
+          --ior "$fwd_ior" --check-recording 2>&1)
+  rec_rc=$?
+  sed 's/^/  /' <<<"$(grep -E '^  (ok|FAIL|SKIPPED)' <<<"$rec")"
+  if [ "$rec_rc" -eq 2 ]; then
+    fail "the recording could not be re-taken: $(grep '^reason=' <<<"$rec" | head -1)"
+  elif [ "$rec_rc" -ne 0 ]; then
+    fail "the recorded omniORB replies no longer describe the live peer"
+  fi
+fi
+
 # ── half 2: our client, following it ────────────────────────────────────────
 #
 # `--ignored` because these cases need the two live foreign processes; the test
