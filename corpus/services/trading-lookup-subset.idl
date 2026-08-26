@@ -1,0 +1,427 @@
+// The `CosTrading::Lookup` subset `crates/orbweaver-giop/src/trading_server.rs`
+// serves, written as a contract.
+//
+// # Why this file exists
+//
+// D022 T4 put `CosTrading::Lookup::query` on the wire, on our POA, answering
+// with a nil `OfferIterator` for every result that fits and refusing the rest
+// by name. It could not be added to `docs/SERVICES-COVERAGE.md` §8, and the
+// batch that landed it stopped at the right wall: **the sweep derives its
+// operation list by parsing IDL from our own corpus, and no first-party
+// `CosTrading` contract existed.** D030 §5 L4 names that as the prerequisite
+// every future target hits, not just this one. This file is it.
+//
+// # Provenance, which is the whole design constraint here
+//
+// **Written from the OMG Trading Object Service specification** — the
+// `CosTrading` module's published declarations: `Lookup`, its three base
+// attribute interfaces, and the types and exceptions `query` names. Those
+// names, types and exception members are OMG's, published, and implementing a
+// published specification ourselves is the first-party category `CLAUDE.md`
+// draws; the ORB core is first-party for exactly the same reason.
+//
+// omniORB ships a `CosTrading.idl` and it is **LGPL**. It was not copied, not
+// retyped from, not adapted, and not diffed into existence. Under clause (b) of
+// the licensing boundary — invoking an external program and reading its text
+// output — `omniidl` was run over **this file** as the conformance oracle, the
+// same use every other corpus file gets, and `spikes/trading_client.py` already
+// checks this contract's repository ids by *running* omniidl-generated stubs.
+// Neither reads omniORB's own `CosTrading.idl` into this one.
+//
+// *OMG 명세에서 직접 썼다. omniORB의 `CosTrading.idl`은 LGPL이며 복사·전사·개작·
+// 대조 중 어느 것도 하지 않았다. 재타이핑은 세탁이 아니다.*
+//
+// # Scope: what is served, and nothing wider
+//
+// D022 §7 forbids widening and it is still binding, so this contract is the
+// **import side only**:
+//
+//   * `Lookup::query`, with its full signature — six in-parameters, three
+//     out-parameters — and the exceptions the servant actually raises.
+//   * `TraderComponents`, `SupportAttributes`, `ImportAttributes`, whose
+//     twenty readonly attributes the servant answers every one of. A trader
+//     that does not answer them is a trader a foreign client cannot
+//     characterise, which is why they are here in full while everything else
+//     is not.
+//
+// Deliberately absent, each because the servant does not serve it: `Register`
+// (the export side), `Admin`, `Link`, `Proxy`, and any
+// `CosTradingRepos::ServiceTypeRepository` — D022 T3 landed the service *type*
+// and deliberately not the repository. Declaring their operations would make
+// `spikes/service_sweep.sh` report a gap that is really a scope decision, which
+// is the opposite of what this file is for.
+//
+// # The five interfaces declared as bare names, and why that is the honest form
+//
+// `Register`, `Link`, `Proxy`, `Admin` and `OfferIterator` appear below with
+// **empty bodies**. Every one of them is a type this contract cannot avoid
+// naming: four are the types of `TraderComponents`' attributes and the fifth is
+// the type of `query`'s `out offer_itr`. The servant answers **nil** for all
+// five — the specification's own way of saying an interface is not supported —
+// and a nil reference is what makes T4's deferral conformant rather than
+// short: when the matches fit `how_many` they are all in `offers` and the
+// iterator is nil, so nil here always means *that is all of them*.
+//
+// A forward declaration (`interface Register;`) would say this more precisely —
+// *defined elsewhere*, which is exactly the truth — and it was measured rather
+// than assumed before being turned down. **Both front ends accept an undefined
+// one**: `omniidl -b dump` exits 0 with no diagnostic, `orbweaver-idl`'s
+// `collect_definition` introduces the name and never revisits whether a body
+// arrived, and `corpus/services/ir-subset.idl`'s `interface ModuleDef;` has
+// relied on that tolerance for as long as it has existed. It is still a
+// tolerance and not a licence: IDL requires a forward-declared interface to be
+// **defined later in the same specification**, so an undefined one is
+// non-conformant in a way a stricter compiler may refuse.
+//
+// This file is a *prerequisite for other targets* (D030 §5 L4) rather than
+// coverage material, so it is the wrong place to spend a conformance tolerance.
+// An empty body is conformant everywhere and is the same thing every other file
+// in this directory already does — `gen-naming-subset.idl` declares
+// `BindingIterator` with only `destroy()` and omits the rest. The empty subset
+// of an interface we serve none of is that convention taken to zero, and it
+// keeps the sweep's operation count equal to the served operation count either
+// way.
+//
+// `interface Lookup;` below *is* a forward declaration and a fully conformant
+// one, because `Lookup` is defined at the bottom of this file —
+// `TraderComponents` needs the type before then.
+//
+// *다섯 인터페이스는 이름만 선언한다. 서번트가 모두 nil로 답하며, nil 반복자는
+// 언제나 "이것이 전부"를 뜻한다.*
+//
+// # Two exceptions the OMG raises clause carries and this one does not
+//
+// `Lookup::query` is published raising nine exceptions. Seven are here. The
+// two that are not are `PolicyTypeMismatch` and `InvalidPolicyValue`, both of
+// which carry a `Policy` — a policy's *value*:
+//
+//   * The servant never decodes a policy's `any`. `Policy` is
+//     `{ PolicyName name; any value; }` inside a sequence, so the `any` is
+//     never last in the request body and CDR gives it no length prefix;
+//     skipping one means walking its `TypeCode`, which that crate has no
+//     walker for. It therefore reads the first policy's **name** and refuses
+//     there.
+//   * That is sound because `orbweaver-trading` refuses *every* policy name:
+//     this trader implements no import policy at all, its cardinalities are its
+//     own constants, and it has no links, so no policy value can ever change an
+//     answer. `IllegalPolicyName` is reached before a value is ever looked at.
+//
+// So both are unraisable by construction, and this file follows the rule
+// `gen-naming-subset.idl` states for `CannotProceed`: an exception that is
+// never raised adds a fault variant that can never be measured. They also
+// carry an `any` **inside an exception body**, which no other contract here
+// asks an emitter for. If a policy value is ever decoded, they land with it.
+//
+// The order of the seven that remain is the specification's own order, and it
+// is load-bearing rather than cosmetic: `orbweaver-trading`'s `answer` checks
+// in exactly this order so that a caller who sends both a bad type name and a
+// bad constraint is told about the type name, every time, on every ORB.
+//
+// # Identity, and where the ids have to match
+//
+// `#pragma prefix "omg.org"` is what makes these the real ids —
+// `IDL:omg.org/CosTrading/Lookup:1.0` — rather than a look-alike that would
+// compare equal to nothing. Like the other two files here this lives under
+// `corpus/services/` and not `corpus/golden/` for that reason:
+// `pragma_corpus.rs` keeps the golden corpus free of identity pragmas.
+//
+// **The two exceptions nested inside `Lookup` are nested on purpose.** OMG
+// declares `IllegalPreference` and `IllegalPolicyName` inside the interface and
+// the repository id follows the scope, so hoisting either to module level would
+// silently rename it from `IDL:omg.org/CosTrading/Lookup/IllegalPreference:1.0`
+// to `IDL:omg.org/CosTrading/IllegalPreference:1.0`. No compiler catches that
+// and a foreign client's exception dispatch is exactly what breaks. The
+// servant's `ILLEGAL_PREFERENCE_ID` and `ILLEGAL_POLICY_NAME_ID` carry the
+// scoped form for the same reason, and `spikes/trading_client.py` checks every
+// one of these ids against omniidl-generated stubs by running them.
+//
+// # What is not in this contract because it is not in the protocol
+//
+// A property value is a `PropertyValue`, which is an `any`. The vocabulary this
+// trader's offers actually carry — `id`, `specialization`, `placement_node`,
+// `cost`, `latency_p50`, `latency_p99`, `load`, `mem_footprint`, `route_freq`,
+// `residency` — belongs to the **service type**, not to `CosTrading`, and lives
+// where the service type is declared. Writing it here would be inventing a
+// contract OMG does not publish.
+//
+// Naming note, the dominant generation failure: the identifier clash rule is
+// case-insensitive. The parameter and member names below are OMG's (`type`,
+// `constr`, `pref`, `n`) and were kept for fidelity and for that. `type` is a
+// **Rust** keyword and not an IDL one, which is the generator's problem and not
+// this contract's — `corpus/golden/28-target-keywords.idl` is where that class
+// is covered, and this file executes the `r#type` path incidentally.
+
+#pragma prefix "omg.org"
+
+module CosTrading {
+
+  // Defined at the bottom of this file. `TraderComponents` needs the type
+  // before then, which is what a forward declaration is for.
+  interface Lookup;
+
+  //@ ai_desc: An internationalised string; every name and expression here is one
+  typedef string Istring;
+
+  //@ ai_desc: The name of a service type an offer was exported under
+  typedef Istring ServiceTypeName;
+
+  //@ ai_desc: A constraint expression, which decides which offers match
+  typedef Istring Constraint;
+
+  //@ ai_desc: The name of one property of an offer
+  typedef Istring PropertyName;
+
+  //@ ai_desc: A list of property names, as a caller asks for or a trader refuses
+  typedef sequence<PropertyName> PropertyNameSeq;
+
+  //@ ai_desc: One property's value; its type belongs to the service type, not to the trader
+  typedef any PropertyValue;
+
+  //@ ai_desc: One named value an offer carries
+  struct Property {
+    //@ ai_desc: Which property this is
+    PropertyName name;
+    //@ ai_desc: What it holds
+    PropertyValue value;
+  };
+
+  //@ ai_desc: What an offer carries, listing only the properties it has
+  typedef sequence<Property> PropertySeq;
+
+  //@ ai_desc: One exported service: what to call, and what is known about it
+  struct Offer {
+    //@ ai_desc: The object this offer is for; nil unless the deployment bound one
+    Object reference;
+    //@ ai_desc: The properties this offer has; an absent property is absent, not empty
+    PropertySeq properties;
+  };
+
+  //@ ai_desc: The offers one query answers with
+  typedef sequence<Offer> OfferSeq;
+
+  //@ ai_desc: The name of one import policy
+  typedef string PolicyName;
+
+  //@ ai_desc: The policy names a trader reports having applied
+  typedef sequence<PolicyName> PolicyNameSeq;
+
+  //@ ai_desc: One import policy's value
+  typedef any PolicyValue;
+
+  //@ ai_desc: One import policy a caller asks the trader to apply
+  struct Policy {
+    //@ ai_desc: Which policy this is
+    PolicyName name;
+    //@ ai_desc: What it is set to
+    PolicyValue value;
+  };
+
+  //@ ai_desc: The import policies one query carries; this trader refuses any name
+  typedef sequence<Policy> PolicySeq;
+
+  // `Object` rather than an interface: OMG declares it this way so that
+  // `CosTrading` does not depend on the service type repository module, and
+  // this trader answers nil for it in any case.
+  //@ ai_desc: Where a trader's service type repository lives, if it has one
+  typedef Object TypeRepository;
+
+  //@ ai_desc: How far a query may travel across links to other traders
+  enum FollowOption { local_only, if_no_local, always };
+
+  //@ ai_desc: The service type name is not a legal one
+  exception IllegalServiceType {
+    //@ ai_desc: The name that was rejected
+    ServiceTypeName type;
+  };
+
+  //@ ai_desc: The service type name is legal but this trader has never been told about it
+  exception UnknownServiceType {
+    //@ ai_desc: The name nothing is known about
+    ServiceTypeName type;
+  };
+
+  //@ ai_desc: The constraint expression does not parse, or asks about something the type has no property for
+  exception IllegalConstraint {
+    //@ ai_desc: The expression that was rejected
+    Constraint constr;
+  };
+
+  //@ ai_desc: A requested property name is not one this service type declares
+  exception IllegalPropertyName {
+    //@ ai_desc: The name that was rejected
+    PropertyName name;
+  };
+
+  //@ ai_desc: The same property was requested twice in one query
+  exception DuplicatePropertyName {
+    //@ ai_desc: The name that arrived twice
+    PropertyName name;
+  };
+
+  // The four interfaces this trader answers nil for. Named, never served —
+  // see the header. `Register` is the export side, `Admin` the configuration
+  // side, and `Link` and `Proxy` are federation, which a trader with no links
+  // has nothing to say about.
+  //@ ai_desc: The export side of a trader; this trader has none and answers nil
+  interface Register { };
+
+  //@ ai_desc: The federation side of a trader; this trader has no links and answers nil
+  interface Link { };
+
+  //@ ai_desc: The proxy-offer side of a trader; this trader has none and answers nil
+  interface Proxy { };
+
+  //@ ai_desc: The configuration side of a trader; this trader has none and answers nil
+  interface Admin { };
+
+  // Declared so that `query`'s `out offer_itr` has a type, and never served:
+  // this trader answers every query completely or refuses it, so the iterator
+  // is always nil and nil always means "that is all of them". Building one is
+  // an object with a lifecycle per query, which D022 §7 defers.
+  //@ ai_desc: Serves the remainder of an answer; this trader always answers nil
+  interface OfferIterator { };
+
+  //@ ai_desc: Which of a trader's five interfaces are available, and where
+  interface TraderComponents {
+    //@ ai_desc: The import side, which is this object
+    //@ ai_effect: read_only
+    readonly attribute Lookup lookup_if;
+
+    //@ ai_desc: The export side, nil here because this trader has none
+    //@ ai_effect: read_only
+    readonly attribute Register register_if;
+
+    //@ ai_desc: The federation side, nil here
+    //@ ai_effect: read_only
+    readonly attribute Link link_if;
+
+    //@ ai_desc: The proxy-offer side, nil here
+    //@ ai_effect: read_only
+    readonly attribute Proxy proxy_if;
+
+    //@ ai_desc: The configuration side, nil here
+    //@ ai_effect: read_only
+    readonly attribute Admin admin_if;
+  };
+
+  //@ ai_desc: What a trader supports, which a client reads before it asks anything
+  interface SupportAttributes {
+    //@ ai_desc: Whether an exported offer's properties may be changed afterwards
+    //@ ai_effect: read_only
+    readonly attribute boolean supports_modifiable_properties;
+
+    //@ ai_desc: Whether a property may be computed on demand rather than stored
+    //@ ai_effect: read_only
+    readonly attribute boolean supports_dynamic_properties;
+
+    //@ ai_desc: Whether offers may stand for objects created on import
+    //@ ai_effect: read_only
+    readonly attribute boolean supports_proxy_offers;
+
+    //@ ai_desc: The service type repository this trader consults, nil if it exposes none
+    //@ ai_effect: read_only
+    readonly attribute TypeRepository type_repos;
+  };
+
+  //@ ai_desc: The bounds a trader applies to a query, readable before asking one
+  interface ImportAttributes {
+    //@ ai_desc: How many offers a query searches by default; zero means no bound
+    //@ ai_effect: read_only
+    readonly attribute unsigned long def_search_card;
+
+    //@ ai_desc: The most offers a query may search; zero means no bound
+    //@ ai_effect: read_only
+    readonly attribute unsigned long max_search_card;
+
+    //@ ai_desc: How many matches a query keeps by default
+    //@ ai_effect: read_only
+    readonly attribute unsigned long def_match_card;
+
+    //@ ai_desc: The most matches a query may keep
+    //@ ai_effect: read_only
+    readonly attribute unsigned long max_match_card;
+
+    //@ ai_desc: How many offers a query returns by default
+    //@ ai_effect: read_only
+    readonly attribute unsigned long def_return_card;
+
+    //@ ai_desc: The most offers one answer carries; a query matching more is refused rather than shortened
+    //@ ai_effect: read_only
+    readonly attribute unsigned long max_return_card;
+
+    //@ ai_desc: The most an iterator hands over in one call
+    //@ ai_effect: read_only
+    readonly attribute unsigned long max_list;
+
+    //@ ai_desc: How many trader links a query crosses by default
+    //@ ai_effect: read_only
+    readonly attribute unsigned long def_hop_count;
+
+    //@ ai_desc: The most trader links a query may cross
+    //@ ai_effect: read_only
+    readonly attribute unsigned long max_hop_count;
+
+    //@ ai_desc: How far a query follows links by default
+    //@ ai_effect: read_only
+    readonly attribute FollowOption def_follow_policy;
+
+    //@ ai_desc: The furthest a query may be asked to follow links
+    //@ ai_effect: read_only
+    readonly attribute FollowOption max_follow_policy;
+  };
+
+  //@ ai_desc: The import side of a trader: asks which exported offers satisfy a constraint
+  interface Lookup : TraderComponents, SupportAttributes, ImportAttributes {
+
+    //@ ai_desc: A preference expression, which orders the offers that matched
+    typedef Istring Preference;
+
+    //@ ai_desc: Whether a caller wants no properties back, some named ones, or all of them
+    enum HowManyProps { none, some, all };
+
+    //@ ai_desc: Which properties to return with each offer
+    union SpecifiedProps switch (HowManyProps) {
+      //@ ai_desc: Return exactly these, and refuse a name this service type does not declare
+      case some: PropertyNameSeq prop_names;
+    };
+
+    //@ ai_desc: The preference expression does not parse, or orders by something it cannot read
+    exception IllegalPreference {
+      //@ ai_desc: The expression that was rejected
+      Preference pref;
+    };
+
+    //@ ai_desc: An import policy this trader does not implement was named
+    exception IllegalPolicyName {
+      //@ ai_desc: The policy name that was rejected
+      PolicyName name;
+    };
+
+    // `offer_itr` is always nil and `limits_applied` is always empty, and
+    // both are answers rather than omissions: a nil iterator says the offers
+    // returned are all of them, and an empty `limits_applied` says nothing
+    // clamped the answer. This trader never clamps — it refuses instead, so
+    // there is never anything to report there. A query that matched more than
+    // `max_return_card`, or more than `how_many`, is refused with a system
+    // exception rather than shortened, because a nil iterator over a
+    // shortened list would be a false statement in the direction that loses
+    // offers the caller cannot ask for again.
+    //@ ai_desc: The offers of a service type that satisfy a constraint, in preference order
+    //@ ai_effect: read_only
+    //@ ai_authz: costrading.lookup.query
+    //@ ai_precond: how_many is at least the number of offers the constraint matches, and at most max_return_card — otherwise the answer would need an OfferIterator this trader does not create, and the query is refused rather than shortened
+    //@ ai_example: type "moe::Expert", constr "" and pref "" ask for every offer of that type in no particular order — an empty constraint means every offer, an empty preference means the specification's FIRST
+    void query(in ServiceTypeName type,
+               in Constraint constr,
+               in Preference pref,
+               in PolicySeq policies,
+               in SpecifiedProps desired_props,
+               in unsigned long how_many,
+               out OfferSeq offers,
+               out OfferIterator offer_itr,
+               out PolicyNameSeq limits_applied)
+      raises (IllegalServiceType, UnknownServiceType, IllegalConstraint,
+              IllegalPreference, IllegalPolicyName, IllegalPropertyName,
+              DuplicatePropertyName);
+  };
+};
