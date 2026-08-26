@@ -36,7 +36,7 @@
 
 use std::io::Write;
 
-use orbweaver_giop::server::Server;
+use orbweaver_giop::orb::Orb;
 use orbweaver_giop::trading_server::TradingServer;
 use orbweaver_giop::{Ior, Result};
 use orbweaver_test::state::MoeExperts;
@@ -112,7 +112,11 @@ fn run(out: &str, port: u16, hold: bool) -> Result<u32> {
     );
 
     let key = b"SeededTradingService".to_vec();
-    let server = Server::bind(&format!("127.0.0.1:{port}"), key.clone())?;
+    // D019 step 4: the ORB is the only public way to a listener. This spike
+    // was written against `Server::bind` in a branch that landed the same day
+    // step 4 closed it — both were correct and their merge did not compile.
+    let orb = Orb::new();
+    let server = orb.server(&format!("127.0.0.1:{port}"), key.clone())?;
     let bound = server.local_addr()?.port();
     let trader = TradingServer::new("127.0.0.1", bound, key);
 
