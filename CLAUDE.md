@@ -387,7 +387,9 @@ decisions being approved and work landing.
 ## Commands
 
 ```bash
-cargo test --workspace          # ~1515 tests across twelve crates
+cargo test --workspace          # 1949 tests across twelve crates (measured
+                                # 2026-08-26; ~1515 when this line was written,
+                                # and a figure in prose carries its date)
 ./spikes/run_checks.sh          # the harness; exit code is the verdict, one run at a time
 ```
 
@@ -453,7 +455,10 @@ Fixture setup: `brew install omniorb` (interop peer and oracle only);
 ## Layout
 
 ```
-crates/orbweaver-cdr/       CDR encode/decode
+crates/orbweaver-cdr/       CDR encode/decode, and the JSON parser — it moved
+                            down here 2026-08-26 so fixtures below `dynamic`
+                            can read a seed; `orbweaver_dynamic::json` is a
+                            re-export and removing it would widen the graph
 crates/orbweaver-giop/      GIOP, IOR, TypeCode, Server/Dispatch, naming + event servants
 crates/orbweaver-idl/       IDL 4.2 front end, SIDL structured comments
 crates/orbweaver-registry/  types as data, the IFR facade, remote IFR ingestion, §5.3 differ
