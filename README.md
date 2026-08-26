@@ -499,6 +499,71 @@ The full set, with the incident behind each, is in [`CLAUDE.md`](CLAUDE.md).
 
 ### What a number here means / 수치가 뜻하는 것
 
+#### Why a number gets set at all / 애초에 수치를 두는 이유
+
+The completion criterion in D029 §6 is a **property**, not a list of features.
+A property is only workable if claims about it can be refuted, and a number is
+the shape a refutable claim takes: *this many of the corpus compiles*, *this
+many operations answered over the wire*, *this many implementations inherit the
+default*. Prose can be argued with. A number can be run.
+
+That is also the trap. **A number that cannot actually be refuted is worse than
+prose, because it looks like it can be.** So before a figure is allowed into
+this project, four things have to exist, and every drift incident in this
+repository is one of the four missing:
+
+| | What must exist | What its absence produces |
+|---|---|---|
+| **1** | a **denominator** — *this many out of what?* | a percentage that cannot be wrong |
+| **2** | an **instrument** — the run that takes the reading | a target nothing can fail |
+| **3** | a **procedure** — how the reading is taken, repeatably | a number nobody can take twice |
+| **4** | a **decision it serves** — what changes at that value | a threshold picked to look rigorous |
+
+Each has a real case behind it. **The denominator** killed the seven
+per-stage "automation targets" this file used to carry — 95 / 90 / 80 / 100 /
+100 / 85 / 90 — because *automation of what* was never answered: items,
+operations, or human touches? Two of the seven stages are deterministic
+programs, where a percentage is a category error rather than a hard goal.
+**The instrument** is the column in [`PLAN.md` §11](docs/PLAN.md#11-success-metrics)
+that separates a gate from a wish; rows whose instrument reads *none* are filed
+below the table as **aspirations**, each carrying the trigger that would give it
+one, rather than sitting in the table looking enforceable. **The procedure**
+is what "≥80% reduction versus manual" never had: no pilot, no cooperative
+owner, and no logged manual baseline, so nothing could have failed it.
+**The decision** is why `spikes/entry_cost.py` reports and does not gate — no
+threshold for *too many things a newcomer must learn* is defensible, so the
+project declines to invent one and prints the figure instead.
+
+That last one is the case worth reading twice. **Refusing to set a number is a
+result, not an omission**, and it is recorded as one.
+
+#### The four kinds, and the reason they get confused / 네 종류, 그리고 섞이는 이유
+
+Once a figure is legitimate it is still one of four different things, and they
+do not mean the same:
+
+- a **reading** — what was true when someone looked. It ages.
+- a **floor** — a regression tripwire. Its value is *what we had when we last
+  looked*, chosen so that legitimate growth does not turn it red. It is not a
+  description of anything.
+- a **threshold** — a point on a continuum where an action changes, chosen by a
+  person who has to defend the choice.
+- a **given** — a constant from outside: a specification, an OS, a peer's
+  version. Not ours to pick.
+
+**And here is the root cause of everything in the next subsection: on the page
+they are the same characters.** `5248` written in a sentence does not say
+whether it means *there are 5248* or *there were at least 5248 the last time
+anybody checked*. Nothing in Markdown carries provenance, and nothing
+recompiles a sentence, so the reader supplies the missing half — and readers
+supply *reading*, because that is what a number in prose normally is. That is
+how a floor of 5248 came to be quoted beside an actual 6016 without anybody
+being careless, and why the rules below are about **provenance** rather than
+about arithmetic. They are not hygiene for its own sake; they are the only way
+a figure can carry which of the four it is.
+
+#### The rules that follow from it / 거기서 따라 나오는 규칙
+
 Numbers are the easiest thing in a repository to get wrong, because a wrong one
 looks exactly like a right one and nothing recompiles a sentence. Every rule
 below was learned by shipping the mistake first.
@@ -560,9 +625,66 @@ unmeasured list is progress only when a run actually closed a leak, and it looks
 identical to nobody looking. A number that cannot distinguish those two states
 is worse than no number, because it will be quoted.
 
-수치는 저장소에서 가장 틀리기 쉬운 것입니다. 틀린 수치는 맞은 수치와 똑같이
-생겼고, 문장을 다시 컴파일하는 것은 없기 때문입니다. 아래 규칙은 전부 먼저
-틀려 보고 얻은 것입니다.
+**애초에 수치를 두는 이유.** D029 §6의 완성 기준은 기능 목록이 아니라
+**성질**입니다. 성질은 그에 대한 주장을 반증할 수 있을 때만 작업 가능해지고,
+수치는 반증 가능한 주장이 취하는 형태입니다 — *코퍼스 이만큼이 컴파일된다*,
+*연산 이만큼이 와이어로 답했다*, *구현 이만큼이 기본값을 상속한다*. 산문은
+말싸움이 되지만 수치는 돌려 볼 수 있습니다.
+
+그리고 바로 그것이 함정입니다. **실제로는 반증할 수 없는 수치는 산문보다
+나쁩니다. 반증할 수 있어 보이기 때문입니다.** 그래서 수치가 이 프로젝트에
+들어오기 전에 네 가지가 있어야 하고, 이 저장소에서 일어난 모든 어긋남은 그 넷 중
+하나가 빠진 경우입니다.
+
+| | 있어야 하는 것 | 없을 때 생기는 것 |
+|---|---|---|
+| **1** | **분모** — *무엇 중에 이만큼인가* | 틀릴 수가 없는 백분율 |
+| **2** | **계측기** — 값을 읽는 실행 | 아무것도 실패시킬 수 없는 목표 |
+| **3** | **절차** — 그 값을 반복해서 읽는 방법 | 두 번 잴 수 없는 수치 |
+| **4** | **그 수치가 답하는 결정** — 그 값에서 무엇이 달라지는가 | 엄밀해 보이려고 고른 임계값 |
+
+넷 다 실제 사례가 있습니다. **분모**는 이 파일이 한때 달고 있던 단계별 "자동화
+목표" 일곱 개 — 95 / 90 / 80 / 100 / 100 / 85 / 90 — 를 없앴습니다. *무엇의*
+자동화인지가 끝내 답해지지 않았기 때문입니다. 항목인지, 연산인지, 사람의 손이
+닿는 횟수인지. 게다가 일곱 중 둘은 결정론적 프로그램이라 거기서의 백분율은 높은
+목표가 아니라 범주 오류입니다. **계측기**는 관문과 소망을 가르는
+[`PLAN.ko.md` §11](docs/PLAN.ko.md#11-성공-지표)의 열입니다. 계측기가 *없음*인
+행은 표 안에서 강제력 있어 보이게 앉아 있는 대신, 표 아래 **지향**으로 내려가
+계측기를 얻으려면 무엇이 관측되어야 하는지 방아쇠를 답니다. **절차**는 "수작업
+대비 80% 이상 단축"이 끝내 갖지 못한 것입니다 — 파일럿도, 협조하는 소유자도,
+기록된 수작업 기준선도 없었으므로 그 수치는 애초에 실패할 수가 없었습니다.
+**결정**은 `spikes/entry_cost.py`가 보고만 하고 게이트가 되지 않는 이유입니다.
+*새로 온 사람이 익혀야 할 것이 너무 많다*의 임계값으로 방어 가능한 수가 없으므로,
+프로젝트는 하나 지어내기를 거절하고 수치만 출력합니다.
+
+마지막 사례는 두 번 읽을 값이 있습니다. **수치를 두기를 거절한 것은 누락이 아니라
+결과이며**, 결과로 기록됩니다.
+
+**네 종류, 그리고 섞이는 이유.** 정당한 수치가 되고 나서도 그것은 여전히 네 가지
+중 하나이고, 넷은 같은 뜻이 아닙니다.
+
+- **판독값** — 누군가 봤을 때 참이었던 것. 나이를 먹습니다.
+- **하한** — 퇴행 감지용 걸림선. 그 값은 *마지막으로 봤을 때 우리가 갖고 있던
+  수*이며, 정당한 증가가 빨간불이 되지 않도록 그렇게 고른 것입니다. 무언가에
+  대한 서술이 아닙니다.
+- **임계값** — 연속량 위에서 행동이 바뀌는 지점. 고른 사람이 그 선택을 방어해야
+  합니다.
+- **주어진 값** — 바깥에서 온 상수. 명세, 운영체제, 피어의 버전. 우리가 고를 수
+  있는 것이 아닙니다.
+
+**그리고 다음 절 전체의 근본 원인이 여기 있습니다 — 지면에서 넷은 같은
+글자입니다.** 문장 속의 `5248`은 *5248개가 있다*인지 *마지막으로 확인했을 때
+최소 5248개였다*인지를 말해 주지 않습니다. 마크다운은 출처를 싣지 않고 문장을
+다시 컴파일하는 것도 없으므로, 빠진 절반은 읽는 사람이 채웁니다 — 그리고
+읽는 사람은 **판독값**으로 채웁니다. 산문 속의 수치는 보통 그것이기 때문입니다.
+아무도 부주의하지 않았는데 하한 5248이 실제 6016 옆에 인용된 경위가 이것이고,
+아래 규칙들이 산술이 아니라 **출처**에 관한 것인 이유도 이것입니다. 규칙 자체가
+목적인 위생 수칙이 아니라, 수치가 자기가 넷 중 무엇인지를 지고 다닐 수 있는
+유일한 방법입니다.
+
+**거기서 따라 나오는 규칙.** 수치는 저장소에서 가장 틀리기 쉬운 것입니다. 틀린
+수치는 맞은 수치와 똑같이 생겼고, 문장을 다시 컴파일하는 것은 없기 때문입니다.
+아래 규칙은 전부 먼저 틀려 보고 얻은 것입니다.
 
 **수치에는 측정한 날짜가 붙거나, 아니면 스크립트가 씁니다.** 산문에 적힌 개수는
 쓴 날에만 참이고 그다음 날부터 매일 어긋납니다. 문서에 수치가 꼭 나와야 하면
