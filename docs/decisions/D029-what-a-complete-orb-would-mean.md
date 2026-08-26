@@ -297,7 +297,7 @@ move a verdict.** §5 O0 landed and, on the same day, reached the harness:
 | Backend | the same file — the servant behind one reference replaced mid-session | measures |
 | Language | `spikes/leak_tests.sh`'s language leg | counted `SKIPPED`: waits on a Python servant mountable as a `Dispatch` in a server the test owns |
 | Activation / load | its activation leg | counted `SKIPPED`: waits on a POA-level activation path that reloads an evicted target |
-| Lifecycle stability | `spikes/orb_shutdown.sh` (D034) measures the removal; the leak leg is a counted `SKIPPED` | waits on a redirect emitted for a **name** rather than for an object |
+| Lifecycle stability | `spikes/orb_shutdown.sh` (D034) measures the removal; the leak leg is a counted `SKIPPED` | **the blocker changed on 2026-08-26 and the row did not.** It no longer waits on *a redirect emitted for a name* — that is built and measured (`crates/orbweaver-giop/tests/forward_for_a_name.rs`). It waits on **X**: a decision that the reference `Orb::server` hands out is *indirect*. See §6.1's lifecycle subsection, which is also why a forward can never be emitted by the party that went away |
 
 Two things are worth stating rather than inferring. **A test existing does not
 move a row** — the two rows with a measuring leg are the two that already read
@@ -355,15 +355,24 @@ reproduces the `Ok(Unknown)` above.
 
 **What is still open, named rather than left looking closed.**
 
-1. **`knows` gates the forward on the request path too.** `Dispatch::serve_one`
-   asks `knows` *before* `redirect`, so the same servant that now answers
-   `OBJECT_FORWARD` to a probe answers `OBJECT_NOT_EXIST` to an ordinary
-   request. One root cause, two messages, one of them fixed. Closing it means
-   reordering `serve_one`, which changes what an existing servant's `redirect`
-   is asked about — a decision this batch did not take. Pinned as a
-   characterisation test (`a_moved_object_is_still_refused_on_the_request_path`)
-   so that closing it is deliberate, and named in `Dispatch::locate`'s rustdoc.
-   The workaround until then is for a moving servant to keep `knows` true.
+1. ~~**`knows` gates the forward on the request path too.**~~ **Closed later the
+   same day, by a later batch, and the characterisation test did its job.**
+   `serve_one` asked `knows` before `redirect`, so the servant that answered
+   `OBJECT_FORWARD` to a probe answered `OBJECT_NOT_EXIST` to an ordinary
+   request; one root cause, two messages. The order is now `redirect`, `knows`,
+   `dispatch`, and the argument for it has one home rather than two copies —
+   `orbweaver_giop::server::serve_one_ordering()`, which returns the order as
+   data so both `serve_one` implementations are asserted against it rather than
+   against a comment. `a_moved_object_is_still_refused_on_the_request_path` went
+   red on the reorder exactly as it was built to and is now
+   `a_moved_object_is_forwarded_on_the_request_path_too`, asserting the
+   opposite against a **live** second server, so what it measures is that the
+   caller is served rather than that a message came back. The reorder is a no-op
+   for every servant here: none of the five overrides `redirect`, and every
+   skeleton `orbweaver-gen` emits opens its `redirect` with
+   `self.refs.oid_of(&req.object_key)?`. Measured: in
+   `locate_forward_and_reply_contexts.rs` exactly that one test changed answer
+   and the other eleven were identical, under the reverted order.
 2. **The multiplexer answers for its members.** `orbweaver_gen::rt::Servants`
    uses the default `locate`, which consults its own `knows` — "any member
    knows" — so a member that has moved an object would be overruled into
@@ -401,13 +410,22 @@ so — *who may* is `docs/PLAN-DEFERRED.md` §21.
 GIOP 3개 버전 × 바이트 순서 2가지, 각각 붉게 만들어 본 부정 대조군 7개(서브
 루프를 `knows()`로 되돌린 것 포함, 위의 `Ok(Unknown)`이 재현된다).*
 
-***열려 있는 것, 닫힌 것처럼 보이지 않게 이름 붙여 둔다.*** *(1) `knows`가
-요청 경로에서도 포워드를 막는다: `serve_one`이 `redirect`보다 `knows`를 먼저
-묻기 때문에, 조사에 `OBJECT_FORWARD`를 답하는 바로 그 서번트가 일반 요청에는
-`OBJECT_NOT_EXIST`를 답한다. 원인 하나, 메시지 둘, 그중 하나만 고쳤다 —
-`serve_one` 재정렬은 기존 서번트의 `redirect`가 무엇에 대해 질문받는지를 바꾸므로
-이 배치가 내리지 않은 결정이다. 특성화 테스트로 고정했고
-`Dispatch::locate`의 러스트독에도 적었다. (2) 다중화기가 멤버 대신 답한다:
+***열려 있는 것, 닫힌 것처럼 보이지 않게 이름 붙여 둔다.*** *(1) ~~`knows`가
+요청 경로에서도 포워드를 막는다~~ — **같은 날 뒤이은 배치가 닫았고, 특성화
+테스트가 제 역할을 했다.** `serve_one`이 `redirect`보다 `knows`를 먼저 물었기에
+조사에 `OBJECT_FORWARD`를 답하는 바로 그 서번트가 일반 요청에는
+`OBJECT_NOT_EXIST`를 답했다 — 원인 하나, 메시지 둘. 이제 순서는 `redirect`,
+`knows`, `dispatch`이며 그 근거는 복사본 둘이 아니라 집 하나를 갖는다:
+`orbweaver_giop::server::serve_one_ordering()`이 순서를 **데이터로** 돌려주므로
+두 `serve_one` 구현이 주석이 아니라 그 함수에 대해 검증된다.
+`a_moved_object_is_still_refused_on_the_request_path`는 설계대로 재정렬에서
+붉어졌고 지금은 `a_moved_object_is_forwarded_on_the_request_path_too`로서 **살아
+있는** 두 번째 서버를 목적지로 두고 반대를 주장한다 — 메시지가 돌아왔다가 아니라
+호출자가 응답받았다를 측정하기 위해서다. 재정렬은 여기 모든 서번트에 무영향이다:
+다섯 중 `redirect`를 재정의한 것이 없고, `orbweaver-gen`이 내는 모든 스켈레톤은
+`redirect`를 `self.refs.oid_of(&req.object_key)?`로 시작한다. 측정: 순서를
+되돌린 상태에서 `locate_forward_and_reply_contexts.rs`의 정확히 그 한 테스트만
+답이 바뀌었고 나머지 열한 개는 동일했다. (2) 다중화기가 멤버 대신 답한다:
 `orbweaver_gen::rt::Servants`는 기본 `locate`를 쓰므로 이동한 멤버가
 `ObjectHere`로 덮어써진다 — `orbweaver-gen`은 다른 배치의 footprint여서 손대지
 않았다. (3) **피어에게 물어보지 않았다**: 모든 측정이 우리 인코더 대 우리 디코더다.
@@ -423,6 +441,114 @@ omniORB·JacORB가 우리에게 `OBJECT_FORWARD`를 보내게 한 적이 없으�
 이것은 적합성과 상호운용성이지 투명성이 아니다: 이것으로부터 호출자가 대상의
 위치에 대해 알게 되는 것은 없다. 나가는 응답에 컨텍스트를 붙이는 것은 아무것도
 없고 그럴 훅도 없다 — **누가 붙일 수 있는가**는 `PLAN-DEFERRED` §21이다.*
+
+#### Lifecycle — a redirect for a *name*, built, and the decision it waits on (2026-08-26)
+
+**The lifecycle row does not move, and declining to move it is the result.**
+Four records name "a redirect emitted for a **name** rather than for an object"
+as this row's blocker — the row itself, the instrument table below, the leak
+test's counted `SKIPPED`, and the event-channel item 3 that follows. It is now
+built and measured, and it still does not close the row. Why not is the finding.
+
+**It is built.** `crates/orbweaver-giop/tests/forward_for_a_name.rs`: a servant
+whose object keys are names and which hosts no objects. `knows` is `false` —
+truthfully — `redirect` is a name-table lookup, `locate` says the same thing one
+message earlier. A caller knowing only a name is served by whatever currently
+answers to it, and when the binding moves the caller's reference does not
+change. Seven tests, both byte orders, three negative controls.
+
+**It could not have been built the day before**, and not for want of a hook: the
+`knows`-before-`redirect` order refused a truthful `knows` of `false` before
+`redirect` was reached, so a forwarder could only forward *everything* or refuse
+*everything*. Saying *this name I redirect, that name does not exist* is the
+entire content of a name-keyed redirect. That is the same root cause as the
+Location subsection's item 1 above, which is why one reorder closed both.
+
+**Why it does not close the row.** A forward is a **reply**, and a reply needs a
+listener. A server that has been removed is not listening, so a
+`LOCATION_FORWARD` emitted *by the removed server* is a contradiction in terms —
+a server still able to answer has not been removed. The redirect must therefore
+come from a **third endpoint that outlives both**, and the client's reference
+must have pointed at that endpoint **from the start**. A client holding a dead
+backend's IOR cannot be redirected by anybody at any layer; that is not a gap in
+this ORB, it is what an IOR is. `corbaname:` is not the answer either: it
+resolves on the client, once, at bind time, and what is kept afterwards is
+exactly as dead. That claim is not rhetoric — the test's third negative control
+hands the forwarder a *snapshot* of the name table, which is what resolving once
+amounts to, and exactly the two late-resolution tests go red.
+
+**X, the decision this waits on.** *That the reference `Orb::server` hands out is
+**indirect**: its IIOP profile carries a name-resolving endpoint's address and a
+name rather than the servant's own address and an object key.* X is **not** a
+successor registry, and the batch deliberately did not build one — CosNaming's
+`rebind` already owns the mapping and the successor already calls it. X is a
+decision because it (a) changes every IOR this project emits, which D019 step 4
+made one path's promise; (b) inverts a layer, making the ORB depend on a servant
+built on it, against D019's title; (c) **displaces** the leak to the forwarding
+endpoint rather than closing it — the shape item 1 of the next subsection
+already names for the bootstrap address, and whoever proposes X must say which
+of displacement and closure is being claimed; and (d) does not repair a stale
+binding, because item 4 below has unbinding deliberately separate from the
+channel going away, so the forwarder faithfully redirects to an IOR that is also
+dead and the caller fails one hop later. Repairing *that* is liveness detection,
+a fifth and much larger decision. X also re-opens **D013**, which decided
+reference identity assuming an IOR names an object.
+
+The argument in full, beside the tests that check its claims, is that file's
+module documentation. **No new wire shape was added** — a forward produced by a
+name resolving is byte-for-byte the message produced by an object moving, which
+`the_forward_a_name_produces_is_the_same_message_an_object_move_produces`
+checks over three versions and both orders rather than asserting. That is why no
+new peer leg is owed and none was written.
+
+*이 행은 움직이지 않으며, **움직이지 않기로 한 것이 결과다.** 네 개의 기록이
+"객체가 아니라 **이름**에 대해 발행되는 리다이렉트"를 이 행의 차단 요인으로
+지목한다. 그것이 이제 만들어졌고 측정되었으며, 그럼에도 행을 닫지 못한다. 그
+이유가 발견이다.*
+
+***만들어졌다.*** `forward_for_a_name.rs` — 객체 키가 이름이고 객체를 하나도
+호스팅하지 않는 서번트. `knows`는 (사실대로) `false`, `redirect`는 이름표 조회,
+`locate`는 한 메시지 앞서 같은 답을 한다. 이름만 아는 호출자가 지금 그 이름에
+답하는 쪽에게 응답받고, 바인딩이 옮겨져도 호출자의 참조는 바뀌지 않는다. 테스트
+7개, 바이트 순서 양쪽, 부정 대조군 3개.
+
+***하루 전이었다면 만들 수 없었다*** — 훅이 없어서가 아니라, `knows`가
+`redirect`보다 먼저였기에 사실대로인 `false`가 `redirect`에 닿기 전에 거절되었기
+때문이다. 그래서 포워더는 **전부** 넘기거나 **전부** 거절할 수만 있었다. *이
+이름은 넘기고 저 이름은 없다*고 말하는 것이 이름 기반 리다이렉트의 전부다. 위
+Location 절 항목 1과 같은 근본원인이며, 그래서 재정렬 하나가 둘 다 닫았다.
+
+***왜 행을 닫지 못하는가.*** 포워드는 **응답**이고 응답에는 듣는 쪽이 필요하다.
+제거된 서버는 듣고 있지 않으므로 *제거된 서버가 발행하는* `LOCATION_FORWARD`는
+용어상 모순이다 — 아직 답할 수 있는 서버는 제거된 것이 아니다. 따라서
+리다이렉트는 **둘보다 오래 사는 제3의 종단점**에서 와야 하고, 클라이언트의 참조는
+**처음부터** 그 종단점을 가리키고 있었어야 한다. 죽은 백엔드의 IOR을 든
+클라이언트는 어느 계층에서도 리다이렉트될 수 없다. 이는 이 ORB의 결함이 아니라
+IOR이 무엇인지의 문제다. `corbaname:`도 답이 아니다 — 클라이언트에서 바인드
+시점에 한 번 해석되고, 그 뒤 들고 있는 것은 똑같이 죽어 있다. 이는 수사가 아니다:
+세 번째 부정 대조군이 포워더에게 이름표의 **스냅숏**을 넘기는데(한 번만 해석한다는
+것이 바로 그것이다) 늦은 해석에 의존하는 정확히 그 두 테스트가 붉어진다.
+
+***X — 이것이 기다리는 결정.*** *`Orb::server`가 내주는 참조가 **간접적**이라는
+것 — IIOP 프로필이 서번트 자신의 주소와 객체 키가 아니라 이름 해석 종단점의
+주소와 이름을 싣는다.* X는 **후계자 레지스트리가 아니며** 이 배치는 그것을 짓지
+않기로 했다. 매핑의 주인은 이미 CosNaming의 `rebind`이고 후계자가 이미 그것을
+부른다. X가 결정인 이유: (a) 이 프로젝트가 내는 모든 IOR을 바꾼다 — D019 4단계가
+한 경로의 약속으로 만든 것이다; (b) 계층을 뒤집어 ORB가 자기 위에 세워진 서번트에
+의존하게 한다 — D019의 제목에 반한다; (c) 구멍을 닫는 것이 아니라 포워딩 종단점으로
+**옮긴다** — 다음 절 항목 1이 부트스트랩 주소에 대해 이미 지목한 모양이며, X를
+제안하는 쪽은 이전과 폐쇄 중 무엇을 주장하는지 말해야 한다; (d) 낡은 바인딩을
+고치지 못한다 — 아래 항목 4가 언바인드를 채널 소멸과 의도적으로 분리하므로,
+포워더는 역시 죽은 IOR로 충실히 리다이렉트하고 호출자는 한 홉 뒤에 실패한다. 그것을
+고치는 것은 생존 감지이며 다섯 번째이자 훨씬 큰 결정이다. X는 IOR이 객체를
+가리킨다는 전제 위에서 참조 동일성을 정한 **D013**도 다시 연다.
+
+*전체 논증은 그 파일의 모듈 문서에 있고, 그 주장들을 검사하는 테스트가 옆에 있다.
+**새로운 와이어 모양은 추가되지 않았다** — 이름 해석이 낳은 포워드는 객체 이동이
+낳은 메시지와 바이트 단위로 같으며,
+`the_forward_a_name_produces_is_the_same_message_an_object_move_produces`가 버전
+3개와 순서 양쪽에서 주장 대신 검사한다. 그래서 새 피어 검사는 빚지지 않았고 쓰지
+않았다.*
 
 #### Location, for event channels — what closed and what did not (2026-08-26)
 

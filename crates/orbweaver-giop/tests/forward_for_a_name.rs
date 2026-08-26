@@ -301,18 +301,43 @@ fn dial(at: SocketAddr, key: &[u8], endian: Endian) -> Connection {
     conn
 }
 
+/// Every key `redirect` was asked about, in order.
+type Asked = Arc<Mutex<Vec<Vec<u8>>>>;
+
 /// A forwarder in front of two backends, with `INVENTORY` bound to the first.
-fn a_forwarder_and_two_backends() -> (Running, Running, Running, Names, Arc<Mutex<Vec<Vec<u8>>>>) {
+struct Fixture {
+    fwd: Running,
+    first: Running,
+    second: Running,
+    /// The live table. A test rebinds through this while a client's reference
+    /// stays exactly as it was — which is the property, not a convenience.
+    names: Names,
+    asked: Asked,
+}
+
+impl Fixture {
+    fn shut_down(self) {
+        self.fwd.shut_down();
+        self.first.shut_down();
+        self.second.shut_down();
+    }
+
+    fn bind(&self, name: &[u8], to: &Running) {
+        self.names.lock().expect("names").insert(name.to_vec(), to.ior(b"backend"));
+    }
+}
+
+fn a_forwarder_and_two_backends() -> Fixture {
     let first = serving(Backend { id: "first", key: b"backend".to_vec() }, b"backend");
     let second = serving(Backend { id: "second", key: b"backend".to_vec() }, b"backend");
 
     let names: Names = Arc::new(Mutex::new(HashMap::new()));
     names.lock().expect("names").insert(INVENTORY.to_vec(), first.ior(b"backend"));
 
-    let asked = Arc::new(Mutex::new(Vec::new()));
-    let forwarder =
+    let asked: Asked = Arc::new(Mutex::new(Vec::new()));
+    let fwd =
         serving(NameForwarder { names: Arc::clone(&names), asked: Arc::clone(&asked) }, INVENTORY);
-    (forwarder, first, second, names, asked)
+    Fixture { fwd, first, second, names, asked }
 }
 
 /// What the backend said, or a panic naming the endian that broke.
@@ -333,19 +358,17 @@ fn call(at: SocketAddr, name: &[u8], endian: Endian) -> String {
 /// is served by whatever currently answers to that name.
 #[test]
 fn a_bound_name_reaches_whatever_currently_serves_it() {
-    let (fwd, first, second, _names, _asked) = a_forwarder_and_two_backends();
+    let f = a_forwarder_and_two_backends();
 
     for endian in BOTH_ORDERS {
         assert_eq!(
-            call(fwd.addr, INVENTORY, endian),
+            call(f.fwd.addr, INVENTORY, endian),
             "first",
             "{endian:?}: the name must reach the backend it is bound to"
         );
     }
 
-    fwd.shut_down();
-    first.shut_down();
-    second.shut_down();
+    f.shut_down();
 }
 
 /// **The transparency claim this whole file exists for.** The client's
@@ -356,27 +379,25 @@ fn a_bound_name_reaches_whatever_currently_serves_it() {
 /// and kept the answer would still be calling `first` here.
 #[test]
 fn the_same_name_reaches_the_new_backend_after_a_rebind() {
-    let (fwd, first, second, names, _asked) = a_forwarder_and_two_backends();
+    let f = a_forwarder_and_two_backends();
 
     for endian in BOTH_ORDERS {
-        assert_eq!(call(fwd.addr, INVENTORY, endian), "first", "{endian:?}: before the rebind");
+        assert_eq!(call(f.fwd.addr, INVENTORY, endian), "first", "{endian:?}: before the rebind");
 
-        names.lock().expect("names").insert(INVENTORY.to_vec(), second.ior(b"backend"));
+        f.bind(INVENTORY, &f.second);
 
         assert_eq!(
-            call(fwd.addr, INVENTORY, endian),
+            call(f.fwd.addr, INVENTORY, endian),
             "second",
             "{endian:?}: after the rebind the same reference must reach the new backend"
         );
 
         // And back, so the test is not passing on a one-way latch.
-        names.lock().expect("names").insert(INVENTORY.to_vec(), first.ior(b"backend"));
-        assert_eq!(call(fwd.addr, INVENTORY, endian), "first", "{endian:?}: rebound back");
+        f.bind(INVENTORY, &f.first);
+        assert_eq!(call(f.fwd.addr, INVENTORY, endian), "first", "{endian:?}: rebound back");
     }
 
-    fwd.shut_down();
-    first.shut_down();
-    second.shut_down();
+    f.shut_down();
 }
 
 /// **The distinction that was impossible before the `serve_one` reorder**, and
@@ -388,10 +409,10 @@ fn the_same_name_reaches_the_new_backend_after_a_rebind() {
 /// no third answer. This test is red on either of those.
 #[test]
 fn a_name_the_forwarder_does_not_hold_is_refused_rather_than_forwarded() {
-    let (fwd, first, second, _names, _asked) = a_forwarder_and_two_backends();
+    let f = a_forwarder_and_two_backends();
 
     for endian in BOTH_ORDERS {
-        let mut conn = dial(fwd.addr, NOT_BOUND, endian);
+        let mut conn = dial(f.fwd.addr, NOT_BOUND, endian);
         match conn.invoke("who", |_: &mut Encoder| {}) {
             Err(orbweaver_giop::Error::SystemException { ref id, .. })
                 if id.contains("OBJECT_NOT_EXIST") => {}
@@ -402,12 +423,10 @@ fn a_name_the_forwarder_does_not_hold_is_refused_rather_than_forwarded() {
         }
         // And the bound one still works on a fresh connection, so the refusal
         // is about the name and not about the forwarder having given up.
-        assert_eq!(call(fwd.addr, INVENTORY, endian), "first", "{endian:?}");
+        assert_eq!(call(f.fwd.addr, INVENTORY, endian), "first", "{endian:?}");
     }
 
-    fwd.shut_down();
-    first.shut_down();
-    second.shut_down();
+    f.shut_down();
 }
 
 /// The probe and the request must agree about every name — a bound one, and an
@@ -415,27 +434,27 @@ fn a_name_the_forwarder_does_not_hold_is_refused_rather_than_forwarded() {
 /// different hours of the day, which is why this asserts both.
 #[test]
 fn the_probe_and_the_request_agree_about_every_name() {
-    let (fwd, first, second, names, _asked) = a_forwarder_and_two_backends();
-    names.lock().expect("names").insert(ORDERS.to_vec(), second.ior(b"backend"));
+    let f = a_forwarder_and_two_backends();
+    f.bind(ORDERS, &f.second);
 
     for endian in BOTH_ORDERS {
         for (name, expected) in
             [(INVENTORY, Some("first")), (ORDERS, Some("second")), (NOT_BOUND, None)]
         {
-            let mut conn = dial(fwd.addr, name, endian);
+            let mut conn = dial(f.fwd.addr, name, endian);
             let probed = conn.locate().expect("the probe is answered");
             drop(conn);
 
             match (probed, expected) {
                 (LocateResult::Forward(_), Some(who)) => {
                     assert_eq!(
-                        call(fwd.addr, name, endian),
+                        call(f.fwd.addr, name, endian),
                         who,
                         "{endian:?}: the probe said elsewhere; the request must agree and land"
                     );
                 }
                 (LocateResult::Unknown, None) => {
-                    let mut conn = dial(fwd.addr, name, endian);
+                    let mut conn = dial(f.fwd.addr, name, endian);
                     assert!(
                         matches!(
                             conn.invoke("who", |_: &mut Encoder| {}),
@@ -452,9 +471,7 @@ fn the_probe_and_the_request_agree_about_every_name() {
         }
     }
 
-    fwd.shut_down();
-    first.shut_down();
-    second.shut_down();
+    f.shut_down();
 }
 
 /// `redirect` is now asked about keys the servant does not know — that is the
@@ -463,22 +480,20 @@ fn the_probe_and_the_request_agree_about_every_name() {
 /// Before, a `knows` of `false` ended the request and this list would be empty.
 #[test]
 fn redirect_is_asked_about_keys_the_servant_does_not_know() {
-    let (fwd, first, second, _names, asked) = a_forwarder_and_two_backends();
+    let f = a_forwarder_and_two_backends();
 
-    let mut conn = dial(fwd.addr, NOT_BOUND, Endian::Big);
+    let mut conn = dial(f.fwd.addr, NOT_BOUND, Endian::Big);
     let _ = conn.invoke("who", |_: &mut Encoder| {});
     drop(conn);
 
-    let seen = asked.lock().expect("asked").clone();
+    let seen = f.asked.lock().expect("asked").clone();
     assert!(
         seen.iter().any(|k| k == NOT_BOUND),
         "`redirect` must be consulted for a key `knows` rejects -- it is the only set of \
          keys a forward is for. Saw {seen:?}"
     );
 
-    fwd.shut_down();
-    first.shut_down();
-    second.shut_down();
+    f.shut_down();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

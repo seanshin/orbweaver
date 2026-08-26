@@ -43,11 +43,64 @@ records what changed and, where it matters, what it changes on the wire.
   as `HEADER_LEN + 12` beside a comment saying it was right only while the
   context list stayed empty. `reply_body_start` is now its one home.
 
-  Open and named rather than left looking closed: `serve_one` asks `knows`
-  before `redirect`, so a moved object is still `OBJECT_NOT_EXIST` on the
-  request path; and no external peer has been made to emit an `OBJECT_FORWARD`
-  at us, so this change has no recorded peer bytes. D029 §6.1's Location row
-  and `docs/COMPONENTS.md` carry both.
+  Open and named rather than left looking closed: no external peer has been
+  made to emit an `OBJECT_FORWARD` at us, so this change has no recorded peer
+  bytes. D029 §6.1's Location row and `docs/COMPONENTS.md` carry it.
+
+- **`serve_one` asks `redirect` before `knows`, so a moved object is forwarded
+  on the *request* path too.** The second message of the root cause above.
+  `knows` returning `false` used to end the request as `OBJECT_NOT_EXIST`
+  before `redirect` was consulted — and a key the servant does not answer to is
+  exactly and only the set a forward is *for*. A servant that had moved an
+  object could either lie in `knows` or refuse a caller whose object exists
+  elsewhere; a caller that probed was told "elsewhere" and a caller that
+  invoked was told "nowhere". The order is now `redirect`, `knows`, `dispatch`,
+  and it has one home rather than two copies: `server::serve_one_ordering()`
+  returns it as data, and both `serve_one` implementations are asserted against
+  that function instead of against a comment.
+
+  **No servant here changes.** None of the five overrides `redirect`, and every
+  skeleton `orbweaver-gen` emits opens its `redirect` with
+  `self.refs.oid_of(&req.object_key)?`, returning `None` for an unknown key
+  before the servant is reached. Measured under the reverted order: exactly one
+  test in `locate_forward_and_reply_contexts.rs` changes answer and the other
+  eleven are identical. What a servant now sees that it did not: `redirect` is
+  asked about keys whose `knows` is `false`, so a `redirect` with a **side
+  effect** has it on unknown keys too.
+
+  **What this made possible**, and what it did not:
+  `crates/orbweaver-giop/tests/forward_for_a_name.rs` is a redirect emitted for
+  a **name** — a servant holding names and no objects, which four records name
+  as the blocker on D029 §6.1's lifecycle row. It was unwritable before the
+  reorder, because a forwarder could only forward everything or refuse
+  everything. **The lifecycle row still does not move**: a forward is a reply
+  and a reply needs a listener, so it can never be emitted by the party that
+  went away, and closing the row needs a decision — named X in D029 §6.1's new
+  lifecycle subsection — that the reference `Orb::server` hands out is
+  *indirect*. No new wire shape: a forward produced by a name resolving is
+  byte-for-byte the message an object move produces, checked rather than
+  asserted, so no new peer leg is owed.
+
+  *위 근본원인의 **두 번째 메시지**. `knows`가 `false`면 `redirect`를 묻기 전에
+  `OBJECT_NOT_EXIST`로 끝났는데, 서번트가 답하지 않는 키야말로 포워드가
+  존재하는 이유인 바로 그 집합이다. 조사한 호출자는 "다른 곳", 그냥 호출한
+  호출자는 "아무 데도 없음"을 들었다. 이제 순서는 `redirect`, `knows`,
+  `dispatch`이고, 복사본 둘이 아니라 집 하나를 갖는다 —
+  `server::serve_one_ordering()`이 순서를 데이터로 돌려주고 두 구현이 주석이
+  아니라 그 함수에 대해 검증된다. **여기 서번트는 하나도 바뀌지 않는다**: 다섯 중
+  `redirect`를 재정의한 것이 없고, 생성된 스켈레톤은 모두
+  `self.refs.oid_of(&req.object_key)?`로 시작한다. 순서를 되돌린 상태에서 측정:
+  정확히 한 테스트만 답이 바뀌고 나머지 열한 개는 동일했다. 새로 보이는 것:
+  `redirect`가 `knows`가 거절하는 키에 대해서도 질문받으므로, **부작용이 있는**
+  `redirect`는 이제 모르는 키에서도 그 부작용을 갖는다. **이것이 가능하게 한 것**:
+  `forward_for_a_name.rs` — 이름에 대해 발행되는 리다이렉트이며, 네 개의 기록이
+  생애주기 행의 차단 요인으로 지목한 것이다. 재정렬 전에는 쓸 수 없었다.
+  **그럼에도 생애주기 행은 움직이지 않는다**: 포워드는 응답이고 응답에는 듣는 쪽이
+  필요하므로 떠난 쪽이 발행할 수 없다. 닫으려면 결정이 필요하다 — D029 §6.1의 새
+  생애주기 절에서 **X**로 이름 붙였다: `Orb::server`가 내주는 참조가 *간접적*이라는
+  결정. 새 와이어 모양은 없다 — 이름이 낳은 포워드는 객체 이동이 낳은 메시지와
+  바이트 단위로 같으며, 주장이 아니라 검사했다. 그래서 새 피어 검사는 빚지지
+  않았다.*
 
   *§9.4.6과 §9.4.3.1이 요구하지만 이 ORB가 **이름 부를 수는 있고 와이어에 실을
   수는 없던** 두 가지 형태. `LocateStatus::ObjectForward`에는 본문이 없었고 서브
@@ -65,9 +118,8 @@ records what changed and, where it matters, what it changes on the wire.
   중 발견: `handle_request`가 응답 본문 오프셋을 `HEADER_LEN + 12`로 다시 타이핑해
   두었고, 그 옆 주석이 "컨텍스트 목록이 비어 있는 동안에만 맞다"고 적고 있었다 —
   `reply_body_start`가 이제 그 사실의 유일한 집이다. **닫히지 않았고 이름 붙여 둔
-  것**: `serve_one`이 `redirect`보다 `knows`를 먼저 물으므로 이동한 객체는 요청
-  경로에서 여전히 `OBJECT_NOT_EXIST`이며, 외부 피어에게 `OBJECT_FORWARD`를
-  보내게 한 적이 없으므로 이 변경에는 기록된 피어 바이트가 없다.*
+  것**: 외부 피어에게 `OBJECT_FORWARD`를 보내게 한 적이 없으므로 이 변경에는
+  기록된 피어 바이트가 없다.*
 
 - **`::CORBA::Principal` was recorded as `void` and marshalled zero bytes.**
   The name is predeclared by `sema.rs` and the registry answered
