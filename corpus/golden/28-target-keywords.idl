@@ -75,8 +75,16 @@
 //   * Rust — 44 of 45. Strict plus reserved, 2015 through 2024, is 52 names;
 //     `abstract`, `const`, `enum`, `false`, `in`, `struct` and `true` are not
 //     legal IDL, leaving 45. The one absent is `Self`, which is class 2.
-// 69 distinct identifiers across 18 positions. Both front ends accept the file
-// and `omniidl` says nothing on stderr.
+// 69 distinct identifiers across 18 positions, measured 2026-08-25 when the two
+// lists above were extended. **Java's sections below add 38 more names**
+// (2026-08-26) — 22 that Java reserves and 16 that a generator's template binds
+// — so that figure describes the file as it stood, not as it stands. Nothing
+// here restates a coverage count for a target: `binding-words --language <L>`
+// computes it, which is what stops a number in a comment from drifting past the
+// run that produced it. Both front ends accept the file and `omniidl` says
+// nothing on stderr — re-measured 2026-08-26 with the Java sections in place,
+// `omniidl -b dump` and `org.jacorb.idl.parser` 3.9 both exit 0 with empty
+// stderr.
 
 module target_kw {
   //@ ai_desc: Members whose names are reserved words in a target language
