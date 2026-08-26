@@ -169,6 +169,66 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **One acceptance suite, parameterised by language — `spikes/binding_suite.sh`
+  (D032 §5 B3, D033 §3.1).** A binding is accepted by passing a suite, not by
+  being written, and the suite is one suite rather than a copy per language: a
+  per-language copy of an instrument drifts exactly the way a per-language copy
+  of a *sentence* does. There is **no language name in the driver** — a language
+  is `spikes/bindings/<name>.manifest` plus what it names, and the axis values
+  live once in `spikes/bindings/AXES`. Python is its first instance and the
+  instruments the cells run are unchanged, which is how "byte-identical results
+  as an instance" is a property of running the same thing rather than a claim.
+
+  The derivation is the design. **D032 §4's six clauses are not six checks:**
+  clauses 3/4/5 are language-scoped (no peer, no wire), clause 1 is one
+  measurement ranged over a (direction × peer) grid, and clauses 2 and 6 are
+  **coverage requirements over that grid**. A suite with a "both byte orders"
+  line would print `ok` for Python today off `python_target.rs` and
+  `python_servant.rs`, which walk both orders with no peer in either — and, in
+  `python_target.rs`'s case, no socket either. So an order **read** off GIOP
+  §15.4.1's flag byte is `observed`, one inferred from the peer's host or
+  language is `claimed`, and only `observed` counts toward clause 2.
+
+  What it says for Python on a host with both fixtures: 5 of 6 cells supplied,
+  0 red. `servant × big` is read off the wire from a foreign peer (JacORB, at
+  IIOP 1.2 and 1.1); `servant × little` and `client × little` are exercised by
+  omniORB but **never read**; `client × big` is reported by nothing; the client
+  direction has **no foreign-peer reading at all**; GIOP 1.0 is reached by no
+  cell in either direction; and `client × jacorb` — a JacORB *server* that
+  generated Python dials — is the missing cell, D030 §3.1's prose printed as a
+  counted `SKIPPED` on every run. No score, no percentage, no N-of-M: the
+  verdict names what is unmeasured and does not count what is measured.
+
+  *언어 바인딩은 작성됨이 아니라 **스위트 통과**로 인정되며, 그 스위트는 언어마다
+  복사한 것이 아니라 **언어로 매개변수화된 하나**다 — 구동기에는 언어 이름이 없다.
+  D032 §4의 여섯 절은 여섯 검사가 아니다: 셋은 언어만의 성질, 하나는 격자 위의 측정,
+  둘(바이트 순서·외부 피어)은 그 격자에 대한 **커버리지 요구**다. 그래서 §15.4.1
+  플래그 바이트에서 **읽은** 순서만 `observed`로 세고, 피어의 언어나 호스트에서
+  추론한 것은 `claimed`으로 따로 적는다. 점수도 백분율도 없다.*
+
+- **D032 §4 clause 5 gets an instrument, and it is a finding.** *"Its keyword
+  escaping is exercised by `28-target-keywords.idl`"* had nothing measuring it:
+  both emitters' keyword lists were private consts, so a word was covered by
+  accident and a **new** word would be uncovered by accident with nothing red
+  either way — which is how `yield` went missing from the Rust list in the
+  first place. `orbweaver_gen::targets::TARGETS` publishes each target's
+  reserved words, its **own** escaping function and a uniform emit-to-text;
+  `binding-words --language L` asks, per word, whether the escaped spelling is
+  in what the emitter actually wrote. Measured 2026-08-26: of Python's 37
+  reserved words the contract set executes **28**, of Rust's 66 it executes
+  **42**. `spikes/bindings/keywords-not-executed.tsv` is the home for the rest,
+  checked in **both** directions — a word that stops being uncovered makes its
+  own row a failure telling you to delete it. Three computed classes and only
+  one is a gap: **eleven Rust primitives (`bool`, `u8`, `f64`, …) are exercised
+  by nothing at all** — not the corpus file, and `one_spelling_for_an_identifier.rs`
+  covers only `i32` of the twelve. Written down rather than fixed, because
+  giving them a home is a corpus batch.
+
+  *절 5에는 계측기가 없었다. 각 대상의 예약어와 **이미터 자신의** 이스케이프 함수를
+  공개하고, 단어마다 "이스케이프가 실제로 실행되었는가"를 묻는다. 실제 구멍은
+  하나 — Rust 원시 타입 이름 열한 개는 어디서도 실행되지 않는다.*
+
+
 - **The ORB can stop what it handed out** (D029 §5 O1; decision
   [`D034`](docs/decisions/D034-stopping-what-the-orb-handed-out.md)).
   `Orb::shutdown`, `Orb::is_shutdown`, `Orb::wait_until_stopped(deadline)`,

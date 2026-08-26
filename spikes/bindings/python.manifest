@@ -1,0 +1,84 @@
+# Python's entry in the acceptance suite — the FIRST instance of D032 §5 B3.
+#
+# This file is data. `spikes/binding_suite.sh` reads it and contains no
+# language name of its own; everything Python-specific about Python's
+# acceptance is here or in `spikes/bindings/python/`.
+#
+# ── What a row is / 행의 뜻 ────────────────────────────────────────────────────
+#
+#   cell   <direction> <peer> <command>   clause 1, measured in that cell
+#   waits  <direction> <peer> <reason>    a cell nobody supplies, with a real
+#                                         reason; the SKIPPED itself is printed
+#                                         whether or not this row exists
+#   clause <name>      <command>          clauses 3/4/5 — no peer, no wire
+#
+# A `cell` command runs from the repository root and answers with its EXIT
+# STATUS: 0 ok, 1 red, 2 its fixture is absent. On stdout it may report, tab
+# separated:
+#
+#   observed<TAB>giop=<v><TAB>order=<o>            read off §15.4.1's flag byte
+#   claimed<TAB>giop=<v><TAB>order=<o><TAB><why>   asserted, NOT read
+#   note<TAB><text>
+#
+# Only `observed` counts toward clause 2. That is the distinction the whole
+# suite turns on: `claimed` is what a cell says when the order is right but
+# nobody looked, and printing it as `observed` would be exactly the "green while
+# measuring nothing" class in a new coat.
+#
+# ── Why these five cells and not six / 다섯 칸인 이유 ─────────────────────────
+#
+# The grid is (direction × peer) = 2 × 3. Five have runners. The sixth —
+# client × jacorb — is the one D030 §3.1 already names in prose as the gap, and
+# it is stated here as a `waits` row so the suite prints it every run instead of
+# it living in a table nobody executes.
+#
+# *이 파일은 데이터다. 격자는 (방향 × 피어)이고 여섯 칸 중 다섯에 러너가 있다.
+# 빠진 하나는 D030 §3.1이 이미 산문으로 지목한 바로 그 구멍이며, 여기서는 매 실행마다
+# 인쇄되는 `waits` 행이다.*
+
+# ── clause 1, over the grid ──────────────────────────────────────────────────
+
+# The harness group `Python client target`'s first leg, unchanged: generated
+# Python invokes a C++ target holding only a reference, with no Rust stub in the
+# path. The adapter exists because the leg needs the omniORB fixture started and
+# stopped around it, not because Python needs a special case.
+cell	client	omniorb	spikes/bindings/python/client-omniorb.sh
+
+# The cross-implementation sweep. It is in the grid because it is clause 1's
+# measurement for this cell — every operation of a contract set called and
+# answered — and it reports NO wire observation at all, which is the point: it
+# is a value-level round trip through `_rt.Loopback` with no socket in it. A
+# suite that counted this as "both byte orders" would be lying twice over.
+cell	client	self	cargo test -q -p orbweaver-gen --test python_target
+
+# omniORB's own Python client drives the Python servant behind our ORB.
+cell	servant	omniorb	spikes/bindings/python/servant-omniorb.sh
+
+# JacORB drives the same servant. The strongest cell in the grid and the only
+# one anywhere that reads a foreign peer's byte order out of the flag byte.
+cell	servant	jacorb	spikes/bindings/python/servant-jacorb.sh
+
+# Our generated Rust client against the Python servant, plus the seam's own
+# 19 calls × 3 versions × 2 orders comparison against a Rust servant. Both ends
+# ours, so it can never satisfy clause 6 — which is why `peer` is an axis.
+cell	servant	self	cargo test -q -p orbweaver-gen --test python_servant
+
+# The gap, stated so it is printed rather than remembered.
+waits	client	jacorb	a JacORB SERVER that generated Python dials. Every JacORB leg in this tree has JacORB as the CLIENT (spikes/jacorb_giop11.sh, jacorb_wchar11.sh, jacorb_python_servant.sh) or drives a JacORB server from a RUST client (run_checks.sh's "our client -> JacORB server"). Nothing drives generated Python at a JacORB server, and that is precisely the cell that would give the client direction a big-endian reading off a foreign peer's flag byte — D030 §3.1's "not established by that batch and not by this one", as a cell rather than a sentence.
+
+# ── clauses 3, 4 and 5 — language-scoped, no peer and no wire ────────────────
+
+# Clause 3. The refusal a generated stub gives for a form the wire cannot carry
+# must be EQUAL to the published head, not similar — held by computing the
+# expected text from the same function rather than by a literal.
+clause	refusals-equal-the-published-heads	cargo test -q -p orbweaver-gen --test python_target -- a_peer_fed_form_reads_as_a_description_and_refuses_as_a_value
+
+# Clause 4, in two halves: the exception a reply names arrives as itself, and a
+# repository id is spelled by the emitter's own naming function at every segment.
+clause	an-exception-arrives-as-what-the-reply-named	cargo test -q -p orbweaver-gen --test python_target -- a_generated_stub_raises_what_the_reply_names
+clause	a-stub-is-found-by-the-name-the-emitter-gave-it	cargo test -q -p orbweaver-gen --test python_target -- a_stub_is_looked_up_by_the_name_the_emitter_gave_it
+
+# Clause 5. `--language` is passed through rather than the binary knowing which
+# language it is for; `binding-words` looks the target up in
+# `orbweaver_gen::targets::TARGETS`.
+clause	keyword-escaping-is-executed	cargo run -q -p orbweaver-gen --bin binding-words -- --language python --allow spikes/bindings/keywords-not-executed.tsv --idl corpus/golden/28-target-keywords.idl
