@@ -241,6 +241,51 @@ feature to add.
 *다섯 가지 각각은 **테스트로 반증 가능한 주장**이며, 그것이 이 작업의 방식이다.
 투명성은 확인하는 것이 아니라 **구멍을 사냥하는 것**이다.*
 
+#### Location, for event channels — what closed and what did not (2026-08-26)
+
+D021 E3 landed: a channel is published under a name in a CosNaming context and
+a client reaches it holding an `Orb`, the string `corbaloc:rir:NameService` and
+the channel's name. Measured twice — `channel_found_by_name.rs` with our client
+at both ends, and `spikes/event_by_name.sh` with omniORB's client, which is
+what makes it a measurement rather than a self-test. The claim is refutable and
+its control is the leak: the same client handed the pre-move IOR cannot survive
+the move, and when that control was made to pass the whole assertion went red.
+
+**What a client can still tell, named rather than left looking closed.** Every
+one of these is a defect to close, on the same terms as the table above.
+
+1. **The naming service's address is still handed over.** The channel's is not,
+   but something had to put an address into the ORB's initial-references table
+   for `corbaloc:rir:` to answer. The leak is **displaced, not closed** — from
+   N channels to one bootstrap — and calling it closed would be the row this
+   subsection exists to avoid.
+2. **A moved channel is a redeployment, and the client has to notice.** §3.1's
+   gap means "move" is really "stop one server and start another with the same
+   keys", so an *already-attached* consumer is not carried across: it is
+   dropped, and the client learns by failing. The test re-runs the whole
+   bootstrap unconditionally, so it measures that a **new** bootstrap is
+   unaffected and measures **nothing** about an existing connection surviving.
+   That is the honest limit of the measurement and the next thing to close.
+3. **Nothing re-publishes.** Publication is the deployer's explicit call. A
+   channel that moves without one leaves its name pointing at a dead address,
+   and the client gets a connect failure rather than a redirect —
+   `LOCATION_FORWARD` is served for objects but nothing emits it for a name.
+4. **A binding outlives its channel.** Unbinding is deliberately separate from
+   the channel going away (§2.5.1, and what omniNames measurably does), so a
+   name can resolve to a channel that is gone. The client tells the difference
+   only by dialling and failing.
+5. **The channel's *name* is still deployment knowledge**, including that the
+   kind is `EventChannel`. That is a name and not a location, so it is not a
+   leak in this row — recorded so the next reader does not re-derive it.
+
+*무엇이 닫혔고 무엇이 닫히지 않았는가. 채널의 주소는 더 이상 건네지지 않지만,
+**네이밍 서비스의 주소는 여전히 건네진다** — 구멍은 닫힌 것이 아니라 N개에서
+하나로 **옮겨졌다**. §3.1 때문에 "이동"은 사실 재배포이므로 **이미 붙어 있던
+소비자는 이어지지 않는다**; 테스트는 새 부트스트랩이 영향받지 않음을 재고 기존
+연결의 생존은 **재지 않는다** — 이것이 측정의 정직한 한계다. 재발행하는 것은
+없고, 바인딩은 채널보다 오래 살아남으며, 채널의 **이름**은 여전히 배포 지식이다
+(이름은 위치가 아니므로 이 행의 구멍은 아니다).*
+
 ### 6.2 What this criterion does to the order
 
 O1 (lifecycle) and D030 L1 (the language seam) are **no longer two items of

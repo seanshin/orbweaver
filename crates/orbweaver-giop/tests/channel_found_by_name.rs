@@ -48,6 +48,19 @@
 //! cannot stop what it handed out (D029 §3.1) and a channel carries no state
 //! across it. What is claimed is narrower and is the Location row exactly: the
 //! **client** could not tell, and needed no new information to keep working.
+//!
+//! And one limit that is easy to read past, so it is stated as a limit rather
+//! than left to be inferred from the code: step 3 **re-runs the whole
+//! bootstrap**. It therefore measures that a *new* client is unaffected by the
+//! move, and measures **nothing** about an already-attached consumer surviving
+//! one — that consumer is dropped, and the client finds out by failing. A test
+//! that asserted the existing proxy kept working would be asserting something
+//! this ORB does not do. The gap is named in D029 §6.1's Location subsection
+//! as the next thing to close; naming it is worth more than a green row.
+//!
+//! *3단계는 부트스트랩을 처음부터 다시 한다. 따라서 **새** 클라이언트가 영향을
+//! 받지 않음을 재고, 이미 붙어 있던 소비자의 생존은 재지 않는다 — 그 소비자는
+//! 끊기고, 클라이언트는 실패로 알게 된다.*
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
