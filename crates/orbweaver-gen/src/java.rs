@@ -625,8 +625,9 @@ pub fn emit_java(registry: &Registry, package: &str) -> JavaPackage {
         let name = path.last().cloned().unwrap_or_default();
         let pkg = cx.package_of(&path);
         let emitted = match registry.get(id) {
-            Some(Entry::Type(tc)) => crossable(tc, &mut Vec::new())
-                .and_then(|()| emit_type(registry, id, &name, tc, cx)),
+            Some(Entry::Type(tc)) => {
+                crossable(tc, &mut Vec::new()).and_then(|()| emit_type(registry, id, &name, tc, cx))
+            }
             Some(Entry::Interface(_)) => interface_crossable(registry, id)
                 .and_then(|()| emit_interface(registry, id, &name, cx)),
             Some(Entry::Const { tc, value }) => {

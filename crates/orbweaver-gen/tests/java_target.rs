@@ -701,8 +701,7 @@ fn the_java_mapping_agrees_with_the_rust_one_over_the_golden_corpus() {
                 continue;
             }
             let path_segs = registry.qualified_name(id).unwrap_or_default().to_owned();
-            let mut segs: Vec<String> =
-                path_segs.split("::").map(java_name).collect::<Vec<_>>();
+            let mut segs: Vec<String> = path_segs.split("::").map(java_name).collect::<Vec<_>>();
             let Some(class_name) = segs.pop() else { continue };
             let class = if segs.is_empty() {
                 format!("contract.{class_name}")
