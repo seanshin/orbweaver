@@ -77,6 +77,14 @@ the product rather than of a spike.
 ORB가 주기만 하고 거두지 못한다는 비대칭이 이제 스파이크의 성질이 아니라 제품의
 성질이다.*
 
+**Closed 2026-08-26 by O1**, whose design answer and refusal are
+[`D032`](D032-stopping-what-the-orb-handed-out.md) and whose bound is the
+rustdoc on `Orb::shutdown`. Neither is restated here; what §6.1's lifecycle row
+records is **how far the row moved**, which is less far than *closed*.
+
+*2026-08-26 O1이 닫았다. 설계의 답과 거절은 D032, 한계는 `Orb::shutdown`의
+러스트독에 있다 — 여기서 다시 적지 않는다.*
+
 ### 3.2 Seven policies exist as types, and nothing lets a caller choose one
 
 D020 Stage A landed `ThreadPolicy`, `LifespanPolicy`, `IdUniquenessPolicy`,
@@ -154,6 +162,13 @@ yet be tested (lifecycle, until O1), the test exists and is a **counted
 Ordered by what a defect would cost.
 
 ### O1 — the ORB can stop what it handed out (`orbweaver-giop`, `orbweaver-object`)
+
+**Landed 2026-08-26.** The design question below was answered in writing first,
+in [`D032`](D032-stopping-what-the-orb-handed-out.md); the bound is the rustdoc
+on `Orb::shutdown`; the oracle asked for below was built and is
+`crates/orbweaver-giop/tests/orb_stops_what_it_handed_out.rs`. The paragraph
+that follows is left as it was written, because it is what was proposed and
+editing it to match the answer would falsify the proposal rather than record it.
 
 An ORB-level shutdown that stops the servers and pools it created, and says
 what it does to work in flight. **Not `run`.** The design question to answer
@@ -236,7 +251,7 @@ feature to add.
 | **Backend** | what implements it | mostly held: a servant is behind a POA and a reference; but `spike_experts`' server root key collides with its derived registry key, which is a backend detail reaching a name. |
 | **Language** | what it is written in | **the construction leak is closed; three narrower ones remain** (2026-08-26). A Python servant is dispatched into by `orbweaver_gen::pyservant`, and `tests/python_servant.rs` compares one against the generated Rust servant for the same contract — 19 calls × 3 GIOP versions × 2 byte orders, **byte-identical replies**, with a negative control that perturbs five answers and asserts each is seen. What remains is listed in §6.1.1 and none of it is the old *"cannot be a target at all"*. |
 | **Activation / load** | whether it is loaded right now | **leaks, and now measured (2026-08-26)**: the leak is `moe::Router::select`, and it is *residency-blind by omission rather than by absence of data*. `mirror_residency` keeps `Offer::residency` live in the very store `select` reads, and `orbweaver-trading`'s query grammar has a `residency` field, but `Constraints::to_query_text` never names it — so an OFFLOADED expert comes back in the sequence and dialling it answers `OBJECT_NOT_EXIST` where a resident one answers. `expert_service.rs:882-891` records this as intended: *"the caller's cue to `prefetch`"*. That makes the leak a **design choice written down**, not an oversight, which is the strongest form for it to be in before it is decided. `Router::dispatch` is *not* the operation that would close it — it is refused (D006 option E), and its own reason is now known to be false as written (see D006's 2026-08-26 amendment). The closer is a POA-level activation path, because the criterion says *any* target, and a fix inside one application contract closes it for one contract. |
-| **Lifecycle stability** | that the above survives add / remove / move / load / evict at runtime | **partly unmeasurable today**: the ORB owns the transport and **cannot stop what it handed out** (§3.1), so "remove at runtime" has no implementation to be transparent about. |
+| **Lifecycle stability** | that the above survives add / remove / move / load / evict at runtime | **was "partly unmeasurable"; as of 2026-08-26 it is measurable and leaking for a reason that is now named.** O1 landed: `Orb::shutdown` stops the servers and pools the ORB created, and `crates/orbweaver-giop/tests/orb_stops_what_it_handed_out.rs` measures what a peer mid-call observes across it — from the peer's own socket, three GIOP versions × two byte orders, with four negative controls that were each run red. So *"removed at runtime"* now has an implementation and a test. **What did not move is the transparency of the removal**: a caller of a removed server can tell immediately, because there is nowhere else for its request to go, and closing that needs a second endpoint and a redirect — `LOCATION_FORWARD` served for a *name* rather than for an object, which is item 3 of the event-channel subsection below and which O1 does not touch. The argument and the refusal (graceful, at request granularity; immediate refused; *not* `run()`) are `docs/decisions/D032-stopping-what-the-orb-handed-out.md`; the bound is the rustdoc on `Orb::shutdown` and is not restated in either. Also measured that day and not changed: **17 of this workspace's 63 serve sites pass `|| false`** — seventeen processes that are still stopped only by being killed. They are now *fixable* rather than fixed. |
 
 *다섯 가지 각각은 **테스트로 반증 가능한 주장**이며, 그것이 이 작업의 방식이다.
 투명성은 확인하는 것이 아니라 **구멍을 사냥하는 것**이다.*
@@ -256,6 +271,20 @@ feature to add.
 2026-08-26 개정). 기준이 말하는 것은 *임의의* 대상이므로, 막는 자리는 응용 계약
 하나가 아니라 POA 수준의 활성화 경로다. 둘 다 **기록만 하고 바꾸지 않았다** —
 `select`는 서빙 중이고 소비자가 있다.
+
+**2026-08-26 측정 — 생애주기 행도 같은 날 옮겨졌다.** O1이 착지했다:
+`Orb::shutdown`이 ORB가 내어준 서버와 풀을 멈추고,
+`crates/orbweaver-giop/tests/orb_stops_what_it_handed_out.rs`가 **통화 중인 피어가
+자기 소켓에서 무엇을 보는지**를 잰다 — GIOP 3개 버전 × 바이트 순서 2가지, 그리고
+각각 붉게 만들어 본 부정 대조군 4개. 그래서 *"런타임에 제거됨"*은 이제 구현과
+테스트를 갖는다. **옮겨가지 않은 것은 제거의 투명성이다**: 제거된 서버의 호출자는
+즉시 알아차린다 — 요청이 갈 다른 곳이 없기 때문이다. 그것을 막으려면 두 번째
+엔드포인트와 리디렉션이 필요하고, 그것은 객체가 아니라 **이름**에 대한
+`LOCATION_FORWARD`이며 아래 이벤트 채널 절의 3번 항목이다. 논증과 거절(요청 단위의
+우아한 종료, 즉시 종료 거절, `run()` 아님)은 D032에 있고, 한계는 `Orb::shutdown`의
+러스트독에 있으며 어느 쪽도 다시 적지 않는다. 같은 날 측정하고 **바꾸지 않은 것**:
+이 워크스페이스의 serve 지점 63개 중 **17개가 `|| false`를 넘긴다** — 여전히 죽여야만
+멈추는 프로세스 열일곱이다. 이제 *고칠 수 있게* 되었을 뿐 고쳐진 것은 아니다.
 
 #### Location, for event channels — what closed and what did not (2026-08-26)
 
