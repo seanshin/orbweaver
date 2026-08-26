@@ -491,6 +491,16 @@ impl<A: Answerer> ForeignServant<A> {
         self.identity.as_ref()
     }
 
+    /// What answers on the servant's behalf.
+    ///
+    /// Borrowed rather than hidden so a test can read what the far side was
+    /// actually put — the call documents are the seam's observable behaviour,
+    /// and a test that could only see the reply bytes could not tell a servant
+    /// that was *told* which object it is from one that guessed right.
+    pub fn answerer(&self) -> &A {
+        &self.answerer
+    }
+
     /// Every operation name this servant will dispatch, `_is_a` and
     /// `_non_existent` excluded.
     pub fn operations(&self) -> impl Iterator<Item = &str> {
