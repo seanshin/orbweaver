@@ -142,21 +142,28 @@ unmeasured (D031 H1/H2), so the answer stops being a reading assembled by hand.
 | | Status |
 |---|---|
 | the five names | ✅ one home, `docs/decisions/D029-...md` §6.1, read by `spikes/transparency.py`; a harness tag naming anything else fails the run by name |
-| the ledger | ✅ printed before the verdict, computed from the run; no score, and an untagged run reads as `NONE measured`, not as a pass. Its seven negative controls run without the harness's lock in about a second: `./spikes/ledger_control.sh` |
-| groups declaring | ◐ ten, measured 2026-08-26 — three of the five transparencies have at least one declaring group and two have none. Recompute rather than quote this: `python3 spikes/transparency.py --check spikes/run_checks.sh`, and the ledger of any run is the live answer |
-| leak tests per transparency | ❌ D029 §5 O0. The ledger reads what exists; the two transparencies nothing declares need a group that changes the hidden property under a live caller, and that group does not exist yet. **One test of the shape now exists and the ledger cannot see it** (2026-08-26): `orbweaver-giop`'s `channel_found_by_name.rs` moves a channel under a live client and asserts nothing the client observes changed, with three negative controls each shown red — but it is a `cargo test` and its peer half is a standalone spike, and **the ledger reads declaring harness groups**, so it counts toward nothing above. That gap is the row, not an oversight in the ledger: a leak test with nowhere to report is D031 §4 H4's own argument arriving as a measurement |
+| the ledger | ✅ printed before the verdict, computed from the run; no score, and an untagged run reads as `NONE measured`, not as a pass. It also distinguishes a group that **looked** from a group that **declared it had not** (`tp_measures_nothing`), so a transparency whose only declaring groups measured nothing still reads UNMEASURED with their blockers in the load-bearing column. Its eight negative controls run without the harness's lock in about a second — `./spikes/ledger_control.sh`, 33 assertion groups, 0 failed (2026-08-26) — and since that day they are **also a harness group**, which they were not when control 5 went red and stayed red unnoticed |
+| groups declaring | ◐ seventeen tags over all five names, measured 2026-08-26 (`location` 8, `backend` 3, `language` 3, `lifecycle` 2, `activation` 1). Every transparency now has at least one declaring group; **two of the five (`language`, `activation`) are declared only by groups that declared they measured nothing**, so the ledger still reads them UNMEASURED. Recompute rather than quote this: `python3 spikes/transparency.py --check spikes/run_checks.sh`, and the ledger of any run is the live answer |
+| leak tests per transparency | ◐ D029 §5 O0 landed and reaches the instruments (2026-08-26). `crates/orbweaver-test/tests/what_a_caller_can_tell.rs` changes the hidden property under a live caller; `spikes/leak_tests.sh` gives one leg per transparency, read from `spikes/transparency.py` and never retyped; `spikes/leak_controls.sh` puts each leak back and requires the test to see it (14 checks, 0 failures, 2026-08-26). **Two legs measure** — a target moved under a live caller, and the implementation behind one reference replaced mid-session — and **three are counted `SKIPPED`s naming a blocker**: a Python servant mountable as a `Dispatch` in a server the test owns (`language`), a POA-level activation path that reloads an evicted target (`activation`), a redirect emitted for a *name* rather than an object (`lifecycle`). All five are harness groups, so the three skips are counted by the verdict and cited in the ledger's `unmeasured:` column, which is what "reaches the instruments" means and is what they did not do on the day they landed. Still outside: `orbweaver-giop`'s `channel_found_by_name.rs` is a test of this shape with three controls each shown red, and it has no declaring group — it counts toward nothing above |
 
 완성 기준의 집은 D029 §6, 다섯 투명성과 그 구멍의 집은 §6.1이며 **여기서 다시 적지
 않는다.** 여기에 사는 것은 *계기*의 상태다: 2026-08-26부터 하네스는 투명성별로 어느
 그룹이 그것을 재는지와 무엇이 미측정인지를 스스로 밝힌다(D031 H1/H2). 위 표의 개수는
 인용하지 말고 다시 계산한다 — 어느 실행이든 원장이 살아 있는 답이다. 원장의 부정
-대조군 일곱 개는 하네스 락 없이 1초 남짓에 돈다: `./spikes/ledger_control.sh`.
-**그 모양의 테스트가 하나 생겼고 원장은 그것을 보지 못한다**(2026-08-26):
-`channel_found_by_name.rs`는 살아 있는 클라이언트 아래에서 채널을 옮기고 관측이
-변하지 않음을 주장하며 부정 대조군 셋이 각각 붉어졌으나, `cargo test`이고 피어
-절반은 독립 스파이크라서 원장이 읽는 **선언 그룹**이 아니다. 이 간극이 곧 그
-행이며 원장의 누락이 아니다 — 보고할 곳 없는 구멍 테스트라는 D031 §4 H4의 논지가
-측정으로 도착한 것이다.
+대조군 **여덟 개**는 하네스 락 없이 1초 남짓에 돈다: `./spikes/ledger_control.sh`,
+단언 그룹 33개·실패 0(2026-08-26). 그리고 그날부터 그 대조군들 자체가 **하네스
+그룹**이다 — 대조군 5가 붉어진 채 아무도 모르고 지나갔을 때는 아니었다.
+**D029 §5 O0이 착지했고 계기에 도달했다**(2026-08-26): `what_a_caller_can_tell.rs`가
+살아 있는 호출자 아래에서 숨은 성질을 바꾸고, `leak_tests.sh`가 투명성마다 다리를
+하나씩 놓으며(이름은 `transparency.py`에서 읽고 결코 다시 적지 않는다),
+`leak_controls.sh`가 각 구멍을 되돌려 넣고 테스트가 보는지를 요구한다(검사 14개,
+실패 0). **재는 다리 둘**, **장애물을 이름 붙인 계수되는 `SKIPPED` 셋**이며 다섯 모두
+하네스 그룹이므로 스킵 셋이 판정에 세어지고 원장의 `unmeasured:` 열에 인용된다 —
+착지한 날에는 하지 못했던 바로 그것이다. 원장은 이제 **본 그룹**과 **보지 않았다고
+선언한 그룹**을 구분하므로(`tp_measures_nothing`), 선언 그룹이 전부 아무것도 재지
+않은 투명성은 여전히 UNMEASURED로 읽힌다 — 다섯 중 둘(`language`, `activation`)이
+그렇다. 아직 바깥에 있는 것: `channel_found_by_name.rs`는 이 모양의 테스트이고
+부정 대조군 셋이 각각 붉어졌으나 선언 그룹이 없어 위 표에 아무것도 더하지 않는다.
 
 ## Reading this honestly / 정직한 독해
 

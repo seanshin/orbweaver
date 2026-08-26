@@ -99,7 +99,19 @@ def rows():
 
     out = []
     for line in lines[start:]:
-        if re.match(r"^#{1,3}\s", line):
+        # ANY deeper heading ends the table, including a `####` subsection.
+        #
+        # This stopped at `#{1,3}` until 2026-08-26, on the reasoning that §6.1's
+        # own `####` subsections are part of §6.1 — which is true of their prose
+        # and false of their tables. §6.1 grew a subsection whose table has one
+        # row per transparency, and this reader collected eleven rows and
+        # refused, exactly as `_die` promises: *"the table shape changed and this
+        # reader must be looked at before any harness tag is trusted"*. Loud, and
+        # correct, and the fix is to say what the table IS rather than to make
+        # the count elastic — **the first table under the heading**, which is the
+        # one §6 defines. A subsection table is somebody citing the rows, not
+        # declaring them.
+        if re.match(r"^#{1,4}\s", line):
             break
         if not line.startswith("|"):
             continue

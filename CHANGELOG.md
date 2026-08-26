@@ -226,6 +226,103 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **A leak test per transparency, and the harness now counts the ones that do
+  not exist** (D029 §5 O0, D031 H2/H4). `crates/orbweaver-test/tests/what_a_caller_can_tell.rs`
+  is the first instrument in this project that holds a **live caller** while the
+  property a transparency names changes underneath it; `spikes/leak_tests.sh`
+  reads the five names from their owner and gives one leg per transparency;
+  `spikes/leak_controls.sh` puts each leak back and requires the test to see it,
+  by exit code and in the test file's own sentence. Two legs measure — a target
+  moved under a live caller, and the implementation behind one reference
+  replaced mid-session. **Three are counted `SKIPPED`s naming a specific
+  blocker**, which is the half that matters: a Python servant mountable as a
+  `Dispatch` in a server the test owns; a POA-level activation path that reloads
+  an evicted target; a redirect emitted for a **name** rather than for an object.
+
+  Those scripts landed with nothing running them, because the batch that wrote
+  them was given a footprint that excluded `spikes/run_checks.sh` — its report
+  said so: *"the three SKIPPED are not counted by the harness verdict and do not
+  reach D031's ledger"*. They are now **eight harness groups**, and wiring them
+  in needed the ledger to be able to say something it could not. A group that
+  declares `bears_on activation` is a group the ledger counts, so five counted
+  skips would have flipped `activation` from UNMEASURED to *"measured by 1
+  group(s), 0 red"* over a row D029 §6.1 calls the one with the most machinery
+  and the least measurement — **the ledger swallowing a leak by being told about
+  it.** `tp_measures_nothing` is the declaration that stops it: a transparency
+  whose only declaring groups measured nothing still reads UNMEASURED, and the
+  blockers they name become the load-bearing column instead of the reason the
+  row left it. It is written at column 0 beside `bears_on` so that
+  `spikes/ledger_control.sh`, which lifts those declarations and replaces every
+  group body with an `echo`, reads a run the same way the run does.
+
+  `spikes/orb_shutdown.sh` is a group too — the D034 lifecycle spike, whose peer
+  imports no ORB and builds its §9.4 requests by hand in both byte orders. Its
+  exit code is the measurement and the fixture's own counters are printed beside
+  it, never allowed to vouch for it. So the lifecycle row moves from *no
+  declaring group* to declared and measured, and **not** to held: what became
+  measurable is the removal, not the transparency of the removal (D034 §8), and
+  its leak leg stays a counted SKIPPED naming the redirect-for-a-name that would
+  close it. Both lines print under the row every run.
+
+  **Found by running the controls rather than by reading them.**
+  `ledger_control.sh` control 5 had been **red since the acceptance suite gave
+  `language` a second tag**, and nothing noticed, because that script was not a
+  group — the instrument that answers *can the ledger be green while measuring
+  nothing* was itself green while measuring nothing. Its assertion was a
+  hand-typed group count; it is now scoped to the rule it exists for. Two more:
+  the lift's `awk` anchors were title *prefixes*, so naming a new group
+  `transparency ledger — its own negative controls` made the lift swallow it and
+  the driver then ran the group, which ran the script — **unbounded recursion
+  that hung rather than failing**, and a hang is the one diagnostic nobody can
+  read; and `/^tp_measures_nothing/` in the lift also matched the function
+  *definition*, producing a driver with an unterminated `{`. Anchors are full
+  titles now and `build` refuses a driver that would re-enter.
+
+  **Named rather than fixed**, because `spikes/leak_tests.sh` is another batch's
+  file today: `--raw` is documented as one TSV row per transparency and, on a
+  RED leg, also writes its failure extract to stdout — the stream is well formed
+  exactly when nothing is wrong. The harness therefore sifts rows by shape. A
+  consumer that trusted the line count read `8 row(s)` on the one run that
+  mattered.
+
+  What the ledger reads after this, from a standalone lift of the new groups:
+  `location` and `backend` measured, `language` and `activation` **UNMEASURED
+  with a named blocker each**, `lifecycle` measured by one group with its leak
+  leg still unmeasured beside it. No score, and the empty case still reads as
+  unmeasured rather than as passing.
+
+  *투명성마다 구멍 테스트 하나, 그리고 **아직 없는 것을 하네스가 세기 시작했다.**
+  `what_a_caller_can_tell.rs`는 이 프로젝트에서 처음으로 **살아 있는 호출자**를 붙든
+  채 성질을 바꾸는 계기이고, `leak_tests.sh`는 다섯 이름을 소유 문서에서 읽어 다리를
+  하나씩 놓으며, `leak_controls.sh`는 각 구멍을 되돌려 넣고 테스트가 그것을 보는지를
+  종료 코드와 **테스트 파일 자신의 문장**으로 요구한다. 재는 다리는 둘, **구체적
+  장애물을 이름 붙인 계수되는 `SKIPPED`가 셋**이며 후자가 중요한 절반이다.
+  그 스크립트들은 아무것도 실행하지 않는 상태로 착지했다 — 그것을 쓴 배치의
+  footprint가 `run_checks.sh`를 제외했기 때문이고, 그 보고서가 스스로 그렇게 적었다.
+  이제 **하네스 그룹 여덟 개**다. 그런데 그렇게 연결하려면 원장이 할 수 없던 말을 할
+  수 있어야 했다: `bears_on activation`을 선언한 그룹은 원장이 **세는** 그룹이므로,
+  계수되는 스킵 다섯이 `activation`을 미측정에서 *"1개 그룹이 쟀고 붉음 0"*으로
+  뒤집었을 것이다 — §6.1이 "기계는 가장 많고 측정은 가장 적은 행"이라 부르는 바로 그
+  행 위에서. **구멍을 알려 줬다는 이유로 원장이 그 구멍을 삼키는 것이다.**
+  `tp_measures_nothing`이 그것을 막는 선언이며, 선언한 그룹이 전부 아무것도 재지
+  않았다면 그 투명성은 여전히 UNMEASURED로 읽히고 그들이 이름 붙인 장애물이 원장을
+  지탱하는 열이 된다. 그 선언은 `bears_on` 옆 0열에 적힌다 — 그룹 본문을 `echo`로
+  갈아 끼우는 `ledger_control.sh`가 실행과 같은 방식으로 읽어야 하기 때문이다.
+  `orb_shutdown.sh`도 그룹이 되었다(D034). 그래서 생애주기 행은 **선언 그룹 없음**에서
+  선언·측정됨으로 옮겨가되 **유지됨으로는 옮겨가지 않는다**: 측정 가능해진 것은
+  제거이지 제거의 투명성이 아니며(D034 §8), 그 구멍 다리는 이름에 대한 리디렉션을
+  기다리는 계수되는 SKIPPED로 남는다. **읽어서가 아니라 돌려 보고 찾은 것**: 인수
+  스위트가 `language`에 두 번째 태그를 준 이래 `ledger_control.sh`의 대조군 5가
+  **붉어 있었고 아무도 몰랐다** — 그룹이 아니었기 때문이다. "원장이 아무것도 재지
+  않으면서 초록일 수 있는가"에 답하는 계기가 스스로 아무것도 재지 않으면서 초록이었다.
+  그 단언은 손으로 적은 그룹 개수였고, 이제 존재 이유인 규칙으로 범위를 옮겼다. 두 가지
+  더: 리프트의 `awk` 기준이 제목 **접두사**여서 새 그룹 이름 하나가 무한 재귀를
+  만들었고 — 실패가 아니라 **멈춤**이었으며, 멈춤은 아무도 읽을 수 없는 유일한 진단이다
+  — `/^tp_measures_nothing/`이 함수 **정의**까지 잡아 닫히지 않은 `{`를 만들었다.
+  **고치지 않고 이름만 붙인 것**: `leak_tests.sh --raw`는 투명성당 TSV 한 줄로
+  문서화돼 있으나 붉은 다리에서는 실패 발췌도 표준출력에 쓴다 — 아무 문제가 없을 때만
+  형식이 온전하다. 그 파일은 오늘 다른 배치의 것이므로 하네스가 모양으로 걸러 읽는다.*
+
 - **One acceptance suite, parameterised by language — `spikes/binding_suite.sh`
   (D032 §5 B3, D033 §3.1).** A binding is accepted by passing a suite, not by
   being written, and the suite is one suite rather than a copy per language: a
