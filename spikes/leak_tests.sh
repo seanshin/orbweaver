@@ -74,7 +74,20 @@ run_tests() {
   # The head is the point: a red that does not say what the caller could tell
   # is a diagnosis nobody can act on. `THE CALLER` is matched anywhere on the
   # line because an `assert_eq!` message arrives after `assertion ... failed:`.
-  grep -E '^(thread |---- )|THE CALLER' <<<"$out" | head -8 | cut -c1-160 | sed 's/^/       /'
+  # `--raw`'s contract is one TSV row per transparency and nothing else. This
+  # extract used to be written to stdout unconditionally, so the TSV was well
+  # formed **exactly when nothing was wrong** — a consumer counting rows read
+  # eight on the one run where a leak had been found. It goes through `say`
+  # like every other line now.
+  #
+  # No `head` on the pipe either: an early-exit form SIGPIPEs the `grep` that
+  # feeds it, which under `pipefail` is the shape this project has been bitten
+  # by twice. Capture, then trim with a herestring.
+  if [ "$RAW" != 1 ]; then
+    local why
+    why=$(grep -E '^(thread |---- )|THE CALLER' <<<"$out" || true)
+    [ -n "$why" ] && sed -n '1,8p' <<<"$why" | cut -c1-160 | sed 's/^/       /'
+  fi
   return 1
 }
 
