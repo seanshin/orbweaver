@@ -84,6 +84,7 @@
 #![deny(missing_docs)]
 
 pub mod python;
+pub mod pyservant;
 pub mod rt;
 pub mod skeleton;
 
