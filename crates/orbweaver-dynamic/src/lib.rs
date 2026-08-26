@@ -33,7 +33,34 @@
 pub mod anyjson;
 pub mod dynany;
 pub mod invoke;
-pub mod json;
+
+/// The JSON reader and writer, which now lives in [`orbweaver_cdr::json`].
+///
+/// **This re-export is deliberate and is not a second home for the name.**
+/// Moved 2026-08-26 (D026 §5 S1) so the seed loader could be reached from the
+/// fixtures below this crate; kept reachable here for a reason that is a
+/// measurement rather than a courtesy.
+///
+/// `orbweaver_dynamic::json` had **60 references across 44 files in six
+/// crates** on the day of the move, and two of those crates cannot spell
+/// `orbweaver_cdr::json` at all: `orbweaver-forge` (7 references) does not
+/// depend on `orbweaver-cdr`, and `orbweaver-console` (3 in `src/`) has it
+/// only as a dev-dependency. Rewriting either would **add a `cargo tree`
+/// edge**, which this project forbids outright — so the alternative to this
+/// line is not a tidier graph, it is a wider one.
+///
+/// The *"where a fact lives"* rule is about restated facts that drift. A `pub
+/// use` cannot drift: `orbweaver_dynamic::json::MAX_DEPTH` and
+/// `orbweaver_cdr::json::MAX_DEPTH` are the same item, so an equality test
+/// between them is green by construction and proves nothing. That is exactly
+/// the case CLAUDE.md describes for a shared constant — *"the drift is
+/// impossible rather than detectable … a reason to record the fact rather than
+/// to add a test"* — which is why this comment exists and no test does.
+///
+/// What would remove it: giving `orbweaver-forge` and `orbweaver-console` a
+/// real `orbweaver-cdr` dependency, which is a graph change and therefore a
+/// decision, not a cleanup.
+pub use orbweaver_cdr::json;
 
 use std::fmt;
 

@@ -21,8 +21,32 @@
 //! So: **do not add a convenience here that the Python half cannot have.** The
 //! format is plain JSON with AnyJSON v1's scalar spellings, for the four
 //! reasons `corpus/state/README.md` gives, and the parser is
-//! [`orbweaver_dynamic::json`] because the workspace has no serde and gains
-//! none by this.
+//! [`orbweaver_cdr::json`] because the workspace has no serde and gains none by
+//! this.
+//!
+//! # Why the parser is named from `orbweaver-cdr` and must stay that way
+//!
+//! This file is compiled twice: once as a module of `orbweaver-test`, and again
+//! *inside another crate* by `#[path]`, so that a fixture living below this one
+//! loads the same population rather than retyping it. That second compilation
+//! is the whole mechanism, and it only works where the host crate can resolve
+//! **every** name this file imports — which is exactly two crates,
+//! `orbweaver-cdr` and `orbweaver-trading`.
+//!
+//! Until 2026-08-26 the parser was named from `orbweaver-dynamic`, which sits
+//! above `giop`, `registry` and `trading`; a fixture in any of those could not
+//! host this file without a cycle, and `spike_names`, `spike_events` and
+//! `spike_ifr` were left inventing their populations for that reason alone.
+//! Moving `json` down to `orbweaver-cdr` (D026 §5 S1) removed it for the two
+//! that live in `orbweaver-giop`, because giop's manifest already carries both
+//! crates this file needs.
+//!
+//! **`orbweaver_dynamic::json` still resolves**, via a deliberate re-export, so
+//! writing it here would compile and would silently re-impose the old ceiling
+//! on any fixture that later tried to host this file. That is why the import
+//! above is spelled `orbweaver_cdr` and why adding an import from a taller
+//! crate to this file is a decision about which fixtures can exist, not a
+//! convenience.
 //!
 //! # A seeded population is not the only population
 //!
@@ -43,7 +67,7 @@
 
 use std::path::{Path, PathBuf};
 
-use orbweaver_dynamic::json::Json;
+use orbweaver_cdr::json::Json;
 use orbweaver_trading::{Offer, Residency};
 
 /// Why a seed could not be loaded.
