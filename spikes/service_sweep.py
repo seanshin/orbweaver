@@ -6,7 +6,7 @@ output written up.
 
 # The question
 
-`docs/COMPONENTS.md` marks five served services ✅ and each servant implements
+`docs/COMPONENTS.md` marks the served services ✅ and each servant implements
 a *subset*. A reader cannot tell a considered refusal from an omission. This
 script answers, per declared operation, which of three it is:
 
@@ -58,6 +58,11 @@ import sys
 # Probed rather than assumed: `resolve_idl_root()` reports what it found, and
 # the report says which files were read. A hand-typed operation list would be
 # a claim about a specification; this is a reading of one.
+#
+# It is also a **fixture's** file, and what we report about our own servants is
+# derived from it. Where a first-party contract exists the sweep reads that
+# instead (`CosTrading`, since 2026-08-26), and every service's `#SOURCES` row
+# says which of the two it was — see the block that emits them in `main()`.
 IDL_ROOT_CANDIDATES = [
     "/opt/homebrew/share/idl/omniORB",
     "/usr/local/share/idl/omniORB",
@@ -66,6 +71,10 @@ IDL_ROOT_CANDIDATES = [
 
 TIMEOUT = 5.0
 PROBE_BODY = b"\0" * 64
+
+# This repository, so a declaration's source can be classified as ours or a
+# fixture's by where the file is rather than by a hand-kept list.
+REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 CORBA_OBJECT_ID = "IDL:omg.org/CORBA/Object:1.0"
 
@@ -506,14 +515,27 @@ def declared_operations(idl_paths, includes, unclassified=None):
     hazard here at all: the dump elides it.
     """
     args = ["omniidl"] + [f"-I{i}" for i in includes] + ["-b", "dump"]
-    text = ""
+    interfaces = {}
     for path in idl_paths:
         done = subprocess.run(args + [path], capture_output=True, text=True)
         if done.returncode != 0:
             raise RuntimeError(f"omniidl failed on {path}:\n{done.stderr}")
-        text += done.stdout + "\n"
+        # Parsed per file, not over the concatenation, for two reasons: the
+        # scope stack cannot leak from one file into the next, and every
+        # interface carries **the file it was read from**. That second one is
+        # not bookkeeping — three of the services swept here derive their
+        # operation list from omniORB's *installed* IDL, and until this field
+        # existed that fact lived in a literal path in `main()` and in nothing
+        # the report printed. `omniidl -b dump` emits only the file it was
+        # given, never its `#include`s (checked 2026-08-26 on
+        # CosEventChannelAdmin.idl, whose dump carries no `CosEventComm`
+        # declaration), so an interface is read exactly once and the source is
+        # unambiguous.
+        _read_dump(done.stdout, path, interfaces, unclassified)
+    return interfaces
 
-    interfaces = {}
+
+def _read_dump(text, source, interfaces, unclassified):
     scope = []  # (kind, name) — 'module' | 'interface' | 'block'
     for line in text.splitlines():
         stripped = line.strip()
@@ -531,7 +553,7 @@ def declared_operations(idl_paths, includes, unclassified=None):
             bases = []
             if m.group(2):
                 bases = [b.strip() for b in m.group(2).split(",") if b.strip()]
-            interfaces.setdefault(name, {"bases": [], "ops": []})
+            interfaces.setdefault(name, {"bases": [], "ops": [], "source": source})
             interfaces[name]["bases"] = bases
             scope.append(("interface", name))
             continue
@@ -563,7 +585,6 @@ def declared_operations(idl_paths, includes, unclassified=None):
             for _ in range(-opens):
                 if scope:
                     scope.pop()
-    return interfaces
 
 
 def qualify(interfaces, base, from_scope):
@@ -838,6 +859,147 @@ def do_ifr(sweep, interfaces, ref):
         conn.close()
 
 
+# ── CosTrading (corpus/services/trading-lookup-subset.idl) ───────────────────
+
+# The trader's importer face, and the id its own IOR carries. Retyped here
+# because this script speaks GIOP to a foreign-looking peer and imports nothing
+# of ours on purpose (see the module docs); `orbweaver_giop::trading_server`
+# owns the constant, and the identity check below is what makes a drift between
+# the two an unmeasured check rather than a quiet one.
+LOOKUP_ID = "IDL:omg.org/CosTrading/Lookup:1.0"
+# `HowManyProps` — `none`, `some`, `all`, in the specification's declaration
+# order, which is the order the enum's wire values follow.
+HOW_MANY_NONE, HOW_MANY_SOME, HOW_MANY_ALL = 0, 1, 2
+
+FIXTURE_SERVICE_TYPE = "moe::Expert"
+FIXTURE_OFFERS = 5
+
+
+def write_query(w, service_type, constraint, preference, desired, how_many):
+    """`Lookup::query`'s six in-parameters. `policies` is always the empty
+    sequence: every policy name is refused (D022 §7), so a non-empty one would
+    measure the refusal rather than the query."""
+    w.string(service_type)
+    w.string(constraint)
+    w.string(preference)
+    w.u32(0)            # PolicySeq — empty
+    w.u32(desired)      # SpecifiedProps, a union whose `none`/`all` arms carry
+                        # nothing after the discriminator
+    w.u32(how_many)
+
+
+def read_query_reply(r):
+    """(offer count, properties on the first offer, iterator, limits applied).
+
+    Decodable without a `TypeCode` walk **only** because `desired` is `none`:
+    a property carries an `any`, and CDR gives an `any` no length prefix, which
+    is the same reason the servant refuses every policy name."""
+    n = r.u32()
+    first_props = None
+    for i in range(n):
+        read_objref(r)          # the offer's reference; nil unless a deployment bound one
+        props = r.u32()
+        if i == 0:
+            first_props = props
+    itr = read_objref(r)
+    limits = r.u32()
+    return n, first_props, ("nil" if itr is None else repr(itr)), limits
+
+
+def do_trading(sweep, interfaces, ref):
+    """Sweeps `CosTrading::Lookup`, the importer face D022 T4 put on the wire.
+
+    **Which object, and how that was checked.** The one object
+    `spike-trading` publishes: the `CosTrading::Lookup` servant at object key
+    `TradingService`, reached through `trading.ior` — the same file
+    `spikes/trading_client.py` hands to omniORB's `string_to_object`. A probe
+    aimed at the wrong object has twice been the defect in this file, and it
+    is a *silent* defect: every operation answers `BAD_OPERATION`, no object
+    claims the interface, and the sweep reports "declared, claimed by no
+    object probed" — the same sentence it would print if the servant had never
+    been written. So identity is asserted first and a failure is recorded as
+    unmeasured, which is a failing sweep:
+
+      - the published IOR's type id must be `Lookup`'s;
+      - `_is_a(Lookup)` must answer true, and `_is_a` of an id nothing serves
+        must answer false, because a servant that answers true to everything
+        would satisfy the first half alone.
+    """
+    if ref.type_id != LOOKUP_ID:
+        sweep.unmeasured.append(
+            f"trading.ior names {ref.type_id!r}, not {LOOKUP_ID!r} — the sweep would have "
+            "probed an object that is not the trader, and every answer would have read as "
+            "an unserved interface"
+        )
+        return
+    conn = Conn(ref)
+    try:
+        a = conn.call(ref.key, "_is_a", lambda w: w.string(LOOKUP_ID))
+        claims = a.status == NO_EXCEPTION and a.body.u8() != 0
+        b = conn.call(ref.key, "_is_a", lambda w: w.string("IDL:omg.org/CosTrading/Register:1.0"))
+        claims_anything = b.status == NO_EXCEPTION and b.body.u8() != 0
+        if not claims or claims_anything:
+            sweep.unmeasured.append(
+                f"trading.ior: _is_a({LOOKUP_ID}) -> {claims}, _is_a(Register) -> "
+                f"{claims_anything}; expected True/False. The object addressed is not the "
+                "trader, or it claims every id, and either way the rows below would not be "
+                "about CosTrading::Lookup"
+            )
+            return
+        sweep.note(
+            f"CosTrading _is_a({LOOKUP_ID}) -> True, _is_a(.../Register) -> False "
+            "(the object probed is the trader and does not claim what it does not serve)"
+        )
+
+        # Real calls first, with real arguments — the probes below are
+        # degenerate by design. This pair is D022 §5's whole distinction: the
+        # nil `offer_itr` is legal only when every match fits `how_many`, so a
+        # query that does not fit is refused rather than answered short.
+        a = conn.call(
+            ref.key,
+            "query",
+            lambda w: write_query(w, FIXTURE_SERVICE_TYPE, "", "", HOW_MANY_NONE, 10),
+        )
+        if a.status == NO_EXCEPTION:
+            n, props, itr, limits = read_query_reply(a.body)
+            sweep.note(
+                f"CosTrading query('{FIXTURE_SERVICE_TYPE}', how_many 10, props none) -> "
+                f"{n} offer(s), {props} propert(ies) on the first, "
+                f"offer_itr {itr}, {limits} limit(s) applied"
+            )
+        else:
+            sweep.note(f"CosTrading query(how_many 10) -> {a.short()}")
+        a = conn.call(
+            ref.key,
+            "query",
+            lambda w: write_query(w, FIXTURE_SERVICE_TYPE, "", "", HOW_MANY_NONE, 2),
+        )
+        sweep.note(
+            f"CosTrading query('{FIXTURE_SERVICE_TYPE}', how_many 2, {FIXTURE_OFFERS} match) "
+            f"-> {a.short()} (not truncated under a nil iterator)"
+        )
+        a = conn.call(ref.key, "query", lambda w: write_query(w, "moe::Nope", "", "", HOW_MANY_NONE, 10))
+        sweep.note(f"CosTrading query('moe::Nope') -> {a.short()}")
+        a = conn.call(ref.key, "_get_max_return_card")
+        if a.status == NO_EXCEPTION:
+            sweep.note(f"CosTrading _get_max_return_card() -> {a.body.u32()}")
+
+        sweep_object(
+            sweep, "CosTrading", "Lookup (trader)", conn, ref,
+            resolve(interfaces, "CosTrading::Lookup"),
+        )
+        sweep_object(
+            sweep,
+            "CosTrading",
+            "Lookup (trader)",
+            conn,
+            ref,
+            [(CORBA_OBJECT_ID, "_is_a"), (CORBA_OBJECT_ID, "_non_existent")],
+        )
+    finally:
+        conn.close()
+
+
 # ── moe::ExpertRegistry / moe::ExpertLoader (corpus/golden/22) ───────────────
 
 
@@ -1045,7 +1207,29 @@ def main(argv):
     # about unprobed interfaces did until 2026-08-19. Collected here and given
     # to the sweep as unmeasured, which is what it is.
     unclassified = []
-    omg = declared_operations(
+    sweep = Sweep()
+
+    def read(paths, includes):
+        """A declaration source that cannot be read is an unmeasured check, and
+        the sweep has to *say so and stay red* rather than raise. It used to
+        raise, which is loud enough for a person watching a terminal and wrong
+        in the way that matters: the traceback is not a counted failure, it
+        leaves no `UNMEASURED` row for `coverage_tables.py` to render, and the
+        document keeps whatever it last said. Returning an empty declaration
+        set instead means the service is swept with nothing declared — which
+        would be silence — so the reason is counted here, where the verdict
+        line reads it."""
+        try:
+            return declared_operations(paths, includes, unclassified)
+        except (RuntimeError, OSError) as e:
+            for path in paths:
+                sweep.unmeasured.append(
+                    f"{path}: its declarations could not be read, so every operation it "
+                    f"declares was left unprobed rather than reported absent — {e}"
+                )
+            return {}
+
+    omg = read(
         [
             os.path.join(cos, "CosNaming.idl"),
             os.path.join(cos, "CosEventComm.idl"),
@@ -1053,16 +1237,20 @@ def main(argv):
             os.path.join(root, "ir.idl"),
         ],
         [root, cos],
-        unclassified,
     )
     # The two project contracts are read *separately* and never merged: each
     # declares its own `moe::Expert`, and golden 22's carries a `delegate` that
     # golden 23's does not. Merging them would invent an operation neither
     # servant's contract asks for.
-    control = declared_operations(["corpus/golden/22-moe-control-plane.idl"], [], unclassified)
-    enterprise = declared_operations(["corpus/golden/23-moe-enterprise.idl"], [], unclassified)
+    control = read(["corpus/golden/22-moe-control-plane.idl"], [])
+    enterprise = read(["corpus/golden/23-moe-enterprise.idl"], [])
+    # The trader is the first standard service whose operation list comes from
+    # a contract of ours rather than from a fixture's installed IDL — which is
+    # why it could not be swept before the contract existed, not because the
+    # servant was not on the wire. `#SOURCES` below prints that distinction for
+    # every service instead of leaving it in these four literals.
+    trading = read(["corpus/services/trading-lookup-subset.idl"], [])
 
-    sweep = Sweep()
     for iface, line in unclassified:
         sweep.unmeasured.append(
             f"{iface}: declaration not classified by this reader, so it was never "
@@ -1071,6 +1259,7 @@ def main(argv):
         ("names.ior", lambda ref: do_naming(sweep, omg, ref)),
         ("events.ior", lambda ref: do_event(sweep, omg, ref)),
         ("ifr.ior", lambda ref: do_ifr(sweep, omg, ref)),
+        ("trading.ior", lambda ref: do_trading(sweep, trading, ref)),
         ("moe-factory.ior", lambda ref: do_tenants(sweep, enterprise, ref)),
     ]
     for name, run in plan:
@@ -1096,12 +1285,49 @@ def main(argv):
     except Exception as e:  # noqa: BLE001
         sweep.unmeasured.append(f"moe-registry.ior: {type(e).__name__}: {e}")
 
+    # Which declarations belong to which service. Read twice below — once to
+    # say where each service's operation list came from, once to name the
+    # interfaces nothing was probed against — so a service added to one list
+    # and not the other cannot exist.
+    scope = [
+        ("CosNaming", omg, ("CosNaming::",)),
+        ("CosEvent", omg, ("CosEventComm::", "CosEventChannelAdmin::")),
+        ("IFR", omg, ("CORBA::",)),
+        ("CosTrading", trading, ("CosTrading::",)),
+        ("MoE enterprise", enterprise, ("",)),
+        ("MoE control plane", control, ("",)),
+    ]
+
     # ── output: one TSV row per probe, then the real answers, then totals ────
     print("\n#ROWS\tservice\tobject\tinterface\toperation\tanswer\tkind")
     for row in sweep.rows:
         print(
             "ROW\t{service}\t{object}\t{interface}\t{operation}\t{answer}\t{kind}".format(**row)
         )
+
+    # ── where each service's operation list was read from ────────────────────
+    #
+    # Three of the six services swept here are measured against **omniORB's
+    # installed IDL**, because no first-party contract for them exists yet.
+    # That is a defensible position — the OMG files are read as an external
+    # program's text output, clause (b) — and it is also a fact a reader of the
+    # coverage document is owed: what we report about our own servants is
+    # derived from a fixture's files, and if that fixture is absent or a
+    # different version, the *declared* half of every count moves. Until
+    # 2026-08-26 the fact lived in four literal paths in this function and
+    # nothing printed it. Classified by where the file is, not by a per-service
+    # label: a contract that moves into `corpus/` changes its own row.
+    print("\n#SOURCES\tservice\torigin\tpaths")
+    for service, decl, prefixes in scope:
+        paths = []
+        for iface, info in decl.items():
+            if any(iface.startswith(p) for p in prefixes) and info["source"] not in paths:
+                paths.append(info["source"])
+        for path in paths:
+            inside = os.path.realpath(path).startswith(REPO_ROOT + os.sep)
+            origin = "first-party" if inside else "fixture"
+            shown = os.path.relpath(path, REPO_ROOT) if inside else path
+            print(f"SOURCE\t{service}\t{origin}\t{shown}")
 
     print("\n#ANSWERS")
     for n in sweep.notes:
@@ -1169,13 +1395,6 @@ def main(argv):
     # channel), and most of `ir.idl`. Silence read as coverage. Listed so the
     # generated document can say "unmeasured" where it used to say nothing.
     probed = {(r["service"], r["interface"]) for r in sweep.rows}
-    scope = [
-        ("CosNaming", omg, ("CosNaming::",)),
-        ("CosEvent", omg, ("CosEventComm::", "CosEventChannelAdmin::")),
-        ("IFR", omg, ("CORBA::",)),
-        ("MoE enterprise", enterprise, ("",)),
-        ("MoE control plane", control, ("",)),
-    ]
     unprobed = []
     for service, decl, prefixes in scope:
         for iface in decl:
