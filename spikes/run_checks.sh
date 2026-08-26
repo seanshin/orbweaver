@@ -1769,6 +1769,48 @@ fi
 fkill register_name
 fkill omniNames
 
+# ── Location: a FOREIGN ORB forwards our client somewhere else ───────────────
+hr "foreign forward — omniORB redirects our client to another address"
+# Every LOCATION_FORWARD this ORB had followed, it had written itself. This buys
+# the missing half: omniORB decides on its own to forward, naming a SECOND
+# omniORB process at a different port, and our client lands there and completes
+# the call. D029 §6.1's location row, from the side that had never been read.
+bears_on location
+# Two pairs, because the peer's two mechanisms reach different statuses: a
+# ServantLocator raising ForwardRequest (status 3 only — the exception has no
+# field for permanent) and a servant operation raising
+# omniORB.LOCATION_FORWARD(ref, 1) (status 4 at 1.2, downgraded to 3 below it,
+# asserted rather than skipped). Three negative controls, each moving the
+# counter, with their output in 3b6c25c and dee711e:
+#   --break no-forward       0 -> 14
+#   --break forward-to-self  0 -> 14   ("too many LOCATION_FORWARD hops")
+#   --break no-permanent     0 ->  3   (narrow: only status 4 becomes 3)
+# Takes no lock of its own: ephemeral ports, killed by PID, no fixed /tmp path.
+#
+# Only the green path is filtered, and that is the whole of why this block is
+# shaped the way it is rather than as one filter over all three exits. The
+# producer wraps its SKIPPED reason over four lines, of which only the first
+# begins with the word — so a single `grep` for `ok|FAIL|SKIPPED` prints
+# `omniORB's Python bindings are not importable (fixture:` and drops the name
+# of the fixture, the reason, and the words `not passing`. **A counted SKIPPED
+# whose reason is truncated to its first line names nothing**, which is D010
+# §2's complaint with the count paid and the appearance of compliance. So the
+# absent and failing paths print the producer's own text whole. The `[ -n ]`
+# guard is the other recorded class: `sed` over an empty capture emits one
+# blank line, which `diag_out`'s own comment in this file says reads as a
+# diagnostic that ran and found nothing rather than as a producer that never
+# said anything — and those are different failures.
+ff_out=$(./spikes/foreign_forward.sh 2>&1); ff_rc=$?
+case "$ff_rc" in
+  0) ff_lines=$(grep -E '^ +(ok|\.\.) ' <<<"$ff_out" || true)
+     [ -n "$ff_lines" ] && sed 's/^/  /' <<<"$ff_lines" ;;
+  2) sed 's/^/  /' <<<"$ff_out"
+     skip_age absent git:spikes/foreign_forward_peer.py ;;
+  *) sed 's/^/  /' <<<"$ff_out"
+     echo "  FAIL a foreign ORB's LOCATION_FORWARD is no longer followed to a completed call"
+     fail_total=$((fail_total+1)) ;;
+esac
+
 # ── D019: the ORB object — a table, a URL with no address, three refusals ───
 hr "ORB initial references — corbaloc:rir: out of OUR table to a foreign servant"
 # Leg A resolves a URL carrying NO ADDRESS AT ALL and a foreign servant in
