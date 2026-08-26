@@ -100,6 +100,46 @@ class ForwardEverything(PortableServer.ServantLocator):
         pass
 
 
+class ForwardFromTheOperation(foreign_forward__POA.Waypoint):
+    """A servant that answers its operation with a forward instead of a value.
+
+    The second of the peer's two mechanisms, and it exists because the first
+    one cannot reach status 4.
+
+    `PortableServer.ForwardRequest` carries a reference and nothing else: there
+    is no field in it for *permanent*, so a `ServantLocator` can only ever
+    produce `LOCATION_FORWARD` (status 3). omniORB's own `LOCATION_FORWARD`
+    extension takes the flag as a second argument — but its docstring says it
+    "may be thrown inside any operation implementation", and a locator's
+    `preinvoke` is not one. Measured 2026-08-26: raised from `preinvoke` it does
+    not become status 4, it becomes **SYSTEM_EXCEPTION (status 2)**, at all
+    three GIOP versions.
+
+    That is worth having found rather than designed around. The two statuses
+    travel by different mechanisms inside this peer, and a fixture that assumed
+    one mechanism served both would have measured status 3 twice and reported
+    it as coverage of both.
+    """
+
+    def __init__(self, target, log, permanent):
+        self.target = target
+        self.log = log
+        self.permanent = permanent
+        self.count = 0
+
+    def where_am_i(self, note):
+        self.count += 1
+        status = 4 if self.permanent else 3
+        print(
+            f"forwarder: operation call #{self.count} note={note!r}"
+            f" -> omniORB.LOCATION_FORWARD(perm={int(self.permanent)}),"
+            f" expecting status {status}",
+            file=self.log,
+            flush=True,
+        )
+        raise omniORB.LOCATION_FORWARD(self.target, 1 if self.permanent else 0)
+
+
 def profile_address(orb, ref):
     """Host and port omniORB actually published, read back out of the IOR.
 
@@ -176,6 +216,20 @@ def main():
     ap.add_argument("--tag", default=None, help="name this server answers with")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument(
+        "--via",
+        choices=("locator", "operation"),
+        default="locator",
+        help="which of the peer's two forwarding mechanisms to use: a "
+        "ServantLocator raising ForwardRequest (status 3 only), or a servant "
+        "operation raising omniORB.LOCATION_FORWARD (status 3 or 4)",
+    )
+    ap.add_argument(
+        "--permanent",
+        action="store_true",
+        help="answer LOCATION_FORWARD_PERM (status 4) instead of LOCATION_FORWARD "
+        "(status 3), via omniORB's own LOCATION_FORWARD(ref, 1) extension",
+    )
+    ap.add_argument(
         "--break",
         dest="break_it",
         choices=("no-forward", "forward-to-self"),
@@ -189,6 +243,12 @@ def main():
         ap.error("--role forward needs --target-ior")
     if args.role == "dest" and args.break_it:
         ap.error("--break applies to the forwarding role")
+    if args.permanent and args.via != "operation":
+        # Measured, not assumed: raising omniORB.LOCATION_FORWARD from a
+        # ServantLocator's preinvoke produces SYSTEM_EXCEPTION, not status 4.
+        # Refusing the combination is better than emitting status 2 under a
+        # flag that says permanent.
+        ap.error("--permanent needs --via operation; a ServantLocator cannot express it")
 
     tag = args.tag or args.role
     argv = [sys.argv[0], "-ORBendPoint", f"giop:tcp:{args.host}:0"]
@@ -216,6 +276,25 @@ def main():
         host, port = profile_address(orb, ref)
         servant.where = f"{host}:{port}"
         print("forwarder: --break no-forward, serving in place", file=sys.stderr, flush=True)
+    elif args.via == "operation":
+        # The second mechanism: an ordinary servant on the RootPOA whose
+        # operation raises omniORB's LOCATION_FORWARD. This is the only one of
+        # the two that can reach status 4 — see ForwardFromTheOperation.
+        if args.break_it == "forward-to-self":
+            target = None  # filled in below, once we have our own reference
+        else:
+            target_text = pathlib.Path(args.target_ior).read_text().strip()
+            target = orb.string_to_object(target_text)
+        servant = ForwardFromTheOperation(target, sys.stderr, args.permanent)
+        ref = servant._this()
+        host, port = profile_address(orb, ref)
+        if args.break_it == "forward-to-self":
+            servant.target = ref
+            print(
+                "forwarder: --break forward-to-self, naming our own address",
+                file=sys.stderr,
+                flush=True,
+            )
     else:
         policies = [
             root.create_id_assignment_policy(PortableServer.USER_ID),

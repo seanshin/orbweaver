@@ -76,8 +76,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 case "$break_it" in
-  ""|no-forward|forward-to-self) ;;
-  *) echo "--break must be no-forward or forward-to-self, got '$break_it'" >&2; exit 2 ;;
+  ""|no-forward|forward-to-self|no-permanent) ;;
+  *) echo "--break must be no-forward, forward-to-self or no-permanent, got '$break_it'" >&2; exit 2 ;;
 esac
 
 fails=0
@@ -157,90 +157,187 @@ start_peer() {
 printf '\n\033[1mforeign forward — omniORB redirects our client to another address\033[0m\n'
 [ -n "$break_it" ] && printf '  (negative control: --break %s)\n' "$break_it"
 
-dest_ior="$work/dest.ior"
-fwd_ior="$work/fwd.ior"
-
-if ! dest_at=$(start_peer destination "$work/dest.log" \
-      --role dest --out-ior "$dest_ior" --tag dest); then
-  echo "  $fails check(s) failed"; exit 1
-fi
-dest_host=${dest_at% *}; dest_port=${dest_at#* }
-
-fwd_args=(--role forward --out-ior "$fwd_ior" --target-ior "$dest_ior" --tag fwd)
-[ -n "$break_it" ] && fwd_args+=(--break "$break_it")
-if ! fwd_at=$(start_peer forwarder "$work/fwd.log" "${fwd_args[@]}"); then
-  echo "  $fails check(s) failed"; exit 1
-fi
-fwd_host=${fwd_at% *}; fwd_port=${fwd_at#* }
-
-if [ "$fwd_port" = "$dest_port" ]; then
-  fail "both peers published port $fwd_port; this leg measures a move to a DIFFERENT address and cannot"
-  echo "  $fails check(s) failed"; exit 1
-fi
-echo "  ..   forwarder $fwd_host:$fwd_port  destination $dest_host:$dest_port  (foreign, two processes)"
-
-# ── half 1: what omniORB actually put on the wire ───────────────────────────
-for minor in 0 1 2; do
-  for order in little big; do
-    cap=$(python3 "$ROOT/spikes/foreign_forward_capture.py" \
-            --ior "$fwd_ior" --minor "$minor" --order "$order" \
-            --expect-port "$dest_port" 2>&1)
-    cap_rc=$?
-    # The producer's own exit status is read FIRST. A probe that could not run
-    # at all is an unmeasured check, which is a failure and never a pass —
-    # and it is never inferred from whether some string is in its output.
-    if [ "$cap_rc" -eq 0 ]; then
-      # Both orders are reported as OBSERVED, off the flag byte, beside what we
-      # chose to send. This project has a measured instance of a probe that
-      # reported an order it had assumed.
-      robs=$(grep '^reply_order=' <<<"$cap" | head -1); robs=${robs#reply_order=}
-      pobs=$(grep '^profile_order=' <<<"$cap" | head -1)
-      pobs=${pobs#profile_order=}; pobs=${pobs%% *}
-      pass "GIOP 1.$minor sent=$order -> LOCATION_FORWARD (status 3) to :$dest_port; reply order observed=$robs, forwarded profile order observed=$pobs"
-    elif [ "$cap_rc" -eq 3 ]; then
-      fail "GIOP 1.$minor sent=$order: nothing could be measured — $(grep '^reason=' <<<"$cap" | head -1)"
-    else
-      fail "GIOP 1.$minor sent=$order: $(grep '^reason=' <<<"$cap" | head -1)"
-      sed 's/^/       /' <<<"$cap" | head -12
-    fi
-  done
-done
-
-# ── the recording, re-taken ─────────────────────────────────────────────────
+# ── measure_pair <label> <perm-at-1.2> [extra peer args...] ─────────────────
 #
-# crates/orbweaver-giop/tests/foreign_forward_bytes.rs holds three replies
-# omniORB wrote on a named day, and is the gate that fires where omniORB is not
-# installed. A recording nobody re-takes is a claim about the past, so this
-# regenerates them from the live fixture and compares the decoded values.
+# Starts a fresh destination + forwarder pair on fresh ephemeral ports and runs
+# both halves against it. Called twice, because the peer has **two** forwarding
+# mechanisms and they do not reach the same statuses:
 #
-# Skipped under --break for the obvious reason: a control that removes the
-# forward makes the re-take fail for a reason that is not drift, and counting
-# it would inflate the control's own count with a finding it did not make.
-if [ -z "$break_it" ]; then
-  rec=$(python3 "$ROOT/spikes/foreign_forward_capture.py" \
-          --ior "$fwd_ior" --check-recording 2>&1)
-  rec_rc=$?
-  sed 's/^/  /' <<<"$(grep -E '^  (ok|FAIL|SKIPPED)' <<<"$rec")"
-  if [ "$rec_rc" -eq 2 ]; then
-    fail "the recording could not be re-taken: $(grep '^reason=' <<<"$rec" | head -1)"
-  elif [ "$rec_rc" -ne 0 ]; then
-    fail "the recorded omniORB replies no longer describe the live peer"
+#   locator    a ServantLocator raising PortableServer.ForwardRequest. That
+#              exception carries a reference and nothing else — there is no
+#              field in it for *permanent* — so it can only ever produce
+#              LOCATION_FORWARD, status 3.
+#   operation  a servant whose operation raises omniORB.LOCATION_FORWARD(ref,
+#              perm), which takes the flag. This is the only way to status 4.
+#
+# Measured 2026-08-26, and the reason the two are separate rather than one
+# boolean: omniORB.LOCATION_FORWARD raised from a locator's `preinvoke` does
+# NOT become status 4. It becomes SYSTEM_EXCEPTION (status 2), at all three
+# versions — its docstring says "any operation implementation", and a
+# preinvoke is not one. A leg that assumed one mechanism served both would
+# have measured status 3 twice and called it coverage of both.
+#
+# <perm-at-1.2> is the status this pair must answer at GIOP 1.2. Below 1.2 the
+# expectation is always 3, and that is not a workaround — ReplyStatusType_1_0
+# has no status 4, so a 1.0 or 1.1 client CANNOT be told *permanent* and the
+# peer must downgrade. This leg asserts the downgrade rather than skipping it,
+# which makes it a foreign confirmation of a rule this ORB also implements.
+measure_pair() {
+  local label="$1" perm_at_1_2="$2"; shift 2
+  local dest_ior="$work/$label-dest.ior" fwd_ior="$work/$label-fwd.ior"
+  local dest_at fwd_at dest_host dest_port fwd_host fwd_port
+
+  printf '\n  \033[1m%s\033[0m\n' "$label"
+
+  if ! dest_at=$(start_peer "destination ($label)" "$work/$label-dest.log" \
+        --role dest --out-ior "$dest_ior" --tag dest); then
+    return 1
   fi
-fi
+  dest_host=${dest_at% *}; dest_port=${dest_at#* }
 
-# ── half 2: our client, following it ────────────────────────────────────────
-#
-# `--ignored` because these cases need the two live foreign processes; the test
-# file panics on a missing variable rather than skipping, so a fixture that is
-# not here cannot make that file look green under a bare `cargo test`.
-rust=$(OW_FOREIGN_FORWARD_IOR="$fwd_ior" \
-       OW_FOREIGN_FORWARD_DEST_HOST="$dest_host" \
-       OW_FOREIGN_FORWARD_DEST_PORT="$dest_port" \
-       cargo test -q -p orbweaver-giop --test foreign_forward -- \
-         --ignored --nocapture --test-threads=1 2>&1)
-rust_rc=$?
+  local fwd_args=(--role forward --out-ior "$fwd_ior" --target-ior "$dest_ior" --tag fwd "$@")
+  if [ "$break_it" = "no-permanent" ]; then
+    # NEGATIVE CONTROL for the permanence assertion alone. Everything else is
+    # untouched: the peer still forwards, our client still lands at the
+    # destination, and every `ok` above would still be an `ok` — the ONLY thing
+    # that changes is that status 4 becomes status 3. It exists because a leg
+    # that measures "the call landed" cannot see the difference between the two
+    # statuses at all, and a permanence claim resting on such a leg would be
+    # green whether or not permanence was ever read.
+    local a filtered=()
+    for a in "${fwd_args[@]}"; do
+      [ "$a" = "--permanent" ] || filtered+=("$a")
+    done
+    fwd_args=("${filtered[@]}")
+  elif [ -n "$break_it" ]; then
+    fwd_args+=(--break "$break_it")
+  fi
+  if ! fwd_at=$(start_peer "forwarder ($label)" "$work/$label-fwd.log" "${fwd_args[@]}"); then
+    return 1
+  fi
+  fwd_host=${fwd_at% *}; fwd_port=${fwd_at#* }
 
-# What the leg covers, pinned as EQUALITIES and not as floors.
+  if [ "$fwd_port" = "$dest_port" ]; then
+    fail "$label: both peers published port $fwd_port; this leg measures a move to a DIFFERENT address and cannot"
+    return 1
+  fi
+  echo "  ..   forwarder $fwd_host:$fwd_port  destination $dest_host:$dest_port  (foreign, two processes)"
+
+  # ── half 1: what omniORB actually put on the wire ─────────────────────────
+  local minor order want cap cap_rc robs pobs name
+  for minor in 0 1 2; do
+    want=3
+    [ "$minor" -ge 2 ] && want="$perm_at_1_2"
+    name="LOCATION_FORWARD"
+    [ "$want" = 4 ] && name="LOCATION_FORWARD_PERM"
+    for order in little big; do
+      cap=$(python3 "$ROOT/spikes/foreign_forward_capture.py" \
+              --ior "$fwd_ior" --minor "$minor" --order "$order" \
+              --expect-status "$want" --expect-port "$dest_port" 2>&1)
+      cap_rc=$?
+      # The producer's own exit status is read FIRST. A probe that could not run
+      # at all is an unmeasured check, which is a failure and never a pass —
+      # and it is never inferred from whether some string is in its output.
+      if [ "$cap_rc" -eq 0 ]; then
+        # Both orders are reported as OBSERVED, off the flag byte, beside what we
+        # chose to send. This project has a measured instance of a probe that
+        # reported an order it had assumed.
+        robs=$(grep '^reply_order=' <<<"$cap" | head -1); robs=${robs#reply_order=}
+        pobs=$(grep '^profile_order=' <<<"$cap" | head -1)
+        pobs=${pobs#profile_order=}; pobs=${pobs%% *}
+        pass "GIOP 1.$minor sent=$order -> $name (status $want) to :$dest_port; reply order observed=$robs, forwarded profile order observed=$pobs"
+      elif [ "$cap_rc" -eq 3 ]; then
+        fail "GIOP 1.$minor sent=$order: nothing could be measured — $(grep '^reason=' <<<"$cap" | head -1)"
+      else
+        fail "GIOP 1.$minor sent=$order: $(grep '^reason=' <<<"$cap" | head -1)"
+        sed 's/^/       /' <<<"$cap" | head -12
+      fi
+    done
+  done
+
+  # ── the recording, re-taken ───────────────────────────────────────────────
+  #
+  # crates/orbweaver-giop/tests/foreign_forward_bytes.rs holds three replies
+  # omniORB wrote on a named day, and is the gate that fires where omniORB is
+  # not installed. A recording nobody re-takes is a claim about the past, so
+  # this regenerates them from the live fixture and compares decoded values.
+  #
+  # Only against the pair whose statuses the recording describes, and never
+  # under --break: a control that removes the forward makes the re-take fail
+  # for a reason that is not drift, and counting it would inflate the control's
+  # count with a finding it did not make.
+  local rec rec_rc
+  if [ -z "$break_it" ] && [ "$perm_at_1_2" = 3 ]; then
+    rec=$(python3 "$ROOT/spikes/foreign_forward_capture.py" \
+            --ior "$fwd_ior" --check-recording 2>&1)
+    rec_rc=$?
+    sed 's/^/  /' <<<"$(grep -E '^  (ok|FAIL|SKIPPED)' <<<"$rec")"
+    if [ "$rec_rc" -eq 2 ]; then
+      fail "the recording could not be re-taken: $(grep '^reason=' <<<"$rec" | head -1)"
+    elif [ "$rec_rc" -ne 0 ]; then
+      fail "the recorded omniORB replies no longer describe the live peer"
+    fi
+  fi
+
+  # ── half 2: our client, following it ──────────────────────────────────────
+  #
+  # `--ignored` because these cases need the two live foreign processes; the
+  # test file panics on a missing variable rather than skipping, so a fixture
+  # that is not here cannot make that file look green under a bare `cargo test`.
+  local rust rust_rc cells order_cells passed perms
+  rust=$(OW_FOREIGN_FORWARD_IOR="$fwd_ior" \
+         OW_FOREIGN_FORWARD_DEST_HOST="$dest_host" \
+         OW_FOREIGN_FORWARD_DEST_PORT="$dest_port" \
+         cargo test -q -p orbweaver-giop --test foreign_forward -- \
+           --ignored --nocapture --test-threads=1 2>&1)
+  rust_rc=$?
+
+  # Not anchored at ^: libtest writes its per-test progress dot on the same
+  # line, so six of the eight cells arrive as `.cell giop=...`. The first draft
+  # of this line anchored the match, counted 2 of 8, and still printed `ok` —
+  # the verdict was sound and the number beside it was not.
+  cells=$(grep 'cell ' <<<"$rust" | sed 's/^\.*//')
+  order_cells=$(grep -c 'cell giop=' <<<"$rust")
+  passed=$(grep -oE 'test result: ok\. [0-9]+ passed' <<<"$rust" | grep -oE '[0-9]+' | head -1)
+  passed=${passed:-0}
+  perms=$(grep -c 'cell giop=.*perm=true' <<<"$rust")
+
+  if [ "$rust_rc" -ne 0 ]; then
+    fail "$label: our client did not follow omniORB's forward to a completed call at :$dest_port"
+    # `-A1` on the panic line, because libtest puts the assertion's own words on
+    # the line AFTER `panicked at <file>:<line>`. The first draft matched only
+    # the `panicked` lines and printed seven file:line references with not one
+    # word of why — a diagnostic that names where and never what, which is the
+    # thing a reader is going to need at 2am.
+    sed 's/^/       /' <<<"$(grep -A1 -E 'panicked at' <<<"$rust" | head -14)"
+    sed 's/^/       /' <<<"$(grep -E 'test result:' <<<"$rust" | head -2)"
+  elif [ "$passed" -ne "$EXPECT_TESTS" ] || [ "$order_cells" -ne "$EXPECT_ORDER_CELLS" ]; then
+    fail "$label: the client half exited 0 having measured $passed/$EXPECT_TESTS case(s) and $order_cells/$EXPECT_ORDER_CELLS order cell(s) — an unmeasured check is a failure, never a pass"
+    sed 's/^/       /' <<<"$(grep -E 'test result:|filtered out' <<<"$rust" | head -4)"
+  elif [ "$perm_at_1_2" = 4 ] && [ "$perms" -ne 2 ]; then
+    # The permanent pair must produce exactly two permanent cells: GIOP 1.2 in
+    # each order, and neither of the four below it. If our client read a
+    # permanent forward where the peer downgraded — or missed one where it did
+    # not — every other assertion here would still hold, because the call still
+    # lands. This is the only line that can see it.
+    fail "$label: our client read $perms permanent forward(s) where the peer emits exactly 2 (GIOP 1.2, both orders)"
+    sed 's/^/       /' <<<"$cells"
+  else
+    pass "$label: our client followed the foreign forward and completed the call at :$dest_port — $passed case(s), $order_cells order cell(s), $perms read as permanent"
+    sed 's/^/       /' <<<"$cells"
+  fi
+
+  # The forwarder's own log is PRINTED, never counted. What a peer believes it
+  # answered is not what the client received; the verdict above comes from the
+  # client and from the octets, and this is here so a reader can see the two
+  # accounts side by side (D034 §5.1).
+  local fwd_says
+  fwd_says=$(grep -cE 'preinvoke|operation call' "$work/$label-fwd.log" 2>/dev/null)
+  echo "  ..   the forwarder's own log says it forwarded $fwd_says time(s) — printed, not counted"
+  return 0
+}
+
+# What each pair covers, pinned as EQUALITIES and not as floors.
 #
 # `cargo test` exits 0 for a run that executed nothing — a renamed case, a stale
 # filter, an `#[ignore]` that stopped being lifted all print `0 passed` and
@@ -252,38 +349,9 @@ rust_rc=$?
 EXPECT_TESTS=7
 EXPECT_ORDER_CELLS=6
 
-# Not anchored at ^: libtest writes its per-test progress dot on the same line,
-# so six of the eight cells arrive as `.cell giop=...`. The first draft of this
-# line anchored the match, counted 2 of 8, and still printed `ok` — the verdict
-# was sound and the number beside it was not.
-cells=$(grep 'cell ' <<<"$rust" | sed 's/^\.*//')
-order_cells=$(grep -c 'cell giop=' <<<"$rust")
-passed=$(grep -oE 'test result: ok\. [0-9]+ passed' <<<"$rust" | grep -oE '[0-9]+' | head -1)
-passed=${passed:-0}
-
-if [ "$rust_rc" -ne 0 ]; then
-  fail "our client did not follow omniORB's forward to a completed call at :$dest_port"
-  # `-A1` on the panic line, because libtest puts the assertion's own words on
-  # the line AFTER `panicked at <file>:<line>`. The first draft matched only
-  # the `panicked` lines and printed seven file:line references with not one
-  # word of why — a diagnostic that names where and never what, which is the
-  # thing a reader is going to need at 2am.
-  sed 's/^/       /' <<<"$(grep -A1 -E 'panicked at' <<<"$rust" | head -14)"
-  sed 's/^/       /' <<<"$(grep -E 'test result:' <<<"$rust" | head -2)"
-elif [ "$passed" -ne "$EXPECT_TESTS" ] || [ "$order_cells" -ne "$EXPECT_ORDER_CELLS" ]; then
-  fail "the client half exited 0 having measured $passed/$EXPECT_TESTS case(s) and $order_cells/$EXPECT_ORDER_CELLS order cell(s) — an unmeasured check is a failure, never a pass"
-  sed 's/^/       /' <<<"$(grep -E 'test result:|filtered out' <<<"$rust" | head -4)"
-else
-  pass "our client followed the foreign forward and completed the call at :$dest_port — $passed case(s), $order_cells order cell(s)"
-  sed 's/^/       /' <<<"$cells"
-fi
-
-# The forwarder's own log is PRINTED, never counted. What a peer believes it
-# answered is not what the client received; the verdict above comes from the
-# client and from the octets, and this is here so a reader can see the two
-# accounts side by side (D034 §5.1).
-fwd_says=$(grep -c 'preinvoke' "$work/fwd.log" 2>/dev/null)
-echo "  ..   the forwarder's own log says it forwarded $fwd_says time(s) — printed, not counted"
+measure_pair "temporary — ServantLocator raises ForwardRequest (status 3)" 3
+measure_pair "permanent — the operation raises omniORB.LOCATION_FORWARD(ref, 1)" 4 \
+  --via operation --permanent
 
 printf '\n'
 if [ "$fails" -eq 0 ]; then

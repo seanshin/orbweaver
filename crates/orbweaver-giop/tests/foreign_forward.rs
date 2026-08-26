@@ -40,10 +40,19 @@
 //!    and neither are the peer's.
 //! 2. **The connection moved.** [`Connection::endpoint`] is the destination's
 //!    port after the call, not the one we dialled.
-//! 3. **The reference did not.** [`Connection::origin`] still names the
-//!    forwarder. A caller that had to be handed the new address to make the
-//!    second call would have learned the target's location, which is the leak
-//!    this row exists to refuse.
+//! 3. **The reference did what its status says.** After a *temporary* forward
+//!    [`Connection::origin`] still names the forwarder — §9.4.3.2 keeps the
+//!    dialled reference good, and a caller that had to be handed the new
+//!    address to make the second call would have learned the target's
+//!    location, which is the leak this row exists to refuse. After a
+//!    *permanent* one the forwarded-to IOR becomes the origin, which is §9.6's
+//!    *may* and which this ORB takes up.
+//!
+//!    That distinction was not in the first draft: it asserted the origin never
+//!    moves, and two GIOP 1.2 cases went red against a peer behaving correctly
+//!    and a client behaving as documented, the moment the fixture was pointed
+//!    at its permanent mechanism. An assertion that is true of one status is
+//!    not a property of forwarding.
 //!
 //! # Byte order is read, never assumed
 //!
@@ -155,27 +164,50 @@ fn follows_a_foreign_forward(version: Version, endian: Endian) {
          itself, at the address we dialled"
     );
 
-    // (2) The connection moved, and (3) the reference did not.
-    assert!(
-        conn.forwarded().is_some(),
-        "GIOP {version:?} {endian:?}: the call succeeded but the connection does \
-         not record having been forwarded"
-    );
+    // (2) The connection moved, and (3) the reference did what its status says.
+    let permanent = conn
+        .forwarded()
+        .unwrap_or_else(|| {
+            panic!(
+                "GIOP {version:?} {endian:?}: the call succeeded but the \
+                 connection does not record having been forwarded"
+            )
+        })
+        .is_permanent();
     assert_eq!(
         conn.endpoint().1,
         dest_port,
         "GIOP {version:?} {endian:?}: the connection is not at the destination"
     );
+
+    // Which origin is correct depends on the status, and this assertion used to
+    // ignore that. It asserted the origin never moves, which is right for
+    // `LOCATION_FORWARD` and wrong for `LOCATION_FORWARD_PERM` — §9.6 says the
+    // client *may* replace the old IOR with the new one, and this ORB takes up
+    // that permission (see `Connection`'s own documentation). Found by pointing
+    // the fixture at its permanent mechanism, which the leg had not been built
+    // to exercise: two GIOP 1.2 cases went red against a peer that was behaving
+    // correctly and a client that was behaving as documented.
     let origin_port = conn.origin().primary().expect("origin has no profile").port;
-    assert_eq!(
-        origin_port, dialled.1,
-        "GIOP {version:?} {endian:?}: following a forward rewrote the caller's \
-         own reference; the caller must keep the reference it was given"
-    );
+    if permanent {
+        assert_eq!(
+            origin_port, dest_port,
+            "GIOP {version:?} {endian:?}: after a PERMANENT forward the \
+             forwarded-to IOR becomes the origin (§9.6's *may*, which this ORB \
+             takes up); it is still the address we dialled"
+        );
+    } else {
+        assert_eq!(
+            origin_port, dialled.1,
+            "GIOP {version:?} {endian:?}: a TEMPORARY forward rewrote the \
+             caller's own reference; §9.4.3.2 keeps the dialled reference good, \
+             so the caller must still hold what it was given"
+        );
+    }
 
     // Order: what we chose beside what the peer actually used.
     println!(
-        "cell giop={}.{} sent={endian:?} observed={:?} dialled={}:{} landed={}:{} answer={answer}",
+        "cell giop={}.{} sent={endian:?} observed={:?} perm={permanent} dialled={}:{} landed={}:{} answer={answer}",
         version.major,
         version.minor,
         reply.endian,
@@ -243,8 +275,10 @@ fn a_second_dial_of_the_same_reference_is_forwarded_again() {
         assert_eq!(reply.status, ReplyStatus::NoException, "round {round}");
         assert!(
             conn.forwarded().is_some(),
-            "round {round}: the reference stopped being forwarded; a temporary \
-             forward does not invalidate the reference the caller holds"
+            "round {round}: the reference stopped being forwarded; neither \
+             status invalidates the reference the caller holds — §9.4.3.2 keeps \
+             the dialled one good and §9.6 only lets the CLIENT prefer the new \
+             one, which says nothing about what the server answers next time"
         );
         assert_eq!(conn.endpoint().1, dest_port, "round {round}");
         println!("cell round={round} landed={}", conn.endpoint().1);
