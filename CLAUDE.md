@@ -222,6 +222,20 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   we could have written from the specification alone. One test per capture
   decodes it and re-encodes back to the peer's bytes; the harness re-takes
   every capture from the live fixture (`spikes/*_capture.py`).
+- **Our own counters are not what a peer saw, and a two-process fixture must
+  never let its own exit code vouch for the peer's.** Measured 2026-08-26
+  (D032 §5.1): with the ORB's shutdown deliberately broken to drop in-flight
+  work, `spike-orb-shutdown` printed `servers_stopped:1, went_quiet:true,
+  serve_returned_ok:true` and **exited 0** — every number this side keeps said
+  the shutdown was clean — while the peer on the other end of the same socket
+  got a TCP reset and not one octet of GIOP. A lifecycle checked from its own
+  counters is green on exactly the build it exists to refuse. Print both,
+  verdict from the peer. And **a reset is an observation, not a failure to
+  measure**: that peer's first draft filed one under `UNMEASURED` and exited 3,
+  so the strongest refutation it could produce would have read as an unmeasured
+  check rather than a failure — found by running the control, not by reading it.
+  *우리 카운터는 피어가 본 것이 아니다. 자기 카운터로 검사하는 생애주기는 그것이
+  거절하려는 바로 그 빌드에서 초록이 된다. 리셋은 측정 실패가 아니라 관측이다.*
 - **A class-B claim lands as a counted `SKIPPED` group naming its fixture,
   never as a `note` and never as `ok`** (D010 §2).
 - **A batch scoped to a keyword will fix a keyword; scope it to the rule.**
@@ -407,6 +421,11 @@ cargo run -q --bin repository-ids -- corpus/pragma/*.idl   # ids, to diff agains
 ./spikes/estate/run.sh --tsv    # thirteen legacy contracts, ingestion to agent call
 ./spikes/perm_fallback.sh --expect-temporary reask --expect-permanent stay
                                 # the two forward statuses, told apart by behaviour — omniORB and ours
+./spikes/orb_shutdown.sh        # what a peer MID-CALL sees when Orb::shutdown stops the
+                                # server under it — the peer imports no ORB and builds its
+                                # own §9.4 requests, both byte orders. Its exit code is the
+                                # measurement; the fixture's own counters are printed beside
+                                # it and never allowed to vouch for it (D032 §5.1)
 ./spikes/jacorb_giop11.sh · ./spikes/jacorb_wchar11.sh · ./spikes/wide_rust.sh
                                 # GIOP 1.1/1.2 wide text against JacORB, version asserted from bytes
 python3 spikes/union_label_capture.py · python3 spikes/union_default_capture.py

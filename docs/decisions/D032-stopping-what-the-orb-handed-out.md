@@ -154,6 +154,40 @@ which reports whether the ORB's flag is up. It is a question, not a return value
 because the answer matters to a supervisor deciding whether to rebind and to
 nobody else.
 
+### 5.1 Why the oracle had to be a peer, measured rather than argued / 왜 오라클이 피어여야 했는가
+
+D029 §5 O1 says the measurement is *"what the client sees, not what our counters
+say"*. That reads like caution. It is not: it was measured on 2026-08-26 and the
+counters lied.
+
+Running `spikes/orb_shutdown.sh` against a deliberately broken build — the
+immediate shutdown §4 refuses, dropping the reply that was in flight — produced
+these two lines from the same run, in both byte orders:
+
+```text
+peer     big: exit 1  {"seen": [{"kind": "reset"}], "verdict": "refuted", …}
+fixture  big: exit 0  {"servers_stopped":1,"pools_closed":0,"already_gone":0,
+                       "went_quiet":true,"serve_returned_ok":true}
+```
+
+**Every number this side keeps said the shutdown was clean.** One server
+stopped, nothing left behind, every counter to zero, `serve` returned `Ok`. The
+peer got a connection reset and not one octet of GIOP. A shutdown checked from
+its own counters passes on the build this document exists to refuse — which is
+the *green while measuring nothing* class with a lifecycle's clothes on, and it
+is why the fixture's own exit code is reported beside the peer's and never
+allowed to vouch for it.
+
+The control also corrected the peer itself. Its first draft filed a reset under
+*"could not measure"* and exited 3, so **the strongest refutation this fixture
+can produce would have reported as an unmeasured check rather than a failure.**
+A reset is an observation — it is precisely §3's third sentence being violated —
+and it now exits 1. Found by running the control, not by reading the code.
+
+*이것은 신중함이 아니다 — 재어 보니 카운터가 거짓말을 했다. 이쪽이 세는 모든 수가
+"깨끗하게 멈췄다"고 말하는 동안 피어는 GIOP 한 옥텟도 받지 못하고 리셋을 받았다.
+자기 카운터로 검사하는 종료는 이 문서가 거절하는 바로 그 빌드에서 초록이 된다.*
+
 ## 6. Pools, where "stopping" means something different / 풀에서의 의미
 
 A pool has no accept loop and no threads. Stopping one means exactly two things:
@@ -222,6 +256,17 @@ otherwise would be the row this project keeps a subsection open to avoid.
 - **Not that a pool's in-flight calls are bounded by this.** §6 says they are
   not; their bound is the timeout they already had.
 - **Not that `Orb::wait_until_stopped` proves the serving thread returned.** It
-  proves every counter went to zero. The accept loop may still be inside its
-  final `stop_poll` sleep, which is a real gap of up to 50 ms between "quiet"
-  and "returned", and it is written on the method rather than smoothed over.
+  proves every counter went to zero — and §5.1 is the measurement of what those
+  counters are worth on their own, which is the reason the method's own rustdoc
+  says what it does not prove.
+- **Not that `spikes/orb_shutdown.sh` is a gate.** The gate for this claim is
+  `crates/orbweaver-giop/tests/orb_stops_what_it_handed_out.rs`, which runs in
+  `cargo test --workspace`. The spike adds provenance — a peer applying none of
+  our conventions — and **wiring it into `spikes/run_checks.sh` is left
+  undone**, because that file was held by another batch on the day this landed.
+  Named rather than silent: the next reader adds a group, and the negative
+  control it lands with is already recorded in §5.1.
+- **Not that the harness declares this transparency.** `spikes/transparency.py`
+  reads per-transparency tags out of `run_checks.sh`, and the lifecycle row
+  therefore still has no declaring group — the same held file, the same one-line
+  fix.
