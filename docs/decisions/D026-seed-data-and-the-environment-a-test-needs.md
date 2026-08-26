@@ -9,6 +9,26 @@ invent, and §6 proposes spending money and CI minutes.
 **상태: 제안** — 2026-08-26, 하네스 자신의 판정에서 출발: `SKIPPED` 일곱 건이
 전부 코드의 부재가 아니라 **환경의 부재**다.
 
+
+> **Priority zero, set 2026-08-26.** This document is subordinate to the ORB
+> completion criterion, whose home is
+> [`D029`](D029-what-a-complete-orb-would-mean.md) §6: *no leak in the
+> transparency that a caller can invoke any target holding only a reference,
+> without knowing its location, backend, language or load state, and that this
+> survives targets being added, removed, moved, loaded or evicted at runtime.*
+> The criterion is stated there and **not restated here** — what is recorded
+> below is only how this document's work bears on it.
+>
+> *0순위 기준의 집은 D029 §6이며 여기서 다시 적지 않는다. 아래에 적는 것은 이
+> 문서의 작업이 그 기준에 **어떻게 닿는지**뿐이다.*
+
+> **How this bears on it.** A leak is only visible against a *named* population.
+> S1b's three sentences — a named population crossed intact, ranking is correct
+> rather than merely running, a divergence has a subject — are the preconditions
+> for testing load and backend transparency at all: you cannot assert that a
+> caller could not tell an expert was evicted without stating which experts there
+> were. D029 §5's O0 is the consumer of this work.
+
 ---
 
 ## 1. The measurement / 측정

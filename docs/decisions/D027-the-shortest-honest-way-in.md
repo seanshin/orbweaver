@@ -22,6 +22,26 @@ ORBs ship.
 > 전부 4단계의 일방향 API를 상대로 쓰이므로 그것을 기다린다 — 일정 선호가 아니라,
 > 지금 교체되고 있는 표면에 대고 쓴 예제는 착지 전에 낡기 때문이다.*
 
+
+> **Priority zero, set 2026-08-26.** This document is subordinate to the ORB
+> completion criterion, whose home is
+> [`D029`](D029-what-a-complete-orb-would-mean.md) §6: *no leak in the
+> transparency that a caller can invoke any target holding only a reference,
+> without knowing its location, backend, language or load state, and that this
+> survives targets being added, removed, moved, loaded or evicted at runtime.*
+> The criterion is stated there and **not restated here** — what is recorded
+> below is only how this document's work bears on it.
+>
+> *0순위 기준의 집은 D029 §6이며 여기서 다시 적지 않는다. 아래에 적는 것은 이
+> 문서의 작업이 그 기준에 **어떻게 닿는지**뿐이다.*
+
+> **How this bears on it.** Directly, and it is the sharper argument for §4's
+> rule: a caller that must name a servant's location, backend or load state to
+> write a working program has been *told* those things by the API, which is a
+> leak in the entry path rather than in the wire. E4's `named` column is
+> therefore also a leak count — every ORB item a caller must name is a fact the
+> transparency was supposed to keep from them.
+
 ---
 
 ## 1. What a newcomer meets today, measured / 오늘 신규 사용자가 만나는 것

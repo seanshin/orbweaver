@@ -124,6 +124,33 @@ is a decision rather than code.
 
 ## 5. What is proposed / 제안
 
+**Re-ordered by §6's criterion, which is priority zero.** O1 and D030's L1 are
+not peers of the rest: each closes an entire transparency, and O2/O3/O4 close
+none — they are hygiene, correctness and record-keeping, all worth doing and
+none of them completion. Where the two orderings disagree, §6 wins.
+
+1. **O1 — lifecycle.** Without it "removed at runtime" has no implementation,
+   so the fifth transparency cannot even be tested.
+2. **D030 L1 — the servant seam.** Language transparency leaks by construction
+   until a non-Rust servant can be dispatched into.
+3. **A leak test per transparency** (new, see below) — because §6 says
+   transparency is hunted, not confirmed, and today there is no instrument.
+4. O2, O3, O4 in their original order.
+
+### O0 — a leak test per transparency (`spikes/`, `crates/orbweaver-test`)
+
+Five properties, each expressed as *a caller holding only a reference cannot
+tell X*, each with a fixture that changes X underneath a live caller and
+asserts the caller's observations are unchanged. Move the object; evict and
+reload it; answer from a different servant; answer from a different language
+once L1 lands.
+
+**The instrument comes before most of the fixes**, because without it every
+claim in §6.1's table is a reading rather than a measurement — and this project
+has spent the day learning what a reading is worth. Where a transparency cannot
+yet be tested (lifecycle, until O1), the test exists and is a **counted
+`SKIPPED` naming what it waits on**, never absent.
+
 Ordered by what a defect would cost.
 
 ### O1 — the ORB can stop what it handed out (`orbweaver-giop`, `orbweaver-object`)
@@ -168,26 +195,62 @@ limit from the command line and watch a peer hit it.
 That is also what makes D015's acceptance sentence — *"without editing Rust,
 without a rebuild"* — true at the ORB layer rather than one layer above it.
 
-## 6. What "complete" means, proposed / "완성"의 정의
+## 6. What "complete" means — the priority-zero criterion / "완성"의 정의 — 0순위 기준
 
-An operation count cannot say it. This can:
+**Set by the project owner, 2026-08-26. This is the definition; the rest of
+this document is subordinate to it, and so is every other plan document.**
 
-> **The ORB is complete when a foreign client can bootstrap through it, call
-> through it, and be told no by it; when an operator can change every number it
-> owns from the command line without a rebuild; and when everything it does not
-> do has a reason and a trigger.** Each clause is measurable against a peer or
-> against a document, and none of them is a count.
+> **The ORB is complete when there is no leak in this transparency: a caller
+> can invoke any target holding only a reference, without knowing its
+> location, its backend, its language, or whether it is currently loaded — and
+> that property does not break when targets are added, removed, moved, loaded
+> or evicted at runtime.**
+>
+> *ORB의 완성은 **호출자가 참조만으로 임의의 대상을 그 위치·백엔드·언어·적재
+> 상태를 모른 채 호출할 수 있고, 대상이 런타임에 추가·제거·이동·적재·축출돼도 그
+> 성질이 깨지지 않는다**는 투명성에 **구멍이 없을 때** 완성된 것이다.*
 
-Against that definition, today: clause one is **measured** (omniORB resolves
-`rir` out of our table and calls through to a real value). Clause two is
-**half** — the numbers have a home and five of eight change the wire, but no
-binary takes the flags, so no deployment can. Clause three is **short by two**,
-which is O3.
+**Why this replaces the definition drafted earlier in this document.** The
+draft asked whether a foreign client could bootstrap, whether an operator could
+change numbers, whether absences had reasons. Every clause was true and every
+clause was about *us* — what we had built, documented and exposed. This one is
+about **what the caller cannot tell**, which is the only thing an ORB is for,
+and it is falsifiable in a way a feature list is not: **you do not confirm
+transparency, you hunt leaks in it.**
 
-*연산 개수로는 말할 수 없다. 외부 클라이언트가 **부트스트랩하고, 호출하고, 거부당할
-수 있을 때**; 운영자가 ORB가 소유한 모든 수치를 **재빌드 없이 명령줄에서** 바꿀 수
-있을 때; 그리고 **하지 않는 모든 것에 사유와 방아쇠가 있을 때** 완성이다. 오늘
-첫째는 측정됐고, 둘째는 절반이며, 셋째는 두 개 모자란다.*
+It also reframes the entire document. §2 counted six of sixteen operations and
+§3 named three gaps; under this criterion an absent operation matters exactly
+as much as the leak it causes and not at all otherwise, which is why
+`register_value_factory` being absent is not a gap while §3.1's missing
+lifecycle is a large one.
+
+### 6.1 The five transparencies, and where each leaks today
+
+Each is a claim that can be **refuted by a test**, which is how this gets
+worked on. Measured 2026-08-26; every "leaks" below is a defect to close, not a
+feature to add.
+
+| Transparency | The caller must not be able to tell | Status today |
+|---|---|---|
+| **Location** | where the target runs | **measured, with a known leak**: `LOCATION_FORWARD` and `_PERM` are served and followed, and R7 rewrites an IOR for a dialable address — but `Connection::move_to` restored a hand-written field list and dropped two configured limits across every forward until today, so the *caller's* limits changed when the object moved. Fixed; the class is the leak to watch. |
+| **Backend** | what implements it | mostly held: a servant is behind a POA and a reference; but `spike_experts`' server root key collides with its derived registry key, which is a backend detail reaching a name. |
+| **Language** | what it is written in | **leaks by construction**: Python is clients only. A Python servant cannot be dispatched into, so *the target's language is visible in whether it can be a target at all*. D030 L1. |
+| **Activation / load** | whether it is loaded right now | **leaks**: MoE residency loads and evicts experts, and a caller reaching an evicted one gets a different answer than one reaching a resident one. This is the transparency this project has the most machinery for and the least measurement of. |
+| **Lifecycle stability** | that the above survives add / remove / move / load / evict at runtime | **partly unmeasurable today**: the ORB owns the transport and **cannot stop what it handed out** (§3.1), so "remove at runtime" has no implementation to be transparent about. |
+
+*다섯 가지 각각은 **테스트로 반증 가능한 주장**이며, 그것이 이 작업의 방식이다.
+투명성은 확인하는 것이 아니라 **구멍을 사냥하는 것**이다.*
+
+### 6.2 What this criterion does to the order
+
+O1 (lifecycle) and D030 L1 (the language seam) are **no longer two items of
+comparable weight**: each closes a whole transparency, and the other proposals
+close none. The re-ordering is stated in §5's preamble rather than left implied.
+
+The clauses of the earlier draft do not disappear — a foreign client
+bootstrapping *is* how location transparency is measured, and an operator's
+flag reaching the wire *is* how a deployment stops being a special case. They
+become **instruments** for this criterion rather than the criterion itself.
 
 ## 7. What this document does not claim / 주장하지 않는 것
 

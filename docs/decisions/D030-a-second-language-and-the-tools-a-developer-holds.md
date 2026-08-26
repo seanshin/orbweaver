@@ -9,6 +9,24 @@ a maintenance surface it does not have today.
 **상태: 제안** — 2026-08-26, 언어별 ORB 구현과 개발 지원 도구가 필요하다는 지시에서
 작성.
 
+
+> **Priority zero, set 2026-08-26.** This document is subordinate to the ORB
+> completion criterion, whose home is
+> [`D029`](D029-what-a-complete-orb-would-mean.md) §6: *no leak in the
+> transparency that a caller can invoke any target holding only a reference,
+> without knowing its location, backend, language or load state, and that this
+> survives targets being added, removed, moved, loaded or evicted at runtime.*
+> The criterion is stated there and **not restated here** — what is recorded
+> below is only how this document's work bears on it.
+>
+> *0순위 기준의 집은 D029 §6이며 여기서 다시 적지 않는다. 아래에 적는 것은 이
+> 문서의 작업이 그 기준에 **어떻게 닿는지**뿐이다.*
+
+> **How this bears on it.** L1 is not one proposal among four: language
+> transparency **leaks by construction** while Python is clients only, because a
+> target's language decides whether it can be a target at all. Under D029 §6 that
+> makes the servant seam a completion item, and L2/L3/L4 hygiene.
+
 ---
 
 ## 1. What exists, measured / 오늘 있는 것

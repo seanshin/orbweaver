@@ -3,6 +3,20 @@
 AI-driven CORBA/IDL interface automation. An MIT ORB core written against the
 published OMG wire specification, plus an AI specification pipeline on top.
 
+**Priority zero — what "a finished ORB" means.** Set by the project owner
+2026-08-26. Its home is `docs/decisions/D029-what-a-complete-orb-would-mean.md`
+§6 and it is **not restated here**: read it there. In one line, so you know
+whether your work touches it — *the ORB is complete when there is no leak in
+the transparency that a caller can invoke any target holding only a reference,
+knowing nothing of its location, backend, language or load state, and that
+this survives targets being added, removed, moved, loaded or evicted at
+runtime.* Every plan document is subordinate to it and each records how its own
+work bears on it. **Transparency is not confirmed, it is hunted** — a proposal
+that closes a leak outranks one that adds a capability.
+
+*0순위 기준의 집은 D029 §6이다. 여기서 다시 적지 않는다 — **투명성은 확인하는 것이
+아니라 구멍을 사냥하는 것**이며, 구멍을 막는 제안이 기능을 더하는 제안보다 앞선다.*
+
 Plan: `docs/PLAN.md` (EN) · `docs/PLAN.ko.md` (KO) · Phase 0 results: `docs/PHASE0.md`
 
 ---

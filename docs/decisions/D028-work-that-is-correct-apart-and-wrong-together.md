@@ -8,6 +8,25 @@ landed, which is a rule about every future batch.
 **상태: 제안** — 2026-08-26, 해결책을 디테일하게 검토하라는 요청에서 작성. 모든
 수치는 병합된 트리에서 그날 측정했다.
 
+
+> **Priority zero, set 2026-08-26.** This document is subordinate to the ORB
+> completion criterion, whose home is
+> [`D029`](D029-what-a-complete-orb-would-mean.md) §6: *no leak in the
+> transparency that a caller can invoke any target holding only a reference,
+> without knowing its location, backend, language or load state, and that this
+> survives targets being added, removed, moved, loaded or evicted at runtime.*
+> The criterion is stated there and **not restated here** — what is recorded
+> below is only how this document's work bears on it.
+>
+> *0순위 기준의 집은 D029 §6이며 여기서 다시 적지 않는다. 아래에 적는 것은 이
+> 문서의 작업이 그 기준에 **어떻게 닿는지**뿐이다.*
+
+> **How this bears on it.** Break 1 is the worked example: `Connection::move_to`
+> restored a hand-written field list and dropped two configured limits, so a
+> caller's limits silently changed when its target *moved*. That is a location
+> transparency leak that arrived through a merge, which is why §4's M1 and M2
+> are transparency work and not only hygiene.
+
 ---
 
 ## 1. The shape both problems share / 두 문제가 공유하는 모양
