@@ -58,6 +58,19 @@ if [ -z "$HEADS" ]; then
 fi
 
 # ── The expected table, checked against the owner before any leg runs ───────
+#
+# NOT every leak test's control lives here. This script drives the ones in
+# `$SRC`, which are switched by `ORBWEAVER_LEAK_CONTROL` because their leaks
+# are servant behaviour a test cannot re-enter. The activation leg's control is
+# **inside its own test file** —
+# `crates/orbweaver-object/tests/what_a_caller_can_tell_about_load.rs`, in
+# `the_refusing_miss_policies_are_the_leak` — because its leak is a `MissPolicy`
+# variant, so putting the leak back is passing a different enum to the same
+# fixture and needs no switch, no environment variable and no second process.
+# `cargo test` runs it in both directions. Absence from this table is therefore
+# not absence of a control; the next reader is told here so they do not have to
+# infer it from a table that does not mention activation.
+#
 # control : the tests that must go red, space separated
 CONTROLS=(
   "no_forward:a_move_under_a_live_caller_is_invisible limits_survive_a_move"
