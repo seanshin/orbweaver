@@ -56,6 +56,7 @@ echo.idl	accept	accept	omniidl=accept,jacorb_idl=accept
 evolution_v1.idl	accept	accept	omniidl=accept,jacorb_idl=accept
 evolution_v1b.idl	accept	accept	omniidl=accept,jacorb_idl=accept
 evolution_v2.idl	accept	accept	omniidl=accept,jacorb_idl=accept
+foreign_forward.idl	accept	accept	omniidl=accept,jacorb_idl=accept
 gen-naming-subset.idl	accept	accept	omniidl=accept,jacorb_idl=accept
 gen-target-lints.idl	accept	accept	omniidl=accept,jacorb_idl=accept
 inherited-scope-leak.idl	reject	reject	omniidl=reject,jacorb_idl=reject
