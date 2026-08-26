@@ -28,12 +28,16 @@ in [`docs/COMPONENTS.md`](docs/COMPONENTS.md). Neither is restated here.
 ## How to read this / 이 문서 읽는 법
 
 The README answers six questions and hands off to a document for anything that
-needs a number. Numbers do not live here, because a number copied into a second
-file drifts from the first one silently.
+needs a number. It carries no figures of its own, because a number copied into a
+second file stops tracking the first one and nothing announces that it has. What
+a number in this project is allowed to claim is set out under
+[What a number here means](#what-a-number-here-means--수치가-뜻하는-것).
 
 이 README는 여섯 가지 질문에 답하고, 수치가 필요한 것은 해당 문서로 넘깁니다.
 수치 자체는 여기 적지 않습니다. 한 번 옮겨 적은 수치는 원본이 바뀌어도 따라
-바뀌지 않고, 어긋났다는 사실을 알려 줄 장치도 없기 때문입니다.
+바뀌지 않고, 어긋났다는 사실을 알려 줄 장치도 없기 때문입니다. 이 프로젝트에서
+수치를 어떻게 읽고 쓰는지는
+[수치가 뜻하는 것](#what-a-number-here-means--수치가-뜻하는-것)에 자세히 적었습니다.
 
 | | Question | 질문 | Section |
 |---|---|---|---|
@@ -492,6 +496,123 @@ The full set, with the incident behind each, is in [`CLAUDE.md`](CLAUDE.md).
 기록하고 라이브에서 다시 받습니다.** 양쪽이 함께 적용하는 관례는 왕복으로
 반증되지 않기 때문입니다. 전체 목록은 각각의 사건과 함께
 [`CLAUDE.md`](CLAUDE.md)에 있습니다.
+
+### What a number here means / 수치가 뜻하는 것
+
+Numbers are the easiest thing in a repository to get wrong, because a wrong one
+looks exactly like a right one and nothing recompiles a sentence. Every rule
+below was learned by shipping the mistake first.
+
+**A figure carries the date it was measured, or it comes from a script.** A
+count in prose is true on the day it is written and drifts every day after.
+Where a figure has to appear in a document, it either says when it was taken or
+it is written by [`spikes/coverage_tables.py`](spikes/coverage_tables.py), which
+computes it from the run. The header of this file says `v0.7.0 (2026-08-26)` for
+the same reason.
+
+**A floor is not a figure.** A gate pinned as `>= N` proves that nothing
+regressed and proves *nothing at all* about the count. Quote `N` in prose as if
+it were today's measurement and the sentence drifts upward in silence while the
+gate stays green over it, because green is all `>= N` was ever going to say.
+Measured 2026-08-25, twice in one sweep: `COMPONENTS.md` said the AnyJSON leg
+crosses `5248/5248` when the floor was 5248 and the actual was **6016**, and
+that the Python sweep crosses `172 values / 137 calls` when the floor was
+170/137 and the actual was **182/139** — and the harness's own comment beside
+that floor said `170 / 137` too, so the document and the gate agreed with each
+other and both disagreed with the run. Where a document and a gate quote the
+same number, the document says which one is the floor.
+
+**A number carries its method, not only its date.** This is the newest rule
+here and it was added on 2026-08-27 after being demonstrated live: a scan of
+this workspace reported `63 of 79` `Dispatch` implementations overriding
+`knows`, and the real answer is `53 of 80`. Nothing was mistyped. The scan
+terminated each `impl` body at the *next* `impl` rather than at its matching
+brace, so it read later blocks' methods as belonging to earlier ones — and it
+under-reported the defect it was counting, which is the direction that gets a
+number believed. A count is only as good as the parse under it, so a figure
+that matters is produced by something a second implementation can disagree
+with, and the disagreement is resolved rather than averaged.
+
+**A count of items is not a count of causes**, and the second number is the one
+worth having. Phase 0's batch was 20 files, 7 failures and **1** cause.
+Reporting "7 defects fixed" would have been arithmetically true and would have
+described the wrong thing, because the seven were one rule nobody had written
+down. Every batch reports its size, its first-pass rate, the causes found with
+their affected counts, and what was codified — and the first-pass rate and the
+round count are reported *separately*, because they measure the generator and
+the oracle respectively and averaging them measures neither.
+
+**A number a model produced about its own work is labelled indicative**, in the
+same breath as the number and not in a footnote. Where the generator and the
+evaluator are the same model, the figure is evidence about consistency and not
+about correctness.
+
+**An unmeasured check is a failure, and never a zero.** If a fixture will not
+start, the count it would have produced does not become 0 — the run reports that
+it could not be taken. This is why the harness prints what it could not measure
+in each group's own words, and why a `SKIPPED` is counted in the verdict rather
+than mentioned in passing.
+
+**Some numbers are deliberately not computed.** No run in this tree produces an
+"automation percentage" per pipeline stage, and no score is derived from the
+transparency ledger. The ledger's own arithmetic is the reason: a shrinking
+unmeasured list is progress only when a run actually closed a leak, and it looks
+identical to nobody looking. A number that cannot distinguish those two states
+is worse than no number, because it will be quoted.
+
+수치는 저장소에서 가장 틀리기 쉬운 것입니다. 틀린 수치는 맞은 수치와 똑같이
+생겼고, 문장을 다시 컴파일하는 것은 없기 때문입니다. 아래 규칙은 전부 먼저
+틀려 보고 얻은 것입니다.
+
+**수치에는 측정한 날짜가 붙거나, 아니면 스크립트가 씁니다.** 산문에 적힌 개수는
+쓴 날에만 참이고 그다음 날부터 매일 어긋납니다. 문서에 수치가 꼭 나와야 하면
+측정 시점을 적거나, 실행 결과에서 계산해 주는
+[`spikes/coverage_tables.py`](spikes/coverage_tables.py)가 씁니다. 이 파일 머리에
+`v0.7.0 (2026-08-26)`이라 적은 것도 같은 이유입니다.
+
+**하한은 수치가 아닙니다.** `>= N`으로 고정한 게이트는 퇴행이 없었다는 것을
+증명할 뿐, 개수에 대해서는 **아무것도** 증명하지 않습니다. `N`을 오늘의
+측정치처럼 인용하면 그 문장은 조용히 위로 어긋나고, 게이트는 그 위에서 초록으로
+남습니다. `>= N`이 할 수 있는 말이 초록뿐이기 때문입니다. 2026-08-25 한 번의
+스윕에서 두 건 나왔습니다 — `COMPONENTS.md`가 AnyJSON 다리를 `5248/5248`이라
+적었는데 하한이 5248이고 실제는 **6016**이었고, Python 스윕을 `172 values / 137
+calls`라 적었는데 하한이 170/137이고 실제는 **182/139**였습니다. 게다가 하네스
+자신의 주석도 `170 / 137`이라 적고 있어서, 문서와 게이트가 서로 일치하면서 둘
+다 실행 결과와 어긋나 있었습니다. 문서와 게이트가 같은 수를 인용하는 자리에서는
+어느 쪽이 하한인지 문서가 밝힙니다.
+
+**수치에는 날짜만이 아니라 방법도 붙습니다.** 여기서 가장 새로운 규칙이고,
+2026-08-27에 실연으로 얻었습니다. 이 워크스페이스를 훑은 스캔이 `knows`를
+재정의하는 `Dispatch` 구현을 `79개 중 63개`로 보고했는데, 실제 답은 `80개 중
+53개`였습니다. 오타는 없었습니다. 스캔이 각 `impl` 본문의 끝을 짝이 맞는 중괄호가
+아니라 **다음 `impl`**로 잡아서, 뒤 블록의 메서드를 앞 블록 것으로 읽었습니다.
+그래서 자기가 세고 있던 결함을 실제보다 **적게** 보고했는데, 그쪽이 바로 수치가
+믿겨지는 방향입니다. 개수는 그 아래 깔린 파싱만큼만 정확하므로, 중요한 수치는
+두 번째 구현이 반박할 수 있는 방식으로 만들고, 불일치가 나오면 평균 내지 않고
+해소합니다.
+
+**항목의 개수는 원인의 개수가 아니며**, 값이 나가는 쪽은 두 번째 수치입니다.
+Phase 0의 배치는 20건, 실패 7건, 원인 **1개**였습니다. "결함 7건 수정"은 산술적으로
+참이지만 엉뚱한 것을 묘사합니다 — 그 일곱은 아무도 적어 두지 않은 규칙 하나였기
+때문입니다. 모든 배치는 규모, 1차 통과율, 영향 개수와 함께 찾은 원인, 그리고
+성문화한 것을 보고합니다. 1차 통과율과 라운드 수는 **따로** 보고합니다. 각각
+생성기와 오라클을 재는 수치라서, 합치면 어느 쪽도 재지 못합니다.
+
+**모델이 자기 작업에 대해 낸 수치는 참고치로 표시합니다.** 각주가 아니라 그
+수치와 같은 호흡에서 밝힙니다. 생성기와 평가기가 같은 모델이면 그 수치는
+일관성에 대한 증거이지 정확성에 대한 증거가 아닙니다.
+
+**측정하지 못한 검사는 실패이지 0이 아닙니다.** 픽스처가 뜨지 않았다면 그것이
+냈을 개수는 0이 되는 것이 아니라, 잴 수 없었다고 보고됩니다. 하네스가 재지 못한
+것을 그룹 자신의 말로 출력하고, `SKIPPED`를 지나가는 말이 아니라 판정에 계수하는
+이유입니다.
+
+**일부러 계산하지 않는 수치도 있습니다.** 이 트리의 어떤 실행도 파이프라인
+단계별 "자동화 백분율"을 내지 않고, 투명성 원장에서 점수를 뽑지 않습니다. 원장
+자신의 산술이 그 이유입니다 — 미측정 목록이 줄어든 것은 어떤 실행이 실제로
+구멍을 막았을 때만 진전인데, 아무도 들여다보지 않아 줄어든 것과 겉으로는
+구별되지 않습니다. 그 두 상태를 구별하지 못하는 수치는 없는 것만 못합니다.
+인용될 것이기 때문입니다.
 
 ---
 
