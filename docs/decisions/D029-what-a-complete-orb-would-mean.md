@@ -241,7 +241,22 @@ feature to add.
 *다섯 가지 각각은 **테스트로 반증 가능한 주장**이며, 그것이 이 작업의 방식이다.
 투명성은 확인하는 것이 아니라 **구멍을 사냥하는 것**이다.*
 
-<<<<<<< HEAD
+**2026-08-26 측정 — 위치 행과 적재 행 두 곳이 갱신되었다.** 두 구멍 모두
+`moe::Router::select` 하나에 있다. (1) `select`는 `ExpertSeq`를 돌려주는데 그
+원소는 `register_expert`가 준 `Ior`를 그대로 담아 호스트·포트·객체 키를 인라인으로
+실어 보낸다 — 호출자가 후보 전문가 각각이 **어디서 도는지** 알게 되며, 이는 위치
+행이 알 수 없어야 한다고 적은 바로 그것이다. (2) `select`는 **데이터가 없어서가
+아니라 묻지 않아서** 적재 상태에 눈이 멀어 있다: `mirror_residency`가 `select`가
+읽는 바로 그 저장소에 `Offer::residency`를 최신으로 유지하고 질의 문법에는
+`residency` 필드가 있는데, `to_query_text`가 그 이름을 한 번도 쓰지 않는다. 그래서
+축출된 전문가가 목록에 돌아오고, 그것을 걸면 `OBJECT_NOT_EXIST`가 온다 —
+`expert_service.rs:882-891`은 이것을 *"호출자가 `prefetch`하라는 신호"*로 **의도된
+설계라고 적어 두었다.** `Router::dispatch`는 이 구멍을 막는 연산이 **아니다**:
+거절되어 있고(D006 E안), 그 거절 사유 자체가 오늘 거짓임이 밝혀졌다(D006
+2026-08-26 개정). 기준이 말하는 것은 *임의의* 대상이므로, 막는 자리는 응용 계약
+하나가 아니라 POA 수준의 활성화 경로다. 둘 다 **기록만 하고 바꾸지 않았다** —
+`select`는 서빙 중이고 소비자가 있다.
+
 #### Location, for event channels — what closed and what did not (2026-08-26)
 
 D021 E3 landed: a channel is published under a name in a CosNaming context and
@@ -313,23 +328,6 @@ more specific claim than the row above used to make.
 양면이다 — 심(seam)은 값을 나르는데, 객체 참조는 데이터가 아니라 능력을 뜻하는
 유일한 값이다. 이것이 남은 언어 투명성이며, 위 행이 예전에 하던 주장보다 좁고
 구체적인 주장이다.*
-=======
-**2026-08-26 측정 — 위치 행과 적재 행 두 곳이 갱신되었다.** 두 구멍 모두
-`moe::Router::select` 하나에 있다. (1) `select`는 `ExpertSeq`를 돌려주는데 그
-원소는 `register_expert`가 준 `Ior`를 그대로 담아 호스트·포트·객체 키를 인라인으로
-실어 보낸다 — 호출자가 후보 전문가 각각이 **어디서 도는지** 알게 되며, 이는 위치
-행이 알 수 없어야 한다고 적은 바로 그것이다. (2) `select`는 **데이터가 없어서가
-아니라 묻지 않아서** 적재 상태에 눈이 멀어 있다: `mirror_residency`가 `select`가
-읽는 바로 그 저장소에 `Offer::residency`를 최신으로 유지하고 질의 문법에는
-`residency` 필드가 있는데, `to_query_text`가 그 이름을 한 번도 쓰지 않는다. 그래서
-축출된 전문가가 목록에 돌아오고, 그것을 걸면 `OBJECT_NOT_EXIST`가 온다 —
-`expert_service.rs:882-891`은 이것을 *"호출자가 `prefetch`하라는 신호"*로 **의도된
-설계라고 적어 두었다.** `Router::dispatch`는 이 구멍을 막는 연산이 **아니다**:
-거절되어 있고(D006 E안), 그 거절 사유 자체가 오늘 거짓임이 밝혀졌다(D006
-2026-08-26 개정). 기준이 말하는 것은 *임의의* 대상이므로, 막는 자리는 응용 계약
-하나가 아니라 POA 수준의 활성화 경로다. 둘 다 **기록만 하고 바꾸지 않았다** —
-`select`는 서빙 중이고 소비자가 있다.
->>>>>>> worktree-agent-ac859d7d35ed73855
 
 ### 6.2 What this criterion does to the order
 
