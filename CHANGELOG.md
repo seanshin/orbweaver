@@ -10,6 +10,99 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+_Nothing yet._
+
+---
+
+## v0.7.0 — 2026-08-26
+
+The release in which **"finished" stopped being a feeling.** Until this release
+the ORB's completion was a list of capabilities, and a list of capabilities can
+only ever grow. The owner replaced it with a property: *a caller can invoke any
+target holding only a reference, knowing nothing of its location, backend,
+language or load state, and this survives targets being added, removed, moved,
+loaded or evicted at runtime.* The criterion lives in
+[`D029`](docs/decisions/D029-what-a-complete-orb-would-mean.md) §6 and is
+restated nowhere. Everything below is downstream of it, including the parts
+that got worse — because a property you hunt for holes in produces holes, and
+every transparency row now names leaks that were invisible when the same rows
+said "held".
+
+**The harness learned to say what it did not measure.** Of its ninety-two
+groups, nineteen declare which transparency they bear on, and the run prints a
+ledger per transparency — measured, red, or **unmeasured with the reason in the
+group's own words**. No score is derived and none should be: a shrinking unmeasured
+list is progress only when a run closed a leak, and looks identical to nobody
+looking.
+
+That instrument immediately convicted its own author. **A gate that is green
+while measuring nothing was found ten-plus times this release, always by
+running something rather than by reading it** — eighty-two pinned comparisons
+over an arm no input reached; a peer probe green with two fields swapped; a
+`deferred_wire_agreement` test green because *both* its sets were empty; a
+`grep -q` over hex that could never match; and, in the harness's own first three
+gates, `cargo test --workspace 2>&1 | grep -q "^error"` printing **`ok` over a
+red workspace** for as long as it had existed. Seventy-six pipelines of that
+shape were swept in one day, and the one that mattered belonged to the group
+whose entire argument is *"five runs, because one green run is not evidence"*.
+**The licence boundary this project calls non-negotiable had a gate that could
+not go red.**
+
+**Four transparencies moved, and two batches deliberately declined to move
+theirs.** A foreign ORB forwards our client to a second process at a different
+address (two mechanisms, statuses 3 and 4, three GIOP versions, both byte
+orders) — every `LOCATION_FORWARD` this ORB had ever followed, it had written
+itself, which is the one shape a round trip cannot refute. The servant seam
+stopped being Python's and an object reference crosses it, so a foreign servant
+is no longer a singleton leaf. `Dispatch::knows`'s accept-every-key default was
+decided wrong — it enacts §15.3.8.6's `USE_DEFAULT_SERVANT` **by omission**,
+which the specification makes unreachable by omission, and which this ORB's own
+`policy.rs` and `skeleton.rs` had each already rejected in writing. And
+`MissPolicy::Activate` closes the eviction leak at the POA, where it holds for
+any target rather than for one contract.
+
+The two that did not move said so on purpose. Mounting a locator is an
+*adoption*, not a second closure; a foreign peer's forward changes the evidence
+behind the word "measured", not the leak. **Recording a row as unmoved is worth
+more here than moving it**, and both batches are why the fifth row's blocker is
+now a named decision rather than a shrug: a forward is a reply, a reply needs a
+listener, and a removed server is not listening.
+
+**What is still open is written where the next reader will find it.** No
+foreign peer has sent us `OBJECT_FORWARD` on a `LocateRequest`. A reference
+*arriving* at a foreign servant is a handle it cannot invoke. A demand load that
+fails answers `OBJECT_NOT_EXIST`, which is false, and wants the same
+third spelling as the deadline that is deliberately absent. Seventeen of
+sixty-three serve sites still pass `|| false`. Each is a row in D029 §6.1 or a
+counted SKIPPED naming its fixture — never an omission.
+
+이번 릴리즈에서 **"완성"이 느낌이기를 그만두었다.** 능력의 목록은 늘어나기만
+하지만, 성질은 구멍을 뚫어 볼 수 있다. 소유자가 정한 0순위 기준의 집은 D029 §6이며
+여기서도 다시 적지 않는다. 아래의 모든 것이 그 아래에 있고, **나빠진 부분까지
+포함해서** 그렇다 — 구멍을 사냥하는 성질은 구멍을 만들어 내며, 같은 행이 "지켜짐"
+이라 말하던 때에는 보이지 않던 것들이다.
+
+**하네스가 자기가 재지 못한 것을 말하는 법을 배웠다.** 92개 그룹이 자기가 어느
+투명성에 닿는지 선언하고, 실행은 투명성별로 측정·붉음·**그룹 자신의 말로 적힌
+미측정**을 출력한다. 점수는 내지 않으며 내서도 안 된다 — 줄어드는 미측정 목록은
+실행이 구멍을 닫았을 때만 진전이고, 아무도 보지 않은 것과 똑같이 보인다.
+
+그 계측기가 곧바로 자기 저자를 유죄로 만들었다. **아무것도 재지 않으면서 초록인
+게이트를 이번 릴리즈에 열 번 넘게 찾았고, 언제나 읽어서가 아니라 돌려서 찾았다** —
+그리고 그중 하나는 이 하네스 자신의 첫 세 게이트 안에 있었다. **타협 불가라고
+적어 둔 라이선스 경계에 붉어질 수 없는 게이트가 달려 있었다.**
+
+**투명성 네 가지가 움직였고, 두 배치는 자기 행을 일부러 움직이지 않았다.** 외부
+ORB가 우리 클라이언트를 다른 주소의 두 번째 프로세스로 넘긴다 — 이 ORB가 따라간
+모든 `LOCATION_FORWARD`는 이 ORB가 쓴 것이었고, 그것이 왕복으로는 반증할 수 없는
+바로 그 모양이다. 서번트 심이 한 언어의 것이기를 그만두고 객체 참조가 심을
+건넌다. `knows`의 기본값은 §15.3.8.6의 `USE_DEFAULT_SERVANT`를 **누락으로**
+시행하고 있었는데, 명세는 그것에 누락으로 도달할 수 없게 만들어 두었다.
+
+움직이지 않은 둘은 일부러 그렇게 말했다. 마운트는 두 번째 닫기가 아니라 채택이고,
+외부 피어의 포워드는 구멍이 아니라 "측정됨"이라는 단어 뒤의 증거를 바꾼다.
+**여기서는 행을 움직였다고 적는 것보다 움직이지 않았다고 적는 것이 값이 나간다.**
+
 ### ⚠ Wire behaviour changed / 와이어 동작 변경
 
 - **A `LocateReply` can say where the object went, and a `Reply` can carry a

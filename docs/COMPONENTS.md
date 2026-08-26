@@ -1,6 +1,6 @@
 # Component coverage — measured, not aspirational / 구성요소 커버리지 — 측정 기준
 
-Reviewed 2026-08-20 (v0.6.0) against the roster in README and PLAN §5/§6, against D010's gap columns, and — since the plan review of 2026-08-19 — row by row against the code rather than against memory. **Re-reviewed 2026-08-25** against the tree after twenty-six batches
+Reviewed 2026-08-20 (v0.6.0) against the roster in README and PLAN §5/§6, against D010's gap columns, and — since the plan review of 2026-08-19 — row by row against the code rather than against memory. **v0.7.0 was cut 2026-08-26 and this document was not re-reviewed row by row for it**, which is stated rather than left to be assumed: the rows below were last swept on 2026-08-25, `records_keep_up.py` reads them as current, and that gate checks only that they were *opened*, never that they are *true*. The transparency rows are the exception and are not here at all — their home is D029 §6.1, which the harness reads at run time. **Re-reviewed 2026-08-25** against the tree after twenty-six batches
 landed, which is the review that found five rows false: two class-B claims the
 batches refuted, a served-count that had moved on the wire, a gap column
 claiming work that had landed, and a test count four days stale. Where a figure
