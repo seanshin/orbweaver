@@ -355,7 +355,7 @@ fn interface_crossable(registry: &Registry, id: &str) -> Result<(), String> {
 /// rather than a wrong type. `unsigned long long` is the one that cannot widen
 /// — it is a `long` read as unsigned, rendered with `Long.toUnsignedString`,
 /// which is exact for every value in the range.
-fn java_type(tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
+fn java_type(tc: &TypeCode, cx: &Jx<'_>) -> Result<String, String> {
     Ok(match tc {
         TypeCode::Boolean => "boolean".into(),
         TypeCode::Octet => "byte".into(),
@@ -383,13 +383,13 @@ fn java_type(tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
         | TypeCode::Enum { id, .. }
         | TypeCode::Except { id, .. }
         | TypeCode::Alias { id, .. }
-        | TypeCode::Recursive(id) => java_path(id, cx),
+        | TypeCode::Recursive(id) => cx.java_path(id),
         other => return Err(descriptor(other).err().unwrap_or_else(|| format!("{other:?}"))),
     })
 }
 
 /// The same type as a *reference* type, for a generic parameter.
-fn boxed(tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
+fn boxed(tc: &TypeCode, cx: &Jx<'_>) -> Result<String, String> {
     Ok(match java_type(tc, cx)?.as_str() {
         "boolean" => "Boolean".into(),
         "byte" => "Byte".into(),
@@ -404,7 +404,7 @@ fn boxed(tc: &TypeCode, cx: &Cx<'_>) -> Result<String, String> {
 }
 
 /// `_expr` as an `Object`: a primitive is boxed, everything else is itself.
-fn box_expr(tc: &TypeCode, expr: &str, cx: &Cx<'_>) -> Result<String, String> {
+fn box_expr(tc: &TypeCode, expr: &str, cx: &Jx<'_>) -> Result<String, String> {
     Ok(match java_type(tc, cx)?.as_str() {
         "boolean" => format!("Boolean.valueOf({expr})"),
         "byte" => format!("Byte.valueOf({expr})"),
@@ -419,7 +419,7 @@ fn box_expr(tc: &TypeCode, expr: &str, cx: &Cx<'_>) -> Result<String, String> {
 }
 
 /// An `Object` read back as this type: unboxed where Java needs it.
-fn unbox_expr(tc: &TypeCode, expr: &str, cx: &Cx<'_>) -> Result<String, String> {
+fn unbox_expr(tc: &TypeCode, expr: &str, cx: &Jx<'_>) -> Result<String, String> {
     let ty = java_type(tc, cx)?;
     Ok(match ty.as_str() {
         "boolean" => format!("((Boolean) {expr}).booleanValue()"),
@@ -434,22 +434,74 @@ fn unbox_expr(tc: &TypeCode, expr: &str, cx: &Cx<'_>) -> Result<String, String> 
     })
 }
 
-/// The fully qualified Java name of a generated type.
-fn java_path(id: &str, cx: &Cx<'_>) -> String {
-    let segs: Vec<String> = cx.path_of(id).iter().map(|s| java_ident(s)).collect();
-    format!("{}.{}", cx.root, segs.join("."))
+/// The emitter's context: what [`Cx`] carries, plus which IDL scopes are
+/// interfaces.
+///
+/// The second half is needed because **an IDL interface is a scope and a Java
+/// class is not**. `interface Root { struct Ticket { … }; }` wants `Root` to be
+/// a class *and* a package at once, and `javac` says `class Root clashes with
+/// package of same name` — measured over the golden corpus, one contract of 37.
+/// The OMG IDL-to-Java mapping answers this with the `Package` suffix
+/// (formal/08-01-11 §1.3.2 reserves `Package`, `Helper`, `Holder`, `Operations`,
+/// `POA` and `POATie` for exactly this class of collision), and the reason that
+/// list exists is the reason this field does.
+struct Jx<'a> {
+    inner: Cx<'a>,
+    /// Qualified IDL names (`gc_inh::Root`) of every interface in the registry.
+    interfaces: std::collections::BTreeSet<String>,
 }
 
-/// The package a generated item lives in, and the file it is written to.
-fn package_of(path: &[String], root: &str) -> String {
-    let module = &path[..path.len() - 1];
-    if module.is_empty() {
-        root.to_owned()
-    } else {
-        format!(
-            "{root}.{}",
-            module.iter().map(|s| java_ident(s)).collect::<Vec<_>>().join(".")
-        )
+impl<'a> Jx<'a> {
+    fn new(registry: &Registry, root: &'a str) -> Self {
+        let names = name_table(registry);
+        let interfaces = registry
+            .ids()
+            .filter(|id| matches!(registry.get(id), Some(Entry::Interface(_))))
+            .filter_map(|id| names.get(id).cloned())
+            .collect();
+        Jx { inner: Cx { root, names }, interfaces }
+    }
+
+    fn root(&self) -> &str {
+        self.inner.root
+    }
+
+    fn path_of(&self, id: &str) -> Vec<String> {
+        self.inner.path_of(id)
+    }
+
+    /// The Java package segments for the scopes enclosing an item.
+    ///
+    /// A segment that names an **interface** becomes `<Name>Package`, because
+    /// the class of that name is already taken by the interface's own stub.
+    fn package_segments(&self, path: &[String]) -> Vec<String> {
+        let module = &path[..path.len() - 1];
+        let mut out = Vec::with_capacity(module.len());
+        for (i, seg) in module.iter().enumerate() {
+            let qualified = module[..=i].join("::");
+            if self.interfaces.contains(&qualified) {
+                out.push(format!("{}Package", java_ident(seg)));
+            } else {
+                out.push(java_ident(seg));
+            }
+        }
+        out
+    }
+
+    /// The package an item lives in, fully qualified.
+    fn package_of(&self, path: &[String]) -> String {
+        let segs = self.package_segments(path);
+        if segs.is_empty() { self.root().to_owned() } else { format!("{}.{}", self.root(), segs.join(".")) }
+    }
+
+    /// The fully qualified Java name of a generated type.
+    fn java_path(&self, id: &str) -> String {
+        let path = self.path_of(id);
+        if path.is_empty() {
+            return self.root().to_owned();
+        }
+        let class = java_ident(path.last().expect("non-empty"));
+        format!("{}.{class}", self.package_of(&path))
     }
 }
 
@@ -477,7 +529,7 @@ fn header(package: &str, root: &str) -> String {
 /// the generated tree hangs from, and every cross-reference inside it is fully
 /// qualified so that no generated file depends on another's import list.
 pub fn emit_java(registry: &Registry, package: &str) -> JavaPackage {
-    let cx = &Cx { root: package, names: name_table(registry) };
+    let cx = &Jx::new(registry, package);
     let mut out = JavaPackage::default();
     // Every type that registered itself, so `_Types` can touch each one: Java
     // runs a class's static initialiser on first use, and a descriptor names a
@@ -494,7 +546,7 @@ pub fn emit_java(registry: &Registry, package: &str) -> JavaPackage {
             continue;
         }
         let name = path.last().cloned().unwrap_or_default();
-        let pkg = package_of(&path, package);
+        let pkg = cx.package_of(&path);
         let emitted = match registry.get(id) {
             Some(Entry::Type(tc)) => crossable(tc, &mut Vec::new())
                 .and_then(|()| emit_type(registry, id, &name, tc, cx))
@@ -559,7 +611,7 @@ pub fn emit_java(registry: &Registry, package: &str) -> JavaPackage {
     }
 
     for (module, items) in &consts {
-        let pkg = package_of(&[module.clone(), vec!["_Consts".to_owned()]].concat(), package);
+        let pkg = cx.package_of(&[module.clone(), vec!["_Consts".to_owned()]].concat());
         let mut text = header(&pkg, package);
         let scope = if module.is_empty() {
             format!("the global scope of `{package}`")
@@ -641,7 +693,7 @@ fn emit_type(
     id: &str,
     name: &str,
     tc: &TypeCode,
-    cx: &Cx<'_>,
+    cx: &Jx<'_>,
 ) -> Result<(String, String, bool), String> {
     match tc {
         TypeCode::Struct { members, .. } | TypeCode::Except { members, .. } => {
@@ -1140,7 +1192,7 @@ fn emit_const(
     tc: &TypeCode,
     value: Option<&ConstValue>,
     path: &[String],
-    cx: &Cx<'_>,
+    cx: &Jx<'_>,
 ) -> Result<String, String> {
     let Some(value) = value else {
         return Err("the registry could not evaluate its expression, and stores no value \
@@ -1160,7 +1212,7 @@ fn emit_const(
     Ok(s)
 }
 
-fn const_literal(tc: &TypeCode, v: &ConstValue, cx: &Cx<'_>) -> Result<String, String> {
+fn const_literal(tc: &TypeCode, v: &ConstValue, cx: &Jx<'_>) -> Result<String, String> {
     let resolved = tc.resolve_alias();
     Ok(match (&resolved, v) {
         (TypeCode::Boolean, ConstValue::Bool(b)) => {
@@ -1192,7 +1244,7 @@ fn const_literal(tc: &TypeCode, v: &ConstValue, cx: &Cx<'_>) -> Result<String, S
         (TypeCode::Double, ConstValue::Float(f)) => format!("{f:?}d"),
         (TypeCode::String(_) | TypeCode::WString(_), ConstValue::Str(s)) => java_str(s),
         (TypeCode::Enum { id, .. }, ConstValue::Enum { member, .. }) => {
-            format!("{}.{}", java_path(id, cx), java_ident(member))
+            format!("{}.{}", cx.java_path(id), java_ident(member))
         }
         (TypeCode::LongDouble, _) => {
             return Err("a `long double` constant has no Java literal: the value is 16 \
@@ -1217,7 +1269,7 @@ fn emit_interface(
     registry: &Registry,
     id: &str,
     name: &str,
-    cx: &Cx<'_>,
+    cx: &Jx<'_>,
 ) -> Result<(String, String, bool), String> {
     if registry.interface(id).is_none() {
         return Err("not an interface".to_owned());
@@ -1251,7 +1303,7 @@ fn emit_interface(
     let _ = writeln!(s);
     let _ = writeln!(s, "    /** A stub over `_invoker`. */");
     let _ = writeln!(s, "    public {class}(_Rt.Invoker _invoker) {{");
-    let _ = writeln!(s, "        {}._Types._ensure();", cx.root);
+    let _ = writeln!(s, "        {}._Types._ensure();", cx.root());
     let _ = writeln!(s, "        this._invoker = _invoker;");
     let _ = writeln!(s, "    }}");
 
@@ -1288,7 +1340,7 @@ fn emit_operation(
     s: &mut String,
     op_name: &str,
     sig: &OperationSig,
-    cx: &Cx<'_>,
+    cx: &Jx<'_>,
 ) -> Result<(), String> {
     let method = method_name(op_name);
     let ins: Vec<_> = sig

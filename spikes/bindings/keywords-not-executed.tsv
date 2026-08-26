@@ -32,7 +32,7 @@
 # exceptions is exact instead — adding a reserved word without covering it goes
 # red on the next run.
 #
-# ── The three classes below, and which of them is a gap ─────────────────────
+# ── The four classes below, and which of them is a gap ──────────────────────
 #
 # `idl-keyword`  The word is a keyword in IDL too, so a contract can only name
 #                it through IDL's own leading-underscore escape (`_struct`
@@ -51,14 +51,24 @@
 #                exercises it either**. This is the gap. It is written down
 #                rather than fixed here because giving eleven Rust primitives a
 #                home in a contract is a corpus batch, not a suite batch.
+# `unreachable`  Stronger than `idl-keyword`: the word cannot be spelled as an
+#                IDL identifier **at all**, by any escape. Added 2026-08-26 with
+#                the Java target for exactly one word — `_`, which Java 9
+#                removed as an identifier and which IDL cannot produce, since an
+#                identifier must begin with a letter and IDL's own `_` escape
+#                needs one after it. A row here can never become stale by
+#                somebody adding a corpus case, which is what separates it from
+#                the class above.
 #
-# Measured 2026-08-26 by the batch that built `spikes/binding_suite.sh`. Every
-# row states which of the three it is, so the next reader can act on the third
-# class without re-deriving the first two.
+# The python and rust rows were measured 2026-08-26 by the batch that built
+# `spikes/binding_suite.sh`; the java rows the same day by the batch that built
+# the Java client target, which is also what added the fourth class. Every row
+# states which class it is, so the next reader can act on `no-instrument` — the
+# only one that is a gap — without re-deriving the other three.
 #
 # *절 5에는 2026-08-26 이전까지 계측기가 없었다. 이 파일은 "이 단어의 이스케이프는
 # 실행되지 않았다"는 사실의 집이며, 예외는 양방향으로 검사된다 — 더 이상 필요 없어진
-# 행은 실패다. 세 부류 중 실제 구멍은 `no-instrument` 하나뿐이다.*
+# 행은 실패다. 네 부류 중 실제 구멍은 `no-instrument` 하나뿐이다.*
 #
 # Format: <language> <TAB> <word> <TAB> <class>: <reason>
 
@@ -98,3 +108,34 @@ rust	u16	no-instrument: as bool above
 rust	u32	no-instrument: as bool above
 rust	u64	no-instrument: as bool above
 rust	usize	no-instrument: as bool above
+
+# ── java ─────────────────────────────────────────────────────────────────────
+# Measured 2026-08-26 by the batch that built the Java client target: 59 words
+# the emitter escapes, 38 executed by 28-target-keywords.idl, and the 21 below.
+# Twenty of them are IDL keywords, which is not a coincidence — IDL and Java are
+# both C-family and share `boolean`, `char`, `const`, `double`, `enum`, `float`,
+# `long`, `short`, `switch`, `void`, `interface`, `private`, `public`, `case`,
+# `default`, `import`, `native`, `abstract` and the two literals. The class is
+# COMPUTED by `binding-words` asking `orbweaver_idl::lex::is_keyword`, so a row
+# claiming it falsely shows up in the run rather than in a reading.
+java	_	unreachable: Java 9 removed `_` as an identifier; IDL cannot spell it under any escape, because an identifier must begin with a letter and `_` is IDL's own escape prefix. This row can never go stale
+java	abstract	idl-keyword: reachable only through IDL's own `_` escape
+java	boolean	idl-keyword: reachable only through IDL's own `_` escape
+java	case	idl-keyword: reachable only through IDL's own `_` escape
+java	char	idl-keyword: reachable only through IDL's own `_` escape
+java	const	idl-keyword: reachable only through IDL's own `_` escape
+java	default	idl-keyword: reachable only through IDL's own `_` escape — and it read as COVERED until 2026-08-26, because `java_rt.java` has a local called `_default` and the coverage check was reading the verbatim runtime along with the generated files. The runtime is the same bytes for every contract and cannot be evidence about any of them; `targets::without_runtime` is where that is now enforced
+java	double	idl-keyword: reachable only through IDL's own `_` escape
+java	enum	idl-keyword: reachable only through IDL's own `_` escape
+java	false	idl-keyword: FALSE is an IDL boolean literal and `is_keyword` is case-insensitive, so `false` would also sit one case-fold away from it — the clash class CLAUDE.md calls the dominant generation failure
+java	float	idl-keyword: reachable only through IDL's own `_` escape
+java	import	idl-keyword: and doubly unreachable — 28-target-keywords.idl's own header excludes CORBA 3 keywords because omniidl warns on them and the harness reads a warning on stderr as a failure
+java	interface	idl-keyword: reachable only through IDL's own `_` escape
+java	long	idl-keyword: reachable only through IDL's own `_` escape
+java	native	idl-keyword: and doubly unreachable, as import above
+java	private	idl-keyword: reachable only through IDL's own `_` escape
+java	public	idl-keyword: reachable only through IDL's own `_` escape
+java	short	idl-keyword: reachable only through IDL's own `_` escape
+java	switch	idl-keyword: reachable only through IDL's own `_` escape
+java	true	idl-keyword: as false above
+java	void	idl-keyword: reachable only through IDL's own `_` escape

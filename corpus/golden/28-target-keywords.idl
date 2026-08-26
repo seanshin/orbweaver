@@ -270,3 +270,147 @@ module kw_scope {
   //@ ai_desc: Python soft keyword and a Rust keyword
   module type { struct Held5 { long v; }; };
 };
+
+// ── Java, added 2026-08-26 with the Java client target ───────────────────────
+//
+// Java's reserved words are not Rust's or Python's, and this file's own rule —
+// *"adding a target means adding its keyword list to that file's coverage"* —
+// is what `binding-words --language java` compiles. Measured before this
+// section existed: **17 of 59** of the words the Java emitter escapes were
+// executed here, every one of them by accident, because `class`, `final`,
+// `try`, `for`, `while`, `static`, `super`, `assert`, `break`, `continue`,
+// `do`, `else`, `if`, `return` and `yield` happen to be Rust or Python keywords
+// too. *A word covered by accident is what the instrument exists to end.*
+//
+// Java's escape is the same as Python's — a LEADING underscore, which is the
+// OMG IDL-to-Java mapping's rule (formal/08-01-11 §1.3.2) and what
+// `org.jacorb.idl.parser` writes.
+//
+// Twenty of the words the Java emitter escapes are IDL keywords as well
+// (`boolean`, `long`, `interface`, `default`, …), so no contract can name them
+// without IDL's own `_` escape, and one — `_`, which Java 9 removed as an
+// identifier — cannot be spelled in IDL at all. Those have rows in
+// `spikes/bindings/keywords-not-executed.tsv` with their class; there is no
+// third option, and that is what makes the clause a gate rather than a report.
+
+module kw_java {
+  //@ ai_desc: Struct members named for Java keywords, none of which are
+  //@ ai_desc: reserved in Rust or Python
+  struct Members {
+    long   byte;
+    long   catch;
+    long   new;
+    long   null;
+    long   this;
+    long   int;
+  };
+
+  //@ ai_desc: Enum members, which leave their own scope and land in this module
+  enum Marks {
+    goto,
+    transient
+  };
+
+  //@ ai_desc: Union branches, whose Java accessors are methods
+  union Choice switch (long) {
+    case 1: long instanceof;
+    case 2: long throws;
+    default: long package;
+  };
+
+  //@ ai_desc: Exception members, which cross the wire inside a fault
+  exception Trouble {
+    long extends;
+    long implements;
+    long throw;
+  };
+
+  //@ ai_desc: Operations named for Java keywords
+  interface Calls {
+    //@ ai_desc: Does nothing; it exists so `synchronized` is emitted as a method name
+    //@ ai_effect: idempotent
+    void synchronized();
+    //@ ai_desc: Does nothing; it exists so `protected` is emitted as a method name
+    //@ ai_effect: idempotent
+    void protected();
+  };
+};
+
+// Type-name positions for Java. Four of these are **contextual** keywords —
+// legal as a variable name and fatal as a type name, which is exactly the
+// position an IDL type lands in — so a list that only held the 50 reserved
+// words would have said Java was covered while `public final class record`
+// failed to compile.
+module kw_java_types {
+  //@ ai_desc: Restricted as a type name since Java 16, legal as a variable name
+  struct record { long v0; };
+  //@ ai_desc: Restricted as a type name since Java 10
+  struct var { long v1; };
+  //@ ai_desc: Restricted as a type name since Java 17
+  enum sealed { j0a, j0b };
+  //@ ai_desc: Restricted as a type name since Java 17
+  typedef sequence<long> permits;
+  //@ ai_desc: A Java keyword as a union name
+  union volatile switch (long) { case 1: long j1a; default: long j1b; };
+  //@ ai_desc: A Java keyword as an exception name
+  exception strictfp { long code3; };
+};
+
+// ── Template locals, added 2026-08-26 ────────────────────────────────────────
+//
+// D030 §5 L2 predicted the Java hazard would be reserved words and was
+// falsified before the target existed: `org.jacorb.idl.parser` 3.9 writes
+// `catch (java.io.IOException e)` into the same scope as an operation's own
+// parameters, so an IDL parameter named `e` makes its generated Java fail to
+// compile — and `e` is not a Java keyword. **The hazard is every identifier the
+// emitter's template puts in scope**, and that list is one only we can know.
+//
+// This emitter answers it by construction rather than by escaping: every local,
+// parameter and field its templates bind begins with `_`, and an IDL identifier
+// can never begin with `_` (the leading underscore in `_struct` is IDL's own
+// keyword escape and the front end strips it). The names below are the ones
+// those locals would have been called without the prefix. They are here so the
+// claim is **executed**: the Java target's cell compiles what the emitter wrote
+// for this file, and a template that ever binds a bare name goes red here
+// rather than at a consumer.
+//
+// One of the emitter's prefixes is `_in_` rather than `_`: an escaped member
+// name IS `_` plus the IDL name, so a constructor parameter spelled `_class`
+// for the member `class` assigns the field to itself — silently, and only for
+// members whose names are Java keywords. Two prefixes are needed because one of
+// them is already the escape. Found by reading what the emitter wrote for
+// `struct Reserved { string class; }` above.
+module kw_template_locals {
+  //@ ai_desc: Members named for what a generator's template calls its locals
+  struct Locals {
+    long   e;
+    long   o;
+    long   v;
+    long   i;
+    long   b;
+    long   p;
+    long   u;
+    long   c;
+    long   r;
+    string name;
+    long   value;
+    long   parts;
+    long   invoker;
+    long   result;
+    long   other;
+    long   disc;
+  };
+
+  //@ ai_desc: Parameters and an operation named for template locals
+  interface Bound {
+    //@ ai_desc: `e` is what a hand-written encoder would have called its encoder
+    //@ ai_effect: idempotent
+    void absorb(in long e, in long v, in string name, in long value);
+    //@ ai_desc: Both directions, since a template binds a local for each
+    //@ ai_effect: idempotent
+    void reduce(inout long i, out long r);
+    //@ ai_desc: Named for the field a generated stub holds its invoker in
+    //@ ai_effect: read_only
+    long invoker();
+  };
+};
