@@ -4315,7 +4315,11 @@ leak_leg language
 
 hr "leak test — a target evicted under a live caller (D029 §5 O0)"
 bears_on activation
-tp_measures_nothing
+# `tp_measures_nothing` was here while this leg was a counted SKIPPED. It
+# measures now: `MissPolicy::Activate` demand-loads inside `locate`, so a
+# caller holding only a reference cannot tell an evicted target from a
+# resident one — and the guard would make the ledger read that measurement
+# as nothing, which is the exact swallow it exists to prevent, upside down.
 leak_leg activation
 
 hr "leak test — a target removed under a live caller (D029 §5 O0)"
