@@ -282,11 +282,7 @@ mod serve {
             .map_err(|e| e.to_string())?;
 
         static GONE: AtomicBool = AtomicBool::new(false);
-        let parent = Parent {
-            stdin: std::io::stdin(),
-            stdout: std::io::stdout(),
-            gone: &GONE,
-        };
+        let parent = Parent { stdin: std::io::stdin(), stdout: std::io::stdout(), gone: &GONE };
         let mut servant = PyServant::new(&registry, interface, parent)?;
 
         // The banner, before a single call can arrive and after the listener

@@ -49,8 +49,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbweaver_cdr::Encoder;
 use orbweaver_dynamic::anyjson::{self, LocalReferences};
 use orbweaver_dynamic::json::Json;
-use orbweaver_giop::codeset::{CodeSetId, WideCodec};
 use orbweaver_giop::Version;
+use orbweaver_giop::codeset::{CodeSetId, WideCodec};
 use orbweaver_giop::server::{Completion, Dispatch, DispatchBody, Request, SystemException};
 use orbweaver_giop::typecode::TypeCode;
 use orbweaver_registry::{OperationSig, ParamDirection, Registry};
@@ -154,11 +154,7 @@ impl<A: Answerer> PyServant<A> {
     /// answer was lost, and this project's own rule is that telling a caller
     /// "safe to retry" wrongly is worse than telling it nobody knows.
     fn seam_failure() -> SystemException {
-        SystemException {
-            id: SEAM_FAILURE.to_owned(),
-            minor: 0,
-            completed: Completion::Maybe,
-        }
+        SystemException { id: SEAM_FAILURE.to_owned(), minor: 0, completed: Completion::Maybe }
     }
 
     /// The wide-character codec **this request** implies.
@@ -350,11 +346,7 @@ impl<A: Answerer> Dispatch for PyServant<A> {
         Ok(DispatchBody::Return)
     }
 
-    fn dispatch(
-        &mut self,
-        request: &Request,
-        out: &mut Encoder,
-    ) -> Result<(), SystemException> {
+    fn dispatch(&mut self, request: &Request, out: &mut Encoder) -> Result<(), SystemException> {
         match self.dispatch_body(request, out)? {
             DispatchBody::Return => Ok(()),
             // The narrow entry point cannot carry a user exception, so one
