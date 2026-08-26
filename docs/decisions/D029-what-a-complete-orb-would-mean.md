@@ -247,7 +247,7 @@ feature to add.
 
 | Transparency | The caller must not be able to tell | Status today |
 |---|---|---|
-| **Location** | where the target runs | **measured, with a known leak**: `LOCATION_FORWARD` and `_PERM` are served and followed, and R7 rewrites an IOR for a dialable address — but `Connection::move_to` restored a hand-written field list and dropped two configured limits across every forward until today, so the *caller's* limits changed when the object moved. Fixed; the class is the leak to watch. **A second instance, found 2026-08-26 and not fixed**: `moe::Router::select` returns `ExpertSeq` — N object references, each an `Ior` stored verbatim from `register_expert` and marshalled inline with host, port and object key. A caller learns where every candidate expert runs, which is exactly what this row says it must not be able to tell. `corpus/golden/22`'s own comment beside the operation already says so — *"widening reach by N addresses at once is precisely the case §4.7's bearer-address rule exists for"* — and §4.7's rule is the authority half of the same fact. Recorded, not changed: `select` is served and has consumers. |
+| **Location** | where the target runs | **measured, with a known leak**: `LOCATION_FORWARD` and `_PERM` are served and followed, and R7 rewrites an IOR for a dialable address — but `Connection::move_to` restored a hand-written field list and dropped two configured limits across every forward until today, so the *caller's* limits changed when the object moved. Fixed; the class is the leak to watch. **A second instance, found 2026-08-26 and not fixed**: `moe::Router::select` returns `ExpertSeq` — N object references, each an `Ior` stored verbatim from `register_expert` and marshalled inline with host, port and object key. A caller learns where every candidate expert runs, which is exactly what this row says it must not be able to tell. `corpus/golden/22`'s own comment beside the operation already says so — *"widening reach by N addresses at once is precisely the case §4.7's bearer-address rule exists for"* — and §4.7's rule is the authority half of the same fact. Recorded, not changed: `select` is served and has consumers. **A third thing under this row, closed 2026-08-26 and not one of the two leaks above**: the probe path *lied*. See the `LocateRequest` subsection below for what moved and why the row's status sentence is unchanged. |
 | **Backend** | what implements it | mostly held: a servant is behind a POA and a reference; but `spike_experts`' server root key collides with its derived registry key, which is a backend detail reaching a name. |
 | **Language** | what it is written in | **the construction leak is closed; three narrower ones remain** (2026-08-26). A Python servant is dispatched into by `orbweaver_gen::pyservant`, and `tests/python_servant.rs` compares one against the generated Rust servant for the same contract — 19 calls × 3 GIOP versions × 2 byte orders, **byte-identical replies**, with a negative control that perturbs five answers and asserts each is seen. **The peer half is now measured in both byte orders (2026-08-26):** omniORB's client little-endian, and JacORB's big-endian — the order taken from §15.4.1's flag byte on every request rather than from the peer's language — with the Python servant's 11 replies byte-identical to a Rust servant's for the same driver run, at IIOP 1.2 and 1.1. What remains is listed in §6.1.1 and none of it is the old *"cannot be a target at all"*. |
 | **Activation / load** | whether it is loaded right now | **leaks, and now measured (2026-08-26)**: the leak is `moe::Router::select`, and it is *residency-blind by omission rather than by absence of data*. `mirror_residency` keeps `Offer::residency` live in the very store `select` reads, and `orbweaver-trading`'s query grammar has a `residency` field, but `Constraints::to_query_text` never names it — so an OFFLOADED expert comes back in the sequence and dialling it answers `OBJECT_NOT_EXIST` where a resident one answers. `expert_service.rs:882-891` records this as intended: *"the caller's cue to `prefetch`"*. That makes the leak a **design choice written down**, not an oversight, which is the strongest form for it to be in before it is decided. `Router::dispatch` is *not* the operation that would close it — it is refused (D006 option E), and its own reason is now known to be false as written (see D006's 2026-08-26 amendment). The closer is a POA-level activation path, because the criterion says *any* target, and a fix inside one application contract closes it for one contract. |
@@ -285,6 +285,104 @@ feature to add.
 러스트독에 있으며 어느 쪽도 다시 적지 않는다. 같은 날 측정하고 **바꾸지 않은 것**:
 이 워크스페이스의 serve 지점 63개 중 **17개가 `|| false`를 넘긴다** — 여전히 죽여야만
 멈추는 프로세스 열일곱이다. 이제 *고칠 수 있게* 되었을 뿐 고쳐진 것은 아니다.
+
+#### Location, for a `LocateRequest` — the probe answered "nowhere" (2026-08-26)
+
+**The row's status sentence does not move, and saying so is the point.** Both
+leaks it names are untouched: `Connection::move_to`'s field list is the class to
+watch, and `moe::Router::select` still hands a caller N addresses. What closed is
+a third defect that sits under this row and was not on it, because nobody had
+looked at the *earlier* of the two moments a forward can be given.
+
+`LOCATION_FORWARD` on a `Request` is served and followed — that is the row's
+"measured" half. `OBJECT_FORWARD` on a `LocateRequest` is the same answer given
+one message earlier, before the caller has spent an invocation, and this ORB
+could **name that status and not serve it**: `encode_locate_reply` wrote a
+request id and a status word and stopped, while the serve loop decided the
+answer by asking `Dispatch::knows`, a boolean. Measured on this workspace before
+the change, with a servant whose object had moved: `Connection::locate()`
+answered `Ok(Unknown)`. Not "elsewhere" — **"nowhere"**. A caller that used the
+side-effect-free probe §9.4.5 exists to provide was told its reference named
+nothing, and the only way to learn otherwise was to send the request anyway.
+
+That is a leak in this row's own terms. The criterion says a caller invokes
+holding only a reference *without knowing the target's location*; a caller told
+its reference is dead has learned something about location, and learned a
+falsehood. `crates/orbweaver-giop/tests/locate_forward_and_reply_contexts.rs`
+refutes it: 12 tests, three GIOP versions × two byte orders, seven negative
+controls each run red — including the serve loop reverted to `knows()`, which
+reproduces the `Ok(Unknown)` above.
+
+**What is still open, named rather than left looking closed.**
+
+1. **`knows` gates the forward on the request path too.** `Dispatch::serve_one`
+   asks `knows` *before* `redirect`, so the same servant that now answers
+   `OBJECT_FORWARD` to a probe answers `OBJECT_NOT_EXIST` to an ordinary
+   request. One root cause, two messages, one of them fixed. Closing it means
+   reordering `serve_one`, which changes what an existing servant's `redirect`
+   is asked about — a decision this batch did not take. Pinned as a
+   characterisation test (`a_moved_object_is_still_refused_on_the_request_path`)
+   so that closing it is deliberate, and named in `Dispatch::locate`'s rustdoc.
+   The workaround until then is for a moving servant to keep `knows` true.
+2. **The multiplexer answers for its members.** `orbweaver_gen::rt::Servants`
+   uses the default `locate`, which consults its own `knows` — "any member
+   knows" — so a member that has moved an object would be overruled into
+   `ObjectHere` and the caller would spend the request the probe existed to
+   save. `orbweaver-gen` was another batch's footprint on 2026-08-26 and was
+   left alone; the delegation is three lines and belongs with whoever owns it.
+3. **No peer has been asked.** Every measurement here is this ORB's encoder
+   against this ORB's decoder and a socket between them. omniORB and JacORB
+   have not been made to emit an `OBJECT_FORWARD` at us, so the recorded-bytes
+   discipline this project applies to wire changes has not been applied to this
+   one. That is the honest limit of the measurement.
+
+**Not a row-mover, landed the same day and recorded here so it is not looked
+for under this row.** A `Reply` could not carry an `IOP::ServiceContextList`
+(§9.4.3.1 requires one in every GIOP version; the encoder wrote a hard zero) and
+an inbound one was discarded by `decode_reply` while `decode_request` kept the
+identical list. §9.7.2's *"ignored, but preserved"*, the rule this codebase
+already applies to a `TaggedComponent`. That is conformance and interoperability,
+not transparency: no caller learns anything about a target's location from it.
+Nothing attaches a context to an outgoing reply and there is no hook for doing
+so — *who may* is `docs/PLAN-DEFERRED.md` §21.
+
+*이 행의 상태 문장은 **옮겨지지 않는다**. 행이 이름 붙인 두 구멍은 그대로다.
+닫힌 것은 이 행 아래 있었지만 행에 적히지 않았던 세 번째 결함이다 — 포워드를
+줄 수 있는 두 순간 중 **이른 쪽**을 아무도 보지 않았다. `Request`의
+`LOCATION_FORWARD`는 서빙되고 따라간다. `LocateRequest`의 `OBJECT_FORWARD`는
+호출자가 요청을 쓰기 **한 메시지 전에** 주는 같은 대답인데, 이 ORB는 그 상태를
+**이름 부를 수는 있고 서빙할 수는 없었다**: `encode_locate_reply`는 요청 id와
+상태 워드를 쓰고 멈췄고, 서브 루프는 불리언인 `Dispatch::knows`로 답을 정했다.
+변경 전 이 워크스페이스에서 측정: 객체가 이동한 서번트에 대해
+`Connection::locate()`가 `Ok(Unknown)`을 답했다 — "다른 곳"이 아니라
+**"아무 데도 없음"**. 부작용 없는 조사를 쓴 호출자가 자기 참조가 아무것도 가리키지
+않는다고 들었고, 그것은 위치에 대해 **거짓을 배운 것**이므로 이 행의 용어로
+구멍이다. `locate_forward_and_reply_contexts.rs`가 반증한다 — 12개 테스트,
+GIOP 3개 버전 × 바이트 순서 2가지, 각각 붉게 만들어 본 부정 대조군 7개(서브
+루프를 `knows()`로 되돌린 것 포함, 위의 `Ok(Unknown)`이 재현된다).*
+
+***열려 있는 것, 닫힌 것처럼 보이지 않게 이름 붙여 둔다.*** *(1) `knows`가
+요청 경로에서도 포워드를 막는다: `serve_one`이 `redirect`보다 `knows`를 먼저
+묻기 때문에, 조사에 `OBJECT_FORWARD`를 답하는 바로 그 서번트가 일반 요청에는
+`OBJECT_NOT_EXIST`를 답한다. 원인 하나, 메시지 둘, 그중 하나만 고쳤다 —
+`serve_one` 재정렬은 기존 서번트의 `redirect`가 무엇에 대해 질문받는지를 바꾸므로
+이 배치가 내리지 않은 결정이다. 특성화 테스트로 고정했고
+`Dispatch::locate`의 러스트독에도 적었다. (2) 다중화기가 멤버 대신 답한다:
+`orbweaver_gen::rt::Servants`는 기본 `locate`를 쓰므로 이동한 멤버가
+`ObjectHere`로 덮어써진다 — `orbweaver-gen`은 다른 배치의 footprint여서 손대지
+않았다. (3) **피어에게 물어보지 않았다**: 모든 측정이 우리 인코더 대 우리 디코더다.
+omniORB·JacORB가 우리에게 `OBJECT_FORWARD`를 보내게 한 적이 없으므로, 이
+프로젝트가 와이어 변경에 적용하는 기록-바이트 규율이 이 변경에는 적용되지 않았다.
+이것이 측정의 정직한 한계다.*
+
+***이 행을 움직이지 않지만 같은 날 착지한 것***, *이 행 아래에서 찾지 않도록
+여기 적어 둔다: `Reply`가 `IOP::ServiceContextList`를 실을 수 없었고(§9.4.3.1은
+모든 GIOP 버전에서 요구한다; 인코더는 하드코딩된 0을 썼다) 들어온 것은
+`decode_reply`가 버렸다 — `decode_request`는 같은 목록을 보관하는데도. §9.7.2의
+*"무시하되 보존한다"*, 이 코드베이스가 `TaggedComponent`에 이미 적용하는 규칙이다.
+이것은 적합성과 상호운용성이지 투명성이 아니다: 이것으로부터 호출자가 대상의
+위치에 대해 알게 되는 것은 없다. 나가는 응답에 컨텍스트를 붙이는 것은 아무것도
+없고 그럴 훅도 없다 — **누가 붙일 수 있는가**는 `PLAN-DEFERRED` §21이다.*
 
 #### Location, for event channels — what closed and what did not (2026-08-26)
 
