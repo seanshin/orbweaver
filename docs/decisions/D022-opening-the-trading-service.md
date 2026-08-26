@@ -131,6 +131,23 @@ stage T1 can start immediately; T2–T4 each name what they wait on.
 
 ### T1 — the constraint language reaches TCL's shape (engine only)
 
+> **Landed, and the heading above overstates what landed — recorded 2026-08-26
+> rather than rewritten.** T1 closed **four** of the eight gaps §4 lists: `or`,
+> `not`, parentheses and `exist`. **`~` (substring), `in` (sequence membership)
+> and arithmetic were never implemented**, and `query.rs`'s own `# Scope`
+> header says so. The preference expression landed as T2, a *second* grammar.
+> So the constraint language moved **toward** TCL — which is the word D023
+> uses — and this heading is the only place in the tree that says it arrived.
+> A later batch quoted the heading back as fact in a brief; that is the drift a
+> plan-title becomes when it is read as a measurement, and the correction
+> belongs here rather than in the title, because **PLAN records what was
+> planned and what landed against it.**
+>
+> *제목이 착지한 것을 과장한다 — 다시 쓰지 않고 기록한다. §4가 나열한 여덟 간극 중
+> **넷**이 닫혔고, `~`·`in`·산술은 구현되지 않았으며 `query.rs`의 `# Scope`가 그렇게
+> 적는다. 트리에서 "도달했다"고 말하는 곳은 이 제목뿐이고, 이후 배치가 그것을 사실로
+> 되받아 인용했다.*
+
 `or`, `not`, parentheses and **`exist`**, in `orbweaver-trading::query`. No
 wire surface, no new crate, and every existing query still parses — the grammar
 grows, it does not change. `exist` is wired to the `Truth`/`gap_note` machinery

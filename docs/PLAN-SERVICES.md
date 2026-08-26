@@ -137,9 +137,45 @@ in stream F consumes more than property-constrained lookup over registered
 offers, which the engine already does with S4-style positioned query errors.
 The wire surface therefore landed as the *project* contract
 (`moe::ExpertRegistry` from `corpus/golden/22`), served on our POA like F6;
-the standard `CosTrading::Lookup::query` facade is still deferred until a
-foreign trading client is named — the IFR-facade rule (§7) applied to
-Trading. Deferral is recorded here so it is a decision, not a drift.
+the standard `CosTrading::Lookup::query` facade was deferred until a foreign
+trading client was named — the IFR-facade rule (§7) applied to Trading.
+Deferral was recorded here so it was a decision, not a drift.
+
+**The deferral fired and closed on 2026-08-26.** The owner asked for the
+trading service to be opened, which D023 §2's proposed rule reads as the naming
+(D022 §2 carries the argument and the alternative reading). The fixture was
+probed before the batch was planned, per `PLAN-DEFERRED` §9, and the probe
+refuted the assumption the deferral rested on: **omniORB ships a real trading
+client** — `CosTrading.idl`, generated `CosTrading` Python packages,
+`CosTrading.Lookup` with `_NP_RepositoryId = IDL:omg.org/CosTrading/Lookup:1.0`
+and `query` with all twenty inherited attributes. No hand-written peer was
+needed. `spikes/trading_client.py` drives omniORB's own stubs over TCP, which
+is sanctioned use (a); nothing was vendored and `cargo tree` stays clean.
+
+What landed: `CosTrading::Lookup::query` on our POA, **answering with a nil
+`OfferIterator`** for every result that fits `how_many` and refusing the rest
+**by name and with the bound**, which the specification makes conformant
+(D022 §5). No iterator object exists, because that is the DynAny hazard —
+a POA-hosted object per query with a lifetime — and D022 §7 forbids it until a
+query that cannot fit is named. `ServiceTypeName` and its property schema
+landed with it, checked at registration; **no `ServiceTypeRepository` servant**,
+per the same section.
+
+**Not in `SERVICES-COVERAGE` §8, and the reason is the licence boundary.** The
+sweep derives its operation list by parsing IDL from our own corpus, no
+first-party `CosTrading` contract exists, and omniORB's must not be vendored.
+Writing one from the OMG specification is the prerequisite and owes
+`differential.sh --require omniidl,jacorb_idl --record`; adding the servant to
+the sweep half-way would have left `coverage_tables.py --check` red, so it was
+deliberately not done.
+
+*유예는 2026-08-26에 발화하고 닫혔다. 배치 계획 전에 픽스처를 프로브했고, 그것이
+유예가 딛고 선 가정을 반증했다 — **omniORB는 진짜 트레이딩 클라이언트를 싣고
+있다.** 착지한 것은 `Lookup::query`이며, `how_many`에 들어가는 결과에는 **nil
+반복자**로 답하고 나머지는 **이름과 한계를 대고 거부**한다. 반복자 객체는 짓지
+않았다. `SERVICES-COVERAGE` §8에 없는 이유는 라이선스 경계다: 1차 저작
+`CosTrading` 계약이 없고 omniORB의 것은 벤더링할 수 없으며, 반쯤 넣으면
+`coverage_tables.py --check`가 빨개진다.*
 
 What the servant is, precisely: **one servant, two objects.** Registering an
 expert has to create it in the offer store *and* in F3's residency machine,
