@@ -65,6 +65,8 @@ use orbweaver_registry::{
 fn main() -> std::process::ExitCode {
     let mut idl: Option<String> = None;
     let mut ior: Option<String> = None;
+    let mut serve_id: Option<String> = None;
+    let mut endpoint: Option<String> = None;
     let mut argv: Vec<String> = std::env::args().skip(1).collect();
     let search = match take_include_dirs(&mut argv) {
         Ok(s) => s,
@@ -78,17 +80,36 @@ fn main() -> std::process::ExitCode {
         match a.as_str() {
             "--idl" => idl = args.next(),
             "--ior" => ior = args.next(),
+            "--serve" => serve_id = args.next(),
+            "--endpoint" => endpoint = args.next(),
             other => {
                 eprintln!("unexpected argument {other:?}");
                 return std::process::ExitCode::from(2);
             }
         }
     }
-    let (Some(idl), Some(ior)) = (idl, ior) else {
-        eprintln!("usage: orbweaver-py-bridge --idl <file.idl> --ior <IOR:… | file> [-I <dir>]...");
+    let Some(idl) = idl else {
+        eprintln!("{USAGE}");
         return std::process::ExitCode::from(2);
     };
-    match run(&idl, &ior, &search) {
+    // The two directions are two modes of one program and never both at once,
+    // which is what keeps the pipes carrying a single conversation: in `--ior`
+    // Python writes a request and the bridge answers; in `--serve` the bridge
+    // writes a call and Python answers. A process that could do both would have
+    // two writers on one stdout.
+    let outcome = match (ior, serve_id) {
+        (Some(_), Some(_)) => {
+            eprintln!("--ior and --serve are the two directions and cannot be combined");
+            return std::process::ExitCode::from(2);
+        }
+        (Some(ior), None) => run(&idl, &ior, &search),
+        (None, Some(id)) => serve::run(&idl, &id, endpoint.as_deref(), &search),
+        (None, None) => {
+            eprintln!("{USAGE}");
+            return std::process::ExitCode::from(2);
+        }
+    };
+    match outcome {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("orbweaver-py-bridge: {e}");
@@ -96,6 +117,11 @@ fn main() -> std::process::ExitCode {
         }
     }
 }
+
+const USAGE: &str = "usage: orbweaver-py-bridge --idl <file.idl> [-I <dir>]...\n  \
+     --ior <IOR:… | file>          call a target from Python (the client direction)\n  \
+     --serve <interface-id>        serve a Python object (the servant direction)\n  \
+     [--endpoint <host:port>]      where a served object listens; default 127.0.0.1:0";
 
 fn run(idl_path: &str, ior_arg: &str, search: &SearchPath) -> Result<(), String> {
     let contract = Contract::load(std::path::Path::new(idl_path), search, Strictness::Checked)
@@ -153,6 +179,141 @@ fn run(idl_path: &str, ior_arg: &str, search: &SearchPath) -> Result<(), String>
 
 fn object<const N: usize>(fields: [(&str, Json); N]) -> Json {
     Json::Object(fields.into_iter().map(|(k, v)| (k.to_owned(), v)).collect())
+}
+
+/// The servant direction: our ORB accepts a call and Python answers it.
+///
+/// The mirror of everything above, and the same program: one JSON document per
+/// line on the same two pipes, with the initiative reversed. What makes this a
+/// *seam* rather than a second ORB is that nothing below knows about GIOP —
+/// `orbweaver_gen::pyservant::PyServant` decodes the request, resolves the
+/// operation, answers the object probes and chooses the reply status, and only
+/// then is anything written to Python.
+///
+/// ```text
+/// ← {"ready":{"ior":"IOR:…","type_id":"IDL:gc24/Gauge:1.0","idl":"…"}}
+/// ← {"call":{"id":"IDL:gc24/Gauge:1.0","op":"record","args":{"sample":1.5,"unit":"C"}}}
+/// → {"ok":{"returns":{"at":1.5,"sequence_no":1,"unit":"C"},"outputs":{}}}
+/// ```
+///
+/// The three reply shapes are the client direction's, unchanged and
+/// deliberately so: `ok`, `user_exception`, `system_exception` are the same
+/// documents read from the other end, which is why a second direction did not
+/// need a second format. *두 방향은 같은 문서를 반대편에서 읽는다.*
+mod serve {
+    use std::io::{BufRead, Write};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use orbweaver_dynamic::json::Json;
+    use orbweaver_gen::pyservant::{Answerer, PyServant};
+    use orbweaver_giop::orb::Orb;
+    use orbweaver_idl::include::SearchPath;
+    use orbweaver_registry::{Contract, Registry, Strictness};
+
+    /// The object key a served Python object answers to.
+    ///
+    /// One servant per bridge process, so one key, and `Dispatch::knows`
+    /// accepts everything — which is what its own default documentation calls
+    /// right for a single-servant process.
+    const KEY: &[u8] = b"pyservant";
+
+    /// Asks the parent process, over the pipes it started us with.
+    ///
+    /// Owned handles rather than locks so the type is `Send`, which
+    /// `Server::serve` requires of a `Dispatch`. Reading and writing are both
+    /// line-framed and flushed, because a buffered call is a call the servant
+    /// never sees and a deadlock nobody can read.
+    struct Parent {
+        stdin: std::io::Stdin,
+        stdout: std::io::Stdout,
+        /// Set when the parent closes its end. The accept loop reads it, so a
+        /// servant whose Python side has gone away stops rather than answering
+        /// every later caller with a seam failure.
+        gone: &'static AtomicBool,
+    }
+
+    impl Answerer for Parent {
+        fn ask(&mut self, call: &Json) -> Result<Json, String> {
+            let document = super::object([("call", call.clone())]);
+            {
+                let mut out = self.stdout.lock();
+                writeln!(out, "{document}").map_err(|e| e.to_string())?;
+                out.flush().map_err(|e| e.to_string())?;
+            }
+            let mut line = String::new();
+            loop {
+                line.clear();
+                let n = self.stdin.lock().read_line(&mut line).map_err(|e| e.to_string())?;
+                if n == 0 {
+                    self.gone.store(true, Ordering::SeqCst);
+                    return Err("the servant closed its end".to_owned());
+                }
+                if line.trim().is_empty() {
+                    continue;
+                }
+                return Json::parse(line.trim()).map_err(|e| e.to_string());
+            }
+        }
+    }
+
+    pub fn run(
+        idl_path: &str,
+        interface: &str,
+        endpoint: Option<&str>,
+        search: &SearchPath,
+    ) -> Result<(), String> {
+        let contract = Contract::load(std::path::Path::new(idl_path), search, Strictness::Checked)
+            .map_err(|e| e.message)?;
+        let mut registry = Registry::new();
+        registry.load(&contract.spec).map_err(|e| e.to_string())?;
+        // The plain registry, not `with_attribute_accessors`. The servant's
+        // callable surface comes from `python::client_operations`, which
+        // synthesises the accessors itself, and the copy the client direction
+        // makes marks every entry as ingested from a remote Interface
+        // Repository — a lie that direction can afford and this one has no
+        // reason to tell.
+
+        let addr = endpoint.unwrap_or("127.0.0.1:0");
+        let server = Orb::new().server(addr, KEY.to_vec()).map_err(|e| e.to_string())?;
+        let host = addr.split(':').next().filter(|h| !h.is_empty()).unwrap_or("127.0.0.1");
+        let ior = server
+            .ior(interface, host)
+            .and_then(|i| i.to_stringified())
+            .map_err(|e| e.to_string())?;
+
+        static GONE: AtomicBool = AtomicBool::new(false);
+        let parent = Parent {
+            stdin: std::io::stdin(),
+            stdout: std::io::stdout(),
+            gone: &GONE,
+        };
+        let mut servant = PyServant::new(&registry, interface, parent)?;
+
+        // The banner, before a single call can arrive and after the listener
+        // exists. A caller told the IOR too early dials a closed port, and
+        // "the fixture had not started yet" is the phantom failure this project
+        // has paid for most often — the same reason the client direction's
+        // banner waits for its connect.
+        {
+            let stdout = std::io::stdout();
+            let mut out = stdout.lock();
+            let _ = writeln!(
+                out,
+                "{}",
+                super::object([(
+                    "ready",
+                    super::object([
+                        ("ior", Json::String(ior.clone())),
+                        ("type_id", Json::String(interface.to_owned())),
+                        ("idl", Json::String(idl_path.to_owned())),
+                    ])
+                )])
+            );
+            let _ = out.flush();
+        }
+
+        server.serve(&mut servant, || GONE.load(Ordering::SeqCst)).map_err(|e| e.to_string())
+    }
 }
 
 /// One request, from the line that carried it to the line that answers it.

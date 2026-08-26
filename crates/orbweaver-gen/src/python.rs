@@ -913,6 +913,14 @@ struct PyOp {
     params: String,
     /// `(name, descriptor, value)` triples for the request.
     args: Vec<String>,
+    /// `(name, descriptor)` for each `in`/`inout`, in declaration order.
+    ///
+    /// The same parameters [`PyOp::args`] describes, without the value
+    /// expression a client stub interpolates. A servant is *given* the values,
+    /// so it needs the names and descriptors alone — and it needs them in this
+    /// order, because that is the order the arguments were declared and
+    /// therefore the order the method's positional parameters are in.
+    ins: Vec<String>,
     /// The declared result's descriptor.
     returns: String,
     /// `(name, descriptor)` for each `out`/`inout`, in declaration order.
@@ -923,6 +931,7 @@ fn py_op(sig: &OperationSig) -> Result<PyOp, String> {
     let mut op = PyOp {
         params: String::new(),
         args: Vec::new(),
+        ins: Vec::new(),
         returns: descriptor(&sig.returns)?,
         outs: Vec::new(),
     };
@@ -935,6 +944,7 @@ fn py_op(sig: &OperationSig) -> Result<PyOp, String> {
                 descriptor(&p.tc)?,
                 py_ident(&p.name)
             ));
+            op.ins.push(format!("({}, {})", py_str(&p.name), descriptor(&p.tc)?));
         }
     }
     for p in &sig.params {
@@ -1005,7 +1015,133 @@ fn emit_interface(registry: &Registry, id: &str, cx: &Cx<'_>) -> Result<String, 
         emit_operation(&mut s, &op_name, &op_name, &sig)?;
     }
     let _ = writeln!(s, "_rt.register({})", py_ident(&name));
+    emit_servant(&mut s, registry, id, &name)?;
     Ok(s)
+}
+
+/// The servant base class for one interface: `<Name>Servant`.
+///
+/// # Why this exists at all
+///
+/// Because until it did, a Python **servant could not be dispatched into**, and
+/// `docs/decisions/D029-*.md` §6.1 records what that cost — language
+/// transparency leaking *by construction*, since a target's language decided
+/// whether it could be a target at all. The client half above renders a request
+/// and reads a reply; this half reads a call and renders the answer. They are
+/// the same documents from the other end.
+///
+/// # Why `<Name>Servant` and not `POA_<Name>`
+///
+/// The OMG Python mapping spells a skeleton `POA_<scoped name>`, in a parallel
+/// package. This emitter spells it as [`crate::skeleton`] spells the Rust one —
+/// `<Name>Servant` beside `<Name>` — because the two targets of this project
+/// answering to two different conventions for the same role is a cost paid at
+/// every reading, while matching omniORBpy's package layout buys nothing here:
+/// nothing narrows to a Python skeleton by name.
+///
+/// It inherits the Rust emitter's one exposure with it. `interface Gauge` beside
+/// `interface GaugeServant` in one module collides, exactly as `GaugeServant`
+/// and `GaugeSkeleton` collide on the Rust side. That is a known limit rather
+/// than a decision — it is recorded here, and in `COMPONENTS.md`, because
+/// inventing a *different* rule for Python would make the two targets disagree
+/// about names for no gain.
+///
+/// # What the generated class contributes
+///
+/// Names, order, descriptors and one method per operation — the facts of one
+/// contract. No conversion logic, exactly as the client half carries none. The
+/// operation table is [`client_operations`]'s, which is the property rather than
+/// the convenience: **a Python servant answers precisely the names a Python
+/// client of the same contract can send, because one function decides both.**
+fn emit_servant(
+    s: &mut String,
+    registry: &Registry,
+    id: &str,
+    name: &str,
+) -> Result<(), String> {
+    let cls = format!("{}Servant", py_ident(name));
+    let ops = client_operations(registry, id);
+    let _ = writeln!(s);
+    let _ = writeln!(s, "class {cls}(_rt.Servant):");
+    docstring(
+        s,
+        "    ",
+        &item_doc(
+            registry.annotations(id),
+            &format!(
+                "Servant base for `{id}`.\n\n\
+                 Subclass it and write the method bodies; hand an instance to\n\
+                 `_rt.serve(idl, \"{id}\").run(...)`. Every operation and attribute\n\
+                 accessor this interface has is declared below, inherited ones included\n\
+                 and flattened, which is the same resolved set the client stub carries.\n\n\
+                 Each method here answers `NO_IMPLEMENT` until it is overridden. That is\n\
+                 the closest a Python base class gets to the Rust servant trait's required\n\
+                 method, and it is deliberately not `BAD_OPERATION`: the operation is in\n\
+                 the contract and this servant has not implemented it, which is a\n\
+                 different thing from there being no such operation.\n\n\
+                 `_is_a` and `_non_existent` are not here and must not be added. The\n\
+                 bridge answers them from the registry's resolved inheritance chain, so\n\
+                 that a servant cannot make its object un-narrowable by getting them\n\
+                 wrong."
+            ),
+        ),
+    );
+    let _ = writeln!(s, "    _idl_id = {}", py_str(id));
+    let _ = writeln!(s, "    _idl_name = {}", py_str(name));
+    let _ = writeln!(s, "    _idl_operations = {{");
+    for (wire, sig) in &ops {
+        let op = py_op(sig)?;
+        let ins: String = op.ins.iter().map(|i| format!("{i}, ")).collect();
+        let outs: String = op.outs.iter().map(|o| format!("{o}, ")).collect();
+        let raises: String = sig.raises.iter().map(|ex| format!("{}, ", py_str(ex))).collect();
+        let _ = writeln!(
+            s,
+            "        {}: _rt.Op({}, ins=({}), returns={}, outs=({}), raises=({}), oneway={}),",
+            py_str(wire),
+            py_str(&py_ident(wire)),
+            ins,
+            op.returns,
+            outs,
+            raises,
+            if sig.oneway { "True" } else { "False" },
+        );
+    }
+    let _ = writeln!(s, "    }}");
+
+    for (wire, sig) in &ops {
+        let op = py_op(sig)?;
+        let _ = writeln!(s);
+        let _ = writeln!(s, "    def {}(self{}):", py_ident(wire), op.params);
+        let mut what = match sig.annotations.get("ai_desc") {
+            Some(desc) => format!("{desc}\n\n`{wire}` on the wire."),
+            None => format!("`{wire}`. The contract carries no `ai_desc` for this operation."),
+        };
+        if !op.outs.is_empty() {
+            what.push_str(
+                "\n\nAnswer a tuple: the declared result first when it is not void, then\n\
+                 the out and inout values in declaration order (§7.9.1) — the same shape\n\
+                 a client of this contract receives.",
+            );
+        }
+        if sig.oneway {
+            what.push_str(
+                "\n\nOneway: §9.4.1 gives this call no reply to travel in, so a refusal\n\
+                 raised here reaches nobody. It is logged where the servant runs and\n\
+                 dropped, which is what the specification requires and what a generated\n\
+                 Rust skeleton does at the same point.",
+            );
+        }
+        if !sig.raises.is_empty() {
+            what.push_str(
+                "\n\nMay raise only the exceptions this operation declares; any other\n\
+                 reaches the caller as `UNKNOWN` with the OMG minor for an unlisted\n\
+                 user exception, which is §4.11's mapping and not this seam's invention.",
+            );
+        }
+        docstring(s, "        ", &what);
+        let _ = writeln!(s, "        raise _rt.Raise.no_implement().did_not_run()");
+    }
+    Ok(())
 }
 
 fn emit_operation(
