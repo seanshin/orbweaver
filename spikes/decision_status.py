@@ -59,9 +59,15 @@ So a source file is read under two extra rules, and both are measured below:
      the decision files themselves keep (`**STATUS: APPROVED**`), all four
      drifted restatements used it, and it removes 10 of the 12. Korean has no
      case, so Korean status words count either way — which means the Korean
-     verb shape ("D006이 제안한") is a hole this rule does not close. It has no
-     instance today over 150 files, and it is written here rather than guarded,
-     so that the second sighting is recognised instead of rediscovered.
+     verb shape ("D006이 제안한") is a hole this rule does not close, and the
+     honest measurement of the exposure is: **77 of the scanned files carry
+     Hangul, and 4 passages put a Korean status word beside a decision
+     reference.** None of the four fires, and three of them do not fire for
+     reasons that are not this rule — the passage also names the current state,
+     or the word is quoted. It is written down rather than guarded because
+     guarding it would need a guess about Korean verb endings and there is no
+     instance to tune against; the point is that the second sighting is
+     recognised instead of rediscovered.
   2. **A quoted status word is a quotation, not an assertion.** A word inside
      backticks or double quotes is being shown, not claimed. This removes the
      last 3 — all of them in *this file's own docstring*, which necessarily
