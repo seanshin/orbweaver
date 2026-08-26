@@ -226,6 +226,79 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **A caller can no longer tell whether the target was loaded — and the leak
+  was not where D029 §6.1 said it was.** The Activation row named
+  `moe::Router::select`. `select` is a **contract, not a leak**, argued from
+  corpus/golden/22: `Constraints` declares no residency member, so filtering
+  would apply a constraint nobody expressed; the contract already gives load
+  state two homes where it is a value a caller *asks for*
+  (`moe::ExpertLoader::status`, `//@ ai_effect: read_only` with no `ai_authz`,
+  and `moe::Capability::state` through `Expert::describe`); `Router` being
+  `//@ ai_desc: Control-plane gate` settles that its callers **may know**,
+  which is a right to be *told* and not a licence for a side channel; and —
+  decisively — **a filter could not have closed it.** `select` answers at T and
+  the caller dials at T+ε, so an expert RESIDENT at T can be evicted before the
+  dial, and a reference from `Expert::delegate`, from an earlier call, or
+  destringified never went through the operation at all. A filter changes how
+  *often* a caller can tell, never *whether*.
+
+  The reason the code gave for the omission was separately false and is
+  corrected in `select`'s rustdoc: *"the caller's cue to `prefetch`"* names an
+  action the cued caller generally cannot take — `prefetch` is `oneway`, it
+  lives on `ExpertLoader`, an object `Router` never hands over, and it is gated
+  `//@ ai_authz: moe.loader.residency`, which `moe.router.select` does not
+  imply. The position it defended was right; its reason was not.
+
+  **The leak was one layer down, in what the *reference* does across an
+  eviction.** `residency::MissPolicy`'s two variants both answered
+  `Located::Unknown` for an OFFLOADED expert, the POA turned that into
+  `OBJECT_NOT_EXIST`, and the same reference invoked twice by the same caller
+  answered differently. **`MissPolicy::Activate`** demand-loads inside `locate`
+  and answers `Located::Here`; being a POA-level fact it holds for *any*
+  target, which is what §6's criterion asks and what a fix inside one
+  application contract could never have given. The refusal that had ruled
+  demand loading out is **kept, with both its variants and its default**, and
+  quoted verbatim in the new rustdoc — every clause of it is about **cost**,
+  and priority zero ranks a cost below a leak. An id the loader never
+  registered stays `Located::Unknown` under every policy, `Activate` included:
+  that is not a load state, and inventing one on demand would answer for
+  references nobody minted.
+
+  Measured by `crates/orbweaver-object/tests/what_a_caller_can_tell_about_load.rs`
+  — one live `Connection`, one reference, the expert evicted from the test
+  thread, and the next observation compared whole (status, version, byte order,
+  every byte). **Its control is in the tree**:
+  `the_refusing_miss_policies_are_the_leak` runs the identical scenario under
+  the two refusing variants and requires it to fail naming `OBJECT_NOT_EXIST`,
+  so a green run is evidence about a leak rather than about a switch that has
+  stopped working. It is also **the first thing in this workspace that routes a
+  wire request through `Poa::dispatch_target`** — `USE_SERVANT_MANAGER`, the
+  locator and the activation had been reached only by unit tests calling it
+  directly, so a leak there could not have been seen by any caller because no
+  caller could reach it. `spikes/leak_tests.sh`'s activation leg is MEASURED
+  rather than a counted `SKIPPED`.
+
+  **Not closed, and named rather than left to be found.** *Time*: a
+  demand-loaded call is slower than a resident one and a caller with a clock
+  can tell; in one process the alternatives are forwarding to a node where the
+  target is loaded (there is no second node) or making every call as slow as
+  the slowest. And in this repository a load is a state transition plus an
+  opaque blob — two map writes — so the latency the refusal is about is real in
+  a deployment and **absent from every test here**. *Deployment*: nothing in
+  the tree mounts `ExpertLocator` on a served POA, so which variant production
+  would run is undecided, and a deployment on either refusing variant leaks.
+
+  *활성화 행이 지목한 곳에 구멍은 없었다. `select`는 구멍이 아니라 **계약**이며,
+  거르기로는 애초에 막히지 않는다 — T에 답하고 T+ε에 걸기 때문이다. 코드가 적어
+  둔 사유(*"호출자가 `prefetch`하라는 신호"*)는 따로 거짓이었다: `prefetch`는
+  `oneway`이고 `Router`가 건네주지 않는 객체에 있으며 다른 권한으로 막혀 있다.
+  구멍은 한 층 아래, 축출을 사이에 두고 **참조**가 하는 일에 있었고
+  `MissPolicy::Activate`가 POA 수준에서 막는다. 요구 적재를 배제했던 거절문은
+  변형과 기본값째로 남기고 그대로 인용했다 — 그 논거는 전부 **비용**이고 0순위는
+  비용을 구멍보다 아래에 둔다. 대조군은 커밋 메시지가 아니라 테스트 파일 안에
+  있다. 닫히지 않은 것: **시간**(이 저장소에서는 측정되지도 않는다)과, 서빙되는
+  POA에 `ExpertLocator`를 올리는 것이 트리에 없다는 사실.*
+
 - **The seed migration D026 §5 S1 owed, and the three answers D028 §4 M3
   ordered.** The seed corpus landed without its migration — *"byte-identity:
   not run, zero fixtures migrated"* — because all five fixtures lived in crates
