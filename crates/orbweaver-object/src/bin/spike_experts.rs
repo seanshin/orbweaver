@@ -62,8 +62,8 @@ use orbweaver_giop::orb::Orb;
 use orbweaver_giop::server::{BAD_OPERATION, Server};
 use orbweaver_giop::{Connection, Error, IiopProfile, Ior, Version};
 use orbweaver_object::expert_service::{
-    BAD_PARAM, Capability, Constraints, EXPERT_ID, ExpertService, GateSignal, MeasuredCapability,
-    NO_IMPLEMENT, NO_PERMISSION, TRANSIENT, residency_from_ordinal,
+    BAD_PARAM, Capability, Constraints, EXPERT_ID, ExpertService, GateSignal, MOE_BASE_KEY,
+    MeasuredCapability, NO_IMPLEMENT, NO_PERMISSION, TRANSIENT, residency_from_ordinal,
 };
 use orbweaver_object::get_reference;
 use orbweaver_object::residency::Applied;
@@ -233,15 +233,30 @@ fn names(experts: &[Ior]) -> Vec<String> {
         .collect()
 }
 
+/// The listening server and the servant it serves, built together — the one
+/// place either identity is chosen.
+///
+/// They come back as a pair because the defect they replaced was a pair that
+/// disagreed (D028 §1): the server was bound to `b"MoE/registry"` on one line
+/// and the servant handed the base `b"MoE"` on the next, from which it derives
+/// `MoE/registry` — the same bytes arrived at twice, by two routes, with
+/// nothing able to notice. A caller that cannot obtain one half without the
+/// other cannot re-open that gap, and the gate below builds this real pair
+/// rather than retyping either half of it.
+fn plane(policy: LoadingPolicy, cold_below: u64) -> Result<(Server, ExpertService), Error> {
+    let server = Orb::new().server("127.0.0.1:0", MOE_BASE_KEY.to_vec())?;
+    let port = server.local_addr()?.port();
+    let svc = ExpertService::new("127.0.0.1", port, MOE_BASE_KEY, policy, cold_below);
+    Ok((server, svc))
+}
+
 fn run(out: &[&str; 3], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
     // §6's knobs, and the cold threshold in FREQ_SCALE units: "fewer than two
     // hits' worth of history left".
     let policy = LoadingPolicy { affinity_weight: 1, low_watermark: 100, high_watermark: 400 };
     let cold_below = 2 * FREQ_SCALE;
 
-    let server = Orb::new().server("127.0.0.1:0", b"MoE/registry".to_vec())?;
-    let port = server.local_addr()?.port();
-    let svc = ExpertService::new("127.0.0.1", port, b"MoE", policy, cold_below);
+    let (server, svc) = plane(policy, cold_below)?;
     let registry_ior = svc.registry_ior();
     let loader_ior = svc.loader_ior();
     let router_ior = svc.router_ior();
@@ -710,6 +725,60 @@ fn run(out: &[&str; 3], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
     }
 
     Ok(r.failures)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use orbweaver_giop::server::SharedDispatch;
+
+    /// **The gate for D028 §1's third finding.**
+    ///
+    /// The defect was not that `MoE/registry` is a bad key — it is a fine key.
+    /// It was that this fixture reached the same bytes by two routes: the
+    /// server's own identity, typed here, and the registry face's key, derived
+    /// by [`ExpertService::new`] from a base typed on the next line. Nothing
+    /// could go red over it, because a `Server`'s key is read only by
+    /// `Server::ior` and this fixture publishes the service's references.
+    ///
+    /// So the check is not "the key is not `MoE/registry`" — that is a
+    /// spelling, and a spelling gate goes green the moment somebody picks a
+    /// different pair of colliding names. It is *the server's identity is not
+    /// one of the three the servant answers for*, asked of the servant itself,
+    /// which is the property the two spellings were violating.
+    ///
+    /// And it asks it of [`plane`] — the real pair the fixture serves — rather
+    /// than of two constants retyped here. A gate that retypes the choice it
+    /// is checking is green over exactly the change it exists to refuse.
+    #[test]
+    fn the_servers_identity_is_not_one_of_the_faces_it_serves() {
+        let (server, svc) = plane(
+            LoadingPolicy { affinity_weight: 1, low_watermark: 100, high_watermark: 400 },
+            2 * FREQ_SCALE,
+        )
+        .expect("the control plane binds a loopback port");
+        let identity = server.object_key();
+        assert!(
+            !SharedDispatch::knows(&svc, identity),
+            "the server binds {:?} as its own identity and the servant it serves also answers \
+             to that key — the same bytes arrived at twice. The three faces are {:?}, {:?}, {:?}.",
+            String::from_utf8_lossy(identity),
+            String::from_utf8_lossy(svc.registry_key()),
+            String::from_utf8_lossy(svc.loader_key()),
+            String::from_utf8_lossy(svc.router_key()),
+        );
+        // …and the faces really are derived from that identity, so the
+        // assertion above is about a collision that can happen rather than
+        // about two unrelated byte strings.
+        assert!(
+            svc.registry_key().starts_with(identity),
+            "the faces no longer derive from the key the server binds, so this check has \
+             stopped being about a collision: identity {:?}, registry {:?}",
+            String::from_utf8_lossy(identity),
+            String::from_utf8_lossy(svc.registry_key()),
+        );
+        assert!(SharedDispatch::knows(&svc, svc.registry_key()));
+    }
 }
 
 /// A latency-ordered router in five lines: the head of the ordered answer,
