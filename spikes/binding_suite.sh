@@ -236,10 +236,18 @@ run_cell() {
        # A bounded extract, and if it matched nothing say so rather than print
        # blank lines: six lines containing no information is what this project
        # already paid for once.
+       # What a diagnostic print owes when the failure is not the shape it
+       # expected: never blank lines. An empty producer and a producer whose
+       # output did not match are different facts and are said differently.
        ex=$(grep -E "FAIL|panicked at|assertion|left:|right:|Error|error:" <<<"$out" | head -8)
        if [ -n "$ex" ]; then sed 's/^/       /' <<<"$ex"
-       else echo "       (nothing in the cell's output matched the extract; last lines follow)"
-            tail -4 <<<"$out" | sed 's/^/       /'; fi
+       elif [ -z "${out//[[:space:]]/}" ]; then
+         echo "       the cell printed NOTHING at all, so its exit status is the only evidence"
+         echo "       there is. Its runner was: $cmd"
+       else
+         echo "       (nothing in the cell's output matched the extract; last lines follow)"
+         tail -4 <<<"$out" | sed 's/^/       /'
+       fi
        return 1 ;;
   esac
 

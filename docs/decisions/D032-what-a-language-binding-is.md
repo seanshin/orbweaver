@@ -165,12 +165,12 @@ Ordered so each unblocks the next. **B1 and B2 are prerequisites for any second
 language and are worth doing even if no second language is ever added.**
 
 > **Status corrected 2026-08-26, the day this was drafted.** B1 is **done**,
-> B2 is **half done**, B4 is **landed**. Each is marked at its own heading
-> below; the ordering argument is unchanged and the remaining work is B2's
-> enrolment and B3.
+> B2 is **half done**, B3 is **landed**, B4 is **landed**. Each is marked at
+> its own heading below; the ordering argument is unchanged and the remaining
+> work is B2's enrolment.
 >
-> *2026-08-26 상태 정정 — B1 완료, B2 절반, B4 착지. 순서 논지는 그대로이고
-> 남은 것은 B2의 등록 방식과 B3다.*
+> *2026-08-26 상태 정정 — B1 완료, B2 절반, B3 착지, B4 착지. 순서 논지는
+> 그대로이고 남은 것은 B2의 등록 방식이다.*
 
 ### B1 — the service contracts join the gates (`spikes/`, `crates/orbweaver-test`) — **DONE 2026-08-26**
 
@@ -201,13 +201,44 @@ from a fixture's file**, rather than the fact living in a line number.
 > the next contract free rather than the one that made this contract visible.
 > §2's second finding above carries the measurement.
 
-### B3 — the acceptance suite is parameterised (`spikes/`, `crates/orbweaver-gen`)
+### B3 — the acceptance suite is parameterised (`spikes/`, `crates/orbweaver-gen`) — **LANDED 2026-08-26**
 
 One suite, a language argument. Today's Python group becomes its first
 instance and **must produce byte-identical results as an instance** — that is
 the migration's oracle, the same discipline the emitted stubs are re-blessed
 under. Until a second language exists this looks like refactoring; it is the
 difference between the next target costing an emitter and costing a project.
+
+> **Landed 2026-08-26 as `spikes/binding_suite.sh`, and the proposal was
+> wrong about one thing in a way worth recording.** §4's six clauses are not
+> six checks, and a suite that ran them as six would have gone green over the
+> gap D030 §3.1 already names: clauses 3/4/5 are language-scoped, clause 1 is
+> one measurement over a (direction × peer) grid, and **clauses 2 and 6 are
+> coverage requirements over that grid rather than checks of their own.** A
+> "both byte orders" line prints `ok` for Python today off `python_target.rs`
+> and `python_servant.rs`, which walk both orders with no peer in either — and
+> in the first case no socket either. So the byte order is a property a *cell*
+> reports, and one **read** off §15.4.1's flag byte (`observed`) is counted
+> apart from one inferred from the peer's host (`claimed`).
+>
+> The migration's oracle was met by not re-deriving anything: the cells run the
+> existing instruments unchanged, and `spikes/jacorb_python_servant.sh` in
+> particular is byte-for-byte as it landed, with a translator outside it. The
+> axes and what each is for live in `spikes/bindings/AXES`, which is their one
+> home and is **not restated here**.
+>
+> What the suite reports for Python, and what a C or Java binding must supply
+> to be run by it, are measurements rather than this decision's content: they
+> are in `CHANGELOG.md`'s Unreleased *Added* section and `docs/COMPONENTS.md`'s
+> `orbweaver-gen` row. **B4's warning is discharged** — the servant seam now
+> has a parameterised suite driving it, which is the state B3 was written to
+> reach before a second language arrived to discover it did not exist.
+>
+> *2026-08-26 착지. 제안이 한 가지를 틀렸고 그것을 기록할 값이 있다 — §4의 여섯
+> 절은 여섯 검사가 아니며, 여섯으로 돌렸다면 D030 §3.1이 이미 지목한 구멍 위에서
+> 초록이 되었을 것이다. 절 2와 6은 검사가 아니라 격자에 대한 **커버리지 요구**다.
+> 이관의 오라클은 아무것도 다시 유도하지 않음으로써 충족되었다: 칸들은 기존
+> 계측기를 그대로 돌린다. **B4의 경고는 해소되었다.***
 
 ### B4 — the servant seam, once (`orbweaver-gen`, the bridge) — **LANDED 2026-08-26**
 
