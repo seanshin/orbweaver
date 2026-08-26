@@ -814,20 +814,17 @@ pub trait Dispatch {
     /// answers about a `Request` — it is handed the operation and the body — and
     /// there is no honest `Request` to synthesise from an object key alone.
     ///
-    /// **What a servant that overrides this still cannot do, measured
-    /// 2026-08-26.** [`Dispatch::serve_one`] asks `knows` *before* it asks
-    /// `redirect`, so a servant whose `knows` returns `false` for a moved key
-    /// answers `OBJECT_NOT_EXIST` to an ordinary `Request` no matter what
-    /// `redirect` would have said — `knows` gates the forward on the invocation
-    /// path exactly as it used to gate it here. A caller that probes first is
-    /// therefore served correctly and a caller that does not is not, which is
-    /// the same defect this method closes, one message later. Closing it means
-    /// reordering `serve_one`, which changes what an existing servant's
-    /// `redirect` is asked about, and that is a decision this batch did not
-    /// take. The workaround until then: a servant that has moved an object
-    /// keeps `knows` returning `true` for the moved key and answers both
-    /// messages, this one with `ObjectForward` and `redirect` with the same
-    /// [`Forward`].
+    /// **The request path now agrees with this one, since 2026-08-26.** It did
+    /// not when this method landed earlier the same day: `serve_one` asked
+    /// `knows` before `redirect`, so a servant whose `knows` was `false` for a
+    /// moved key answered `OBJECT_NOT_EXIST` to an ordinary `Request` however
+    /// this method answered the probe — a caller that probed was told
+    /// "elsewhere" and a caller that invoked was told "nowhere". `knows` gated
+    /// the forward on the invocation path exactly as it used to gate it here.
+    /// The reorder that closed it, what it changed and what it did not, is
+    /// [`serve_one_ordering`]; the workaround it replaced — a moving servant
+    /// keeping `knows` `true` for a key it no longer serves — is no longer
+    /// needed and was itself a lie to this method.
     fn locate(&self, object_key: &[u8]) -> LocateStatus {
         if self.knows(object_key) { LocateStatus::ObjectHere } else { LocateStatus::UnknownObject }
     }
@@ -988,19 +985,96 @@ pub trait SharedDispatch: Sync {
     /// takes its lock once around both — which is exactly what
     /// [`Serialized`] does, and why the compatibility path still gives one
     /// request one indivisible look at the servant.
+    ///
+    /// The order the three are asked in is [`serve_one_ordering`], which is
+    /// where the argument for it lives and is not restated here.
     fn serve_one(
         &self,
         request: &Request,
         out: &mut Encoder,
     ) -> std::result::Result<Served, SystemException> {
-        if !self.knows(&request.object_key) {
-            return Ok(Served::UnknownObject);
-        }
         if let Some(to) = self.redirect(request) {
             return Ok(Served::Forward(to));
         }
+        if !self.knows(&request.object_key) {
+            return Ok(Served::UnknownObject);
+        }
         self.dispatch_body(request, out).map(Served::Body)
     }
+}
+
+/// The order [`SharedDispatch::serve_one`] and [`Serialized::serve_one`] ask
+/// the servant's three questions in — as data, so a test can assert the two
+/// implementations agree with the argument instead of with a comment.
+///
+/// This exists to be the **one home** for that argument. Two implementations
+/// and four prose records depend on it, and a sentence four places retype is a
+/// sentence that goes false in three of them.
+///
+/// # The defect this closed, measured 2026-08-26
+///
+/// Until this date the order was `knows`, then `redirect`. `knows` returning
+/// `false` returned [`Served::UnknownObject`] immediately, so **`redirect` was
+/// never consulted for a key the servant does not answer to** — which is
+/// exactly and only the set of keys a forward is *for*. A servant that had
+/// moved an object had two options and both were wrong: keep `knows` answering
+/// `true` for a key it no longer serves, which lies to [`Dispatch::locate`]
+/// and to `_non_existent`; or answer `OBJECT_NOT_EXIST` to a caller whose
+/// object exists elsewhere, which §9.4.3.2's forward is defined to prevent.
+///
+/// The visible half was closed one message earlier, when [`Dispatch::locate`]
+/// gained [`LocateStatus::ObjectForward`]: after that a caller that **probed**
+/// was told "elsewhere" and a caller that merely **invoked** was told
+/// "nowhere". One root cause, two messages; this is the second.
+///
+/// # Why this order rather than asking `knows` twice
+///
+/// `knows` first, then `redirect` in *both* branches, has the identical
+/// outcome table — `Some` wins either way, `None` falls through to `knows`
+/// either way. The choice is between one call site and two, and one wins.
+///
+/// # What a servant is now asked that it was not asked before
+///
+/// `redirect` sees **every** request, including keys whose `knows` is `false`.
+/// A servant whose `redirect` is a lookup is unaffected: that is all five
+/// servants in this workspace, none of which override it, and every skeleton
+/// `orbweaver-gen` emits, whose `redirect` opens with
+/// `self.refs.oid_of(&req.object_key)?` and so returns `None` for an unknown
+/// key before the servant is reached. A servant whose `redirect` has a **side
+/// effect** now has it on unknown keys too. That is the whole cost of the
+/// change, it is owed by nobody here, and it is why `redirect` is documented
+/// as a lookup rather than a hook.
+///
+/// # What this makes possible that was not
+///
+/// A servant keyed by something other than the objects it hosts — an endpoint
+/// holding *names*, hosting no objects, redirecting to whatever currently
+/// serves each name — was unwritable on this ORB, and not for want of a hook.
+/// Its `knows` is `false` for every key by construction, so `serve_one`
+/// refused before `redirect` was reached; its only recourse was the default
+/// `knows` of `true`, which forwards or refuses **uniformly** and cannot say
+/// *this name I redirect, that name does not exist*. Telling those two apart
+/// is the entire content of a name-keyed redirect.
+/// `crates/orbweaver-giop/tests/forward_for_a_name.rs` is that servant,
+/// working, over the wire.
+///
+/// **It does not follow that D029 §6.1's lifecycle row moves, and it does
+/// not.** That test's module documentation says why, and names the decision
+/// that owns the part still missing.
+pub const fn serve_one_ordering() -> [ServeStep; 3] {
+    [ServeStep::Redirect, ServeStep::Knows, ServeStep::Dispatch]
+}
+
+/// One of the three questions [`serve_one_ordering`] puts in order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServeStep {
+    /// [`SharedDispatch::redirect`] — `Some` ends the request as a
+    /// [`Served::Forward`].
+    Redirect,
+    /// [`SharedDispatch::knows`] — `false` ends it as [`Served::UnknownObject`].
+    Knows,
+    /// [`SharedDispatch::dispatch_body`] — its bytes become the reply.
+    Dispatch,
 }
 
 /// What a servant did with one request, before the reply status is chosen.
@@ -1077,20 +1151,24 @@ impl<D: Dispatch + Send> SharedDispatch for Serialized<D> {
         lock(&self.servant).redirect(request)
     }
 
-    /// The lock spans knows/forward/dispatch — one request is one indivisible
+    /// The lock spans redirect/knows/dispatch — one request is one indivisible
     /// look at the servant, which is what this path has always given and what
     /// composing the three separately would have quietly taken away.
+    ///
+    /// The order is [`serve_one_ordering`], the same as the shared path's, and
+    /// `the_two_serve_one_paths_ask_in_the_documented_order` is what stops the
+    /// two from drifting apart.
     fn serve_one(
         &self,
         request: &Request,
         out: &mut Encoder,
     ) -> std::result::Result<Served, SystemException> {
         let mut servant = lock(&self.servant);
-        if !servant.knows(&request.object_key) {
-            return Ok(Served::UnknownObject);
-        }
         if let Some(to) = servant.redirect(request) {
             return Ok(Served::Forward(to));
+        }
+        if !servant.knows(&request.object_key) {
+            return Ok(Served::UnknownObject);
         }
         servant.dispatch_body(request, out).map(Served::Body)
     }
