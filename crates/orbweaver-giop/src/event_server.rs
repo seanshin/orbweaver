@@ -333,9 +333,9 @@ use std::time::{Duration, Instant};
 use orbweaver_cdr::{Encoder, Endian};
 
 use crate::guarded::{Guarded, Section};
+use crate::naming::{NameComponent, NamingContext};
 use crate::server::{Dispatch, DispatchBody, Request, SharedDispatch, SystemException};
 use crate::typecode::{self, Any, TypeCode};
-use crate::naming::{NameComponent, NamingContext};
 use crate::{Connection, IiopProfile, Ior, Result, Version, codeset};
 
 // ─────────────────────────────────────────────────────────────────────────────
