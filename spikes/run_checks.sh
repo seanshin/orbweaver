@@ -93,10 +93,18 @@ printf 'pid %s in %s at %s\n' "$$" "$ROOT" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >"
 # and the bad name — the `dk_peer` lesson, where the expected table was checked
 # against the peer's own enum before any leg ran, so a typo failed as our table.
 TP_DOC="docs/decisions/D029-what-a-complete-orb-would-mean.md"
-TP_NAMES=$(python3 spikes/transparency.py --names 2>/dev/null)
+# Read once, and KEEP WHAT IT SAID. A second run to produce a diagnostic can
+# succeed where the first failed, and then the failure has no explanation in the
+# transcript — the reader's own words are the diagnostic.
+TP_LOAD_MSG=$(python3 spikes/transparency.py --names 2>&1)
 tp_load_rc=$?
 tp_load_err=0
-if [ "$tp_load_rc" -ne 0 ] || [ -z "$TP_NAMES" ]; then tp_load_err=1; fi
+TP_NAMES=""
+if [ "$tp_load_rc" -eq 0 ] && [ -n "$TP_LOAD_MSG" ]; then
+  TP_NAMES="$TP_LOAD_MSG"
+else
+  tp_load_err=1
+fi
 
 TP_GIDX=0            # which group we are inside, 1-based, in file order
 TP_GROUP_TITLE=""    # its `hr` title, so a diagnostic can name it
@@ -4039,7 +4047,7 @@ if [ "$tp_load_err" = 1 ]; then
   echo "  FAIL the five transparency names could not be read from $TP_DOC §6.1,"
   echo "       so this run measured regression only and cannot say what a caller"
   echo "       can still tell. That is an unmeasured criterion, not a pass."
-  diag_out "$(python3 spikes/transparency.py --names 2>&1)" 6 head
+  diag_out "$TP_LOAD_MSG" 6 head
   fail_total=$((fail_total+1))
 else
   if [ -z "$TP_TAGS" ]; then
