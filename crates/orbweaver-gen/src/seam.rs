@@ -85,6 +85,15 @@ use crate::rt::{OBJECT_ID, ObjectHome, UNKNOWN};
 
 // ── The protocol, as constants every layer reads with ────────────────────────
 
+/// The envelope a call travels in when the far side is the **parent** process
+/// and the bridge is the child — `{"call": {…}}`.
+///
+/// Part of the protocol rather than of one bridge, because the direction is a
+/// property of the deployment and not of the language: a binding whose runtime
+/// starts the bridge reads this key, and one that is started *by* the bridge
+/// does not. Both are the same protocol.
+pub const ENVELOPE_CALL: &str = "call";
+
 /// Call: the repository id of the interface the servant answers for.
 pub const CALL_INTERFACE: &str = "id";
 /// Call: the operation name, `_get_`/`_set_` accessors included.
@@ -172,6 +181,7 @@ pub fn protocol() -> Json {
     // different key changes this document rather than drifting from it.
     o([
         ("version", s(PROTOCOL_VERSION)),
+        ("envelope", o([("call", s(ENVELOPE_CALL))])),
         (
             "call",
             o([

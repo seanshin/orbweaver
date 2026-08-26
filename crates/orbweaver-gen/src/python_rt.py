@@ -85,6 +85,9 @@ __all__ = [
     # `dispatch_call` is the whole of it as a pure function.
     "Servant", "ServantError", "Op", "Raise", "Raising", "OMG_VMCID",
     "dispatch_call", "Host", "serve",
+    # The seam's protocol, as data. Equal to `orbweaver_gen::seam::protocol()`
+    # and asserted so; a binding in a third language publishes its own.
+    "seam_protocol",
 ]
 
 #: The builtin ``property``, reachable through this module.
@@ -191,6 +194,101 @@ def _subject(kind, name, id):
 #: and the spelling is fixed. Equal to `orbweaver_dynamic::principal_subject`.
 _PRINCIPAL = _subject("predeclared type", "::CORBA::Principal",
                       "IDL:omg.org/CORBA/Principal:1.0")
+
+# -- The seam protocol -------------------------------------------------------
+#
+# The names below are the ONLY spelling of the seam's document keys anywhere in
+# this runtime: every ``call[...]`` and every reply this file builds reads one
+# of them. :func:`seam_protocol` is assembled from exactly these, so a runtime
+# that started reading a different key would change the document it publishes
+# rather than drift from the one the ORB dispatches with.
+#
+# Equal to `orbweaver_gen::seam::protocol()`, asserted by
+# `crates/orbweaver-gen/tests/the_seam_is_one_protocol.rs`. A binding in a third
+# language publishes its own and joins the same assertion; the point is that
+# adding one costs a runtime and not a negotiation.
+#
+# Python cannot import a Rust constant, which is why this is an equality across
+# the crate boundary rather than a shared symbol -- the same shape, and the same
+# reason, as the five wire-refusal families above.
+
+#: The protocol version this runtime speaks.
+SEAM_VERSION = "1"
+
+#: The envelope the bridge wraps a call in when Python is the *parent*.
+SEAM_ENVELOPE_CALL = "call"
+
+SEAM_CALL_INTERFACE = "id"
+SEAM_CALL_OPERATION = "op"
+#: Which object of that interface the call was addressed to; "" is the default
+#: object. A servant reaches it through :meth:`Servant.own_oid`.
+SEAM_CALL_OBJECT = "oid"
+SEAM_CALL_ARGUMENTS = "args"
+SEAM_CALL_ONEWAY = "oneway"
+
+SEAM_REPLY_OK = "ok"
+SEAM_REPLY_RETURNS = "returns"
+SEAM_REPLY_OUTPUTS = "outputs"
+SEAM_REPLY_USER_EXCEPTION = "user_exception"
+SEAM_REPLY_SYSTEM_EXCEPTION = "system_exception"
+SEAM_REPLY_ERROR = "error"
+
+SEAM_EXCEPTION_ID = "id"
+SEAM_EXCEPTION_MEMBERS = "members"
+SEAM_EXCEPTION_MINOR = "minor"
+#: Section 4.11.4's completion status, as the ordinal and never as a name. See
+#: :class:`SystemException` for why the number crosses as a number.
+SEAM_EXCEPTION_COMPLETED = "completed"
+
+#: Section 4.11.4's three ordinals, which this runtime passes through rather
+#: than interpreting -- named here only so the published document can carry
+#: them.
+SEAM_COMPLETED_YES = 0
+SEAM_COMPLETED_NO = 1
+SEAM_COMPLETED_MAYBE = 2
+
+#: What turns a handle into *a reference to an object this servant hosts*.
+#: See :meth:`ObjectRef.own`.
+SEAM_OWN_OBJECT_PREFIX = "oid:"
+
+
+def seam_protocol():
+    """This runtime's copy of the seam's document shape, as data.
+
+    Built from the constants above and from nothing else, so it is a statement
+    about what this file actually reads rather than a description of it.
+    """
+    return {
+        "version": SEAM_VERSION,
+        "envelope": {"call": SEAM_ENVELOPE_CALL},
+        "call": {
+            "interface": SEAM_CALL_INTERFACE,
+            "operation": SEAM_CALL_OPERATION,
+            "object": SEAM_CALL_OBJECT,
+            "arguments": SEAM_CALL_ARGUMENTS,
+            "oneway": SEAM_CALL_ONEWAY,
+        },
+        "reply": {
+            "ok": SEAM_REPLY_OK,
+            "returns": SEAM_REPLY_RETURNS,
+            "outputs": SEAM_REPLY_OUTPUTS,
+            "user_exception": SEAM_REPLY_USER_EXCEPTION,
+            "system_exception": SEAM_REPLY_SYSTEM_EXCEPTION,
+            "error": SEAM_REPLY_ERROR,
+        },
+        "exception": {
+            "id": SEAM_EXCEPTION_ID,
+            "members": SEAM_EXCEPTION_MEMBERS,
+            "minor": SEAM_EXCEPTION_MINOR,
+            "completed": SEAM_EXCEPTION_COMPLETED,
+        },
+        "completed": {
+            "yes": SEAM_COMPLETED_YES,
+            "no": SEAM_COMPLETED_NO,
+            "maybe": SEAM_COMPLETED_MAYBE,
+        },
+        "reference": {"own_object_prefix": SEAM_OWN_OBJECT_PREFIX},
+    }
 
 
 class TransportError(Error):
@@ -507,6 +605,28 @@ class ObjectRef(object):
 
     def __hash__(self):
         return hash(self.handle)
+
+    @staticmethod
+    def own(oid):
+        """A reference to an object **this servant hosts**, named by its oid.
+
+        The other half of :meth:`Servant.own_oid`. A servant that answers with
+        one of these is doing what a generated Rust servant does through
+        ``<I>Target::sibling`` -- naming a neighbour without assembling an IIOP
+        profile, without knowing a host or a port, and without ever holding a
+        bearer address.
+
+        The address is minted on the ORB's side, under this servant's home, and
+        it advertises **the repository id the contract declares for the slot
+        the reference is going into**. There is deliberately no way to say
+        which type: a servant that could name it could name the wrong one, and
+        a caller would narrow against it and dial something else.
+
+        ``oid`` is the whole remainder after the key's prefix, so it may contain
+        ``/``, ``:`` or anything else UTF-8 carries -- there is nothing to
+        escape. The empty oid is the default object.
+        """
+        return ObjectRef(SEAM_OWN_OBJECT_PREFIX + oid)
 
     @staticmethod
     def nil():
@@ -1335,18 +1455,19 @@ def call(invoker, id, operation, args=(), returns="void", outs=(), raises=(), on
     body = {}
     for name, desc, value in args:
         body[name] = to_json(desc, value, name)
-    request = {"id": id, "op": operation, "args": body}
+    request = {SEAM_CALL_INTERFACE: id, SEAM_CALL_OPERATION: operation,
+               SEAM_CALL_ARGUMENTS: body}
     if oneway:
-        request["oneway"] = True
+        request[SEAM_CALL_ONEWAY] = True
     reply = invoker.invoke(request)
 
     if "error" in reply:
         raise TransportError(reply["error"].get("message", "the bridge reported a failure"))
-    if "system_exception" in reply:
-        s = reply["system_exception"]
+    if SEAM_REPLY_SYSTEM_EXCEPTION in reply:
+        s = reply[SEAM_REPLY_SYSTEM_EXCEPTION]
         raise SystemException(s.get("id", ""), s.get("minor", 0), s.get("completed", 2))
-    if "user_exception" in reply:
-        u = reply["user_exception"]
+    if SEAM_REPLY_USER_EXCEPTION in reply:
+        u = reply[SEAM_REPLY_USER_EXCEPTION]
         cls = TYPES.get(u.get("id"))
         if cls is None or not (isinstance(cls, type) and issubclass(cls, UserException)):
             # An id we cannot decode still names a contract the caller was not
@@ -1364,17 +1485,17 @@ def call(invoker, id, operation, args=(), returns="void", outs=(), raises=(), on
             # direction, by mirroring this branch on the serving side.
             raise SystemException("IDL:omg.org/CORBA/UNKNOWN:1.0", 0x4f4d0001, 0)
         raise from_json(cls, u.get("members") or {}, "")
-    if "ok" not in reply:
+    if SEAM_REPLY_OK not in reply:
         raise TransportError("the bridge answered with neither a result nor a failure")
 
-    ok = reply["ok"]
+    ok = reply[SEAM_REPLY_OK]
     values = []
     if returns != "void":
-        values.append(from_json(returns, ok.get("returns"), "<return>"))
+        values.append(from_json(returns, ok.get(SEAM_REPLY_RETURNS), "<return>"))
     for name, desc in outs:
-        if name not in ok.get("outputs", {}):
+        if name not in ok.get(SEAM_REPLY_OUTPUTS, {}):
             raise TransportError("the reply is missing the out parameter %r" % (name,))
-        values.append(from_json(desc, ok["outputs"][name], name))
+        values.append(from_json(desc, ok[SEAM_REPLY_OUTPUTS][name], name))
     if not values:
         return None
     if len(values) == 1:
@@ -1399,7 +1520,7 @@ class Loopback(object):
         self.requests.append(request)
         if self.replies:
             return self.replies.pop(0)
-        return {"ok": {"returns": None, "outputs": {}}}
+        return {SEAM_REPLY_OK: {SEAM_REPLY_RETURNS: None, SEAM_REPLY_OUTPUTS: {}}}
 
 
 class Bridge(object):
@@ -1648,6 +1769,26 @@ class Servant(object):
     _idl_name = ""
     _idl_operations = {}
 
+    #: Which object of this interface the call being answered was addressed
+    #: to; ``""`` is the default object. Set by :func:`dispatch_call` for the
+    #: duration of one call, and the exact value the generated Rust
+    #: ``<I>Target::oid()`` would have answered -- the ORB derives it from the
+    #: request's object key by the one key scheme both languages read.
+    #:
+    #: In the generator's namespace rather than the contract's: an interface is
+    #: free to declare an operation called ``oid``, which would shadow a
+    #: plainly-named attribute here. :meth:`own_oid` is the readable way in.
+    _idl_oid = ""
+
+    def own_oid(self):
+        """Which object of this interface this call was addressed to.
+
+        A servant that holds many objects reads this to find its state, and
+        pairs it with :meth:`ObjectRef.own` to answer with a reference to a
+        neighbour. A servant that holds one can ignore it: it is always ``""``.
+        """
+        return self._idl_oid
+
 
 class ServantError(Error):
     """A servant answered in a way the seam cannot carry.
@@ -1669,7 +1810,7 @@ def dispatch_call(servant, call):
     socket and no peer, which is the argument :class:`Loopback` makes for the
     client half.
     """
-    op_name = call.get("op")
+    op_name = call.get(SEAM_CALL_OPERATION)
     op = servant._idl_operations.get(op_name)
     if op is None:
         # The bridge resolves the operation against the registry before it
@@ -1680,7 +1821,12 @@ def dispatch_call(servant, call):
             "%s was asked for %r, which its contract does not declare"
             % (type(servant).__name__, op_name))
 
-    args = call.get("args") or {}
+    # Which object, before anything else, so a servant that raises still knew
+    # who it was. Always present -- "" for a servant serving one object -- so
+    # there is no absence for a servant author to have a rule about.
+    servant._idl_oid = call.get(SEAM_CALL_OBJECT) or ""
+
+    args = call.get(SEAM_CALL_ARGUMENTS) or {}
     values = []
     for name, desc in op.ins:
         if name not in args:
@@ -1697,12 +1843,13 @@ def dispatch_call(servant, call):
             # generated error enum has no variant for an undeclared raise — so
             # this is one of the differences a Python servant keeps, and the
             # answer is the one the specification already fixes.
-            return {"system_exception": {
-                "id": "IDL:omg.org/CORBA/UNKNOWN:1.0",
-                "minor": OMG_VMCID | 1,
-                "completed": 0,
+            return {SEAM_REPLY_SYSTEM_EXCEPTION: {
+                SEAM_EXCEPTION_ID: "IDL:omg.org/CORBA/UNKNOWN:1.0",
+                SEAM_EXCEPTION_MINOR: OMG_VMCID | 1,
+                SEAM_EXCEPTION_COMPLETED: SEAM_COMPLETED_YES,
             }}
-        return {"user_exception": {"id": id, "members": to_json(type(ex), ex, "")}}
+        return {SEAM_REPLY_USER_EXCEPTION: {
+            SEAM_EXCEPTION_ID: id, SEAM_EXCEPTION_MEMBERS: to_json(type(ex), ex, "")}}
     except SystemException as ex:
         if not ex.stated:
             raise ServantError(
@@ -1710,8 +1857,9 @@ def dispatch_call(servant, call):
                 "through _rt.Raise — .did_not_run(), .ran_to_completion() or "
                 ".may_have_run() — so a caller's retry logic has an answer"
                 % (type(servant).__name__, ex.id))
-        return {"system_exception": {
-            "id": ex.id, "minor": ex.minor, "completed": ex.completed}}
+        return {SEAM_REPLY_SYSTEM_EXCEPTION: {
+            SEAM_EXCEPTION_ID: ex.id, SEAM_EXCEPTION_MINOR: ex.minor,
+            SEAM_EXCEPTION_COMPLETED: ex.completed}}
 
     if op.oneway:
         # §9.4.1 gives a oneway no reply to travel in. An answer is rendered
@@ -1744,7 +1892,7 @@ def dispatch_call(servant, call):
     for name, desc in op.outs:
         outputs[name] = to_json(desc, parts[at], name)
         at += 1
-    return {"ok": {"returns": returns, "outputs": outputs}}
+    return {SEAM_REPLY_OK: {SEAM_REPLY_RETURNS: returns, SEAM_REPLY_OUTPUTS: outputs}}
 
 
 class Host(object):
@@ -1806,7 +1954,7 @@ class Host(object):
             if not line.strip():
                 continue
             document = json.loads(line)
-            call = document.get("call")
+            call = document.get(SEAM_ENVELOPE_CALL)
             if call is None:
                 continue
             try:
@@ -1817,8 +1965,10 @@ class Host(object):
                 # the servant's method may well have run before the shape
                 # failed — and the message stays in this process, where
                 # somebody can act on it.
-                reply = {"system_exception": {
-                    "id": "IDL:omg.org/CORBA/UNKNOWN:1.0", "minor": 0, "completed": 2}}
+                reply = {SEAM_REPLY_SYSTEM_EXCEPTION: {
+                    SEAM_EXCEPTION_ID: "IDL:omg.org/CORBA/UNKNOWN:1.0",
+                    SEAM_EXCEPTION_MINOR: 0,
+                    SEAM_EXCEPTION_COMPLETED: SEAM_COMPLETED_MAYBE}}
                 self._note(str(e))
             self._proc.stdin.write(json.dumps(reply) + "\n")
             self._proc.stdin.flush()
