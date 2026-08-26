@@ -63,10 +63,11 @@ fn probe_what_a_foreign_servant_cannot_do() {
     let seen = Rc::new(RefCell::new(Vec::new()));
 
     // 1. Can a foreign servant return a reference to an object it hosts?
-    let mut s = PyServant::new(&reg, TYPE_ID, Spy {
-        seen: seen.clone(),
-        answer: ok_returns(objref("shelf-7")),
-    })
+    let mut s = PyServant::new(
+        &reg,
+        TYPE_ID,
+        Spy { seen: seen.clone(), answer: ok_returns(objref("shelf-7")) },
+    )
     .expect("servant");
     let req = request(ROOT, "lookup", |e| e.put_str("shelf-7"));
     let mut out = Encoder::continuing_at(Endian::Little, 24);
@@ -77,13 +78,14 @@ fn probe_what_a_foreign_servant_cannot_do() {
 
     // 2. Does the call document tell the servant WHICH object was addressed?
     seen.borrow_mut().clear();
-    let mut s2 = PyServant::new(&reg, TYPE_ID, Spy {
-        seen: seen.clone(),
-        answer: ok_returns(Json::Object(BTreeMap::from([(
-            "_ref".to_owned(),
-            Json::Null,
-        )]))),
-    })
+    let mut s2 = PyServant::new(
+        &reg,
+        TYPE_ID,
+        Spy {
+            seen: seen.clone(),
+            answer: ok_returns(Json::Object(BTreeMap::from([("_ref".to_owned(), Json::Null)]))),
+        },
+    )
     .expect("servant");
     for key in [ROOT.to_vec(), home.key_of("/Registry/", "shelf-7")] {
         let r = request(&key, "lookup", |e| e.put_str("x"));

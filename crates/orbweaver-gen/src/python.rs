@@ -970,25 +970,12 @@ fn py_op(sig: &OperationSig) -> Result<PyOp, String> {
 
 /// Every method a generated stub carries, keyed by the name that travels.
 ///
-/// Operations and attribute accessors in one map, because on the wire they are
-/// one thing: §7.9.1 says `_get_balance` is an operation, and an interface that
-/// answered `balance` differently depending on whether the caller went through
-/// an attribute or an operation would be two contracts. Inherited members are
-/// included, which is the same resolved set the Rust stub is built from.
-///
-/// Public because two consumers need exactly this set and neither can derive
-/// it safely: `orbweaver-py-bridge`, which must be able to route every name a
-/// stub can send, and the oracle, which drives every method the emitter wrote.
-pub fn client_operations(registry: &Registry, id: &str) -> BTreeMap<String, OperationSig> {
-    let (mut ops, attrs) = resolved_members(registry, id);
-    for (attr, a) in &attrs {
-        ops.insert(format!("_get_{attr}"), crate::getter_sig(a));
-        if !a.readonly {
-            ops.insert(format!("_set_{attr}"), crate::setter_sig(a));
-        }
-    }
-    ops
-}
+/// **Moved 2026-08-26 to [`crate::surface::callable_operations`]** and re-exported
+/// here, because the set is a fact of the contract rather than of this target:
+/// a foreign-language *servant* resolves its callable surface through it too,
+/// and a Java servant reading it out of the Python emitter is D032 §3's first
+/// row leaking into the third. `surface.rs` carries the argument.
+pub use crate::surface::callable_operations as client_operations;
 
 fn emit_interface(registry: &Registry, id: &str, cx: &Cx<'_>) -> Result<String, String> {
     if registry.interface(id).is_none() {
