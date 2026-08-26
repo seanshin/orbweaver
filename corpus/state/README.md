@@ -234,7 +234,7 @@ rather than scheduling — which is the finding this section exists for.
 |---|---|---|
 | `spike_tenants` | **yes** — tenants, regions, capabilities, costs, adapter deltas, policy domains, the grant, declared nodes | **identical** |
 | `spike_experts` | **partly** — the reported node and the capability vocabulary; its four experts stay invented, and its module docs say so | **one added line**, explained below |
-| `spike_names` | no — **blocked**, see below | identical (untouched) |
+| `spike_names` | no — was **blocked**; unblocked 2026-08-26 by the `json` move, **not yet migrated**, see below | identical (untouched) |
 | `spike_ifr` | not applicable — its population is `corpus/golden/*.idl` and already has a home | identical (untouched) |
 | `spike_events` | not applicable — `ulong`s and object keys, no named entity | **not comparable**, see below |
 
@@ -265,12 +265,35 @@ examples and benches, and **not** a `[[bin]]`.
   those crates can see, and only `spike_names` has a population to share
   (`naming-graph.json`, still built inline in Rust).
 
-**The structural fix, for whoever takes this next:** the binding constraint is
-that `orbweaver_dynamic::json` sits above `orbweaver-giop`. Move that parser
-down to `orbweaver-cdr` — which every crate in the workspace already depends
-on — and the loader can live somewhere all five fixtures can name, at which
-point `spike_names` becomes migratable and the `#[path]` includes become plain
-`use`. Nothing in this batch's footprint could do that.
+**The structural fix — done 2026-08-26, and two of its predictions were
+wrong.** `orbweaver_dynamic::json` now lives in `orbweaver-cdr`, and
+`state.rs` imports it from there. What that bought, measured rather than
+predicted:
+
+- **`spike_names` and `spike_events` are now migratable.** Built both ways
+  with a temporary `#[path]` include inside `orbweaver-giop`: spelled
+  `orbweaver_cdr::json` it compiles; spelled `orbweaver_dynamic::json` it
+  fails `E0433`. Both live in `orbweaver-giop`, whose manifest already carries
+  the only two crates `state.rs` names — `orbweaver-cdr` and
+  `orbweaver-trading`. (`spike_events` remains unmeasurable by *this* oracle
+  for the separate reason below; migratable and measurable are different
+  questions.)
+- **`spike_ifr` is still blocked, and the earlier note did not see why.**
+  `orbweaver-registry` has `orbweaver-cdr` but **not** `orbweaver-trading`,
+  which `state.rs` also imports. The JSON parser was never its only ceiling.
+- **"which every crate in the workspace already depends on" was false.**
+  `orbweaver-forge` has no `orbweaver-cdr` dependency at all, and
+  `orbweaver-console` has it only as a dev-dependency. This is why the old
+  path `orbweaver_dynamic::json` is kept as a re-export: those two crates hold
+  10 of the 60 references, and rewriting them would **add a `cargo tree`
+  edge**.
+- **"the `#[path]` includes become plain `use`" was false, and still is.**
+  Moving the parser does nothing to the loader's own height: `orbweaver-test`
+  depends on `orbweaver-giop`, so `use orbweaver_test::state` from a fixture
+  in `orbweaver-giop` is still a cycle. **`#[path]` remains the mechanism** —
+  one file, two compilations — and the only thing that would retire it is
+  giving the loader a home below every fixture, which is a different move
+  from this one.
 
 ### `spike_events` cannot be measured by this oracle
 
@@ -302,9 +325,20 @@ docs name what it still invents and why.
 없다(`dev-dependency`는 `[[bin]]`에 닿지 않는다). `orbweaver-object`의 둘은
 `orbweaver-dynamic`을 통해 닿으므로 `#[path]`로 **파일 하나를 두 번 컴파일**한다 —
 사본이 없으므로 어긋남이 불가능하다. `orbweaver-giop`·`orbweaver-registry`의 셋은
-**아예 닿지 못한다**: 필요한 JSON 파서가 그들보다 위에 있다. **구조적 해법**은
-`orbweaver_dynamic::json`을 모두가 의존하는 `orbweaver-cdr`로 내리는 것이며, 그때
-`spike_names`가 이전 가능해지고 `#[path]`는 평범한 `use`가 된다.*
+**아예 닿지 못한다**: 필요한 JSON 파서가 그들보다 위에 있다.*
+
+***구조적 해법은 2026-08-26에 수행되었고, 그 예측 중 둘은 틀렸다.**
+`orbweaver_dynamic::json`은 이제 `orbweaver-cdr`에 산다. 측정된 결과:
+`spike_names`와 `spike_events`는 이전 가능해졌다 — `orbweaver-giop` 안에서
+`#[path]`로 양쪽을 빌드해 확인했다(`orbweaver_cdr`은 성공, `orbweaver_dynamic`은
+E0433). `spike_ifr`은 **여전히 막혀 있다**: `orbweaver-registry`에는
+`orbweaver-cdr`은 있으나 `state.rs`가 함께 쓰는 `orbweaver-trading`이 없다 — JSON
+파서만이 천장이었던 적은 없다. **"모두가 의존하는"은 거짓이었다**:
+`orbweaver-forge`에는 `orbweaver-cdr` 의존이 아예 없고 `orbweaver-console`은
+dev 전용이다. 그래서 옛 경로는 재수출로 남긴다 — 그 둘이 60개 참조 중 10개를
+쥐고 있고, 고치면 `cargo tree`에 간선이 늘기 때문이다. **"`#[path]`가 평범한
+`use`가 된다"도 거짓이었고 지금도 그렇다**: `orbweaver-test`는 `orbweaver-giop`에
+의존하므로 여전히 순환이다. `#[path]`는 그대로 남는다.*
 
 *`spike_events`는 이 오라클로 잴 수 없다 — 출력이 입력의 함수가 아니다. 손대지
 않은 바이너리를 열 번 돌려 두 가지 결과가 나왔다(9/10과 1/10). **진단되지 않았고**
