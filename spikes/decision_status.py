@@ -240,6 +240,16 @@ def passages(text):
     `COMPONENTS.md` row is a single very long line, and letting a status word
     in one cell vouch for a reference in another is the same blindness in the
     other direction.
+
+    **A comment marker is stripped before the join, and `//!` is why.** Rust's
+    inner-doc marker ends in `!`, `sentences` splits on `[.:;?!]` followed by
+    whitespace, and a joined comment block therefore breaks into a new
+    "sentence" at every line — which put the reference and the status word of
+    `python.rs`'s D007 restatement into different pieces and lost it. That is
+    the line-wrapping blind spot above, rebuilt out of the comment syntax, and
+    it was invisible until the widening's own historical control went red on
+    two of the four files it was built for. A control that only confirms is not
+    one. *주석 표지를 먼저 벗긴다 — `//!`의 `!`가 문장 끝으로 읽혔다.*
     """
     block, start = [], 1
     for lineno, line in enumerate(text.splitlines() + [""], 1):
@@ -254,7 +264,9 @@ def passages(text):
             continue
         if not block:
             start = lineno
-        # Blockquote and list markers are prose, not structure, once joined.
+        # Comment markers first, then blockquote and list markers: both are
+        # structure around prose, and neither is prose once the block is joined.
+        line = re.sub(r"^\s*(?://[/!]?|#+|;+)\s*", "", line)
         block.append(re.sub(r"^\s*(?:>|[-*+]|\d+\.)\s*", "", line))
 
 
