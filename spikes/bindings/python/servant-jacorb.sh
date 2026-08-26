@@ -58,4 +58,14 @@ done <<<"$wire"
 
 same=$(grep -c "byte-identical at" <<<"$out")
 printf 'note\t%s version(s) with the order read off the flag byte; %s byte-identity result(s) against a Rust servant\n' "$n" "$same"
+
+# The underlying script's own lines, forwarded rather than summarised away. Its
+# header states the principle and it applies to a wrapper too: the bytes travel
+# with the verdict rather than being quoted from a commit message later. The
+# licence line is here for the same reason — JacORB is a fixture, and the check
+# that it stayed one is evidence this run produced, not a standing belief.
+while IFS= read -r l; do
+  [ -n "$l" ] || continue
+  printf 'note\t%s\n' "$(sed 's/^ *//' <<<"$l")"
+done <<<"$(grep -E "read off the wire at|byte-identical at|names no fixture" <<<"$out")"
 exit 0

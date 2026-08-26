@@ -85,12 +85,14 @@ AXES="$BDIR/AXES"
 LANGUAGE=""
 GRID_ONLY=0
 LIST=0
+RAW=0
 ONLY=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --language) LANGUAGE="${2:-}"; shift 2 ;;
     --list)     LIST=1; shift ;;
+    --raw)      RAW=1; shift ;;    # with --list: just the names, one per line
     --grid)     GRID_ONLY=1; shift ;;
     --only)     ONLY="${2:-}"; shift 2 ;;   # <direction>/<peer>, for one cell
     -h|--help)  sed -n '2,60p' "$0"; exit 0 ;;
@@ -131,6 +133,21 @@ fi
 
 # ── --list ───────────────────────────────────────────────────────────────────
 if [ "$LIST" = 1 ]; then
+  # `--raw`: names only, for a caller that enumerates. A caller that globbed
+  # `spikes/bindings/*.manifest` itself would be a second place that knows the
+  # layout, and the day the layout changed one of the two would go quiet.
+  if [ "$RAW" = 1 ]; then
+    found=0
+    for m in "$BDIR"/*.manifest; do
+      [ -e "$m" ] || continue
+      basename "$m" .manifest
+      found=1
+    done
+    # An empty enumeration is not a quiet success: a harness looping over
+    # nothing prints no failures, which reads exactly like passing.
+    [ "$found" = 1 ] || { echo "binding_suite: no manifest in $BDIR" >&2; exit 1; }
+    exit 0
+  fi
   echo "languages with a manifest in $BDIR:"
   found=0
   for m in "$BDIR"/*.manifest; do

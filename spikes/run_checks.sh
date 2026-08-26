@@ -2898,7 +2898,9 @@ fi
 # ── The Python target: a second language is the only test of the mapping ────
 # Anything the Rust emitter got right by accident shows up here as something
 # Python cannot express, or expresses differently. The seam is a local process
-# (D007, PROPOSED) so CPython gains no dependency and the wire stays in Rust.
+# — the alternatives are compared in docs/decisions/D007-python-wire-seam.md,
+# which is where that decision's status lives — so CPython gains no dependency
+# and the wire stays in Rust.
 hr "Python client target — generated Python against the omniORB fixture"
 # The only group in this harness that puts a NON-RUST caller of ours on the
 # wire: generated Python invokes a C++ target holding only a reference, with no
@@ -2981,6 +2983,75 @@ if [ "${1:-0}" -ge 70 ] && [ "${2:-0}" -ge 46 ] && [ "${3:-1}" -eq 0 ]; then
   echo "  ok   $1 service value(s) over $2 call(s), 0 divergences"
 else
   echo "  FAIL python round-trip sweep over services: ${sv:-did not print its measurement}"; fail_total=$((fail_total+1))
+fi
+
+# ── The acceptance suite: one instrument, every language ────────────────────
+#
+# D032 §4 — *"A language binding is accepted by passing a suite, not by being
+# written. The suite is one suite, parameterised by language — never a copy."*
+# The group above measures Python by hand and is deliberately left alone: it is
+# the pre-migration instrument, and `spikes/bindings/python/client-omniorb.sh`
+# runs the SAME commands so that "byte-identical results as an instance" is a
+# property of running the same thing rather than of a claim.
+#
+# What this group adds that the one above cannot: it loops over every language
+# with a manifest, so a second target costs a manifest and not a harness group,
+# and it prints per direction what the cells did NOT measure. The last part is
+# the load-bearing one — a green count here would otherwise read as D030 §3's
+# rule being met, and for Python's client direction it is not.
+#
+# `spikes/jacorb_python_servant.sh` is reached through the suite's
+# servant/jacorb cell and deliberately has no group of its own: the recommended
+# standalone group in that script's own header would run JacORB twice and give
+# one fact two homes.
+#
+# Negative controls, run 2026-08-26 and each printed in the batch's report:
+#   - `--language cobol` -> exit 2, a counted SKIPPED naming what a language
+#     must supply. Verified it is NOT read as a pass.
+#   - the JacORB jars moved aside -> servant/jacorb becomes a counted SKIPPED
+#     naming `jacorb.jar`, the suite still exits 0, and the coverage block flips
+#     `servant × big` from `ok` to UNMEASURED. **A fixture's absence must never
+#     be a failure and must never be invisible**, and this is the control that
+#     shows it is neither.
+#   - an axis value removed from AXES -> exit 1 before any cell runs, naming the
+#     manifest row and the bad name.
+#   - a cell's runner made to exit 1 -> the group goes red naming the cell.
+hr "language bindings — one suite, parameterised by language, and what it does not measure (D032 §4)"
+# The same transparency the group above declares, and for the sharper reason:
+# this one measures BOTH directions, so it is the first group in this harness
+# whose language claim covers the TARGET's half rather than only the caller's.
+bears_on language
+bs_langs=$(./spikes/binding_suite.sh --list --raw 2>&1); bs_lrc=$?
+if [ "$bs_lrc" -ne 0 ] || [ -z "$bs_langs" ]; then
+  # An enumeration that fails is an unmeasured check, not an empty pass: a loop
+  # over nothing prints no failures and reads exactly like green.
+  echo "  FAIL the suite could not enumerate its languages (exit $bs_lrc), so no binding was measured"
+  diag_out "$bs_langs" 4
+  fail_total=$((fail_total+1))
+else
+  for bs_lang in $bs_langs; do
+    bs_out=$(./spikes/binding_suite.sh --language "$bs_lang" 2>&1); bs_rc=$?
+    # The producer's status is read below, after its lines are shown; the lines
+    # are shown either way because the unmeasured block is the point of the
+    # group and it is printed on a green run too.
+    printf '%s\n' "$bs_out" | grep -E "^  (ok|FAIL|info|SKIPPED)|^    (ok|UNMEASURED)|^  - |^binding suite" | cut -c1-150
+    if [ "$bs_rc" -eq 2 ]; then
+      skip_age absent "git:spikes/bindings/$bs_lang.manifest"
+    elif [ "$bs_rc" -ne 0 ]; then
+      echo "  FAIL the acceptance suite went red for $bs_lang"
+      fail_total=$((fail_total+1))
+    fi
+    # Every SKIPPED cell is a skip this harness counts, because D010 §2's rule
+    # is about claims and a cell is a claim. The suite printed the text and
+    # named the fixture, so only the age and the count are added here — two
+    # spellings of one absence is what `skip_age` exists to avoid.
+    bs_skips=$(grep -c "^  SKIPPED" <<<"$bs_out")
+    bs_i=0
+    while [ "$bs_i" -lt "${bs_skips:-0}" ]; do
+      skip_age absent "git:spikes/bindings/$bs_lang.manifest"
+      bs_i=$((bs_i+1))
+    done
+  done
 fi
 
 # ── corpus/include: the first multi-file cases the corpus has ever had ──────
