@@ -175,10 +175,20 @@ def main():
     ap.add_argument("--target-ior", help="forward role: the IOR file to forward to")
     ap.add_argument("--tag", default=None, help="name this server answers with")
     ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument(
+        "--break",
+        dest="break_it",
+        choices=("no-forward", "forward-to-self"),
+        default=None,
+        help="negative control: break the forward deliberately, so the checks "
+        "that claim to see one have to go red",
+    )
     args = ap.parse_args()
 
-    if args.role == "forward" and not args.target_ior:
+    if args.role == "forward" and not args.target_ior and args.break_it is None:
         ap.error("--role forward needs --target-ior")
+    if args.role == "dest" and args.break_it:
+        ap.error("--break applies to the forwarding role")
 
     tag = args.tag or args.role
     argv = [sys.argv[0], "-ORBendPoint", f"giop:tcp:{args.host}:0"]
@@ -191,18 +201,51 @@ def main():
         ref = servant._this()
         host, port = profile_address(orb, ref)
         servant.where = f"{host}:{port}"
+    elif args.break_it == "no-forward":
+        # NEGATIVE CONTROL. Same role, same address, same interface — and no
+        # forward at all. The forwarding POA is replaced by an ordinary servant
+        # that answers where it ran, which is the FORWARDER's address.
+        #
+        # This removes exactly the thing the leg measures and nothing else, so
+        # every check that claims to see a forward must go red: the capture
+        # probe reads reply status 0 where it requires 3, and the Rust client
+        # lands at the address it dialled. A control that merely printed a line
+        # would prove nothing; these both move a counter.
+        servant = Waypoint(tag)
+        ref = servant._this()
+        host, port = profile_address(orb, ref)
+        servant.where = f"{host}:{port}"
+        print("forwarder: --break no-forward, serving in place", file=sys.stderr, flush=True)
     else:
-        target_text = pathlib.Path(args.target_ior).read_text().strip()
-        target = orb.string_to_object(target_text)
         policies = [
             root.create_id_assignment_policy(PortableServer.USER_ID),
             root.create_request_processing_policy(PortableServer.USE_SERVANT_MANAGER),
             root.create_servant_retention_policy(PortableServer.NON_RETAIN),
         ]
         poa = root.create_POA("ForwardPOA", pman, policies)
-        poa.set_servant_manager(ForwardEverything(target, sys.stderr))
         ref = poa.create_reference_with_id(MOVED_OID, REPO_ID)
         host, port = profile_address(orb, ref)
+
+        if args.break_it == "forward-to-self":
+            # NEGATIVE CONTROL. A forward is emitted, and it names THIS
+            # address. Everything about the message is well-formed; the only
+            # thing wrong with it is that it is not a move.
+            #
+            # It exists because "a LOCATION_FORWARD came back" is the check a
+            # tired reader would settle for, and that check cannot tell a move
+            # from a loop. The capture probe's same-address assertion is the
+            # one that must fire here, and our client must run out of hops
+            # rather than answer.
+            target = ref
+            print(
+                "forwarder: --break forward-to-self, naming our own address",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            target_text = pathlib.Path(args.target_ior).read_text().strip()
+            target = orb.string_to_object(target_text)
+        poa.set_servant_manager(ForwardEverything(target, sys.stderr))
 
     out = pathlib.Path(args.out_ior)
     out.write_text(orb.object_to_string(ref))
