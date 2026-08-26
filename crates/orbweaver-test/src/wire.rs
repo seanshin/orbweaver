@@ -505,7 +505,7 @@ fn seeds() -> Vec<Vec<u8>> {
                 version,
                 endian,
                 9,
-                orbweaver_giop::server::LocateStatus::ObjectHere,
+                &orbweaver_giop::server::LocateStatus::ObjectHere,
             ) {
                 out.push(msg);
             }

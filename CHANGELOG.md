@@ -12,6 +12,63 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### ⚠ Wire behaviour changed / 와이어 동작 변경
 
+- **A `LocateReply` can say where the object went, and a `Reply` can carry a
+  service context list.** Two shapes §9.4.6 and §9.4.3.1 require that this ORB
+  could name and could not put on the wire.
+
+  `LocateStatus::ObjectForward` had no body: `encode_locate_reply` wrote a
+  request id and a status word and stopped, and the serve loop decided the
+  answer by asking `Dispatch::knows`, a boolean. Measured before the change,
+  with a servant whose object had moved: `Connection::locate()` answered
+  `Ok(Unknown)` — **"nowhere", not "elsewhere"**. The status now carries its
+  `Forward` inside the variant, so a forward cannot be said without saying
+  where, and `Dispatch::locate` / `SharedDispatch::locate` let a servant say it
+  (defaulting to the previous answer, so no existing servant changes). On the
+  reading side `LocateResult::Forward` now carries a `Forward` rather than a
+  bare `Ior`: statuses 2 and 3 used to collapse, losing the permanence the peer
+  had sent.
+
+  `encode_reply` wrote a hard `0` where §9.4.3.1 puts an
+  `IOP::ServiceContextList`, and `decode_reply` walked the peer's list only to
+  move its cursor — while `decode_request` kept the identical list. One decoder
+  written twice with one copy losing the data; there is now one
+  `read_service_contexts` and `Reply::service_contexts` is populated. §9.7.2's
+  *"ignored, but preserved"*, the rule already applied to `TaggedComponent`.
+  **Not an attachment API**: nothing in the workspace emits a non-empty list,
+  and who may is `PLAN-DEFERRED` §21. An empty list is byte-identical to the
+  zero that was there — asserted, in every version layout and both orders, not
+  assumed.
+
+  Also found while re-measuring: `handle_request` retyped the reply body offset
+  as `HEADER_LEN + 12` beside a comment saying it was right only while the
+  context list stayed empty. `reply_body_start` is now its one home.
+
+  Open and named rather than left looking closed: `serve_one` asks `knows`
+  before `redirect`, so a moved object is still `OBJECT_NOT_EXIST` on the
+  request path; and no external peer has been made to emit an `OBJECT_FORWARD`
+  at us, so this change has no recorded peer bytes. D029 §6.1's Location row
+  and `docs/COMPONENTS.md` carry both.
+
+  *§9.4.6과 §9.4.3.1이 요구하지만 이 ORB가 **이름 부를 수는 있고 와이어에 실을
+  수는 없던** 두 가지 형태. `LocateStatus::ObjectForward`에는 본문이 없었고 서브
+  루프는 불리언 `knows`로 답을 정했다 — 변경 전 측정: 이동한 객체에 대해
+  `Connection::locate()`가 `Ok(Unknown)`, 즉 **"다른 곳"이 아니라 "아무 데도
+  없음"**. 이제 상태가 `Forward`를 변이체 안에 담으므로 **어디인지 말하지 않고
+  포워드를 말할 수 없다**. 읽는 쪽의 `LocateResult::Forward`도 `Ior`가 아니라
+  `Forward`를 담는다 — 상태 2와 3이 합쳐지며 피어가 보낸 영속성이 사라지고
+  있었다. `encode_reply`는 §9.4.3.1이 목록을 두는 자리에 하드코딩된 `0`을 썼고
+  `decode_reply`는 피어의 목록을 커서만 옮기며 버렸다 — `decode_request`는 같은
+  목록을 보관하는데도. 디코더 하나를 두 번 쓴 것이고 한 사본이 데이터를 잃고
+  있었다. §9.7.2의 "무시하되 보존한다". **부착 API가 아니다** — 누가 붙일 수
+  있는가는 `PLAN-DEFERRED` §21. 빈 목록이 그 자리에 있던 0과 바이트 단위로 같음은
+  가정이 아니라 모든 버전 레이아웃과 양쪽 바이트 순서에서 **단언**했다. 재측정
+  중 발견: `handle_request`가 응답 본문 오프셋을 `HEADER_LEN + 12`로 다시 타이핑해
+  두었고, 그 옆 주석이 "컨텍스트 목록이 비어 있는 동안에만 맞다"고 적고 있었다 —
+  `reply_body_start`가 이제 그 사실의 유일한 집이다. **닫히지 않았고 이름 붙여 둔
+  것**: `serve_one`이 `redirect`보다 `knows`를 먼저 물으므로 이동한 객체는 요청
+  경로에서 여전히 `OBJECT_NOT_EXIST`이며, 외부 피어에게 `OBJECT_FORWARD`를
+  보내게 한 적이 없으므로 이 변경에는 기록된 피어 바이트가 없다.*
+
 - **`::CORBA::Principal` was recorded as `void` and marshalled zero bytes.**
   The name is predeclared by `sema.rs` and the registry answered
   `TypeCode::Void` for it, so a member, parameter, return or sequence element

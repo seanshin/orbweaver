@@ -968,8 +968,18 @@ pub enum LocateResult {
     Unknown,
     /// The object is there; invoking will work.
     Here,
-    /// The object lives elsewhere; the reply carried its new address.
-    Forward(Box<Ior>),
+    /// The object lives elsewhere; the reply carried its new address, and
+    /// whether the move was for good.
+    ///
+    /// Carries a [`Forward`] rather than a bare [`Ior`] because §9.4.6's
+    /// `LocateStatusType` has *two* forwarding statuses and this type used to
+    /// collapse them: `OBJECT_FORWARD` (2) and `OBJECT_FORWARD_PERM` (3) both
+    /// became `Forward(ior)`, so a client that probed could not tell a move it
+    /// may remember from one it must re-ask about. That distinction already has
+    /// a home — the same [`Forward`] a servant returns, and the same one
+    /// [`Forward::reply_status`] versions — and this is it read back off the
+    /// wire rather than a second spelling of it.
+    Forward(Box<Forward>),
 }
 
 /// Decodes a `LocateReply`.
@@ -989,8 +999,11 @@ pub fn decode_locate_reply(msg: RawMessage) -> Result<(u32, LocateResult)> {
         0 => LocateResult::Unknown,
         1 => LocateResult::Here,
         // 3 is OBJECT_FORWARD_PERM (1.2): the permanence hint changes what a
-        // client may cache, not what it must do next, so both carry the IOR.
-        2 | 3 => LocateResult::Forward(Box::new(Ior::read_from(&mut d)?)),
+        // client may cache, not what it must do next, so both carry the IOR —
+        // and both are kept, because "what a client may cache" is a fact the
+        // peer sent and dropping it is a decision, not a simplification.
+        2 => LocateResult::Forward(Box::new(Forward::Temporary(Ior::read_from(&mut d)?))),
+        3 => LocateResult::Forward(Box::new(Forward::Permanent(Ior::read_from(&mut d)?))),
         // LOC_SYSTEM_EXCEPTION (1.2): the body is the standard exception shape.
         4 => {
             return Err(Error::SystemException {
@@ -1099,7 +1112,7 @@ where
     e.finish().map_err(Error::Cdr)
 }
 
-fn write_contexts(e: &mut Encoder, contexts: &[ServiceContext]) {
+pub(crate) fn write_contexts(e: &mut Encoder, contexts: &[ServiceContext]) {
     e.put_u32(contexts.len() as u32);
     for c in contexts {
         e.put_u32(c.id);
@@ -1118,6 +1131,23 @@ pub struct Reply {
     pub endian: Endian,
     /// Version the reply was encoded with.
     pub version: Version,
+    /// The reply's `IOP::ServiceContextList` (§9.4.3.1), kept verbatim.
+    ///
+    /// §9.7.2's *"ignored, but preserved"* applied to the other list this
+    /// protocol carries. The same argument as [`TaggedComponent`]: a context
+    /// whose id we do not know is still the peer's, and a decoder that consumes
+    /// the bytes only to move the cursor past them has **decided** the peer said
+    /// nothing. Until this field existed that is exactly what happened — the
+    /// server's [`server::decode_request`] read the identical list into
+    /// [`server::Request::service_contexts`] while `decode_reply` skipped it, so
+    /// a reply's contexts were unobservable from outside this crate and no test
+    /// could have gone red about them.
+    ///
+    /// Empty for every peer that attaches nothing, which is most of them.
+    /// Reading it is the whole of what this crate does with it: **who may put
+    /// something in an outgoing list is a different question**, and it has a
+    /// chapter of its own (`docs/PLAN-DEFERRED.md` §21, Portable Interceptors).
+    pub service_contexts: Vec<ServiceContext>,
     /// Whole message, retained so body offsets stay meaningful.
     raw: Vec<u8>,
     /// Offset in `raw` where the reply body begins.
@@ -1518,13 +1548,13 @@ pub fn decode_reply(msg: RawMessage) -> Result<Reply> {
     let mut d = Decoder::new(&raw, endian);
     d.seek_to(HEADER_LEN)?; // step over the header, keeping alignment
 
-    let (request_id, status_raw);
+    let (request_id, status_raw, service_contexts);
     if version.is_1_2_layout() {
         request_id = d.get_u32()?;
         status_raw = d.get_u32()?;
-        skip_service_contexts(&mut d)?;
+        service_contexts = read_service_contexts(&mut d)?;
     } else {
-        skip_service_contexts(&mut d)?;
+        service_contexts = read_service_contexts(&mut d)?;
         request_id = d.get_u32()?;
         status_raw = d.get_u32()?;
     }
@@ -1541,17 +1571,30 @@ pub fn decode_reply(msg: RawMessage) -> Result<Reply> {
         d.offset()
     };
 
-    Ok(Reply { request_id, status, endian, version, raw, body_at, codec: None })
+    Ok(Reply { request_id, status, endian, version, service_contexts, raw, body_at, codec: None })
 }
 
-fn skip_service_contexts(d: &mut Decoder<'_>) -> Result<()> {
+/// Reads an `IOP::ServiceContextList` from `d`, keeping every entry.
+///
+/// One home for the read, because there is one list: a `Request` header and a
+/// `Reply` header carry the identical `IOP::ServiceContextList`, differing only
+/// in *where* in the header it sits. The server's request decoder read it and
+/// the client's reply decoder skipped it, which was never two policies — it was
+/// one decoder written twice, with one of the copies losing the data.
+///
+/// `validate_count` bounds the count by the bytes that remain: a `u32` count of
+/// entries that cannot fit is a truncated or hostile message, and eight is the
+/// smallest an entry can be (a `u32` id plus a `u32` zero length).
+pub(crate) fn read_service_contexts(d: &mut Decoder<'_>) -> Result<Vec<ServiceContext>> {
     let n = d.get_u32()?;
     let n = d.validate_count(n, 8)?;
+    let mut out = Vec::with_capacity(n);
     for _ in 0..n {
-        let _id = d.get_u32()?;
-        let _data = d.get_octet_seq()?;
+        let id = d.get_u32()?;
+        let data = d.get_octet_seq()?.to_vec();
+        out.push(ServiceContext { id, data });
     }
-    Ok(())
+    Ok(out)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3007,7 +3050,7 @@ mod tests {
                     (LocateStatus::UnknownObject, LocateResult::Unknown),
                     (LocateStatus::ObjectHere, LocateResult::Here),
                 ] {
-                    let msg = encode_locate_reply(version, endian, 5, status).unwrap();
+                    let msg = encode_locate_reply(version, endian, 5, &status).unwrap();
                     let raw = read_message(&mut msg.as_slice(), DEFAULT_MAX_MESSAGE_SIZE)
                         .expect("frames");
                     let (id, got) = decode_locate_reply(raw).expect("decodes");
@@ -3051,7 +3094,11 @@ mod tests {
             let raw = read_message(&mut msg.as_slice(), DEFAULT_MAX_MESSAGE_SIZE).expect("frames");
             let (id, got) = decode_locate_reply(raw).expect("decodes");
             assert_eq!(id, 9);
-            assert_eq!(got, LocateResult::Forward(Box::new(ior.clone())), "{endian:?}");
+            assert_eq!(
+                got,
+                LocateResult::Forward(Box::new(Forward::Temporary(ior.clone()))),
+                "{endian:?}"
+            );
         }
     }
 
