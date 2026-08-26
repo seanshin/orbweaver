@@ -91,7 +91,7 @@ use orbweaver_giop::event_server::{
     ChannelHandle, EventChannelServer, EventSource, MAX_CONSECUTIVE_FAILURES, PUSH_CONSUMER_ID,
     PullSupplierServant, PushConsumerServant, client,
 };
-use orbweaver_giop::server::Server;
+use orbweaver_giop::orb::Orb;
 use orbweaver_giop::typecode::TypeCode;
 use orbweaver_giop::{Connection, IiopProfile, Ior, Version};
 use std::net::TcpListener;
@@ -155,7 +155,7 @@ struct Consumer {
 }
 
 fn start_consumer(key: &[u8]) -> Consumer {
-    let server = Server::bind("127.0.0.1:0", key.to_vec()).expect("bind consumer");
+    let server = Orb::new().server("127.0.0.1:0", key.to_vec()).expect("bind consumer");
     let port = server.local_addr().expect("addr").port();
     let servant = PushConsumerServant::new(key.to_vec());
     let ior = servant.ior("127.0.0.1", port);
@@ -206,7 +206,7 @@ struct Supplier {
 }
 
 fn start_supplier(key: &[u8]) -> Supplier {
-    let server = Server::bind("127.0.0.1:0", key.to_vec()).expect("bind supplier");
+    let server = Orb::new().server("127.0.0.1:0", key.to_vec()).expect("bind supplier");
     let port = server.local_addr().expect("addr").port();
     let servant = PullSupplierServant::new(key.to_vec());
     let ior = servant.ior("127.0.0.1", port);
@@ -236,7 +236,7 @@ fn run(
     hold: bool,
     source_endian: Endian,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let server = Server::bind("127.0.0.1:0", b"EventChannel".to_vec())?;
+    let server = Orb::new().server("127.0.0.1:0", b"EventChannel".to_vec())?;
     let port = server.local_addr()?.port();
     let channel = EventChannelServer::new("127.0.0.1", port, b"EventChannel".to_vec());
     let channel_ior = channel.channel_ior();

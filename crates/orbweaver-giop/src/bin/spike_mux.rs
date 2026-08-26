@@ -52,8 +52,8 @@
 
 use orbweaver_cdr::Encoder;
 use orbweaver_giop::mux::{Mux, MuxStats, Sent};
-use orbweaver_giop::pool::Pool;
-use orbweaver_giop::server::{Dispatch, Request, Server, SystemException};
+use orbweaver_giop::orb::Orb;
+use orbweaver_giop::server::{Dispatch, Request, SystemException};
 use orbweaver_giop::{IiopProfile, Ior, Version};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -140,7 +140,7 @@ impl Dispatch for Echo {
 fn in_process() -> Fallible {
     println!("multiplexing and pooling, against our own server (self-test only)");
 
-    let server = Server::bind("127.0.0.1:0", b"echo".to_vec())?;
+    let server = Orb::new().server("127.0.0.1:0", b"echo".to_vec())?;
     let addr = server.local_addr()?;
     let stop = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&stop);
@@ -190,7 +190,7 @@ fn in_process() -> Fallible {
         );
 
         // Pooling: two references to one endpoint, different objects.
-        let pool = Pool::new();
+        let pool = Orb::new().pool();
         for key in [b"echo".as_slice(), b"other".as_slice()] {
             let reply = pool.invoke(&ior_at(addr, key), "echo", |e: &mut Encoder| e.put_i32(5))?;
             require(reply.body()?.get_i32()? == 5, "a pooled call must answer")?;
@@ -349,7 +349,7 @@ fn against_peer(path: &str, calls: usize, cap: Option<Version>) -> Fallible {
 
     // Pooling, against the same peer: a second reference to the same endpoint
     // must not dial again.
-    let pool = Pool::new();
+    let pool = Orb::new().pool();
     let mut second = ior.clone();
     if let Some(p) = second.profiles.first_mut() {
         p.object_key.push(b'!'); // a different object at the same endpoint

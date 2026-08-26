@@ -244,7 +244,7 @@ use crate::guarded::{Section, assert_nothing_held};
 use crate::{
     Connection, Error, Forward, Ior, MsgType, RawMessage, Reply, ReplyStatus, Result,
     ServiceContext, Stream, Version, codeset, decode_reply, encode_cancel_request,
-    encode_request_with_contexts, fragment_message, read_message,
+    encode_request_with_contexts, fragment_message, read_message_limited,
 };
 
 /// How long [`Mux::call`] waits for a reply when the caller does not say.
@@ -613,6 +613,7 @@ struct Inner {
     default_key: Vec<u8>,
     max_message_size: usize,
     fragment_threshold: usize,
+    max_fragments: usize,
     multiplexes: bool,
 
     /// Allocated under the write half, so id order is wire order.
@@ -683,6 +684,7 @@ impl Mux {
             caller_converts_chars,
             codeset_context_pending,
             fragment_threshold,
+            max_fragments,
             ..
         } = conn;
 
@@ -713,6 +715,7 @@ impl Mux {
                 default_key: object_key,
                 max_message_size,
                 fragment_threshold,
+                max_fragments,
                 multiplexes,
                 next_id: AtomicU32::new(next_id),
                 char_codeset,
@@ -1206,7 +1209,11 @@ impl Inner {
                     let budget = deadline.saturating_duration_since(Instant::now());
                     let _ = rx.set_read_timeout(budget);
                     let mut counting = Counting { inner: &mut rx, seen: 0 };
-                    let outcome = read_message(&mut counting, self.max_message_size);
+                    let outcome = read_message_limited(
+                        &mut counting,
+                        self.max_message_size,
+                        self.max_fragments,
+                    );
                     let seen = counting.seen;
                     // File it *before* letting the read half go, so the caller
                     // it belongs to cannot become the next leader and block on
@@ -1460,6 +1467,10 @@ fn interpret(reply: Reply) -> Answered {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // See the same import in `server::tests`: the reader now calls
+    // `read_message_limited`, and these tests frame a fixed buffer where the
+    // compiled ceiling is the right one.
+    use crate::read_message;
 
     /// A decoded forward keeps the status it arrived under: status 4 becomes
     /// [`Forward::Permanent`], status 3 [`Forward::Temporary`], and the IOR is

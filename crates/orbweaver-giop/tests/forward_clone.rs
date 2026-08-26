@@ -35,7 +35,8 @@
 
 use orbweaver_cdr::{Encoder, Endian};
 use orbweaver_giop::guarded::{Guarded, complaints_about};
-use orbweaver_giop::pool::{Pool, Reference};
+use orbweaver_giop::orb::Orb;
+use orbweaver_giop::pool::Reference;
 use orbweaver_giop::server::{Request, decode_request, encode_location_forward, encode_reply};
 use orbweaver_giop::{
     DEFAULT_MAX_MESSAGE_SIZE, Forward, IiopProfile, Invoker, Ior, ReplyStatus, Version,
@@ -230,7 +231,7 @@ fn clones_agree_where_a_permanent_forward_moved_the_object() {
         let label = format!("reply {reply_endian:?}");
         let m = Moved::set_up(true, reply_endian);
 
-        let pool = Pool::new();
+        let pool = Orb::new().pool();
         let mut template = pool.reference(m.old.clone());
         let mut before = template.clone();
         let mut caller = template.clone();
@@ -301,7 +302,7 @@ fn a_reference_cloned_per_call_pays_the_forward_once_not_every_call() {
         let label = format!("reply {reply_endian:?}");
         let m = Moved::set_up(true, reply_endian);
 
-        let pool = Pool::new();
+        let pool = Orb::new().pool();
         let mut template = pool.reference(m.old.clone());
 
         for call in 1..=3 {
@@ -363,7 +364,7 @@ fn two_references_to_one_object_each_pay_the_forward_once() {
         let label = format!("reply {reply_endian:?}");
         let m = Moved::set_up(true, reply_endian);
 
-        let pool = Pool::new();
+        let pool = Orb::new().pool();
         // Independently created, not cloned: this is the `string_to_object`
         // shape, and the two share the pool — and so the connection — while
         // sharing nothing about where the object is.
@@ -435,7 +436,7 @@ fn a_temporary_forward_stays_with_the_handle_that_took_it() {
         let label = format!("reply {reply_endian:?}");
         let m = Moved::set_up(false, reply_endian);
 
-        let pool = Pool::new();
+        let pool = Orb::new().pool();
         let mut caller = pool.reference(m.old.clone());
         let mut other = caller.clone();
 
@@ -486,7 +487,7 @@ fn the_shared_address_is_send_and_sync_and_crosses_a_thread() {
         let label = format!("reply {reply_endian:?}");
         let m = Moved::set_up(true, reply_endian);
 
-        let pool = Pool::new();
+        let pool = Orb::new().pool();
         let template = pool.reference(m.old.clone());
         let shared = &template;
 
@@ -531,7 +532,7 @@ fn the_shared_address_is_never_held_across_the_wire() {
     let at_new = Arc::new(AtomicUsize::new(0));
     let (new_addr, new_done) = landing(Endian::Big, Arc::clone(&at_new));
 
-    let pool = Pool::new();
+    let pool = Orb::new().pool();
     let mut r = pool.reference(ior_at(new_addr, b"new"));
 
     let said = complaints_about(|| {

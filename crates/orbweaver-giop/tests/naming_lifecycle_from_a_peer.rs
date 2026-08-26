@@ -46,7 +46,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use orbweaver_giop::naming_server::NamingServer;
-use orbweaver_giop::server::Server;
+use orbweaver_giop::orb::Orb;
 
 /// The driver. It prints one `label\tanswer` row per probe and nothing else on
 /// stdout, so a mismatch names the operation rather than the diff of a
@@ -187,7 +187,7 @@ fn omniorbs_client_drives_bind_context_and_destroy_against_our_server() {
     }
 
     let dir = scratch();
-    let server = Server::bind("127.0.0.1:0", b"NameService".to_vec()).expect("bind");
+    let server = Orb::new().server("127.0.0.1:0", b"NameService".to_vec()).expect("bind");
     let port = server.local_addr().expect("local_addr").port();
     let ns = Arc::new(NamingServer::new("127.0.0.1", port, b"NameService".to_vec()));
     let ior = ns.root_ior().to_stringified().expect("a stringified IOR");

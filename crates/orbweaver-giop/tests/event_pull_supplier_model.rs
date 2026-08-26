@@ -38,7 +38,7 @@ use orbweaver_giop::event_server::{
     EventChannelServer, EventSink, EventSource, MAX_CONSECUTIVE_FAILURES, PROXY_PULL_CONSUMER_ID,
     PROXY_PULL_SUPPLIER_ID, PULL_SUPPLIER_ID, PullSupplierServant, PushConsumerServant, client,
 };
-use orbweaver_giop::server::Server;
+use orbweaver_giop::orb::Orb;
 use orbweaver_giop::typecode::{Any, TypeCode};
 use orbweaver_giop::{Connection, Error, IiopProfile, Ior, Version};
 
@@ -67,7 +67,7 @@ struct Channel {
 
 impl Channel {
     fn start() -> Self {
-        let server = Server::bind("127.0.0.1:0", b"EventChannel".to_vec()).unwrap();
+        let server = Orb::new().server("127.0.0.1:0", b"EventChannel".to_vec()).unwrap();
         let port = server.local_addr().unwrap().port();
         let channel =
             Arc::new(EventChannelServer::new("127.0.0.1", port, b"EventChannel".to_vec()));
@@ -175,7 +175,7 @@ struct Supplier {
 
 impl Supplier {
     fn start(key: &[u8]) -> Self {
-        let server = Server::bind("127.0.0.1:0", key.to_vec()).unwrap();
+        let server = Orb::new().server("127.0.0.1:0", key.to_vec()).unwrap();
         let port = server.local_addr().unwrap().port();
         let servant = Arc::new(PullSupplierServant::new(key.to_vec()));
         let ior = servant.ior("127.0.0.1", port);
@@ -205,7 +205,7 @@ struct Consumer {
 
 impl Consumer {
     fn start(key: &[u8]) -> Self {
-        let server = Server::bind("127.0.0.1:0", key.to_vec()).unwrap();
+        let server = Orb::new().server("127.0.0.1:0", key.to_vec()).unwrap();
         let port = server.local_addr().unwrap().port();
         let servant = Arc::new(PushConsumerServant::new(key.to_vec()));
         let ior = servant.ior("127.0.0.1", port);

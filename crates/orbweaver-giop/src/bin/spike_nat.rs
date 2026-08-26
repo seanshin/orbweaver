@@ -46,6 +46,7 @@ use std::time::Duration;
 
 use orbweaver_cdr::{Encoder, Endian};
 use orbweaver_giop::nat::{EndpointMap, RawIor, RawProfile, Rule, rewrite_stringified};
+use orbweaver_giop::orb::Orb;
 use orbweaver_giop::server::{Dispatch, Request, Server, SystemException};
 use orbweaver_giop::{Connection, Ior, TAG_INTERNET_IOP};
 
@@ -114,7 +115,7 @@ struct Servant {
 impl Servant {
     fn start(bind: &str) -> Fallible<Servant> {
         let key = b"nat-servant".to_vec();
-        let server = Arc::new(Server::bind(bind, key.clone())?);
+        let server = Arc::new(Orb::new().server(bind, key.clone())?);
         let addr = server.local_addr()?;
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
@@ -321,7 +322,7 @@ fn publish_time(reachable_host: &str) -> Fallible<u32> {
 /// Container side: bind wide, publish through [`orbweaver_giop::nat::PUBLISH_MAP_ENV`].
 fn serve(bind: &str, ior_path: &str) -> Fallible<u32> {
     let map = EndpointMap::from_env()?.unwrap_or_default();
-    let server = Server::bind(bind, b"nat-servant".to_vec())?;
+    let server = Orb::new().server(bind, b"nat-servant".to_vec())?;
     let bound = server.local_addr()?;
     println!("bound {bound}, {}={map}", orbweaver_giop::nat::PUBLISH_MAP_ENV);
     // Inside a container the bind is wildcard and the map is what makes the

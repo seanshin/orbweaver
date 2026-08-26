@@ -32,7 +32,8 @@ use orbweaver_giop::codeset::{
     self, CodeSetComponent, CodeSetComponentInfo, CodeSetContext, CodeSetId,
 };
 use orbweaver_giop::mux::Mux;
-use orbweaver_giop::server::{Server, decode_request, encode_reply};
+use orbweaver_giop::orb::Orb;
+use orbweaver_giop::server::{decode_request, encode_reply};
 use orbweaver_giop::{
     Connection, DEFAULT_MAX_MESSAGE_SIZE, Error, IiopProfile, Ior, ReplyStatus, ServiceContext,
     TaggedComponent, Version, encode_request_with_contexts, read_message,
@@ -129,7 +130,7 @@ fn code_sets_of(ior: &Ior) -> CodeSetComponentInfo {
 /// conformant client will not call.
 #[test]
 fn every_published_reference_declares_its_codesets() {
-    let server = Server::bind("127.0.0.1:0", b"k".to_vec()).expect("bind");
+    let server = Orb::new().server("127.0.0.1:0", b"k".to_vec()).expect("bind");
     let mut refs: Vec<(&str, Ior)> =
         vec![("Server::ior", server.ior("IDL:t/T:1.0", "127.0.0.1").expect("ior"))];
 
@@ -164,7 +165,7 @@ fn every_published_reference_declares_its_codesets() {
 /// later refactor stops doing.
 #[test]
 fn a_nat_mapped_reference_keeps_its_codesets() {
-    let server = Server::bind("127.0.0.1:0", b"k".to_vec()).expect("bind");
+    let server = Orb::new().server("127.0.0.1:0", b"k".to_vec()).expect("bind");
     let map = orbweaver_giop::nat::EndpointMap::default();
     let ior = server.ior_mapped("IDL:t/T:1.0", &map).expect("mapped ior");
     assert_eq!(code_sets_of(&ior).for_wchar.native, Some(CodeSetId::UTF_16));

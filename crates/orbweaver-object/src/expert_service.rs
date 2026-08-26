@@ -1440,7 +1440,8 @@ impl Dispatch for ExpertService {
 mod tests {
     use super::*;
     use orbweaver_cdr::Endian;
-    use orbweaver_giop::server::Server;
+
+    use orbweaver_giop::orb::Orb;
     use orbweaver_giop::{Connection, DEFAULT_MAX_MESSAGE_SIZE, Error, ReplyStatus};
     use std::io::Write;
     use std::net::TcpStream;
@@ -2073,7 +2074,7 @@ mod tests {
 
     impl Served {
         fn start(mut svc: ExpertService) -> Self {
-            let server = Server::bind("127.0.0.1:0", b"MoE/registry".to_vec()).unwrap();
+            let server = Orb::new().server("127.0.0.1:0", b"MoE/registry".to_vec()).unwrap();
             let port = server.local_addr().unwrap().port();
             svc.host = "127.0.0.1".into();
             svc.port = port;

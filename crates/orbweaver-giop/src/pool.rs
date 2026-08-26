@@ -161,7 +161,7 @@ use orbweaver_cdr::{Encoder, Endian};
 use crate::guarded::Guarded;
 use crate::mux::{Failed, Mux, Sent};
 use crate::{
-    Connection, Error, Forward, Invoker, Ior, MAX_FORWARD_HOPS, Reply, Result, Version, codeset,
+    Connection, Error, Forward, Invoker, Ior, Reply, Result, Version, codeset,
     negotiated_char_converter,
 };
 
@@ -300,7 +300,16 @@ impl State {
 ///
 /// Cheap to clone; a clone shares the same connections. `Send + Sync`, so one
 /// pool serves every thread in a process.
-#[derive(Debug, Clone, Default)]
+/// # Why this is not `Default`
+///
+/// It was, and a derived `Default` on a `pub` struct is a **public
+/// constructor** — one that hands back a pool configured with nothing. Closing
+/// [`Pool::new`] while leaving `Pool::default()` standing would have left the
+/// door D019 step 4 exists to close, with a different name on it. A pool comes
+/// from [`Orb::pool`](crate::orb::Orb::pool).
+///
+/// *파생된 `Default`도 공개 생성자다. 이름만 다른 같은 문이다.*
+#[derive(Debug, Clone)]
 pub struct Pool {
     inner: Arc<Inner>,
 }
@@ -308,29 +317,28 @@ pub struct Pool {
 #[derive(Debug)]
 struct Inner {
     limits: Limits,
+    /// The deployment's numbers, applied to every connection this pool dials.
+    /// Defaults answer the compiled constants, so an unconfigured pool behaves
+    /// exactly as it did before D019 step 4.
+    config: crate::orb::OrbConfig,
     state: Guarded<State>,
 }
 
-impl Default for Inner {
-    fn default() -> Self {
-        Inner {
-            limits: Limits::default(),
-            state: Guarded::new("the connection pool", State::default()),
-        }
-    }
-}
-
 impl Pool {
-    /// A pool with the default [`Limits`].
-    pub fn new() -> Pool {
-        Pool::default()
-    }
-
-    /// A pool with limits of your own.
-    pub fn with_limits(limits: Limits) -> Pool {
+    /// A pool with limits and a deployment's configuration (D019 step 4).
+    ///
+    /// `pub(crate)`, and the only constructor: a [`Pool`] comes from
+    /// [`Orb::pool`](crate::orb::Orb::pool). See [`Server::bind`] for why the
+    /// second door is closed rather than merely documented — a pool built
+    /// beside the ORB dialled every connection with the compiled defaults, and
+    /// that was true no matter what the operator had configured.
+    ///
+    /// [`Server::bind`]: crate::server::Server::bind
+    pub(crate) fn with_limits_and_config(limits: Limits, config: crate::orb::OrbConfig) -> Pool {
         Pool {
             inner: Arc::new(Inner {
                 limits,
+                config,
                 state: Guarded::new("the connection pool", State::default()),
             }),
         }
@@ -417,7 +425,16 @@ impl Pool {
         }
 
         // ── step 2: dial with nothing held. `connect` asserts exactly that ──
-        let dialed = Connection::connect(ior, limits.connect_timeout);
+        // The deployment's numbers go on before the connection is used or
+        // wrapped: `Mux::over` moves them out of the `Connection` wholesale and
+        // there is no setter on a `Mux`, so this is the only moment they can be
+        // applied. Before D019 step 4 nothing applied them here at all, and a
+        // pooled connection therefore ran on the compiled defaults however the
+        // ORB had been configured.
+        let dialed = Connection::connect(ior, limits.connect_timeout).map(|mut conn| {
+            conn.apply_orb_config(&self.inner.config);
+            conn
+        });
 
         // ── step 3: file it, or give the reservation back ──
         match dialed {
@@ -561,7 +578,7 @@ impl Pool {
         let mut target = ior.clone();
         let mut chain = Chain::default();
         let mut retried = false;
-        for _ in 0..MAX_FORWARD_HOPS {
+        for _ in 0..self.inner.config.max_forward_hops() {
             let (mux, key) =
                 self.acquire(&target).map_err(|error| Failed { error, unsent: true })?;
             match mux.call_on(&key, operation, write_args, timeout) {
@@ -1079,7 +1096,7 @@ mod tests {
     /// dialing something.
     #[test]
     fn an_ior_without_a_profile_is_refused() {
-        let pool = Pool::new();
+        let pool = crate::orb::Orb::new().pool();
         let nil = Ior { type_id: String::new(), profiles: Vec::new() };
         assert!(matches!(pool.acquire(&nil), Err(Error::NoIiopProfile)));
         assert_eq!(pool.size(), 0);

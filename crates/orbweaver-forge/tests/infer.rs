@@ -26,7 +26,7 @@ use orbweaver_forge::infer::{
 };
 use orbweaver_forge::pipeline::{ItemStatus, Stage, run_batch};
 use orbweaver_giop::Ior;
-use orbweaver_giop::server::Server;
+use orbweaver_giop::orb::Orb;
 use orbweaver_mcp::policy::{Approval as CallApproval, Denied, Exposure};
 use orbweaver_registry::ifr::{RepositoryServer, interface_ids};
 use orbweaver_registry::ingest::{Limits, ingest};
@@ -64,7 +64,7 @@ fn ingested() -> Registry {
     local.load(&spec).expect("loads");
     let seeds = interface_ids(&local);
 
-    let server = Server::bind("127.0.0.1:0", b"IR".to_vec()).expect("binds");
+    let server = Orb::new().server("127.0.0.1:0", b"IR".to_vec()).expect("binds");
     let port = server.local_addr().expect("has an address").port();
     let mut facade = RepositoryServer::new("127.0.0.1", port, b"IR".to_vec(), local);
     let root: Ior = facade.root_ior();

@@ -42,7 +42,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use orbweaver_cdr::{Encoder, Endian};
-use orbweaver_gen::rt::{self, Dispatch, Forward, ObjRef, ObjectHome, Servants, Server};
+use orbweaver_gen::rt::{self, Dispatch, Forward, ObjRef, ObjectHome, Servants};
+use orbweaver_giop::orb::Orb;
 use orbweaver_giop::server::{Request, decode_request};
 use orbweaver_giop::{
     Connection, DEFAULT_MAX_MESSAGE_SIZE, Error as GiopError, Ior, ReplyStatus, Version,
@@ -198,7 +199,7 @@ fn refs_at(port: u16) -> DirectoryRefs {
 
 /// Runs `f` against a live server whose dispatcher is the generated skeleton.
 fn with_server<F: FnOnce(&Ior)>(tree: Tree, f: F) {
-    let server = Server::bind("127.0.0.1:0", ROOT.to_vec()).expect("bind");
+    let server = Orb::new().server("127.0.0.1:0", ROOT.to_vec()).expect("bind");
     let addr = server.local_addr().expect("addr");
     let ior = server.ior(TYPE_ID, "127.0.0.1").expect("ior");
     let home = ObjectHome::of(&server, "127.0.0.1").expect("home");

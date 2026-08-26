@@ -58,6 +58,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use orbweaver_giop::orb::Orb;
 use orbweaver_giop::server::{BAD_OPERATION, Server};
 use orbweaver_giop::{Connection, Error, IiopProfile, Ior, Version};
 use orbweaver_object::expert_service::{
@@ -238,7 +239,7 @@ fn run(out: &[&str; 3], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
     let policy = LoadingPolicy { affinity_weight: 1, low_watermark: 100, high_watermark: 400 };
     let cold_below = 2 * FREQ_SCALE;
 
-    let server = Server::bind("127.0.0.1:0", b"MoE/registry".to_vec())?;
+    let server = Orb::new().server("127.0.0.1:0", b"MoE/registry".to_vec())?;
     let port = server.local_addr()?.port();
     let svc = ExpertService::new("127.0.0.1", port, b"MoE", policy, cold_below);
     let registry_ior = svc.registry_ior();

@@ -17,9 +17,10 @@
 use orbweaver_cdr::{Encoder, Endian};
 use orbweaver_giop::guarded::{Guarded, complaints_about};
 use orbweaver_giop::mux::{Mux, Sent};
-use orbweaver_giop::pool::{Limits, Pool};
+use orbweaver_giop::orb::Orb;
+use orbweaver_giop::pool::Limits;
 use orbweaver_giop::server::{
-    Dispatch, Request, Server, SystemException, decode_request, encode_close_connection,
+    Dispatch, Request, SystemException, decode_request, encode_close_connection,
     encode_location_forward, encode_message_error, encode_reply,
 };
 use orbweaver_giop::{
@@ -486,7 +487,7 @@ fn two_references_to_one_endpoint_share_a_connection() {
         // would show up: nothing ever accepts one.
     });
 
-    let pool = Pool::new();
+    let pool = Orb::new().pool();
     let one = ior_at(addr, b"object-one", 2);
     let two = ior_at(addr, b"object-two", 2);
     assert_eq!(body_i32(&pool.invoke(&one, "a", |_| {}).expect("first call")), 10);
@@ -517,7 +518,7 @@ fn a_pooled_connection_closed_under_us_is_retried_invisibly() {
         reply_long(&mut second, v, e, id, 42);
     });
 
-    let pool = Pool::new();
+    let pool = Orb::new().pool();
     let ior = ior_at(addr, b"key", 2);
     let reply = pool.invoke(&ior, "op", |_| {}).expect("the retry must be invisible to the caller");
     assert_eq!(body_i32(&reply), 42);
@@ -543,7 +544,7 @@ fn a_peer_that_only_says_goodbye_is_reported_not_retried_forever() {
         // a looping pool would fail on its own connect rather than spin.
     });
 
-    let pool = Pool::new();
+    let pool = Orb::new().pool();
     let ior = ior_at(addr, b"key", 2);
     let err = pool.invoke(&ior, "op", |_| {}).expect_err("a refusing server must be reported");
     assert!(matches!(err, Error::ConnectionClosed), "got {err}");
@@ -571,7 +572,7 @@ fn a_call_the_peer_had_begun_answering_is_reported_rather_than_retried() {
         // the counter below says whether it tried.
     });
 
-    let pool = Pool::new();
+    let pool = Orb::new().pool();
     let ior = ior_at(addr, b"key", 2);
     let err =
         pool.invoke(&ior, "half_answered", |_| {}).expect_err("half a reply is not an answer");
@@ -601,7 +602,7 @@ fn the_pool_refuses_rather_than_exceeding_its_bound() {
     let idle = TcpListener::bind("127.0.0.1:0").expect("bind");
     let idle_addr = idle.local_addr().expect("addr");
 
-    let pool = Pool::with_limits(Limits { max_total: 1, ..Limits::default() });
+    let pool = Orb::new().pool_with_limits(Limits { max_total: 1, ..Limits::default() });
     let (mux, key) = pool.acquire(&ior_at(busy_addr, b"key", 2)).expect("the first fits");
     let pending = mux.send(&key, "slow", |_| {}).expect("goes out");
 
@@ -633,7 +634,8 @@ fn an_idle_connection_is_evicted_rather_than_reused() {
         }
     });
 
-    let pool = Pool::with_limits(Limits { max_idle: Duration::ZERO, ..Limits::default() });
+    let pool =
+        Orb::new().pool_with_limits(Limits { max_idle: Duration::ZERO, ..Limits::default() });
     let ior = ior_at(addr, b"key", 2);
     assert_eq!(body_i32(&pool.invoke(&ior, "a", |_| {}).expect("first")), 1);
     std::thread::sleep(Duration::from_millis(5));
@@ -718,7 +720,7 @@ fn the_pool_follows_both_forward_statuses_and_reports_permanent_only_at_1_2() {
                 );
                 let want = expected_permanent(version, servant_says_permanent);
 
-                let pool = Pool::new();
+                let pool = Orb::new().pool();
                 let old = ior_at(addr, b"old", minor);
                 let (reply, followed) =
                     pool.invoke_tracking(&old, "op", |_| {}, T).expect("the redirect is followed");
@@ -795,7 +797,7 @@ impl Dispatch for Mover {
 #[test]
 fn a_real_server_is_heard_as_permanent_only_at_1_2() {
     for servant_says_permanent in [false, true] {
-        let server = Server::bind("127.0.0.1:0", b"old".to_vec()).expect("bind");
+        let server = Orb::new().server("127.0.0.1:0", b"old".to_vec()).expect("bind");
         let addr = server.local_addr().expect("addr");
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let raised = stop.clone();
@@ -806,7 +808,7 @@ fn a_real_server_is_heard_as_permanent_only_at_1_2() {
                 .expect("serves");
         });
 
-        let pool = Pool::new();
+        let pool = Orb::new().pool();
         for minor in [0u8, 1, 2] {
             let version = Version { major: 1, minor };
             let label = format!("servant says permanent={servant_says_permanent} {version}");
@@ -876,7 +878,7 @@ fn acquiring_from_inside_a_lock_section_is_caught() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("addr");
     let ior = ior_at(addr, b"key", 2);
-    let pool = Pool::new();
+    let pool = Orb::new().pool();
 
     let state = Guarded::new("a servant holding its own state", ());
     let said = complaints_about(|| {

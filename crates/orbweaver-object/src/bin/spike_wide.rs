@@ -58,7 +58,8 @@ use std::time::Duration;
 
 use orbweaver_cdr::{Encoder, Endian};
 use orbweaver_giop::codeset::{CodeSetId, WideCodec};
-use orbweaver_giop::server::{Completion, Dispatch, MARSHAL, Request, Server, SystemException};
+use orbweaver_giop::orb::Orb;
+use orbweaver_giop::server::{Completion, Dispatch, MARSHAL, Request, SystemException};
 use orbweaver_giop::{Connection, Error, Ior};
 use orbweaver_object::ObjectOps;
 use orbweaver_registry::{Registry, Strictness};
@@ -330,7 +331,7 @@ fn serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let host = args.get(1).cloned().unwrap_or_else(|| "127.0.0.1".into());
     let port = args.get(2).cloned().unwrap_or_else(|| "0".into());
 
-    let server = Server::bind(&format!("127.0.0.1:{port}"), OBJECT_KEY.to_vec())?;
+    let server = Orb::new().server(&format!("127.0.0.1:{port}"), OBJECT_KEY.to_vec())?;
     let bound = server.local_addr()?;
     let ior = server.ior(TYPE_ID, &host)?;
     std::fs::write(&out_path, ior.to_stringified()?)?;

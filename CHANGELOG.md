@@ -169,6 +169,54 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **The ORB owns the transport, and the configuration is live** (D019 step 4,
+  the step the §5 shape approval gated; approved one-way 2026-08-26).
+
+  `Orb::server` and `Orb::pool` are now the **only** public ways to a listener
+  and a connection pool: `Server::bind`, `Pool::new` and `Pool::with_limits`
+  became `pub(crate)`, `Pool`'s derived `Default` — a public constructor
+  wearing another name — was removed, and `Poa::new` became `pub(crate)`
+  behind `orbweaver_object::OrbPoa`, an extension trait carrying `create_poa`
+  and `root_poa`. It is a trait rather than a method because `orbweaver-object`
+  depends on `orbweaver-giop`, so the ORB's own crate cannot name a `Poa`; the
+  ORB **hands out** a root POA rather than owning one, and that difference from
+  D019 §5's picture is stated rather than papered over.
+
+  **What this changes that step 3 did not.** Step 3 gave the eight numbers a
+  home and tested it thoroughly — parsing, zero-refusal, round-trip, unset
+  answering the compiled constant — and every one of those tests passed while
+  **`-ORBmaxMessageSize 4096` changed nothing a peer could observe**, because
+  every call site of `OrbConfig`'s eight getters was a unit test or a spike
+  printing them. Held is not applied. The numbers now reach a `Server` through
+  `Server::apply_orb_config` and every dialled connection through
+  `Pool::acquire`, and `tests/orb_config_reaches_the_wire.rs` asserts a
+  **difference a peer can see** for five of the eight, each against its own
+  control. Closing the second constructor is what makes the gap impossible
+  rather than merely fixed: a `Server` built beside the ORB was a place the
+  configuration provably did not arrive.
+
+  **A defect found on the way.** `Connection::move_to` — the forward and §9.6
+  restart path — does `*self = next` and restores a hand-written list of
+  fields. `max_message_size` and `fragment_threshold` were not on that list,
+  so **a connection silently reverted to the compiled defaults on the far side
+  of any redirect**, and both had public setters at the time. Nothing was red
+  because nothing measured a limit *after* a forward. The five ORB numbers are
+  now one `ConnectionLimits` value that moves as one thing.
+
+  **Also.** `read_message_limited` threads the fragment ceiling that
+  `read_message` read off a constant — the size ceiling was always a parameter,
+  so half of one reassembly bound was configurable and half was not.
+  `-ORBListenEndpoints`' refusal reason was rewritten: it said *"the ORB does
+  not own the transport yet; construct a Server directly"*, and this commit
+  made both halves of that sentence untrue. It now names the real remaining
+  limit — a `Server` holds one `TcpListener` and the argument takes a list.
+
+  **Not done, named rather than silent.** `pool::Limits`' five numbers still
+  have no `-ORB…` key; `max_forward_hops` and `follow_timeout` are wired
+  through to `Connection` and `Pool` but have no behavioural test; `stop_poll`
+  and `fragment_threshold` are wired and observable only as timing and as
+  outbound framing respectively.
+
 - **The second half of the agent boundary: four IDL tools, and the edge that
   had to be reversed to write them** (D024 §5, 2026-08-26). The MCP surface
   advertised three tools — find a contract, read it, call it — and the whole
