@@ -75,10 +75,29 @@
 //! `orbweaver_object::OrbPoa`, an extension trait in that crate, because
 //! `orbweaver-object` depends on this crate and not the other way round.
 //!
-//! **Four, and nothing beyond them.** §5's *"not proposed"* list is still
-//! binding: there is no `ORB_init` signature here, no `run`/`shutdown`, and no
-//! thread policies. Each would have to earn its place from a scattered fact or
-//! a fired trigger, as everything else here did.
+//! **Four, and one thing beyond them.** §5's *"not proposed"* list is still
+//! binding in the part that matters: there is no `ORB_init` signature here and
+//! no thread policies, and each would still have to earn its place from a
+//! scattered fact or a fired trigger, as everything else here did.
+//!
+//! # The fifth thing, and why it is not `run`
+//!
+//! [`Orb::shutdown`] exists (D032). D019 §5's refusal named
+//! *"`ORB::run`/`shutdown` semantics"* together, and **the half that was
+//! refused is `run`** — an event-loop model, a main thread parked in the ORB,
+//! which this ORB does not have and does not grow here. D029 §3.1 measured why
+//! the other half had to follow anyway: step 4 made [`Orb::server`] and
+//! [`Orb::pool`] the only way in, so *"an ORB can hand out N servers and cannot
+//! stop one of them"* became a property of the product rather than of a spike.
+//!
+//! Nothing about the serving model moves. The caller still owns the thread,
+//! `serve_shared` still takes the caller's own stop predicate, and the ORB
+//! joins nothing — it raises a flag that is OR'd with that predicate, with
+//! neither privileged. The bound this buys is on [`Orb::shutdown`]; the
+//! argument is D032.
+//!
+//! *거절된 절반은 `run`이다. 서빙 모델은 움직이지 않는다 — 호출자가 여전히 스레드를
+//! 소유하고, ORB는 아무것도 합류시키지 않는다.*
 //!
 //! *ORB가 `resolve_initial_references`의 언어를 말할 줄 알면서 그것을 대조할
 //! 표를 갖고 있지 않았다. 이 모듈이 그 표다 — CORBA 3.4 §8.5.2가 정의한 평평한
@@ -87,6 +106,8 @@
 pub mod config;
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::Ior;
 use crate::naming::ObjectUrl;
@@ -236,10 +257,94 @@ impl std::error::Error for InvalidName {}
 /// that shares the table across threads wraps it the way it wraps everything
 /// else. Interior mutability is not built in here because nothing needs it
 /// yet, and an `Arc<Mutex<_>>` chosen before there is a caller is a guess.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct Orb {
     initial: BTreeMap<String, Ior>,
     config: OrbConfig,
+    /// What this ORB has handed out and can take back (D032).
+    ///
+    /// **Shared across clones**, unlike the two fields above. That asymmetry is
+    /// the deliberate part: a clone that could not stop what the original
+    /// handed out would recreate, one level up, exactly the *gives and cannot
+    /// take back* asymmetry D029 §3.1 opened this work to close. An `Orb` is
+    /// one ORB; a clone is a handle to it for lifecycle purposes.
+    handouts: Arc<Handouts>,
+}
+
+/// [`Orb`] equality is **equality of configuration** — the initial references
+/// table and the eight numbers — and deliberately excludes
+/// [`Orb::shutdown`]'s state.
+///
+/// Written by hand rather than derived, and the reason is worth having in view
+/// because the alternative reads better and is wrong. Deriving is not available
+/// once the handouts list is a shared, interior-mutable thing; identity by
+/// pointer would have made `Orb::new() != Orb::new()`, silently reversing what
+/// this comparison has answered since D019 step 1. So: two ORBs configured
+/// alike are equal, **including when one of them has been stopped**, because
+/// what they were configured to be is not changed by being asked to stop.
+///
+/// *동등성은 설정의 동등성이다. 멈춤 상태는 여기 포함되지 않는다 — 멈춰 달라는
+/// 요청이 그 ORB가 무엇으로 설정되었는지를 바꾸지는 않기 때문이다.*
+impl PartialEq for Orb {
+    fn eq(&self, other: &Self) -> bool {
+        self.initial == other.initial && self.config == other.config
+    }
+}
+
+impl Eq for Orb {}
+
+/// The transport an [`Orb`] handed out, held weakly so a dropped handout prunes
+/// itself.
+#[derive(Debug, Default)]
+struct Handouts {
+    /// Raised once by [`Orb::shutdown`] and never lowered.
+    stopped: crate::server::StopFlag,
+    servers: Mutex<Vec<ServerHandout>>,
+    pools: Mutex<Vec<crate::pool::PoolWatch>>,
+}
+
+/// One [`Server`](crate::server::Server) this ORB handed out.
+#[derive(Debug)]
+struct ServerHandout {
+    /// Weak: a dropped `Server` prunes itself, and that is sound rather than
+    /// convenient — `Server::serve_shared` takes `&self`, so no serving loop
+    /// can outlive the `Server` it serves. A dead weak means *already
+    /// stopped*.
+    stop: std::sync::Weak<std::sync::atomic::AtomicBool>,
+    /// Strong, because [`Orb::wait_until_stopped`] reads it and a cloned
+    /// `ServerStats` is six words. It keeps no socket alive.
+    stats: crate::server::ServerStats,
+}
+
+/// What one [`Orb::shutdown`] did, so a shutdown that stopped nothing is
+/// visible rather than silent.
+///
+/// A count of *zero* servers on an ORB that handed out four is not a bug — it
+/// means all four were dropped before the shutdown, which closed their
+/// listeners already. It is reported so a caller expecting otherwise finds out
+/// here rather than from a port that is still bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shutdown {
+    servers: usize,
+    pools: usize,
+    already_gone: usize,
+}
+
+impl Shutdown {
+    /// Servers that were still alive and have now been asked to stop.
+    pub fn servers(&self) -> usize {
+        self.servers
+    }
+
+    /// Pools that were still alive and are now closed.
+    pub fn pools(&self) -> usize {
+        self.pools
+    }
+
+    /// Handouts that had already been dropped, so there was nothing to stop.
+    pub fn already_gone(&self) -> usize {
+        self.already_gone
+    }
 }
 
 impl Orb {
@@ -274,7 +379,7 @@ impl Orb {
     /// [`ConfigError::InitRefUnreadable`], naming the `ObjectId`, the URL and
     /// why the URL could not be turned into a reference.
     pub fn with_config(config: OrbConfig) -> std::result::Result<Self, ConfigError> {
-        let mut orb = Self { initial: BTreeMap::new(), config };
+        let mut orb = Self { initial: BTreeMap::new(), config, handouts: Arc::default() };
         let mut table = BTreeMap::new();
         for (object_id, url) in orb.config.initial_references() {
             let ior =
@@ -551,12 +656,33 @@ impl Orb {
     /// # Errors
     ///
     /// Whatever binding the listener answered — the address was taken, or is
-    /// not one this host can bind.
+    /// not one this host can bind — or [`Error::Stopped`](crate::Error::Stopped)
+    /// if [`Orb::shutdown`] has been called. See D032 §7 for why a stopped ORB
+    /// refuses rather than obliges.
     ///
     /// *문이 하나면 설정이 도착하지 못할 곳이 없다.*
     pub fn server(&self, addr: &str, object_key: Vec<u8>) -> crate::Result<crate::server::Server> {
+        // Checked before the listener is bound, so a refusal costs no port.
+        if self.handouts.stopped.raised() {
+            return Err(crate::Error::Stopped { what: "a server" });
+        }
         let mut server = crate::server::Server::bind(addr, object_key)?;
         server.apply_orb_config(&self.config);
+        self.handouts
+            .servers
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(ServerHandout { stop: server.stop_flag().watch(), stats: server.stats() });
+        // The window between the check above and the push: a `shutdown` that
+        // landed in it raised `stopped` and then walked a list this entry was
+        // not yet in, so nothing would ever raise this server's flag. Looking
+        // again after the push closes it in both orderings — either shutdown
+        // saw the entry, or we see `stopped` here. A server born stopped is
+        // the honest outcome; a server that quietly outlived its ORB's
+        // shutdown is the bug this whole batch is about.
+        if self.handouts.stopped.raised() {
+            server.stop_flag().raise();
+        }
         Ok(server)
     }
 
@@ -582,8 +708,175 @@ impl Orb {
     /// the transport, which is this one, and adding the keys is a separate
     /// batch now that there is finally something for such a key to apply
     /// itself to.
+    ///
+    /// # On a stopped ORB
+    ///
+    /// The pool is handed out **already closed** (D032 §6): it dials nothing
+    /// and every call through it answers
+    /// [`Error::Stopped`](crate::Error::Stopped).
+    ///
+    /// That differs from [`Orb::server`], which refuses outright, and the
+    /// difference is the resource rather than a lapse in symmetry. Binding a
+    /// listener takes a port, so refusing before the bind is what keeps a
+    /// stopped ORB from holding one; constructing a pool takes an `Arc` and
+    /// nothing else, and the refusal has a natural home one step later, at the
+    /// call that would have dialled. This signature has nowhere to put an error
+    /// and 21 call sites that would have to grow one to no purpose.
     pub fn pool_with_limits(&self, limits: crate::pool::Limits) -> crate::pool::Pool {
-        crate::pool::Pool::with_limits_and_config(limits, self.config.clone())
+        let pool = crate::pool::Pool::with_limits_and_config(limits, self.config.clone());
+        self.handouts.pools.lock().unwrap_or_else(|p| p.into_inner()).push(pool.watch());
+        // Both orderings, exactly as in `server` — see the comment there.
+        if self.handouts.stopped.raised() {
+            pool.close();
+        }
+        pool
+    }
+
+    /// **Stops every server and pool this ORB handed out** — D029 §3.1's gap,
+    /// and the answer to the design question D029 §5 O1 asked in writing first.
+    ///
+    /// The argument for this shape lives in
+    /// `docs/decisions/D032-stopping-what-the-orb-handed-out.md` and is not
+    /// repeated here. **The bound is here**, because the bound is this API's
+    /// contract and its reader is holding this API.
+    ///
+    /// # The bound
+    ///
+    /// > After `shutdown` returns, every serving loop this ORB created will,
+    /// > within one [`stop_poll`](OrbConfig::stop_poll), stop accepting and
+    /// > stop reading. **At most one further request per already-admitted
+    /// > connection** may still be served — the one whose bytes had already
+    /// > reached the socket when that connection's thread last looked — and
+    /// > that one is answered in full. Nothing is answered after it. Every live
+    /// > connection is then told `CloseConnection` (§9.4.10), and no pool this
+    /// > ORB created dials again.
+    ///
+    /// It is a bound and not a guarantee, which is the point: *at most one
+    /// further request* is a number a caller can reason about, where *"in-flight
+    /// work is finished"* is a sentence nobody can hold to. See
+    /// `crates/orbweaver-giop/tests/orb_stops_what_it_handed_out.rs`, which
+    /// measures the bound from a peer's own socket rather than from our
+    /// counters.
+    ///
+    /// # What a peer mid-call sees
+    ///
+    /// Its reply, in full, and then the goodbye. Never a truncated reply, and
+    /// never a bare TCP close with a request outstanding — §9.4.7 makes
+    /// `CloseConnection` mean *"not processed, safe to re-send elsewhere"*, and
+    /// that stays true only because the request after the flag is left
+    /// **unread** rather than read and dropped (D032 §3).
+    ///
+    /// # What a caller holding a `Server` sees
+    ///
+    /// [`Server::serve_shared`](crate::server::Server::serve_shared) returns
+    /// `Ok(())`, indistinguishable from its own `stop` predicate having gone
+    /// true — the two are the same event. A caller that needs to tell them
+    /// apart asks
+    /// [`Server::stop_requested`](crate::server::Server::stop_requested).
+    ///
+    /// # This does not wait, and that is deliberate
+    ///
+    /// The ORB does not own the serving threads — the caller does — so it
+    /// cannot join them, and pretending to would be the `run()` D019 §5 refused
+    /// and D029 §4 forbids. `shutdown` raises flags and returns.
+    /// [`Orb::wait_until_stopped`] is the separate, deadline-bounded question.
+    ///
+    /// # Idempotent, and one-way
+    ///
+    /// Calling it twice is harmless; there is no un-shutdown. Afterwards
+    /// [`Orb::server`] refuses and [`Orb::pool`] hands out a closed pool, so
+    /// `shutdown` is a lifecycle rather than a suggestion (D032 §7).
+    ///
+    /// *한계는 여기에 산다 — 한계는 이 API의 계약이고 그것을 필요로 하는 사람은 이
+    /// API를 들고 있기 때문이다. 논증은 D032에 있고 여기서 되풀이하지 않는다.*
+    pub fn shutdown(&self) -> Shutdown {
+        // Raised **first**, and this ordering is what the race comments in
+        // `server` and `pool_with_limits` depend on.
+        self.handouts.stopped.raise();
+
+        let mut servers = 0;
+        let mut already_gone = 0;
+        for handout in self.handouts.servers.lock().unwrap_or_else(|p| p.into_inner()).iter() {
+            match handout.stop.upgrade() {
+                Some(flag) => {
+                    flag.store(true, std::sync::atomic::Ordering::Release);
+                    servers += 1;
+                }
+                // The `Server` was dropped, which closed its listener and —
+                // because `serve_shared` borrows it — ended every loop it ran.
+                None => already_gone += 1,
+            }
+        }
+
+        let mut pools = 0;
+        for watch in self.handouts.pools.lock().unwrap_or_else(|p| p.into_inner()).iter() {
+            if watch.close() {
+                pools += 1;
+            } else {
+                already_gone += 1;
+            }
+        }
+
+        Shutdown { servers, pools, already_gone }
+    }
+
+    /// Whether [`Orb::shutdown`] has been called on this ORB — or on any clone
+    /// of it, which is the same ORB.
+    pub fn is_shutdown(&self) -> bool {
+        self.handouts.stopped.raised()
+    }
+
+    /// Waits, up to `deadline`, for every server this ORB handed out to go
+    /// quiet. Answers whether they did.
+    ///
+    /// A **sleeping** poll — the harness rule about wait loops that do not wait
+    /// applies to library code that waits, too — at
+    /// [`stop_poll`](OrbConfig::stop_poll) granularity, which is the interval
+    /// the servers themselves look at their flags on, so polling faster would
+    /// only burn a core.
+    ///
+    /// # What "quiet" means, exactly, and what it does not prove
+    ///
+    /// Every live server reports
+    /// [`ServerStats::active`](crate::server::ServerStats::active) `== 0` — no
+    /// connection thread is left — **and**
+    /// [`ServerStats::serving`](crate::server::ServerStats::serving) `== 0` —
+    /// no accept loop is left either. The second is why `serving` exists:
+    /// `active` reaches zero the moment the last connection thread drops its
+    /// slot, while the accept loop may still be inside its final `stop_poll`
+    /// sleep.
+    ///
+    /// **It still does not prove `serve_shared` has returned to its caller.**
+    /// The counter is decremented on the way out of the loop, and the few
+    /// instructions after that — restoring the listener to blocking, returning
+    /// through `thread::scope` — are not covered. That is a real gap of
+    /// microseconds, not milliseconds, and it is written down rather than
+    /// smoothed over (D032 §9).
+    ///
+    /// Returns `true` immediately if this ORB handed out no live server.
+    ///
+    /// *잠자는 폴링이다 — 기다리지 않는 대기 루프에 대한 규칙은 기다리는 라이브러리
+    /// 코드에도 적용된다. 조용해졌다는 것이 `serve_shared`가 호출자에게 돌아갔음을
+    /// 증명하지는 않는다.*
+    pub fn wait_until_stopped(&self, deadline: Duration) -> bool {
+        let give_up = Instant::now() + deadline;
+        loop {
+            let quiet = {
+                let handouts = self.handouts.servers.lock().unwrap_or_else(|p| p.into_inner());
+                handouts.iter().all(|h| {
+                    // A dropped `Server` is quiet by construction.
+                    h.stop.upgrade().is_none() || (h.stats.active() == 0 && h.stats.serving() == 0)
+                })
+            };
+            if quiet {
+                return true;
+            }
+            let left = give_up.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            std::thread::sleep(self.config.stop_poll().min(left));
+        }
     }
 }
 

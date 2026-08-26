@@ -448,6 +448,20 @@ pub enum Error {
         /// The bound in force.
         limit: usize,
     },
+    /// The [`Orb`](orb::Orb) that owns this transport has been stopped, or the
+    /// [`Pool`](pool::Pool) has been closed, so no new transport is handed out
+    /// and no new connection is dialled (D032 §7).
+    ///
+    /// **Not the same as a transport that failed**, which is why it is its own
+    /// variant rather than an `Io` error: nothing was attempted. A caller that
+    /// sees this has a lifecycle bug — it asked a stopped ORB for something —
+    /// and retrying will never help, whereas retrying is exactly the right
+    /// response to most of the neighbours in this enum.
+    Stopped {
+        /// What was asked for, so the refusal is not anonymous: `"a server"`,
+        /// `"a connection pool"` or `"a pooled connection"`.
+        what: &'static str,
+    },
     /// No profile in the IOR advertised a TLS endpoint (`TAG_SSL_SEC_TRANS`),
     /// so [`Connection::connect_tls`] had nothing to dial. Distinct from
     /// [`Error::AllEndpointsFailed`] on purpose: "the target offers no TLS"
@@ -557,6 +571,13 @@ impl fmt::Display for Error {
             }
             Error::PoolExhausted { limit } => {
                 write!(f, "connection pool is at its bound of {limit} and nothing was evictable")
+            }
+            Error::Stopped { what } => {
+                write!(
+                    f,
+                    "{what} was asked for after the ORB was stopped; \
+                     a stopped ORB hands out no new transport (D032 §7)"
+                )
             }
             #[cfg(feature = "ssliop")]
             Error::NoTlsEndpoint => {

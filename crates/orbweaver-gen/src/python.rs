@@ -1053,12 +1053,7 @@ fn emit_interface(registry: &Registry, id: &str, cx: &Cx<'_>) -> Result<String, 
 /// operation table is [`client_operations`]'s, which is the property rather than
 /// the convenience: **a Python servant answers precisely the names a Python
 /// client of the same contract can send, because one function decides both.**
-fn emit_servant(
-    s: &mut String,
-    registry: &Registry,
-    id: &str,
-    name: &str,
-) -> Result<(), String> {
+fn emit_servant(s: &mut String, registry: &Registry, id: &str, name: &str) -> Result<(), String> {
     let cls = format!("{}Servant", py_ident(name));
     let ops = client_operations(registry, id);
     let _ = writeln!(s);

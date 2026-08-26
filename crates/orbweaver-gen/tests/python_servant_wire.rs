@@ -240,8 +240,7 @@ fn start_servant() -> Option<Servant> {
         if let Ok(text) = std::fs::read_to_string(&ior_path) {
             let text = text.trim();
             if text.starts_with("IOR:") {
-                servant.ior =
-                    Some(Ior::parse(text).expect("the servant published a parsable IOR"));
+                servant.ior = Some(Ior::parse(text).expect("the servant published a parsable IOR"));
                 return Some(servant);
             }
         }

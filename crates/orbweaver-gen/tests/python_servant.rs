@@ -473,11 +473,7 @@ fn differences(perturb: Option<Perturbation>) -> Vec<(String, String, String)> {
                 let a = answer(&mut rust, &req, endian);
                 let b = answer(&mut python, &req, endian);
                 if render(&a) != render(&b) {
-                    found.push((
-                        format!("{name} ({version} {endian:?})"),
-                        render(&a),
-                        render(&b),
-                    ));
+                    found.push((format!("{name} ({version} {endian:?})"), render(&a), render(&b)));
                 }
             }
         }
@@ -505,7 +501,9 @@ fn every_operation_answers_identically_whichever_language_serves_it() {
          (D029 §6.1):\n{}",
         found
             .iter()
-            .map(|(call, rust, python)| format!("  {call}\n    rust:   {rust}\n    python: {python}\n"))
+            .map(|(call, rust, python)| format!(
+                "  {call}\n    rust:   {rust}\n    python: {python}\n"
+            ))
             .collect::<String>()
     );
 }
@@ -580,8 +578,9 @@ fn the_comparison_sees_a_python_servant_answering_differently() {
 #[test]
 fn an_undeclared_raise_reaches_the_caller_as_unknown_and_not_as_itself() {
     let registry = registry();
-    let mut python = PyServant::new(&registry, TYPE_ID, Mirror::with(Perturbation::UndeclaredException))
-        .expect("servant");
+    let mut python =
+        PyServant::new(&registry, TYPE_ID, Mirror::with(Perturbation::UndeclaredException))
+            .expect("servant");
     let req = request(Version::V1_2, Endian::Big, "record", true, |e| {
         e.put_f64(1.0);
         e.put_str("");
@@ -604,8 +603,9 @@ fn an_undeclared_raise_reaches_the_caller_as_unknown_and_not_as_itself() {
 #[test]
 fn a_completion_status_that_was_never_stated_is_refused_rather_than_defaulted() {
     let registry = registry();
-    let mut python = PyServant::new(&registry, TYPE_ID, Mirror::with(Perturbation::UnstatedCompletion))
-        .expect("servant");
+    let mut python =
+        PyServant::new(&registry, TYPE_ID, Mirror::with(Perturbation::UnstatedCompletion))
+            .expect("servant");
     let req = request(Version::V1_2, Endian::Little, "scale_all", true, |e| {
         e.put_f64(2.0);
     });
@@ -746,8 +746,7 @@ fn a_oneway_writes_no_reply_from_either_language() {
         for endian in ORDERS {
             let req = request(version, endian, "reset", false, |_| {});
             let mut rust = GaugeSkeleton::new(refs(), Bench::default());
-            let mut python =
-                PyServant::new(&registry, TYPE_ID, Mirror::new()).expect("servant");
+            let mut python = PyServant::new(&registry, TYPE_ID, Mirror::new()).expect("servant");
             for (who, a) in [
                 ("rust", answer(&mut rust, &req, endian)),
                 ("python", answer(&mut python, &req, endian)),
@@ -796,10 +795,13 @@ fn what_crosses_the_seam_comes_back_as_what_went_in() {
 
     let mut python = PyServant::new(&registry, TYPE_ID, Recorder(&mut seen)).expect("servant");
     for (op, build) in [
-        ("record", Box::new(|e: &mut Encoder| {
-            e.put_f64(21.5);
-            e.put_str("C");
-        }) as Box<dyn FnOnce(&mut Encoder)>),
+        (
+            "record",
+            Box::new(|e: &mut Encoder| {
+                e.put_f64(21.5);
+                e.put_str("C");
+            }) as Box<dyn FnOnce(&mut Encoder)>,
+        ),
         ("scale_all", Box::new(|e: &mut Encoder| e.put_f64(2.5))),
         ("_set_label", Box::new(|e: &mut Encoder| e.put_str("a label"))),
     ] {
