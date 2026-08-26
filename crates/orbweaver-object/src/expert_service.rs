@@ -917,16 +917,65 @@ impl ExpertService {
     /// deployment declares specializations out of band with
     /// [`ExpertService::declare_specialization`].
     ///
-    /// # What it does not do
+    /// # What it does not do, and why that is a contract rather than a leak
     ///
-    /// It does not filter on residency: `Constraints` declares no member for
-    /// it and inventing one would be policy this contract did not ask for. An
-    /// OFFLOADED expert can therefore come back, and dialling it answers
-    /// `OBJECT_NOT_EXIST` by F3's design — the caller's cue to `prefetch`. It
-    /// also does not dial anything: the references are copied out of the
-    /// table under the lock and handed back, so the "no outbound call inside
-    /// a lock" rule this module's docs anticipated for `select` is kept by
-    /// there being no call at all.
+    /// It does not filter on residency, and it does not report it. That is
+    /// **deliberate and correct**, and D029 §6.1's Activation row named this
+    /// operation as the load-state leak until 2026-08-26. It is not the leak.
+    /// The four arguments, from the contract rather than from convenience:
+    ///
+    /// 1. **`Constraints` declares no member for it** (corpus/golden/22 line
+    ///    34: `required`, `max_latency_ms`, `max_cost`). Filtering on
+    ///    residency would apply a constraint the caller never expressed —
+    ///    policy this contract did not ask for — and reporting it would need a
+    ///    return type `ExpertSeq` is not.
+    /// 2. **The contract already has two homes for load state, and both are
+    ///    values a caller asks for**: `moe::ExpertLoader::status`, whose
+    ///    `//@ ai_effect: read_only` and absent `ai_authz` make reading
+    ///    residency unrestricted, and `moe::Capability::state`, which
+    ///    `Expert::describe` returns. Load state in this contract is something
+    ///    you are *told*, at a place that declares it.
+    /// 3. **`Router` is `//@ ai_desc: Control-plane gate`, so its callers are
+    ///    entitled to know** — the argument the ledger batch used when it
+    ///    declined to tag the MoE residency spikes. Entitlement settles *may
+    ///    the caller know*; transparency is about *what the caller can tell
+    ///    without being told*. An entitled caller inferring load state from a
+    ///    dial that fails is still a side channel, and point 2 is where the
+    ///    contract says the entitlement is spent.
+    /// 4. **Filtering could not close the leak even if it were welcome.**
+    ///    `select` answers at T and the caller dials at T+ε; an expert
+    ///    RESIDENT at T can be evicted before the dial. A filter changes how
+    ///    *often* a caller can tell, never *whether* it can — and a caller
+    ///    that kept a reference from an earlier call, or got one from
+    ///    `Expert::delegate`, or destringified one, never went through this
+    ///    operation at all.
+    ///
+    /// # Where the leak actually is
+    ///
+    /// In what the **reference** does across an eviction, not in what this
+    /// sequence contains: see [`MissPolicy`](crate::residency::MissPolicy),
+    /// whose two refusing variants make a POA answer `OBJECT_NOT_EXIST` for an
+    /// OFFLOADED expert, and whose [`Activate`](crate::residency::MissPolicy::Activate)
+    /// variant closes it. That is a POA-level fact and therefore holds for
+    /// *any* target, which is what §6's criterion asks for and what a fix
+    /// inside this one application contract could never have given.
+    ///
+    /// **The sentence this section replaced said an OFFLOADED expert's dial
+    /// answers `OBJECT_NOT_EXIST` "by F3's design — the caller's cue to
+    /// `prefetch`", and that reason was false in two ways.** A `select` caller
+    /// holds a `Router` reference; `prefetch` is on `ExpertLoader`, an object
+    /// `Router` never hands over, and it is the one operation on that
+    /// interface whose `//@ ai_authz: moe.loader.residency` a
+    /// `moe.router.select` caller has no reason to hold. And `prefetch` is
+    /// `oneway`, so even a caller that can reach it learns nothing about when
+    /// to retry. The cue named an action the cued caller generally cannot
+    /// take. *The position it defended was right; its reason was not.*
+    ///
+    /// # It still does not dial anything
+    ///
+    /// The references are copied out of the table under the lock and handed
+    /// back, so the "no outbound call inside a lock" rule this module's docs
+    /// anticipated for `select` is kept by there being no call at all.
     pub fn select(
         &self,
         gate: &GateSignal,
