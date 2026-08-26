@@ -286,6 +286,46 @@ feature to add.
 이 워크스페이스의 serve 지점 63개 중 **17개가 `|| false`를 넘긴다** — 여전히 죽여야만
 멈추는 프로세스 열일곱이다. 이제 *고칠 수 있게* 되었을 뿐 고쳐진 것은 아니다.
 
+#### Every row above now has a test, or a counted skip that says why not (2026-08-26)
+
+**No row's status changes here. This subsection cites instruments; it does not
+move a verdict.** §5 O0 landed and, on the same day, reached the harness:
+
+| Row | The instrument that could refute it | What it says today |
+|---|---|---|
+| Location | `what_a_caller_can_tell.rs` — a move under a live caller, and the caller's limits across it | measures |
+| Backend | the same file — the servant behind one reference replaced mid-session | measures |
+| Language | `spikes/leak_tests.sh`'s language leg | counted `SKIPPED`: waits on a Python servant mountable as a `Dispatch` in a server the test owns |
+| Activation / load | its activation leg | counted `SKIPPED`: waits on a POA-level activation path that reloads an evicted target |
+| Lifecycle stability | `spikes/orb_shutdown.sh` (D034) measures the removal; the leak leg is a counted `SKIPPED` | waits on a redirect emitted for a **name** rather than for an object |
+
+Two things are worth stating rather than inferring. **A test existing does not
+move a row** — the two rows with a measuring leg are the two that already read
+*measured, with a known leak* and *mostly held*, and the leg refutes neither
+leak. And **the three skips are the valuable half**: each is a counted `SKIPPED`
+naming one blocker, so D031's ledger prints them under this row on every run and
+the next batch is scoped from a sentence rather than from a reading. A leg that
+did not exist and a leg that cannot run yet used to print identically — as
+nothing.
+
+The controls are in the tree rather than in a commit message:
+`spikes/leak_controls.sh` puts each leak back and requires the test to see it,
+by exit code and in the test file's own sentence, and it runs in the harness
+ahead of the legs so that a green leg is evidence about a leak rather than about
+a switch that has stopped working.
+
+*여기서 어떤 행의 상태도 바뀌지 않는다. 이 절은 **계기를 인용**할 뿐 판정을 옮기지
+않는다.* §5 O0*이 착지했고 같은 날 하네스에 닿았다. 두 가지는 추론이 아니라 명시해
+둘 값어치가 있다. **테스트가 생겼다는 것이 행을 옮기지는 않는다** — 재는 다리를 가진
+두 행은 이미 "알려진 구멍과 함께 측정됨", "대체로 유지됨"이라 적혀 있던 두 행이고,
+그 다리는 어느 구멍도 반증하지 않는다. 그리고 **스킵 셋이 값어치 있는 절반이다**:
+각각이 장애물 하나를 이름 붙인 계수되는 `SKIPPED`이므로 D031의 원장이 매 실행마다 이
+행 아래에 그것을 찍고, 다음 배치는 읽기가 아니라 **문장**에서 범위를 잡는다. 존재하지
+않는 다리와 아직 돌 수 없는 다리는 예전에는 똑같이 — 아무것도 아닌 것으로 — 찍혔다.
+대조군은 커밋 메시지가 아니라 트리에 있다: `leak_controls.sh`가 각 구멍을 되돌려 넣고
+테스트가 그것을 보는지를 요구하며, 하네스에서 다리들보다 **먼저** 돈다 — 그래야 초록인
+다리가 구멍에 대한 증거이지 고장 난 스위치에 대한 증거가 아니다.*
+
 #### Location, for a `LocateRequest` — the probe answered "nowhere" (2026-08-26)
 
 **The row's status sentence does not move, and saying so is the point.** Both

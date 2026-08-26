@@ -259,14 +259,21 @@ otherwise would be the row this project keeps a subsection open to avoid.
   proves every counter went to zero — and §5.1 is the measurement of what those
   counters are worth on their own, which is the reason the method's own rustdoc
   says what it does not prove.
-- **Not that `spikes/orb_shutdown.sh` is a gate.** The gate for this claim is
+- **Not that `spikes/orb_shutdown.sh` is the gate.** The gate for this claim is
   `crates/orbweaver-giop/tests/orb_stops_what_it_handed_out.rs`, which runs in
   `cargo test --workspace`. The spike adds provenance — a peer applying none of
-  our conventions — and **wiring it into `spikes/run_checks.sh` is left
-  undone**, because that file was held by another batch on the day this landed.
-  Named rather than silent: the next reader adds a group, and the negative
-  control it lands with is already recorded in §5.1.
-- **Not that the harness declares this transparency.** `spikes/transparency.py`
-  reads per-transparency tags out of `run_checks.sh`, and the lifecycle row
-  therefore still has no declaring group — the same held file, the same one-line
-  fix.
+  our conventions. **Done 2026-08-26, by the follow-up this bullet asked for:**
+  it is a `spikes/run_checks.sh` group, tagged `bears_on lifecycle`, whose
+  verdict is the peer's exit code with the fixture's own counters printed beside
+  it; `exit 3` there is a *failure* and not a `SKIPPED`, because the fixture is
+  this workspace's own binary and so "it would not build" is a broken tree
+  rather than an absent peer. Its negative controls — the peer moved aside, and
+  the peer's assertion inverted — are in that commit's message.
+- **Not that the harness declares this transparency.** Written when it did not.
+  **Superseded 2026-08-26**: the group above is the lifecycle row's first
+  declaring group, and D029 §5 O0's leak leg for the same row is a counted
+  `SKIPPED` naming the redirect-for-a-name it waits on, so the ledger prints
+  both under the row every run. §8 is unaffected and is the reason this is worth
+  spelling out — **a declaring group is not a held row.** What the group
+  measures is the removal; the transparency of the removal is still leaking, and
+  the skip beside it is what keeps that legible.
