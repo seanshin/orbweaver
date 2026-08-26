@@ -224,6 +224,19 @@ records what changed and, where it matters, what it changes on the wire.
   only the 50 reserved words would have said Java was covered while
   `public final class record` failed to compile.
 
+  **A compiler that is not ours agrees, by failing.** `org.jacorb.idl.parser`
+  3.9 accepts the file and writes 179 Java files, 20 of which do not compile
+  under JDK 21: `'sealed' is not allowed here` ×9, `'yield'` ×5, `'var'` ×3,
+  `'record'` ×3. JacORB escapes the 50 reserved words and none of the contextual
+  ones — the same class D030 §5 L2 recorded for its `catch (…IOException e)`
+  template, in a second instance. Ours escapes all four and compiles, and that
+  is a fact about the corpus section rather than about the emitter: without
+  those six declarations nothing would have executed that escaping either.
+
+  *우리 것이 아닌 컴파일러가 실패함으로써 동의한다: JacORB 3.9의 IDL 컴파일러는 이
+  파일을 받아들여 Java 179개를 쓰지만 그중 20개가 JDK 21에서 컴파일되지 않는다 —
+  예약어 50개는 이스케이프하고 **문맥 키워드는 하나도** 하지 않기 때문이다.*
+
   The template-locals section is D030 §5 L2's third consequence, executed rather
   than asserted: JacORB 3.9's own stub template writes `catch (java.io.IOException
   e)` into the same scope as an operation's parameters, so **the hazard is every

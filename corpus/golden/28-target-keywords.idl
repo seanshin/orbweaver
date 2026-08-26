@@ -341,6 +341,16 @@ module kw_java {
 // position an IDL type lands in — so a list that only held the 50 reserved
 // words would have said Java was covered while `public final class record`
 // failed to compile.
+//
+// Measured 2026-08-26, and by a compiler that is not ours: `org.jacorb.idl.parser`
+// 3.9 accepts this whole file and writes 179 Java files, of which **20 do not
+// compile under JDK 21** — `'sealed' is not allowed here` ×9, `'yield'` ×5,
+// `'var'` ×3, `'record'` ×3. JacORB escapes the 50 reserved words and **none of
+// the contextual ones**, which is the same class of defect D030 §5 L2 recorded
+// for its `catch (java.io.IOException e)` template and a different instance of
+// it. Our emitter escapes all four and its output compiles, which is a fact
+// about this section rather than about the emitter: without these six
+// declarations nothing would have executed that escaping either.
 module kw_java_types {
   //@ ai_desc: Restricted as a type name since Java 16, legal as a variable name
   struct record { long v0; };
