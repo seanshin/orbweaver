@@ -984,7 +984,7 @@ fn hex(bytes: &[u8]) -> String {
 /// on the wire rather than a boolean.
 fn orders(frames: &[&Frame]) -> Vec<&'static str> {
     let mut seen: Vec<&'static str> =
-        frames.iter().map(|f| f.big.then_some("big").unwrap_or("little")).collect();
+        frames.iter().map(|f| if f.big { "big" } else { "little" }).collect();
     seen.sort_unstable();
     seen.dedup();
     seen
