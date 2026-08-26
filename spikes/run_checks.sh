@@ -64,7 +64,109 @@ printf 'pid %s in %s at %s\n' "$$" "$ROOT" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >"
 # hypothetical tidiness — the first version of this lock did use its own trap,
 # every run leaked a stale lock, and the next run refused to start.
 
-hr() { printf '\n\033[1m%s\033[0m\n' "$1"; }
+# ── The dimension this harness did not have ──────────────────────────────────
+#
+# Every one of the groups below answers *did this break*. None of them answers
+# *what can a caller still tell* — D029 §6's priority-zero criterion — and until
+# today that question was answered by reading batch reports with a `grep`, which
+# is a reading, not a measurement. D031 H1/H2.
+#
+# Two pieces, and neither of them is a score. `bears_on` lets a group declare
+# which transparency it bears on, validated against the ONE place those names
+# live; the ledger before the verdict reads what actually ran and prints, per
+# transparency, how many groups measured it, how many went red, and what is
+# named unmeasured. **The last column is the load-bearing one** — it is what a
+# next batch is scoped from — and a transparency nothing declares prints as
+# UNMEASURED, never as absence of bad news.
+#
+# What is deliberately NOT here: a percentage, a completed-of-five count, or any
+# figure that could be quoted in prose as progress. `A floor is not a figure`
+# and a completion percentage is its worst form — it moves when a group is
+# added, and it is wrong the moment a leak is FOUND rather than closed, which is
+# what finding a leak is. The verdict line therefore names the unmeasured
+# transparencies instead of counting the measured ones.
+#
+# The five names are NOT written in this file. `spikes/transparency.py` reads
+# them out of D029 §6.1, which owns them; a retyped list here would be
+# `a classifier is a sentence too` in shell, and would go quiet the day §6.1
+# changed. A tag naming something §6.1 does not is a FAILURE naming the group
+# and the bad name — the `dk_peer` lesson, where the expected table was checked
+# against the peer's own enum before any leg ran, so a typo failed as our table.
+TP_DOC="docs/decisions/D029-what-a-complete-orb-would-mean.md"
+# Read once, and KEEP WHAT IT SAID. A second run to produce a diagnostic can
+# succeed where the first failed, and then the failure has no explanation in the
+# transcript — the reader's own words are the diagnostic.
+TP_LOAD_MSG=$(python3 spikes/transparency.py --names 2>&1)
+tp_load_rc=$?
+tp_load_err=0
+TP_NAMES=""
+if [ "$tp_load_rc" -eq 0 ] && [ -n "$TP_LOAD_MSG" ]; then
+  TP_NAMES="$TP_LOAD_MSG"
+else
+  tp_load_err=1
+fi
+
+TP_GIDX=0            # which group we are inside, 1-based, in file order
+TP_GROUP_TITLE=""    # its `hr` title, so a diagnostic can name it
+TP_GROUPS=""         # idx \t title
+TP_TAGS=""           # transparency \t idx
+TP_RED=""            # idx \t how many failures that group added
+TP_SKIPS=""          # idx \t the skip's own first line, or empty
+tp_fail_at_start=0
+tp_skip_text=""
+
+# A group's verdict is a DELTA, not a flag: every group already reports by
+# adding to `fail_total`, and asking 81 groups to also set a variable would be
+# 81 chances to forget. So the close-out runs when the next `hr` starts and
+# reads what the previous group added. No group's own verdict changes, which is
+# D031 §2's third refusal — the ledger reads the run, it does not replace it.
+tp_close_group() {
+  local d
+  [ -z "$TP_GROUP_TITLE" ] && return 0
+  d=$((fail_total - tp_fail_at_start))
+  if [ "$d" -gt 0 ]; then
+    TP_RED="${TP_RED}${TP_GIDX}	${d}
+"
+  fi
+  return 0
+}
+
+hr() {
+  tp_close_group
+  TP_GIDX=$((TP_GIDX+1))
+  TP_GROUP_TITLE="$1"
+  TP_GROUPS="${TP_GROUPS}${TP_GIDX}	$1
+"
+  tp_fail_at_start=$fail_total
+  printf '\n\033[1m%s\033[0m\n' "$1"
+}
+
+#   bears_on <name>
+# Declared by a group immediately after its `hr`. Declaring nothing is normal
+# and most groups do; declaring a name §6.1 does not have is a failure.
+bears_on() {
+  local name="$1"
+  if [ "$tp_load_err" = 1 ]; then
+    echo "  FAIL bears_on $name: the transparency names could not be read from"
+    echo "       $TP_DOC §6.1, so this group's claim is unvalidated — and an"
+    echo "       unvalidated claim is an unmeasured check, which is a failure"
+    fail_total=$((fail_total+1))
+    return 0
+  fi
+  if ! grep -qx -- "$name" <<<"$TP_NAMES"; then
+    echo "  FAIL group \"$TP_GROUP_TITLE\" declares bears_on \"$name\","
+    echo "       which is not one of the transparencies $TP_DOC §6.1 names:"
+    echo "       $(tr '\n' ' ' <<<"$TP_NAMES")"
+    echo "       fix the tag, or change §6.1 first — the names have one home"
+    echo "       and this file is not it"
+    fail_total=$((fail_total+1))
+    return 0
+  fi
+  TP_TAGS="${TP_TAGS}${name}	${TP_GIDX}
+"
+  return 0
+}
+
 need() { command -v "$1" >/dev/null 2>&1 || { echo "missing tool: $1"; exit 2; }; }
 
 # Whether something is listening, without needing lsof. The probe used to be
@@ -202,6 +304,7 @@ git_date() { git -C "$ROOT" log -1 --format=%cs -- "$1" 2>/dev/null; }
 #     line...   the group's own text, one argument per line, naming its fixture
 skip() {
   local kind="$1" spec="$2"; shift 2
+  tp_skip_text="$1"   # the group's own first line, for the ledger to cite
   echo "  SKIPPED  $1"; shift
   while [ "$#" -gt 0 ]; do echo "           $1"; shift; done
   skip_age "$kind" "$spec"
@@ -229,6 +332,13 @@ skip_age() {
   fi
   skipped=$((skipped+1))
   [ "$kind" = replay ] && replays=$((replays+1))
+  # The ledger's unmeasured column cites the group's own words rather than
+  # inventing a second wording for the same absence. Nine skips are announced by
+  # the script being run and call `skip_age` directly, so there is no text to
+  # cite; the ledger says so rather than printing an empty reason.
+  TP_SKIPS="${TP_SKIPS}${TP_GIDX}	${kind}	${tp_skip_text}
+"
+  tp_skip_text=""
   return 0
 }
 
@@ -598,6 +708,10 @@ else
 fi
 
 hr "a generated skeleton answers as the hand-written servant does"
+# Two different implementations answer the same interface and the caller's bytes
+# are asserted identical. That is D029 §6.1's backend row exactly — *what
+# implements it* varies INSIDE this group and the observation does not.
+bears_on backend
 # 59 scripted steps x 2 byte orders over CosNaming, and every structured reply
 # decoded back by orbweaver-giop's own readers — two servants can agree on the
 # wrong bytes. This is what forced D009's L2 early: the naming server began
@@ -1311,6 +1425,10 @@ fkill spike-server
 
 # ── Object model ─────────────────────────────────────────────────────────────
 hr "object model — references, identity, LOCATION_FORWARD"
+# The second half sends a LOCATION_FORWARD and requires the peer to retry
+# transparently — the target's address changes under a live caller and the
+# caller's result does not.
+bears_on location
 if start_rust_server; then
   out=$(python3 spikes/object_client.py spikes/server.ior 2>&1)
   if grep -q "failures: 0" <<<"$out"; then
@@ -1366,6 +1484,9 @@ fkill spike-server
 
 # ── LOCATION_FORWARD_PERM: a generated skeleton saying "moved for good" ─────
 hr "LOCATION_FORWARD_PERM — status 4 from a generated skeleton, omniORB following it"
+# The object has moved for good and a foreign client follows without its caller
+# being told: D029 §6.1's location row, measured rather than argued.
+bears_on location
 # The status byte is the oracle: through every client measured, a temporary
 # and a permanent forward produce the same request count at the old reference
 # (1), so a count can never go red on its own. The in-test control is the
@@ -1469,6 +1590,9 @@ case "$capout" in
 esac
 
 hr "LOCATION_FORWARD vs _PERM — fallback-on-failure: the forwarded-to server killed, does the client go back?"
+# The hardest half of location transparency: the place the target moved TO dies,
+# and the caller must still be able to reach it without knowing either address.
+bears_on location
 # 680aa41: a request count is 1 under both statuses. The oracle is §9.6:
 # temporary -> the client shall restart at the original address; permanent ->
 # it may have replaced the reference. Measured 2026-08-19 (af73b2f): omniORB
@@ -1535,6 +1659,10 @@ fi
 
 # ── Naming: resolve a target the way a deployment does ───────────────────────
 hr "object-reference acquisition — corbaname: through a real naming service"
+# The caller holds a NAME and never learns an address at all — the strongest
+# form of D029 §6.1's location row, because the property is absent from the
+# caller rather than merely unused by it.
+bears_on location
 fkill omniNames
 fkill register_name
 sleep 0.5
@@ -1607,6 +1735,10 @@ fkill omniNames
 
 # ── D019: the ORB object — a table, a URL with no address, three refusals ───
 hr "ORB initial references — corbaloc:rir: out of OUR table to a foreign servant"
+# Leg A resolves a URL carrying NO ADDRESS AT ALL and a foreign servant in
+# another process answers a real call. Location, and the group says so itself:
+# "D019 calls this the ORB's whole point."
+bears_on location
 # `rir` means *resolve initial references*, and CORBA 3.4 §8.5.2 is explicit
 # that the mechanism is **local**: *"a simplified, local version of the Naming
 # Service."* So handing `corbaloc:rir:NameService` to omniORB's client measures
@@ -2353,6 +2485,9 @@ fi
 
 # ── Wire hardening: stream E — multi-profile failover ────────────────────────
 hr "wire hardening — multi-profile failover, dead first profile"
+# The reference names several places and the first one is dead; the call
+# completes and the caller is never told which endpoint answered.
+bears_on location
 # Unit tests prove failover against listeners that accept but never speak
 # GIOP. This closes the peer half: a synthetic IOR whose first profile is the
 # real one with its port forced to 1 must still carry ping() -> 42, and an
@@ -2483,6 +2618,21 @@ fkill "spike-names"
 
 # ── The MoE control plane, one turn on the wire ─────────────────────────────
 hr "expert service — registry, policy and residency through GIOP"
+# NOT TAGGED `bears_on activation`, deliberately, and this is the finding of
+# D031's first ledger. D031 §3 lists "the MoE residency spikes" as a group that
+# already measures the activation transparency; read against what this group
+# asserts, it does not. It drives residency FROM THE CONTROL PLANE — register,
+# heartbeat, prefetch, guarded evict, policy — and a control plane is precisely
+# the layer that is ALLOWED to know load state. D029 §6.1's activation row is
+# about a caller holding only a reference getting the same answer whether the
+# target is resident or evicted, and nothing here asks that question.
+#
+# Tagging it would have made the ledger print "activation: measured by 1 group,
+# 0 red" over a row §6.1 calls "the transparency this project has the most
+# machinery for and the least measurement of" — the ledger swallowing a leak,
+# which is the one thing it exists not to do. It stays untagged until a group
+# calls an evicted target and an equivalent resident one and asserts the caller
+# cannot tell (D029 §5 O0).
 # F1+F2+F3 joined: register and heartbeat over the wire, run the loading
 # policy over the offers it produced, and drive the residency machine with the
 # decisions. Measured because the interesting failures are between the parts —
@@ -2750,6 +2900,14 @@ fi
 # Python cannot express, or expresses differently. The seam is a local process
 # (D007, PROPOSED) so CPython gains no dependency and the wire stays in Rust.
 hr "Python client target — generated Python against the omniORB fixture"
+# The only group in this harness that puts a NON-RUST caller of ours on the
+# wire: generated Python invokes a C++ target holding only a reference, with no
+# Rust stub in the path. It is the weakest of this run's tags and it is worth
+# saying why: it measures the CALLER's half of language transparency, and
+# D029 §6.1's language row is about the TARGET's — "a Python servant cannot be
+# dispatched into". The ledger prints that leak under this row every run, so a
+# green count here cannot be read as the row being held.
+bears_on language
 if start_server; then
   pyout=/tmp/orbweaver-pytarget; rm -rf "$pyout"; mkdir -p "$pyout"
   if cargo run -q --bin gen-python -- --out "$pyout" spikes/echo.idl >/dev/null 2>&1 \
@@ -2933,6 +3091,10 @@ rm -rf "$SD"
 
 # ── R7: an IOR that is dialable from where the client actually is ───────────
 hr "NAT rewriting — the address a container publishes is not the one it bound"
+# D029 §6.1's location cell names this one by name — "R7 rewrites an IOR for a
+# dialable address". The bound address and the published address differ and the
+# caller dials the one it was given.
+bears_on location
 # assumption D already measured that a server publishes a routable-but-local
 # address. Inside a container that address is the namespace's, and a client
 # outside cannot dial it. The spike constructs both real failures — refused and
@@ -3507,6 +3669,10 @@ fkill spike-events
 
 # ── F7b: the pull model, with omniORB as the SUPPLIER ────────────────────────
 hr "event channel — omniORB is the pull supplier and OUR channel does the asking"
+# Our channel holds a PullSupplier reference and cannot tell that an ORB we did
+# not write is behind it — the same interface its own PullSupplierServant answers
+# in the group above. Backend.
+bears_on backend
 # `event_consumer.py` above measures the direction where our channel calls an
 # ORB we did not write. This measures the other one: our channel is the
 # *client*, it dials omniORB's `PullSupplier` and invokes `try_pull` on a
@@ -3880,6 +4046,108 @@ else
 fi
 [ "$ev_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
+hr "transparency ledger — what a caller can still tell (D029 §6, D031 H2)"
+# A READING OF THIS RUN, computed from what ran. It adds no check and removes
+# none: every group above keeps its own verdict, `fail_total` and `skipped` keep
+# their exact meanings, and the only thing this section can add to `fail_total`
+# is its own inability to read the names it needs.
+#
+# Read the third column. "measured by N group(s)" is the cheap column — it says
+# somebody looked. `unmeasured:` is the one a next batch is scoped from.
+#
+# WHAT THIS DOES NOT DO YET, so the next reader does not have to find out by
+# trying: (1) D031 H3 — there is no `--ledger` flag and no machine-readable
+# emission, so commissioning the next batch still means a human reading this
+# text; (2) D029 §5 O0 — nothing here CHANGES a hidden property under a live
+# caller. Every group this ledger counts was written for another reason and is
+# being re-read; two transparencies have no group at all and will not get one
+# until O0 lands. A first ledger that mostly re-reads green work is cheap and
+# honest, and it is not the same thing as a leak hunt.
+tp_unmeasured_names=""
+tp_measured_names=""
+if [ "$tp_load_err" = 1 ]; then
+  echo "  FAIL the five transparency names could not be read from $TP_DOC §6.1,"
+  echo "       so this run measured regression only and cannot say what a caller"
+  echo "       can still tell. That is an unmeasured criterion, not a pass."
+  diag_out "$TP_LOAD_MSG" 6 head
+  fail_total=$((fail_total+1))
+else
+  if [ -z "$TP_TAGS" ]; then
+    echo "  NO GROUP IN THIS RUN DECLARED A TRANSPARENCY."
+    echo "  All five read as UNMEASURED below. That is not \"nothing is wrong\":"
+    echo "  it means this run answered \"did anything regress\" and did not answer"
+    echo "  D029 §6's criterion at all."
+    echo ""
+  fi
+  while IFS= read -r tp_name; do
+    [ -z "$tp_name" ] && continue
+    tp_title=$(python3 spikes/transparency.py --title "$tp_name" 2>/dev/null)
+    tp_idxs=$(awk -F'\t' -v n="$tp_name" '$1==n {print $2}' <<<"$TP_TAGS")
+    tp_n=0; tp_red_n=0
+    for tp_i in $tp_idxs; do tp_n=$((tp_n+1)); done
+    printf '  %-11s %s\n' "$tp_name" "— ${tp_title:-$tp_name}"
+    if [ "$tp_n" -eq 0 ]; then
+      echo "              UNMEASURED — no group in this run declares bears_on $tp_name"
+      tp_unmeasured_names="$tp_unmeasured_names $tp_name"
+    else
+      for tp_i in $tp_idxs; do
+        tp_rn=$(awk -F'\t' -v i="$tp_i" '$1==i {print $2}' <<<"$TP_RED")
+        [ -n "$tp_rn" ] && tp_red_n=$((tp_red_n+1))
+      done
+      echo "              measured by $tp_n group(s) in this run, $tp_red_n of them red"
+      for tp_i in $tp_idxs; do
+        tp_gt=$(awk -F'\t' -v i="$tp_i" '$1==i {print $2}' <<<"$TP_GROUPS")
+        tp_rn=$(awk -F'\t' -v i="$tp_i" '$1==i {print $2}' <<<"$TP_RED")
+        tp_sk=$(awk -F'\t' -v i="$tp_i" '$1==i {print $2}' <<<"$TP_SKIPS")
+        # A group that skipped and a group whose sub-probe skipped print the
+        # same `SKIPPED` line and this file cannot tell them apart, so it does
+        # not guess: `+SKIPPED` says a skip was recorded here and the unmeasured
+        # column below says which. Inventing the distinction would be a
+        # classifier reading somebody else's sentence.
+        if [ -n "$tp_rn" ]; then
+          echo "                RED ($tp_rn)  $tp_gt"
+        elif [ -n "$tp_sk" ]; then
+          echo "                ok +SKIPPED $tp_gt"
+        else
+          echo "                ok          $tp_gt"
+        fi
+      done
+      tp_measured_names="$tp_measured_names $tp_name"
+    fi
+    # The unmeasured column. Two sources, both CITED rather than restated: a
+    # tagged group that skipped said in its own words why, and §6.1 says where
+    # this transparency leaks today. Neither sentence is retyped here.
+    for tp_i in $tp_idxs; do
+      tp_sk=$(awk -F'\t' -v i="$tp_i" '$1==i {print $2}' <<<"$TP_SKIPS")
+      tp_sr=$(awk -F'\t' -v i="$tp_i" '$1==i {print $3}' <<<"$TP_SKIPS")
+      [ -z "$tp_sk" ] && continue
+      tp_gt=$(awk -F'\t' -v i="$tp_i" '$1==i {print $2}' <<<"$TP_GROUPS")
+      echo "              unmeasured: $tp_gt"
+      if [ -n "$tp_sr" ]; then
+        echo "                          SKIPPED ($tp_sk): $tp_sr"
+      else
+        echo "                          SKIPPED ($tp_sk) — the group printed its own"
+        echo "                          SKIPPED line above, with its age"
+      fi
+    done
+    tp_cite=$(python3 spikes/transparency.py --cite "$tp_name" 2>&1); tp_cite_rc=$?
+    if [ "$tp_cite_rc" -ne 0 ] || [ -z "$tp_cite" ]; then
+      echo "              FAIL D029 §6.1's status for $tp_name could not be read,"
+      echo "                   so the load-bearing column is missing for it"
+      diag_out "$tp_cite" 4 head
+      fail_total=$((fail_total+1))
+    else
+      echo "              unmeasured, per D029 §6.1 — where it leaks today:"
+      sed -e 's/^/                | /' <<<"$tp_cite"
+    fi
+  done <<<"$TP_NAMES"
+  echo ""
+  echo "  Where a line above says D029 §6.1, the sentence is READ from that table"
+  echo "  at run time, not copied into this harness. No score is printed here and"
+  echo "  none should be derived: a shrinking unmeasured list is progress only"
+  echo "  when a run closed the leak, and looks identical to nobody looking."
+fi
+
 hr "verdict"
 if [ "$skipped" -gt 0 ]; then
   echo "  $skipped check group(s) SKIPPED — those claims are unmeasured, not passing"
@@ -3894,5 +4162,22 @@ if [ "$fail_total" -eq 0 ]; then
   echo "  all measured checks green"
 else
   echo "  $fail_total check group(s) failed"
+fi
+# And the other dimension, LAST, so that "all measured checks green" cannot be
+# read on its own. Names, not a count: "3 of 5" would be quoted as sixty per
+# cent complete by the first person to repeat it, and D031 §2 refuses a score.
+# Naming the unmeasured ones cannot be turned into one, and is the useful half.
+if [ "$tp_load_err" = 1 ]; then
+  echo "  transparency: NOT READ — $TP_DOC §6.1 could not be parsed (see the ledger)"
+elif [ -z "$tp_measured_names" ]; then
+  echo "  transparency: NONE measured in this run —$tp_unmeasured_names all unmeasured."
+  echo "  A green verdict above means nothing regressed; it does not mean anything"
+  echo "  was learned about what a caller can still tell (D029 §6)."
+else
+  echo "  transparency measured this run:$tp_measured_names"
+  if [ -n "$tp_unmeasured_names" ]; then
+    echo "  transparency UNMEASURED this run:$tp_unmeasured_names"
+    echo "  — unmeasured, not passing; the ledger above names what each one waits on"
+  fi
 fi
 exit "$fail_total"

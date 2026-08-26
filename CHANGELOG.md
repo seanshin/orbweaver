@@ -169,6 +169,62 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **The harness gained a dimension: it now says what a caller can still tell**
+  (D031 H1/H2, PROPOSED — the ledger lands, the decision's status is its own).
+
+  81 groups answered *did anything regress* and none of them knew D029 §6's
+  five transparencies existed. When that criterion was asked about directly, the
+  answer had to be assembled from four batch reports, a decision document and a
+  `grep` — a reading, not a measurement.
+
+  **`spikes/transparency.py` reads the five names out of D029 §6.1 and does not
+  contain them.** A `TRANSPARENCIES` list in the harness, or in a crate, would
+  be a second home for names §6.1 already owns; the slug a group tags itself
+  with is derived from the table's own first column (`**Activation / load**` →
+  `activation`), so renaming a transparency there makes every stale tag fail by
+  name rather than be ignored. A group declares `bears_on <name>`, and a name
+  §6.1 does not have is a **failure naming the group and the bad name**.
+
+  **The ledger** prints, before the verdict and computed from the run: per
+  transparency, how many groups measured it, how many went red, and — the
+  load-bearing column — what is named unmeasured, from the groups' own `SKIPPED`
+  text and from §6.1's status cell, **both read at run time rather than copied**.
+  No group moved, no group's verdict changed, `fail_total` and `skipped` keep
+  their exact meanings: a group's redness is a delta of `fail_total` taken when
+  the next `hr` starts, so none of the 81 had to be edited to report itself.
+
+  **No score, deliberately.** The verdict line names the unmeasured
+  transparencies instead of counting the measured ones — *a floor is not a
+  figure*, and "3 of 5" is quoted as sixty per cent by the first person to
+  repeat it, while today's honest movement was negative: one leak closed and
+  three revealed. And **the empty case reads as unmeasured, not as success**:
+  with nothing tagged the ledger prints `NO GROUP IN THIS RUN DECLARED A
+  TRANSPARENCY` and the verdict prints `transparency: NONE measured in this
+  run`, because a ledger whose empty state looks like a pass is the
+  green-while-measuring-nothing class wearing a report's coat.
+
+  **`spikes/ledger_control.sh`** runs the ledger's seven negative controls in
+  about a second, starting no fixture and taking no lock — it cuts the ledger,
+  `hr` and `bears_on` out of `run_checks.sh` with `awk` and runs those bytes
+  over the real tag set, so it runs the harness's changes rather than a copy of
+  them. Batches are told not to run `run_checks.sh`; a prohibition without its
+  replacement is an instruction to skip the check.
+
+  Ten groups declare, measured 2026-08-26: seven location, two backend, one
+  language; activation and lifecycle are declared by nobody. **The MoE
+  residency group was proposed for `activation` and declined** — it drives
+  residency from the control plane, which is the one layer allowed to know load
+  state, and never asks whether a caller holding only a reference can tell.
+  The reason is written at that group.
+
+  *하네스는 81개 그룹으로 "퇴행했나"에 답했고, 그중 무엇도 D029 §6의 다섯 투명성을
+  알지 못했다. 다섯 이름의 집은 D029 §6.1이며 `spikes/transparency.py`는 그것을
+  **읽을 뿐 담지 않는다**. §6.1에 없는 이름을 단 그룹은 무시되지 않고 **실패한다**.
+  원장은 투명성별로 몇 그룹이 쟀는지, 몇이 빨간지, 그리고 무엇이 측정되지 않았는지를
+  실행에서 계산해 찍는다. 점수는 없다 — "5분의 3"은 처음 인용하는 사람이 60%로 읽고,
+  오늘의 정직한 이동은 **음수**였다. 그리고 **아무것도 태그되지 않은 실행은 통과가
+  아니라 미측정으로 읽힌다**.*
+
 - **The ORB owns the transport, and the configuration is live** (D019 step 4,
   the step the §5 shape approval gated; approved one-way 2026-08-26).
 
