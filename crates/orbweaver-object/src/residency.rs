@@ -605,6 +605,30 @@ pub struct Reconciled {
 /// a dispatch thread and spends a round of application code that cannot in
 /// general be written.
 ///
+/// **The one clause that is not answered by rank is "unbounded", and it is
+/// answered by not being answered here.** A demand load with no ceiling holds
+/// a dispatch thread for as long as the load takes, and the obvious guard is a
+/// deadline after which the locator gives up. This variant does not have one,
+/// deliberately: in this repository a load is a state transition and an opaque
+/// blob, so a deadline could never elapse and the test for it would assert
+/// against a branch nothing can reach — *"adding one without a client that
+/// acts on it would be decoration"*, which is the refusal's own standard,
+/// applied to the fix rather than to the refusal. A deployment with a real
+/// weight copy needs the bound and needs to decide what the expiry **answers**,
+/// and that second half is the harder one: `OBJECT_NOT_EXIST` puts the leak
+/// straight back, so the honest expiry is `TRANSIENT` or a `Located` variant
+/// carrying a retry-after — the same two the paragraph above already named,
+/// still with no client that acts on either. Named here so it is a decision
+/// somebody takes rather than an omission somebody inherits.
+///
+/// *비용이 아니라 "무한정"인 절만은 순위로 답해지지 않으며, 여기서 답하지
+/// **않음**으로써 답한다: 이 저장소에서 적재는 상태 전이와 불투명 블롭이므로
+/// 마감 시한은 결코 만료될 수 없고, 그 테스트는 도달 불가능한 분기를 겨눈다 —
+/// *"그것에 반응하는 클라이언트 없이 더하는 것은 장식"*이라는 거절문 자신의 기준을
+/// 수정 쪽에 적용한 것이다. 진짜 가중치 복사가 있는 배포는 한계가 필요하고, 만료가
+/// **무엇을 답하는가**를 정해야 한다 — `OBJECT_NOT_EXIST`는 구멍을 그대로 되돌려
+/// 놓는다.*
+///
 /// # What [`Activate`](Self::Activate) does not close
 ///
 /// **Time.** A demand-loaded call is slower than a resident one, and a caller
