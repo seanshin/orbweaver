@@ -629,6 +629,15 @@ pub struct Reconciled {
 /// **무엇을 답하는가**를 정해야 한다 — `OBJECT_NOT_EXIST`는 구멍을 그대로 되돌려
 /// 놓는다.*
 ///
+/// **And it is not two questions.** A demand load that *fails* wants exactly
+/// the reply an expired deadline wants, for the same reason — neither "here"
+/// nor "never existed" — so whoever answers one answers both. The failing half
+/// is written up where it is reachable from a caller,
+/// [`ExpertHost::dispatch`](crate::expert_host::ExpertHost), and is not
+/// restated here.
+///
+/// *두 개의 질문이 아니다: 실패한 요구 적재와 만료된 마감 시한은 같은 답을 원한다.*
+///
 /// # What [`Activate`](Self::Activate) does not close
 ///
 /// **Time.** A demand-loaded call is slower than a resident one, and a caller

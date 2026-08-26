@@ -278,6 +278,74 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **`orbweaver_object::expert_host::ExpertHost` — the mount `MissPolicy::Activate`
+  had been waiting for, and the answer to *who owns an expert's server*.**
+
+  The batch that closed D029 §6.1's **Activation / load** leak at the POA left
+  the closure available and unchosen: `ExpertLocator` had **zero references
+  outside `residency.rs`**, nothing mounted it on a served POA, and every
+  deployment therefore ran one of the two *refusing* policies. It named the
+  reason — *"who owns an expert's server … is a separate design"*.
+
+  The design answer: **whoever owns the expert's residency owns its server, and
+  the mount is the statement that these are one object.** A POA consults a
+  locator only for ids inactive *in that POA*, so owning the POA without the
+  loader means answering `Here` for what you cannot load, and owning the loader
+  without the POA means loading what nothing will dispatch to. Neither existing
+  servant satisfies it, each on its own recorded argument: `ExpertService` owns
+  the loader and stores registrants' `Ior`s verbatim, so its experts live in
+  other processes (*"an `Expert` servant on the registry's object would answer
+  for an expert that does not live here"*); `TenantService` serves experts and
+  has no residency, and giving it one would make load state a tenancy fact,
+  leaving the tenantless shared base with no owner for its own.
+
+  So a third servant: a `Poa` (Persistent, `AskLocator`) and the `ExpertLoader`
+  for that POA's ids under one lock, serving `moe::Expert`'s three declared
+  operations, defaulting to `MissPolicy::Activate`. **Nothing is wired to it** —
+  no existing deployment behaves differently — which is also the honest limit:
+  the adoption is *available and not taken*.
+
+  Two things the mounted shape found that the isolated one could not.
+  **`knows` must be residency-independent**: a `LocateRequest` is answered one
+  message before an invocation on the message §9.4.5 guarantees is
+  side-effect-free, so a `knows` that read the loader would hand the caller the
+  load state for free. **And `moe::Capability`'s fifth member is `Residency
+  state`** — the contract's own `describe()` *reports* load state, so the
+  fixture's reason for byte-identity ("the answer depends on the object and on
+  nothing else") is false for the declared operation. The reply is identical
+  anyway, for an **ordering** reason: the demand load runs inside `locate`,
+  before the servant, so the honest report is `RESIDENT` both times.
+
+  `crates/orbweaver-object/tests/a_mounted_expert_host_across_an_eviction.rs`
+  measures it — 9 tests, one live `Connection` each, replies compared whole —
+  with three controls in the file (`cargo test` runs them) and four more run
+  red: the default policy reverted to `Refuse`; the scenario run on `Refuse`
+  (`OBJECT_NOT_EXIST`, named); `knows` made to read residency (the probe
+  answers `Unknown`); and `evict` stripped of its `reconcile`, which reddens
+  three tests including the one that exists to prove the demand load happened.
+
+  **Not measured, and not to be read into a green run: time.** A demand-loaded
+  call is slower and a caller with a clock can tell; in this repository a load
+  is two map writes, so that latency is real in a deployment and absent from
+  every test here. **And a demand load that *fails* is `OBJECT_NOT_EXIST` — the
+  leak put straight back.** Unreachable here (both edges the `Activate` arm
+  takes are unguarded), live in a deployment, and the *same* open question as
+  `MissPolicy`'s deliberately-absent deadline: both want a reply that is
+  neither "here" nor "never existed", the candidates are `TRANSIENT` or a
+  `Located` carrying a retry-after, and neither has a client that acts on one.
+
+  *닫힌 구멍이 채택되지 않은 채 있었다 — `ExpertLocator`는 `residency.rs` 밖에서
+  참조가 **0개**였다. 설계 답: **전문가의 잔류를 소유한 쪽이 그 서버를 소유하며,
+  마운트는 이 둘이 하나의 객체라는 선언이다.** 기존 두 서번트 어느 쪽도 그것이 될
+  수 없어 세 번째 서번트를 만들었고, 기본값은 `MissPolicy::Activate`다. 아무것도
+  여기에 연결되지 않았으므로 기존 동작은 바뀌지 않는다 — 그것이 정직한 한계이기도
+  하다. 마운트된 형태에서만 보이는 두 가지: `knows`는 잔류와 무관해야 하고(프로브가
+  두 번째 표면이다), `moe::Capability`의 다섯째 멤버가 `Residency`이므로 계약의
+  `describe()`는 적재 상태를 보고한다 — 답이 같은 이유는 독립성이 아니라 **순서**다.
+  재지 않은 것은 **시간**이고, 실패한 요구 적재는 `OBJECT_NOT_EXIST`로 구멍을 그대로
+  되돌려 놓는다 — 여기서는 도달 불가, 배포에서는 도달, 그리고 마감 시한과 같은
+  하나의 미결 질문이다.*
+
 - **A third target: Java clients, and the suite accepts it (D030 §5 L2, D032
   §4).** `orbweaver_gen::java` emits client stubs, the types they carry and a
   hand-written runtime (`_Rt.java`), and `spikes/bindings/java.manifest` is the
