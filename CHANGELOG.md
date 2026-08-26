@@ -169,6 +169,118 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Added / 추가
 
+- **The second protocol direction: a request our ORB decoded, carried into a
+  Python servant and back.** `orbweaver-gen` emitted Python **clients** for six
+  phases and could not emit a servant, so a target's language decided whether
+  it could be a target at all. `crates/orbweaver-gen/src/pyservant.rs` is that
+  direction — `PyServant` is a `Dispatch` that turns a `Request` into one JSON
+  line and a reply line back, `orbweaver-py-bridge --serve` writes the call
+  document and Python answers it, and `python.rs` emits a `<Name>Servant` base
+  from `client_operations` so a Python servant answers exactly the names a
+  Python client of the same contract can send.
+
+  **It is a dispatch and not a wire**, which is the refusal D030 §4 states:
+  GIOP framing, CDR, alignment, byte order, codeset negotiation, reply status
+  and the repository id on a user exception all stay on the Rust side, and what
+  crosses is an operation name and already-decoded values. The seam's refusals
+  are the **published constructors** — `SystemException::bad_operation`,
+  `::marshal`, `::object_not_exist` — called rather than reproduced, so a
+  fourth wording cannot appear the way the generated Python runtime once wrote
+  its own for `fixed`.
+
+  Measured by `crates/orbweaver-gen/tests/python_servant.rs`: a Python servant
+  and the generated Rust servant for the same contract answer **byte-identically
+  over 19 calls × 3 GIOP versions × 2 byte orders**, with a negative control
+  that perturbs five answers and asserts each is seen; `python_servant_wire.rs`
+  adds our generated Rust client and omniORB's client against it. **Named
+  unmeasured, not counted:** the omniORB leg runs in that peer's **native byte
+  order only** — omniORB marshals native-endian and exposes no override — so
+  the foreign-peer half is one byte order, which is a property of the peer and
+  is recorded as a limit rather than as coverage.
+
+  What this closes and what it leaves is D029 §6.1's Language row and §6.1.1,
+  and is not restated here.
+
+  *`orbweaver-gen`은 여섯 페이즈 동안 파이썬 **클라이언트**만 냈고 서번트를 낼 수
+  없었다 — 대상의 언어가 대상이 될 수 있는지를 결정했다. 이제 두 번째 방향이
+  있으며, **와이어가 아니라 디스패치**를 나른다: GIOP·CDR·정렬·바이트 순서는
+  모두 러스트 쪽에 남는다. 거부 문장은 공개된 생성자를 **호출**한다. 19호출 ×
+  3버전 × 2바이트 순서에서 러스트 서번트와 바이트 단위로 동일. **미측정으로
+  명명:** omniORB 다리는 그 피어의 네이티브 순서뿐이다.*
+
+- **A channel is reached by its name, and the address is not handed over**
+  (Event E3). `publish_channels` binds every channel of an `EventChannelServer`
+  into a naming context the caller supplies, under the single component
+  `{ id: <name>, kind: "EventChannel" }`. The mapping is a decision stated on
+  `CHANNEL_BINDING_KIND` rather than implied by the code: the name goes in `id`
+  verbatim so the map stays injective, and the constant kind partitions the
+  bindings inside a context a deployer may be sharing. A sub-context was
+  rejected for having a lifecycle; an empty kind was rejected because a channel
+  may legally be called `NameService`. It is a **free function and not a
+  method** — binding is an outbound call, and a servant that makes one is the
+  shape `crate::guarded` polices — and the registry lock is dropped before the
+  loop that dials, so the no-lock rule is structural rather than careful.
+
+  `crates/orbweaver-giop/tests/channel_found_by_name.rs`, 8 tests: a client
+  holds an `Orb`, `corbaloc:rir:NameService` and a channel name, and **no
+  channel IOR — enforced by `reach_by_name`'s signature rather than by a
+  comment.** The experiment stops the channel's server and restarts it at a
+  different address with the same object keys; `Observed` deliberately has no
+  address field, so the assertion is *nothing the client sees changed*. Three
+  negative controls, each run, each moving the counter: removing the shutdown
+  so the pre-move IOR still works, holding a lock across the bind, and pushing
+  a different event to show `before == after` is not vacuous. The peer half is
+  `spikes/event_by_name.sh` — omniORB resolves the name, narrows to
+  `CosEventChannelAdmin::EventChannel` and receives an event over a reference
+  whose address it was never given.
+
+  **What E3 closed and the four leaks it did not** are in D029 §6.1's Location
+  material and are not restated here. One limit belongs with the change: the
+  test re-runs the whole bootstrap, so it measures that a **new** client is
+  unaffected and measures **nothing** about an existing connection surviving a
+  move. That is stated in the test's own module docs where its next reader is.
+
+  *채널은 이름으로 도달하고 주소는 건네지지 않는다. 매핑은 코드가 암시하는 것이
+  아니라 `CHANNEL_BINDING_KIND`에 진술된 결정이다. 바인딩은 아웃바운드 호출이므로
+  메서드가 아니라 자유 함수다. 부정 대조군 셋이 각각 붉어졌다. **한계:** 테스트는
+  새 클라이언트가 영향받지 않음을 재고, 기존 연결의 생존은 재지 않는다.*
+
+- **Two ORB features that had no chapter now have one, and one of them is half
+  a transparency.** `docs/PLAN-DEFERRED.md` gains §21 Portable Interceptors and
+  §22 BiDirectional GIOP. §22 is the one that bears on priority zero: it is a
+  half of location transparency we hold, which is why it is a deferral with a
+  reason rather than an omission. Both chapters graduate by §9's rule like any
+  other; neither is scheduled here.
+
+  *장이 없던 두 ORB 기능에 장이 생겼다. §22는 우리가 쥐고 있는 위치 투명성의
+  절반이며, 그래서 누락이 아니라 사유 있는 보류다.*
+
+- **A fact that crosses a crate boundary now names its dependents, and a binary
+  is its own crate root.** `spikes/crossing_facts.py` (D028 §4 M2) prints which
+  public items a branch changes and who names them. Three of 2026-08-26's merge
+  breaks share one mechanical signature — **a public item changed in crate A
+  and named in crate B**, where the two batches held disjoint footprints, no
+  line was touched twice, `git merge-tree` reported no conflict, and the merged
+  tree did not compile. That signature is computable from the diff without
+  building anything.
+
+  It groups by **compilation unit and never by directory**, because break 6 was
+  `Server::bind` becoming `pub(crate)` and breaking
+  `crates/orbweaver-giop/src/bin/spike_trading.rs` while four other binaries in
+  the same crate were fine — and the human sweep for break 5 excluded
+  `crates/orbweaver-giop/src`, the directory containing `src/bin`, and reported
+  the rule holding workspace-wide over a break sitting inside it.
+
+  **It is a report and not a gate, by instruction**, and its exit code is 0
+  whether it finds something or not: *"names it"* is not *"breaks on it"*, so a
+  crate naming a type in a doc comment is a true hit and a false alarm. It is
+  for the person commissioning batches, which is what neither footprint list
+  was.
+
+  *브랜치가 바꾸는 공개 항목과 그것을 이름 부르는 곳을 출력한다. 디렉터리가
+  아니라 **컴파일 단위**로 묶는다 — 이진 파일은 자기 크레이트 루트다. 게이트가
+  아니라 보고서이며 종료 코드는 항상 0이다.*
+
 - **The coverage sweep can see the trader, and now says which services it
   measures from a fixture's files.** `CosTrading::Lookup` had been on the wire
   since D022 T4 and outside `SERVICES-COVERAGE` §8 the whole time; the missing
@@ -821,6 +933,71 @@ records what changed and, where it matters, what it changes on the wire.
 
 ### Measured / 측정
 
+- **The census that would have inverted D006 was taken once, and four
+  operations crossed the line it drew.** `moe::Router::dispatch` **stays
+  refused** — that was the question, and the answer is not the finding.
+
+  D006 rests on one falsifiable claim it calls the consumer census, with an
+  explicit inversion clause: *"if the count is zero, E is right… if it is
+  nonzero, E is wrong today and the recommendation inverts."* It was recorded
+  as zero on 2026-08-14 and not re-run until 2026-08-26. **It is four.** Five
+  operations across `corpus/golden/22` and `23` carry a `moe::Tensor` on the
+  wire; four are served and one is refused. The served four include
+  `moe::Expert::process` — **one of the two operations option E excluded** —
+  and `spikes/f5_peer_client.py` has an omniORB peer send it a real
+  `Activation` while the harness asserts every declared operation was called,
+  so the harness does not merely permit the breach, it gates that it stays.
+  **A measurement with a stated inversion condition, taken once and never
+  re-taken, is the floor-quoted-as-a-figure class with higher stakes: the
+  figure did not drift in silence, it crossed the threshold its own author
+  wrote down.**
+
+  D006 §1's P3 — that no predicate distinguishes a handle from a payload —
+  **does not have to be settled** to read it. `infer` ends at `Ok(x)`, and both
+  `process` arms end at `x.write_to(out)`, echoing an unbounded
+  `sequence<octet>` back without interpreting a byte: under the payload reading
+  that is the data plane, under the handle reading the servant returns a handle
+  it never dereferences and the operation does no work at all.
+
+  **The finding is that `dispatch`'s stated reason was false, under a green
+  harness.** Two sentences repaired in `expert_service.rs`, both about that one
+  operation: `:737` said it answers `BAD_OPERATION` when it answers
+  `NO_IMPLEMENT` — four lines from the code that refutes it, in a module whose
+  own docs record this exact polarity failure being fixed in *themselves* on
+  2026-08-18/19 — and `:449` said the decision keeps `Expert::process`
+  unimplemented, which it is not.
+
+  Codified so it cannot be re-derived by reading:
+  `orbweaver_object::plane::TENSOR_BEARING` is the one home, five rows with
+  direction, status and reason. `tests/one_plane_rule_for_a_tensor.rs` computes
+  census **membership** by parsing both contracts with our own front end (a
+  typedef/struct/sequence fixpoint, so a `Tensor` one struct deeper still
+  joins) and checks the recorded **status** against what the servants answer
+  over a socket, so the next operation to start carrying a `Tensor` joins on
+  the next `cargo test` rather than on the next reading. Three negative
+  controls, each run, each red.
+
+  **Not settled here, and not this batch's to settle:** `PLAN-SERVICES` §1
+  rule 2 and D006 option E point opposite ways at `Expert::process`, and four
+  documents state both halves — §8.1.1 holds both in one paragraph.
+  D006's STATUS is unchanged and remains the owner's. Also recorded and not
+  changed: `Router::select` returns N IORs with host, port and object key, and
+  is a **location**-transparency leak with live consumers; `dispatch` is not
+  the operation that would close it.
+
+  **Not measured:** the workspace test count before and after. A clean baseline
+  was started, discarded when it was found to be compiling sources edited
+  mid-run, restarted, and then stopped so a long harness run could hold the
+  machine. Counted unmeasured, not a gap.
+
+  *D006이 스스로 적어둔 반증 조건 — 세면 0이면 E가 옳고, 0이 아니면 권고가
+  뒤집힌다 — 을 2026-08-14 이후 다시 재지 않았다. **넷이다.** 옵션 E가 제외한
+  `Expert::process`가 그중 하나이며 omniORB 피어가 실제로 호출하고 하네스가 그
+  유지를 게이트한다. **주어진 질문의 답은 "계속 거부"였고, 답은 발견이 아니었다**
+  — 발견은 그 거부의 명시된 사유가 초록 하네스 아래에서 거짓이었다는 것이다.
+  이제 인구조사의 집은 하나이고 테스트가 계약에서 계산한다. 규칙 차원의 충돌과
+  D006의 상태는 소유자의 것으로 남는다. **워크스페이스 테스트 수는 미측정.**
+
 - **Two references to one object cost one request each — and that is what
   omniORB costs too.** `cd9f88f` shared a permanent forward across every
   *clone* of a `Reference` and reported that two `Pool::reference` calls for
@@ -1190,6 +1367,54 @@ records what changed and, where it matters, what it changes on the wire.
   하나, **컴파일되고 틀리게 도는 것 셋**.*
 
 ### Fixed / 수정
+
+- **The harness's five failures were two causes, and both were the
+  coordinator's.** A clean two-hour run on a frozen tree (`d4aaf00`, `dirty=0`
+  at the end, so the verdict is uncontaminated) came back exit 5: **294 ok,
+  5 FAIL, 6 SKIPPED**. All five cluster into two causes and **neither is a
+  behaviour regression.**
+
+  **Cause A — a fact changed and a pin in another home went stale (3).**
+  `::CORBA::Principal` became a fifth wire-refusal family and the MCP surface
+  gained D024 §5's four IDL tools; three pins outside those batches' crates
+  went stale — the `--wire v1` file list, the deferred-wire count over golden,
+  and `mcp_session.py`'s `tools/list`. **This was caused by the instruction,
+  not by the batches:** each was told not to touch `spikes/run_checks.sh`
+  because another batch held it, which left no way to update the pin its own
+  change invalidated. **A footprint that bounds files does not bound facts.**
+
+  The count pin failed in the more interesting way — it parsed the number by
+  retyping a prefix of a sentence `contract-check` owns, `(§4.4 and natives)`,
+  which had become `(§4.4's three, natives, and what CORBA withdrew)`. The
+  match found nothing and the group reported `'absent'`: **the classifier
+  defect `CLAUDE.md` names, in the harness itself.** The extraction now matches
+  only the two numbers and the words carrying them, and the `ok` line no longer
+  restates that parenthetical at all.
+
+  **Cause B — `Server::bind` and `Poa::new` are `pub(crate)`, and two Rust
+  files outside the workspace still called them (2).** `spikes/e2e/servant.rs`
+  and `spikes/estate/servant.rs` are compiled standalone, so `cargo check
+  --workspace --all-targets` **cannot see them by definition** — and that check
+  had been reported as evidence the one-way rule held workspace-wide. It was
+  the second time a sweep for this class was wrong; the first excluded
+  `crates/orbweaver-giop/src`, which is where `src/bin` lives. There are
+  exactly four `.rs` files outside `crates/`, and the sweep is now over all
+  four.
+
+  Each repaired group was lifted verbatim and re-run standalone on a quiet
+  machine: S4 wire-v1 ok, contract-check ok (35/21), MCP stdio ok, estate PASS,
+  end-to-end PASS. The MCP pin gained a **negative clause** it did not have —
+  `register_contract`, `register` and `compile_idl` must never appear, because
+  D024 §5 refuses registration by name and a silent addition is exactly what a
+  pinned list exists to catch.
+
+  *동결된 트리에서 2시간 실행: 294 ok, 5 FAIL, 6 SKIPPED. 다섯은 두 원인이고
+  **어느 것도 동작 퇴행이 아니다.** 원인 A는 사실이 바뀌었는데 다른 집의 고정이
+  낡은 것 — 각 배치에 `run_checks.sh`를 건드리지 말라고 지시한 결과이며,
+  **파일을 묶는 발자국은 사실을 묶지 못한다.** 그중 하나는 `contract-check`가
+  소유한 문장의 접두사를 다시 타이핑해 분류하던 것으로, `CLAUDE.md`가 이름 붙인
+  분류자 결함이 하네스 자신에게 있었다. 원인 B는 워크스페이스 밖 두 파일이라
+  `cargo check --workspace`가 **정의상** 볼 수 없었다.*
 
 - **The differential and the gate over it named the same four directories, so
   neither could report the one they both missed.** `corpus/services/` — the
