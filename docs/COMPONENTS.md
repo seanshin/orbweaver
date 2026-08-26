@@ -142,14 +142,15 @@ unmeasured (D031 H1/H2), so the answer stops being a reading assembled by hand.
 | | Status |
 |---|---|
 | the five names | ✅ one home, `docs/decisions/D029-...md` §6.1, read by `spikes/transparency.py`; a harness tag naming anything else fails the run by name |
-| the ledger | ✅ printed before the verdict, computed from the run; no score, and an untagged run reads as `NONE measured`, not as a pass |
+| the ledger | ✅ printed before the verdict, computed from the run; no score, and an untagged run reads as `NONE measured`, not as a pass. Its seven negative controls run without the harness's lock in about a second: `./spikes/ledger_control.sh` |
 | groups declaring | ◐ ten, measured 2026-08-26 — three of the five transparencies have at least one declaring group and two have none. Recompute rather than quote this: `python3 spikes/transparency.py --check spikes/run_checks.sh`, and the ledger of any run is the live answer |
 | leak tests per transparency | ❌ D029 §5 O0. The ledger reads what exists; the two transparencies nothing declares need a group that changes the hidden property under a live caller, and that group does not exist yet |
 
 완성 기준의 집은 D029 §6, 다섯 투명성과 그 구멍의 집은 §6.1이며 **여기서 다시 적지
 않는다.** 여기에 사는 것은 *계기*의 상태다: 2026-08-26부터 하네스는 투명성별로 어느
 그룹이 그것을 재는지와 무엇이 미측정인지를 스스로 밝힌다(D031 H1/H2). 위 표의 개수는
-인용하지 말고 다시 계산한다 — 어느 실행이든 원장이 살아 있는 답이다.
+인용하지 말고 다시 계산한다 — 어느 실행이든 원장이 살아 있는 답이다. 원장의 부정
+대조군 일곱 개는 하네스 락 없이 1초 남짓에 돈다: `./spikes/ledger_control.sh`.
 
 ## Reading this honestly / 정직한 독해
 

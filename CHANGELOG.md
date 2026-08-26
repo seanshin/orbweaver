@@ -203,6 +203,13 @@ records what changed and, where it matters, what it changes on the wire.
   run`, because a ledger whose empty state looks like a pass is the
   green-while-measuring-nothing class wearing a report's coat.
 
+  **`spikes/ledger_control.sh`** runs the ledger's seven negative controls in
+  about a second, starting no fixture and taking no lock — it cuts the ledger,
+  `hr` and `bears_on` out of `run_checks.sh` with `awk` and runs those bytes
+  over the real tag set, so it runs the harness's changes rather than a copy of
+  them. Batches are told not to run `run_checks.sh`; a prohibition without its
+  replacement is an instruction to skip the check.
+
   Ten groups declare, measured 2026-08-26: seven location, two backend, one
   language; activation and lifecycle are declared by nobody. **The MoE
   residency group was proposed for `activation` and declined** — it drives
