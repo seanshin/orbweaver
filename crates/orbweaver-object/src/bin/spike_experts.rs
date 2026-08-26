@@ -727,6 +727,29 @@ fn run(out: &[&str; 3], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
     Ok(r.failures)
 }
 
+/// A latency-ordered router in five lines: the head of the ordered answer,
+/// **when the answer is complete**. `Err` carries the ids the engine could not
+/// judge or place — the experts a lesser router would have ranked by fiat.
+/// `Ok("")` is an honest empty answer: everything was judged, nothing
+/// qualified.
+fn pick_fastest(svc: &ExpertService, q: &Query) -> Result<String, Vec<String>> {
+    svc.with_store(|s| {
+        let sel = q.select_reporting(s);
+        let ranked: Vec<&str> = sel.matched.iter().map(|o| o.id.as_str()).collect();
+        let set_aside: Vec<String> =
+            sel.unanswerable.iter().chain(sel.unranked.iter()).map(|o| o.id.clone()).collect();
+        println!(
+            "        ranked {ranked:?}, set aside {set_aside:?}{}",
+            sel.gap_note().map(|n| format!(" — {n}")).unwrap_or_default()
+        );
+        if sel.is_complete() {
+            Ok(sel.matched.first().map(|o| o.id.clone()).unwrap_or_default())
+        } else {
+            Err(set_aside)
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -779,27 +802,4 @@ mod tests {
         );
         assert!(SharedDispatch::knows(&svc, svc.registry_key()));
     }
-}
-
-/// A latency-ordered router in five lines: the head of the ordered answer,
-/// **when the answer is complete**. `Err` carries the ids the engine could not
-/// judge or place — the experts a lesser router would have ranked by fiat.
-/// `Ok("")` is an honest empty answer: everything was judged, nothing
-/// qualified.
-fn pick_fastest(svc: &ExpertService, q: &Query) -> Result<String, Vec<String>> {
-    svc.with_store(|s| {
-        let sel = q.select_reporting(s);
-        let ranked: Vec<&str> = sel.matched.iter().map(|o| o.id.as_str()).collect();
-        let set_aside: Vec<String> =
-            sel.unanswerable.iter().chain(sel.unranked.iter()).map(|o| o.id.clone()).collect();
-        println!(
-            "        ranked {ranked:?}, set aside {set_aside:?}{}",
-            sel.gap_note().map(|n| format!(" — {n}")).unwrap_or_default()
-        );
-        if sel.is_complete() {
-            Ok(sel.matched.first().map(|o| o.id.clone()).unwrap_or_default())
-        } else {
-            Err(set_aside)
-        }
-    })
 }

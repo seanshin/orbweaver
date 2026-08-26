@@ -5,11 +5,20 @@
 //! `corpus/state/`, and every one of them asserts something that was
 //! **unaskable** while each fixture built its population inline:
 //!
-//! - *Is every offer placed on a node the estate declares?* Three fixtures
-//!   model MoE placement over three disjoint node namespaces (`node-a`,
-//!   `gpu-04`, `gpu-eu-1`/`gpu-us-1`), and one of them refuses undeclared
-//!   nodes default-deny. Nothing was red, because they are separate processes
-//!   and no node was ever checked against another fixture's declaration.
+//! - *Which node domain is a node name in?* Three fixtures model MoE placement
+//!   over three disjoint namespaces (`node-a`, `gpu-04`,
+//!   `gpu-eu-1`/`gpu-us-1`), and one of them refuses undeclared nodes
+//!   default-deny. Nothing was red, because they are separate processes and no
+//!   node was ever checked against another fixture's declaration. The answer,
+//!   decided 2026-08-27, is **two domains** — see `corpus/state/README.md`,
+//!   *The two node domains*. The first version of this file asked instead
+//!   whether every offer was placed on a **declared** node, over a list built
+//!   as the union of both; it passed, and what it was really asserting was the
+//!   one-domain answer.
+//! - *Is a capability that is shown being refused actually ungranted?* `vision`
+//!   is absent in the tenancy fixture and a pinned resident expert in the
+//!   placement fixture. Two worlds, not a contradiction — but the refusal is a
+//!   demonstration only while nothing grants the word.
 //! - *Does the stated expected order agree with the stated property values?*
 //!   A hand-built population with a hand-written expected order beside it is
 //!   one author agreeing with themselves: edit a cost and the ranking
@@ -33,7 +42,9 @@ fn the_seeds_load() {
     let experts = MoeExperts::load().expect("moe-experts.json loads");
     let estate = MoeEstate::load().expect("moe-estate.json loads");
     assert!(!experts.offers.is_empty(), "the expert population is not empty");
-    assert!(!estate.nodes.is_empty(), "the estate declares nodes");
+    assert!(!estate.declared_estate.nodes.is_empty(), "the operator declared nodes");
+    assert!(!estate.reported_placement.nodes.is_empty(), "offers report nodes");
+    assert!(!estate.tenants.is_empty(), "the estate states tenants");
 }
 
 /// `null` survived the round trip as an absence, not as a zero.
@@ -65,48 +76,137 @@ fn a_sixty_four_bit_integer_kept_its_digits() {
     assert_eq!(fast.route_freq, 16);
 }
 
-/// **The invariant no fixture checks.**
+/// **Every offer reports a node this seed's vocabulary states.**
 ///
-/// `spike_tenants` declares its nodes and refuses an undeclared one
-/// default-deny; `spike_experts` places every expert on `gpu-04`, which
-/// `spike_tenants` never declared; the trading fixture uses `node-a`, which
-/// neither declared. As three populations that is three separate facts and
-/// nothing can be wrong. As **one** population it is a single question with a
-/// yes-or-no answer, and this is it being asked for the first time.
+/// A typo gate, and deliberately *not* a residency gate. The first version of
+/// this file asked whether every offer was placed on a node the estate
+/// **declares**, over a `nodes` list that was the union of both domains — so
+/// it passed, and what it was really asserting was the one-domain answer to
+/// D028 §4 M3, compiled in as if it were bookkeeping. The answer is two
+/// domains (`corpus/state/README.md`, *The two node domains*), and this asks
+/// the question domain B can answer about itself.
 #[test]
-fn every_offer_is_placed_on_a_declared_node() {
+fn every_offer_reports_a_node_the_seed_states() {
     let experts = MoeExperts::load().unwrap();
     let estate = MoeEstate::load().unwrap();
 
-    let undeclared: Vec<&str> = experts
+    let unstated: Vec<&str> = experts
         .offers
         .iter()
-        .filter(|o| !estate.declares(&o.placement_node))
+        .filter(|o| !estate.reported_placement.states(&o.placement_node))
         .map(|o| o.placement_node.as_str())
         .collect();
 
     assert!(
-        undeclared.is_empty(),
-        "these offers are placed on nodes corpus/state/moe-estate.json does not declare: {undeclared:?}. \
-         Either the estate is missing a node or the offer is placed nowhere — and which of the two \
-         it is, is exactly the question three fixtures could not ask."
+        unstated.is_empty(),
+        "these offers report nodes `node_domains.reported_placement` does not list: {unstated:?}. \
+         That list is this seed's vocabulary, so a name outside it is a typo — it is not an \
+         admission list, and adding a name to it grants nothing."
+    );
+}
+
+/// **The two domains are two, and the seed can show it.**
+///
+/// This is the gate on the decision itself. If every reported node happened
+/// also to be declared, the two-domain answer would be indistinguishable from
+/// the one-domain answer, and the next reader would re-merge the lists as a
+/// tidy-up — which is exactly how the union got written the first time. So the
+/// population must keep at least one offer reporting a node the operator never
+/// declared, and that is not a defect: `moe::Capability.placement_node` is
+/// filled in by the expert, and no layer validates it or may.
+///
+/// It fails loudly the day somebody makes the two lists agree.
+#[test]
+fn the_population_keeps_the_two_node_domains_distinguishable() {
+    let experts = MoeExperts::load().unwrap();
+    let estate = MoeEstate::load().unwrap();
+
+    let outside: Vec<&str> = experts
+        .offers
+        .iter()
+        .map(|o| o.placement_node.as_str())
+        .filter(|n| !estate.declared_estate.declares(n))
+        .collect();
+
+    assert!(
+        !outside.is_empty(),
+        "every offer in this population reports a node the operator also declared, so this seed \
+         can no longer tell the two node domains apart — and a reader who merged \
+         `declared_estate` into `reported_placement` would see nothing go red. \
+         declared: {:?}; reported by offers: {:?}",
+        estate.declared_estate.nodes.iter().map(|n| &n.name).collect::<Vec<_>>(),
+        experts.offers.iter().map(|o| &o.placement_node).collect::<Vec<_>>(),
     );
 }
 
 /// The probe really is undeclared, so a residency check shown refusing it is
 /// refusing something.
 ///
-/// Without this, `_undeclared_node_probe` could quietly be added to `nodes`
-/// and every default-deny demonstration built on it would keep passing while
-/// demonstrating nothing.
+/// Without this, `undeclared_probe` could quietly be added to the declared
+/// estate and every default-deny demonstration built on it would keep passing
+/// while demonstrating nothing.
 #[test]
 fn the_undeclared_probe_is_undeclared() {
     let estate = MoeEstate::load().unwrap();
     assert!(
-        !estate.declares(&estate.undeclared_probe),
-        "`{}` is named as the undeclared-node probe but the estate declares it",
-        estate.undeclared_probe
+        !estate.declared_estate.declares(&estate.declared_estate.undeclared_probe),
+        "`{}` is named as the undeclared-node probe but the declared estate declares it",
+        estate.declared_estate.undeclared_probe
     );
+}
+
+/// Every declared node carries a region, because that is the only fact
+/// `check_residency` decides on.
+#[test]
+fn every_declared_node_has_a_region() {
+    let estate = MoeEstate::load().unwrap();
+    assert!(!estate.declared_estate.nodes.is_empty(), "the declared estate declares nodes");
+    for n in &estate.declared_estate.nodes {
+        assert!(!n.region.is_empty(), "declared node `{}` carries no region", n.name);
+    }
+}
+
+/// **The ungranted capability is granted by nobody.**
+///
+/// `spike_tenants` asserts `authorize("svc-acme", "vision")` is `false` and
+/// calls it *"…and only for what was granted"*. That assertion is a
+/// demonstration only while nothing grants it — the day a grant appears, the
+/// fixture keeps printing `ok` for a refusal that has stopped being one, and
+/// no compiler can see it because the two live in different files.
+///
+/// It is also the load-bearing half of the `vision` finding: the capability is
+/// *absent by decision* in the tenancy world, and this is the decision.
+#[test]
+fn the_ungranted_capability_is_granted_by_nobody() {
+    let estate = MoeEstate::load().unwrap();
+    let word = &estate.ungranted_capability;
+
+    assert!(
+        estate.capability_vocabulary.contains(word),
+        "`{word}` is named as the ungranted capability but is not in the vocabulary {:?} — \
+         a refusal about a word nothing knows is not a refusal about anything",
+        estate.capability_vocabulary
+    );
+
+    let granted: Vec<_> =
+        estate.grants().into_iter().filter(|(_, _, _, capability)| capability == word).collect();
+    assert!(
+        granted.is_empty(),
+        "`{word}` is granted by {granted:?}, so every fixture that shows it being refused is \
+         showing nothing. Either withdraw the grant or pick a different ungranted capability — \
+         and if it was granted on purpose, `spike_tenants`' '…and only for what was granted' \
+         is now false and has to move with it."
+    );
+
+    // …and no tenant holds it as a capability either, which is the other way
+    // it could quietly become grantable.
+    for t in &estate.tenants {
+        assert!(
+            t.capability(word).is_none(),
+            "tenant `{}` holds `{word}`, which is named as the capability nobody has",
+            t.id
+        );
+    }
 }
 
 /// Every specialization an offer carries is a word the estate's vocabulary

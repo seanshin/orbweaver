@@ -1,16 +1,33 @@
 {
-  "_note": "The MoE estate the expert population is placed in: nodes and their regions, tenants, policy domains and grants. Read corpus/state/README.md first.",
-  "_provenance": "Assembled 2026-08-26 from spike_tenants (crates/orbweaver-object/src/bin/spike_tenants.rs) and spike_experts. Those two fixtures are the only pair among D026 section 1's five whose populations overlap, and they disagree; see README 'Measured 2026-08-26'. This file is the union that makes every seeded offer legal, and it is the FIRST place the two vocabularies are written down together. It does not claim either fixture was changed to match it -- neither was.",
+  "_note": "The MoE estate the expert population is placed in: node domains, tenants, policy domains and grants. Read corpus/state/README.md first.",
+  "_provenance": "Assembled 2026-08-26 from spike_tenants (crates/orbweaver-object/src/bin/spike_tenants.rs) and spike_experts. Those two fixtures are the only pair among D026 section 1's five whose populations overlap, and they disagreed three ways; see README 'Measured 2026-08-26'. Restructured 2026-08-27 when the node-namespace question D028 section 4 M3 requires an answer to got one: TWO DOMAINS, not one vocabulary. The first version of this file listed the union of both under a single 'nodes' key, which is the one-domain answer written down as if it were bookkeeping.",
 
-  "nodes": [
-    { "name": "node-a",   "region": "eu-west", "_from": "the trading fixture's placement_node" },
-    { "name": "gpu-04",   "region": "eu-west", "_from": "spike_experts' Capability.placement_node" },
-    { "name": "gpu-eu-1", "region": "eu-west", "_from": "spike_tenants' declare_node" },
-    { "name": "gpu-us-1", "region": "us-east", "_from": "spike_tenants' declare_node" }
-  ],
+  "node_domains": {
+    "_why": "D028 section 4 M3 asks whether gpu-eu-1 and gpu-04 are one domain spelled twice or two domains. They are two, and the difference is mechanical rather than a matter of taste -- see corpus/state/README.md, 'The two node domains'. A node name is therefore NOT a workspace-wide identifier: which domain it belongs to is part of what it means, and a reader that resolves one against the other is asking a question neither domain can answer.",
 
-  "_undeclared_node_probe": "gpu-nowhere",
-  "_undeclared_node_probe_note": "Named so a residency check can be shown refusing default-deny. It is deliberately NOT in nodes above, and a loader that binds it has a defect.",
+    "declared_estate": {
+      "_authority": "the operator, out of band -- TenantService::declare_node. The contract declares no member for it.",
+      "_closed": true,
+      "_default_deny": "PolicyDomain::check_residency REFUSES a name not listed here. Membership has to be decidable or the refusal is not one.",
+      "nodes": [
+        { "name": "gpu-eu-1", "region": "eu-west", "_from": "spike_tenants' declare_node" },
+        { "name": "gpu-us-1", "region": "us-east", "_from": "spike_tenants' declare_node" }
+      ],
+      "undeclared_probe": "gpu-nowhere",
+      "_undeclared_probe_note": "Named so a residency check can be shown refusing default-deny. It is deliberately NOT in nodes above, and a loader that binds it has a defect."
+    },
+
+    "reported_placement": {
+      "_authority": "the expert itself, in-band -- moe::Capability.placement_node, a string member of corpus/golden/22-moe-control-plane.idl written by the expert about itself in register_expert and heartbeat.",
+      "_closed": false,
+      "_note": "Stored verbatim in the offer store and queried by the trader as an opaque value (placement_node == 'node-a', ORDER BY placement_node). No layer validates it, and no layer may: a set whose membership is decided by the thing being admitted is not a closed set. This list is the vocabulary THIS SEED uses, so a typo in an offer is catchable -- it is not an admission list, and adding a name to it grants nothing.",
+      "nodes": [
+        { "name": "node-a", "_from": "the trading fixture's placement_node, and every offer in moe-experts.json" },
+        { "name": "gpu-04", "_from": "spike_experts' Capability.placement_node" }
+      ],
+      "_two_deployments_note": "node-a and gpu-04 are two deployments, not two spellings of one. Nothing states they are the same machines and nothing needs to; within this domain a name is whatever the expert reporting it says."
+    }
+  },
 
   "base_model": "llama-70b",
 
@@ -39,7 +56,10 @@
     }
   ],
 
-  "_capability_vocabulary_note": "math, code and vision are the three capability words the MoE fixtures use. vision appears here in NO tenant's capability list on purpose: spike_tenants asserts authorize('svc-acme','vision') is false, and that assertion is only meaningful while nobody has granted it. spike_experts meanwhile registers expert-vision as a pinned, Resident expert. The two are not in contradiction as long as they stay two populations -- they would be the moment they became one, and that is the finding this file exists to make sayable.",
+  "_capability_vocabulary_note": "math, code and vision are the three capability words the MoE fixtures use. vision appears here in NO tenant's capability list and in NO grant, on purpose: spike_tenants asserts authorize('svc-acme','vision') is false, and that assertion is only meaningful while nobody has granted it. spike_experts meanwhile registers expert-vision as a pinned, Resident expert. The two are not in contradiction -- they are two worlds, and README's 'The two worlds vision lives in' says which is which. What was wrong was never the values; it was that no document said they were different worlds.",
 
-  "capability_vocabulary": ["code", "math", "vision"]
+  "capability_vocabulary": ["code", "math", "vision"],
+
+  "ungranted_capability": "vision",
+  "_ungranted_capability_note": "The capability that must stay in the vocabulary and out of every grant, so spike_tenants' '...and only for what was granted' is refusing something. Stated rather than inferred: a reader that inferred it from 'whatever happens to be ungranted' would go quiet the day a grant was added, which is precisely when it should speak."
 }
