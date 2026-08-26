@@ -503,13 +503,20 @@ fn omniorb_calls_a_python_servant() {
             "omniORB's client did not report {wanted:?}\nstdout:\n{stdout}\nstderr:\n{stderr}"
         );
     }
-    assert_eq!(
-        stdout.contains("TYPE_ID"),
-        false,
-        "the servant's language must not appear in what the peer prints"
-    );
     assert!(
-        !stdout.contains("was not refused"),
+        !stdout.contains("the client stub allowed the assignment"),
         "a refusal did not happen:\n{stdout}"
     );
+    // Nothing about the implementation reached the caller. This is the
+    // transparency claim itself, made against the only thing a peer actually
+    // has: what it printed. A traceback, a bridge diagnostic or the word
+    // Python in an exception's text would all be the target's language
+    // arriving at a client that asked about a gauge.
+    for leak in ["Traceback", "python", "Python", "bridge", "orbweaver", "_rt"] {
+        assert!(
+            !stdout.contains(leak),
+            "the peer's output mentions {leak:?}, so the servant's implementation \
+             reached its caller:\n{stdout}"
+        );
+    }
 }
