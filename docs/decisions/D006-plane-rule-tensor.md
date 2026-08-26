@@ -32,6 +32,76 @@ a "never per token" rule it did so by **removing the API**, held by a
 크기를 제약하지 **빈도**를 보지 못하고, "토큰당 금지"를 실제로 지킨 유일한 방법은
 API를 없애고 `compile_fail`로 잠근 것이었다.
 
+> ### Amendment 2026-08-26 — the census was re-run and it is not zero
+>
+> This document's recommendation rests on one falsifiable claim, stated in
+> *What measurement would confirm or refute this* as measurement 1: **"if the
+> count is zero, E is right and A was premature. If it is nonzero, E is wrong
+> today and the recommendation inverts."** The count was recorded as zero on
+> 2026-08-14 — the approval block above still says *"Nothing serves them,
+> nothing plans to"* — and was not re-run until today.
+>
+> **It is four.** Five operations in `corpus/golden/22` and `corpus/golden/23`
+> carry a `moe::Tensor` across the wire; four are served and one is refused.
+> The refused one is `Router::dispatch`. The four served are
+> `moe::Expert::process` — **one of the two operations option E excluded** —
+> together with `Router::select`, `EnterpriseExpert::adapter_delta` and
+> `ComposedModel::infer`. `process` is served in two arms of
+> `crates/orbweaver-object/src/tenant_service.rs`, and an omniORB peer calls it
+> over the wire inside the harness (`spikes/f5_peer_client.py`, run from
+> `spikes/run_checks.sh`), which asserts that every declared operation was
+> called. The harness does not merely permit the breach; it gates that it stays.
+>
+> Three of the four are condemned under *both* readings, so §1's P3 problem —
+> that no predicate distinguishes a handle from a payload — does not have to be
+> settled to see it: `infer` ends at `Ok(x)` and both `process` arms end at
+> `x.write_to(out)`, echoing an unbounded octet sequence back to the caller
+> without interpreting a byte. Under the payload reading that is the data
+> plane; under the handle reading the servant returns a handle it never
+> dereferences, so the operation does no work at all.
+>
+> **What this does and does not settle.** It does not change this document's
+> status, which is the project owner's to change: option E may still be the
+> right destination, and the exit from the four crossings is a §5.3 version
+> change rather than an edit, because each has a live consumer. What it settles
+> is that E was **never applied**. §6 of *What none of the options fix* says E
+> is recommended *"not because it enforces the rule but because it is the only
+> option that removes the opportunity instead of labelling it."* The
+> opportunity was not removed. The census now has one home that a test computes
+> from the contracts — `orbweaver_object::plane::TENSOR_BEARING`, pinned by
+> `crates/orbweaver-object/tests/one_plane_rule_for_a_tensor.rs` — so the next
+> operation to start carrying a `Tensor` joins it on the next `cargo test`
+> rather than on the next reading.
+>
+> ### 개정 2026-08-26 — 소비자 조사를 다시 돌렸고, 0이 아니다
+>
+> 이 문서의 권고는 반증 가능한 주장 하나에 기대고 있다: **"0이면 E가 옳고, 1 이상
+> 이면 권고는 뒤집힌다."** 2026-08-14에 0으로 기록되었고 — 위 승인 블록은 아직도
+> *"아무것도 서빙하지 않고, 그럴 계획도 없다"*고 적고 있다 — 오늘까지 다시
+> 측정되지 않았다.
+>
+> **4다.** 두 계약에서 `moe::Tensor`를 와이어로 나르는 연산은 다섯이고, 넷이
+> 서빙되며 하나가 거절된다. 거절되는 것은 `Router::dispatch`다. 서빙되는 넷은
+> **E안이 제외한 두 연산 중 하나인** `moe::Expert::process`와 `Router::select`,
+> `EnterpriseExpert::adapter_delta`, `ComposedModel::infer`다. `process`는
+> `tenant_service.rs`의 두 갈래에서 서빙되고, omniORB 피어가 하네스 안에서
+> 그것을 와이어로 호출한다. 하네스는 이 위반을 허용하는 데 그치지 않고 **그것이
+> 유지되도록 게이트한다.**
+>
+> 넷 중 셋은 **두 독해 모두에서** 유죄이므로, 핸들과 페이로드를 가르는 술어가
+> 없다는 §1 P3 문제를 해결하지 않아도 보인다: `infer`는 `Ok(x)`로, `process`의
+> 두 갈래는 `x.write_to(out)`으로 끝난다 — 상한 없는 옥텟 시퀀스를 한 바이트도
+> 해석하지 않고 호출자에게 되돌려준다. 페이로드 독해에서는 그것이 데이터
+> 플레인이고, 핸들 독해에서는 역참조하지 않는 핸들을 그대로 돌려주므로 그 연산은
+> 아무 일도 하지 않는다.
+>
+> **무엇이 정해지고 무엇이 정해지지 않는가.** 이 문서의 상태는 바꾸지 않는다 —
+> 그것은 프로젝트 소유자의 몫이며, E가 여전히 옳은 목적지일 수 있고 네 건의
+> 이탈은 편집이 아니라 §5.3의 버전 변경이다(각각 살아 있는 소비자가 있다).
+> 정해지는 것은 **E가 한 번도 적용된 적이 없다**는 사실이다. E가 권고된 이유는
+> *"규칙을 표시하는 대신 기회를 제거하는 유일한 대안이기 때문"*이었는데, 기회는
+> 제거되지 않았다. 이제 그 조사는 계약에서 계산되는 집 하나를 가진다.
+
 This is a decision and not a batch because every mechanism that would make the
 rule checkable **constrains what a deployment may put in a `Tensor`** — and the
 cheapest of them is refused by our own `idl-diff` as a breaking change to a

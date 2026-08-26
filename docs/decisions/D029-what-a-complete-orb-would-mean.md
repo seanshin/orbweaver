@@ -232,14 +232,30 @@ feature to add.
 
 | Transparency | The caller must not be able to tell | Status today |
 |---|---|---|
-| **Location** | where the target runs | **measured, with a known leak**: `LOCATION_FORWARD` and `_PERM` are served and followed, and R7 rewrites an IOR for a dialable address — but `Connection::move_to` restored a hand-written field list and dropped two configured limits across every forward until today, so the *caller's* limits changed when the object moved. Fixed; the class is the leak to watch. |
+| **Location** | where the target runs | **measured, with a known leak**: `LOCATION_FORWARD` and `_PERM` are served and followed, and R7 rewrites an IOR for a dialable address — but `Connection::move_to` restored a hand-written field list and dropped two configured limits across every forward until today, so the *caller's* limits changed when the object moved. Fixed; the class is the leak to watch. **A second instance, found 2026-08-26 and not fixed**: `moe::Router::select` returns `ExpertSeq` — N object references, each an `Ior` stored verbatim from `register_expert` and marshalled inline with host, port and object key. A caller learns where every candidate expert runs, which is exactly what this row says it must not be able to tell. `corpus/golden/22`'s own comment beside the operation already says so — *"widening reach by N addresses at once is precisely the case §4.7's bearer-address rule exists for"* — and §4.7's rule is the authority half of the same fact. Recorded, not changed: `select` is served and has consumers. |
 | **Backend** | what implements it | mostly held: a servant is behind a POA and a reference; but `spike_experts`' server root key collides with its derived registry key, which is a backend detail reaching a name. |
 | **Language** | what it is written in | **leaks by construction**: Python is clients only. A Python servant cannot be dispatched into, so *the target's language is visible in whether it can be a target at all*. D030 L1. |
-| **Activation / load** | whether it is loaded right now | **leaks**: MoE residency loads and evicts experts, and a caller reaching an evicted one gets a different answer than one reaching a resident one. This is the transparency this project has the most machinery for and the least measurement of. |
+| **Activation / load** | whether it is loaded right now | **leaks, and now measured (2026-08-26)**: the leak is `moe::Router::select`, and it is *residency-blind by omission rather than by absence of data*. `mirror_residency` keeps `Offer::residency` live in the very store `select` reads, and `orbweaver-trading`'s query grammar has a `residency` field, but `Constraints::to_query_text` never names it — so an OFFLOADED expert comes back in the sequence and dialling it answers `OBJECT_NOT_EXIST` where a resident one answers. `expert_service.rs:882-891` records this as intended: *"the caller's cue to `prefetch`"*. That makes the leak a **design choice written down**, not an oversight, which is the strongest form for it to be in before it is decided. `Router::dispatch` is *not* the operation that would close it — it is refused (D006 option E), and its own reason is now known to be false as written (see D006's 2026-08-26 amendment). The closer is a POA-level activation path, because the criterion says *any* target, and a fix inside one application contract closes it for one contract. |
 | **Lifecycle stability** | that the above survives add / remove / move / load / evict at runtime | **partly unmeasurable today**: the ORB owns the transport and **cannot stop what it handed out** (§3.1), so "remove at runtime" has no implementation to be transparent about. |
 
 *다섯 가지 각각은 **테스트로 반증 가능한 주장**이며, 그것이 이 작업의 방식이다.
 투명성은 확인하는 것이 아니라 **구멍을 사냥하는 것**이다.*
+
+**2026-08-26 측정 — 위치 행과 적재 행 두 곳이 갱신되었다.** 두 구멍 모두
+`moe::Router::select` 하나에 있다. (1) `select`는 `ExpertSeq`를 돌려주는데 그
+원소는 `register_expert`가 준 `Ior`를 그대로 담아 호스트·포트·객체 키를 인라인으로
+실어 보낸다 — 호출자가 후보 전문가 각각이 **어디서 도는지** 알게 되며, 이는 위치
+행이 알 수 없어야 한다고 적은 바로 그것이다. (2) `select`는 **데이터가 없어서가
+아니라 묻지 않아서** 적재 상태에 눈이 멀어 있다: `mirror_residency`가 `select`가
+읽는 바로 그 저장소에 `Offer::residency`를 최신으로 유지하고 질의 문법에는
+`residency` 필드가 있는데, `to_query_text`가 그 이름을 한 번도 쓰지 않는다. 그래서
+축출된 전문가가 목록에 돌아오고, 그것을 걸면 `OBJECT_NOT_EXIST`가 온다 —
+`expert_service.rs:882-891`은 이것을 *"호출자가 `prefetch`하라는 신호"*로 **의도된
+설계라고 적어 두었다.** `Router::dispatch`는 이 구멍을 막는 연산이 **아니다**:
+거절되어 있고(D006 E안), 그 거절 사유 자체가 오늘 거짓임이 밝혀졌다(D006
+2026-08-26 개정). 기준이 말하는 것은 *임의의* 대상이므로, 막는 자리는 응용 계약
+하나가 아니라 POA 수준의 활성화 경로다. 둘 다 **기록만 하고 바꾸지 않았다** —
+`select`는 서빙 중이고 소비자가 있다.
 
 ### 6.2 What this criterion does to the order
 

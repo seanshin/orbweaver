@@ -445,8 +445,19 @@ impl MeasuredCapability {
 /// # `affinity` is decoded and deliberately not read
 ///
 /// `Tensor` is `sequence<octet>`, and whether one carries a *handle* or a
-/// *payload* is the open decision PLAN-MOE §4.6 records — the decision that
-/// keeps `Router::dispatch` and `Expert::process` unimplemented. A `select`
+/// *payload* is the open decision PLAN-MOE §4.6 records and D006 settled as
+/// option E — the decision that keeps `Router::dispatch` unimplemented.
+///
+/// This sentence named `Expert::process` alongside it until 2026-08-26, and
+/// that half was false: [`crate::tenant_service`] serves `process` in two
+/// arms, and an omniORB peer calls it under the harness. It is the **second**
+/// false restatement of this operation's status in this one file — the other
+/// was `router_ior`'s `BAD_OPERATION` — which is a fact about how a paragraph
+/// repeated in four places is maintained rather than two typos.
+/// [`crate::plane`] is now the one home, and a test computes it from the
+/// contracts.
+///
+/// A `select`
 /// that interpreted these bytes as an affinity vector and did arithmetic on
 /// them would be making that decision unilaterally, on the operation that was
 /// supposed to be the *pure control-plane* half.
@@ -733,8 +744,15 @@ impl ExpertService {
     }
 
     /// A publishable `Router` reference. `select` is served on it; `dispatch`
-    /// answers `BAD_OPERATION` — see the module docs for the reason, which is
-    /// PLAN-MOE §4.6's undecided half.
+    /// answers `NO_IMPLEMENT` — see [`crate::plane`] for which operations
+    /// carry a `Tensor` and what this project does about each.
+    ///
+    /// This sentence said `BAD_OPERATION` until 2026-08-26, four lines from
+    /// the code that refutes it and a week after the module docs recorded the
+    /// *same* polarity failure being repaired in themselves (2026-08-18 to
+    /// 2026-08-19). Repairing one home of a fact is what leaves
+    /// the others standing; the status now lives in one place and a test reads
+    /// it from there.
     pub fn router_ior(&self) -> Ior {
         self.ior_for(ROUTER_ID, &self.router_key)
     }
