@@ -42,11 +42,18 @@
 //! crates this file needs.
 //!
 //! **`orbweaver_dynamic::json` still resolves**, via a deliberate re-export, so
-//! writing it here would compile and would silently re-impose the old ceiling
-//! on any fixture that later tried to host this file. That is why the import
-//! above is spelled `orbweaver_cdr` and why adding an import from a taller
-//! crate to this file is a decision about which fixtures can exist, not a
-//! convenience.
+//! writing it here would compile *in this crate* and break every `#[path]` host
+//! that has no `orbweaver-dynamic` dependency. Measured 2026-08-26 by building
+//! `spike-names` with a temporary include of this file, both ways: spelled
+//! `orbweaver_cdr` it builds; spelled `orbweaver_dynamic` it fails with
+//! `E0433: cannot find module or crate orbweaver_dynamic`.
+//!
+//! So the failure is **loud, and it lands on the host rather than here** — the
+//! next fixture to try this is told exactly what is wrong, which is why no gate
+//! guards this import. What the spelling costs is not correctness but reach:
+//! an import from a taller crate silently shrinks the set of fixtures that can
+//! host this file, and that is a decision about which measurements can exist,
+//! not a convenience.
 //!
 //! # A seeded population is not the only population
 //!
