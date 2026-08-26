@@ -107,13 +107,65 @@ pub struct JavaPackage {
 /// computing the reachability class by asking `orbweaver_idl::lex::is_keyword`
 /// rather than trusting a typed reason.
 const JAVA_KEYWORDS: &[&str] = &[
-    "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class", "const",
-    "continue", "default", "do", "double", "else", "enum", "extends", "final", "finally", "float",
-    "for", "goto", "if", "implements", "import", "instanceof", "int", "interface", "long",
-    "native", "new", "package", "private", "protected", "public", "return", "short", "static",
-    "strictfp", "super", "switch", "synchronized", "this", "throw", "throws", "transient", "try",
-    "void", "volatile", "while", "true", "false", "null", "var", "yield", "record", "permits",
-    "sealed", "_",
+    "abstract",
+    "assert",
+    "boolean",
+    "break",
+    "byte",
+    "case",
+    "catch",
+    "char",
+    "class",
+    "const",
+    "continue",
+    "default",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "extends",
+    "final",
+    "finally",
+    "float",
+    "for",
+    "goto",
+    "if",
+    "implements",
+    "import",
+    "instanceof",
+    "int",
+    "interface",
+    "long",
+    "native",
+    "new",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "return",
+    "short",
+    "static",
+    "strictfp",
+    "super",
+    "switch",
+    "synchronized",
+    "this",
+    "throw",
+    "throws",
+    "transient",
+    "try",
+    "void",
+    "volatile",
+    "while",
+    "true",
+    "false",
+    "null",
+    "var",
+    "yield",
+    "record",
+    "permits",
+    "sealed",
+    "_",
 ];
 
 /// Every word this emitter escapes.
@@ -233,6 +285,13 @@ pub fn descriptor(tc: &TypeCode) -> Result<String, String> {
         TypeCode::Double => "_Rt.DOUBLE".into(),
         TypeCode::LongDouble => "_Rt.LONGDOUBLE".into(),
         TypeCode::Any => "_Rt.ANY".into(),
+        // `tk_TypeCode`, kind 12: a TypeCode as a value in its own right, which
+        // is what `::CORBA::TypeCode describe()` returns and what every
+        // Interface Repository description is made of. It had no arm here until
+        // the corpus sweep found `IDL:gp34/Described:1.0` refused by Java and
+        // carried by the other two targets — one contract of 37, and a
+        // divergence rather than a decision.
+        TypeCode::TypeCode => "_Rt.TYPECODE".into(),
         TypeCode::Void | TypeCode::Null => "_Rt.VOID".into(),
         TypeCode::String(bound) => format!("new _Rt.Str(false, {bound}L)"),
         TypeCode::WString(bound) => format!("new _Rt.Str(true, {bound}L)"),
@@ -261,7 +320,12 @@ pub fn descriptor(tc: &TypeCode) -> Result<String, String> {
         }
         TypeCode::Native { name, id, .. } => return Err(crate::unmarshallable_native(name, id)),
         TypeCode::Principal => return Err(crate::withdrawn_principal()),
-        other => return Err(format!("no AnyJSON descriptor for {other:?}")),
+        // No catch-all, deliberately, and `rustc` enforces it: this match is
+        // exhaustive over `TypeCode`, so a thirty-fourth construct is a build
+        // error here rather than a type Java silently refuses while the other
+        // two targets carry it. That is not hypothetical — `TypeCode::TypeCode`
+        // reached a catch-all until the corpus sweep found one contract of 37
+        // refused by Java alone.
     })
 }
 
@@ -368,6 +432,7 @@ fn java_type(tc: &TypeCode, cx: &Jx<'_>) -> Result<String, String> {
         TypeCode::LongDouble => "_Rt.LongDouble".into(),
         TypeCode::String(_) | TypeCode::WString(_) => "String".into(),
         TypeCode::Any => "_Rt.Any".into(),
+        TypeCode::TypeCode => "_Rt.TypeCodeValue".into(),
         TypeCode::ObjRef { .. } => "_Rt.ObjectRef".into(),
         TypeCode::Void | TypeCode::Null => "void".into(),
         TypeCode::Sequence { element, .. } => {
@@ -378,11 +443,19 @@ fn java_type(tc: &TypeCode, cx: &Jx<'_>) -> Result<String, String> {
             }
         }
         TypeCode::Array { element, .. } => format!("java.util.List<{}>", boxed(element, cx)?),
+        // A typedef is **transparent to the value**, exactly as it is to CDR:
+        // `typedef sequence<octet> Payload` is a `byte[]` and not a `Payload`,
+        // and `typedef string Name` is a `String`. The generated class of that
+        // name holds the descriptor and registers it; it is not a type anything
+        // is an instance of, and emitting it as one produced
+        // `class java.lang.String cannot be cast to class contract.gc03.ShortName`
+        // in 20 of the corpus's contracts at once — one cause, found by
+        // sweeping the whole corpus rather than one file.
+        TypeCode::Alias { aliased, .. } => java_type(aliased, cx)?,
         TypeCode::Struct { id, .. }
         | TypeCode::Union { id, .. }
         | TypeCode::Enum { id, .. }
         | TypeCode::Except { id, .. }
-        | TypeCode::Alias { id, .. }
         | TypeCode::Recursive(id) => cx.java_path(id),
         other => return Err(descriptor(other).err().unwrap_or_else(|| format!("{other:?}"))),
     })
@@ -491,7 +564,11 @@ impl<'a> Jx<'a> {
     /// The package an item lives in, fully qualified.
     fn package_of(&self, path: &[String]) -> String {
         let segs = self.package_segments(path);
-        if segs.is_empty() { self.root().to_owned() } else { format!("{}.{}", self.root(), segs.join(".")) }
+        if segs.is_empty() {
+            self.root().to_owned()
+        } else {
+            format!("{}.{}", self.root(), segs.join("."))
+        }
     }
 
     /// The fully qualified Java name of a generated type.
@@ -549,17 +626,16 @@ pub fn emit_java(registry: &Registry, package: &str) -> JavaPackage {
         let pkg = cx.package_of(&path);
         let emitted = match registry.get(id) {
             Some(Entry::Type(tc)) => crossable(tc, &mut Vec::new())
-                .and_then(|()| emit_type(registry, id, &name, tc, cx))
-                .map(|(class, body, registers)| (class, body, registers)),
+                .and_then(|()| emit_type(registry, id, &name, tc, cx)),
             Some(Entry::Interface(_)) => interface_crossable(registry, id)
                 .and_then(|()| emit_interface(registry, id, &name, cx)),
             Some(Entry::Const { tc, value }) => {
                 match emit_const(registry, id, &name, tc, value.as_ref(), &path, cx) {
                     Ok(text) => {
-                        consts.entry(path[..path.len() - 1].to_vec()).or_default().push((
-                            id.clone(),
-                            text,
-                        ));
+                        consts
+                            .entry(path[..path.len() - 1].to_vec())
+                            .or_default()
+                            .push((id.clone(), text));
                         out.emitted += 1;
                         continue;
                     }
@@ -729,12 +805,8 @@ fn emit_type(
             for (i, m) in members.iter().enumerate() {
                 let _ = writeln!(s);
                 let _ = writeln!(s, "    /** Marshalled {}. */", crate::nth(i));
-                let _ = writeln!(
-                    s,
-                    "    public {} {};",
-                    java_type(&m.tc, cx)?,
-                    java_ident(&m.name)
-                );
+                let _ =
+                    writeln!(s, "    public {} {};", java_type(&m.tc, cx)?, java_ident(&m.name));
             }
             let _ = writeln!(s);
             let params: Vec<String> = members
@@ -747,12 +819,8 @@ fn emit_type(
                 let _ = writeln!(s, "        super(_ID);");
             }
             for m in members {
-                let _ = writeln!(
-                    s,
-                    "        this.{} = {};",
-                    java_ident(&m.name),
-                    ctor_local(&m.name)
-                );
+                let _ =
+                    writeln!(s, "        this.{} = {};", java_ident(&m.name), ctor_local(&m.name));
             }
             let _ = writeln!(s, "    }}");
             if is_exception {
@@ -809,7 +877,11 @@ fn emit_type(
             let _ = writeln!(s, "        }}, {class}::_make, {class}::_parts);");
             let _ = writeln!(s, "    }}");
 
-            emit_value_semantics(&mut s, &class, &members.iter().map(|m| m.name.clone()).collect::<Vec<_>>());
+            emit_value_semantics(
+                &mut s,
+                &class,
+                &members.iter().map(|m| m.name.clone()).collect::<Vec<_>>(),
+            );
             let _ = writeln!(s, "}}");
             Ok((class, s, true))
         }
@@ -878,10 +950,8 @@ fn emit_type(
             let _ = writeln!(s);
             let _ = writeln!(s, "    /** Registers this type with the runtime. */");
             let _ = writeln!(s, "    public static void _register() {{");
-            let _ = writeln!(
-                s,
-                "        _Rt._registerEnum(_ID, _NAME, {class}.class, new String[] {{"
-            );
+            let _ =
+                writeln!(s, "        _Rt._registerEnum(_ID, _NAME, {class}.class, new String[] {{");
             for m in members {
                 let _ = writeln!(s, "            {},", java_str(m));
             }
@@ -1037,7 +1107,8 @@ fn emit_type(
             let _ = writeln!(s, "    public static final String _ID = {};", java_str(id));
             let _ = writeln!(s, "    public static final String _NAME = {};", java_str(name));
             let _ = writeln!(s, "    /** What this name is an alias for. */");
-            let _ = writeln!(s, "    public static final _Rt.Desc _DESC = {};", descriptor(aliased)?);
+            let _ =
+                writeln!(s, "    public static final _Rt.Desc _DESC = {};", descriptor(aliased)?);
             let _ = writeln!(s);
             let _ = writeln!(s, "    /** The Java type a value of this alias is held as. */");
             let _ = writeln!(s, "    // {}", java_type(aliased, cx)?);
@@ -1200,13 +1271,9 @@ fn emit_const(
             .to_owned());
     };
     let literal = const_literal(tc, value, cx)?;
-    let ty = java_type(&tc.resolve_alias(), cx)?;
+    let ty = java_type(tc.resolve_alias(), cx)?;
     let mut s = String::new();
-    javadoc(
-        &mut s,
-        "    ",
-        &item_doc(registry.annotations(id), &format!("IDL constant `{id}`.")),
-    );
+    javadoc(&mut s, "    ", &item_doc(registry.annotations(id), &format!("IDL constant `{id}`.")));
     let _ = writeln!(s, "    public static final {ty} {} = {literal};", java_ident(name));
     let _ = path;
     Ok(s)
@@ -1216,7 +1283,11 @@ fn const_literal(tc: &TypeCode, v: &ConstValue, cx: &Jx<'_>) -> Result<String, S
     let resolved = tc.resolve_alias();
     Ok(match (&resolved, v) {
         (TypeCode::Boolean, ConstValue::Bool(b)) => {
-            if *b { "true".to_owned() } else { "false".to_owned() }
+            if *b {
+                "true".to_owned()
+            } else {
+                "false".to_owned()
+            }
         }
         (TypeCode::Char | TypeCode::WChar, ConstValue::Int(i)) => {
             let c = u32::try_from(*i)
@@ -1378,8 +1449,10 @@ fn emit_operation(
             let _ = writeln!(s, "        public {} _returns;", java_type(&sig.returns, cx)?);
         }
         for p in &outs {
-            let _ = writeln!(s, "        /** The `{}` parameter, as the reply carried it. */", p.name);
-            let _ = writeln!(s, "        public {} {};", java_type(&p.tc, cx)?, java_ident(&p.name));
+            let _ =
+                writeln!(s, "        /** The `{}` parameter, as the reply carried it. */", p.name);
+            let _ =
+                writeln!(s, "        public {} {};", java_type(&p.tc, cx)?, java_ident(&p.name));
         }
         let _ = writeln!(s, "    }}");
     }
@@ -1441,11 +1514,8 @@ fn emit_operation(
         let _ = writeln!(s, "        {result_class} _out = new {result_class}();");
         let mut at = 0usize;
         if !returns_void {
-            let _ = writeln!(
-                s,
-                "        _out._returns = {};",
-                unbox_expr(&sig.returns, "_r[0]", cx)?
-            );
+            let _ =
+                writeln!(s, "        _out._returns = {};", unbox_expr(&sig.returns, "_r[0]", cx)?);
             at += 1;
         }
         for p in &outs {

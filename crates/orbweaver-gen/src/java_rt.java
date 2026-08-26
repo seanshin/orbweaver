@@ -91,8 +91,9 @@ public final class _Rt {
         return _what + " was withdrawn from CORBA: GIOP 1.0 carried one in every request"
                 + " header, GIOP 1.1 dropped that field and CORBA 3.0 removed the type — so"
                 + " this version marshals no value for one, and no later version will; the"
-                + " TypeCode describing it still reads, and docs/PLAN.md §4.4 does not apply"
-                + " — this is not a deferral waiting on an implementation";
+                + " TypeCode describing it reads, the value behind it does not. This is not"
+                + " one of docs/PLAN.md §4.4's deferrals: those wait on this project, and a"
+                + " type the specification has removed waits on nobody";
     }
 
     /** `orbweaver_dynamic::PRINCIPAL_ID`. */
@@ -667,6 +668,28 @@ public final class _Rt {
             this.valueForm = _valueForm;
         }
 
+        /**
+         * The value behind the `_t` half, or the refusal that names why not.
+         *
+         * Relaying is the default (see the class comment) and this is what a
+         * caller asks when it wants the value rather than the document. Two
+         * outcomes are refusals rather than answers, and they are the point:
+         *
+         * * a type **the wire cannot carry** — a `fixed`, a `valuetype`, an
+         *   abstract interface, a `native`, a `::CORBA::Principal` — is refused
+         *   with the sentence whose home is `orbweaver-dynamic`, so a Java
+         *   caller is told what a Rust or Python caller is told, in the same
+         *   words. D008's asymmetry is why this is reachable at all: the
+         *   *description* crossed, and only the value stops;
+         * * a type this runtime does not rebuild — a struct a peer described
+         *   structurally — says so, rather than pretending the document is
+         *   opaque for the same reason a `fixed` is.
+         */
+        public Object open() {
+            Desc _d = _descOfForm(typeForm, "_t");
+            return _fromJson(_d, valueForm, "_v");
+        }
+
         /** An `any` holding a value of a type whose whole identity is its name. */
         public static Any of(Desc _desc, Object _value) {
             Desc _d = _resolve(_desc, "");
@@ -723,6 +746,151 @@ public final class _Rt {
         public String toString() {
             return "TypeCode(" + _writeJson(form) + ")";
         }
+    }
+
+    /**
+     * The descriptor a peer's `_t` half describes, or the refusal for a type
+     * whose value cannot cross.
+     *
+     * AnyJSON v1.1 (D008) writes a type either as a **name**, when its whole
+     * identity is one, or as a **structural form** — an object with a `"kind"`.
+     * This reads the first completely and the second only far enough to answer
+     * honestly: the five families whose values cannot cross are refused with
+     * their published sentences, and everything else says that this runtime
+     * relays a structural type rather than rebuilding it.
+     *
+     * Rebuilding is what the Python runtime does, and it is a larger claim than
+     * this target makes today: a Java class cannot be synthesised at run time
+     * without a class loader, and a `Map` pretending to be a struct would be a
+     * second value representation for the same type. The relay keeps the
+     * document exact — a peer's `any` round-trips through Java to the peer's own
+     * bytes — and this method is where a caller that wants more is told what it
+     * is getting.
+     */
+    public static Desc _descOfForm(Object _form, String _path) {
+        if (_form instanceof String) {
+            Desc _named = _descOfName((String) _form);
+            if (_named == null) {
+                throw new MarshalError(_path, "no type is named " + _form);
+            }
+            return _named;
+        }
+        if (!(_form instanceof Map)) {
+            throw new MarshalError(_path, "a type is a name or an object with a \"kind\"");
+        }
+        Map<?, ?> _m = (Map<?, ?>) _form;
+        Object _kind = _m.get("kind");
+        if (!(_kind instanceof String)) {
+            throw new MarshalError(_path, "a structural type needs a \"kind\"");
+        }
+        String _k = (String) _kind;
+        String _id = _m.get("id") instanceof String ? (String) _m.get("id") : "";
+        String _name = _m.get("name") instanceof String ? (String) _m.get("name") : "";
+        if (_k.equals("fixed")) {
+            long _digits = _m.get("digits") instanceof Num ? ((Num) _m.get("digits")).asLong() : 0;
+            long _scale = _m.get("scale") instanceof Num ? ((Num) _m.get("scale")).asLong() : 0;
+            return new FixedD((int) _digits, (int) _scale);
+        }
+        if (_k.equals("value")) {
+            return new NoWire("deferred", _subject("valuetype", _name, _id));
+        }
+        if (_k.equals("abstract_interface")) {
+            return new NoWire("deferred", _subject("abstract interface", _name, _id));
+        }
+        if (_k.equals("native")) {
+            return new NoWire("unmarshallable", _subject("native", _name, _id));
+        }
+        if (_k.equals("principal")) {
+            return new NoWire("withdrawn", _principalSubject());
+        }
+        if (_k.equals("string") || _k.equals("wstring")) {
+            long _bound = _m.get("bound") instanceof Num ? ((Num) _m.get("bound")).asLong() : 0;
+            return new Str(_k.equals("wstring"), _bound);
+        }
+        if (_k.equals("objref")) {
+            return new ObjRef(_id);
+        }
+        if (_k.equals("seq") || _k.equals("array")) {
+            Desc _elem = _descOfForm(_m.get("element"), _path + ".element");
+            if (_k.equals("seq")) {
+                long _bound = _m.get("bound") instanceof Num ? ((Num) _m.get("bound")).asLong() : 0;
+                return new Seq(_elem, _bound);
+            }
+            long _len = _m.get("length") instanceof Num ? ((Num) _m.get("length")).asLong() : 0;
+            return new Arr(_elem, (int) _len);
+        }
+        if (_k.equals("recursive")) {
+            return new Ref(_id);
+        }
+        // A named aggregate the receiving package already declares is resolved
+        // by id — the ordinary case, and the one that costs nothing.
+        if (!_id.isEmpty() && TYPES.containsKey(_id)) {
+            return new Ref(_id);
+        }
+        throw new MarshalError(_path,
+                "this runtime relays a structural " + _k + " rather than rebuilding it: the"
+                + " document crossed whole and can be sent back unchanged, but no Java type"
+                + " is synthesised for a " + _k + " the generated package does not declare"
+                + (_id.isEmpty() ? "" : " (" + _id + ")"));
+    }
+
+    /** The descriptor for a type whose whole identity is its name, or null. */
+    public static Desc _descOfName(String _name) {
+        if (_name.equals("boolean")) {
+            return BOOLEAN;
+        }
+        if (_name.equals("octet")) {
+            return OCTET;
+        }
+        if (_name.equals("char")) {
+            return CHAR;
+        }
+        if (_name.equals("wchar")) {
+            return WCHAR;
+        }
+        if (_name.equals("short")) {
+            return SHORT;
+        }
+        if (_name.equals("unsigned short")) {
+            return USHORT;
+        }
+        if (_name.equals("long")) {
+            return LONG;
+        }
+        if (_name.equals("unsigned long")) {
+            return ULONG;
+        }
+        if (_name.equals("long long")) {
+            return LONGLONG;
+        }
+        if (_name.equals("unsigned long long")) {
+            return ULONGLONG;
+        }
+        if (_name.equals("float")) {
+            return FLOAT;
+        }
+        if (_name.equals("double")) {
+            return DOUBLE;
+        }
+        if (_name.equals("long double")) {
+            return LONGDOUBLE;
+        }
+        if (_name.equals("string")) {
+            return new Str(false, 0);
+        }
+        if (_name.equals("wstring")) {
+            return new Str(true, 0);
+        }
+        if (_name.equals("any")) {
+            return ANY;
+        }
+        if (_name.equals("typecode")) {
+            return TYPECODE;
+        }
+        if (_name.equals("void") || _name.equals("null")) {
+            return VOID;
+        }
+        return null;
     }
 
     // ── the type registry ───────────────────────────────────────────────────

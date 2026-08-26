@@ -51,9 +51,7 @@ fn main() -> std::process::ExitCode {
         }
     }
     let (Some(out_dir), false) = (out_dir, files.is_empty()) else {
-        eprintln!(
-            "usage: gen-java --out <dir> [--package <name>] [-I <dir>]... <file.idl>..."
-        );
+        eprintln!("usage: gen-java --out <dir> [--package <name>] [-I <dir>]... <file.idl>...");
         return std::process::ExitCode::from(2);
     };
     if package_arg.is_some() && files.len() > 1 {
