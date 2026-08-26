@@ -12,6 +12,10 @@ orbweaver-cdr = { path = "../orbweaver-cdr" }
 orbweaver-giop = { path = "../orbweaver-giop", default-features = false }
 orbweaver-dynamic = { path = "../orbweaver-dynamic" }
 orbweaver-registry = { path = "../orbweaver-registry" }
+# D026 §5 S1: the seed loader builds `orbweaver_trading::Offer` values from
+# `corpus/state/`, so the population has one home instead of being retyped at
+# each fixture. Cycle-free: `orbweaver-trading` depends on nothing.
+orbweaver-trading = { path = "../orbweaver-trading" }
 orbweaver-idl = { path = "../orbweaver-idl" }
 # The reporting vocabulary, not a second one. S4 already defines what a finding
 # is and how it prints; a second Finding type would mean a caller consuming
@@ -35,6 +39,15 @@ orbweaver-gen = { path = "../orbweaver-gen" }
 
 [lints]
 workspace = true
+
+# D026 §5 S1b. Serves `CosTrading::Lookup` over the population in
+# `corpus/state/`, so `spikes/seed_trading_client.py` can check the wire
+# against a stated population instead of against values typed a second time in
+# the checking script. Separate from `spike-trading`, which keeps its inline
+# offers: a seeded population must not become the only population (D026 §3).
+[[bin]]
+name = "spike-seeded-trading"
+path = "src/bin/spike_seeded_trading.rs"
 
 [[bin]]
 name = "contract-check"

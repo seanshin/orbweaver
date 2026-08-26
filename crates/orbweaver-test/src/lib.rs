@@ -83,6 +83,7 @@
 pub mod agent;
 pub mod contract;
 pub mod prop;
+pub mod state;
 pub mod wire;
 
 use orbweaver_forge::{Finding, Report, Severity};
