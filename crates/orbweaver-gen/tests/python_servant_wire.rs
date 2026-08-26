@@ -155,8 +155,19 @@ impl Drop for TempDir {
 /// reach another batch's fixtures on a machine running more than one thing.
 struct Servant {
     child: std::process::Child,
-    ior: Ior,
+    /// `None` until the servant publishes one. The child is owned from the
+    /// moment it is spawned so that *every* exit from the wait below — the
+    /// deadline, a panic, the servant dying — still kills it; a version that
+    /// waited first and took ownership after would leak a process on exactly
+    /// the paths where a leak matters.
+    ior: Option<Ior>,
     _dir: TempDir,
+}
+
+impl Servant {
+    fn ior(&self) -> &Ior {
+        self.ior.as_ref().expect("the servant published an IOR before this was called")
+    }
 }
 
 impl Drop for Servant {
@@ -212,13 +223,14 @@ fn start_servant() -> Option<Servant> {
     // A sleeping, deadline-bounded wait. `for i in $(seq 1 500); do [ -f f ] &&
     // break; done` finishes in microseconds and does not wait at all — the
     // phantom failure `CLAUDE.md`'s harness rules open with.
-    let mut servant = Servant { child, ior: Ior::default(), _dir: dir };
+    let mut servant = Servant { child, ior: None, _dir: dir };
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
         if let Ok(text) = std::fs::read_to_string(&ior_path) {
             let text = text.trim();
             if text.starts_with("IOR:") {
-                servant.ior = Ior::parse(text).expect("the servant published a parsable IOR");
+                servant.ior =
+                    Some(Ior::parse(text).expect("the servant published a parsable IOR"));
                 return Some(servant);
             }
         }
@@ -269,7 +281,7 @@ fn our_generated_rust_client_calls_a_python_servant() {
 
     for version in VERSIONS {
         for endian in [Endian::Big, Endian::Little] {
-            let mut client = GaugeClient::new(connect(&servant.ior, version, endian));
+            let mut client = GaugeClient::new(connect(servant.ior(), version, endian));
             let what = format!("{version} {endian:?}");
 
             client.set_label(format!("driven at {what}")).expect("set_label");
@@ -402,7 +414,7 @@ fn omniorb_calls_a_python_servant() {
     std::fs::write(&script, OMNIORB_DRIVER).expect("write the driver");
     let ior_path = dir.path().join("gauge.ior");
     let mut f = std::fs::File::create(&ior_path).expect("create");
-    write!(f, "{}", servant.ior.to_stringified().expect("stringify")).expect("write the ior");
+    write!(f, "{}", servant.ior().to_stringified().expect("stringify")).expect("write the ior");
     drop(f);
 
     let out = std::process::Command::new("python3")
