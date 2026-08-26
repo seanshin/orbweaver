@@ -17,6 +17,14 @@ orbweaver-registry = { path = "../orbweaver-registry" }
 orbweaver-trading = { path = "../orbweaver-trading" }
 
 orbweaver-idl = { path = "../orbweaver-idl" }
+# D026 §5 S1's migration: `spike_tenants` and `spike_experts` load their
+# population from `corpus/state/` instead of retyping it, and the seed loader
+# parses with `orbweaver_dynamic::json` because the workspace has no serde.
+# Cycle-free in this direction only: `orbweaver-dynamic` depends on cdr, giop,
+# registry and idl — all of which this crate already depends on — and on
+# nothing here. See `src/bin/spike_tenants.rs`, *Where the loader lives*, for
+# why the loader is reached by `#[path]` rather than by `use`.
+orbweaver-dynamic = { path = "../orbweaver-dynamic" }
 
 [[bin]]
 name = "spike-server"

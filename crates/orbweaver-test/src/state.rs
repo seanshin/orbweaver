@@ -519,6 +519,26 @@ impl SeededTenant {
     pub fn policy_domain(&self, name: &str) -> Option<&SeededPolicyDomain> {
         self.policy_domains.iter().find(|d| d.name == name)
     }
+
+    /// The tenant's domain that grants **nothing** — what a default-deny
+    /// `authorize` is refused under.
+    ///
+    /// By role, not by name and not by position. A caller that reached for
+    /// `policy_domains[0]` would be asserting the file's member order, which
+    /// is not a fact the file states — `Json::Object` is a `BTreeMap` here and
+    /// a `dict` in the Python reader, and neither may depend on order. A
+    /// caller that reached for the literal `"acme-default"` would be retyping
+    /// a name the seed owns.
+    pub fn default_domain(&self) -> Option<&SeededPolicyDomain> {
+        self.policy_domains.iter().find(|d| d.grants.is_empty())
+    }
+
+    /// The tenant's domain that grants **something** — what makes a positive
+    /// `authorize` answer positive. See [`SeededTenant::default_domain`] for
+    /// why this is by role.
+    pub fn granting_domain(&self) -> Option<&SeededPolicyDomain> {
+        self.policy_domains.iter().find(|d| !d.grants.is_empty())
+    }
 }
 
 /// The seeded MoE estate: **two** node domains, tenants, policy domains.
