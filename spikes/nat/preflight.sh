@@ -135,8 +135,15 @@ case "$(uname -s)" in
     done
     if command -v multipass >/dev/null 2>&1; then
       # An instance that already exists needs no image and no free disk.
-      insts=$(bounded 20 multipass list --format csv 2>/dev/null)
-      if printf '%s' "$insts" | grep -q Running; then
+      #
+      # Herestring, and the producer's status read first by the `&&`. Piping
+      # into `grep -q` lies **quietly** here: `grep -q` stops at the first
+      # `Running` and SIGPIPEs `multipass list` (141), which `pipefail` — set
+      # on line 31 — makes the pipeline's status, and the `if` reads that as
+      # "no instance is running". A preflight whose whole job is to say which
+      # probes could run would report the one that *can* run as unavailable.
+      if insts=$(bounded 20 multipass list --format csv 2>/dev/null) &&
+        grep -q Running <<<"$insts"; then
         ok "multipass: an instance is already running — spikes/nat/vm/run.sh can run now"
         runnable=1
       fi
