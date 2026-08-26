@@ -84,17 +84,46 @@ build() {
     awk '/^diag\(\) \{/{p=1} /^# ── Kill this run/{p=0} p' "$RC"
     awk '/^# ── The dimension this harness did not have/{p=1} /^need\(\) \{/{p=0} p' "$RC"
     cat "$body"
-    awk '/^hr "transparency ledger/{p=1} p' "$RC"
+    awk '/^hr "transparency ledger — what a caller can still tell/{p=1} p' "$RC"
   } >"$out"
   /bin/bash -n "$out" || { echo "  FAIL the lifted driver does not parse"; return 2; }
+  # A driver that would run THIS SCRIPT is unbounded recursion, and it hangs
+  # rather than failing — the one diagnostic nobody can read. Measured
+  # 2026-08-26: the anchors below were title PREFIXES, a new harness group was
+  # titled `transparency ledger — its own negative controls`, and the lift
+  # swallowed it. The anchors are now full titles; this is the check that says so
+  # if a future title collides anyway.
+  # Comment lines are stripped first: this file's own name appears in a comment
+  # inside the block being lifted, and a guard that fired on a comment would be
+  # a guard nobody could keep. No early-exit form on either grep, so neither can
+  # SIGPIPE the other and `pipefail` has no status to misread.
+  local reenter
+  reenter=$(grep -vE '^[[:space:]]*#' "$out" | grep -n -F -- 'ledger_control.sh')
+  if [ -n "$reenter" ]; then
+    echo "  FAIL the lifted driver would re-enter this script — a group title has"
+    echo "       collided with one of the awk anchors above, and running it would"
+    echo "       recurse without bound"
+    sed 's/^/       /' <<<"$reenter"
+    return 2
+  fi
   return 0
 }
 
 # The harness's real groups and real tags, bodies replaced by an `ok`.
+#
+# `tp_measures_nothing` is lifted alongside `bears_on` and for the same reason:
+# it is a DECLARATION about the group, not part of its body, and a group that
+# declares a transparency while declaring it measured nothing must read the same
+# way here as it does in a real run. That is why the harness writes it at column
+# 0 beside `bears_on` rather than from inside the leg that learns the blocker —
+# a declaration only a body could make would be invisible to every control below,
+# and control 2 would then read `activation` as measured on the strength of a
+# group whose own output says nobody has looked yet.
 awk '/^hr "verdict"/{exit}
-     /^hr "transparency ledger/{exit}
+     /^hr "transparency ledger — what a caller can still tell/{exit}
      /^hr "/{print; print "echo \"  ok   (body not run in this control)\""; next}
-     /^bears_on /{print}' "$RC" >"$WORK/body_all.sh"
+     /^bears_on /{print}
+     /^tp_measures_nothing$/ || /^tp_measures_nothing /{print}' "$RC" >"$WORK/body_all.sh"
 
 TAGS=$(grep -c '^bears_on ' "$WORK/body_all.sh")
 echo "lifted $(grep -c '^hr ' "$WORK/body_all.sh") group(s) and $TAGS tag(s) out of spikes/run_checks.sh"
@@ -125,10 +154,29 @@ want "declared transparencies print a count and their groups" "$o2" \
      "ok          NAT rewriting"
 want "§6.1 is cited for every transparency, measured or not" "$o2" \
      "unmeasured, per D029 §6.1 — where it leaks today:"
-want "an undeclared transparency still reads UNMEASURED" "$o2" \
-     "UNMEASURED — no group in this run declares bears_on activation"
+# Until 2026-08-26 this read `no group in this run declares bears_on activation`,
+# and it was true: nothing declared that transparency at all. D029 §5 O0's leak
+# tests then landed as groups, and the activation leg is a counted SKIPPED naming
+# its blocker — so activation is now DECLARED and still measured by nothing. The
+# assertion moves with it rather than being deleted, because the property being
+# defended is the same one and is now the harder half: *a group that declares a
+# transparency and measures none of it must not flip the row to measured.*
+want "a transparency whose only groups measured nothing still reads UNMEASURED" "$o2" \
+     "UNMEASURED — 1 group(s) declare bears_on activation and not one"
+act_sec=$(sed -n '/^  activation /,/^  lifecycle /p' <<<"$o2")
+reject "and its row does not claim a measurement" "$act_sec" "measured by"
+# The blocker TEXT is learned by the group's body, which this control replaces
+# with an `echo`, so what is asserted here is that the group reaches the
+# load-bearing column at all and says it measured nothing. That the real run
+# fills in the text is the harness's own `leak_leg`, and the ledger prints
+# "could not say what it waits on" rather than an empty line when it cannot —
+# which is the branch this control is standing in.
+want "it reaches the load-bearing column saying it measured nothing" "$act_sec" \
+     "unmeasured: leak test" "measured nothing"
 want "the verdict names both halves" "$o2" \
      "transparency measured this run:" "transparency UNMEASURED this run:"
+want "the verdict's unmeasured half still names activation" \
+     "$(grep 'transparency UNMEASURED this run:' <<<"$o2")" "activation"
 want_rc "a green run stays green" "$rc" eq 0
 loc_before=$(grep -c '^                ok  ' <<<"$(sed -n '/^  location /,/^  backend /p' <<<"$o2")")
 
@@ -168,8 +216,15 @@ awk '/^hr "Python client target/{print; print "fail_total=$((fail_total+1)); ech
   "$WORK/body_all.sh" >"$WORK/body_red.sh"
 build "$WORK/body_red.sh" "$WORK/d5.sh" || fails=$((fails+1))
 o=$(bash "$WORK/d5.sh" 2>&1); rc=$?
+# This assertion used to read `measured by 1 group(s) in this run, 1 of them
+# red`, and it went FALSE on 2026-08-26 when the language row grew a second
+# declaring group — the acceptance suite. Nothing noticed, because this script
+# was not a harness group; it is one now. **A floor is not a figure and neither
+# is a group count**: what this control is for is that a red tagged group is not
+# swallowed by its transparency's row, so it asserts the red half and the named
+# group, and says nothing about how many groups happen to declare `language`.
 want "the transparency shows red rather than the ledger swallowing it" "$o" \
-     "measured by 1 group(s) in this run, 1 of them red" \
+     "in this run, 1 of them red" \
      "RED (1)  Python client target"
 want "the group keeps its own verdict" "$o" "1 check group(s) failed"
 want_rc "a red tagged group fails the run" "$rc" ne 0
@@ -209,6 +264,27 @@ want "every tag becomes an unvalidated claim, which is a failure" "$o" \
 want "the verdict says the criterion was not read" "$o" \
      "transparency: NOT READ"
 want_rc "an unreadable §6.1 fails the run" "$rc" ne 0
+
+# ── 8. the no-measure declaration is what holds the line ────────────────────
+say "control 8 — a group declares a transparency and measures none of it"
+# Control 2 asserts that `activation` reads UNMEASURED even though a group
+# declares it. That assertion is only worth something if the row would read
+# differently without the declaration — otherwise it is a check tuned until it
+# is quiet, tested only against a tree with no defect in it. So: strip every
+# `tp_measures_nothing` and require the row to FLIP to measured. The flip is the
+# defect the declaration exists to prevent, and this is the run that shows it.
+grep -v '^tp_measures_nothing' "$WORK/body_all.sh" >"$WORK/body_nomark.sh"
+build "$WORK/body_nomark.sh" "$WORK/d8.sh" || fails=$((fails+1))
+o=$(bash "$WORK/d8.sh" 2>&1); rc=$?
+want "without the declaration the row flips to measured — the leak swallowed" "$o" \
+     "  activation  — Activation / load"
+act8=$(sed -n '/^  activation /,/^  lifecycle /p' <<<"$o")
+want "and that is what the declaration prevents" "$act8" "measured by 1 group(s)"
+reject "the UNMEASURED reading is gone without it" "$act8" "UNMEASURED"
+want "the verdict now claims activation was measured" \
+     "$(grep 'transparency measured this run:' <<<"$o")" "activation"
+want_rc "swallowing a leak does not fail the run — which is exactly why the
+       declaration has to be in the file rather than in a reviewer" "$rc" eq 0
 
 say "ledger controls"
 echo "  $checks assertion group(s), $fails failed"

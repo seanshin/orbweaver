@@ -112,6 +112,8 @@ TP_GROUPS=""         # idx \t title
 TP_TAGS=""           # transparency \t idx
 TP_RED=""            # idx \t how many failures that group added
 TP_SKIPS=""          # idx \t the skip's own first line, or empty
+TP_NOMEASURE=""      # idx, one per line: a declaring group that measures NOTHING
+TP_NOMEASURE_WHY=""  # idx \t what that group waits on, when it can say
 tp_fail_at_start=0
 tp_skip_text=""
 
@@ -164,6 +166,40 @@ bears_on() {
   fi
   TP_TAGS="${TP_TAGS}${name}	${TP_GIDX}
 "
+  return 0
+}
+
+#   tp_measures_nothing [<the specific thing this group waits on>]
+# Declared by a group that carries `bears_on` and, in this run, MEASURED NOTHING.
+#
+# Written on its OWN LINE at column 0, immediately after the group's `bears_on`,
+# because `spikes/ledger_control.sh` lifts this file's `hr` and `bears_on` lines
+# and replaces every group BODY with an `echo` — so a declaration made only from
+# inside a body would be invisible to the ledger's own negative controls, and
+# those controls would then read a transparency as measured that the real run
+# reads as unmeasured. The declaration is static; the blocker TEXT is not, and a
+# leg that learns it at run time adds it with a second, argument-carrying call.
+#
+# WHY THIS HAD TO EXIST BEFORE THE LEAK TESTS COULD BE WIRED IN. D029 §5 O0's
+# instrument is five legs of which three are counted `SKIPPED` naming a blocker,
+# and D010 §2 makes such a skip a real artifact — so each of the three lands as a
+# group, and a group that declares `bears_on activation` is a group the ledger
+# would have counted. Without this declaration the wiring would have printed
+# `activation: measured by 1 group(s), 0 red` over a row §6.1 calls the one with
+# the most machinery and the least measurement: **the ledger swallowing a leak by
+# being told about it.** The comment above the MoE residency group refuses a tag
+# for the same reason and is the standard this keeps.
+#
+# So a transparency whose only declaring groups measured nothing still prints
+# UNMEASURED, and the blockers those groups name become the load-bearing column
+# rather than the reason the row disappeared from it.
+tp_measures_nothing() {
+  TP_NOMEASURE="${TP_NOMEASURE}${TP_GIDX}
+"
+  if [ "$#" -gt 0 ] && [ -n "$1" ]; then
+    TP_NOMEASURE_WHY="${TP_NOMEASURE_WHY}${TP_GIDX}	$1
+"
+  fi
   return 0
 }
 
@@ -4117,6 +4153,249 @@ else
 fi
 [ "$ev_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
+# ── D029 §5 O0 — the leak tests reach the instruments ────────────────────────
+#
+# Every other group in this file was written for another reason and is being
+# re-read by the ledger. These five are the other kind: each holds a LIVE CALLER
+# while the property its transparency names changes underneath it, and each is
+# either a measurement or a counted SKIPPED naming the specific thing it waits
+# on. D010 §2 is why the second kind is a group at all — *a class-B claim lands
+# as a counted SKIPPED naming its fixture, never as a note and never as an ok* —
+# and D031 H2 is why it is worth the lines: the ledger's `unmeasured:` column is
+# the one a next batch is scoped from, and a blocker that is only in a script
+# nobody runs is not in that column.
+#
+# THE SPLIT IS NOT WRITTEN HERE. `spikes/leak_tests.sh --raw` prints one TSV row
+# per transparency and this file reads its verdict. Which legs measure and which
+# skip is that script's fact, and a `case` here listing the three that skip would
+# be `a classifier is a sentence too` in shell — green on the day a leg starts
+# measuring and nobody moved the list. What IS written here, once per group, is
+# the transparency name in `bears_on`, which the ledger validates against D029
+# §6.1; `leak_leg` then checks that its own argument matches the tag its group
+# declared, so the two spellings hold each other up.
+#
+# COST: about four seconds after `cargo test --workspace` has warmed the cache,
+# because the tests are in-process servers on 127.0.0.1:0 and start no fixture.
+#
+# NEGATIVE CONTROLS, run 2026-08-26 and recorded in this batch's commit message:
+#   - `ORBWEAVER_LEAK_CONTROL=backend` in the environment -> the `backend` group
+#     goes RED naming what the caller could tell, `fail_total` rises, and the
+#     ledger prints `RED (1)` under the backend row instead of `ok`.
+#   - `spikes/leak_tests.sh` made non-executable -> all five groups go RED with
+#     "did not run ... an unmeasured check is a failure", NOT skipped and not ok.
+#   - the `location` row deleted from the producer's output -> that group alone
+#     goes RED naming the missing row; the other four are unaffected.
+#   - `tp_measures_nothing` removed from the three skipping groups -> activation
+#     flips from UNMEASURED to "measured by 1 group(s), 0 red", which is the
+#     ledger swallowing a leak and is what that declaration exists to stop. Held
+#     by `spikes/ledger_control.sh` control 8 from now on.
+hr "leak tests — the instrument, and the controls that make its green mean something (D029 §5 O0)"
+# NOT tagged: this group measures the INSTRUMENT, not a transparency. It runs
+# first so that a leg below cannot report `ok` on a test whose leak switch has
+# stopped working — `spikes/leak_controls.sh` puts each leak back and requires
+# the test to see it, by exit code and in the test file's own words.
+leak_ctl=$(./spikes/leak_controls.sh 2>&1); leak_ctl_rc=$?
+if [ "$leak_ctl_rc" -eq 0 ]; then
+  echo "  ok   every leak these tests name is put back and seen; the tests are green without it"
+  echo "       $(grep -E '^  [0-9]+ check\(s\)' <<<"$leak_ctl" | sed 's/^ *//')"
+else
+  echo "  FAIL a leak control could not make its test red (exit $leak_ctl_rc), so a green"
+  echo "       leg below is not evidence about a leak"
+  diag "control failure" "$leak_ctl" "$(grep -E '^  FAIL' <<<"$leak_ctl")"
+  fail_total=$((fail_total+1))
+fi
+# One run of the producer for all five groups. Its own exit status is read
+# first: 0 means every leg held, 1 means a leg was refuted (the legs below say
+# which), and anything else means it could not measure at all.
+leak_raw=$(./spikes/leak_tests.sh --raw 2>&1); leak_rc=$?
+leak_ok=0
+if { [ "$leak_rc" -eq 0 ] || [ "$leak_rc" -eq 1 ]; } && [ -n "$leak_raw" ]; then
+  leak_ok=1
+  echo "  ok   spikes/leak_tests.sh ran (exit $leak_rc) and printed $(grep -c . <<<"$leak_raw") row(s)"
+else
+  echo "  FAIL spikes/leak_tests.sh did not run (exit $leak_rc); every leg below is"
+  echo "       therefore unmeasured, which is a failure and never a pass"
+  diag_out "$leak_raw" 8 head
+  fail_total=$((fail_total+1))
+fi
+
+#   leak_leg <name>
+# The verdict of one transparency's leak test, read from the producer's row.
+# Never invents a class: MEASURED, RED and SKIPPED come from `leak_tests.sh`,
+# and anything else — including a name with no row — is a failure here rather
+# than a transparency quietly falling out of the ledger.
+leak_leg() {
+  local name="$1" row verdict detail
+  # The tag and the leg must name the same transparency. `bears_on` is what the
+  # ledger reads and this argument is what selects the row; a copy-paste that
+  # left them disagreeing would tag one transparency with another's result.
+  if ! grep -qxF -- "$name	$TP_GIDX" <<<"$TP_TAGS"; then
+    echo "  FAIL leak_leg $name is in a group that did not declare bears_on $name,"
+    echo "       so the row read and the transparency credited are not the same one"
+    fail_total=$((fail_total+1))
+    return 0
+  fi
+  if [ "$leak_ok" -ne 1 ]; then
+    echo "  FAIL the leak-test producer did not run, so $name is unmeasured"
+    fail_total=$((fail_total+1))
+    return 0
+  fi
+  row=$(awk -F'\t' -v n="$name" '$1==n {v=$2; d=$3} END{printf "%s\t%s", v, d}' <<<"$leak_raw")
+  verdict=${row%%	*}
+  detail=${row#*	}
+  case "$verdict" in
+    MEASURED)
+      if grep -qx -- "$TP_GIDX" <<<"$TP_NOMEASURE"; then
+        echo "  FAIL this group declares tp_measures_nothing and the leak test for"
+        echo "       $name MEASURED ($detail) — the declaration is now understating"
+        echo "       the run; delete it so the ledger can count this leg"
+        fail_total=$((fail_total+1))
+      else
+        echo "  ok   $detail: nothing the caller observed changed across it"
+      fi
+      ;;
+    RED)
+      echo "  FAIL the leak test for $name was refuted — $detail"
+      echo "       run ./spikes/leak_tests.sh for what the caller could tell"
+      fail_total=$((fail_total+1))
+      ;;
+    SKIPPED)
+      if ! grep -qx -- "$TP_GIDX" <<<"$TP_NOMEASURE"; then
+        echo "  FAIL the leak test for $name is a SKIPPED and this group does not"
+        echo "       declare tp_measures_nothing, so the ledger would count it as"
+        echo "       measured — add the declaration beside bears_on $name"
+        fail_total=$((fail_total+1))
+      fi
+      tp_measures_nothing "$detail"
+      skip absent "git:spikes/leak_tests.sh" \
+        "no leak test changes $name under a live caller yet; it waits on $detail" \
+        "the leg's full reason, and what exists instead, is in spikes/leak_tests.sh" \
+        "— run ./spikes/leak_tests.sh to read it. This is UNMEASURED, not passing."
+      ;;
+    NOHANDLER)
+      echo "  FAIL $name is one of D029 §6.1's transparencies and spikes/leak_tests.sh"
+      echo "       has no leg for it — neither a test nor a reason ($detail)"
+      fail_total=$((fail_total+1))
+      ;;
+    *)
+      echo "  FAIL spikes/leak_tests.sh printed no row for $name, so this"
+      echo "       transparency's leak test is unmeasured — and an unmeasured check"
+      echo "       is a failure, never a pass"
+      diag "a row for $name" "$leak_raw" ""
+      fail_total=$((fail_total+1))
+      ;;
+  esac
+  return 0
+}
+
+hr "leak test — a move under a live caller (D029 §5 O0)"
+bears_on location
+leak_leg location
+
+hr "leak test — the implementation behind one reference replaced mid-session (D029 §5 O0)"
+bears_on backend
+leak_leg backend
+
+hr "leak test — the servant's language changed under a live caller (D029 §5 O0)"
+bears_on language
+tp_measures_nothing
+leak_leg language
+
+hr "leak test — a target evicted under a live caller (D029 §5 O0)"
+bears_on activation
+tp_measures_nothing
+leak_leg activation
+
+hr "leak test — a target removed under a live caller (D029 §5 O0)"
+bears_on lifecycle
+tp_measures_nothing
+leak_leg lifecycle
+
+# ── D029 §5 O1 / D034 — the removal itself, from the peer's socket ───────────
+#
+# D034 §9 named this wiring as left undone and said why: `run_checks.sh` was
+# held by another batch on the day O1 landed. This is that one-line fix, and the
+# group is worth more than one line of explanation because of what its exit code
+# means. The fixture prints its own counters — `servers_stopped`, `went_quiet`,
+# `serve_returned_ok` — and D034 §5.1 measured that all three said the shutdown
+# was clean on a build where the peer got a TCP reset and not one octet of GIOP.
+# **The verdict is the peer's**; the fixture's numbers are printed beside it and
+# never allowed to vouch for it (CLAUDE.md's harness rule, which that day wrote).
+#
+# 3 is `nothing measured`, and it is a FAILURE here rather than a SKIPPED: the
+# fixture is this workspace's own binary, so "it would not build" is a broken
+# tree and not an absent peer. A SKIPPED is for a fixture that is not here.
+#
+# What this adds over `cargo test --workspace`, which already runs the gate
+# (`crates/orbweaver-giop/tests/orb_stops_what_it_handed_out.rs`): provenance.
+# The peer imports no ORB, applies none of our conventions, and builds its §9.4
+# requests by hand in both byte orders.
+#
+# NEGATIVE CONTROLS, run 2026-08-26 and recorded in this batch's commit message:
+#   - `spikes/orb_shutdown_peer.py` moved aside -> exit 3, the group goes RED
+#     saying nothing was measured, and lifecycle drops back to UNMEASURED in the
+#     ledger. Verified it is NOT read as a pass and NOT read as a skip.
+#   - the peer's assertion inverted -> exit 1, the group goes RED and the ledger
+#     prints `RED (1)` under the lifecycle row.
+hr "ORB lifecycle — what a peer mid-call sees when the ORB stops the server under it (D029 §5 O1, D034)"
+# The first group in this harness to declare this transparency. It does NOT
+# close the row: D034 §8 is explicit that what became measurable is the removal,
+# not the transparency OF the removal, and the leak test above stays a counted
+# SKIPPED naming the redirect-for-a-name that would close it. The ledger prints
+# both lines under `lifecycle` every run, which is the arrangement that stops a
+# green count here from reading as the row being held.
+bears_on lifecycle
+os_out=$(./spikes/orb_shutdown.sh 2>&1); os_rc=$?
+case "$os_rc" in
+  0)
+    echo "  ok   $(grep -E '^held ' <<<"$os_out" | sed 's/^/ /' | tr -d '\n') — both byte orders, verdict from the peer's socket"
+    diag "the per-order peer lines" "$os_out" "$(grep -E '^  (peer|fixture) ' <<<"$os_out")" 4
+    ;;
+  1)
+    echo "  FAIL a peer mid-call did not see what D034 §3 says it must"
+    diag "a REFUTED line" "$os_out" "$(grep -E '^(REFUTED|note) ' <<<"$os_out")"
+    fail_total=$((fail_total+1))
+    ;;
+  *)
+    echo "  FAIL spikes/orb_shutdown.sh measured nothing (exit $os_rc) — the fixture is"
+    echo "       this workspace's own binary, so this is a broken tree and not an"
+    echo "       absent peer, which is why it is a failure and not a SKIPPED"
+    diag "an UNMEASURED line" "$os_out" "$(grep -E '^UNMEASURED ' <<<"$os_out")"
+    fail_total=$((fail_total+1))
+    ;;
+esac
+
+# ── The ledger's own negative controls ───────────────────────────────────────
+#
+# `spikes/ledger_control.sh` lifts the ledger, `hr`, `bears_on` and
+# `tp_measures_nothing` out of THIS FILE with `awk` and runs those bytes over the
+# harness's real tag set with every group body replaced by an `echo`. It is the
+# instrument that answers *can the ledger be green while measuring nothing*, and
+# until now it was not a group — so when the language row grew a second tag, its
+# control 5 started failing on a hand-typed group count and **nothing noticed**.
+# That is the class this harness exists to refuse, found in the control for the
+# ledger rather than in the ledger. It runs in about a second and starts nothing.
+#
+# THIS GROUP'S TITLE MUST NOT BEGIN `transparency ledger`. `ledger_control.sh`
+# lifts the ledger with `awk '/^hr "transparency ledger/{p=1} p'`, so a second
+# group whose title starts with that prefix is lifted into the driver, the driver
+# runs this group, and this group runs `ledger_control.sh` again — measured
+# 2026-08-26 as an unbounded recursion that hung rather than failing. Both ends
+# are now fixed (the anchors there are the full title, and `build` refuses a
+# driver that would re-enter), and the title stays distinct because a hang is the
+# one diagnostic nobody can read.
+hr "ledger controls — every way the transparency ledger could be green while measuring nothing (D031 H2)"
+lc_out=$(./spikes/ledger_control.sh 2>&1); lc_rc=$?
+if [ "$lc_rc" -eq 0 ]; then
+  echo "  ok   $(grep -E '^  [0-9]+ assertion group\(s\)' <<<"$lc_out" | sed 's/^ *//')"
+  echo "       every way this ledger could be green while measuring nothing was tried"
+else
+  echo "  FAIL the ledger's own controls do not hold (exit $lc_rc), so the section"
+  echo "       below is a reading nothing is checking"
+  diag "a FAIL line" "$lc_out" "$(grep -E '^  FAIL' <<<"$lc_out")"
+  fail_total=$((fail_total+1))
+fi
+
 hr "transparency ledger — what a caller can still tell (D029 §6, D031 H2)"
 # A READING OF THIS RUN, computed from what ran. It adds no check and removes
 # none: every group above keeps its own verdict, `fail_total` and `skipped` keep
@@ -4127,13 +4406,25 @@ hr "transparency ledger — what a caller can still tell (D029 §6, D031 H2)"
 # somebody looked. `unmeasured:` is the one a next batch is scoped from.
 #
 # WHAT THIS DOES NOT DO YET, so the next reader does not have to find out by
-# trying: (1) D031 H3 — there is no `--ledger` flag and no machine-readable
+# trying: D031 H3 — there is no `--ledger` flag and no machine-readable
 # emission, so commissioning the next batch still means a human reading this
-# text; (2) D029 §5 O0 — nothing here CHANGES a hidden property under a live
-# caller. Every group this ledger counts was written for another reason and is
-# being re-read; two transparencies have no group at all and will not get one
-# until O0 lands. A first ledger that mostly re-reads green work is cheap and
-# honest, and it is not the same thing as a leak hunt.
+# text.
+#
+# WHAT CHANGED 2026-08-26. The second limit recorded here used to read *"nothing
+# here CHANGES a hidden property under a live caller — every group this ledger
+# counts was written for another reason and is being re-read"*, and it was true
+# on the day it was written. D029 §5 O0 landed as
+# `crates/orbweaver-test/tests/what_a_caller_can_tell.rs` and
+# `spikes/leak_tests.sh`, and the five `leak test —` groups below are the first
+# in this harness that hold a live caller while the property changes underneath
+# it. Two of the five measure; three are counted SKIPPEDs that declare
+# `tp_measures_nothing` and therefore leave their transparency reading
+# UNMEASURED, with the blocker each waits on in the load-bearing column.
+#
+# The sentence being edited rather than left is the point: the batch that wrote
+# those tests could not edit this file — it was held — so its own report had to
+# say *"the three SKIPPED are not counted by the harness verdict and do not
+# reach D031's ledger"*. That is the debt this wiring pays.
 tp_unmeasured_names=""
 tp_measured_names=""
 if [ "$tp_load_err" = 1 ]; then
@@ -4154,49 +4445,86 @@ else
     [ -z "$tp_name" ] && continue
     tp_title=$(python3 spikes/transparency.py --title "$tp_name" 2>/dev/null)
     tp_idxs=$(awk -F'\t' -v n="$tp_name" '$1==n {print $2}' <<<"$TP_TAGS")
-    tp_n=0; tp_red_n=0
-    for tp_i in $tp_idxs; do tp_n=$((tp_n+1)); done
+    tp_n=0; tp_red_n=0; tp_nm=0
+    for tp_i in $tp_idxs; do
+      tp_n=$((tp_n+1))
+      grep -qx -- "$tp_i" <<<"$TP_NOMEASURE" && tp_nm=$((tp_nm+1))
+    done
+    # Groups that declared this transparency AND measured something. The
+    # difference between this and `tp_n` is the whole point of
+    # `tp_measures_nothing`: a leak test that is a counted SKIPPED naming its
+    # blocker declares the transparency and measures none of it, and a ledger
+    # that counted it would report the row as looked-at on the strength of a
+    # group that says in its own words that nobody has looked yet.
+    tp_m=$((tp_n - tp_nm))
     printf '  %-11s %s\n' "$tp_name" "— ${tp_title:-$tp_name}"
     if [ "$tp_n" -eq 0 ]; then
       echo "              UNMEASURED — no group in this run declares bears_on $tp_name"
       tp_unmeasured_names="$tp_unmeasured_names $tp_name"
-    else
+    elif [ "$tp_m" -eq 0 ]; then
+      echo "              UNMEASURED — $tp_n group(s) declare bears_on $tp_name and not one"
+      echo "                           of them measured anything this run; each names below"
+      echo "                           what it waits on"
+      tp_unmeasured_names="$tp_unmeasured_names $tp_name"
+    fi
+    if [ "$tp_n" -gt 0 ]; then
       for tp_i in $tp_idxs; do
         tp_rn=$(awk -F'\t' -v i="$tp_i" '$1==i {print $2}' <<<"$TP_RED")
-        [ -n "$tp_rn" ] && tp_red_n=$((tp_red_n+1))
+        if [ -n "$tp_rn" ] && ! grep -qx -- "$tp_i" <<<"$TP_NOMEASURE"; then
+          tp_red_n=$((tp_red_n+1))
+        fi
       done
-      echo "              measured by $tp_n group(s) in this run, $tp_red_n of them red"
+      [ "$tp_m" -gt 0 ] && \
+        echo "              measured by $tp_m group(s) in this run, $tp_red_n of them red"
       for tp_i in $tp_idxs; do
         tp_gt=$(awk -F'\t' -v i="$tp_i" '$1==i {print $2}' <<<"$TP_GROUPS")
         tp_rn=$(awk -F'\t' -v i="$tp_i" '$1==i {print $2}' <<<"$TP_RED")
         tp_sk=$(awk -F'\t' -v i="$tp_i" '$1==i {print $2}' <<<"$TP_SKIPS")
+        tp_nmw=""
+        grep -qx -- "$tp_i" <<<"$TP_NOMEASURE" && tp_nmw=yes
         # A group that skipped and a group whose sub-probe skipped print the
         # same `SKIPPED` line and this file cannot tell them apart, so it does
         # not guess: `+SKIPPED` says a skip was recorded here and the unmeasured
         # column below says which. Inventing the distinction would be a
-        # classifier reading somebody else's sentence.
+        # classifier reading somebody else's sentence. A group that DECLARED it
+        # measured nothing is the one case that is not a guess, and it is the
+        # one case that must not print `ok`.
         if [ -n "$tp_rn" ]; then
           echo "                RED ($tp_rn)  $tp_gt"
+        elif [ -n "$tp_nmw" ]; then
+          echo "                unmeasured  $tp_gt"
         elif [ -n "$tp_sk" ]; then
           echo "                ok +SKIPPED $tp_gt"
         else
           echo "                ok          $tp_gt"
         fi
       done
-      tp_measured_names="$tp_measured_names $tp_name"
+      [ "$tp_m" -gt 0 ] && tp_measured_names="$tp_measured_names $tp_name"
     fi
-    # The unmeasured column. Two sources, both CITED rather than restated: a
-    # tagged group that skipped said in its own words why, and §6.1 says where
-    # this transparency leaks today. Neither sentence is retyped here.
+    # The unmeasured column. Three sources, all CITED rather than restated: a
+    # tagged group that skipped said in its own words why, a tagged group that
+    # declared it measured nothing named what it waits on, and §6.1 says where
+    # this transparency leaks today. No sentence here is retyped.
     for tp_i in $tp_idxs; do
       tp_sk=$(awk -F'\t' -v i="$tp_i" '$1==i {print $2}' <<<"$TP_SKIPS")
       tp_sr=$(awk -F'\t' -v i="$tp_i" '$1==i {print $3}' <<<"$TP_SKIPS")
-      [ -z "$tp_sk" ] && continue
+      tp_nmw=""
+      grep -qx -- "$tp_i" <<<"$TP_NOMEASURE" && tp_nmw=yes
+      [ -z "$tp_sk" ] && [ -z "$tp_nmw" ] && continue
       tp_gt=$(awk -F'\t' -v i="$tp_i" '$1==i {print $2}' <<<"$TP_GROUPS")
+      tp_nmr=$(awk -F'\t' -v i="$tp_i" '$1==i {w=$2} END{print w}' <<<"$TP_NOMEASURE_WHY")
       echo "              unmeasured: $tp_gt"
-      if [ -n "$tp_sr" ]; then
+      if [ -n "$tp_nmw" ]; then
+        if [ -n "$tp_nmr" ]; then
+          echo "                          measured nothing; waits on: $tp_nmr"
+        else
+          echo "                          measured nothing, and could not say what it waits"
+          echo "                          on — read the group's own output above"
+        fi
+      fi
+      if [ -n "$tp_sk" ] && [ -n "$tp_sr" ]; then
         echo "                          SKIPPED ($tp_sk): $tp_sr"
-      else
+      elif [ -n "$tp_sk" ]; then
         echo "                          SKIPPED ($tp_sk) — the group printed its own"
         echo "                          SKIPPED line above, with its age"
       fi
