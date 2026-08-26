@@ -48,11 +48,13 @@
 //!   a green run imply a timing claim it never made.
 //! - **One process, loopback, our own client.** A leak visible only to
 //!   omniORB's or JacORB's client is invisible here.
-//! - **The POA's forward arm.** [`ExpertLocator`] never answers
-//!   `Located::Forward`, so [`ExpertHost`] has no `redirect` and a locator
-//!   that did forward would reach the `unreachable` arm below rather than the
-//!   wire. Naming it because a future locator that forwards would need this
-//!   host changed, not merely reconfigured.
+//! - **The POA's forward arm.** `ExpertLocator` never answers
+//!   `Located::Forward`, so [`ExpertHost`] implements no `redirect` and a
+//!   locator that did forward would hit the `panic!` in `dispatch`'s
+//!   `Target::Forward` arm rather than reach the wire. A panic and not a
+//!   silent `OBJECT_NOT_EXIST` on purpose: the second would look exactly like
+//!   the leak this file measures. Naming it because a future locator that
+//!   forwards needs this host changed, not merely reconfigured.
 //! - **One expert, one operation.** The reply body is a constant and the
 //!   object id. A servant whose *answer* depended on residency would defeat
 //!   this test, and nothing here stops one being written.
