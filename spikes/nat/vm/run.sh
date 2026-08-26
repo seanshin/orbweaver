@@ -229,10 +229,27 @@ bold "identity across the two references"
 key_hex=$(hex_of "$KEY_TEXT")
 tid_hex=$(hex_of "$TYPE_ID")
 both_ok=1
+# Herestrings, and the read's own status first — but for a reason worth writing
+# down, because the obvious one is **wrong** and was measured wrong here on
+# 2026-08-27. `grep -q` cannot decide before it has a *complete line*, so the
+# early exit that SIGPIPEs the producer only happens once a whole matching line
+# has arrived. A stringified IOR is one unbroken line: `grep` is obliged to read
+# it to the end, the `printf` is never killed, and at 1 MB of single line the
+# pipeline still answered `status=0`. So these two were **not** lying, and the
+# hazard is governed by where the first complete matching line ends rather than
+# by how much output there is. They are herestrings anyway — the form is not a
+# judgement call about today's payload — and the live defect this loop actually
+# had is the one below it: an unreadable .ior made `body` empty, both greps
+# missed, and an unmeasured check was reported as "the rewrite dropped the key".
+# That is a different observation and is now counted as itself.
 for name in naive published; do
-  body=$(tr 'A-Z' 'a-z' <"$WORK/$name.ior" 2>/dev/null)
-  printf '%s' "$body" | grep -q "$key_hex" || both_ok=0
-  printf '%s' "$body" | grep -q "$tid_hex" || both_ok=0
+  if ! body=$(tr 'A-Z' 'a-z' <"$WORK/$name.ior" 2>/dev/null); then
+    note "could not read $WORK/$name.ior — the identity check is unmeasured for $name"
+    both_ok=0
+    continue
+  fi
+  grep -q "$key_hex" <<<"$body" || both_ok=0
+  grep -q "$tid_hex" <<<"$body" || both_ok=0
 done
 if [ "$both_ok" -eq 1 ]; then
   pass "object key \"$KEY_TEXT\" and type id \"$TYPE_ID\" appear verbatim in both"

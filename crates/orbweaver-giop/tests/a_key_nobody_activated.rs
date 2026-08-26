@@ -37,25 +37,37 @@
 //! `the_inheritors_of_the_default_are_named_where_a_change_would_be_made`
 //! carries the list of what else must move.
 //!
-//! # Blast radius, measured 2026-08-26 — the numbers, not an assumption
+//! # Blast radius — a figure that is computed, beside the reading it replaced
 //!
-//! **72** `Dispatch`/`SharedDispatch` implementations in this workspace. **46**
-//! override `knows`; **26** inherit the default.
+//! **Today's figure is not written here.** It is computed from the tree by
+//! `the_inheritors_of_the_default_are_named_where_a_change_would_be_made` and
+//! printed under `--nocapture`, because the reading that used to stand in this
+//! paragraph had already drifted and nothing could go red on it.
 //!
-//! * **12 of 12** hand-written servants in `orbweaver-giop` override it, and
-//!   with real checks: `NamingServer` looks the key up in its context tree,
-//!   `TradingServer` and the two event servants compare against their key,
-//!   `EventChannelServer` routes it through four maps.
-//! * **6 of 6** production servants in the sibling crates override it
-//!   (`RepositoryServer`, `ExpertService`, `TenantService`).
-//! * **16 of 16** emitted skeletons override it, and `orbweaver_gen`'s servant
-//!   trait declares its own `knows` **required, with no default** — that layer
-//!   already made this decision, the other way, and pinned it.
+//! The **2026-08-26** reading, kept as the dated record of what the C peer's
+//! sweep found rather than as a claim about today: 72
+//! `Dispatch`/`SharedDispatch` implementations, 46 overriding `knows`, 26
+//! inheriting the default; 12 of 12 hand-written `orbweaver-giop` servants
+//! overriding with real checks (`NamingServer` looks the key up in its context
+//! tree, `TradingServer` and the two event servants compare against their key,
+//! `EventChannelServer` routes it through four maps); 6 of 6 production
+//! servants in the sibling crates overriding (`RepositoryServer`,
+//! `ExpertService`, `TenantService`); 16 of 16 emitted skeletons overriding,
+//! with `orbweaver_gen`'s servant trait declaring its own `knows` **required,
+//! with no default** — that layer already made this decision, the other way,
+//! and pinned it.
+//!
+//! One line of that reading was **already false when it was written down as a
+//! standing fact**: it named `orbweaver-gen/src/pyservant.rs` as a production
+//! inheritor, and the seam refactor moved that servant to
+//! `crate::seam::ForeignServant`, which overrides `knows`. Nothing noticed,
+//! because the guard beside the list asserted the *list* was non-empty. That is
+//! the whole reason the roster below is read out of the tree.
 //!
 //! So "checking the key is ceremony" is a claim only the inheritors act on, and
 //! **the production inheritors are defects rather than deliberate**: they are
-//! named in the test at the bottom of this file, because a crate this one does
-//! not own is where the repair has to land.
+//! computed by the test at the bottom of this file, because a crate this one
+//! does not own is where the repair has to land.
 //!
 //! # What a caller can tell, which is the reason any of this matters
 //!
@@ -611,62 +623,645 @@ fn every_claim_above_has_a_perturbation_that_is_seen() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 6 · What is left undone, named where a change would be made
+// 6 · What is left undone — read out of the tree, never typed
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// **Not a gate — a list, asserted so it cannot rot silently.**
+/// Who implements `Dispatch`, and which of them override `knows`, **computed**.
 ///
-/// The repair for the 26 inheritors cannot land in this crate. This test holds
-/// the names so that whoever changes `default_knows_policy()` finds them at the
-/// point of change rather than by re-running the sweep, and asserts the list is
-/// non-empty so deleting the finding requires deleting the test.
+/// This module exists because the list it replaces was typed. The typed one
+/// held `orbweaver-gen/src/pyservant.rs` as a production inheritor, and on
+/// 2026-08-26 that was true; the seam refactor then moved the servant to
+/// `crate::seam::ForeignServant`, **which overrides `knows`**, leaving
+/// `pyservant.rs` a 24-line re-export with no `Dispatch` impl in it at all. The
+/// guard beside the list was `!PRODUCTION_INHERITORS.is_empty()`, a property of
+/// a literal three lines above it, so it could not notice — and neither could a
+/// path-existence check, because the file still exists. It is the *property*
+/// that moved out from under the name. That is CLAUDE.md's rule about a control
+/// that names a live subject, arriving in a roster rather than in a control.
 ///
-/// Measured 2026-08-26. Each entry is a servant that inherits `knows` and is
-/// **production rather than fixture**:
+/// The parsing is deliberately small but not naive, because this tree contains
+/// both of the decoys a bare grep falls for: a `code.contains("impl
+/// SharedDispatch for NamingServer")` assertion in
+/// `naming_no_outbound_call.rs`, and `skeleton.rs`'s `writeln!` template that
+/// emits `impl<S: {servant}> __rt::Dispatch for {skel}<S>`. Neither is an
+/// implementation. Comments, strings and char literals are blanked first, so
+/// they are not, and so a brace inside a literal cannot close an impl body.
+/// Matching `fn knows` only inside the brace-matched body of the impl is what
+/// keeps the *generated servant trait's* own `knows` — a different trait, in
+/// the same files — from counting.
+mod roster {
+    use std::path::{Path, PathBuf};
+
+    /// One `impl … Dispatch for …` found in the tree.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct DispatchImpl {
+        /// Path relative to the workspace root, `/`-separated.
+        pub file: String,
+        pub line: usize,
+        /// The type the trait is implemented for, as written.
+        pub subject: String,
+        pub overrides_knows: bool,
+        /// Inherits `knows` but checks the key by another route — `Poa`'s
+        /// `dispatch_target` or `parse_key` — so the request path refuses while
+        /// the probe path, which only ever consults `knows`, still answers
+        /// `ObjectHere`. This is the disagreement
+        /// `the_probe_path_and_the_request_path_agree_about_an_unactivated_key`
+        /// exists to catch.
+        pub checks_in_another_hook: bool,
+    }
+
+    #[derive(Debug, Default)]
+    pub struct Scan {
+        pub files_read: usize,
+        pub impls: Vec<DispatchImpl>,
+    }
+
+    impl Scan {
+        pub fn overriders(&self) -> Vec<&DispatchImpl> {
+            self.impls.iter().filter(|i| i.overrides_knows).collect()
+        }
+        pub fn inheritors(&self) -> Vec<&DispatchImpl> {
+            self.impls.iter().filter(|i| !i.overrides_knows).collect()
+        }
+        pub fn wrong_hook(&self) -> Vec<&DispatchImpl> {
+            self.impls.iter().filter(|i| i.checks_in_another_hook).collect()
+        }
+    }
+
+    /// Refuse, rather than report a clean tree.
+    ///
+    /// Every clause is the same lesson one level up from CLAUDE.md's ledger
+    /// control: *a green that means nothing occurred reads exactly like a green
+    /// that means the property held.* A scan that read no files, parsed no
+    /// impls, or classified every impl the same way has produced no evidence
+    /// about `knows` at all and must not come back quiet.
+    ///
+    /// `overriders().is_empty()` is the strip-removed-nothing clause: before
+    /// either answer means anything, the classifier has to be shown answering
+    /// **both** ways on this tree. `inheritors().is_empty()` is loud for the
+    /// opposite reason — it may well be good news, but "the finding is closed"
+    /// is a conclusion a person retires this test for, not one a scan reaches
+    /// by going quiet.
+    pub fn verdict(scan: &Scan) -> Result<(), String> {
+        if scan.files_read == 0 {
+            return Err("the roster scan read no .rs files at all: it is not measuring the \
+                        workspace, and its silence is not evidence about `knows`"
+                .into());
+        }
+        if scan.impls.is_empty() {
+            return Err(format!(
+                "the roster scan read {} files and parsed no `Dispatch` impl out of any of \
+                 them. Either the trait was renamed or the parser broke; either way this test \
+                 is measuring nothing",
+                scan.files_read
+            ));
+        }
+        if scan.overriders().is_empty() {
+            return Err(format!(
+                "the roster scan found {} `Dispatch` impls and says not one of them overrides \
+                 `knows`. A classifier that only ever gives one answer is not evidence for \
+                 that answer — see CLAUDE.md, indistinguishability",
+                scan.impls.len()
+            ));
+        }
+        if scan.inheritors().is_empty() {
+            return Err(format!(
+                "the roster scan found {} `Dispatch` impls and says every one of them \
+                 overrides `knows`. If that is true the finding this test carries is CLOSED — \
+                 retire the test deliberately and record it. If it is not true the scan broke. \
+                 Neither reading is allowed to be a silent pass",
+                scan.impls.len()
+            ));
+        }
+        if scan.wrong_hook().is_empty() {
+            return Err(format!(
+                "the roster scan found {} inheritors and none of them checks the key in \
+                 another hook. The request/probe disagreement may be repaired — say so \
+                 deliberately — or the body scan stopped seeing `dispatch_target`",
+                scan.inheritors().len()
+            ));
+        }
+        Ok(())
+    }
+
+    fn is_ident(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80
+    }
+
+    fn utf8_len(b: u8) -> usize {
+        if b < 0x80 {
+            1
+        } else if b >> 5 == 0b110 {
+            2
+        } else if b >> 4 == 0b1110 {
+            3
+        } else {
+            4
+        }
+    }
+
+    /// Replace every comment, string, byte-string and char literal with spaces,
+    /// preserving byte offsets and newlines so line numbers still hold.
+    ///
+    /// Lifetimes are code and stay: `'a` is told from `'a'` by looking for a
+    /// closing quote one scalar along.
+    pub fn blank_noncode(src: &str) -> String {
+        let b = src.as_bytes();
+        let n = b.len();
+        let mut out = b.to_vec();
+        let mut i = 0usize;
+        let blank = |out: &mut Vec<u8>, from: usize, to: usize| {
+            for byte in out.iter_mut().take(to.min(n)).skip(from) {
+                if *byte != b'\n' {
+                    *byte = b' ';
+                }
+            }
+        };
+        while i < n {
+            if b[i] == b'/' && i + 1 < n && b[i + 1] == b'/' {
+                let s = i;
+                while i < n && b[i] != b'\n' {
+                    i += 1;
+                }
+                blank(&mut out, s, i);
+                continue;
+            }
+            if b[i] == b'/' && i + 1 < n && b[i + 1] == b'*' {
+                let s = i;
+                let mut depth = 1usize;
+                i += 2;
+                while i < n && depth > 0 {
+                    if b[i] == b'/' && i + 1 < n && b[i + 1] == b'*' {
+                        depth += 1;
+                        i += 2;
+                    } else if b[i] == b'*' && i + 1 < n && b[i + 1] == b'/' {
+                        depth -= 1;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                blank(&mut out, s, i);
+                continue;
+            }
+            // An identifier is consumed whole, so that the `r` in `for` or the
+            // `b` in `body` is never read as a literal prefix.
+            if is_ident(b[i]) && !b[i].is_ascii_digit() {
+                let s = i;
+                while i < n && is_ident(b[i]) {
+                    i += 1;
+                }
+                let word = &b[s..i];
+                if word == b"r" || word == b"br" {
+                    let lit = i;
+                    let mut hashes = 0usize;
+                    while i < n && b[i] == b'#' {
+                        hashes += 1;
+                        i += 1;
+                    }
+                    // `r#type` is a raw identifier, not a raw string: only a
+                    // quote after the hashes makes this a literal.
+                    if i < n && b[i] == b'"' {
+                        i += 1;
+                        while i < n {
+                            if b[i] == b'"' {
+                                let mut k = i + 1;
+                                let mut got = 0usize;
+                                while k < n && b[k] == b'#' && got < hashes {
+                                    got += 1;
+                                    k += 1;
+                                }
+                                if got == hashes {
+                                    i = k;
+                                    break;
+                                }
+                            }
+                            i += 1;
+                        }
+                        blank(&mut out, lit, i);
+                    }
+                }
+                continue;
+            }
+            if b[i] == b'"' {
+                let s = i;
+                i += 1;
+                while i < n {
+                    if b[i] == b'\\' {
+                        i += 2;
+                        continue;
+                    }
+                    if b[i] == b'"' {
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+                blank(&mut out, s, i);
+                continue;
+            }
+            if b[i] == b'\'' {
+                let is_char = if i + 1 < n && b[i + 1] == b'\\' {
+                    true
+                } else {
+                    let mut k = i + 1;
+                    if k < n {
+                        k += utf8_len(b[k]);
+                    }
+                    k < n && b[k] == b'\''
+                };
+                if is_char {
+                    let s = i;
+                    i += 1;
+                    while i < n {
+                        if b[i] == b'\\' {
+                            i += 2;
+                            continue;
+                        }
+                        if b[i] == b'\'' {
+                            i += 1;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    blank(&mut out, s, i);
+                } else {
+                    i += 1; // a lifetime, which is code
+                }
+                continue;
+            }
+            i += 1;
+        }
+        String::from_utf8(out).expect("whole bytes were replaced, so this is still UTF-8")
+    }
+
+    fn word_at(b: &[u8], at: usize, word: &[u8]) -> bool {
+        b.len() >= at + word.len()
+            && &b[at..at + word.len()] == word
+            && (at == 0 || !is_ident(b[at - 1]))
+            && b.get(at + word.len()).map(|c| !is_ident(*c)).unwrap_or(true)
+    }
+
+    /// `fn <name>` anywhere in this body.
+    fn declares_fn(body: &[u8], name: &[u8]) -> bool {
+        let mut i = 0usize;
+        while i < body.len() {
+            if word_at(body, i, b"fn") {
+                let mut j = i + 2;
+                while j < body.len() && (body[j] as char).is_whitespace() {
+                    j += 1;
+                }
+                if word_at(body, j, name) {
+                    return true;
+                }
+            }
+            i += 1;
+        }
+        false
+    }
+
+    fn strip_where(s: &str) -> &str {
+        let b = s.as_bytes();
+        let mut i = 0usize;
+        while i < b.len() {
+            if word_at(b, i, b"where") {
+                return s[..i].trim_end();
+            }
+            i += 1;
+        }
+        s
+    }
+
+    fn at_impl(code: &str, start: usize) -> Option<(String, bool, bool)> {
+        let b = code.as_bytes();
+        let n = b.len();
+        let mut i = start + 4;
+        while i < n && (b[i] as char).is_whitespace() {
+            i += 1;
+        }
+        // impl generics, if any
+        if i < n && b[i] == b'<' {
+            let mut d = 0i32;
+            while i < n {
+                match b[i] {
+                    b'<' => d += 1,
+                    b'>' => {
+                        d -= 1;
+                        if d == 0 {
+                            i += 1;
+                            break;
+                        }
+                    }
+                    b'{' | b';' => return None,
+                    _ => {}
+                }
+                i += 1;
+            }
+        }
+        let head = i;
+        let mut d = 0i32;
+        let mut p = 0i32;
+        let mut for_at: Option<usize> = None;
+        let mut brace: Option<usize> = None;
+        let mut j = i;
+        while j < n {
+            match b[j] {
+                b'<' => d += 1,
+                b'>' => d -= 1,
+                b'(' | b'[' => p += 1,
+                b')' | b']' => p -= 1,
+                b'{' if d <= 0 && p <= 0 => {
+                    brace = Some(j);
+                    break;
+                }
+                b';' if d <= 0 && p <= 0 => return None,
+                b'f' if d == 0 && p == 0 && for_at.is_none() && word_at(b, j, b"for") => {
+                    for_at = Some(j);
+                }
+                _ => {}
+            }
+            j += 1;
+        }
+        let brace = brace?;
+        let for_at = for_at?;
+        // The trait path is what stands between the impl generics and `for`.
+        let path = code[head..for_at].trim();
+        let last = path.rsplit("::").next().unwrap_or(path);
+        let last = last.split('<').next().unwrap_or(last).trim();
+        if last != "Dispatch" && last != "SharedDispatch" {
+            return None;
+        }
+        let subject = strip_where(code[for_at + 3..brace].trim()).trim().to_string();
+
+        let mut depth = 0i32;
+        let mut k = brace;
+        let mut end = n;
+        while k < n {
+            if b[k] == b'{' {
+                depth += 1;
+            } else if b[k] == b'}' {
+                depth -= 1;
+                if depth == 0 {
+                    end = k;
+                    break;
+                }
+            }
+            k += 1;
+        }
+        let body = &b[brace..end.min(n)];
+        let overrides = declares_fn(body, b"knows");
+        let elsewhere = !overrides
+            && (code[brace..end.min(n)].contains("dispatch_target")
+                || code[brace..end.min(n)].contains("parse_key"));
+        Some((subject, overrides, elsewhere))
+    }
+
+    pub fn scan_source(rel: &str, src: &str, out: &mut Vec<DispatchImpl>) {
+        let code = blank_noncode(src);
+        let b = code.as_bytes();
+        let mut i = 0usize;
+        while i < b.len() {
+            if word_at(b, i, b"impl") {
+                if let Some((subject, overrides_knows, checks_in_another_hook)) = at_impl(&code, i)
+                {
+                    out.push(DispatchImpl {
+                        file: rel.to_string(),
+                        line: 1 + b[..i].iter().filter(|c| **c == b'\n').count(),
+                        subject,
+                        overrides_knows,
+                        checks_in_another_hook,
+                    });
+                }
+            }
+            i += 1;
+        }
+    }
+
+    pub fn workspace_root() -> Result<PathBuf, String> {
+        let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        loop {
+            if let Ok(text) = std::fs::read_to_string(d.join("Cargo.toml")) {
+                if text.contains("[workspace]") {
+                    return Ok(d);
+                }
+            }
+            if !d.pop() {
+                return Err(format!(
+                    "no Cargo.toml with a [workspace] table above {}: the roster cannot be \
+                     computed and must not report a clean tree",
+                    env!("CARGO_MANIFEST_DIR")
+                ));
+            }
+        }
+    }
+
+    pub fn scan_tree(root: &Path) -> Scan {
+        let mut scan = Scan::default();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for e in entries.flatten() {
+                let p = e.path();
+                let Some(name) = p.file_name().and_then(|s| s.to_str()) else { continue };
+                if p.is_dir() {
+                    // `target/` holds build output, and a dot directory holds
+                    // another checkout of this same tree.
+                    if name == "target" || name.starts_with('.') {
+                        continue;
+                    }
+                    stack.push(p);
+                } else if name.ends_with(".rs") {
+                    let Ok(src) = std::fs::read_to_string(&p) else { continue };
+                    scan.files_read += 1;
+                    let rel = p.strip_prefix(root).unwrap_or(&p).to_string_lossy().into_owned();
+                    scan_source(&rel.replace('\\', "/"), &src, &mut scan.impls);
+                }
+            }
+        }
+        scan.impls.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
+        scan
+    }
+}
+
+/// **Not a gate — a roster, computed so it cannot rot silently.**
 ///
-/// 1. `orbweaver-gen/src/pyservant.rs` — `PyServant<A>`, the Python-servant
-///    bridge. No key check anywhere. This is the one that is a live defect
-///    rather than a fixture convenience, because it is on the language-
-///    transparency path D029 §6.1 calls closed.
-/// 2. `orbweaver-object/src/bin/spike_server.rs` — `Echo`, i.e. **spike-server**
-///    itself, the fixture omniORB and JacORB are pointed at. Every gate that
-///    measures `OBJECT_NOT_EXIST` behaviour against it is measuring a servant
-///    that accepts all keys.
-/// 3. `spikes/e2e/servant.rs` and `spikes/estate/servant.rs` — `PoaFront<D>`.
-///    These *do* check, through `poa.dispatch_target`, but in `dispatch_body`
-///    and not in `knows`. So their request path refuses and their **probe path
-///    still answers `ObjectHere`** — the request/probe disagreement
-///    `the_probe_path_and_the_request_path_agree_about_an_unactivated_key`
-///    exists to catch, live in the tree today, in two files.
-/// 4. `orbweaver-giop/src/bin/` — `spike_mux`, `spike_nat`, `spike_orb_shutdown`;
-///    and `orbweaver-object/src/bin/spike_wide.rs`,
-///    `orbweaver-registry/src/bin/spike_ingest.rs` (`TrackManager`). Fixtures.
+/// The repair for the inheritors cannot land in this crate. This test finds
+/// them so that whoever changes `default_knows_policy()` is handed today's
+/// list at the point of change rather than a list somebody typed on a day when
+/// it was true. The list that used to be here is why: it named
+/// `orbweaver-gen/src/pyservant.rs`, the seam refactor moved that servant into
+/// `crate::seam::ForeignServant` — which *does* override `knows` — and the
+/// guard, `!PRODUCTION_INHERITORS.is_empty()`, went on being green over a
+/// literal it had itself been typed beside.
+///
+/// The blast-radius figures that stood in this file's module documentation —
+/// 72 impls, 46 overriding, 26 inheriting — were the reading of **2026-08-26**
+/// and are kept there as that dated record rather than maintained. Today's
+/// figure is printed by this test (`--nocapture`) and is never retyped, which
+/// is the whole point: a count that has to be maintained by hand is a sentence
+/// that will drift, and this one already had.
+///
+/// What is *not* computed here is the production/fixture split. Deciding which
+/// servants are "production" by matching path substrings would put the same
+/// hand-typed classifier back one layer down, so the split stays prose: what
+/// the assertion hands the next reader is every inheritor, and the judgement
+/// about which of them matter is theirs to make with the tree in front of them.
 ///
 /// The ready-made repair exists and is not wired up: `orbweaver_object::Poa`
 /// has `parse_key` and `dispatch_target`, and `Target` already distinguishes
 /// `Forward` from `Unknown` — which a boolean `knows` cannot, and which is the
 /// reason the right hook for a POA-backed servant is `locate` and not `knows`.
-/// **No implementation in the workspace calls it from either.**
 #[test]
 fn the_inheritors_of_the_default_are_named_where_a_change_would_be_made() {
-    /// Kept as data rather than only as prose so the count is checkable.
-    const PRODUCTION_INHERITORS: [&str; 2] =
-        ["orbweaver-gen/src/pyservant.rs", "orbweaver-object/src/bin/spike_server.rs"];
-    /// Servants that check the key in `dispatch_body` instead of `knows`, so
-    /// their probe path and request path disagree.
-    const CHECK_IN_THE_WRONG_HOOK: [&str; 2] =
-        ["spikes/e2e/servant.rs", "spikes/estate/servant.rs"];
+    let root = roster::workspace_root().unwrap_or_else(|why| panic!("{why}"));
+    let scan = roster::scan_tree(&root);
+    roster::verdict(&scan).unwrap_or_else(|why| panic!("{why}"));
 
-    assert!(
-        !PRODUCTION_INHERITORS.is_empty() && !CHECK_IN_THE_WRONG_HOOK.is_empty(),
-        "the finding was emptied rather than repaired"
+    let inheritors = scan.inheritors();
+    let wrong_hook = scan.wrong_hook();
+    println!(
+        "roster, computed from {} .rs files under {}: {} Dispatch/SharedDispatch impls, \
+         {} override `knows`, {} inherit it, of which {} check the key in another hook",
+        scan.files_read,
+        root.display(),
+        scan.impls.len(),
+        scan.overriders().len(),
+        inheritors.len(),
+        wrong_hook.len(),
     );
+    for i in &inheritors {
+        println!(
+            "  inherits  {}:{}  {}{}",
+            i.file,
+            i.line,
+            i.subject,
+            if i.checks_in_another_hook { "   (checks in dispatch_body, not knows)" } else { "" }
+        );
+    }
+
+    let named = |v: &[&roster::DispatchImpl]| -> String {
+        v.iter()
+            .map(|i| format!("{}:{} {}", i.file, i.line, i.subject))
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
     assert_eq!(
         default_knows_policy(),
         UnknownKeyPolicy::ServeAnyway,
-        "default_knows_policy() moved. Before this lands, the servants listed in this test's \
-         documentation inherit the old default and must be given a `knows` of their own: \
-         {PRODUCTION_INHERITORS:?}, plus the wrong-hook pair {CHECK_IN_THE_WRONG_HOOK:?} and \
-         the fixture binaries the docs name."
+        "default_knows_policy() moved. Before this lands, these {} implementations inherit the \
+         old default and must be given a `knows` of their own: {}. Of those, the {} that check \
+         the key in `dispatch_body` instead answer a LocateRequest with `ObjectHere` for a key \
+         they would refuse a call on: {}",
+        inheritors.len(),
+        named(&inheritors),
+        wrong_hook.len(),
+        named(&wrong_hook),
+    );
+}
+
+/// The control for the roster above, which is the half that makes it evidence.
+///
+/// A computed roster fails differently from a typed one: it does not go stale,
+/// it goes **quiet**. A parser that stopped recognising `impl … Dispatch for …`
+/// would report a workspace with no inheritors in it, and "no inheritors" is
+/// indistinguishable from "the finding is repaired" unless somebody made it
+/// impossible to say quietly. So this test does two things, and CLAUDE.md's
+/// ledger-control rule is why it is both rather than either:
+///
+/// * **Synthesise the subject.** The classification is exercised on source
+///   written here, not on whatever the tree happens to contain today — so this
+///   control cannot itself be invalidated by a servant moving. The synthetic
+///   text carries both of the decoys that are really in this workspace (a trait
+///   name inside a string literal, and a `writeln!` template that emits one)
+///   plus a `fn knows` on a *different* trait, which is the one a bare grep
+///   over `spikes/e2e/servant.rs` gets wrong.
+/// * **Make the strip refuse when it removed nothing.** `verdict` is fed
+///   scans that are broken in each of the five available ways and must return
+///   `Err` for every one — and then a scan that is merely unremarkable, which
+///   it must **accept**. Without that last row a `verdict` that refused
+///   everything would pass this test while measuring nothing, which is the
+///   defect one level up.
+#[test]
+fn the_roster_refuses_to_be_quiet_about_finding_nothing() {
+    const SYNTHETIC: &str = r##"
+        impl Dispatch for Overrider {
+            fn dispatch_body(&mut self) {}
+            fn knows(&self, k: &[u8]) -> bool { k == b"x" }
+        }
+        impl<D: Dispatch> Dispatch for Inheritor<D> where D: Send {
+            // fn knows(&self) {}                       <- a comment
+            fn dispatch_body(&mut self) { let _ = "fn knows"; let _ = '}'; }
+        }
+        impl<D: Dispatch> crate::server::SharedDispatch for WrongHook<D> {
+            fn dispatch_body(&mut self) { self.poa.dispatch_target(k, None); }
+        }
+        trait GeneratedServant {
+            fn knows(&self, k: &[u8]) -> bool;
+        }
+        // impl Dispatch for InAComment {}
+        fn decoys() {
+            let _ = code.contains("impl SharedDispatch for InAStringLiteral");
+            let _ = writeln!(s, "impl<S: {servant}> __rt::Dispatch for {skel}<S> {{");
+            let _ = r#"impl Dispatch for InARawString { fn knows() {} }"#;
+        }
+        impl Debug for NotEvenDispatch { fn fmt(&self) {} }
+    "##;
+
+    let mut found = Vec::new();
+    roster::scan_source("synthetic.rs", SYNTHETIC, &mut found);
+    let seen: Vec<(&str, bool, bool)> = found
+        .iter()
+        .map(|i| (i.subject.as_str(), i.overrides_knows, i.checks_in_another_hook))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            ("Overrider", true, false),
+            ("Inheritor<D>", false, false),
+            ("WrongHook<D>", false, true),
+        ],
+        "the roster parser mis-read source written to be read: it either lost an impl, \
+         counted a decoy, or put an impl in the wrong class. Anything it reports about the \
+         real tree is worth nothing until this row is right"
+    );
+
+    // Every way a scan can be broken, and the one way it can be ordinary.
+    let one = |overrides_knows: bool, checks_in_another_hook: bool| roster::DispatchImpl {
+        file: "synthetic.rs".into(),
+        line: 1,
+        subject: "Synthetic".into(),
+        overrides_knows,
+        checks_in_another_hook,
+    };
+    let refused: [(&str, roster::Scan); 5] = [
+        ("read no files", roster::Scan { files_read: 0, impls: vec![] }),
+        ("parsed no impls", roster::Scan { files_read: 400, impls: vec![] }),
+        (
+            "every impl inherits — the classifier is stuck",
+            roster::Scan { files_read: 400, impls: vec![one(false, true), one(false, true)] },
+        ),
+        (
+            "every impl overrides — repaired, or broken, but never quiet",
+            roster::Scan { files_read: 400, impls: vec![one(true, false), one(true, false)] },
+        ),
+        (
+            "no inheritor checks in another hook",
+            roster::Scan { files_read: 400, impls: vec![one(true, false), one(false, false)] },
+        ),
+    ];
+    for (why, scan) in &refused {
+        assert!(
+            roster::verdict(scan).is_err(),
+            "verdict() accepted a scan that measured nothing: {why}"
+        );
+    }
+    let ordinary =
+        roster::Scan { files_read: 400, impls: vec![one(true, false), one(false, true)] };
+    assert!(
+        roster::verdict(&ordinary).is_ok(),
+        "verdict() refuses every scan it is given, including an unremarkable one. A check that \
+         can only say no is not a control, and the five rows above prove nothing about it: \
+         {:?}",
+        roster::verdict(&ordinary)
     );
 }

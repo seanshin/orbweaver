@@ -53,12 +53,21 @@ need cargo
 # immediate refusal rather than a timeout, so the failure is attributable to
 # "nothing is serving there" and not to "the packet went nowhere". Both are
 # exercised when both are available.
+# `| head -1` is the same early-exit hazard as `grep -q`: it closes the pipe on
+# the first line and SIGPIPEs whatever is upstream, which `pipefail` then makes
+# the status of the whole pipeline. This one is **latent, not live** — measured
+# 2026-08-27 on the development box, `ifconfig` output is far short of the pipe
+# buffer and the old form returned 0 — and even where it fires only the *status*
+# is wrong, never the address. It is repaired anyway, because the next reader to
+# write `lan=$(second_address) || ...` on a host with many interfaces inherits a
+# function that reports 141 having succeeded. `awk` picks the first match
+# without exiting, so it reads its input to the end and nothing is killed.
 second_address() {
   if command -v ip >/dev/null 2>&1; then
     ip -4 -o addr show scope global 2>/dev/null |
-      awk '{split($4,a,"/"); print a[1]}' | grep -v '^127\.' | head -1
+      awk '{split($4,a,"/"); if (a[1] !~ /^127\./ && !seen++) print a[1]}'
   elif command -v ifconfig >/dev/null 2>&1; then
-    ifconfig 2>/dev/null | awk '/inet /{print $2}' | grep -v '^127\.' | head -1
+    ifconfig 2>/dev/null | awk '/inet /{if ($2 !~ /^127\./ && !seen++) print $2}'
   fi
 }
 
@@ -84,9 +93,21 @@ note "claimed address 2: $UNROUTABLE (no route from here; the client hangs, as i
 out=$(cd "$ROOT" && cargo run -q --bin spike-nat -- prove 127.0.0.1 $claimed 2>&1)
 status=$?
 printf '%s\n' "$out" | sed 's/^/  | /'
-# Captured, then matched: piping into `grep -q` SIGPIPEs the producer, which
-# has produced a phantom pass in this project before.
-if [ "$status" -eq 0 ] && printf '%s' "$out" | grep -q "nat rewriting: PASS"; then
+# The comment that stood here said this was safe *because the output had been
+# captured first*. That is exactly the reasoning CLAUDE.md refutes: capturing
+# saves the **data**, and the pipeline still lies twice over. `grep -q` exits on
+# the first match and SIGPIPEs the `printf` (141), and `set -o pipefail` — set
+# on line 35 of this file — makes 141 the status of the pipeline, which the `if`
+# reads as "no match". This one fails **loud**: a real `nat rewriting: PASS`
+# becomes `FAIL`, and R7 is measured over a transcript that grows with the
+# number of claimed addresses. Measured on this box 2026-08-27, with the marker
+# on its own first line: 32 KB of tail after it -> status 0, 64 KB -> status 141
+# while the `if` still took the THEN branch (the race), 96 KB and up -> 141 and
+# the ELSE branch. What governs it is where the **first complete matching line**
+# ends, not the total size — `grep` cannot decide mid-line, which is why the
+# single-line IOR check in `nat/vm/run.sh` was not lying and this one is.
+# The herestring feeds `grep` a file, so there is no producer to kill.
+if [ "$status" -eq 0 ] && grep -q "nat rewriting: PASS" <<<"$out"; then
   pass "unrewritten references did not dial; rewritten ones completed a call"
 else
   fail "see the transcript above"
@@ -142,7 +163,7 @@ else
     if [ "$published" = "$want" ]; then
       pass "the manifest's map is accepted and publishes $published (host and port both translated)"
       note "unmeasured here: whether anything answers there. That needs the cluster."
-    elif printf '%s' "$log" | grep -q "in use"; then
+    elif grep -q "in use" <<<"$log"; then
       # Unmeasured, so counted — never quietly passed.
       skip "port 5555 is busy on this machine, so the manifest's map was not exercised"
     else
@@ -170,9 +191,16 @@ fi
 # should do behind its caller's back. Where there is none it is a counted skip
 # naming the command that would do it.
 bold "vm probe — a client on a real second host"
+# Herestring, not a pipe: this is the **quiet** direction of the same defect.
+# `multipass list` over a machine with several instances easily outruns a
+# `grep -q` that stops at the first `Running`, and the SIGPIPE that follows is
+# read as "no instance is running" — so the one routing-domain probe that has
+# ever executed would be silently downgraded to a counted skip, which is an
+# unmeasured check wearing the word `skip`. The producer's own status is still
+# read first, by the `&&`.
 if command -v multipass >/dev/null 2>&1 &&
   vms=$(multipass list --format csv 2>/dev/null) &&
-  printf '%s' "$vms" | grep -q Running; then
+  grep -q Running <<<"$vms"; then
   if (cd "$ROOT" && ORBWEAVER_KEEP=1 ./spikes/nat/vm/run.sh); then
     pass "the vm probe ran: the loopback reference did not dial, the mapped one did"
   else
