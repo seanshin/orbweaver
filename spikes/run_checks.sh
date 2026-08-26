@@ -118,8 +118,8 @@ tp_fail_at_start=0
 tp_skip_text=""
 
 # A group's verdict is a DELTA, not a flag: every group already reports by
-# adding to `fail_total`, and asking 81 groups to also set a variable would be
-# 81 chances to forget. So the close-out runs when the next `hr` starts and
+# adding to `fail_total`, and asking every group to also set a variable would be
+# one chance to forget per group. So the close-out runs when the next `hr` starts and
 # reads what the previous group added. No group's own verdict changes, which is
 # D031 §2's third refusal — the ledger reads the run, it does not replace it.
 tp_close_group() {
