@@ -80,6 +80,11 @@ __all__ = [
     "ValueType",
     "TYPES", "NAMES", "register", "register_alias", "register_name", "resolve",
     "to_json", "from_json", "call", "Bridge", "Loopback", "connect", "property",
+    # The serving direction. `Servant` and `Op` are what a generated servant
+    # class is built from, `Raise`/`Raising` are how one refuses, and
+    # `dispatch_call` is the whole of it as a pure function.
+    "Servant", "ServantError", "Op", "Raise", "Raising", "OMG_VMCID",
+    "dispatch_call", "Host", "serve",
 ]
 
 #: The builtin ``property``, reachable through this module.
@@ -201,13 +206,24 @@ class SystemException(Error):
     those first two transposed once already, in an enum whose comment is now
     longer than the enum, so the number crosses as a number rather than
     becoming a second name to get wrong.
+
+    ``stated`` records whether the completion status was *given* rather than
+    defaulted, and it exists for the serving side. A Rust servant cannot reach
+    a `SystemException` without naming the status — `rt::Raising` has no
+    ``Default`` and no ``From``, and its ``#[must_use]`` makes a forgotten one
+    a warning — because a generator-chosen COMPLETED_NO on a raise that fired
+    halfway through a mutation is how a well-behaved retry loop corrupts state.
+    Python has no type system to enforce that, so :func:`dispatch_call` refuses
+    an unstated one instead, and this flag is how it can tell. Reading a peer's
+    reply always states it, so a client is unaffected.
     """
 
-    def __init__(self, id, minor=0, completed=2):
+    def __init__(self, id, minor=0, completed=None):
         self.id = id
         self.minor = minor
-        self.completed = completed
-        super().__init__("%s (minor=%d, completed=%s)" % (id, minor, completed))
+        self.stated = completed is not None
+        self.completed = 2 if completed is None else completed
+        super().__init__("%s (minor=%d, completed=%s)" % (id, minor, self.completed))
 
 
 class UserException(Error):
@@ -1335,7 +1351,18 @@ def call(invoker, id, operation, args=(), returns="void", outs=(), raises=(), on
         if cls is None or not (isinstance(cls, type) and issubclass(cls, UserException)):
             # An id we cannot decode still names a contract the caller was not
             # built against, which is the useful half of the message.
-            raise SystemException("IDL:omg.org/CORBA/UNKNOWN:1.0", 0x4f4d0001, "YES")
+            #
+            # ``0`` and not ``"YES"``. This was the one place in the runtime
+            # that built a `SystemException` itself, and it was the one place
+            # that put a *name* in the field every other path fills with the
+            # ordinal the peer sent — so a caller writing the retry test this
+            # class's docstring describes, ``exc.completed == 1``, could never
+            # match here, and ``exc.completed`` came back as a string only on
+            # this one path. §4.11.4 numbers COMPLETED_YES 0, which is what
+            # `orbweaver_giop`'s `SystemException::unknown_user_exception`
+            # answers with; found 2026-08-26 while building the servant
+            # direction, by mirroring this branch on the serving side.
+            raise SystemException("IDL:omg.org/CORBA/UNKNOWN:1.0", 0x4f4d0001, 0)
         raise from_json(cls, u.get("members") or {}, "")
     if "ok" not in reply:
         raise TransportError("the bridge answered with neither a result nor a failure")
@@ -1442,3 +1469,398 @@ class Bridge(object):
 def connect(idl, ior, command=None, cwd=None):
     """A :class:`Bridge` over ``ior``, speaking the contract in ``idl``."""
     return Bridge(idl, ior, command=command, cwd=cwd)
+
+
+# ── serving ─────────────────────────────────────────────────────────────────
+#
+# The other protocol direction. Everything above this line is a client: it
+# renders a request, hands it to an invoker and reads a reply. Everything below
+# is a servant: it reads a call, hands it to a Python object and renders the
+# answer. The two halves share ``to_json`` and ``from_json`` and share the
+# three reply shapes — ``ok``, ``user_exception``, ``system_exception`` —
+# because they are the same documents read from the other end. That reuse is
+# why a servant was a seam question rather than a language question: the
+# mapping did not need a second half, the *protocol* needed a second direction.
+#
+# What is **not** here is any wire knowledge at all. The bridge decoded the
+# CDR, resolved the operation, answered ``_is_a`` and chose the reply status
+# before this module saw anything. See ``orbweaver_gen::pyservant``.
+
+
+#: OMG's own vendor minor code space; ``orbweaver_gen::rt::OMG_VMCID``'s twin.
+OMG_VMCID = 0x4f4d0000
+
+
+class Raising(object):
+    """A system exception that has not yet said whether the operation ran.
+
+    The mirror of Rust's ``rt::Raising``, and it exists for the same reason
+    that one does: whether a refusal landed before or after the state changed
+    is knowledge the **servant** has and no generator does, so there is no
+    default that is right. Reach a :class:`SystemException` through
+    :meth:`did_not_run`, :meth:`ran_to_completion` or :meth:`may_have_run`.
+
+    Python cannot make a forgotten one a compile error the way ``#[must_use]``
+    does, so the check moved to the seam: :func:`dispatch_call` refuses to
+    serialise a :class:`SystemException` whose status was never stated.
+    """
+
+    def __init__(self, id, minor=0):
+        self.id = id
+        self._minor = minor
+
+    def minor(self, minor):
+        """Attaches a vendor minor code."""
+        return Raising(self.id, minor)
+
+    def omg_minor(self, minor):
+        """Attaches a minor code in OMG's own space, which is the half of the
+        code that makes it portable between ORBs."""
+        return Raising(self.id, OMG_VMCID | minor)
+
+    def did_not_run(self):
+        """COMPLETED_NO: nothing was touched and re-sending is safe."""
+        return SystemException(self.id, self._minor, 1)
+
+    def ran_to_completion(self):
+        """COMPLETED_YES: it ran and only the answer is lost."""
+        return SystemException(self.id, self._minor, 0)
+
+    def may_have_run(self):
+        """COMPLETED_MAYBE: it cannot be determined.
+
+        The right answer whenever a failure lands in the middle of a mutation —
+        it is worse for a client to be told "safe to retry" wrongly than to be
+        told nobody knows.
+        """
+        return SystemException(self.id, self._minor, 2)
+
+    def with_completion(self, completed):
+        """The same decision made from an ordinal, for a servant whose
+        completion status is itself computed."""
+        return SystemException(self.id, self._minor, completed)
+
+
+class Raise(object):
+    """The system exceptions a servant raises, as ``rt::raise`` spells them.
+
+    A ``raises`` clause gives an interface its *user* exceptions; this is the
+    other half, the vocabulary every servant needs and no contract declares.
+    Each answers a :class:`Raising`, which becomes a :class:`SystemException`
+    only once the completion status is stated::
+
+        raise _rt.Raise.no_permission().did_not_run()
+        raise _rt.Raise.bad_param().omg_minor(3).did_not_run()
+
+    The set is the one the servants in this workspace actually raise, not the
+    whole of §4.11; :meth:`other` is the door for the rest of it rather than a
+    reason to grow the list to thirty constructors.
+    """
+
+    @staticmethod
+    def object_not_exist():
+        """The object key names nothing this servant holds."""
+        return Raising("IDL:omg.org/CORBA/OBJECT_NOT_EXIST:1.0")
+
+    @staticmethod
+    def no_permission():
+        """The caller may not make this call, and retrying will not change it."""
+        return Raising("IDL:omg.org/CORBA/NO_PERMISSION:1.0")
+
+    @staticmethod
+    def bad_param():
+        """An argument is outside what the operation accepts. Usually worth a
+        minor code, since the caller cannot see which argument otherwise."""
+        return Raising("IDL:omg.org/CORBA/BAD_PARAM:1.0")
+
+    @staticmethod
+    def transient():
+        """Refused now; a retry may well succeed."""
+        return Raising("IDL:omg.org/CORBA/TRANSIENT:1.0")
+
+    @staticmethod
+    def bad_inv_order():
+        """Legal call, wrong state."""
+        return Raising("IDL:omg.org/CORBA/BAD_INV_ORDER:1.0")
+
+    @staticmethod
+    def no_implement():
+        """In the contract, not in this servant.
+
+        Distinct from BAD_OPERATION, and the difference is visible on the wire:
+        BAD_OPERATION says *no such operation*, which an oversight and a
+        decision both used to say. This one says the operation exists and this
+        servant does not implement it, on purpose.
+        """
+        return Raising("IDL:omg.org/CORBA/NO_IMPLEMENT:1.0")
+
+    @staticmethod
+    def internal():
+        """The servant broke and the caller can do nothing about it."""
+        return Raising("IDL:omg.org/CORBA/INTERNAL:1.0")
+
+    @staticmethod
+    def other(id):
+        """Any other standard system exception, by repository id."""
+        return Raising(id)
+
+
+class Op(object):
+    """One operation's shape, as a generated servant class records it.
+
+    The same facts a generated client method passes to :func:`call` — names,
+    order, descriptors — read from the other end. A generated servant class
+    contributes exactly this and no conversion logic, which is the rule the
+    whole target is built on.
+    """
+
+    __slots__ = ("method", "ins", "returns", "outs", "raises", "oneway")
+
+    def __init__(self, method, ins=(), returns="void", outs=(), raises=(), oneway=False):
+        self.method = method
+        self.ins = tuple(ins)
+        self.returns = returns
+        self.outs = tuple(outs)
+        self.raises = tuple(raises)
+        self.oneway = oneway
+
+
+class Servant(object):
+    """Base of every generated servant class.
+
+    A generated subclass sets ``_idl_id``, ``_idl_name`` and
+    ``_idl_operations`` — a map from the name that travels to an :class:`Op` —
+    and the application subclasses *that* and writes the method bodies.
+
+    Inherited members are flattened into ``_idl_operations`` rather than
+    expressed as Python inheritance, exactly as a client stub flattens them,
+    because one function computes both sets: a servant answers precisely the
+    names a client of the same contract can send.
+
+    **This class does not answer ``_is_a``.** The bridge answers it from the
+    registry's resolved inheritance chain and it never reaches Python, because
+    a servant that answered it differently would be an object that could not be
+    narrowed through a base-typed reference — a caller being able to tell what
+    language it is talking to.
+    """
+
+    _idl_id = ""
+    _idl_name = ""
+    _idl_operations = {}
+
+
+class ServantError(Error):
+    """A servant answered in a way the seam cannot carry.
+
+    Not a refusal — a refusal is a well-formed answer. This is the servant
+    getting the *shape* wrong: a completion status never stated, an out
+    parameter never returned, a tuple of the wrong length. Raised in the
+    servant's own process, where the traceback is, rather than reaching a
+    caller as an opaque failure with nothing to act on.
+    """
+
+
+def dispatch_call(servant, call):
+    """One call document to one reply document, with no process in sight.
+
+    The whole of the servant direction's Python half, as a pure function of a
+    servant object and a JSON-shaped dict. That is what lets a test execute
+    every branch below — every refusal, every conversion — with no bridge, no
+    socket and no peer, which is the argument :class:`Loopback` makes for the
+    client half.
+    """
+    op_name = call.get("op")
+    op = servant._idl_operations.get(op_name)
+    if op is None:
+        # The bridge resolves the operation against the registry before it
+        # writes a call, so reaching here means the servant class and the
+        # contract the bridge loaded disagree. That is a wiring mistake inside
+        # one process and it is raised there rather than mapped onto the wire.
+        raise ServantError(
+            "%s was asked for %r, which its contract does not declare"
+            % (type(servant).__name__, op_name))
+
+    args = call.get("args") or {}
+    values = []
+    for name, desc in op.ins:
+        if name not in args:
+            raise ServantError("the call for %r is missing the argument %r" % (op_name, name))
+        values.append(from_json(desc, args[name], name))
+
+    try:
+        answer = getattr(servant, op.method)(*values)
+    except UserException as ex:
+        id = getattr(ex, "_idl_id", "")
+        if id not in op.raises:
+            # §4.11's mapping for an exception the caller's contract cannot
+            # name. A Rust servant cannot reach this state at all — its
+            # generated error enum has no variant for an undeclared raise — so
+            # this is one of the differences a Python servant keeps, and the
+            # answer is the one the specification already fixes.
+            return {"system_exception": {
+                "id": "IDL:omg.org/CORBA/UNKNOWN:1.0",
+                "minor": OMG_VMCID | 1,
+                "completed": 0,
+            }}
+        return {"user_exception": {"id": id, "members": to_json(type(ex), ex, "")}}
+    except SystemException as ex:
+        if not ex.stated:
+            raise ServantError(
+                "%s raised %s without saying whether the operation ran; reach one "
+                "through _rt.Raise — .did_not_run(), .ran_to_completion() or "
+                ".may_have_run() — so a caller's retry logic has an answer"
+                % (type(servant).__name__, ex.id))
+        return {"system_exception": {
+            "id": ex.id, "minor": ex.minor, "completed": ex.completed}}
+
+    if op.oneway:
+        # §9.4.1 gives a oneway no reply to travel in. An answer is rendered
+        # anyway and the bridge drops it — visibly, through the same
+        # ``oneway_fault_dropped`` a generated Rust skeleton calls — because a
+        # server whose oneway operations fail invisibly is one nobody can debug.
+        return {"ok": {"returns": None, "outputs": {}}}
+
+    # The declared result first when it is not void, then the out and inout
+    # values in declaration order (§7.9.1) — the same tuple shape a Python
+    # *client* receives from :func:`call`, so a servant returns what a client
+    # reads. One rule, read from both ends.
+    wanted = (0 if op.returns == "void" else 1) + len(op.outs)
+    if wanted <= 1:
+        parts = [answer] if wanted else []
+    else:
+        if not isinstance(answer, tuple) or len(answer) != wanted:
+            raise ServantError(
+                "%s.%s must answer a tuple of %d — the result then the out and inout "
+                "values in declaration order — and answered %r"
+                % (type(servant).__name__, op.method, wanted, answer))
+        parts = list(answer)
+
+    at = 0
+    returns = None
+    if op.returns != "void":
+        returns = to_json(op.returns, parts[at], "<return>")
+        at += 1
+    outputs = {}
+    for name, desc in op.outs:
+        outputs[name] = to_json(desc, parts[at], name)
+        at += 1
+    return {"ok": {"returns": returns, "outputs": outputs}}
+
+
+class Host(object):
+    """The ``orbweaver-py-bridge`` process, serving a Python object.
+
+    The mirror of :class:`Bridge`, and the same program in its other mode. In
+    the client direction Python writes a request line and the bridge answers;
+    here the bridge writes a call line and Python answers. A bridge is in one
+    mode or the other for its whole life, never both, so the pipes never carry
+    two conversations at once.
+
+    ``ior`` is the reference to hand a caller. Python never sees a byte of CDR
+    on this side either.
+    """
+
+    def __init__(self, idl, interface, command=None, cwd=None, include=(), endpoint=None):
+        command = command or os.environ.get("ORBWEAVER_PY_BRIDGE", "orbweaver-py-bridge")
+        argv = command if isinstance(command, list) else [command]
+        argv = list(argv) + ["--idl", str(idl), "--serve", str(interface)]
+        for d in include:
+            argv += ["-I", str(d)]
+        if endpoint:
+            argv += ["--endpoint", str(endpoint)]
+        self._proc = subprocess.Popen(
+            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=cwd,
+            text=True, bufsize=1)
+        # The banner is a synchronisation point, not decoration: a caller told
+        # the IOR before the listener existed would dial a closed port, and
+        # "the fixture had not started yet" is the phantom failure this project
+        # has paid for most often.
+        hello = self._proc.stdout.readline()
+        if not hello.strip():
+            raise TransportError("the bridge did not start: %s" % (self._stderr(),))
+        banner = json.loads(hello)
+        if "ready" not in banner:
+            raise TransportError("the bridge refused to start: %s" % (hello.strip(),))
+        self.ready = banner["ready"]
+        self.ior = self.ready.get("ior", "")
+        self.type_id = self.ready.get("type_id", "")
+
+    def _stderr(self):
+        try:
+            self._proc.kill()
+        except Exception:
+            pass
+        return "exit status %r" % (self._proc.poll(),)
+
+    def run(self, servant, stop=None):
+        """Answers calls until the bridge closes its output, or ``stop()``.
+
+        ``stop`` is consulted after each call rather than between reads,
+        because this loop blocks on a line; a servant that wants to stop while
+        idle closes the host from another thread.
+        """
+        while True:
+            line = self._proc.stdout.readline()
+            if not line:
+                return
+            if not line.strip():
+                continue
+            document = json.loads(line)
+            call = document.get("call")
+            if call is None:
+                continue
+            try:
+                reply = dispatch_call(servant, call)
+            except ServantError as e:
+                # The seam could not carry the answer. The caller is told the
+                # least wrong true thing — UNKNOWN, completion MAYBE, because
+                # the servant's method may well have run before the shape
+                # failed — and the message stays in this process, where
+                # somebody can act on it.
+                reply = {"system_exception": {
+                    "id": "IDL:omg.org/CORBA/UNKNOWN:1.0", "minor": 0, "completed": 2}}
+                self._note(str(e))
+            self._proc.stdin.write(json.dumps(reply) + "\n")
+            self._proc.stdin.flush()
+            if stop is not None and stop():
+                return
+
+    def _note(self, message):
+        import sys
+        sys.stderr.write("orbweaver servant: %s\n" % (message,))
+        sys.stderr.flush()
+
+    def close(self):
+        """Stops serving.
+
+        Closing stdin is enough for a :class:`Bridge`, which is always either
+        answering a request or waiting for one. A :class:`Host` is usually
+        waiting to *accept*, where it has no reason to look at stdin at all —
+        so an idle one would notice the closed pipe only at the next call,
+        which may never come. There is no graceful "stop accepting" document
+        because inventing one would be protocol nobody needs: the parent owns
+        this child and terminates it.
+        """
+        if self._proc.poll() is None:
+            try:
+                self._proc.stdin.close()
+            except Exception:
+                pass
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=5)
+            except Exception:
+                self._proc.kill()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+
+def serve(idl, interface, command=None, cwd=None, include=(), endpoint=None):
+    """A :class:`Host` serving ``interface`` from the contract in ``idl``."""
+    return Host(idl, interface, command=command, cwd=cwd, include=include,
+                endpoint=endpoint)

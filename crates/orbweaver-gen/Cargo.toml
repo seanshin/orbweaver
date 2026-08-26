@@ -22,6 +22,10 @@ orbweaver-cdr = { path = "../orbweaver-cdr" }
 orbweaver-giop = { path = "../orbweaver-giop", default-features = false }
 orbweaver-idl = { path = "../orbweaver-idl" }
 orbweaver-registry = { path = "../orbweaver-registry" }
+# The servant seam's own documents. `python_servant.rs` builds AnyJSON v1 by
+# hand — the answers a Python servant would send — and drives `PyServant` with
+# them, so it needs the JSON type and the value mapping directly.
+orbweaver-dynamic = { path = "../orbweaver-dynamic" }
 # The guard a stub crosses the trust boundary through (PLAN §7.4 I1). A test
 # dependency only: the generated code stands on `rt` alone, and `guarded_stub.rs`
 # is what proves a *checked-in* stub's payload reaches the guard's content seat.
@@ -40,7 +44,8 @@ path = "src/bin/gen_python.rs"
 
 # The Python target's seam. A separate process rather than an extension module:
 # the wire stays in Rust and CPython gains no dependency. See
-# docs/decisions/D007-python-wire-seam.md, which is PROPOSED.
+# docs/decisions/D007-python-wire-seam.md, which is where that decision's
+# status lives and is deliberately not restated here.
 [[bin]]
 name = "orbweaver-py-bridge"
 path = "src/bin/py_bridge.rs"

@@ -234,12 +234,39 @@ feature to add.
 |---|---|---|
 | **Location** | where the target runs | **measured, with a known leak**: `LOCATION_FORWARD` and `_PERM` are served and followed, and R7 rewrites an IOR for a dialable address — but `Connection::move_to` restored a hand-written field list and dropped two configured limits across every forward until today, so the *caller's* limits changed when the object moved. Fixed; the class is the leak to watch. |
 | **Backend** | what implements it | mostly held: a servant is behind a POA and a reference; but `spike_experts`' server root key collides with its derived registry key, which is a backend detail reaching a name. |
-| **Language** | what it is written in | **leaks by construction**: Python is clients only. A Python servant cannot be dispatched into, so *the target's language is visible in whether it can be a target at all*. D030 L1. |
+| **Language** | what it is written in | **the construction leak is closed; three narrower ones remain** (2026-08-26). A Python servant is dispatched into by `orbweaver_gen::pyservant`, and `tests/python_servant.rs` compares one against the generated Rust servant for the same contract — 19 calls × 3 GIOP versions × 2 byte orders, **byte-identical replies**, with a negative control that perturbs five answers and asserts each is seen. What remains is listed in §6.1.1 and none of it is the old *"cannot be a target at all"*. |
 | **Activation / load** | whether it is loaded right now | **leaks**: MoE residency loads and evicts experts, and a caller reaching an evicted one gets a different answer than one reaching a resident one. This is the transparency this project has the most machinery for and the least measurement of. |
 | **Lifecycle stability** | that the above survives add / remove / move / load / evict at runtime | **partly unmeasurable today**: the ORB owns the transport and **cannot stop what it handed out** (§3.1), so "remove at runtime" has no implementation to be transparent about. |
 
 *다섯 가지 각각은 **테스트로 반증 가능한 주장**이며, 그것이 이 작업의 방식이다.
 투명성은 확인하는 것이 아니라 **구멍을 사냥하는 것**이다.*
+
+### 6.1.1 What a caller can still tell about a servant's language / 남은 구멍
+
+Measured 2026-08-26 by `crates/orbweaver-gen/tests/python_servant.rs`, which is
+where each of these is named. The first three are differences in **what a
+servant author can get wrong**, not in what a correct servant answers; the last
+two are differences in **what a servant can do at all**, and are the ones worth
+closing next.
+
+| # | Difference | Caller sees |
+|---|---|---|
+| 1 | An operation the author never implemented: Rust will not compile, Python answers `NO_IMPLEMENT` | only when the author erred, and then a legal CORBA refusal |
+| 2 | A raise the operation does not declare: Rust's generated fault enum has no variant for one, Python can raise anything | only when the author erred, and then `UNKNOWN` + OMG minor 1, which is §4.11's own mapping |
+| 3 | A system exception with no completion status: Rust's `#[must_use] Raising` warns, Python's seam refuses at runtime | only when the author erred, and then a refusal rather than a guessed "safe to retry" |
+| 4 | **An object reference argument reaches a Python servant as an opaque handle it cannot invoke** — §4.5 emits no IOR, so a reference crosses as a token into the bridge's table | on any contract that passes a reference the servant must *use*: the Python servant cannot, the Rust one can |
+| 5 | **A Python servant cannot mint a new object reference**, having no POA on its side | on any operation whose contract returns a reference the servant creates |
+
+4 and 5 are one fact from two sides: **the seam carries values, and an object
+reference is the one value whose meaning is a capability rather than data.**
+They are the language transparency that is left, and they are a smaller and
+more specific claim than the row above used to make.
+
+*1–3은 서번트 작성자가 **틀릴 수 있는 방식**의 차이이지 올바른 서번트가 내놓는
+답의 차이가 아니다. 4와 5는 **서번트가 아예 할 수 없는 일**의 차이이며, 한 사실의
+양면이다 — 심(seam)은 값을 나르는데, 객체 참조는 데이터가 아니라 능력을 뜻하는
+유일한 값이다. 이것이 남은 언어 투명성이며, 위 행이 예전에 하던 주장보다 좁고
+구체적인 주장이다.*
 
 ### 6.2 What this criterion does to the order
 
