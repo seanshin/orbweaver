@@ -13,42 +13,63 @@
 #   write; twelve wire changes in v0.5.0 were found this way and none by a test
 #   we could have written from the specification alone.
 #
-# So the peer here is omniORB, made to forward by ITS OWN mechanism — a POA with
-# USE_SERVANT_MANAGER + NON_RETAIN whose `ServantLocator.preinvoke` raises
-# `PortableServer.ForwardRequest` — pointing at a SECOND omniORB process at a
-# different ephemeral port. Nothing in this repository encodes the reply.
+# So the peer here is omniORB, made to forward by ITS OWN mechanisms, pointing
+# at a SECOND omniORB process at a different ephemeral port. Nothing in this
+# repository encodes the reply.
 #
-#   ./spikes/foreign_forward.sh [--break no-forward|forward-to-self] [--keep]
+#   ./spikes/foreign_forward.sh [--break no-forward|forward-to-self|no-permanent]
+#                               [--keep]
 #
-# Two halves, and they are deliberately not the same measurement:
+# TWO PAIRS, because the peer has two mechanisms and they reach different
+# statuses (see `measure_pair` for what was measured about that):
+#
+#   temporary  a ServantLocator raising PortableServer.ForwardRequest — status 3
+#   permanent  a servant operation raising omniORB.LOCATION_FORWARD(ref, 1) —
+#              status 4 at GIOP 1.2, downgraded to 3 below it, which this leg
+#              asserts rather than skips
+#
+# TWO HALVES per pair, deliberately not the same measurement:
 #
 #   1. spikes/foreign_forward_capture.py — imports no ORB, builds its own GIOP
-#      requests, and reads the reply out of the octets. Six probes: three GIOP
-#      versions x two byte orders. This is the provenance half: it says what
-#      omniORB actually put on the wire, with the byte order taken OFF the flag
-#      byte in both places it appears (the reply message's, and the forwarded
-#      IIOP profile's own encapsulation flag, which is independent of it).
+#      requests, and reads the reply out of the octets. Six probes per pair:
+#      three GIOP versions x two byte orders. This is the provenance half: it
+#      says what omniORB actually put on the wire, with the byte order taken OFF
+#      the flag byte in both places it appears (the reply message's, and the
+#      forwarded IIOP profile's own encapsulation flag, independent of it).
 #   2. crates/orbweaver-giop/tests/foreign_forward.rs — OUR client, dialling the
 #      same forwarder, which must follow the forward and complete the call at
-#      the destination. Seven cases.
+#      the destination. Eight cases: six version x order, a re-dial, and a
+#      LocateRequest probe.
 #
 # The first without the second would say a foreign ORB forwards and never that
 # we can follow it. The second without the first would say a call completed and
 # never that a foreign ORB was what redirected it. Neither alone buys the half
 # that was missing.
 #
+# Plus, against the temporary pair only, a re-take of the replies recorded in
+# crates/orbweaver-giop/tests/foreign_forward_bytes.rs — the gate that fires
+# where omniORB is NOT installed. A recording nobody re-takes is a claim about
+# the past.
+#
 # Exit: 0 every check green; 1 any check failed or could not be measured;
 #       2 the fixture is absent (a counted SKIPPED naming it, never an ok).
 #
 # NEGATIVE CONTROLS (D010 §7.2). `--break` removes the thing being measured and
 # leaves everything else alone; the run must go RED, with the failure counter
-# moving, not merely print a different line:
+# moving, not merely print a different line. Measured 2026-08-26:
 #
-#   --break no-forward       the forwarder serves in place at the same address
-#                            and emits no forward at all
-#   --break forward-to-self  a well-formed LOCATION_FORWARD naming the address
-#                            it was sent to — a forward that is not a move,
-#                            which is the case "a forward came back" cannot see
+#   --break no-forward       0 -> 14   the forwarder serves in place at the same
+#                            address and emits no forward at all
+#   --break forward-to-self  0 -> 14   a well-formed LOCATION_FORWARD naming the
+#                            address it was sent to — a forward that is not a
+#                            move, which is the case "a forward came back"
+#                            cannot see. Our client answers "too many
+#                            LOCATION_FORWARD hops"
+#   --break no-permanent     0 ->  3   narrow on purpose: the peer still
+#                            forwards and the client still lands, so every other
+#                            ok stays an ok and ONLY status 4 becomes status 3.
+#                            It exists because a leg that measures "the call
+#                            landed" cannot tell the two statuses apart at all
 #
 # No harness lock is taken. Every port is ephemeral, every fixture is killed by
 # PID, and nothing is written to a fixed /tmp path, so a concurrent
