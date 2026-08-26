@@ -103,6 +103,19 @@ const PY_KEYWORDS: &[&str] = &[
 ///
 /// It cannot collide with the runtime's own attributes: those are `_idl_*`,
 /// `_rt` and the union's `_d`/`_v`, and no Python keyword spells any of them.
+/// Every word this emitter escapes.
+///
+/// Published for [`crate::targets`]. One list, unlike Rust's four, and `self`
+/// and `cls` are in it although neither is a Python keyword — an operation
+/// parameter named `self` would rebind the receiver, which is a silently wrong
+/// call rather than a syntax error.
+pub fn reserved_words() -> Vec<&'static str> {
+    let mut v: Vec<&'static str> = PY_KEYWORDS.to_vec();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
 pub(crate) fn py_ident(name: &str) -> String {
     if PY_KEYWORDS.contains(&name) { format!("_{name}") } else { name.to_owned() }
 }

@@ -1,0 +1,87 @@
+# The acceptance suite's axes — the ONE home for these names.
+#
+# D032 §4: "A language binding is accepted by passing a suite, not by being
+# written. The suite is one suite, parameterised by language — never a copy."
+#
+# ── Why these axes and not others / 왜 이 축들인가 ───────────────────────────
+#
+# D032 §4 lists six clauses. They are NOT six checks, and a suite that treated
+# them as six would go green over the defect D030 §3.1 already names in prose.
+# Read them again and they fall into three shapes:
+#
+#   clauses 3, 4, 5  are properties of the EMITTER AND ITS RUNTIME, with no peer
+#                    and no wire in them: the refusal sentences, the exception
+#                    repository ids, the keyword escaping. One cell per language,
+#                    no further axis.
+#   clause 1         "every operation of a stated contract set is called and
+#                    answered" is ONE measurement ranged over a grid.
+#   clauses 2 and 6  are not measurements at all. They are COVERAGE REQUIREMENTS
+#                    over clause 1's grid — "both byte orders", "a foreign peer
+#                    at one end". They say which cells must exist, not what to
+#                    run in one.
+#
+# That distinction is the whole design. A suite with a "clause 2 — both byte
+# orders" line would print `ok` for Python today, because `python_target.rs` and
+# `python_servant.rs` both walk both orders — with no peer in either, and in
+# `python_target.rs`'s case with no wire either. The order has to be a property
+# OF A CELL, so that "both orders" can be asked of the foreign-peer cells alone.
+#
+# *D032 §4의 여섯 절은 여섯 개의 검사가 아니다. 셋은 언어만의 성질이고, 하나는
+# 격자 위에서 재는 측정이며, 둘(바이트 순서·외부 피어)은 그 격자에 대한 **커버리지
+# 요구**다. 이 구분이 설계 전부다 — "양쪽 순서" 줄을 하나 두면 피어 없는 루프백
+# 때문에 오늘 당장 초록이 된다.*
+#
+# ── What a missing cell means / 빈 칸의 뜻 ──────────────────────────────────
+#
+# Never absent and never `ok`. A cell with no runner in the language's manifest
+# is a counted SKIPPED naming what it waits on (D010 §2), and the suite derives
+# that sentence rather than asking for it to be typed — a hand-typed reason per
+# cell would be one more sentence with no home. A manifest MAY add a real reason
+# with `waits`, and should where the absence has a cause worth stating.
+#
+# ── Adding an axis value / 축 값 추가 ────────────────────────────────────────
+#
+# Add a row here and every language's grid grows by the cells it implies, each
+# of them SKIPPED until some manifest supplies a runner. That is the intended
+# direction: a new peer makes every existing binding's gap visible on the next
+# run, rather than being visible only to whoever added the peer.
+#
+# Format: <axis> <TAB> <value> <TAB> <property> <TAB> <what it is>
+# `property` is `-` where the axis value carries none.
+
+# ── direction ────────────────────────────────────────────────────────────────
+# Split out because D030 §3.1 is a table with two columns and the two columns do
+# not agree: Python's servant direction meets all three of D030 §3's clauses and
+# its client direction does not. A suite parameterised by language alone cannot
+# see that, and it is the difference between a target and an emitter.
+direction	client	-	generated code in the binding's language calls a peer
+direction	servant	-	a peer calls generated code in the binding's language
+
+# ── peer ─────────────────────────────────────────────────────────────────────
+# `foreign` is the property clause 6 turns on: "a foreign peer — not us — is one
+# end of it". `self` is a legitimate value and a legitimate measurement; it just
+# cannot satisfy clause 6, and writing it down as a peer is what stops a
+# loopback run from being quietly counted as one.
+peer	omniorb	foreign	omniORB, run as a separate process and read from (LGPL fixture, never a dependency)
+peer	jacorb	foreign	JacORB, likewise (LGPL fixture); the only peer here that writes big-endian
+peer	self	ours	our own ORB at both ends — measures the seam, and can never satisfy clause 6
+# D033 §3.4: C's peer does not exist yet and is not another ORB. When a
+# hand-written C peer speaking GIOP lands, it is added here and every binding's
+# grid gains its column on the next run.
+
+# ── order ────────────────────────────────────────────────────────────────────
+# Clause 2. A cell reports the order it READ out of GIOP §15.4.1's flag byte of
+# what the peer actually wrote. "Java is big-endian" is a belief until that byte
+# says so, and a cell that asserts an order from the peer's language reports it
+# as `claimed`, which the coverage verdict counts separately and never as met.
+order	little	-	§15.4.1 flag bit 0 set
+order	big	-	§15.4.1 flag bit 0 clear
+
+# ── giop ─────────────────────────────────────────────────────────────────────
+# Not a grid axis: a cell reports which versions it reached, and the coverage
+# verdict names the ones no cell did. Making it an axis would multiply the grid
+# by three for no gain, because no cell is defined by its version — a cell
+# reaches the versions its peer will negotiate.
+giop	1.0	-	no fragmentation, no codeset service context
+giop	1.1	-	fragmentation, wide text
+giop	1.2	-	the default both fixtures negotiate

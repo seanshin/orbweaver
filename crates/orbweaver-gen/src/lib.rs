@@ -87,6 +87,7 @@ pub mod pyservant;
 pub mod python;
 pub mod rt;
 pub mod skeleton;
+pub mod targets;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -174,6 +175,36 @@ const PRIMITIVES: &[&str] =
 /// that is not there. The Python target has the same single function
 /// ([`python::python_name`]) for the same reason, and it is public because the
 /// oracle that drives generated code needs the same answer the emitter gave.
+/// Every word this emitter escapes, from all four lists above.
+///
+/// Published for [`crate::targets`], which is what lets an instrument outside
+/// this crate ask *what does Rust reserve* without retyping the answer. Four
+/// lists rather than one: a check that only knew `KEYWORDS` would have called
+/// Rust covered on the day `Self` was missing from `CANNOT_BE_RAW` and fifteen
+/// of nineteen positions emitted `pub struct Self {`.
+pub fn reserved_words() -> Vec<&'static str> {
+    let mut v: Vec<&'static str> = KEYWORDS
+        .iter()
+        .chain(CANNOT_BE_RAW)
+        .chain(CANNOT_BE_A_BINDING)
+        .chain(PRIMITIVES)
+        .copied()
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// The Rust spelling of an IDL identifier.
+///
+/// Public for the same reason [`python::python_name`] is: the escaping is part
+/// of the mapping, and an oracle that drives generated code needs **the answer
+/// the emitter gave**, not a second implementation of the rule that agrees with
+/// it until one of the two changes.
+pub fn rust_name(idl: &str) -> String {
+    ident(idl)
+}
+
 pub(crate) fn ident(name: &str) -> String {
     match name {
         n if CANNOT_BE_RAW.contains(&n)

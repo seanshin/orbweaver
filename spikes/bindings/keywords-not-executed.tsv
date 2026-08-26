@@ -1,0 +1,100 @@
+# Reserved words whose escaping the contract set does NOT execute, with why.
+#
+# D032 §4 clause 5 says a binding is a target when *"its keyword escaping is
+# exercised by `corpus/golden/28-target-keywords.idl`"*. `binding-words` asks
+# that question one word at a time: it emits the contract set for a target and
+# looks for each reserved word's **escaped spelling** in what the emitter wrote.
+# A word it does not find must have a row here, or the clause-5 cell goes red.
+#
+# ── Why this file exists at all / 이 파일이 있는 이유 ────────────────────────
+#
+# Before 2026-08-26 clause 5 had no instrument. `28-target-keywords.idl` was
+# reached only by `corpus/golden/*.idl` globs, so a word was covered by accident
+# and a *new* word would be uncovered by accident, with nothing red either way —
+# which is how `yield` was missing from the Rust list in the first place. The
+# corpus file's own header lists five classes it was measured not to carry, and
+# that prose is a fact with no home: nothing read it, so nothing could notice it
+# going stale. This file is that fact's home and `binding-words` compiles it.
+#
+# ── What a row costs and what it buys / 행 하나의 값 ────────────────────────
+#
+# A row is an exception and is checked in **both** directions. A word that stops
+# being uncovered — because someone gave it a home in the corpus — makes its own
+# row a FAILURE telling you to delete it, for the reason `differential.sh`'s
+# staleness loop exists: an exception nobody removed stops describing the tree
+# and the next reader believes it anyway. And a word that leaves an emitter's
+# list fails too, because a row about a word the emitter no longer reserves is a
+# sentence about nothing.
+#
+# There is deliberately **no count anywhere**. `A floor is not a figure`: a
+# pinned "34 of 37 covered" would stay green while a covered word was swapped
+# for an uncovered one, and would have to be edited upward by hand. Naming the
+# exceptions is exact instead — adding a reserved word without covering it goes
+# red on the next run.
+#
+# ── The three classes below, and which of them is a gap ─────────────────────
+#
+# `idl-keyword`  The word is a keyword in IDL too, so a contract can only name
+#                it through IDL's own leading-underscore escape (`_struct`
+#                declares an identifier named `struct`). No corpus file does
+#                that. Not a defect; a real limit on what the corpus can say.
+#                This class is COMPUTED — `binding-words` asks
+#                `orbweaver_idl::lex::is_keyword` rather than trusting the word
+#                below, so a row claiming it falsely is visible in the run.
+# `position`     The contract DOES name the word, in a position this target
+#                never renders as an identifier. An out parameter comes back as
+#                a tuple element and keeps its wire name; an attribute's
+#                accessor is built as `_get_<raw>` from the unescaped name. The
+#                escaping correctly does not run. Not a defect, and worth a row
+#                precisely because it looks like one.
+# `no-instrument` The word is not in the contract set and **nothing else
+#                exercises it either**. This is the gap. It is written down
+#                rather than fixed here because giving eleven Rust primitives a
+#                home in a contract is a corpus batch, not a suite batch.
+#
+# Measured 2026-08-26 by the batch that built `spikes/binding_suite.sh`. Every
+# row states which of the three it is, so the next reader can act on the third
+# class without re-deriving the first two.
+#
+# *절 5에는 2026-08-26 이전까지 계측기가 없었다. 이 파일은 "이 단어의 이스케이프는
+# 실행되지 않았다"는 사실의 집이며, 예외는 양방향으로 검사된다 — 더 이상 필요 없어진
+# 행은 실패다. 세 부류 중 실제 구멍은 `no-instrument` 하나뿐이다.*
+#
+# Format: <language> <TAB> <word> <TAB> <class>: <reason>
+
+# ── python ───────────────────────────────────────────────────────────────────
+python	False	idl-keyword: FALSE is an IDL boolean literal and `is_keyword` is case-insensitive, so `False` can reach a contract only as IDL's `_False`, which would also sit one case-fold away from the literal — the clash class CLAUDE.md calls the dominant generation failure
+python	True	idl-keyword: as False above
+python	import	idl-keyword: and doubly unreachable — 28-target-keywords.idl's own header excludes CORBA 3 keywords because omniidl warns on them and the harness reads a warning on stderr as a failure
+python	in	idl-keyword: `in` is a parameter direction, so no contract can name an identifier with it
+python	break	position: named at 28-target-keywords.idl:166 as an OUT parameter. An out value comes back as a tuple element and keeps its wire name, so no Python identifier is ever spelled from it
+python	continue	position: as break above
+python	or	position: as break above
+python	raise	position: as break above
+python	return	position: named at 28-target-keywords.idl:179 as an ATTRIBUTE. The accessor is `_get_return`/`_set_return`, built from the raw IDL name because that is the operation name on the wire, so the Python escaping never runs on it
+
+# ── rust ─────────────────────────────────────────────────────────────────────
+rust	abstract	idl-keyword: reachable only through IDL's own `_` escape
+rust	const	idl-keyword: reachable only through IDL's own `_` escape
+rust	enum	idl-keyword: reachable only through IDL's own `_` escape
+rust	in	idl-keyword: a parameter direction
+rust	struct	idl-keyword: reachable only through IDL's own `_` escape
+rust	break	position: 28-target-keywords.idl:166, an out parameter; the Rust stub returns out values rather than binding the contract's name
+rust	let	position: as break above
+rust	override	position: as break above
+rust	Self	position: not in the corpus file, but exercised by crates/orbweaver-gen/tests/one_spelling_for_an_identifier.rs::a_name_rust_will_not_bind_is_moved_rather_than_escaped, whose inline contract declares `_Self` and asserts `pub struct Self_ {`
+rust	Ok	position: exercised by the same test — `const long Ok = 1;` asserting `pub const Ok_: i32 = 1;`
+rust	Err	position: exercised by the same test, as a parameter — a pattern position, which is why `r#Err` is no help
+rust	Some	position: exercised by the same test, as a parameter
+rust	i32	position: exercised by the same test — `typedef sequence<long> i32;` asserting `pub type i32_ =`
+rust	bool	no-instrument: a contract item named for this primitive shadows it inside its own module, and NOTHING exercises that today — the corpus file does not name it and one_spelling_for_an_identifier.rs covers only i32 of the twelve. Giving these a home is a corpus batch
+rust	f32	no-instrument: as bool above
+rust	f64	no-instrument: as bool above
+rust	i16	no-instrument: as bool above
+rust	i64	no-instrument: as bool above
+rust	str	no-instrument: as bool above
+rust	u8	no-instrument: as bool above
+rust	u16	no-instrument: as bool above
+rust	u32	no-instrument: as bool above
+rust	u64	no-instrument: as bool above
+rust	usize	no-instrument: as bool above
