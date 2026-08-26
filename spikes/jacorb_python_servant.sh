@@ -43,6 +43,32 @@
 #       the Rust servant answers one `sequence_no` the Python one would not,
 #       and the byte comparison must name the reply and print both hex strings
 #
+# The harness group this script is meant to be run by, recommended rather than
+# written: `spikes/run_checks.sh` is held by another batch, and CLAUDE.md's rule
+# is not to edit a script while it may be running. Drop this beside the two
+# existing JacORB groups, in their shape:
+#
+#   hr "JacORB -> a Python servant behind our ORB — the byte order omniORB cannot reach (D030 §3)"
+#   # spikes/jacorb_python_servant.sh: the servant seam's own reported gap.
+#   # omniORB emits its native order and our server replies in the request's
+#   # order, so that leg is little-endian in both directions on this host;
+#   # JacORB writes big-endian and the assertion is over §15.4.1's flag bit of
+#   # the requests it actually wrote, at IIOP 1.2 and 1.1. The same driver run
+#   # is then answered by a Python servant and a Rust one and the replies are
+#   # compared byte for byte — the exception CLAUDE.md names, because both
+#   # encoders are ours. Negative controls: `--expect-order little` goes red on
+#   # the order line (left: ["big"] right: ["little"]); `--perturb` makes the
+#   # Rust servant answer one sequence_no the Python one would not and goes red
+#   # on the byte comparison, naming reply 2 of 11 with both hex strings.
+#   jps=$(./spikes/jacorb_python_servant.sh 2>&1); jps_rc=$?
+#   printf '%s\n' "$jps" | grep -E "^  (ok|FAIL|info|SKIPPED)" | cut -c1-150
+#   if [ "$jps_rc" -eq 2 ]; then
+#     skip_age absent git:spikes/jacorb_python_servant.sh
+#   elif [ "$jps_rc" -ne 0 ]; then
+#     echo "  FAIL JacORB -> a Python servant — see /tmp/orbweaver-jacorb-servant"
+#     fail_total=$((fail_total+1))
+#   fi
+#
 # Harness rules: the producer's exit status is read before anything it printed;
 # nothing is piped into `grep -q` (output is captured and matched with a
 # herestring); JacORB is a fixture and never a dependency, which is asserted
