@@ -154,31 +154,73 @@ want "declared transparencies print a count and their groups" "$o2" \
      "ok          NAT rewriting"
 want "§6.1 is cited for every transparency, measured or not" "$o2" \
      "unmeasured, per D029 §6.1 — where it leaks today:"
-# Until 2026-08-26 this read `no group in this run declares bears_on activation`,
-# and it was true: nothing declared that transparency at all. D029 §5 O0's leak
-# tests then landed as groups, and the activation leg is a counted SKIPPED naming
-# its blocker — so activation is now DECLARED and still measured by nothing. The
-# assertion moves with it rather than being deleted, because the property being
-# defended is the same one and is now the harder half: *a group that declares a
-# transparency and measures none of it must not flip the row to measured.*
-want "a transparency whose only groups measured nothing still reads UNMEASURED" "$o2" \
-     "UNMEASURED — 1 group(s) declare bears_on activation and not one"
-act_sec=$(sed -n '/^  activation /,/^  lifecycle /p' <<<"$o2")
-reject "and its row does not claim a measurement" "$act_sec" "measured by"
-# The blocker TEXT is learned by the group's body, which this control replaces
-# with an `echo`, so what is asserted here is that the group reaches the
-# load-bearing column at all and says it measured nothing. That the real run
-# fills in the text is the harness's own `leak_leg`, and the ledger prints
-# "could not say what it waits on" rather than an empty line when it cannot —
-# which is the branch this control is standing in.
-want "it reaches the load-bearing column saying it measured nothing" "$act_sec" \
-     "unmeasured: leak test" "measured nothing"
-want "the verdict names both halves" "$o2" \
-     "transparency measured this run:" "transparency UNMEASURED this run:"
-want "the verdict's unmeasured half still names activation" \
-     "$(grep 'transparency UNMEASURED this run:' <<<"$o2")" "activation"
+# The property under test: *a group that declares a transparency and measures
+# none of it must not flip the row to measured.* It is a property of the LEDGER
+# and of nothing else, and until 2026-08-26 both this control and control 8
+# demonstrated it by typing the name `activation`.
+#
+# That pin outlived its fact twice in one day. First activation went from
+# UNDECLARED to declared-and-measuring-nothing when D029 §5 O0's leak tests
+# landed as groups, and the assertion was edited to match. Then the activation
+# leg started actually measuring, `tp_measures_nothing` came off it — and this
+# control went RED while control 8 went VACUOUSLY GREEN. That is the pair's
+# whole failure mode in one move: control 8 exists to prove this control is not
+# tuned-until-quiet, and it proved it by asserting a flip that no longer had
+# anything to flip. One broke loudly, the other in silence, and only the loud
+# one would ever have been looked at.
+#
+# And the deeper reason it kept moving is that the property is about a GROUP —
+# *this group measured none of what it declared* — while the only place the
+# ledger makes it VISIBLE is a row, and a row reads UNMEASURED only when every
+# group declaring that transparency is marked. `activation` satisfied that by
+# arithmetic accident: it had exactly one declaring group. Today no transparency
+# does — `language` and `lifecycle` still carry the two markers, and both are
+# also declared by groups that measure them for real — so there is no live
+# transparency left to point at, and pointing at one was never the right move.
+#
+# So the subject is SYNTHESISED. One group, one tag, one marker, no dependence
+# on what the harness happens to be waiting on this week. `activation` is used
+# as its tag purely because §6.1 has to know the name; nothing about the real
+# activation groups is asserted, which is the whole difference.
+want "the verdict names the measured half over the real tag set" "$o2" \
+     "transparency measured this run:"
 want_rc "a green run stays green" "$rc" eq 0
 loc_before=$(grep -c '^                ok  ' <<<"$(sed -n '/^  location /,/^  backend /p' <<<"$o2")")
+
+say "control 2b — one group declares a transparency and measures none of it"
+SYNTH_TITLE="ledger_control's own group, which measures nothing"
+# TWO groups, and the second one is load-bearing. With only the marked group the
+# run measures nothing at all, so the verdict takes its `NONE measured in this
+# run` branch — which is control 1's subject, not this one, and would have let
+# this control assert something control 1 already proves while the half it
+# actually cares about never printed. A companion group that measures a
+# DIFFERENT transparency for real is what makes the verdict print both halves,
+# which is the only place `activation` can be seen sitting in the unmeasured one.
+{
+  printf 'hr "%s"\n' "$SYNTH_TITLE"
+  echo 'bears_on activation'
+  echo 'tp_measures_nothing'
+  echo 'echo "  ok   (body not run in this control)"'
+  echo 'hr "ledger_control'"'"'s own group, which measures something"'
+  echo 'bears_on location'
+  echo 'echo "  ok   (body not run in this control)"'
+} >"$WORK/body_synth.sh"
+build "$WORK/body_synth.sh" "$WORK/d2b.sh" || fails=$((fails+1))
+o2b=$(bash "$WORK/d2b.sh" 2>&1); rc=$?
+want "the row its only group declared still reads UNMEASURED" "$o2b" \
+     "UNMEASURED — 1 group(s) declare bears_on activation and not one"
+syn_sec=$(awk '$0 ~ "^  activation +— " {p=1; print; next}
+               p && /^  [a-z]+ +— / {p=0} p' <<<"$o2b")
+reject "and its row does not claim a measurement" "$syn_sec" "measured by"
+# The blocker TEXT is learned by a group's body, which this control replaces with
+# an `echo`, so what is asserted is that the group reaches the load-bearing
+# column at all and says it measured nothing — in its own title, not in a
+# wording this file keeps a second copy of.
+want "it reaches the load-bearing column in the group's own words" "$syn_sec" \
+     "$SYNTH_TITLE" "measured nothing"
+want "the verdict's unmeasured half names it" \
+     "$(grep 'transparency UNMEASURED this run:' <<<"$o2b")" "activation"
+want_rc "declaring and measuring nothing does not fail the run — it reports" "$rc" eq 0
 
 # ── 3. a name §6.1 does not have ─────────────────────────────────────────────
 say "control 3 — a tag naming something D029 §6.1 does not"
@@ -267,21 +309,37 @@ want_rc "an unreadable §6.1 fails the run" "$rc" ne 0
 
 # ── 8. the no-measure declaration is what holds the line ────────────────────
 say "control 8 — a group declares a transparency and measures none of it"
-# Control 2 asserts that `activation` reads UNMEASURED even though a group
-# declares it. That assertion is only worth something if the row would read
+# Control 2b asserts that a transparency whose only group measured nothing reads
+# UNMEASURED. That assertion is only worth something if the row would read
 # differently without the declaration — otherwise it is a check tuned until it
-# is quiet, tested only against a tree with no defect in it. So: strip every
+# is quiet, tested only against a tree with no defect in it. So: strip the
 # `tp_measures_nothing` and require the row to FLIP to measured. The flip is the
 # defect the declaration exists to prevent, and this is the run that shows it.
-grep -v '^tp_measures_nothing' "$WORK/body_all.sh" >"$WORK/body_nomark.sh"
+#
+# **On 2b's synthetic body, and that is the repair.** This control spent
+# 2026-08-26 stripping markers out of the REAL body and then asserting a flip on
+# `activation`, which by then had no marker to strip — so every one of its
+# assertions was already true before the strip, and it passed green without
+# exercising anything at all. It was the vacuum this whole file exists to hunt,
+# sitting inside the file. A control that strips a marker must assert on a body
+# it knows had one.
+grep -v '^tp_measures_nothing' "$WORK/body_synth.sh" >"$WORK/body_nomark.sh"
+checks=$((checks+1))
+if cmp -s "$WORK/body_synth.sh" "$WORK/body_nomark.sh"; then
+  echo "  FAIL the strip removed nothing, so this control exercises nothing —"
+  echo "       which is exactly how it passed on 2026-08-26"
+  fails=$((fails+1))
+else
+  echo "  ok   the strip actually removed a declaration to strip"
+fi
 build "$WORK/body_nomark.sh" "$WORK/d8.sh" || fails=$((fails+1))
 o=$(bash "$WORK/d8.sh" 2>&1); rc=$?
-want "without the declaration the row flips to measured — the leak swallowed" "$o" \
-     "  activation  — Activation / load"
-act8=$(sed -n '/^  activation /,/^  lifecycle /p' <<<"$o")
-want "and that is what the declaration prevents" "$act8" "measured by 1 group(s)"
-reject "the UNMEASURED reading is gone without it" "$act8" "UNMEASURED"
-want "the verdict now claims activation was measured" \
+syn8=$(awk '$0 ~ "^  activation +— " {p=1; print; next}
+            p && /^  [a-z]+ +— / {p=0} p' <<<"$o")
+want "without the declaration the row flips to measured — the leak swallowed" \
+     "$syn8" "measured by 1 group(s)"
+reject "the UNMEASURED reading is gone without it" "$syn8" "UNMEASURED"
+want "the verdict now claims it was measured" \
      "$(grep 'transparency measured this run:' <<<"$o")" "activation"
 want_rc "swallowing a leak does not fail the run — which is exactly why the
        declaration has to be in the file rather than in a reviewer" "$rc" eq 0
