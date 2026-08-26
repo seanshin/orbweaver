@@ -52,8 +52,12 @@ use orbweaver_giop::{Connection, Ior, Version};
 
 use emitted::f_24_skeleton_surface::gc24::GaugeClient;
 
-const TYPE_ID: &str = "IDL:gc24/Gauge:1.0";
 const VERSIONS: [Version; 3] = [Version::V1_0, Version::V1_1, Version::V1_2];
+
+/// The generated package's name, and therefore the directory that holds it and
+/// the name the servant script imports. One constant because those three have
+/// to agree and nothing would compile if they did not — they are strings.
+const PACKAGE: &str = "g24_surface";
 
 /// The IDL this whole file is about, as an absolute path.
 fn contract() -> std::path::PathBuf {
@@ -195,10 +199,17 @@ fn start_servant() -> Option<Servant> {
     .expect("the corpus contract must load");
     registry.load(&spec.spec).expect("the contract must build a registry");
 
-    let package = orbweaver_gen::python::emit_python(&registry, "g24_surface");
-    let root = dir.path().join("pkg");
+    let package = orbweaver_gen::python::emit_python(&registry, PACKAGE);
+    // `PythonPackage::files` is keyed **relative to the package root**, so the
+    // directory holding them has to be named after the package and its
+    // *parent* is what goes on `sys.path`. Writing them into a directory
+    // called anything else produces a tree Python cannot import, which is what
+    // the first run of this file did: `ModuleNotFoundError: No module named
+    // 'g24_surface'`, from both tests, with one cause.
+    let root = dir.path().join("site");
+    let package_dir = root.join(PACKAGE);
     for (relative, body) in &package.files {
-        let path = root.join(relative);
+        let path = package_dir.join(relative);
         std::fs::create_dir_all(path.parent().expect("a parent")).expect("mkdir");
         std::fs::write(&path, body).expect("write");
     }
@@ -300,15 +311,39 @@ fn our_generated_rust_client_calls_a_python_servant() {
             assert_eq!((at, unit.as_str()), (43.0, "C"), "{what}");
 
             // A user exception, raised in Python and travelling as a
-            // USER_EXCEPTION reply with its repository id in front.
-            let refused = client.record(-1.0, "C".into()).expect_err("a negative sample");
-            assert!(
-                format!("{refused:?}").contains("a sample below zero is not a reading"),
-                "{what}: {refused:?}"
-            );
-            // And the memberless one, which is the empty-body edge case.
-            let busy = client.record(1.0, String::new()).expect_err("an empty unit");
-            assert!(format!("{busy:?}").contains("Busy"), "{what}: {busy:?}");
+            // USER_EXCEPTION reply with its repository id in front. Decoded
+            // member by member rather than matched as text: the first version
+            // of this assertion searched the error's `Debug` for the message
+            // and failed while the servant was answering perfectly, because
+            // what `Debug` prints is the undecoded body as a list of numbers.
+            match client.record(-1.0, "C".into()).expect_err("a negative sample is rejected") {
+                orbweaver_giop::Error::UserException { id, reply } => {
+                    assert_eq!(id, "IDL:gc24/Rejected:1.0", "{what}");
+                    let mut body = reply.body().expect("body");
+                    assert_eq!(body.get_string().expect("the repository id"), id, "{what}");
+                    assert_eq!(
+                        body.get_string().expect("why"),
+                        "a sample below zero is not a reading",
+                        "{what}"
+                    );
+                    assert_eq!(body.get_i32().expect("code"), 7, "{what}");
+                }
+                other => panic!("{what}: expected a user exception, got {other}"),
+            }
+            // And the memberless one: the repository id and nothing else, which
+            // is the empty-body edge case a servant can get wrong by writing a
+            // length or a pad after it.
+            match client.record(1.0, String::new()).expect_err("an empty unit is refused") {
+                orbweaver_giop::Error::UserException { id, reply } => {
+                    assert_eq!(id, "IDL:gc24/Busy:1.0", "{what}");
+                    let mut body = reply.body().expect("body");
+                    assert_eq!(body.get_string().expect("the repository id"), id, "{what}");
+                    assert!(body.is_empty(), "{what}: Busy has no members");
+                }
+                other => panic!("{what}: expected a user exception, got {other}"),
+            }
+            // A raise is an answer, not a fault: the connection carries on.
+            assert_eq!(client.record(3.0, "C".into()).expect("after the raise").at, 3.0, "{what}");
 
             // A oneway, and then a call that proves the connection's framing
             // survived it: §9.4.1 gives a oneway no reply, and a servant that
@@ -361,11 +396,16 @@ try:
 except gc24.Busy:
     print("Busy")
 
+# A readonly attribute. omniORB's generated stub makes this a Python attribute
+# error *before* anything reaches the wire, so this line says nothing about the
+# servant and is deliberately not asserted on: the wire-level refusal of
+# `_set_latest` with BAD_OPERATION is measured in `python_servant.rs`, where
+# the request can be built by hand.
 try:
     gauge.latest = r
-    print("a readonly attribute accepted a setter")
+    print("readonly: the client stub allowed the assignment")
 except Exception as e:
-    print("readonly refused with %s" % (type(e).__name__,))
+    print("readonly refused client-side with %s" % (type(e).__name__,))
 
 gauge.reset()
 print("after the oneway, sequence_no = %d" % (gauge.latest.sequence_no,))
@@ -384,13 +424,30 @@ print("OK")
 /// language behind the reference. If this agrees with that one, a caller cannot
 /// tell what language it is talking to, which is D029 §6.1's Language row.
 ///
-/// Byte order: omniORB emits its native order, so the two orders are covered by
-/// running the driver under both `-ORBnativeCharCodeSet`-independent paths that
-/// exist here — which on one machine is one order. What the two orders *are*
-/// measured on is [`our_generated_rust_client_calls_a_python_servant`], which
-/// sets the encoder's order explicitly; this test's independence is about the
-/// peer, not about the order, and saying otherwise would be claiming a
-/// measurement nobody took.
+/// # Byte order: what this measures, and what it does not
+///
+/// **This test measures one byte order, and that is a gap rather than a
+/// choice.** omniORB emits its native order — little-endian on this machine —
+/// and `orbweaver-giop`'s server replies in *the request's* order
+/// (`server.rs`, `Encoder::continuing_at(req.endian, …)`), so both directions
+/// of this exchange are little-endian and nothing here has ever seen a
+/// big-endian foreign peer talk to a Python servant.
+///
+/// D030 §3 asks for both orders against a peer that is not us, so the rule is
+/// **not fully met by this file** and saying otherwise would be claiming a
+/// measurement nobody took. Both orders *are* measured against our own client
+/// in [`our_generated_rust_client_calls_a_python_servant`], which sets the
+/// encoder's order explicitly, and byte-for-byte against a Rust servant over
+/// both orders in `python_servant.rs`. What is missing is specifically
+/// *foreign peer × big-endian*.
+///
+/// What would close it: **JacORB**, which is already a fixture here
+/// (`spikes/jacorb/setup.sh`, the differential's second front end, the GIOP
+/// 1.1/1.2 wide-text measurements) and whose Java runtime emits big-endian.
+/// A driver of the same shape as [`OMNIORB_DRIVER`], run against the same
+/// servant, would measure the order omniORB cannot reach. It is not written
+/// here because this batch could not start that fixture; it is the next
+/// measurement this file wants.
 #[test]
 fn omniorb_calls_a_python_servant() {
     if !omniorb_available() {
