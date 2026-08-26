@@ -64,7 +64,101 @@ printf 'pid %s in %s at %s\n' "$$" "$ROOT" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >"
 # hypothetical tidiness — the first version of this lock did use its own trap,
 # every run leaked a stale lock, and the next run refused to start.
 
-hr() { printf '\n\033[1m%s\033[0m\n' "$1"; }
+# ── The dimension this harness did not have ──────────────────────────────────
+#
+# Every one of the groups below answers *did this break*. None of them answers
+# *what can a caller still tell* — D029 §6's priority-zero criterion — and until
+# today that question was answered by reading batch reports with a `grep`, which
+# is a reading, not a measurement. D031 H1/H2.
+#
+# Two pieces, and neither of them is a score. `bears_on` lets a group declare
+# which transparency it bears on, validated against the ONE place those names
+# live; the ledger before the verdict reads what actually ran and prints, per
+# transparency, how many groups measured it, how many went red, and what is
+# named unmeasured. **The last column is the load-bearing one** — it is what a
+# next batch is scoped from — and a transparency nothing declares prints as
+# UNMEASURED, never as absence of bad news.
+#
+# What is deliberately NOT here: a percentage, a completed-of-five count, or any
+# figure that could be quoted in prose as progress. `A floor is not a figure`
+# and a completion percentage is its worst form — it moves when a group is
+# added, and it is wrong the moment a leak is FOUND rather than closed, which is
+# what finding a leak is. The verdict line therefore names the unmeasured
+# transparencies instead of counting the measured ones.
+#
+# The five names are NOT written in this file. `spikes/transparency.py` reads
+# them out of D029 §6.1, which owns them; a retyped list here would be
+# `a classifier is a sentence too` in shell, and would go quiet the day §6.1
+# changed. A tag naming something §6.1 does not is a FAILURE naming the group
+# and the bad name — the `dk_peer` lesson, where the expected table was checked
+# against the peer's own enum before any leg ran, so a typo failed as our table.
+TP_DOC="docs/decisions/D029-what-a-complete-orb-would-mean.md"
+TP_NAMES=$(python3 spikes/transparency.py --names 2>/dev/null)
+tp_load_rc=$?
+tp_load_err=0
+if [ "$tp_load_rc" -ne 0 ] || [ -z "$TP_NAMES" ]; then tp_load_err=1; fi
+
+TP_GIDX=0            # which group we are inside, 1-based, in file order
+TP_GROUP_TITLE=""    # its `hr` title, so a diagnostic can name it
+TP_GROUPS=""         # idx \t title
+TP_TAGS=""           # transparency \t idx
+TP_RED=""            # idx \t how many failures that group added
+TP_SKIPS=""          # idx \t the skip's own first line, or empty
+tp_fail_at_start=0
+tp_skip_text=""
+
+# A group's verdict is a DELTA, not a flag: every group already reports by
+# adding to `fail_total`, and asking 81 groups to also set a variable would be
+# 81 chances to forget. So the close-out runs when the next `hr` starts and
+# reads what the previous group added. No group's own verdict changes, which is
+# D031 §2's third refusal — the ledger reads the run, it does not replace it.
+tp_close_group() {
+  local d
+  [ -z "$TP_GROUP_TITLE" ] && return 0
+  d=$((fail_total - tp_fail_at_start))
+  if [ "$d" -gt 0 ]; then
+    TP_RED="${TP_RED}${TP_GIDX}	${d}
+"
+  fi
+  return 0
+}
+
+hr() {
+  tp_close_group
+  TP_GIDX=$((TP_GIDX+1))
+  TP_GROUP_TITLE="$1"
+  TP_GROUPS="${TP_GROUPS}${TP_GIDX}	$1
+"
+  tp_fail_at_start=$fail_total
+  printf '\n\033[1m%s\033[0m\n' "$1"
+}
+
+#   bears_on <name>
+# Declared by a group immediately after its `hr`. Declaring nothing is normal
+# and most groups do; declaring a name §6.1 does not have is a failure.
+bears_on() {
+  local name="$1"
+  if [ "$tp_load_err" = 1 ]; then
+    echo "  FAIL bears_on $name: the transparency names could not be read from"
+    echo "       $TP_DOC §6.1, so this group's claim is unvalidated — and an"
+    echo "       unvalidated claim is an unmeasured check, which is a failure"
+    fail_total=$((fail_total+1))
+    return 0
+  fi
+  if ! grep -qx -- "$name" <<<"$TP_NAMES"; then
+    echo "  FAIL group \"$TP_GROUP_TITLE\" declares bears_on \"$name\","
+    echo "       which is not one of the transparencies $TP_DOC §6.1 names:"
+    echo "       $(tr '\n' ' ' <<<"$TP_NAMES")"
+    echo "       fix the tag, or change §6.1 first — the names have one home"
+    echo "       and this file is not it"
+    fail_total=$((fail_total+1))
+    return 0
+  fi
+  TP_TAGS="${TP_TAGS}${name}	${TP_GIDX}
+"
+  return 0
+}
+
 need() { command -v "$1" >/dev/null 2>&1 || { echo "missing tool: $1"; exit 2; }; }
 
 # Whether something is listening, without needing lsof. The probe used to be
@@ -202,6 +296,7 @@ git_date() { git -C "$ROOT" log -1 --format=%cs -- "$1" 2>/dev/null; }
 #     line...   the group's own text, one argument per line, naming its fixture
 skip() {
   local kind="$1" spec="$2"; shift 2
+  tp_skip_text="$1"   # the group's own first line, for the ledger to cite
   echo "  SKIPPED  $1"; shift
   while [ "$#" -gt 0 ]; do echo "           $1"; shift; done
   skip_age "$kind" "$spec"
@@ -229,6 +324,13 @@ skip_age() {
   fi
   skipped=$((skipped+1))
   [ "$kind" = replay ] && replays=$((replays+1))
+  # The ledger's unmeasured column cites the group's own words rather than
+  # inventing a second wording for the same absence. Nine skips are announced by
+  # the script being run and call `skip_age` directly, so there is no text to
+  # cite; the ledger says so rather than printing an empty reason.
+  TP_SKIPS="${TP_SKIPS}${TP_GIDX}	${kind}	${tp_skip_text}
+"
+  tp_skip_text=""
   return 0
 }
 
@@ -3867,6 +3969,94 @@ else
 fi
 [ "$ev_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
+hr "transparency ledger — what a caller can still tell (D029 §6, D031 H2)"
+# A READING OF THIS RUN, computed from what ran. It adds no check and removes
+# none: every group above keeps its own verdict, `fail_total` and `skipped` keep
+# their exact meanings, and the only thing this section can add to `fail_total`
+# is its own inability to read the names it needs.
+#
+# Read the third column. "measured by N group(s)" is the cheap column — it says
+# somebody looked. `unmeasured:` is the one a next batch is scoped from.
+tp_unmeasured_names=""
+tp_measured_names=""
+if [ "$tp_load_err" = 1 ]; then
+  echo "  FAIL the five transparency names could not be read from $TP_DOC §6.1,"
+  echo "       so this run measured regression only and cannot say what a caller"
+  echo "       can still tell. That is an unmeasured criterion, not a pass."
+  diag_out "$(python3 spikes/transparency.py --names 2>&1)" 6 head
+  fail_total=$((fail_total+1))
+else
+  if [ -z "$TP_TAGS" ]; then
+    echo "  NO GROUP IN THIS RUN DECLARED A TRANSPARENCY."
+    echo "  All five read as UNMEASURED below. That is not \"nothing is wrong\":"
+    echo "  it means this run answered \"did anything regress\" and did not answer"
+    echo "  D029 §6's criterion at all."
+    echo ""
+  fi
+  while IFS= read -r tp_name; do
+    [ -z "$tp_name" ] && continue
+    tp_title=$(python3 spikes/transparency.py --title "$tp_name" 2>/dev/null)
+    tp_idxs=$(awk -F'\t' -v n="$tp_name" '$1==n {print $2}' <<<"$TP_TAGS")
+    tp_n=0; tp_red_n=0
+    for tp_i in $tp_idxs; do tp_n=$((tp_n+1)); done
+    printf '  %-11s %s\n' "$tp_name" "— ${tp_title:-$tp_name}"
+    if [ "$tp_n" -eq 0 ]; then
+      echo "              UNMEASURED — no group in this run declares bears_on $tp_name"
+      tp_unmeasured_names="$tp_unmeasured_names $tp_name"
+    else
+      for tp_i in $tp_idxs; do
+        tp_rn=$(awk -F'\t' -v i="$tp_i" '$1==i {print $2}' <<<"$TP_RED")
+        [ -n "$tp_rn" ] && tp_red_n=$((tp_red_n+1))
+      done
+      echo "              measured by $tp_n group(s) in this run, $tp_red_n of them red"
+      for tp_i in $tp_idxs; do
+        tp_gt=$(awk -F'\t' -v i="$tp_i" '$1==i {print $2}' <<<"$TP_GROUPS")
+        tp_rn=$(awk -F'\t' -v i="$tp_i" '$1==i {print $2}' <<<"$TP_RED")
+        tp_sk=$(awk -F'\t' -v i="$tp_i" '$1==i {print $2}' <<<"$TP_SKIPS")
+        if [ -n "$tp_rn" ]; then
+          echo "                RED ($tp_rn) $tp_gt"
+        elif [ -n "$tp_sk" ]; then
+          echo "                skipped  $tp_gt"
+        else
+          echo "                ok       $tp_gt"
+        fi
+      done
+      tp_measured_names="$tp_measured_names $tp_name"
+    fi
+    # The unmeasured column. Two sources, both CITED rather than restated: a
+    # tagged group that skipped said in its own words why, and §6.1 says where
+    # this transparency leaks today. Neither sentence is retyped here.
+    for tp_i in $tp_idxs; do
+      tp_sk=$(awk -F'\t' -v i="$tp_i" '$1==i {print $2}' <<<"$TP_SKIPS")
+      tp_sr=$(awk -F'\t' -v i="$tp_i" '$1==i {print $3}' <<<"$TP_SKIPS")
+      [ -z "$tp_sk" ] && continue
+      tp_gt=$(awk -F'\t' -v i="$tp_i" '$1==i {print $2}' <<<"$TP_GROUPS")
+      echo "              unmeasured: $tp_gt"
+      if [ -n "$tp_sr" ]; then
+        echo "                          SKIPPED ($tp_sk): $tp_sr"
+      else
+        echo "                          SKIPPED ($tp_sk) — the group printed its own"
+        echo "                          SKIPPED line above, with its age"
+      fi
+    done
+    tp_cite=$(python3 spikes/transparency.py --cite "$tp_name" 2>&1); tp_cite_rc=$?
+    if [ "$tp_cite_rc" -ne 0 ] || [ -z "$tp_cite" ]; then
+      echo "              FAIL D029 §6.1's status for $tp_name could not be read,"
+      echo "                   so the load-bearing column is missing for it"
+      diag_out "$tp_cite" 4 head
+      fail_total=$((fail_total+1))
+    else
+      echo "              unmeasured, per D029 §6.1 — where it leaks today:"
+      sed -e 's/^/                | /' <<<"$tp_cite"
+    fi
+  done <<<"$TP_NAMES"
+  echo ""
+  echo "  Where a line above says D029 §6.1, the sentence is READ from that table"
+  echo "  at run time, not copied into this harness. No score is printed here and"
+  echo "  none should be derived: a shrinking unmeasured list is progress only"
+  echo "  when a run closed the leak, and looks identical to nobody looking."
+fi
+
 hr "verdict"
 if [ "$skipped" -gt 0 ]; then
   echo "  $skipped check group(s) SKIPPED — those claims are unmeasured, not passing"
@@ -3881,5 +4071,22 @@ if [ "$fail_total" -eq 0 ]; then
   echo "  all measured checks green"
 else
   echo "  $fail_total check group(s) failed"
+fi
+# And the other dimension, LAST, so that "all measured checks green" cannot be
+# read on its own. Names, not a count: "3 of 5" would be quoted as sixty per
+# cent complete by the first person to repeat it, and D031 §2 refuses a score.
+# Naming the unmeasured ones cannot be turned into one, and is the useful half.
+if [ "$tp_load_err" = 1 ]; then
+  echo "  transparency: NOT READ — $TP_DOC §6.1 could not be parsed (see the ledger)"
+elif [ -z "$tp_measured_names" ]; then
+  echo "  transparency: NONE measured in this run —$tp_unmeasured_names all unmeasured."
+  echo "  A green verdict above means nothing regressed; it does not mean anything"
+  echo "  was learned about what a caller can still tell (D029 §6)."
+else
+  echo "  transparency measured this run:$tp_measured_names"
+  if [ -n "$tp_unmeasured_names" ]; then
+    echo "  transparency UNMEASURED this run:$tp_unmeasured_names"
+    echo "  — unmeasured, not passing; the ledger above names what each one waits on"
+  fi
 fi
 exit "$fail_total"
