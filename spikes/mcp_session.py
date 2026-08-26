@@ -87,8 +87,18 @@ def main():
 
     listed = c.send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
     names = [t["name"] for t in listed["result"]["tools"]]
-    if names == ["search_interfaces", "describe_interface", "invoke_operation"]:
-        ok("tools/list -> the generic triad, whatever the catalog holds")
+    # The triad until 2026-08-26, when D024 §5's four IDL tools landed behind the
+    # same interceptor chain. Pinned as the whole list and in order, because the
+    # order is what a client sees and a silent addition is what this exists to
+    # catch — and negatively, because a tool that can *register* a contract would
+    # change what other agents see and D024 §5 refuses it by name.
+    triad = ["search_interfaces", "describe_interface", "invoke_operation"]
+    idl_tools = ["validate_contract", "diff_contract", "describe_type", "preview_generation"]
+    forbidden = [n for n in ("register_contract", "register", "compile_idl") if n in names]
+    if forbidden:
+        no(f"tools/list advertises {forbidden}, which D024 §5 refuses by name")
+    elif names == triad + idl_tools:
+        ok("tools/list -> the triad plus D024 §5's four IDL tools, in order")
     else:
         no(f"tools/list returned {names}")
 

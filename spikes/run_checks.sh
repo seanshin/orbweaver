@@ -2000,13 +2000,15 @@ fi
 s4_wire_out=$(cargo run -q --bin sidl-validate -- --wire v1 corpus/golden/*.idl 2>/dev/null)
 s4_wire_files=$(printf '%s\n' "$s4_wire_out" | grep 'error: .*\[wire/deferred-type\]' \
   | cut -d: -f1 | sort -u | xargs -n1 basename | tr '\n' ' ')
-# Three files until 2026-08-21, when `native` joined the closure as a fourth
+# Six files since 2026-08-26, when `::CORBA::Principal` joined as a fifth
+# family — withdrawn rather than deferred. Three until 2026-08-21, when
+# `native` joined the closure as a fourth
 # family that is not a deferral: `31-native-type` and `32-valuebase` are refused
 # under --wire v1 for two different reasons, and the rule says which.
-if [ "$s4_wire_files" = "20-deferred-valuetype.idl 21-deferred-fixed.idl 31-native-type.idl 32-valuebase.idl deferred-reach.idl " ]; then
-  echo "  ok   --wire v1 refuses exactly the five golden files that reach a construct the wire cannot carry"
+if [ "$s4_wire_files" = "20-deferred-valuetype.idl 21-deferred-fixed.idl 31-native-type.idl 32-valuebase.idl 34-corba-principal.idl deferred-reach.idl " ]; then
+  echo "  ok   --wire v1 refuses exactly the six golden files that reach a construct the wire cannot carry (2026-08-26)"
 else
-  echo "  FAIL --wire v1 refused: '$s4_wire_files' (expected 20, 21, 31, 32, deferred-reach)"
+  echo "  FAIL --wire v1 refused: '$s4_wire_files' (expected 20, 21, 31, 32, 34, deferred-reach)"
   fail_total=$((fail_total+1))
 fi
 
@@ -2083,12 +2085,23 @@ fi
 # no longer "§4.4" alone, because a native is not deferred, there is nothing to
 # defer. The unmeasured half went 12 -> 18 and not 20: a sequence of an
 # unsamplable element has one value, the empty one, and that one is measured.
-cc_wire=$(printf '%s\n' "$cc_out" | sed -n 's/.* \([0-9][0-9]*\) declaration(s) the wire cannot carry (§4.4 and natives) of which \([0-9][0-9]*\) unmeasured.*/\1 \2/p')
+# The parenthetical after "cannot carry" is prose owned by contract-check and it
+# has changed twice as families were added — `(§4.4 and natives)` became
+# `(§4.4's three, natives, and what CORBA withdrew)` on 2026-08-26 and this
+# extraction, which retyped the old spelling, matched nothing and reported
+# 'absent'. A count parsed by retyping a prefix of somebody else's sentence is
+# the classifier defect CLAUDE.md names; match only the two numbers and the
+# words that carry them.
+cc_wire=$(printf '%s\n' "$cc_out" | sed -n 's/.* \([0-9][0-9]*\) declaration(s) the wire cannot carry.* of which \([0-9][0-9]*\) unmeasured.*/\1 \2/p' | head -1)
 set -- $cc_wire
-if [ "${1:-}" = 30 ] && [ "${2:-}" = 18 ]; then
-  echo "  ok   30 declaration(s) over golden the wire cannot carry (§4.4 and natives), 18 unmeasured by the property"
+# 30/18 until 2026-08-26, when `::CORBA::Principal` became a fifth refusal
+# family. The `ok` line no longer retypes contract-check's parenthetical: that
+# prose is its to change, and restating it here is what made this group report
+# a count it could no longer read.
+if [ "${1:-}" = 35 ] && [ "${2:-}" = 21 ]; then
+  echo "  ok   35 declaration(s) over golden the wire cannot carry, 21 unmeasured by the property (measured 2026-08-26)"
 else
-  echo "  FAIL deferred-wire count over golden: '${cc_wire:-absent}' (pinned 30 of which 18)"
+  echo "  FAIL deferred-wire count over golden: '${cc_wire:-absent}' (pinned 35 of which 21)"
   fail_total=$((fail_total+1))
 fi
 # Panic freedom. Rust rules out the memory-corruption half of "wire parsing is

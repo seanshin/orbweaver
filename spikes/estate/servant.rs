@@ -30,7 +30,8 @@ use orbweaver_genout::f_ESTATE::MFS::Tracking::{
     Consignment, ScanEvent, ScanHistory, ShipmentTrackerFault, ShipmentTrackerRefs,
     ShipmentTrackerServant, ShipmentTrackerSkeleton, ShipmentTrackerTarget, UnknownConsignment,
 };
-use orbweaver_object::{ObjectId, Poa, Target};
+use orbweaver_giop::orb::Orb;
+use orbweaver_object::{ObjectId, OrbPoa, Poa, Target};
 
 /// The repository id the estate's own files produce. Not typed from memory:
 /// it is the row `exposure.todo.tsv` carries, and the driver greps for it.
@@ -261,12 +262,18 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::from(2);
     };
 
-    let mut poa = Poa::new("TrackingPOA", TYPE_ID);
+    // D019 step 4: `Server::bind` and `Poa::new` are `pub(crate)`; the ORB is
+    // the only public way to a listener and a POA. This file is compiled
+    // standalone, outside the workspace, so `cargo check --workspace` cannot
+    // see it — which is exactly how it survived two sweeps that reported the
+    // one-way rule holding.
+    let orb = Orb::new();
+    let mut poa = orb.create_poa("TrackingPOA", TYPE_ID);
     let oid = ObjectId::from_name("tracker-1");
     poa.activate(oid.clone());
     let key = poa.object_key(&oid);
 
-    let server = match Server::bind("127.0.0.1:0", key.clone()) {
+    let server = match orb.server("127.0.0.1:0", key.clone()) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("bind: {e}");
