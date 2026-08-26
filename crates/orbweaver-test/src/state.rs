@@ -460,3 +460,112 @@ impl MoeEstate {
         self.nodes.iter().any(|n| n.name == node)
     }
 }
+
+// ---- the naming graph ----
+
+/// One `CosNaming::NameComponent`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeededNameComponent {
+    /// The `id` field.
+    pub id: String,
+    /// The `kind` field, empty for most components.
+    pub kind: String,
+}
+
+/// One name bound in the graph, or stated to be absent from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeededBinding {
+    /// The compound name, component by component.
+    pub path: Vec<SeededNameComponent>,
+    /// The object key the bound reference carries, when this is a binding.
+    pub object_key: Option<String>,
+    /// The `CosNaming` stringified form, e.g. `spike/Echo 2.dev`.
+    pub stringified: String,
+    /// The URL-escaped form for a `corbaname:` fragment, when stated.
+    pub url_fragment: Option<String>,
+}
+
+/// The seeded naming graph.
+#[derive(Debug, Clone)]
+pub struct NamingGraph {
+    /// The `type_id` every bound reference carries.
+    pub type_id: String,
+    /// Contexts that must exist, parents before children.
+    pub contexts: Vec<Vec<String>>,
+    /// Names that must resolve.
+    pub bindings: Vec<SeededBinding>,
+    /// Names that must **not** resolve — a stated property of the population,
+    /// not the absence of a statement.
+    pub absent: Vec<SeededBinding>,
+    /// How many bindings `list` over the root must return.
+    pub root_binding_count: u32,
+    /// Their names.
+    pub root_binding_names: Vec<String>,
+}
+
+impl NamingGraph {
+    /// Loads `corpus/state/naming-graph.json`.
+    pub fn load() -> Result<NamingGraph> {
+        const FILE: &str = "naming-graph.json";
+        let doc = load(FILE)?;
+        let root = At::new(FILE, &doc);
+
+        let type_id = root.field("reference_template")?.field("type_id")?.as_ref().string()?;
+
+        let mut contexts = Vec::new();
+        for c in root.field("contexts")?.items()? {
+            contexts.push(c.field("path")?.as_ref().strings()?);
+        }
+
+        let read_names = |field: &str| -> Result<Vec<SeededBinding>> {
+            let mut out = Vec::new();
+            for b in root.field(field)?.items()? {
+                let mut path = Vec::new();
+                for c in b.field("path")?.items()? {
+                    path.push(SeededNameComponent {
+                        id: c.field("id")?.as_ref().string()?,
+                        kind: c.field("kind")?.as_ref().string()?,
+                    });
+                }
+                out.push(SeededBinding {
+                    path,
+                    object_key: match b.field("object_key") {
+                        Ok(f) => Some(f.as_ref().string()?),
+                        Err(_) => None,
+                    },
+                    stringified: b.field("stringified")?.as_ref().string()?,
+                    url_fragment: match b.field("url_fragment") {
+                        Ok(f) => Some(f.as_ref().string()?),
+                        Err(_) => None,
+                    },
+                });
+            }
+            Ok(out)
+        };
+
+        let bindings = read_names("bindings")?;
+        let absent = read_names("absent")?;
+
+        let rb = root.field("root_bindings")?;
+        Ok(NamingGraph {
+            type_id,
+            contexts,
+            bindings,
+            absent,
+            root_binding_count: rb.field("count")?.as_ref().u32()?,
+            root_binding_names: rb.field("names")?.as_ref().strings()?,
+        })
+    }
+}
+
+/// The `CosNaming` stringified form of a compound name.
+///
+/// One function, because the Rust gate and the diagnostics both need it and a
+/// second copy would drift. `id.kind` when the kind is non-empty, `id` when it
+/// is, joined by `/`.
+pub fn stringify(path: &[SeededNameComponent]) -> String {
+    path.iter()
+        .map(|c| if c.kind.is_empty() { c.id.clone() } else { format!("{}.{}", c.id, c.kind) })
+        .collect::<Vec<_>>()
+        .join("/")
+}
