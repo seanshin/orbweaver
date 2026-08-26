@@ -375,15 +375,39 @@ PRUNE = {".git", "target", "node_modules", ".claude", "venv", ".venv", "__pycach
 
 
 def walk():
-    """Every file in the tree, build and tooling directories pruned."""
-    stack = [ROOT]
-    while stack:
-        for p in sorted(stack.pop().iterdir()):
-            if p.is_dir():
-                if p.name not in PRUNE:
-                    stack.append(p)
-            else:
-                yield p
+    """Every **tracked** file in the tree, build and tooling directories pruned.
+
+    Tracked, not merely present. The first widening of this gate walked the
+    filesystem and counted 32 unreadable files — JacORB's jars and `.class`
+    files under `spikes/jacorb/`, which are a gitignored **fixture**. The gate
+    therefore went red on any machine where the fixture was installed, which is
+    a verdict about somebody's setup rather than about the repository.
+
+    An untracked file is not somewhere this repository states a fact, so it
+    cannot restate a decision's status. Asking git also makes the binary
+    question moot: a jar is untracked here, and a tracked binary would still be
+    reported as unreadable, which is the honest answer for a file that might
+    contain the claim and could not be read.
+    """
+    import subprocess
+
+    r = subprocess.run(
+        ["git", "ls-files", "-z", "--cached"], cwd=ROOT, capture_output=True, text=True
+    )
+    if r.returncode != 0:
+        # A producer that could not run is an unmeasured check, never a pass.
+        raise SystemExit(
+            f"  FAIL git ls-files did not run (exit {r.returncode}) — "
+            "the tree was NOT scanned, which is a failure and not a pass"
+        )
+    for rel in r.stdout.split("\0"):
+        if not rel:
+            continue
+        p = ROOT / rel
+        if any(part in PRUNE for part in p.relative_to(ROOT).parts[:-1]):
+            continue
+        if p.is_file():
+            yield p
 
 
 def source(skipped):
