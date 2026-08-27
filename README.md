@@ -938,6 +938,73 @@ Phase 0–3.5 완료, Phase 4 대부분 착지, Phase 5 절반. 남은 작업은
 목록이 줄어든 것은 어떤 실행이 실제로 구멍을 막았을 때만 진전입니다. 아무도
 들여다보지 않아서 줄어든 것과 겉으로는 구별되지 않습니다.
 
+### The roadmap / 로드맵
+
+Two things stand between here and every transparency row being **measured**,
+and they are not the same kind of thing. One is a decision the owner has to
+make; the other is a wire change with a published specification behind it.
+
+| | Stage | Closes | Isolated to |
+|---|---|---|---|
+| **L0** | **Decision X** — is the reference `Orb::server` hands out *indirect*? | unblocks the Lifecycle leak test | a decision record; no code until it is answered |
+| **R1** | `TAG_FT_GROUP` (27) read and written — domain id, group id, **version** | nothing yet; it is content nothing acts on | `orbweaver-giop`, IOR only |
+| **R2** | `FT_GROUP_VERSION` (12) service context sent with the version dialled | nothing yet; an unknowing peer ignores it | the request path |
+| **R3** | server answers `LOCATION_FORWARD_PERM` when the version it is given is stale | **a caller holding an old reference can be told, rather than failing** | one `Dispatch` |
+| **R4** | `TAG_FT_PRIMARY` (28) honoured as a dial *preference* | dial order only — the spec says correctness does not depend on it | `Connection::connect` |
+| **G1** | `//@ ai_*` — the Language row's item 4: a reference *arriving* is a handle the far side cannot invoke | the Language row's last named leak | `orbweaver-gen`'s seam |
+
+**Why R1–R4 exist, and what they are not.** Fault Tolerant CORBA specifies an
+**Interoperable Object Group Reference** — an IOR carrying several
+`TAG_INTERNET_IOP` profiles, each with a `TAG_FT_GROUP` component naming the
+group and *the version of the reference*, and a `FT_GROUP_VERSION` service
+context by which a server detects that a client's reference is out of date.
+This project already carries the transport half of that: an IOR holds several
+profiles, `Connection::connect` dials each profile's address then its
+`TAG_ALTERNATE_IIOP_ADDRESS` alternates then the next profile, and a successful
+connection keeps **the whole IOR** so a restart gets the same failover. What is
+missing is the specification's identity for it — *which group these addresses
+are, and which version of it the caller holds.*
+
+**R1–R4 are the reference half only.** The `ReplicationManager`,
+`ObjectGroupManager`, `GenericFactory`, `FaultDetector` and `FaultNotifier` are
+infrastructure with no consumer here, and building them would put a capability
+ahead of a leak, which the priority-zero criterion forbids. Heartbeating
+(`TAG_FT_HEARTBEAT_ENABLED`, 29) and transparent reinvocation (`FT_REQUEST`, 13)
+are out for the same reason.
+
+**And the honest limit: R1–R4 do not close the Lifecycle row.** Failing over
+needs a second member to fail over *to*, which is a property of a deployment and
+not of this repository. What they make measurable in one process is the smaller,
+real claim — **a caller holding a superseded reference is told so instead of
+dialling something that is gone.** Saying they close the row would be exactly
+the move D029 §6 exists to prevent.
+
+여기서 모든 투명성 행이 **측정됨**이 되기까지 둘이 남았고, 둘은 종류가 다릅니다.
+하나는 소유자가 내려야 할 결정이고, 하나는 공개 명세가 뒤를 받치는 와이어
+변경입니다.
+
+**R1–R4가 있는 이유.** 내결함성 CORBA는 **상호운용 객체 그룹 참조(IOGR)**를
+명세합니다 — 여러 `TAG_INTERNET_IOP` 프로파일을 담은 IOR이고, 각 프로파일에
+그룹과 *참조의 버전*을 적은 `TAG_FT_GROUP` 컴포넌트가 있으며, 서버가 클라이언트의
+참조가 낡았음을 알아내는 `FT_GROUP_VERSION` 서비스 컨텍스트가 함께 있습니다. 이
+프로젝트는 그것의 **전송 절반을 이미 갖고 있습니다** — IOR이 프로파일을 여럿
+담고, `Connection::connect`가 프로파일마다 자기 주소 → alternates → 다음 프로파일
+순으로 다이얼하며, 연결에 성공하면 **IOR 전체**를 보관해 재시작이 같은 페일오버를
+받습니다. 없는 것은 그것에 대한 명세의 정체성입니다 — *이 주소들이 어느 그룹이고,
+호출자가 그 그룹의 어느 버전을 들고 있는가.*
+
+**R1–R4는 참조 절반뿐입니다.** `ReplicationManager`·`FaultDetector` 같은 인프라는
+여기 소비자가 없고, 그것을 짓는 일은 구멍보다 기능을 앞세우는 것이라 0순위 기준이
+금지합니다. 하트비트(`TAG_FT_HEARTBEAT_ENABLED`, 29)와 투명 재호출
+(`FT_REQUEST`, 13)도 같은 이유로 제외입니다.
+
+**그리고 정직한 한계 — R1–R4는 생애주기 행을 닫지 않습니다.** 페일오버하려면
+넘어갈 두 번째 멤버가 있어야 하고, 그것은 배포의 성질이지 이 저장소의 성질이
+아닙니다. 한 프로세스에서 이들이 측정 가능하게 만드는 것은 더 작고 진짜인
+주장입니다 — **낡은 참조를 든 호출자가, 사라진 것에 걸어 보는 대신 낡았다는 말을
+듣는다.** 이것이 행을 닫는다고 말하는 것이야말로 D029 §6이 막으려고 존재하는
+움직임입니다.
+
 ---
 
 ## Running it / 직접 돌리기
