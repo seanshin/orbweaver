@@ -136,9 +136,9 @@ X의 어떤 것도 0으로 보낼 수 없다 — 호출자는 첫 패킷을 어�
 **N에서 1로 옮겨진 구멍이 이 기준이 말하는 "더 이상 새지 않는 행"인가, 아니면
 N번 대신 한 번 새는 행인가**이다.
 
-## 5. The third option, which D029 does not name / D029가 이름 붙이지 않은 세 번째 선택지
+## 5. An option D029 does not name / D029가 이름 붙이지 않은 선택지
 
-D029 frames this as approve-X or keep-waiting. There is a third, and it should
+D029 frames this as approve-X or keep-waiting. There is another, and it should
 be on the table because it is the only one that can move the row **without**
 3.1–3.5:
 
@@ -166,7 +166,9 @@ D029는 이것을 *X 승인* 아니면 *계속 대기*로 놓는다. 세 번째�
 하므로 노드가 하나인 배포는 구멍 0인 생애주기 행을 가질 수 없고, 0에 닿을 수 없는
 결정을 영원히 기다리는 행은 자기가 딛고 선 바닥을 이름 붙인 행보다 나쁘다.
 
-## 6. The alternatives that are refused, and why / 거절된 대안들
+## 6. Alternatives — one pair refused, one that answers a different row / 대안들
+
+### 6.1 Refused / 거절
 
 - **A tombstone** — leaving the removed server's ORB listening at the same
   address to answer forwards. Refused in D029 and refused here: it contradicts
@@ -180,7 +182,7 @@ D029는 이것을 *X 승인* 아니면 *계속 대기*로 놓는다. 세 번째�
   a *snapshot* of the name table, which is what resolving once amounts to, and
   exactly the two late-resolution tests go red.
 
-## 6.1 The alternative D029 never named — Fault Tolerant CORBA / D029가 이름 붙이지 않은 대안
+### 6.2 Not refused — the one D029 never named: Fault Tolerant CORBA / 거절이 아니라, D029가 이름 붙이지 않은 것
 
 Found 2026-08-27 by sweeping the OMG catalogue against this repository: **`Fault
 Tolerant`, `IOGR`, `TAG_FT` and `object group` return zero hits in `docs/` and
@@ -231,26 +233,87 @@ smaller claim in §4's terms: a caller holding a replaced reference is told so.
 그러므로 X가 불필요해지는 것도, FT가 답이 되는 것도 아니다. 바뀌는 것은 틀이다 —
 X를 *유일한* 생애주기 결정으로 다루기를 그만두어야 한다.
 
-## 7. What approval would mean / 승인의 의미
+## 7. The four paths, and what each costs / 네 가지 경로와 비용
 
-Approving X commits to all of: 3.1 (every IOR changes), 3.2 (D019's direction
-reversed, deliberately), 3.4 (a stale binding still fails, one hop later), and
-3.5 (D013 re-read before it is decided). It does **not** commit to liveness
-detection, which stays a separate and larger decision.
+§6.2 added a path this document did not have when §3 was written, so the choice
+is four-way and not three. Cost is **rough and labelled as such** — it is an
+estimate from the shape of the work, not a measurement, and this project's own
+rule about numbers applies to it.
 
-The row would move to *measured, with a leak displaced to the forwarding
-endpoint* — never to *closed*.
+| | Path | Commits to | Moves the Lifecycle row to | Rough cost |
+|---|---|---|---|---|
+| **A** | Approve **X** | 3.1 (every IOR changes), 3.2 (D019's direction reversed), 3.4 (a stale binding still fails, one hop later), 3.5 (D013 re-read) | *measured, leak displaced to the forwarding endpoint* — never *closed* | large: one IOR-minting path, a name-resolving servant on the serving side, and a re-reading of D013 |
+| **B** | §5's third option — refuse X, record the bootstrap leak as irreducible in one process | nothing in 3.1–3.5 | *measured, leaks at the bootstrap* | small: a leak-test leg and a row edit |
+| **C** | The **FT reference half** (§6.2): `TAG_FT_GROUP` (27), `FT_GROUP_VERSION` (12), a server that forwards on a stale version, `TAG_FT_PRIMARY` (28) as a dial preference | a wire-shape addition with a published specification and an independent implementation (TAO) to be refuted against; **no layer inversion**, and it repairs the stale binding X cannot | *measured*, on the smaller claim: a caller holding a replaced reference is told so. Failover itself needs a second member, which is a deployment property | medium: four items, each independently landable, on a transport half that already exists |
+| **D** | Refuse all three | nothing | stays a counted `SKIPPED` | none |
 
-Approving §5 instead commits to none of 3.1–3.5 and moves the row to *measured,
-leaks at the bootstrap*. Refusing both leaves the row a counted `SKIPPED`, which
-is honest and is where it is today.
+A and C are **not exclusive**. §6.2's table is the reason: X minimises what a
+caller can see and FT maximises what a caller can survive, and they answer
+different rows of D029 §6.1 — X the Location row, FT the Lifecycle row.
 
-## 8. What this document does not claim / 주장하지 않는 것
+## 8. Recommendation / 권고
 
-It does not claim X is the right answer; §4 says what X buys and §5 says a
-cheaper option exists. It does not claim the forwarding mechanism is unproven —
-it is built and measured, and that is precisely why the remaining question is a
-decision and not work. It does not claim either option reaches zero leaks; §4
-says why nothing can. And it does not claim the lifecycle row is the last thing
-between here and a complete ORB — it is the last thing between here and every
-row being *measured*, which is a smaller claim and the one D029 §6 can check.
+**C, then B; A deferred rather than refused.** Stated so it can be rejected
+rather than left for the reader to assemble:
+
+- **C first**, because it is the only path that repairs the stale binding, needs
+  no layer inversion, and is checkable against a peer that implements the same
+  specification. Its four items are independently landable, and R1 and R2 change
+  no wire behaviour at all — a component nobody acts on and a service context an
+  unknowing peer ignores — so the first half is close to free to try.
+- **B alongside it**, because the Lifecycle row should stop being unmeasured
+  regardless of which mechanism lands, and B is honest about a floor that
+  neither A nor C can reach: **a caller must be given one address to send a
+  first packet to.**
+- **A deferred, not refused.** X remains the better answer for the *Location*
+  row, and §4's displacement argument is a reason to be precise about what it
+  buys, not a reason to discard it. What it should stop being is *the* lifecycle
+  decision, which is how D029 framed it and how this document was commissioned.
+
+The recommendation this document does **not** make: building Fault Tolerant
+CORBA. §6.2 proposes the reference half only and refuses the infrastructure —
+`ReplicationManager`, `ObjectGroupManager`, `GenericFactory`, `FaultDetector`,
+`FaultNotifier`, heartbeating and transparent reinvocation — because it has no
+consumer here and would put a capability ahead of a leak, which priority zero
+forbids.
+
+## 9. What would refute the recommendation / 무엇이 이 권고를 반증하는가
+
+Written down so approving it is not the end of the argument:
+
+- **C is refuted** if a peer that implements FT rejects our `TAG_FT_GROUP` or
+  ignores `FT_GROUP_VERSION` where the specification says it must forward — the
+  claim is interoperability, and an independent implementation is what can
+  falsify it. It is also refuted if R3 cannot be measured in one process, since
+  the whole argument for C over A is that its useful half needs no second node.
+- **B is refuted** if a single-node deployment turns out to have a way to give a
+  caller its first address without that address being a leak. §4 argues there is
+  none; a counter-example ends B.
+- **The framing is refuted** if X and FT turn out to answer the *same* row after
+  all — if, say, a name-resolving endpoint can carry the group version and make
+  the stale binding repairable. Then A and C stop being complementary and the
+  choice really is exclusive.
+
+## 10. What this document does not claim / 주장하지 않는 것
+
+It **does** now recommend — §8 — and that is a change from this document's first
+draft, which listed options and left the synthesis to the reader. A decision
+record that will not say what it thinks is asking the owner to do the work it
+was written to do. The recommendation is stated so it can be **rejected**, and
+§9 says what would refute it.
+
+What it does not claim: that the forwarding mechanism is unproven — it is built
+and measured, which is precisely why what is left is a decision and not work.
+That either option reaches zero leaks; §4 says why nothing in one process can.
+That the cost column in §7 is a measurement — it is an estimate from the shape
+of the work, labelled as such, and this project's rules about numbers apply to
+it. That FT should be built — §6.2 proposes the reference half and refuses the
+infrastructure. And that the Lifecycle row is the last thing between here and a
+complete ORB: it is the last thing between here and every row being
+**measured**, which is a smaller claim and the one D029 §6 can check.
+
+이 문서는 이제 **권고합니다**(§8). 첫 초안은 선택지만 늘어놓고 종합을 읽는 사람에게
+넘겼는데, 자기 생각을 말하지 않는 결정 기록은 스스로 하려던 일을 소유자에게
+떠넘기는 것입니다. 권고는 **거절당할 수 있도록** 적었고, §9가 무엇이 그것을
+반증하는지 말합니다. §7의 비용 열은 측정이 아니라 작업의 모양에서 나온 추정이며,
+그렇게 표시했습니다.
