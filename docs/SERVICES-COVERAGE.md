@@ -642,10 +642,10 @@ _Declared_ counts each `interface::operation` once however many objects it was p
 
 | Service | Origin | File the declarations were read from |
 |---|---|---|
-| CosNaming | fixture | `/opt/homebrew/share/idl/omniORB/COS/CosNaming.idl` |
-| CosEvent | fixture | `/opt/homebrew/share/idl/omniORB/COS/CosEventComm.idl` |
-| CosEvent | fixture | `/opt/homebrew/share/idl/omniORB/COS/CosEventChannelAdmin.idl` |
-| IFR | fixture | `/opt/homebrew/share/idl/omniORB/ir.idl` |
+| CosNaming | fixture | `omniORB/COS/CosNaming.idl` |
+| CosEvent | fixture | `omniORB/COS/CosEventComm.idl` |
+| CosEvent | fixture | `omniORB/COS/CosEventChannelAdmin.idl` |
+| IFR | fixture | `omniORB/ir.idl` |
 | CosTrading | first-party | `corpus/services/trading-lookup-subset.idl` |
 | MoE enterprise | first-party | `corpus/golden/23-moe-enterprise.idl` |
 | MoE control plane | first-party | `corpus/golden/22-moe-control-plane.idl` |

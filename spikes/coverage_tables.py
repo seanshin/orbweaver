@@ -120,6 +120,33 @@ def cell(s):
     return s.replace("|", "\\|")
 
 
+def fixture_path(path):
+    """A fixture's identity, with the machine's install prefix taken off.
+
+    This column used to carry the absolute path the sweep reported, which made
+    the checked-in table a record of **where omniORB happens to be installed on
+    whichever machine last regenerated it** — machine state wearing a
+    measurement's clothes. The cost was not theoretical: the committed table
+    said `/opt/homebrew/share/idl/...` (a Mac) while CI on Ubuntu measured
+    `/usr/share/idl/...`, so `--check` failed there, on every push, for a day.
+    **The two could never be green at once** — regenerating on either machine
+    turns the other red — so the gate was unsatisfiable rather than merely
+    stale, and no amount of "just regenerate it" would have fixed it.
+
+    What this section exists to say is provenance: *this operation list came
+    from a fixture's IDL and not from a contract of ours*.
+    `omniORB/COS/CosNaming.idl` says that completely. The install root says
+    nothing about provenance and everything about the machine, so it is
+    dropped deliberately.
+
+    A path with no `/idl/` component is returned unchanged: first-party files
+    live inside the repository and read the same everywhere.
+    """
+    marker = "/idl/"
+    i = path.find(marker)
+    return path[i + len(marker):] if i >= 0 else path
+
+
 def render(text):
     """(document region, dropped rows, noise lines)."""
     services, unserved, unprobed, sources, dropped, noise = parse(text)
@@ -200,7 +227,7 @@ def render(text):
         out.append("| Service | Origin | File the declarations were read from |")
         out.append("|---|---|---|")
         for service, origin, path in sources:
-            out.append("| %s | %s | `%s` |" % (service, cell(origin), cell(path)))
+            out.append("| %s | %s | `%s` |" % (service, cell(origin), cell(fixture_path(path))))
         out.append("")
         out.append("_`fixture` means the operation list is derived from omniORB's **installed** "
                    "IDL, not from a contract of ours: what this document reports about our own "

@@ -975,8 +975,8 @@ are out for the same reason.
 **And the honest limit: R1–R4 do not close the Lifecycle row.** Failing over
 needs a second member to fail over *to*, which is a property of a deployment and
 not of this repository. What they make measurable in one process is the smaller,
-real claim — **a caller holding a superseded reference is told so instead of
-dialling something that is gone.** Saying they close the row would be exactly
+real claim — **a caller holding a reference that has since been replaced is
+told so, instead of dialling something that is gone.** Saying they close the row would be exactly
 the move D029 §6 exists to prevent.
 
 여기서 모든 투명성 행이 **측정됨**이 되기까지 둘이 남았고, 둘은 종류가 다릅니다.

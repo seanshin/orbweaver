@@ -228,6 +228,49 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   run had to be repeated. Wait for the lock, or copy the script. *실행 중인
   스크립트를 편집하지 않는다. 영향 여부를 사후에 증명할 수 없으므로 그 실행의
   판정은 증거가 되지 못한다.*
+- **A run's inputs are wider than its script, and that rule above is the
+  narrow statement of this one.** Measured 2026-08-27, twice in one run, by
+  the person who had just quoted the rule. A `/tmp` sweep during a harness run
+  deleted `/tmp/orbweaver-f5-hold.log` — the file a wait loop was polling for
+  its fixture's `HOLDING` line — and the group reported *"the holding tenant
+  service never came up"* over a fixture that was up and had already written
+  both its IORs. An age cutoff does **not** close this: the sweep stats the
+  *stale* file, the fixture recreates one at the same path, and `rm` acts on
+  the **path**, not on the inode that was measured. **The harness's fixture
+  state lives in `/tmp` under the same `orbweaver*` prefix any cleanup
+  targets**, so reclaim only when the lock is free — the lock was read and
+  printed minutes before the sweep. Separately, a README commit landed mid-run
+  and tripped `decision_status.py`, which reads it through `ROOT.glob("*.md")`;
+  the check that had "proved" README was safe was a grep for the string
+  `README` in the gates, and **a search for a filename cannot find a glob.**
+  Two more from the same hour: `find /tmp` on macOS silently returns nothing
+  because `/tmp` is a symlink (`ls` saw 61 files, `find` saw 0, and the
+  cleanup reported success having done nothing — use `/private/tmp`), and a
+  pipeline's exit code is its last stage's, so `script | head` reported `0`
+  for a script that exits 4. *실행의 입력은 스크립트만이 아니다 — `/tmp`의 픽스처
+  상태, 루트의 `*.md`, 포트를 쥔 프로세스가 모두 그 실행의 입력이다. 나이 경계로는
+  TOCTOU가 닫히지 않는다: 낡은 파일을 재고 픽스처가 같은 **경로**에 새로 만들면
+  `rm`은 새것을 가져간다. 락이 비었을 때만 회수한다. 그리고 **파일 이름을 찾는
+  검색은 글로브를 찾지 못한다.***
+- **Reaping a child is not reaping its tree.** Measured 2026-08-27:
+  `orbweaver-py-bridge` leaked **twelve processes from one harness run** and
+  fifty more from the days before, every one `ppid=1` and each holding a
+  loopback port. The chain is `cargo test → python3 → the bridge`, and three
+  layers each did their job inside their own scope: `python_rt.py` wrote a
+  correct `close()` and a docstring naming *"forty orphaned peers"* as the
+  cost of leaking one, but nothing ever called it — no `atexit`, no handler,
+  no `__del__`; the Rust test owned its child *"so that every exit still kills
+  it"*, which is correct one level above the leaf and killed with SIGKILL
+  besides, which no handler can catch; and the harness `fkill`s every fixture
+  it starts, which this one is not. **Nobody owned the span.** A test that
+  leaks four bridges was green both before and after the fix — the leak was
+  never visible to it, which is why the control counts processes rather than
+  reading a verdict. Spawn long-lived children with `process_group(0)` and
+  signal the **group** in `Drop`; register the runtime's own `close()` with
+  `atexit` for the paths where the child exits by itself. *자식을 거두는 것은
+  나무를 거두는 것이 아니다. 세 계층이 각자 자기 범위 안에서 옳았고, 그 사이를
+  아무도 소유하지 않았다. 누수하는 테스트는 수정 전후 모두 초록이었다 — 그래서
+  대조군은 판정을 읽지 않고 프로세스를 센다.*
 - **A completed client `connect` does not mean the server can accept yet.**
   On macOS loopback a non-blocking single `accept()` misses fresh connections
   ~5% of the time (measured 25/500 in stream E batch 2). Accept-side checks
