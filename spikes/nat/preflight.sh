@@ -45,7 +45,10 @@ bounded() { # bounded <seconds> <cmd...>
   local limit="$1"
   shift
   local out
-  out=$(mktemp -t orbweaver-preflight) || return 125
+  # `-t PREFIX` without X's is a BSD extension; GNU fails with `too few X's`
+  # and leaves this empty, so every path built from it lands at the filesystem
+  # root. Swept 2026-08-27 across every tracked *.sh.
+  out=$(mktemp "${TMPDIR:-/tmp}/orbweaver-preflight.XXXXXX") || return 125
   "$@" >"$out" 2>&1 &
   local pid=$! ticks=0
   local max=$((limit * 5))

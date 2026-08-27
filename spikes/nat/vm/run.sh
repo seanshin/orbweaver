@@ -50,7 +50,10 @@ KEY_TEXT="nat-servant"
 TYPE_ID="IDL:spike/Echo:1.0"
 
 fails=0
-WORK=$(mktemp -d -t orbweaver-r7-vm) || exit 2
+# `-t PREFIX` without X's is a BSD extension; GNU fails with `too few X's`
+# and leaves this empty, so every path built from it lands at the filesystem
+# root. Swept 2026-08-27 across every tracked *.sh.
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/orbweaver-r7-vm.XXXXXX") || exit 2
 SERVE_PID=""
 
 bold() { printf '\n\033[1m%s\033[0m\n' "$1"; }

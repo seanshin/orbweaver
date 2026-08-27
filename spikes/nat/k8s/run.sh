@@ -58,7 +58,10 @@ NODE_PORT=30555
 IMAGE=orbweaver/spike-nat:probe
 
 fails=0
-WORK=$(mktemp -d -t orbweaver-r7-k8s) || exit 2
+# `-t PREFIX` without X's is a BSD extension; GNU fails with `too few X's`
+# and leaves this empty, so every path built from it lands at the filesystem
+# root. Swept 2026-08-27 across every tracked *.sh.
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/orbweaver-r7-k8s.XXXXXX") || exit 2
 
 cleanup() {
   kubectl delete namespace "$NS" --ignore-not-found --wait=false >/dev/null 2>&1

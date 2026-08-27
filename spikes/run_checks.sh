@@ -716,6 +716,54 @@ else
   echo "       measurement rather than whichever compile it happened to trigger"
 fi
 
+# ── Shell constructs one of the two platforms does not have ──────────────────
+#
+# This project is developed on macOS and verified on Linux, so a GNU-only
+# construct fails here and a BSD-only one fails there. Neither failure is
+# loud: `mktemp -t PREFIX` on GNU returns nothing, and a path built from the
+# empty result lands at the filesystem root.
+#
+# That is not hypothetical. Two CI runs were spent blaming a regex before the
+# tool that wrote the file was checked, and the sweep that followed found
+# **five** instances — one written that day, four that predated it, three of
+# them under `spikes/nat/` where an earlier sweep scoped to `spikes/*.sh` had
+# never looked. Hence `git ls-files`, and hence this group rather than a memory
+# of having swept once.
+#
+# The probe is SYNTHESISED, for the same reason the early-exit group's is: a
+# scan that finds nothing must be shown able to find something first.
+hr "no shell construct only one platform has"
+PORT_BAD='mktemp[[:space:]][^#]*-t[[:space:]]+[A-Za-z]'
+port_probe=$(mktemp "${TMPDIR:-/tmp}/orbweaver-port.XXXXXX")
+# The flag is assembled, not typed. Writing `-t` next to `mktemp` here would put
+# the defect into this file and the scan below would report its own probe — the
+# same trap the early-exit group fell into, and the second time in one day, so
+# it is written down rather than remembered.
+port_t='-'t
+{
+  printf 'WORK=$(mktemp -d %s orbweaver-thing)\n' "$port_t"              # line 1: the defect
+  printf 'WORK=$(mktemp -d "${TMPDIR:-/tmp}/orbweaver-thing.XXXXXX")\n'  # line 2: the repair
+} >"$port_probe"
+port_hits=$(grep -nE "$PORT_BAD" "$port_probe" | grep -v XXXXXX | cut -d: -f1 | tr '\n' ',')
+if [ "$port_hits" != "1," ]; then
+  echo "  FAIL the portability scan reported lines [$port_hits] of a two-line probe whose"
+  echo "       defect is line 1 and whose repair is line 2 — it is not measuring what it"
+  echo "       claims, so its silence over the tree means nothing"
+  fail_total=$((fail_total+1))
+else
+  port_out=$(git ls-files -z -- '*.sh' | xargs -0 grep -nE "$PORT_BAD" 2>/dev/null \
+    | grep -v XXXXXX | grep -vE ':[0-9]+:[[:space:]]*#')
+  if [ -n "$port_out" ]; then
+    echo "  FAIL \`mktemp -t PREFIX\` without an explicit XXXXXX template — a BSD extension"
+    echo "       that GNU refuses (\`too few X's\`), leaving the variable empty:"
+    printf '%s\n' "$port_out" | sed 's/^/         /'
+    fail_total=$((fail_total+1))
+  else
+    echo "  ok   every mktemp carries an explicit template; the probe shows the scan sees one"
+  fi
+fi
+rm -f "$port_probe"
+
 hr "unit tests (CDR + GIOP)"
 # Captured, then matched — and the producer's own exit status is read first.
 #
