@@ -67,6 +67,7 @@ wire has no encoding for. Refusing the description too would have made a peer's
 """
 
 import base64
+import atexit
 import builtins
 import json
 import keyword
@@ -1550,6 +1551,20 @@ class Bridge(object):
         if "ready" not in banner:
             raise TransportError("the bridge refused to start: %s" % (hello.strip(),))
         self.ready = banner["ready"]
+        # The docstring above already knew what leaking one of these costs —
+        # "how a test suite ends up with forty orphaned peers" — and `close()`
+        # was written correctly. Nothing ever called it: there was no atexit,
+        # no signal handler, no `__del__`, and no servant script called it by
+        # hand. Measured 2026-08-27: **twelve orphaned bridges from a single
+        # harness run**, every one `ppid=1`, each holding a loopback port.
+        # `close()` is idempotent (it guards on `poll()`), so registering it
+        # here is safe even when a caller also closes explicitly.
+        #
+        # This covers every path where Python exits of its own accord, which is
+        # every one-shot script the test suite runs. It CANNOT cover a parent
+        # that is SIGKILLed — atexit does not run then — which is why the Rust
+        # side kills the process *group* rather than the child.
+        atexit.register(self.close)
 
     def _stderr(self):
         try:
@@ -1932,6 +1947,11 @@ class Host(object):
         self.ready = banner["ready"]
         self.ior = self.ready.get("ior", "")
         self.type_id = self.ready.get("type_id", "")
+        # Same reason as Bridge's, and this class's own `close()` docstring names
+        # the assumption that broke: *"the parent owns this child and terminates
+        # it"*. It does — unless the parent is killed, which is what a test's
+        # `Drop` does. Registered so a normal exit reaps it.
+        atexit.register(self.close)
 
     def _stderr(self):
         try:

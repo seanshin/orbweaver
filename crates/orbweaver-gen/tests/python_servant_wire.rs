@@ -184,6 +184,27 @@ impl Servant {
 
 impl Drop for Servant {
     fn drop(&mut self) {
+        // **The servant is not the leaf.** `python_rt.py` starts
+        // `orbweaver-py-bridge` as its own child, so killing this handle alone
+        // orphans the bridge, which then holds a loopback port until somebody
+        // notices. Measured 2026-08-27: **twelve orphans from a single harness
+        // run**, every one `ppid=1`, and fifty more from the days before.
+        //
+        // The comment above this struct reasoned carefully about never leaking
+        // *the child* — "every exit from the wait below … still kills it" —
+        // and that reasoning is correct one level up from where it needed to
+        // be. `child.kill()` is SIGKILL besides, which no handler can catch,
+        // so Python never got to run the `close()` it had written for exactly
+        // this.
+        //
+        // So: SIGTERM the whole group first. It reaches the bridge directly,
+        // and it gives Python's `atexit` the chance to close its own child
+        // politely. `std` cannot signal a group and `unsafe` is forbidden
+        // here, so `kill(1)` does it — `--` because the pid is negative.
+        let pid = self.child.id();
+        let _ =
+            std::process::Command::new("kill").args(["-TERM", "--", &format!("-{pid}")]).status();
+        // The old behaviour stays as the floor: whatever ignored SIGTERM dies.
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -226,7 +247,13 @@ fn start_servant() -> Option<Servant> {
     std::fs::write(&script, SERVANT).expect("write the servant");
     let ior_path = dir.path().join("gauge.ior");
 
+    // Its own process group, so `Drop` can signal the TREE and not just this
+    // handle. `python_rt.py` starts `orbweaver-py-bridge` as a child of this
+    // process, so the servant is not the leaf — see the comment on `Drop`.
+    // `process_group` is safe std; this workspace forbids `unsafe`.
+    use std::os::unix::process::CommandExt as _;
     let child = std::process::Command::new("python3")
+        .process_group(0)
         .arg(&script)
         .arg(&root)
         .arg(contract())

@@ -415,9 +415,45 @@ cleanup() {
   fkill echo_server.py
   fkill evolution_server.py
   for _ in $(seq 1 50); do
-    pgrep -f "echo_server.py|evolution_server.py" >/dev/null 2>&1 || return 0
+    pgrep -f "echo_server.py|evolution_server.py" >/dev/null 2>&1 || break
     sleep 0.1
   done
+  # ── The backstop that needs no name ────────────────────────────────────────
+  #
+  # The two `fkill`s above are a hand-typed roster, and every fixture this
+  # script starts has its own `fkill` at the point it is used. What neither
+  # covers is a fixture this script does NOT start: `orbweaver-py-bridge` is
+  # spawned by a Rust test, through a Python servant, so it is nobody's child
+  # by the time it matters. Measured 2026-08-27: **twelve orphans from one run
+  # of this harness**, every one `ppid=1` and holding a loopback port, plus
+  # fifty older ones going back to the day the servant seam landed.
+  #
+  # The named repair is in the test and the Python runtime. This is the floor
+  # underneath it, and it is deliberately NOT another name: everything this
+  # script started shares its process group, so signalling the group reaps
+  # whatever leaked into it — including a fixture nobody has written yet.
+  # That is the same repair the roster gates got today: **compute the set, do
+  # not type it.**
+  #
+  # NOT `kill -- -$own_pgid`. That was the first draft and it is unsafe here:
+  # this script is not always its own process-group leader — launched from a
+  # non-job-control shell it shares the caller's group (measured: harness
+  # pid 24267, pgid 24263), so signalling the group would kill whoever
+  # started the harness. `trap '' TERM` protects only this shell, not them.
+  #
+  # The precise target instead: a process in **our** group whose parent is
+  # **init**. Being in the group means this run started it; being `ppid=1`
+  # means whatever started it is gone. Nothing still parented is leaked, and
+  # neither this shell nor its ancestors can match, because they have real
+  # parents. That is exactly the class the census found and nothing else.
+  if [ -n "$own_pgid" ]; then
+    for _lpid in $(ps -eo pid=,ppid=,pgid= \
+        | awk -v g="$own_pgid" '$2==1 && $3==g {print $1}'); do
+      [ "$_lpid" = "$$" ] && continue
+      kill -TERM "$_lpid" 2>/dev/null || true
+    done
+  fi
+  return 0
 }
 
 # Starts the contract-evolution peer. `$1` is empty for the deployed version or

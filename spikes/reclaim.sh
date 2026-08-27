@@ -41,6 +41,39 @@ for a in "$@"; do
   esac
 done
 
+# ── Refuse while a harness holds the lock ─────────────────────────────────────
+#
+# Learned the hard way on 2026-08-27, in this repository, by me. A `/tmp` sweep
+# ran while `run_checks.sh` was in flight and deleted
+# `/tmp/orbweaver-f5-hold.log` — the file a wait loop was polling for its
+# fixture's `HOLDING` line. The fixture was up and healthy (it had already
+# written both its IORs); the group reported *"the holding tenant service never
+# came up"* and the run's verdict stopped being evidence.
+#
+# The mechanism is a TOCTOU and an age cutoff does not close it: the sweep
+# stats the STALE file, the fixture recreates one at the same path, and `rm`
+# acts on the path rather than on the inode that was measured. The lock was
+# there the whole time and was read and printed before the sweep ran.
+#
+# So: the lock is the gate. `--force` is deliberately NOT an override for it —
+# there is no version of "reclaim during a run" that is safe.
+LOCK=/tmp/orbweaver-harness.lock
+if [ -e "$LOCK" ]; then
+  echo "REFUSED: $LOCK is held — a harness run is in flight." >&2
+  if [ -r "$LOCK/owner" ]; then
+    echo "  owner: $(cat "$LOCK/owner" 2>/dev/null)" >&2
+  fi
+  echo "  Reclaiming now would delete fixture state a running group is polling," >&2
+  echo "  and whether the run was affected cannot be established afterwards." >&2
+  echo "  Wait for the run to finish." >&2
+  exit 4
+fi
+if pgrep -f 'bash ./spikes/run_checks.sh' >/dev/null 2>&1; then
+  echo "REFUSED: run_checks.sh is running without holding the lock." >&2
+  echo "  That is odd on its own; either way this is not the moment to reclaim." >&2
+  exit 4
+fi
+
 held_before=$(du -sk .claude/worktrees 2>/dev/null | cut -f1)
 held_before=${held_before:-0}
 
