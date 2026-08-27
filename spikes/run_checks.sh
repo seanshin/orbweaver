@@ -322,6 +322,47 @@ diag() {
 # as a diagnostic that ran and found nothing worth saying rather than as a
 # producer that never said anything — and those are different failures.
 #   diag_out <whole-output> [lines] [head|tail]
+# ── What a red `cargo test` owes: which binary, which test, and why ─────────
+#
+# `cargo test` prints a `Running …` line per binary, then that binary's
+# results, and it prints `failures:` **twice** — a detail block holding the
+# panic, and later a bare list of names. A grep anchored at `^` catches
+# neither: the names are indented under the second header and the panic sits
+# under a `---- name stdout ----` line. So a group that greps `^failures:`
+# reports the word `failures:` and nothing else.
+#
+# Measured in CI 2026-08-27: `FAIL cargo test --workspace (exit 101, 71s)`
+# followed by `| failures:`, `| failures:` and a summary. **79 test binaries
+# ran and the log could not say which one broke** — the failing binary had ten
+# tests, and six binaries in this workspace have ten tests, so the log narrowed
+# it to six and named none.
+#
+# One function, because two groups owe the same sentence. The
+# concurrent-dispatch group was repaired for exactly this on 2026-08-25 and the
+# workspace group was not — a repair scoped to the group that had the incident
+# instead of to the rule, which is the shape this file's own header warns
+# about. The `Running` line is the part neither group had: it is what names the
+# binary.
+#
+# No pipes into `head`/`grep -q`: the capture is a variable and every trim is a
+# herestring, for the reason this file states twice already.
+cargo_test_diag() {
+  local out="$1" indent="${2:-       }" names why bin
+  bin=$(awk '/^ *Running /{r=$0} /^test result: FAILED/{print r; exit}' <<<"$out")
+  names=$(grep -E "^test .* \.\.\. FAILED$" <<<"$out" || true)
+  why=$(grep -E "panicked at|^assertion .* failed|^  left:|^ right:" <<<"$out" || true)
+  [ -n "$bin" ]   && sed 's/^ *//' <<<"$bin" | sed "s/^/${indent}in /"
+  [ -n "$names" ] && sed "s/^/${indent}/" <<<"$names"
+  [ -n "$why" ]   && sed -n '1,20p' <<<"$why" | sed "s/^/${indent}| /"
+  if [ -z "$bin$names$why" ]; then
+    # Say so rather than printing nothing, which is how both groups spent a red
+    # run saying nothing at all.
+    echo "${indent}(no Running line, no FAILED test and no panic — last 8 lines:)"
+    tail -8 <<<"$out" | sed "s/^/${indent}| /"
+  fi
+  return 0
+}
+
 diag_out() {
   local whole="$1" n="${2:-8}" from="${3:-tail}"
   if [ -z "$whole" ]; then
@@ -896,8 +937,11 @@ ut_out=$(cargo test --workspace 2>&1); ut_rc=$?
 ut_elapsed=$(( $(date +%s) - ut_started ))
 if [ "$ut_rc" -ne 0 ] || grep -q "^error" <<<"$ut_out"; then
   echo "  FAIL cargo test --workspace (exit $ut_rc, ${ut_elapsed}s)"
-  diag "an error line or a FAILED suite" "$ut_out" \
-       "$(grep -E "^(error|test result: FAILED|failures:)" <<<"$ut_out")" 12
+  # `cargo_test_diag`, not a `^`-anchored grep: this group's own CI red on
+  # 2026-08-27 printed `failures:` twice and named nothing. See the function.
+  cargo_test_diag "$ut_out"
+  ut_errs=$(grep -E "^error" <<<"$ut_out" || true)
+  [ -n "$ut_errs" ] && sed -n '1,6p' <<<"$ut_errs" | sed 's/^/       | /'
   fail_total=$((fail_total+1))
 else
   echo "  ok   cargo test --workspace (${ut_elapsed}s)"
@@ -3879,18 +3923,13 @@ for cd_run in $(seq 1 "$cd_runs"); do
     # own five-run argument was written down. **A group whose case is "one
     # green run is not evidence" produced a red run that was not evidence
     # either.** Name the tests, then print each one's panic line.
-    # No pipe: `head`/`grep -q` on a pipe are the two forms this file has been
-    # bitten by, so the capture is a variable and the trim is a herestring.
-    cd_names=$(grep -E "^test .* \.\.\. FAILED$" <<<"$cd_out" || true)
-    cd_why=$(grep -E "panicked at|^assertion .* failed|^  left:|^ right:" <<<"$cd_out" || true)
-    [ -n "$cd_names" ] && sed 's/^/       /' <<<"$cd_names"
-    [ -n "$cd_why" ] && sed -n '1,20p' <<<"$cd_why" | sed 's/^/       | /'
-    if [ -z "$cd_names$cd_why" ]; then
-      # Neither shape matched: say so rather than printing nothing, which is
-      # how this group spent its first red run saying nothing at all.
-      echo "       (no FAILED test line and no panic in the output — last 8 lines:)"
-      tail -8 <<<"$cd_out" | sed 's/^/       | /'
-    fi
+    # The extraction moved to `cargo_test_diag` on 2026-08-27, when the
+    # workspace-test group went red in CI with the defect this group had
+    # already been repaired for. Two groups owing the same sentence is what
+    # `pub(crate)` is to a fact: one home, reachable from both. The function
+    # also adds the `Running` line, which neither copy had and which is the
+    # part that names the failing binary.
+    cargo_test_diag "$cd_out"
     cd_failures=$((cd_failures+1))
   fi
 done
