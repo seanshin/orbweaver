@@ -589,7 +589,21 @@ fi
 # The `[^|]` prefix keeps the REPAIRED form — `… || grep -q "…" <<<"$out"`, an
 # OR and not a pipe — from matching.
 hr "no early-exit consumer on the end of a pipe"
-EARLY='[^|]\|[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:space:]]+-[A-Za-z]*(q|m1)'
+# `[|]`, not `\|`. In an ERE `|` is alternation, so a **literal** pipe needs a
+# bracket expression; `\|` is not portable and implementations disagree.
+#
+# Measured 2026-08-27, and the interesting part is how it was caught. The
+# pattern matched on the machine it was written on and matched **nothing** on
+# the CI runner, where the group's own probe reported `[]` for a two-line probe
+# whose first line IS the defect — so the scan **refused** rather than reporting
+# a clean tree it had never read. That refusal is the entire reason the probe is
+# synthesised rather than pointed at the tree, and it fired on the first CI run
+# after the group was written.
+#
+# The author's `grep` is `ugrep`, the runner's is GNU. **Three implementations
+# are in play here, not two**, so a regex verified on one machine is verified on
+# one machine — which is what the probe exists to notice.
+EARLY='[^|][|][[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:space:]]+-[A-Za-z]*(q|m1)'
 
 # SYNTHESISE THE SUBJECT. A scan that finds nothing is indistinguishable from a
 # scan that cannot see, so before its silence is allowed to mean anything it is
