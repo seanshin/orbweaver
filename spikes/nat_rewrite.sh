@@ -143,7 +143,12 @@ else
   if ! cargo build -q --bin spike-nat 2>/dev/null; then
     fail "could not build spike-nat"
   else
-    tmp=$(mktemp -d -t orbweaver-r7-map)
+    # Explicit template: `mktemp -d -t PREFIX` fails on GNU (`too few X's`),
+    # which leaves `$tmp` empty and turns every `$tmp/...` below into an
+    # absolute path at the filesystem root. Found 2026-08-27 while fixing the
+    # same mistake one file over; this one predates it and would have been
+    # failing on the Linux runner all along.
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/orbweaver-r7-map.XXXXXX")
     ORBWEAVER_PUBLISH_MAP="$map" "$bin" serve 0.0.0.0:5555 "$tmp/k8s.ior" \
       >"$tmp/serve.log" 2>&1 &
     serve_pid=$!

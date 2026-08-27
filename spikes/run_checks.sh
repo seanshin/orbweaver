@@ -613,7 +613,13 @@ EARLY='[^|][|][[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:space:]]+-[A-Za-z]*(q|
 # `ledger_control.sh` on 2026-08-26. Line 1 is the defect and line 2 is the
 # repair: a scan reporting neither measures nothing, and one reporting both is
 # tuned to be loud rather than to be right.
-ee_probe=$(mktemp -t orbweaver-earlyexit)
+# An explicit template, not `mktemp -t PREFIX`. BSD/macOS appends the random
+# suffix itself; **GNU requires at least three X's and fails without them**
+# (`too few X's in template`). On the runner this returned nothing, the probe
+# file was never written, the scan found no lines, and the group reported `[]`
+# — which it correctly refused to read as a clean tree. Two CI runs were spent
+# blaming the regex before the shell tool was checked.
+ee_probe=$(mktemp "${TMPDIR:-/tmp}/orbweaver-earlyexit.XXXXXX")
 # The flag is assembled rather than typed: writing `grep -q` literally here
 # would put the defect into this file, and the scan below would report its own
 # probe. A gate that trips on its own text cannot be run over its own tree.
