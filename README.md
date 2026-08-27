@@ -940,18 +940,52 @@ Phase 0–3.5 완료, Phase 4 대부분 착지, Phase 5 절반. 남은 작업은
 
 ### The roadmap / 로드맵
 
-Two things stand between here and every transparency row being **measured**,
-and they are not the same kind of thing. One is a decision the owner has to
-make; the other is a wire change with a published specification behind it.
+What stands between here and every transparency row being **measured** is not
+one kind of thing. One item is a decision only the owner can make; the rest are
+wire changes with a published specification behind them, and one is a record
+rather than any code at all. The order below is
+[`D035`](docs/decisions/D035-the-reference-the-orb-hands-out.md) §8's
+recommendation, which is a recommendation and not a schedule — it is stated so
+it can be rejected.
 
 | | Stage | Closes | Isolated to |
 |---|---|---|---|
-| **L0** | **Decision X** — is the reference `Orb::server` hands out *indirect*? | unblocks the Lifecycle leak test | a decision record; no code until it is answered |
 | **R1** | `TAG_FT_GROUP` (27) read and written — domain id, group id, **version** | nothing yet; it is content nothing acts on | `orbweaver-giop`, IOR only |
 | **R2** | `FT_GROUP_VERSION` (12) service context sent with the version dialled | nothing yet; an unknowing peer ignores it | the request path |
-| **R3** | server answers `LOCATION_FORWARD_PERM` when the version it is given is stale | **a caller holding an old reference can be told, rather than failing** | one `Dispatch` |
+| **R3** | server answers `LOCATION_FORWARD_PERM` when the version it is given is stale | **a caller holding a replaced reference is told, rather than failing** | one `Dispatch` |
 | **R4** | `TAG_FT_PRIMARY` (28) honoured as a dial *preference* | dial order only — the spec says correctness does not depend on it | `Connection::connect` |
-| **G1** | `//@ ai_*` — the Language row's item 4: a reference *arriving* is a handle the far side cannot invoke | the Language row's last named leak | `orbweaver-gen`'s seam |
+| **B** | record the bootstrap leak as **irreducible in a single-node deployment** | moves the Lifecycle row from *unmeasured* to *measured, leaks at the bootstrap* | a leak-test leg and a `D029` §6.1 row; no wire change |
+| **G1** | a reference *arriving* at a foreign servant is a handle it cannot invoke — `D029` §6.1.1 item 4 | the Language row's last named leak | `orbweaver-gen`'s seam |
+| **L0** | **Decision X** — is the reference `Orb::server` hands out *indirect*? | the **Location** row, not this one — see below | a decision record; no code until it is answered |
+
+**R1 and R2 change no wire behaviour at all**, which is why they are first: a
+component nobody acts on and a service context an unknowing peer ignores. The
+first half of the FT work is close to free to try, and R3 is where behaviour
+changes.
+
+**L0 is last here and that is a change from this file's first version**, which
+listed it first because `D029` framed X as *the* lifecycle decision. D035 §4
+answers the question D029 required — X claims **displacement**, moving the leak
+from N server addresses to one forwarding address, and cannot reach zero — and
+§6.2 shows FT and X answer **different rows**: X minimises what a caller can
+see, FT maximises what a caller can survive. X is deferred, not refused; it
+remains the better answer for the Location row.
+
+여기서 모든 투명성 행이 **측정됨**이 되기까지 남은 것은 한 종류가 아닙니다.
+하나는 소유자만 내릴 수 있는 결정이고, 나머지는 공개 명세가 뒤를 받치는 와이어
+변경이며, 하나는 코드가 아니라 기록입니다. 위 순서는
+[`D035`](docs/decisions/D035-the-reference-the-orb-hands-out.md) §8의
+**권고**이지 일정이 아닙니다 — 거절당할 수 있도록 적은 것입니다.
+
+**R1과 R2는 와이어 동작을 전혀 바꾸지 않습니다.** 아무도 반응하지 않는 컴포넌트와,
+모르는 피어가 무시하는 서비스 컨텍스트입니다. 그래서 앞에 둡니다. 동작이 바뀌는
+지점은 R3입니다.
+
+**L0이 맨 뒤인 것은 이 파일의 첫 판에서 바뀐 것입니다.** 처음에는 D029가 X를
+*유일한* 생애주기 결정으로 놓았기에 맨 앞이었습니다. D035 §4가 D029가 요구한
+질문에 답하면서 — X는 **전가**를 주장하며 구멍을 서버 주소 N개에서 포워딩 주소
+하나로 옮길 뿐 0에 닿지 못합니다 — §6.2가 FT와 X가 **서로 다른 행**을 답한다는
+것을 보였습니다. X는 거절이 아니라 유예이며, 위치 행에는 여전히 더 나은 답입니다.
 
 **Why R1–R4 exist, and what they are not.** Fault Tolerant CORBA specifies an
 **Interoperable Object Group Reference** — an IOR carrying several
