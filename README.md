@@ -971,6 +971,71 @@ is written against the published OMG specification alone; omniORB and JacORB
 appear only as separate-process peers and as conformance oracles whose text
 output we read.
 
+### What it costs on disk, and keeping it down / 디스크에 무엇을 쓰는가
+
+Worth knowing before a long session, because both numbers below are larger than
+they look and one of them corrupts a search rather than merely filling a drive.
+
+**A full workspace build reaches about 35 G**, measured 2026-08-27, and roughly
+14 G of that is `target/*/incremental` — a rebuild cache, not a build product.
+It regenerates on demand and nothing reads it across a clean checkout.
+
+**Parallel work leaves a worktree behind per batch.** Landing merges the branch
+and nothing removes the checkout, so they pile up: **70 mounted, 61 of them
+already merged into `main`**, the same day. The disk is the smaller half of that
+problem. The larger half is that a tree-wide `grep -r` reads them, so a scan
+reports *other branches'* defects as this tree's — which happened to this
+project's own early-exit gate on the day it was written, and is why that gate
+scans `git ls-files` rather than walking a directory.
+
+```bash
+./spikes/reclaim.sh                        # dry run: what could be reclaimed
+./spikes/reclaim.sh --apply                # remove merged worktrees and branches
+./spikes/reclaim.sh --apply --incremental  # and drop the rebuild cache
+```
+
+It removes a worktree only when it sits under `.claude/worktrees/` **and** its
+branch is an ancestor of `main` — every commit already landed. A branch that is
+not merged is left alone and printed by name. Losing an unlanded batch to a
+cleanup script is the one failure this must not have, so the script never
+decides that question from a commit message.
+
+**One practical trap, measured the same day.** Running a `RUSTFLAGS`-modified
+cargo command in the default target directory — `RUSTFLAGS="-D warnings" cargo
+test -p …` — changes the fingerprint for *everything*, so the next plain
+`cargo test --workspace` rebuilds the whole tree. That cost a harness run more
+than twenty minutes of build before its first group. The harness already knows:
+the gates that need those flags give them their own `CARGO_TARGET_DIR`. Do the
+same, or run them after the harness rather than before it.
+
+긴 세션 전에 알아 둘 값이 있습니다. 아래 두 수치는 보기보다 크고, 그중 하나는
+디스크를 채우는 것을 넘어 **검색을 오염시킵니다.**
+
+**워크스페이스 전체 빌드는 약 35 G에 이릅니다**(2026-08-27 측정). 그중 약 14 G가
+`target/*/incremental`로, 빌드 산출물이 아니라 재빌드 캐시입니다. 필요할 때 다시
+만들어지고, 새로 받은 체크아웃에서는 아무도 읽지 않습니다.
+
+**병행 작업은 배치마다 워크트리를 하나씩 남깁니다.** 착지는 브랜치를 병합할 뿐
+체크아웃을 지우지 않으므로 쌓입니다 — 같은 날 **70개가 마운트되어 있었고 그중
+61개가 이미 `main`에 병합**된 상태였습니다. 디스크는 그 문제의 작은 절반입니다.
+큰 절반은 트리 전체를 훑는 `grep -r`이 그것들을 읽는다는 것입니다. 스캔이 *다른
+브랜치의* 결함을 이 트리의 것으로 보고하게 됩니다 — 이 프로젝트의 early-exit
+게이트가 작성된 날 실제로 그랬고, 그래서 그 게이트는 디렉터리를 걷는 대신
+`git ls-files`를 훑습니다.
+
+워크트리는 `.claude/worktrees/` 아래에 있고 **그 브랜치가 `main`의 조상일 때만**
+— 즉 모든 커밋이 이미 착지했을 때만 — 제거합니다. 병합되지 않은 브랜치는 손대지
+않고 이름을 출력합니다. 착지하지 않은 배치를 정리 스크립트에 잃는 것은 이 도구가
+절대 가져서는 안 되는 실패이므로, 그 판단을 커밋 메시지로 내리지 않습니다.
+
+**실무적인 함정 하나, 같은 날 측정.** 기본 target 디렉터리에서 `RUSTFLAGS`를 바꾼
+cargo 명령 — `RUSTFLAGS="-D warnings" cargo test -p …` — 을 돌리면 *전체*의
+지문이 바뀌므로, 다음번 평범한 `cargo test --workspace`가 트리를 통째로 다시
+빌드합니다. 그 때문에 어떤 하네스 실행은 첫 그룹이 나오기까지 20분 넘게 빌드만
+했습니다. 하네스는 이미 알고 있습니다 — 그 플래그가 필요한 게이트들은 자기
+`CARGO_TARGET_DIR`을 따로 갖습니다. 같이 하거나, 하네스 앞이 아니라 뒤에서
+돌리십시오.
+
 ORB를 빌드하고 자체 테스트만 통과시키려면 위의 두 줄이 전부입니다. 상호운용에는
 피어가 필요합니다. 하네스는 `/tmp/orbweaver-harness.lock`에 머신 전역 락을
 잡습니다. 두 개를 동시에 돌리면 서로의 픽스처를 죽이고 코드가 아니라 스케줄링에

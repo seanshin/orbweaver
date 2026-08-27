@@ -140,6 +140,26 @@ jobs:
   interop:
     name: interop harness (omniORB + JacORB)
     runs-on: ubuntu-latest
+    # Disk discipline, and it belongs here rather than in a cleanup step: the
+    # cache below restores `target`, and a restored `target` only ever grows —
+    # cargo evicts nothing, and `restore-keys` falls back to an older, larger
+    # cache when the exact key misses. Reclaiming 30 GB at the start does not
+    # touch that; it just moves the crossing later. So the job stops PRODUCING
+    # what nobody here reads:
+    #
+    #   CARGO_INCREMENTAL       incremental state is for a developer rebuilding
+    #                           the same tree twice. A CI runner never does.
+    #   *_DEBUG=0               nobody attaches a debugger to a CI job, and
+    #                           debug info is the bulk of a debug `target`.
+    #
+    # Measured 2026-08-26 with neither set: `target` reached **35 G** and the
+    # job ended at **15 G free (90% used)**. The effect of these three is NOT
+    # yet measured — the next run is its first reading, and the `df` lines
+    # around the harness are what will say so.
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
     steps:
       # This job ran the runner out of disk on 2026-08-25 and stayed that way
       # for EIGHT consecutive pushes, including the one tagged v0.7.0. It did
@@ -283,6 +303,21 @@ jobs:
         env:
           JAVA_HOME_21: ${{ env.JAVA_HOME }}
         run: ./spikes/jacorb/setup.sh
+
+      # The cache can restore `target/*/incremental` from before CARGO_INCREMENTAL
+      # was set. It regenerates on demand and is never read here, so dropping it
+      # is free; `|| true` because a cache miss means it does not exist.
+      - name: drop restored incremental state, and report the margin
+        run: |
+          before=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+          du -sh target/*/incremental 2>/dev/null || echo "no incremental state restored"
+          rm -rf target/*/incremental || true
+          after=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+          echo "available before the harness: ${after}G (was ${before}G)"
+          # No floor here on purpose. This is the reading a later run compares
+          # against, not a gate: the number that decides whether the job fits is
+          # the one printed AFTER the harness, and inventing a threshold for the
+          # before-figure would be a number nobody could defend.
 
       - name: harness
         env:
