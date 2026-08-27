@@ -390,6 +390,34 @@ skip_age() {
 # behaviour with a printed note, because a harness that silently stops killing
 # fixtures leaks them into the next group and fails somewhere unrelated. A
 # noisy wide kill beats a quiet leak.
+#   rc_says <status>
+# How a fixture's exit status should be READ, which is not the same as whether
+# it passed. A shell encodes "died by signal N" as 128+N, so a process that
+# completed its measurement and then crashed on the way out is indistinguishable
+# from one that failed — both are simply "non-zero" to every `if` in this file.
+#
+# Seen 2026-08-27: omniORBpy's thread scavenger calls into Python during
+# `Py_Finalize` and segfaults (`omnipyThreadScavenger::run_undetached` ->
+# `_PyType_LookupStackRefAndVersion`, null deref, Python 3.14.6 +
+# omniORBpy 4.3.4). The work was already done; only the shutdown died. A gate
+# reading 139 would report the measurement as failed, which is the mirror image
+# of the rule this file keeps about a fixture's own exit code vouching for a
+# peer — here it *betrays* a measurement that succeeded.
+#
+# This changes what is PRINTED, never whether a group passes. The crash did not
+# reproduce in 60 runs across three shapes, so tightening a verdict on it would
+# be tuning a gate against something nobody has made fail.
+rc_says() {
+  local rc="$1"
+  if [ "$rc" -gt 128 ] 2>/dev/null; then
+    echo "died by signal $((rc - 128)) (status $rc) — it did not exit, it crashed;"\
+         "check whether its output above is complete before reading this as a"\
+         "failed measurement"
+  else
+    echo "exit $rc"
+  fi
+}
+
 own_pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
 fkill() {
   local pat="$1" pid pgid hit=0 seen=0
@@ -995,7 +1023,7 @@ if [ "$ev_rc" -eq 1 ] && grep -q "amount_minor" <<<"$ev_out" \
    && grep -q "restamp" <<<"$ev_out"; then
   echo "  ok   both header-only breaking changes are named and the release is refused"
 else
-  echo "  FAIL a breaking change in a shared header does not reach the differ (exit $ev_rc)"
+  echo "  FAIL a breaking change in a shared header does not reach the differ ($(rc_says "$ev_rc"))"
   diag_out "$ev_out" 3 head; ev_fail=1
 fi
 # The negative control, or the check above could pass for the wrong reason.
@@ -2203,7 +2231,7 @@ else
           diag_out "$rp_out" 3
           rir_fail=1 ;;
         *)
-          echo "  FAIL omniORB no longer answers the three states as recorded (exit $rp_rc)"
+          echo "  FAIL omniORB no longer answers the three states as recorded ($(rc_says "$rp_rc"))"
           diag_out "$rp_out" 10
           rir_fail=1 ;;
       esac
@@ -3852,7 +3880,7 @@ except CORBA.NO_PERMISSION:
     # script whose body stopped running still falls off the end with 0.
     walk_legs=$(sed -n 's/^walk: every leg answered (\([0-9][0-9]*\) legs)$/\1/p' <<<"$walk_out")
     if [ "$walk_rc" -ne 0 ]; then
-      echo "  FAIL omniORB's IR client could not walk our repository (exit $walk_rc)"
+      echo "  FAIL omniORB's IR client could not walk our repository ($(rc_says "$walk_rc"))"
       diag_out "$walk_out" 10
       ifr_fail=1
     elif [ -z "$walk_legs" ] || [ "$walk_legs" -lt 51 ]; then
@@ -3914,7 +3942,7 @@ except CORBA.NO_PERMISSION:
         diag_out "$dk_out" 3
         ifr_fail=1 ;;
       *)
-        echo "  FAIL omniORB's IR client did not name our definition kinds (exit $dk_rc)"
+        echo "  FAIL omniORB's IR client did not name our definition kinds ($(rc_says "$dk_rc"))"
         diag_out "$dk_out" 12
         ifr_fail=1 ;;
     esac
@@ -4016,7 +4044,7 @@ if [ "$ev_up" -eq 1 ]; then
     if [ "$ev_rc" -eq 0 ]; then
       echo "  ok   omniORB's PushConsumer received events from OUR channel"
     else
-      echo "  FAIL cross-ORB consumer (exit $ev_rc)"
+      echo "  FAIL cross-ORB consumer ($(rc_says "$ev_rc"))"
       diag_out "$ev_out" 6
       ev_fail=1
     fi
@@ -4120,7 +4148,7 @@ else
         echo "       PullSupplier with try_pull and never the blocking pull, and both of omniORB's"
         echo "       consumer models got them in order"
       else
-        echo "  FAIL --source-endian $pull_e: the pull direction (exit $pull_rc)"
+        echo "  FAIL --source-endian $pull_e: the pull direction ($(rc_says "$pull_rc"))"
         diag_out "$pull_out" 8
         pull_fail=1
       fi
