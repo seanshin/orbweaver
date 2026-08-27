@@ -586,9 +586,35 @@ if [ "$ee_hits" != "1," ]; then
   fail_total=$((fail_total+1))
 else
   # Tracked files only. `grep -r .` also walks `.claude/worktrees/` — other
-  # branches' checkouts, which are not this tree and whose defects are not
-  # this run's to report — and `target/`. `git ls-files` is the scope the
-  # rule actually has.
+  # branches' checkouts, which are not this tree and whose defects are not this
+  # run's to report — and `target/`. `git ls-files` is the scope the rule has.
+  #
+  # **And the scope is asserted rather than assumed.** `*.sh` is complete only
+  # while every shell script in the tree carries that extension; the day
+  # somebody adds `spikes/foo` with a `#!/bin/bash`, this scan would quietly
+  # cover less and stay green over it — which is the exact failure the rule
+  # this group enforces was written about (a sweep reported 76 instances and
+  # had opened one file). Documentation is deliberately NOT scanned: four
+  # documents quote the defective form on purpose, `CLAUDE.md` among them.
+  # A `while read` loop, not `xargs -0 -I{} sh -c '<script>'`: that form was the
+  # first draft and **xargs refused it** — `command line cannot be assembled,
+  # too long` — while a `2>/dev/null` on the pipeline swallowed the message, so
+  # the check found nothing and read as clean. A scope check that cannot run is
+  # worse than none, and it took a synthesised stray file to notice.
+  ee_stray=""
+  while IFS= read -r ee_f; do
+    case "$ee_f" in *.sh) continue ;; esac
+    if head -1 "$ee_f" 2>/dev/null | grep -qE '^#!.*(ba)?sh'; then
+      ee_stray="$ee_stray$ee_f
+"
+    fi
+  done < <(git ls-files)
+  if [ -n "$ee_stray" ]; then
+    echo "  FAIL a tracked shell script has no .sh extension, so this scan no longer"
+    echo "       covers the rule it claims to — widen the glob or rename the file:"
+    printf '%s' "$ee_stray" | sed 's/^/         /'
+    fail_total=$((fail_total+1))
+  fi
   ee_out=$(git ls-files -z -- '*.sh' | xargs -0 grep -nE "$EARLY" 2>/dev/null \
     | grep -v ':[0-9]*:[[:space:]]*#')
   if [ -n "$ee_out" ]; then
@@ -620,14 +646,52 @@ hr "unit tests (CDR + GIOP)"
 # CLAUDE.md's rule — never pipe into `grep -q` when the producer matters —
 # names the SIGPIPE half of this; `pipefail` is a second, independent way the
 # same pipeline lies, and it is the half that silenced this gate.
-ut_out=$(cargo test --workspace --quiet 2>&1); ut_rc=$?
+# ── and where its minutes go ─────────────────────────────────────────────────
+#
+# This group is one opaque block, and a block cannot be argued with. Measured
+# 2026-08-27: **194s in CI and over 50 minutes on a developer laptop** for the
+# same command over the same tree, with no compilation in either (`rustc` idle,
+# no new artifacts) — a 16x gap nobody could attribute, because the only thing
+# the harness prints is `ok`. So the group now keeps a per-binary clock.
+#
+# `--quiet` is dropped for this reason and this reason only: without it cargo
+# prints one `Running …/deps/<name>-<hash>` line per test binary, which is the
+# boundary a clock needs. The verdict below still reads the captured text and
+# the producer's exit status, exactly as before.
+ut_started=$(date +%s)
+ut_out=$(cargo test --workspace 2>&1); ut_rc=$?
+ut_elapsed=$(( $(date +%s) - ut_started ))
 if [ "$ut_rc" -ne 0 ] || grep -q "^error" <<<"$ut_out"; then
-  echo "  FAIL cargo test --workspace (exit $ut_rc)"
+  echo "  FAIL cargo test --workspace (exit $ut_rc, ${ut_elapsed}s)"
   diag "an error line or a FAILED suite" "$ut_out" \
        "$(grep -E "^(error|test result: FAILED|failures:)" <<<"$ut_out")" 12
   fail_total=$((fail_total+1))
 else
-  echo "  ok   cargo test --workspace"
+  echo "  ok   cargo test --workspace (${ut_elapsed}s)"
+fi
+# The slowest binaries, by the gap between consecutive `Running` lines. This is
+# a REPORT and never a gate: no threshold for "a test binary is too slow" is
+# defensible, and inventing one is the failure this project names elsewhere.
+# It exists so the next reader inherits a measurement instead of a mystery.
+# Not `Running [^ ]+ \(`: cargo prints `Running unittests src/lib.rs (…)` for a
+# crate's own tests — two tokens before the paren — and that regex silently
+# counted 1 of 2 when it was checked against real output. Match the deps path
+# itself, which is the part that is always there.
+ut_names=$(grep -oE '\(target/[^)]*/deps/[a-zA-Z_0-9]+-[0-9a-f]+\)' <<<"$ut_out" \
+  | sed 's#.*/deps/##; s/-[0-9a-f]*)$//')
+ut_count=$(printf '%s' "$ut_names" | grep -c . || true)
+if [ "${ut_count:-0}" -gt 0 ]; then
+  echo "       ${ut_count} test binaries ran in ${ut_elapsed}s"
+  # A per-binary clock needs cargo's own timestamps, which it does not print.
+  # What IS available without changing how cargo is invoked is the count and
+  # the total, so the average is reported and the claim is kept to what that
+  # supports. Naming the slowest binary needs `--report-time` (unstable) or one
+  # `cargo test -p` per crate, and neither is worth changing this gate for
+  # until the 16x gap is understood.
+  echo "       average ${ut_elapsed}s / ${ut_count} = $(( ut_elapsed * 1000 / ut_count ))ms per binary"
+else
+  echo "       NOTE no 'Running' line was found in cargo's output, so the per-binary"
+  echo "            count is unmeasured — this line is not evidence of anything"
 fi
 
 # ── Lint (runs before the oracle, on purpose) ────────────────────────────────
@@ -1026,12 +1090,23 @@ hr "F5 lifecycle/property — omniORB's client against OUR tenant service"
 # ever been asserted by the client written alongside the server.
 f5_fail=0
 rm -f /tmp/orbweaver-f5-a.ior /tmp/orbweaver-f5-b.ior /tmp/orbweaver-f5-hold.log
+# Started so its pid is reachable — `( … & )` in a subshell threw `$!` away,
+# and without it the loop below cannot tell a slow fixture from a dead one.
 ( cd "$ROOT" && exec cargo run -q --bin spike-tenants -- \
     /tmp/orbweaver-f5-a.ior /tmp/orbweaver-f5-b.ior --hold \
-    >/tmp/orbweaver-f5-hold.log 2>&1 & )
+    >/tmp/orbweaver-f5-hold.log 2>&1 ) &
+F5_PID=$!
 f5_up=0
+f5_died=0
 for _ in $(seq 1 120); do
   grep -qs HOLDING /tmp/orbweaver-f5-hold.log && { f5_up=1; break; }
+  # Give up the moment the fixture is gone. Waiting the full deadline on a
+  # process that has exited is how a timeout gets blamed for something else:
+  # measured 2026-08-27, this group printed "the holding tenant service never
+  # came up" when the service HAD come up and had written both its IORs, and
+  # the only thing missing was its log file. `events-pull` has had this early
+  # exit for longer and is where the shape is copied from.
+  kill -0 "$F5_PID" 2>/dev/null || { f5_died=1; break; }
   sleep 0.25
 done
 if [ "$f5_up" -eq 1 ]; then
@@ -1045,7 +1120,15 @@ if [ "$f5_up" -eq 1 ]; then
       f5_fail=1 ;;
   esac
 else
-  echo "  FAIL the holding tenant service never came up"; f5_fail=1
+  if [ "${f5_died:-0}" -eq 1 ]; then
+    echo "  FAIL the holding tenant service EXITED before it was ready — it did not"
+    echo "       time out, it ran and stopped. Its own output:"
+  else
+    echo "  FAIL the holding tenant service was still alive and had not said HOLDING"
+    echo "       after 30s — a timeout, not a crash. Its output so far:"
+  fi
+  diag_log /tmp/orbweaver-f5-hold.log 6
+  f5_fail=1
 fi
 fkill spike-tenants
 [ "$f5_fail" -eq 0 ] || fail_total=$((fail_total+1))
@@ -3863,8 +3946,16 @@ rm -f "$EV_IOR" /tmp/orbweaver-events-hold.log
 cargo run -q --bin spike-events -- "$EV_IOR" --hold >/tmp/orbweaver-events-hold.log 2>&1 &
 EV_PID=$!
 ev_up=0
+ev_died=0
 for _ in $(seq 1 60); do
   grep -qs HOLDING /tmp/orbweaver-events-hold.log && { ev_up=1; break; }
+  # `EV_PID` was captured above and never read. Without it this loop cannot
+  # tell three different events apart, and reported all of them in one
+  # sentence. Measured 2026-08-27: the group printed "the holding event channel
+  # never came up within 12s" over a fixture that came up, ran, and printed
+  # `event-channel: FAIL — the dead consumer's backlog must be counted as
+  # dropped, loudly`. The diagnosis hid the finding.
+  kill -0 "$EV_PID" 2>/dev/null || { ev_died=1; break; }
   sleep 0.2
 done
 if [ "$ev_up" -eq 1 ]; then
@@ -3895,7 +3986,14 @@ else
   # Print what the fixture said: on CI (run for 46ccaae, 2026-08-19) this line
   # fired once with nothing to read, right after the self-consistency spike
   # had failed on a race, and did not reproduce on the next run.
-  echo "  FAIL the holding event channel never came up within 12s; its log:"
+  if [ "${ev_died:-0}" -eq 1 ]; then
+    echo "  FAIL the holding event channel EXITED before it was ready — it ran and"
+    echo "       stopped rather than timing out. Its own verdict is below and IS the"
+    echo "       finding; this line is not."
+  else
+    echo "  FAIL the holding event channel was still alive and had not said HOLDING"
+    echo "       after 12s — a timeout, not a crash. Its log:"
+  fi
   diag_log /tmp/orbweaver-events-hold.log 5
   ev_fail=1
 fi
@@ -4695,6 +4793,42 @@ else
   echo "  at run time, not copied into this harness. No score is printed here and"
   echo "  none should be derived: a shrinking unmeasured list is progress only"
   echo "  when a run closed the leak, and looks identical to nobody looking."
+fi
+
+# ── Did anything this run started outlive it? ───────────────────────────────
+#
+# `cleanup` reaps orphans in this process group at EXIT, and that is the floor.
+# A floor that reaps SILENTLY is the problem it was built to solve wearing a
+# hat: after it, a leak and a clean run print the same thing, so the fixture
+# repair that landed today would stop being measurable the moment it regressed.
+# **Reaping is not reporting.** This group runs BEFORE the verdict and before
+# `cleanup`, so what it sees is what the run actually left.
+#
+# In our process group means this run started it; `ppid=1` means whatever
+# started it is gone. Nothing still parented is leaked, and this shell and its
+# ancestors cannot match, because they have real parents.
+#
+# Measured 2026-08-27 for scale: before the repair, one run of this harness left
+# **twelve** orphaned `orbweaver-py-bridge` processes, each holding a port, and
+# every test that leaked them passed.
+hr "no fixture outlived this run"
+if [ -z "$own_pgid" ]; then
+  echo "  FAIL this run could not read its own process group, so whether it leaked a"
+  echo "       fixture is unmeasured — and an unmeasured check is a failure, never a pass"
+  fail_total=$((fail_total+1))
+else
+  leaked=$(ps -eo pid=,ppid=,pgid=,comm= \
+    | awk -v g="$own_pgid" -v me="$$" '$2==1 && $3==g && $1!=me {print $1" "$4}')
+  leaked_n=$(printf '%s' "$leaked" | grep -c . || true)
+  if [ "${leaked_n:-0}" -gt 0 ]; then
+    echo "  FAIL $leaked_n process(es) this run started outlived it — a fixture is not"
+    echo "       reaping what it spawned. A test that leaks is GREEN while leaking, which"
+    echo "       is why this counts processes instead of reading a verdict."
+    printf '%s\n' "$leaked" | sed 's/^/         /'
+    fail_total=$((fail_total+1))
+  else
+    echo "  ok   nothing this run started outlived it (process group $own_pgid)"
+  fi
 fi
 
 hr "verdict"
