@@ -633,6 +633,41 @@ fi
 rm -f "$ee_probe"
 
 # ── Unit tests ───────────────────────────────────────────────────────────────
+# ── Build once, under its own name ───────────────────────────────────────────
+#
+# This harness invokes **34 distinct binaries across 92 `cargo run` calls**, and
+# only five scattered `cargo build` lines precede any of them. Two costs follow,
+# and the second is the reason this group exists:
+#
+#   * every `cargo run` re-checks the dependency graph — measured 2026-08-27,
+#     **700 ms for a no-op**, so ~64s across 92 calls;
+#   * a binary that is not built yet pays its **compile inside whichever group
+#     asks for it first**. In CI that made `NAT rewriting` report **385s** for a
+#     measurement whose entire dial budget is 3 seconds. The group's number was
+#     not its measurement, and nothing said so.
+#
+# This file already knew: the comment above the `spike-server` fixture records
+# that `cargo run` "had to compile first and accidentally covered the race".
+#
+# So the build is paid once, here, where it is labelled. It is NOT a gate on
+# duration — no threshold for "too slow" is defensible — but a build FAILURE is
+# a failure, because everything after it would be measuring a tree that does not
+# compile.
+hr "build everything this run will execute"
+pb_started=$(date +%s)
+pb_out=$(cargo build -q --workspace --bins --tests 2>&1); pb_rc=$?
+pb_elapsed=$(( $(date +%s) - pb_started ))
+if [ "$pb_rc" -ne 0 ]; then
+  echo "  FAIL cargo build --workspace --bins --tests (exit $pb_rc, ${pb_elapsed}s) — every"
+  echo "       group below would be measuring a tree that does not compile"
+  diag "an error line" "$pb_out" "$(grep -E "^error" <<<"$pb_out")" 8
+  fail_total=$((fail_total+1))
+else
+  echo "  ok   workspace bins and tests built (${pb_elapsed}s)"
+  echo "       every group below is timed against a built tree, so its number is its"
+  echo "       measurement rather than whichever compile it happened to trigger"
+fi
+
 hr "unit tests (CDR + GIOP)"
 # Captured, then matched — and the producer's own exit status is read first.
 #
