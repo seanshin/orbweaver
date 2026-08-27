@@ -31,11 +31,13 @@ cd "$ROOT" || exit 2
 DRY=1
 FORCE=""
 INCR=0
+CARGO_CLEAN=0
 for a in "$@"; do
   case "$a" in
     --apply) DRY=0 ;;
     --force) FORCE="--force" ;;
     --incremental) INCR=1 ;;
+    --cargo-clean) CARGO_CLEAN=1 ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "unknown argument: $a" >&2; exit 2 ;;
   esac
@@ -80,6 +82,35 @@ held_before=${held_before:-0}
 echo "== what this repository is holding =="
 du -sh target .claude/worktrees .git 2>/dev/null | sed 's/^/  /'
 df -h . | tail -1 | sed 's/^/  /'
+
+# ── The one that costs time rather than only disk ────────────────────────────
+#
+# `cargo` writes a new hash per build and evicts nothing, and this repository
+# builds the same code many ways — different RUSTFLAGS, different features,
+# a worktree per agent. `target/debug/deps` therefore grows without bound, and
+# cargo reads it on every invocation.
+#
+# Measured 2026-08-27, and it is not a disk problem:
+#
+#   deps files    858,966          13,538   (after `cargo clean`)
+#   target             25G            2.4G
+#   cargo test --workspace
+#                 >50 minutes      221s, then 85s   (CI: 194s)
+#
+# `cargo clean` itself took 287s — the directory was too large to *delete*
+# quickly, while cargo was scanning it on every build.
+#
+# No threshold is printed and none is a gate: there is no defensible number for
+# "too many artifacts", the same reason `entry_cost.py` reports and does not
+# gate. What is printed is the count beside the measurement, so a reader can
+# decide. `--cargo-clean` acts on it, and is opt-in because it makes the next
+# build a full rebuild.
+deps_n=$(find target/debug/deps -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
+if [ "${deps_n:-0}" -gt 0 ]; then
+  echo "  target/debug/deps holds ${deps_n} file(s)"
+  echo "  for scale: at 858,966 files \`cargo test --workspace\` took >50 min here"
+  echo "             and 221s after a clean, against 194s in CI"
+fi
 echo
 
 # `git for-each-ref`, not `git branch --list`: a branch checked out in another
@@ -139,6 +170,18 @@ if [ "$INCR" -eq 1 ]; then
   else
     rm -rf target/*/incremental
     echo "  dropped    $((incr_kb / 1024)) MB of target/*/incremental"
+  fi
+fi
+
+if [ "$CARGO_CLEAN" -eq 1 ]; then
+  if [ "$DRY" -eq 1 ]; then
+    echo "  would run \`cargo clean\` — ${deps_n:-0} artifact file(s) go, and the next"
+    echo "               build is a full rebuild"
+  else
+    echo "  cargo clean: removing ${deps_n:-0} artifact file(s) (this is slow — it was"
+    echo "               287s at 858,966 files)"
+    cargo clean
+    echo "  cargo clean: done, target/debug/deps now $(find target/debug/deps -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ') file(s)"
   fi
 fi
 

@@ -271,6 +271,25 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   나무를 거두는 것이 아니다. 세 계층이 각자 자기 범위 안에서 옳았고, 그 사이를
   아무도 소유하지 않았다. 누수하는 테스트는 수정 전후 모두 초록이었다 — 그래서
   대조군은 판정을 읽지 않고 프로세스를 센다.*
+- **`target/` grows without bound, and it costs time rather than disk.** Cargo
+  writes a new hash per build and evicts nothing, and this repository builds the
+  same code many ways — a different `RUSTFLAGS`, a different feature set, a
+  worktree per agent. Measured 2026-08-27, after the harness had twice spent
+  most of an hour in one group: **`target/debug/deps` held 858,966 files and
+  25 G**, and `cargo test --workspace` took **over 50 minutes** locally against
+  **194s in CI** for the same tree with no compilation in either. After
+  `cargo clean`: 13,538 files, 2.4 G, and the same command took **221s, then
+  85s**. Cargo reads that directory on every invocation; `cargo clean` itself
+  took 287s, so it had grown too large to *delete* quickly. The 16x was never
+  the tests — 2002 of them pass in 85 seconds. Diagnosed rather than suspected:
+  the slow case was seen twice, the fix stopped it, and the fast case
+  reproduced twice. `spikes/reclaim.sh` prints the count beside this
+  measurement and `--cargo-clean` acts on it; **no threshold is a gate**,
+  because there is no defensible number for "too many artifacts" — the same
+  reason `entry_cost.py` reports and does not gate. *`target/`는 무한히 자라고,
+  그 비용은 디스크가 아니라 시간이다. 86만 파일에서 50분, 청소 후 221초, CI는
+  194초. cargo는 매 호출마다 그 디렉터리를 읽는다. 테스트가 느린 것이 아니었다 —
+  2002개가 85초에 통과한다.*
 - **A completed client `connect` does not mean the server can accept yet.**
   On macOS loopback a non-blocking single `accept()` misses fresh connections
   ~5% of the time (measured 25/500 in stream E batch 2). Accept-side checks
