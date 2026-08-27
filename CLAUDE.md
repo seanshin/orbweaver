@@ -191,6 +191,34 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   `pipefail`. 변수로 캡처해도 파이프면 똑같이 거짓말한다; herestring을 쓴다.
   "다섯 번 도는 이유는 한 번의 초록이 증거가 아니기 때문"이라던 그룹이 바로 그
   형태 때문에 실패한 실행을 못 보고 있었다.*
+  **What fires it is a complete line, not a full buffer.** `grep -q` cannot
+  decide before it has a whole matching line, so the early exit that kills the
+  producer only happens once one has arrived. Measured 2026-08-27: a marker
+  alone on the first line lies from ~96 KB of tail, and *races* at 64 KB —
+  status 141 while the `if` still took THEN. **The same marker at the front of
+  one unbroken 1 MB line does not lie at all**, because grep must read the line
+  to its end. That is why, in a five-site sweep, `spikes/nat/vm/run.sh`'s two
+  checks were the pair telling the truth — a stringified IOR is one line — and
+  it is why hand-checking these always looks fine. Convert them anyway: the
+  form is not a judgement call about today's payload. But **do not record a
+  site as "was lying" without measuring it.** *방아쇠는 버퍼가 아니라 완전한 한
+  줄이다. 표지가 첫 줄에 단독이면 꼬리 ~96 KB부터 거짓말하고 64 KB에서 경합하지만,
+  끊기지 않은 1 MB 한 줄의 앞에 있으면 거짓말하지 않는다 — grep이 줄 끝까지 읽어야
+  하기 때문이다. 형태는 그래도 바꾸되, 재보지 않고 "거짓말하고 있었다"고 적지
+  않는다.*
+- **A sweep is scoped to a rule; a sweep that names a file will sweep that
+  file.** 2026-08-25's `printf | grep -q` sweep reported **76 instances** and
+  touched **only `spikes/run_checks.sh`**. Five survived in three scripts it
+  never opened, one of them carrying a comment asserting immunity in exactly
+  the words this file refutes. The number was true and useless — **it measured
+  the file, not the rule.** A sweep lands with the scan that produced it,
+  runnable over the whole tree, or the next reader inherits a count instead of
+  a check. That scan is now a group in `run_checks.sh`, over `git ls-files`
+  rather than a directory walk, with a synthesised two-line probe — the defect
+  and its repair — that it must report as exactly one hit before its silence
+  over the tree is allowed to mean anything. *스윕의 범위는 규칙이지 파일이
+  아니다. 76은 참이었고 쓸모없었다 — 규칙이 아니라 파일을 잰 수였기 때문이다.
+  스윕은 그것을 만든 스캔과 함께, 트리 전체에서 돌 수 있는 형태로 착지한다.*
 - **Never edit a script while it is running.** `bash` reads a script
   incrementally, so an edit that shifts byte offsets can make a running shell
   resume at the wrong place. Done 2026-08-25 — three gate repairs written into

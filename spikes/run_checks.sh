@@ -510,6 +510,62 @@ else
   fail_total=$((fail_total+1))
 fi
 
+# ── No early-exit consumer on the end of a pipe ──────────────────────────────
+#
+# `grep -q` / `grep -m1` exit on the first match, SIGPIPE the producer (141),
+# and `pipefail` makes 141 the pipeline's status — which an `if` reads as "no
+# match". This file's header records the sweep that fixed 76 of these. That
+# sweep reported a number and touched ONE FILE: five survived in three scripts
+# it never opened (`nat_rewrite.sh`, `nat/preflight.sh`, `nat/vm/run.sh`), one
+# of them carrying a comment asserting immunity in exactly the words the header
+# refutes. So the sweep is replaced by a scan that runs over the whole tree.
+#
+# `| head` is NOT matched, on purpose: these scripts use it to trim a transcript
+# for display or to take a value out of `$(...)`, and nothing reads that status.
+# The `[^|]` prefix keeps the REPAIRED form — `… || grep -q "…" <<<"$out"`, an
+# OR and not a pipe — from matching.
+hr "no early-exit consumer on the end of a pipe"
+EARLY='[^|]\|[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:space:]]+-[A-Za-z]*(q|m1)'
+
+# SYNTHESISE THE SUBJECT. A scan that finds nothing is indistinguishable from a
+# scan that cannot see, so before its silence is allowed to mean anything it is
+# shown finding one. The probe is written here rather than pointed at a file in
+# the tree, because a control that names a live subject stops being a control
+# when the subject is repaired — which is the defect this harness recorded in
+# `ledger_control.sh` on 2026-08-26. Line 1 is the defect and line 2 is the
+# repair: a scan reporting neither measures nothing, and one reporting both is
+# tuned to be loud rather than to be right.
+ee_probe=$(mktemp -t orbweaver-earlyexit)
+# The flag is assembled rather than typed: writing `grep -q` literally here
+# would put the defect into this file, and the scan below would report its own
+# probe. A gate that trips on its own text cannot be run over its own tree.
+ee_q='-'q
+printf '%s\n' "if printf '%s' \"\$out\" | grep $ee_q MARKER; then :; fi"   >"$ee_probe"
+printf '%s\n' "if [ 1 -eq 1 ] || grep $ee_q MARKER <<<\"\$out\"; then :; fi" >>"$ee_probe"
+ee_hits=$(grep -nE "$EARLY" "$ee_probe" | cut -d: -f1 | tr '\n' ',')
+if [ "$ee_hits" != "1," ]; then
+  echo "  FAIL the early-exit scan reported lines [$ee_hits] of a two-line probe"
+  echo "       whose defect is line 1 and whose repair is line 2, so it is not"
+  echo "       measuring what it claims and its silence over the tree means nothing"
+  fail_total=$((fail_total+1))
+else
+  # Tracked files only. `grep -r .` also walks `.claude/worktrees/` — other
+  # branches' checkouts, which are not this tree and whose defects are not
+  # this run's to report — and `target/`. `git ls-files` is the scope the
+  # rule actually has.
+  ee_out=$(git ls-files -z -- '*.sh' | xargs -0 grep -nE "$EARLY" 2>/dev/null \
+    | grep -v ':[0-9]*:[[:space:]]*#')
+  if [ -n "$ee_out" ]; then
+    echo "  FAIL a script pipes into an early-exit grep — capture, then match with"
+    echo "       a herestring (grep -q … <<<\"\$out\"), and read the producer's status first"
+    printf '%s\n' "$ee_out" | sed 's/^/       /'
+    fail_total=$((fail_total+1))
+  else
+    echo "  ok   no script pipes into \`grep -q\`/\`grep -m1\`, and the probe shows the scan sees one"
+  fi
+fi
+rm -f "$ee_probe"
+
 # ── Unit tests ───────────────────────────────────────────────────────────────
 hr "unit tests (CDR + GIOP)"
 # Captured, then matched — and the producer's own exit status is read first.
