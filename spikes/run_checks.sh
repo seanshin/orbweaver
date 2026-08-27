@@ -604,7 +604,11 @@ else
   ee_stray=""
   while IFS= read -r ee_f; do
     case "$ee_f" in *.sh) continue ;; esac
-    if head -1 "$ee_f" 2>/dev/null | grep -qE '^#!.*(ba)?sh'; then
+    # A herestring, not `head … | grep -q`. `head -1` is a short producer so
+    # SIGPIPE would never fire here — and the rule is about the FORM, not about
+    # today's payload, which is what this very gate exists to enforce. It
+    # caught its own author on the run that introduced it.
+    if grep -qE '^#!.*(ba)?sh' <<<"$(head -1 "$ee_f" 2>/dev/null)"; then
       ee_stray="$ee_stray$ee_f
 "
     fi
@@ -4632,6 +4636,56 @@ esac
 # are now fixed (the anchors there are the full title, and `build` refuses a
 # driver that would re-enter), and the title stays distinct because a hang is the
 # one diagnostic nobody can read.
+# ── Did anything this run started outlive it? ───────────────────────────────
+#
+# `cleanup` reaps orphans in this process group at EXIT, and that is the floor.
+# A floor that reaps SILENTLY is the problem it was built to solve wearing a
+# hat: after it, a leak and a clean run print the same thing, so the fixture
+# repair that landed today would stop being measurable the moment it regressed.
+# **Reaping is not reporting.** This group runs BEFORE the verdict and before
+# `cleanup`, so what it sees is what the run actually left.
+#
+# In our process group means this run started it; `ppid=1` means whatever
+# started it is gone. Nothing still parented is leaked, and this shell and its
+# ancestors cannot match, because they have real parents.
+#
+# Measured 2026-08-27 for scale: before the repair, one run of this harness left
+# **twelve** orphaned `orbweaver-py-bridge` processes, each holding a port, and
+# every test that leaked them passed.
+hr "no fixture outlived this run"
+if [ -z "$own_pgid" ]; then
+  echo "  FAIL this run could not read its own process group, so whether it leaked a"
+  echo "       fixture is unmeasured — and an unmeasured check is a failure, never a pass"
+  fail_total=$((fail_total+1))
+else
+  leaked=$(ps -eo pid=,ppid=,pgid=,comm= \
+    | awk -v g="$own_pgid" -v me="$$" '$2==1 && $3==g && $1!=me {print $1" "$4}')
+  leaked_n=$(printf '%s' "$leaked" | grep -c . || true)
+  if [ "${leaked_n:-0}" -gt 0 ]; then
+    echo "  FAIL $leaked_n process(es) this run started outlived it — a fixture is not"
+    echo "       reaping what it spawned. A test that leaks is GREEN while leaking, which"
+    echo "       is why this counts processes instead of reading a verdict."
+    printf '%s\n' "$leaked" | sed 's/^/         /'
+    fail_total=$((fail_total+1))
+  else
+    echo "  ok   nothing this run started outlived it (process group $own_pgid)"
+  fi
+fi
+
+# Placed BEFORE the ledger groups on purpose. `spikes/ledger_control.sh` lifts
+# `/^hr "transparency ledger/` **to end of file** with awk and runs those bytes
+# as its subject; a group inserted between the ledger and the verdict lands
+# inside that window and runs inside the control, which broke 13 of its 34
+# assertions on the run that introduced it. The control is not fragile — it
+# deliberately reads the harness rather than copying it, which is what let it
+# notice at all.
+#
+# **What that costs, stated rather than hidden**: this group runs before the two
+# ledger groups, so a fixture leaked by *those* is not seen here — `cleanup`
+# still reaps it, silently, which is the exact half this group exists to stop.
+# It is a narrow window on purpose: the ledger groups read state and start no
+# servers. Widening it means teaching `ledger_control.sh` where to stop lifting,
+# which couples the control to a group it has no business knowing about.
 hr "ledger controls — every way the transparency ledger could be green while measuring nothing (D031 H2)"
 lc_out=$(./spikes/ledger_control.sh 2>&1); lc_rc=$?
 if [ "$lc_rc" -eq 0 ]; then
@@ -4793,42 +4847,6 @@ else
   echo "  at run time, not copied into this harness. No score is printed here and"
   echo "  none should be derived: a shrinking unmeasured list is progress only"
   echo "  when a run closed the leak, and looks identical to nobody looking."
-fi
-
-# ── Did anything this run started outlive it? ───────────────────────────────
-#
-# `cleanup` reaps orphans in this process group at EXIT, and that is the floor.
-# A floor that reaps SILENTLY is the problem it was built to solve wearing a
-# hat: after it, a leak and a clean run print the same thing, so the fixture
-# repair that landed today would stop being measurable the moment it regressed.
-# **Reaping is not reporting.** This group runs BEFORE the verdict and before
-# `cleanup`, so what it sees is what the run actually left.
-#
-# In our process group means this run started it; `ppid=1` means whatever
-# started it is gone. Nothing still parented is leaked, and this shell and its
-# ancestors cannot match, because they have real parents.
-#
-# Measured 2026-08-27 for scale: before the repair, one run of this harness left
-# **twelve** orphaned `orbweaver-py-bridge` processes, each holding a port, and
-# every test that leaked them passed.
-hr "no fixture outlived this run"
-if [ -z "$own_pgid" ]; then
-  echo "  FAIL this run could not read its own process group, so whether it leaked a"
-  echo "       fixture is unmeasured — and an unmeasured check is a failure, never a pass"
-  fail_total=$((fail_total+1))
-else
-  leaked=$(ps -eo pid=,ppid=,pgid=,comm= \
-    | awk -v g="$own_pgid" -v me="$$" '$2==1 && $3==g && $1!=me {print $1" "$4}')
-  leaked_n=$(printf '%s' "$leaked" | grep -c . || true)
-  if [ "${leaked_n:-0}" -gt 0 ]; then
-    echo "  FAIL $leaked_n process(es) this run started outlived it — a fixture is not"
-    echo "       reaping what it spawned. A test that leaks is GREEN while leaking, which"
-    echo "       is why this counts processes instead of reading a verdict."
-    printf '%s\n' "$leaked" | sed 's/^/         /'
-    fail_total=$((fail_total+1))
-  else
-    echo "  ok   nothing this run started outlived it (process group $own_pgid)"
-  fi
 fi
 
 hr "verdict"
