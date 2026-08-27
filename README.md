@@ -946,22 +946,36 @@ wire changes with a published specification behind them, and one is a record
 rather than any code at all. The order below is
 [`D035`](docs/decisions/D035-the-reference-the-orb-hands-out.md) §8's
 recommendation, which is a recommendation and not a schedule — it is stated so
-it can be rejected.
+it can be refused.
 
 | | Stage | Closes | Isolated to |
 |---|---|---|---|
+| **B** | record the bootstrap leak as **irreducible in a single-node deployment** | moves the Lifecycle row from *unmeasured* to *measured, leaks at the bootstrap* | a leak-test leg and a `D029` §6.1 row; no wire change |
+| **P** | a **TAO peer** as a fixture, on omniORB's and JacORB's terms | nothing on its own — it is what can refute R1–R4, and it retires the differential's standing `tao_idl` skip | `spikes/`, a separate process; never a dependency |
 | **R1** | `TAG_FT_GROUP` (27) read and written — domain id, group id, **version** | nothing yet; it is content nothing acts on | `orbweaver-giop`, IOR only |
 | **R2** | `FT_GROUP_VERSION` (12) service context sent with the version dialled | nothing yet; an unknowing peer ignores it | the request path |
 | **R3** | server answers `LOCATION_FORWARD_PERM` when the version it is given is stale | **a caller holding a replaced reference is told, rather than failing** | one `Dispatch` |
 | **R4** | `TAG_FT_PRIMARY` (28) honoured as a dial *preference* | dial order only — the spec says correctness does not depend on it | `Connection::connect` |
-| **B** | record the bootstrap leak as **irreducible in a single-node deployment** | moves the Lifecycle row from *unmeasured* to *measured, leaks at the bootstrap* | a leak-test leg and a `D029` §6.1 row; no wire change |
 | **G1** | a reference *arriving* at a foreign servant is a handle it cannot invoke — `D029` §6.1.1 item 4 | the Language row's last named leak | `orbweaver-gen`'s seam |
 | **L0** | **Decision X** — is the reference `Orb::server` hands out *indirect*? | the **Location** row, not this one — see below | a decision record; no code until it is answered |
 
-**R1 and R2 change no wire behaviour at all**, which is why they are first: a
-component nobody acts on and a service context an unknowing peer ignores. The
-first half of the FT work is close to free to try, and R3 is where behaviour
-changes.
+**B is first because it answers the decision rather than a consequence of it**,
+and because it costs a leak-test leg and a row edit. Approving D035 answered
+D029's required question with *displacement is not closure*, which means the
+Lifecycle row can stop waiting on a decision that **cannot reach zero** — a
+caller must be given one address to send a first packet to. A row that can never
+move is the same class as a gate that can never go red.
+
+**P is a fixture and it is ahead of R1 on a measurement, not a preference.**
+D035 §9 makes R1–R4 refutable by *a peer that implements FT*, and there is none
+here: measured 2026-08-27, omniORB 4.3.4's headers carry no `TAG_FT_GROUP`,
+`FT_GROUP_VERSION` or `IOGR`, JacORB 3.9's jar has no FT entries, and `tao_idl`
+is absent — the differential has been reporting `SKIPPED tao_idl absent` all
+along. R1 and R2 change no wire behaviour, which is why they were once listed
+first; but a cheap experiment nothing can refute is not cheap, it is decorative,
+and a convention both ends apply cannot be refuted by a round trip. If the peer
+will not stand up, that is a result: R1–R4 are *unrefutable here* and get
+recorded as such rather than landed anyway.
 
 **L0 is last here and that is a change from this file's first version**, which
 listed it first because `D029` framed X as *the* lifecycle decision. D035 §4
@@ -977,9 +991,21 @@ remains the better answer for the Location row.
 [`D035`](docs/decisions/D035-the-reference-the-orb-hands-out.md) §8의
 **권고**이지 일정이 아닙니다 — 거절당할 수 있도록 적은 것입니다.
 
-**R1과 R2는 와이어 동작을 전혀 바꾸지 않습니다.** 아무도 반응하지 않는 컴포넌트와,
-모르는 피어가 무시하는 서비스 컨텍스트입니다. 그래서 앞에 둡니다. 동작이 바뀌는
-지점은 R3입니다.
+**B가 맨 앞인 것은 그것이 결정의 결과가 아니라 결정 자체에 답하기 때문이고**,
+비용이 누출 테스트 다리 하나와 행 편집 하나이기 때문입니다. D035 승인은 D029가
+요구한 질문에 *전가는 폐쇄가 아니다*로 답했고, 그러면 생애주기 행은 **0에 닿을 수
+없는 결정**을 더 기다리지 않아도 됩니다 — 호출자는 첫 패킷을 보낼 주소 하나를
+받아야 합니다. 결코 움직일 수 없는 행은 결코 빨개질 수 없는 게이트와 같은 부류입니다.
+
+**P는 픽스처이고, 선호가 아니라 측정 때문에 R1보다 앞에 있습니다.** D035 §9는
+R1–R4를 *FT를 구현한 피어*로 반증 가능하게 해두었는데 여기에는 그런 피어가
+없습니다: 2026-08-27 측정으로 omniORB 4.3.4 헤더에 `TAG_FT_GROUP`·
+`FT_GROUP_VERSION`·`IOGR` 0건, JacORB 3.9 jar에 FT 항목 0건, `tao_idl` 부재이며
+differential은 줄곧 `SKIPPED tao_idl absent`를 보고하고 있었습니다. R1과 R2는
+와이어 동작을 전혀 바꾸지 않고 그래서 한때 맨 앞이었지만, **반증할 것이 없는 싼
+실험은 싼 것이 아니라 장식**이고, 양쪽이 적용하는 관례는 왕복으로 반박되지
+않습니다. 피어를 세우지 못하면 그것이 결과이며, R1–R4가 *여기서 반증 불가*임을
+기록할 뿐 그냥 착지시키지 않습니다.
 
 **L0이 맨 뒤인 것은 이 파일의 첫 판에서 바뀐 것입니다.** 처음에는 D029가 X를
 *유일한* 생애주기 결정으로 놓았기에 맨 앞이었습니다. D035 §4가 D029가 요구한

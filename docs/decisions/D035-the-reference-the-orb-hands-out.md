@@ -1,18 +1,26 @@
 # D035 — The reference the ORB hands out, and whether it should name a place
 
-**STATUS: PROPOSED** — drafted 2026-08-27 because D029 §6.1's lifecycle row has
-waited on a decision called **X** since 2026-08-26 and nothing can move it from
-this side. Not self-approvable, and not for the usual reason: §3 lists four
-consequences the owner has to accept or refuse, and §4 answers the question
-D029 requires of anyone proposing X — *are you claiming closure or
-displacement?* — with **displacement**. A proposal that quietly claimed closure
-would be the row this whole criterion exists to prevent.
+**STATUS: APPROVED 2026-08-27, with §8's ordering amended.** The owner answered
+§4 — *is a leak displaced from N to 1 a row that no longer leaks, or a row that
+leaks once instead of N times?* — with **the latter: displacement is not
+closure**, which is the answer D029 already gives for the bootstrap and which
+keeps one fact with one answer. What was approved is therefore **B first, then a
+TAO fixture, then C conditional on that fixture; A deferred** — not §8's
+original *C then B*. The reason is a measurement §8 did not have, recorded in
+§6.2 and §9: **no peer available here implements Fault Tolerant CORBA**, so C's
+whole argument for preference over A — that it is checkable against an
+independent implementation — has no fixture today. §8 carries the amended order
+and what changed.
 
-**상태: 제안** — 2026-08-27 작성. D029 §6.1의 생애주기 행이 2026-08-26부터 **X**
-라는 결정을 기다리고 있고, 이쪽에서는 움직일 수 없다. 스스로 승인하지 않는다.
-§4는 D029가 X를 제안하는 사람에게 요구한 질문 — *폐쇄를 주장하는가, 전가를
-주장하는가* — 에 **전가**라고 답한다. 조용히 폐쇄를 주장하는 제안이야말로 이
-기준이 막으려고 존재하는 것이다.
+**상태: 2026-08-27 승인, §8의 순서를 수정하여.** 소유자는 §4 — *N에서 1로 옮겨진
+구멍은 더 이상 새지 않는 행인가, N번 대신 한 번 새는 행인가* — 에 **후자, 즉
+전가는 폐쇄가 아니다**라고 답했다. 이는 D029가 부트스트랩에 대해 이미 내놓은
+답이며, 한 사실이 한 답을 갖게 한다. 따라서 승인된 것은 §8의 원래 *C 다음 B*가
+아니라 **B 먼저, 그다음 TAO 픽스처, 그리고 그 픽스처를 조건으로 하는 C이며 A는
+보류**다. 이유는 §8이 갖지 못한 측정이고 §6.2와 §9에 기록되어 있다 — **여기서
+쓸 수 있는 어떤 피어도 Fault Tolerant CORBA를 구현하지 않는다.** 그래서 C가 A보다
+선호되는 근거인 *독립 구현에 대고 반증할 수 있다*는 주장에는 오늘 픽스처가 없다.
+§8이 수정된 순서와 무엇이 바뀌었는지를 담는다.
 
 > Everything cited is on `main` at `823017e`. Figures carry the date they were
 > taken. *인용은 `main`(`823017e`) 기준이며, 수치에는 측정 날짜가 붙는다.*
@@ -251,7 +259,58 @@ A and C are **not exclusive**. §6.2's table is the reason: X minimises what a
 caller can see and FT maximises what a caller can survive, and they answer
 different rows of D029 §6.1 — X the Location row, FT the Lifecycle row.
 
-## 8. Recommendation / 권고
+## 8. Recommendation, and what the owner approved / 권고와 승인된 것
+
+> **APPROVED 2026-08-27, amended: B first, then a TAO fixture, then C
+> conditional on it; A deferred.** What changed from the recommendation below
+> is the *order*, and it changed on a measurement rather than on a preference.
+>
+> §9 says C is refuted by *"a peer that implements FT"*. Measured 2026-08-27,
+> after this section was written: **omniORB 4.3.4's headers contain no
+> `TAG_FT_GROUP`, `FT_GROUP_VERSION` or `IOGR`; JacORB 3.9's jar has no FT
+> entries; and `tao_idl` is absent** — the differential already reports
+> `SKIPPED tao_idl absent — its column is unmeasured, not passing`. So the one
+> argument that puts C ahead of A, that it is checkable against an independent
+> implementation of the same specification, **has no fixture on this machine.**
+> Landing R1–R4 without one produces a wire feature that is green because both
+> ends are ours, which is the shape §6.2 was written to avoid and which this
+> project refuses everywhere else.
+>
+> The amended order therefore is:
+>
+> 1. **B now.** It is small, it is independent of which mechanism eventually
+>    lands, and it answers §4 — which is the decision, the paths being only its
+>    consequences. It also retires a counted `SKIPPED` that was waiting on a
+>    decision **that cannot reach zero**, and a row that can never move is the
+>    same class as a gate that can never go red.
+> 2. **Then a TAO fixture**, under the same terms as omniORB and JacORB — a
+>    separate-process wire peer and an external program whose output is read,
+>    never a dependency. Two rows move for one fixture: it is what can refute
+>    C, and it retires the differential's standing `tao_idl` skip. **If it will
+>    not stand up, that is a result** — it makes C *unrefutable here*, and that
+>    is what should be recorded rather than C being landed anyway.
+> 3. **Then C's R1 and R2**, which change no wire behaviour, but only once
+>    something exists that could refute them. A cheap experiment with no
+>    possible refutation is not cheap, it is decorative.
+> 4. **A deferred**, exactly as below — X answers the *Location* row, and what
+>    it should stop being is *the* lifecycle decision.
+>
+> **승인 2026-08-27, 수정: B 먼저, 그다음 TAO 픽스처, 그것을 조건으로 C, A는
+> 보류.** 아래 권고에서 바뀐 것은 *순서*이고, 선호가 아니라 측정 때문에 바뀌었다.
+> §9는 C가 *"FT를 구현한 피어"*에 의해 반증된다고 적는다. 2026-08-27 측정:
+> **omniORB 4.3.4 헤더에 `TAG_FT_GROUP`·`FT_GROUP_VERSION`·`IOGR` 0건, JacORB
+> 3.9 jar에 FT 항목 0건, `tao_idl` 부재** — differential은 이미
+> `SKIPPED tao_idl absent`를 보고하고 있다. 즉 C를 A보다 앞세우는 유일한 근거에
+> 오늘 픽스처가 없다. 픽스처 없이 R1–R4를 착지시키면 **양 끝이 다 우리 것이라
+> 초록인 와이어 기능**이 나오며, 그것은 §6.2가 피하려고 쓰인 모양이다. 그러므로
+> B를 먼저 두고(§4에 답하며, 0에 닿을 수 없는 결정을 기다리던 계수된 `SKIPPED`를
+> 없앤다 — 결코 움직일 수 없는 행은 결코 빨개질 수 없는 게이트와 같은 부류다),
+> 그다음 TAO 픽스처를 세우고(omniORB·JacORB와 같은 조건으로 — 별도 프로세스
+> 피어이자 출력을 읽는 외부 프로그램일 뿐 의존성이 아니다. 세우지 못하면 그것이
+> 결과이며, C가 *여기서 반증 불가*임을 기록한다), 그다음에야 R1·R2를 시도한다.
+> 반증될 수 없는 싼 실험은 싼 것이 아니라 장식이다. A는 아래 그대로 보류한다.
+
+The document's own recommendation, which the above amends the order of:
 
 **C, then B; A deferred rather than refused.** Stated so it can be rejected
 rather than left for the reader to assemble:
@@ -286,6 +345,28 @@ Written down so approving it is not the end of the argument:
   claim is interoperability, and an independent implementation is what can
   falsify it. It is also refuted if R3 cannot be measured in one process, since
   the whole argument for C over A is that its useful half needs no second node.
+
+  **Measured 2026-08-27, and it is why §8's order was amended on approval:
+  there is no such peer here.**
+
+  | peer | implements FT | how it was checked |
+  |---|---|---|
+  | omniORB 4.3.4 | **no** | `TAG_FT_GROUP`, `FT_GROUP_VERSION`, `IOGR`: zero hits across `/opt/homebrew/include/omniORB4` |
+  | JacORB 3.9 | **no** | zero FT entries in `spikes/jacorb/lib/jacorb.jar` |
+  | TAO | yes, but **absent** | `tao_idl` not on this machine; `spikes/differential.sh` already reports `SKIPPED tao_idl absent — its column is unmeasured, not passing` |
+
+  So C's refutation criterion is presently **unrunnable**, which is not the same
+  as C being refuted and must not be recorded as it. What it means is that the
+  fixture comes before the feature: until a TAO peer stands up, landing R1–R4
+  would produce a wire shape whose only reader is ours, and this project's own
+  rule is that a convention both ends apply cannot be refuted by a round trip.
+
+  *2026-08-27 측정, 승인 시 §8의 순서를 수정한 이유다 — **여기에 그런 피어가
+  없다.** omniORB 4.3.4 헤더 0건, JacORB 3.9 jar 0건, `tao_idl` 부재(하네스가
+  이미 `SKIPPED tao_idl absent`로 보고 중). C의 반증 기준이 지금은 **돌릴 수
+  없다**는 뜻이며, 이는 C가 반증되었다는 것과 다르고 그렇게 기록해서도 안 된다.
+  뜻하는 바는 기능보다 픽스처가 먼저라는 것이다 — 양쪽이 적용하는 관례는 왕복으로
+  반박되지 않는다.*
 - **B is refuted** if a single-node deployment turns out to have a way to give a
   caller its first address without that address being a leak. §4 argues there is
   none; a counter-example ends B.

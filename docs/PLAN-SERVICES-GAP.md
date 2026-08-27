@@ -93,9 +93,10 @@ and which version of it the client holds.
 ### 2.3 Why it changes decision X / 왜 결정 X를 바꾸는가
 
 `D029` §6.1 frames X as: *make the reference indirect — its profile carries a
-name-resolving endpoint's address and a name.* `D035` (drafted today) answers
-D029's required question with **displacement**: the leak moves from N server
-addresses to 1 forwarding address, and cannot reach 0.
+name-resolving endpoint's address and a name.* `D035` answers D029's required
+question with **displacement**: the leak moves from N server addresses to 1
+forwarding address, and cannot reach 0. Its status and the order it was
+approved in live in that document and are not restated here.
 
 **FT's answer has a different shape, and D029 never considered it:**
 
@@ -108,7 +109,7 @@ addresses to 1 forwarding address, and cannot reach 0.
 | every IOR changes | yes | yes |
 | new wire shape | no | **no** — components + one service context |
 | stale binding repaired | **no** (D035 §3.4) | **yes** — most-recent IOGR processing |
-| independent implementation to be refuted by | none | **TAO ships FT CORBA** |
+| independent implementation to be refuted by | none | TAO ships FT CORBA — **and is not installed here**, see below |
 
 Two of those rows are decisive. FT **does not invert a layer** — a group id and
 a version are bytes in a component, not a dependency on a servant built on the
@@ -142,6 +143,32 @@ inversion priority zero forbids. What is proposed is the **reference half only**
 That is a wire-shape change with a peer to check it against, which is the kind
 of work this project is set up to do. It is also the smallest thing that lets
 the Lifecycle leak test stop being a `SKIPPED` **without** X's layer inversion.
+
+**The peer is the part that was assumed rather than checked, and it decided the
+order this landed in.** *"A peer to check it against"* was written from the fact
+that TAO implements FT, not from the fact that TAO is reachable from here.
+Measured 2026-08-27: omniORB 4.3.4's headers carry no `TAG_FT_GROUP`,
+`FT_GROUP_VERSION` or `IOGR`; JacORB 3.9's jar has no FT entries; and `tao_idl`
+is absent — `spikes/differential.sh` has been reporting `SKIPPED tao_idl absent
+— its column is unmeasured, not passing` all along. So the four items above are
+landable, but nothing here can refute them, and a convention both ends apply
+cannot be refuted by a round trip. **The fixture comes before the feature**: a
+TAO peer, on the same terms as omniORB and JacORB — a separate-process wire peer
+and an external program whose text output is read, never a dependency — and it
+retires the differential's standing skip at the same time, so two rows move for
+one fixture. If it will not stand up, that is a result: it makes this proposal
+*unrefutable here*, which is what should be recorded rather than the proposal
+being landed anyway.
+
+**피어가 검사되지 않고 가정된 부분이었고, 그것이 착지 순서를 정했다.** *"대고
+검사할 피어"*는 TAO가 FT를 구현한다는 사실에서 나왔지 TAO에 여기서 닿을 수 있다는
+사실에서 나오지 않았다. 2026-08-27 측정: omniORB 4.3.4 헤더 0건, JacORB 3.9 jar
+0건, `tao_idl` 부재 — `differential.sh`는 줄곧 `SKIPPED tao_idl absent`를
+보고하고 있었다. 즉 위 네 항목은 착지시킬 수 있지만 여기서는 무엇도 그것을 반증하지
+못하고, **양쪽이 적용하는 관례는 왕복으로 반박되지 않는다. 기능보다 픽스처가
+먼저다** — omniORB·JacORB와 같은 조건의 TAO 피어이며, 동시에 differential의 오래된
+스킵도 걷히므로 픽스처 하나로 행 둘이 움직인다. 세우지 못하면 그것이 결과이고,
+이 제안이 *여기서 반증 불가*임을 기록한다.
 
 ---
 

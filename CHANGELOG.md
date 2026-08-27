@@ -10,7 +10,127 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
-_Nothing yet._
+**D035 APPROVED, with its own recommendation's order amended by a measurement
+it did not have.** The owner answered the question D029 required of anyone
+proposing X — *is a leak displaced from N to 1 a row that no longer leaks, or a
+row that leaks once instead of N times?* — with **the latter: displacement is
+not closure.** That is the answer D029 already gives for the bootstrap, so the
+fact now has one answer instead of two. What follows from it is that the
+Lifecycle row can stop waiting on a decision **that cannot reach zero** — a
+caller must be given one address to send a first packet to — and a row that can
+never move is the same class as a gate that can never go red.
+
+D035 §8 recommended *C then B*. Approved instead: **B first, then a TAO peer as
+a fixture, then C's R1/R2 conditional on it; A deferred.** The reason is a
+measurement taken after §8 was written and now recorded in §9: **no peer here
+implements Fault Tolerant CORBA.** omniORB 4.3.4's headers carry no
+`TAG_FT_GROUP`, `FT_GROUP_VERSION` or `IOGR`; JacORB 3.9's jar has no FT
+entries; `tao_idl` is absent, and `spikes/differential.sh` had been reporting
+`SKIPPED tao_idl absent — its column is unmeasured, not passing` all along. C's
+single argument for preference over A is that it is checkable against an
+independent implementation, and that check has no fixture today. R1 and R2
+change no wire behaviour, which is why they were listed first — but **a cheap
+experiment nothing can refute is not cheap, it is decorative**, and a convention
+both ends apply cannot be refuted by a round trip. The fixture therefore comes
+before the feature, and it moves two rows at once, since it also retires the
+differential's standing skip. If TAO will not stand up, that is a result: R1–R4
+become *unrefutable here* and get recorded as such rather than landed anyway.
+The README roadmap follows the amended order; `PLAN-SERVICES-GAP` §2.4's *"a
+peer to check it against"* is corrected in place, because it was written from
+the fact that TAO implements FT and not from the fact that TAO is reachable.
+
+**D035 승인, 그 자신의 권고 순서를 그것이 갖지 못한 측정으로 수정하여.** 소유자는
+D029가 X를 제안하는 사람에게 요구한 질문에 **전가는 폐쇄가 아니다**로 답했다.
+D029가 부트스트랩에 대해 이미 내놓은 답과 같으므로, 이제 그 사실은 답을 하나만
+갖는다. 따라오는 결론은 생애주기 행이 **0에 닿을 수 없는 결정**을 더 기다리지
+않아도 된다는 것이다 — 호출자는 첫 패킷을 보낼 주소 하나를 받아야 하고, 결코
+움직일 수 없는 행은 결코 빨개질 수 없는 게이트와 같은 부류다. §8은 *C 다음 B*를
+권고했으나 승인된 것은 **B 먼저, 그다음 TAO 피어 픽스처, 그것을 조건으로 C의
+R1/R2, A는 보류**다. 이유는 §8이 쓰인 뒤에 잰 것이고 §9에 기록되어 있다 — **여기
+어떤 피어도 FT CORBA를 구현하지 않는다**(omniORB 헤더 0건, JacORB jar 0건,
+`tao_idl` 부재). C가 A보다 선호되는 유일한 근거인 *독립 구현에 대고 반증할 수
+있다*에 오늘 픽스처가 없다. **반증할 것이 없는 싼 실험은 싼 것이 아니라 장식이다.**
+그래서 기능보다 픽스처가 먼저이며, differential의 오래된 스킵도 함께 걷히므로
+픽스처 하나로 행 둘이 움직인다.
+
+**A backstop that reaped orphans took the CI runner with them, and two days of
+red said `The operation was canceled`.** The orphan backstop landed
+2026-08-27 12:06 with a stated premise — *a process in our group whose parent
+is init; neither this shell nor its ancestors can match, because they have real
+parents.* The last clause is false. An ancestor is reparented to init the
+moment **its** parent exits, so it carries `ppid=1` while still leading the
+process group this shell inherited, and it lands in the candidate set. That is
+the shape of a CI runner: the agent is started by the machine's init path, its
+launcher exits, and the step's shell inherits its process group because nothing
+in between calls `setpgid`. Every run after that commit died with `Terminated`
+at whatever group called `cleanup` next; the run immediately before it took the
+same harness to completion in 23 minutes. It never showed locally, because a
+Terminal's `zsh` has a live parent. Repaired by walking this shell's ancestor
+chain and excluding it, in **one** function that both the reaping half and the
+counting half now call — they had been restating the same false sentence in two
+places. Negative control, on a synthesised ancestor (fork, let the middle
+process exit, `setpgid(0,0)`, run the harness as its child): before the repair
+the set is `kill -TERM 9649 Python` *(the ancestor)* and `kill -TERM 9657
+sleep`; after it, only `9657 sleep` — and a genuinely leaked fixture is still
+found, which is the leg that would have caught a repair that merely blinded the
+check.
+
+**The harness now records the memory it ran in, and refuses a run the kernel
+shot at.** `spikes/memlog.sh` samples every 5s from before the first group,
+appending and flushing, so the file survives a machine that dies without
+unwinding; the previous run's trace is moved to `.prev` rather than deleted.
+The gate beside it is a different claim from the trace — *did the kernel kill
+anything for memory while this run was measuring* — and it is a counted FAIL,
+because a fixture that was shot cannot report that it was. **No threshold is a
+gate**: "too little memory left" has no defensible number, so the trace is a
+report, as `entry_cost.py` and the CI `df` steps are. `memorystatus: killing`
+is deliberately **not** the pattern — macOS reaps idle daemons through the same
+subsystem and logged **782 such lines in fifty idle minutes** here — so the
+pattern names the pressure reasons and the two-line probe carries an idle-exit
+as its second line, which must **not** count. In CI, `free -m` either side of
+the harness, the kill query, and the trace kept by an `if: always()` artifact
+step, because a runner that runs out of memory reports no failing step at all.
+
+Why it was written: on 2026-08-27 this machine froze at 15:17:50 KST — the
+unified log ends mid-second, there is no panic report, and
+`ResetCounter-...-151943.diag` reads `Boot faults: btn_rst,finger_reset
+force_off`. The cause could be named only because the kernel stamps
+`memorystatus_available_pages` onto unrelated lines: available memory fell
+**6.42 GB → 0.75 GB in 33 seconds** and sat between **0.06 and 0.36 GB** with
+the compressor holding **11.8 GB of 16** for the eight minutes up to the stop.
+A lucky reconstruction is not a measurement. **And it is recorded here that the
+recorder would not have caught it** — no harness was running, and what
+exhausted the machine was ~1,700 `node` processes from a Vite toolchain in
+another repository. This covers a run, not a machine.
+
+**고아를 거두는 백스톱이 CI 러너까지 가져갔고, 이틀치 빨강이
+`The operation was canceled`이라고만 말했다.** 백스톱이 내건 전제 — *우리 그룹
+안에서 부모가 init인 프로세스; 이 셸도 그 조상도 진짜 부모가 있으므로 걸릴 수
+없다* — 의 마지막 절이 거짓이다. 조상은 **그 부모**가 종료되는 순간 init에 재양자
+되어 `ppid=1`을 달면서도 이 셸이 물려받은 프로세스 그룹을 그대로 이끈다. CI 러너가
+정확히 그 모양이다. 로컬에서는 드러나지 않았다 — 터미널의 `zsh`에는 살아 있는 부모가
+있기 때문이다. 조상 사슬을 **걸어서** 제외하도록 고쳤고, 거두는 쪽과 세는 쪽이 같은
+거짓 문장을 각각 적어두고 있었으므로 **함수 하나**로 합쳤다. 부정 대조군(합성한
+조상): 수리 전에는 집합이 `9649 Python`(**조상**)과 `9657 sleep`, 수리 후에는
+`9657 sleep`만 — 그리고 진짜 누수 픽스처는 여전히 잡힌다.
+
+**하네스가 자기가 돌던 메모리를 기록하고, 커널이 쏜 실행을 거절한다.**
+`spikes/memlog.sh`가 첫 그룹 전부터 5초마다 표본을 덧붙이고 흘려보내며, 이전 추이는
+지우지 않고 `.prev`로 옮긴다. 옆의 게이트는 추이와 **다른 문장**이다 — *이 실행이
+재는 동안 커널이 메모리 때문에 무언가를 죽였는가* — 이고 계수되는 FAIL이다.
+**임계값은 게이트가 아니다.** `memorystatus: killing`은 일부러 패턴이 아니다: macOS는
+같은 서브시스템으로 유휴 데몬을 거두며 여기서 **한가한 50분에 782줄**이 찍혔다.
+CI에서는 하네스 양옆의 `free -m`, kill 질의, 그리고 `if: always()` 아티팩트로 추이를
+남긴다 — 메모리가 떨어진 러너는 실패한 스텝을 하나도 보고하지 않기 때문이다.
+
+쓰게 된 이유: 2026-08-27 15:17:50 KST에 이 머신이 멎었고, 통합 로그는 초 중간에
+끊겼으며 패닉 리포트는 없고 `ResetCounter`는 `btn_rst,finger_reset force_off`를
+말한다. 원인은 커널이 무관한 줄에 찍어둔 `memorystatus_available_pages` 덕분에만
+이름 붙일 수 있었다 — **33초 만에 6.42 GB → 0.75 GB**, 이후 멎을 때까지
+**0.06–0.36 GB**, 컴프레서 **16 중 11.8 GB**. 운 좋은 복원은 측정이 아니다.
+**그리고 이 기록기가 그것을 잡지 못했을 것이라는 사실을 여기 적어둔다** — 그때
+하네스는 돌지 않았고, 머신을 말린 것은 다른 저장소의 Vite 도구 사슬이 띄운 `node`
+프로세스 약 1,700개였다. 이것은 실행을 덮지 머신을 덮지 않는다.
 
 ---
 
