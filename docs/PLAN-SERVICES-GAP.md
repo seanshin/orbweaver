@@ -170,7 +170,126 @@ being landed anyway.
 스킵도 걷히므로 픽스처 하나로 행 둘이 움직인다. 세우지 못하면 그것이 결과이고,
 이 제안이 *여기서 반증 불가*임을 기록한다.
 
+### 2.5 B — the lifecycle leg, and what makes its green mean something / 생애주기 다리
+
+D035 was approved 2026-08-27 with **B first**. Its claim: lifecycle transparency
+has an **irreducible bootstrap leak in a single-node deployment**, because a
+caller must be given one address to send a first packet to. The row moves from
+*unmeasured, waits on X* to *measured, leaks at the bootstrap, recorded*.
+
+**What B is not, and this is its failure condition.** Not a declaration of
+victory. `D029` §6.1 already records the same trade for the event channel —
+*"displaced, not closed — from N channels to one bootstrap"* — and B is that
+sentence one level up. **If the row reads as closed, B has failed even if the
+test is green.**
+
+**Where the edit lands, which is narrower than it looks.**
+`spikes/transparency.py` reads exactly one row — §6.1's five-transparency table
+— and takes its cells as (slug + title, tell, status). So:
+
+- **cell 0 must not change.** The slug is its first word, lowercased; changing
+  it breaks `bears_on lifecycle`, `leak_tests.sh`'s `lifecycle)` arm, and every
+  `--check`.
+- **the table must stay five rows.** Four or six makes every mode exit 2, which
+  the harness counts as a failure.
+- **cell 2 is what B rewrites.** It is what `--cite` returns and what the ledger
+  prints verbatim, wrapped at 62 columns, under *"unmeasured, per D029 §6.1 —
+  where it leaks today"*.
+- the Korean half is **not** in the cell; it is the prose paragraph after the
+  table and moves with it, one fact in two languages.
+- the leg itself is `spikes/leak_tests.sh`'s `lifecycle` arm, whose `--raw`
+  detail is today `decision X: the reference Orb::server hands out is not
+  indirect` — the blocker that no longer exists.
+
+**The control is the load-bearing half, and this project has measured why.** An
+*indistinguishability* assertion passes in every world where nothing happens:
+the backend leg stayed green when `Dispatch::knows` was made a blanket `false`,
+because a server that serves nothing answers both keys identically too. So B's
+leg needs a counted companion showing the two answers **can** differ — a caller
+whose target was *not* removed still gets through — or its green means only that
+nothing occurred. `spikes/leak_controls.sh` is where that goes; it proves three
+of its four controls today and states so in the file.
+
+D035가 2026-08-27에 **B를 먼저**로 승인했다. 주장은 단일 노드 배포에서 생애주기
+투명성에 **환원 불가능한 부트스트랩 구멍**이 있다는 것이다 — 호출자는 첫 패킷을
+보낼 주소 하나를 받아야 하기 때문이다. 행은 *미측정, X 대기*에서 *측정됨,
+부트스트랩에서 샘, 기록됨*으로 옮겨 간다. **B가 아닌 것이 곧 B의 실패 조건이다**:
+승리 선언이 아니다. D029 §6.1이 이벤트 채널에 대해 이미 *"닫힌 것이 아니라
+옮겨졌다"*고 적었고 B는 그 문장을 한 단계 위에 적용하는 것이므로, **행이 닫힌
+것으로 읽히면 테스트가 초록이어도 B는 실패다.** 편집 지점은 보기보다 좁다:
+`transparency.py`가 읽는 것은 §6.1 다섯 투명성 표의 그 한 행뿐이고, **첫 칸은
+슬러그의 출처라 건드릴 수 없으며 행 수는 다섯을 유지해야 한다**(아니면 모든 모드가
+exit 2). **셋째 칸**이 다시 쓸 곳이고, 한국어 절반은 표 안이 아니라 표 뒤 산문이며
+함께 움직인다. **통제군이 짐을 진다**: 구별불가능성 주장은 아무 일도 일어나지 않는
+세계에서도 통과하므로, 제거되지 *않은* 대상을 든 호출자는 여전히 통과한다는 계수된
+동반자가 없으면 초록은 아무것도 뜻하지 않는다.
+
+### 2.6 P — a TAO peer, and what it costs / TAO 피어
+
+**P is not a new item.** It is `docs/PLAN.md`'s standing aspiration **A6** —
+*TAO as a wire round-trip peer* — and **D026 item 2**, promoted by D035's
+approval from "waits on somebody else" to the step before R1. D026 already wrote
+its success criterion and P should quote rather than reinvent it: *each script's
+success criterion is that the corresponding `SKIPPED` becomes an `ok` or a
+`FAIL` — never that the script exits 0.*
+
+**The licence position, before any command.** ACE/TAO is DOC-licensed and is a
+**fixture, never a dependency**, exactly as omniORB and JacORB are: never
+imported, linked, vendored or redistributed; only run as a separate-process wire
+peer over TCP or invoked as an external program whose text output is read;
+`cargo tree` free of it — which `spikes/licence_boundary.sh` now enforces from
+one home for all four call sites; and **no CI image containing it is ever
+published**, because publishing is redistribution.
+
+**What one fixture buys — two rows for one build.** It is what can refute
+R1–R4, which is why it precedes them; and it retires `spikes/differential.sh`'s
+standing `SKIPPED tao_idl absent — its column is unmeasured, not passing`,
+giving the corpus a third independent front end. `differential.sh` already has
+the column wired: `tao_idl_verdict()` exists, detection is a bare
+`command -v tao_idl`, and `--require omniidl,jacorb_idl,tao_idl` turns the skip
+into a counted failure with no other change.
+
+**The shape, narrowed by measurement 2026-08-27 and not yet priced.** Homebrew's
+`ace` formula downloads `ACE+TAO-8.0.7.tar.bz2` — the **combined** distribution
+— but its install block is `make -C ace`, so it builds the ACE library and
+nothing under `TAO/`. `brew install ace` therefore leaves `command -v tao_idl`
+false, and a bottle exists so ACE itself costs a download rather than a compile.
+The plausible route is that bottle plus a build of **`TAO/TAO_IDL` alone** — one
+compiler binary, not the ORB. **What is not measured is whether that builds
+against an installed ACE at all**: TAO's makefiles expect `ACE_ROOT` to be a
+source tree, and the fallback is an in-tree ACE build. So P's cost stays
+*unknown until tried*; the finding narrows the shape and does not price it.
+
+**In CI**, `.github/workflows/ci.yml` already records — as a measurement, not a
+guess — that *Ubuntu has no tao-idl package, which the first run of this
+workflow established rather than assumed.* The same tarball route applies there,
+and the interop job already builds omniORBpy from source, so a source build in
+that job has precedent and 117 G of reclaimed disk to happen in.
+
+**If it will not stand up, that is the result.** R1–R4 become *unrefutable
+here*, and that is what gets recorded — not a decision to land them anyway,
+which would put a capability ahead of a leak and is what priority zero forbids.
+
+**P는 새 항목이 아니다.** `PLAN.md`의 상시 아스피레이션 **A6**과 **D026 항목 2**이며,
+D035 승인으로 *남을 기다림*에서 R1 앞 단계로 승격된 것이다. D026이 성공 기준을 이미
+써 두었고 P는 그것을 인용한다 — *각 스크립트의 성공 기준은 해당 `SKIPPED`가 `ok`나
+`FAIL`이 되는 것이지, 스크립트가 0으로 끝나는 것이 아니다.* **라이선스 위치는 어떤
+명령보다 먼저**: ACE/TAO는 DOC 라이선스이고 omniORB·JacORB와 똑같이 **픽스처이지
+의존성이 아니다** — 링크·벤더링·재배포 없음, 별도 프로세스 피어이거나 출력을 읽는
+외부 프로그램일 뿐, `cargo tree`에 없음(이제 `licence_boundary.sh`가 네 호출 지점
+모두에 대해 한 집에서 강제한다), 그리고 **그것이 든 CI 이미지는 발행하지 않는다.**
+**픽스처 하나로 행 둘이 움직인다**: R1–R4를 반증할 수 있는 것이자, differential의
+오래된 `tao_idl` 스킵을 걷어 코퍼스에 **독립적인 세 번째 프론트엔드**를 준다.
+**모양은 2026-08-27 측정으로 좁혀졌으나 값은 아직 매겨지지 않았다**: Homebrew의
+`ace`는 결합 tarball을 내려받지만 `make -C ace`만 하므로 `tao_idl`을 만들지 않는다.
+유력한 길은 그 병 + **`TAO/TAO_IDL`만** 빌드하는 것이다 — ORB 전체가 아니라 컴파일러
+하나. **재지 않은 것은 그것이 설치된 ACE에 붙는가**이며(TAO는 `ACE_ROOT`가 소스
+트리이길 기대한다), 그래서 비용은 *시도 전에는 모름*으로 남는다. **세우지 못하면
+그것이 결과다** — R1–R4가 *여기서 반증 불가*임을 기록할 뿐, 그냥 착지시키지 않는다.
+그것은 구멍보다 기능을 앞세우는 것이고 0순위가 금지한다.
+
 ---
+
 
 ## 3. Gap 2 — CORBA Messaging (AMI) / 비동기 호출
 

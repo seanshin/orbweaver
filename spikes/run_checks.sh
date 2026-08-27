@@ -984,16 +984,41 @@ hr "licence boundary"
 #   ELSE
 # A short producer fits the pipe buffer and never sees SIGPIPE, which is why
 # this passed every hand-check anyone ever gave it.
-tree_out=$(cargo tree --workspace 2>/dev/null); tree_rc=$?
-if [ "$tree_rc" -ne 0 ]; then
-  echo "  FAIL cargo tree did not run (exit $tree_rc) — the licence boundary was NOT measured"
-  fail_total=$((fail_total+1))
-elif grep -qiE "omniorb|jacorb" <<<"$tree_out"; then
-  echo "  FAIL an ORB fixture has become a dependency"
-  sed -n '1,5p' <<<"$(grep -inE "omniorb|jacorb" <<<"$tree_out")" | sed 's/^/    | /'
+#
+# ── The names live in one file now ──────────────────────────────────────────
+#
+# This check existed here AND in `.github/workflows/ci.yml`, and on 2026-08-27
+# the two had drifted: CI matched `omniorb|jacorb|\btao\b`, this matched
+# `omniorb|jacorb`. **The copy missing the TAO term is the one that runs on the
+# machine where a TAO fixture gets built** — and D035 was approved that day with
+# exactly that fixture as its second step. Neither copy was wrong when written;
+# they drifted because a rule restated in two places drifts on the next change.
+#
+# `spikes/licence_boundary.sh` owns the pattern and the discipline, and both
+# callers invoke it. The divergence is no longer detectable, it is
+# unrepresentable — which this file elsewhere says is the better repair.
+#
+# Its `--self-test` runs first: a pattern that matches nothing over a clean tree
+# is indistinguishable from a pattern that cannot match, so the silence has to
+# be earned before it is read.
+lb_st=$(./spikes/licence_boundary.sh --self-test 2>&1); lb_st_rc=$?
+if [ "$lb_st_rc" -ne 0 ]; then
+  echo "  FAIL the licence-boundary pattern failed its own self-test, so its silence"
+  echo "       over this tree means nothing ($(rc_says "$lb_st_rc"))"
+  diag_out "$lb_st" 6 head
   fail_total=$((fail_total+1))
 else
-  echo "  ok   no ORB fixture appears in cargo tree"
+  lb_out=$(./spikes/licence_boundary.sh 2>&1); lb_rc=$?
+  case "$lb_rc" in
+    0) echo "  ok   $lb_out" ;;
+    1) echo "  FAIL an ORB fixture has become a dependency"
+       diag_out "$lb_out" 6 head
+       fail_total=$((fail_total+1)) ;;
+    *) echo "  FAIL cargo tree did not run — the licence boundary was NOT measured"
+       echo "       ($(rc_says "$lb_rc")); an unmeasured check is a failure, never a pass"
+       diag_out "$lb_out" 6 head
+       fail_total=$((fail_total+1)) ;;
+  esac
 fi
 # NOTICE promises that --no-default-features drops encoding_rs and the
 # BSD-3-Clause obligation with it. That promise is testable, so it is tested.
@@ -1737,9 +1762,17 @@ fi
 # ── Differential conformance ─────────────────────────────────────────────────
 hr "differential conformance — every front end on every corpus file"
 # Was two ad-hoc omniidl loops over golden/ and negative/. They are now one
-# script, because CI runs a second oracle (tao_idl) and the interesting result
-# there is where the *oracles* disagree with each other — a corpus file that is
-# not portable, which agreeing with either one of them cannot reveal.
+# script, because the interesting result is where the *oracles* disagree with
+# each other — a corpus file that is not portable, which agreeing with either
+# one of them cannot reveal.
+#
+# This comment used to say "because CI runs a second oracle (tao_idl)". **CI
+# does not**, and says so itself: `.github/workflows/ci.yml` records that
+# Ubuntu ships no tao-idl package, "which the first run of this workflow
+# established rather than assumed". The second oracle here and there is
+# JacORB's IDL compiler. Corrected 2026-08-27, when D035's approval made the
+# TAO column real work rather than a sentence — and a sentence claiming a
+# column that has never run is the shape this file exists to refuse.
 dout=$(bash spikes/differential.sh 2>&1); drc=$?
 printf '%s\n' "$dout"
 if [ "$drc" -ne 0 ]; then fail_total=$((fail_total+1)); fi

@@ -71,16 +71,27 @@ done
   exit 2
 }
 
-# ── the licence gate, producer status first ─────────────────────────────────
-tree_out=$(cargo tree --workspace 2>&1); tree_rc=$?
-if [ "$tree_rc" -ne 0 ]; then
-  echo "FAIL	cargo tree --workspace exited $tree_rc, so the licence boundary is UNMEASURED"
-  printf '%s\n' "$tree_out" | tail -3
-  exit 1
-fi
-if grep -qiE "omniorb|jacorb" <<<"$tree_out"; then
+# ── the licence gate ────────────────────────────────────────────────────────
+#
+# The names are NOT written here. This was the **third** copy of one rule —
+# after `spikes/run_checks.sh` and `.github/workflows/ci.yml` — and it was
+# found on 2026-08-27 by the sweep that repaired the other two, only because
+# that sweep was scoped to the rule rather than to the files that had the
+# incident. All three carried `omniorb|jacorb`; two of them had already drifted
+# apart on whether TAO was in it. `spikes/licence_boundary.sh` owns the pattern
+# and the producer-status discipline now.
+# Resolved from `$0`, not from the caller's CWD: this script has no `cd` of its
+# own and is run by hand, so a bare relative path would find the gate only when
+# the caller happened to stand in the right directory — and a gate that cannot
+# be found is an unmeasured check, which is a failure and never a pass.
+lb_out=$("$(dirname "$0")/../../licence_boundary.sh" 2>&1); lb_rc=$?
+if [ "$lb_rc" -eq 1 ]; then
   echo "FAIL	a fixture has become a dependency — cargo tree names it:"
-  grep -iE "omniorb|jacorb" <<<"$tree_out" | head -3
+  head -4 <<<"$lb_out"
+  exit 1
+elif [ "$lb_rc" -ne 0 ]; then
+  echo "FAIL	the licence boundary is UNMEASURED (exit $lb_rc)"
+  head -4 <<<"$lb_out"
   exit 1
 fi
 

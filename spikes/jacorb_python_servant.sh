@@ -126,13 +126,25 @@ rm -rf "$D"; mkdir -p "$D"
 # could not run is an unmeasured check and never a pass — and matches with a
 # herestring, because `grep -q` in a pipeline SIGPIPEs the producer and
 # `pipefail` then reads a *found* forbidden dependency as "no match".
-tree_out=$(cargo tree --workspace 2>&1); tree_rc=$?
-if [ "$tree_rc" -ne 0 ]; then
-  fail "cargo tree --workspace did not run (exit $tree_rc), so the licence boundary is unmeasured"
-  head -3 <<<"$tree_out" | sed 's/^/       /'
-elif grep -qiE "jacorb|omniorb|jboss-rmi" <<<"$tree_out"; then
+# The names are NOT written here. This was the **fourth** copy of one rule —
+# with `spikes/run_checks.sh`, `.github/workflows/ci.yml` and
+# `spikes/bindings/java/client-jacorb.sh` — and each had drifted: this one
+# carried `jboss-rmi` that no other had, and it lacked the `tao` term that CI
+# had. Found 2026-08-27 by a sweep scoped to the rule instead of to the file
+# that had the incident, which is the only reason any of them turned up.
+# `spikes/licence_boundary.sh` owns the names now.
+#
+# `jboss-rmi` is not lost: it is a JacORB jar, and a jar cannot appear in
+# `cargo tree` — the term was guarding a shape this check cannot see. The
+# thing that does see it is `spikes/jacorb/setup.sh`'s fixture directory being
+# gitignored, and `NOTICE` saying so.
+lb_out=$("$(dirname "$0")/licence_boundary.sh" 2>&1); lb_rc=$?
+if [ "$lb_rc" -eq 1 ]; then
   fail "a fixture reached the dependency graph — JacORB is LGPL and must never be linked"
-  grep -iE "jacorb|omniorb|jboss-rmi" <<<"$tree_out" | head -3 | sed 's/^/       /'
+  head -4 <<<"$lb_out" | sed 's/^/       /'
+elif [ "$lb_rc" -ne 0 ]; then
+  fail "the licence boundary is unmeasured (exit $lb_rc)"
+  head -4 <<<"$lb_out" | sed 's/^/       /'
 else
   ok "cargo tree --workspace names no fixture: JacORB stays a separate process we read"
 fi

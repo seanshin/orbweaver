@@ -10,6 +10,67 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**One rule had four copies, and the one missing a term was the one that
+mattered.** The licence boundary — *omniORB, ACE/TAO and JacORB are fixtures,
+never dependencies* — was checked in four places, each with its own pattern:
+`run_checks.sh` and `bindings/java/client-jacorb.sh` matched `omniorb|jacorb`,
+`ci.yml` matched `omniorb|jacorb|\btao\b`, and `jacorb_python_servant.sh`
+matched `jacorb|omniorb|jboss-rmi`. **The copy without the TAO term is the one
+that runs on the machine where a TAO fixture gets built**, which D035 approved
+the same day as its second step. None was wrong when written; four copies of one
+rule drift on the next change, and only a sweep scoped to the rule instead of to
+the file that had the incident found the third and fourth. `spikes/licence_boundary.sh`
+owns the names, the producer-status check and the herestring match now; all four
+sites call it, and the divergence is unrepresentable rather than detectable.
+Negative controls: a fixture name in the tree → exit 1; a `cargo tree` that
+cannot run → **exit 3, not 0**, because unmeasured is not clean; the pattern
+widened to bare `tao|ace` → the self-test catches six false positives and exits
+2. That third control was green on its first run **because the control itself
+was an empty file** — a sed quoting error swallowed by `2>/dev/null`, and bash
+exits 0 on an empty script. Fourth false green of the day, and the only one that
+was in a control rather than in a gate.
+
+**Three records that outlived their fact, and a decision record that
+contradicted itself.** `docs/COMPONENTS.md` (both halves) and
+`spikes/leak_tests.sh` (twice) all said one line was still owed in
+`run_checks.sh`, and all three cited **line 4318** — for a group that had moved
+to 4792 and whose declaration had already been deleted, with a comment in its
+place saying why. The line number is the tell: a debt naming a location nobody
+re-checked is a debt nobody re-checked. Separately, D029 §6.1's instrument table
+was **two** tables split by a blank line, and the split had inverted — the later
+table's Lifecycle row still carried the text the earlier one had superseded,
+while its Activation rows were genuine updates. `transparency.py` reads neither,
+so no tool could see the contradiction and only a reader met it. Merged into one
+table, with the Lifecycle row rewritten to what D035's approval established:
+**X was answered, and the answer was not X.** Also corrected: the comment
+claiming CI runs `tao_idl`, which `ci.yml` itself contradicts.
+
+**`PLAN-SERVICES-GAP` gains §2.5 and §2.6** — the two steps D035's approved
+order names and that section did not have. Deliberately not a new document: the
+order lives in D035 §8, the gap analysis in §2.3/§2.4, and a third home would
+have to restate both to be readable. §2.6 records that **P is not a new item** —
+it is `PLAN.md`'s aspiration A6 and D026 item 2, promoted — and narrows its
+shape by measurement: Homebrew's `ace` downloads the combined `ACE+TAO` tarball
+but builds `-C ace` only, so `brew install ace` leaves `tao_idl` absent and the
+plausible route is that bottle plus `TAO/TAO_IDL` alone. **Whether that builds
+against an installed ACE is not measured**, so the cost stays *unknown until
+tried*.
+
+**하나의 규칙에 사본이 넷이었고, 항이 빠진 사본이 하필 문제가 되는 쪽이었다.**
+넷이 전부 다른 패턴을 갖고 있었고, **TAO 항이 없는 사본이 TAO 픽스처를 빌드할
+머신에서 도는 것**이었다. 규칙에 범위를 맞춘 스윕만이 셋째·넷째를 찾았다. 이제
+`spikes/licence_boundary.sh`가 소유하고 네 곳이 그것을 호출하므로, 어긋남은 탐지
+대상이 아니라 **불가능**하다. 대조군 셋 중 하나는 첫 실행에서 초록이었는데
+**대조군 자체가 빈 파일**이었다 — sed 인용 오류를 `2>/dev/null`이 삼켰고 bash는 빈
+스크립트에 0을 낸다. 그날의 네 번째 거짓 초록이자, 게이트가 아니라 대조군에서 난
+유일한 것.
+
+**사실보다 오래 산 기록 셋과, 스스로 모순된 결정 기록 하나.** 셋 다 **4318행**을
+가리켰고 그 그룹은 4792행에 있었다. 그리고 D029 §6.1의 계기 표는 **둘**이었으며
+분리가 뒤집혀 있었다 — 나중 표의 생애주기 행이 앞 표가 대체한 문장을 달고 있었고,
+도구는 어느 쪽도 읽지 않아 사람만 그 모순을 만났다. 하나로 합치고 생애주기 행을
+D035 승인 결과로 다시 썼다: **X는 답해졌고 답은 X가 아니었다.**
+
 **D035 APPROVED, with its own recommendation's order amended by a measurement
 it did not have.** The owner answered the question D029 required of anyone
 proposing X — *is a leak displaced from N to 1 a row that no longer leaks, or a

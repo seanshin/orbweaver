@@ -15,11 +15,18 @@
 # landed** — the harness has one group per transparency, each calling
 # `leak_leg <name>`, which reads the `--raw` rows below — so the SKIPPED half is
 # gated now and this paragraph's old "until then" is gone. One consequence is
-# live and is printed in the verdict: `leak_leg` FAILS a MEASURED row whose
-# group still carries the static `tp_measures_nothing` declaration it was given
-# while its leg was a skip. The activation leg started measuring on 2026-08-26
-# and its declaration is still there, so the harness is red until one line is
-# deleted; see the verdict for which.
+# live: `leak_leg` FAILS a MEASURED row whose group still carries the static
+# `tp_measures_nothing` declaration it was given while its leg was a skip, so a
+# leg that starts measuring cannot be swallowed by a stale declaration.
+#
+# **The activation instance of that was paid and this file kept billing for it.**
+# Until 2026-08-27 the paragraph here, the verdict below, and
+# `docs/COMPONENTS.md` all said one line was still owed in `run_checks.sh`, and
+# all three cited **line 4318** — for a group that had moved to 4792 and whose
+# declaration had already been deleted, with a comment in its place saying why.
+# The line number is the tell: a debt that names a location nobody re-checked is
+# a debt nobody re-checked. A record that outlives its fact is the defect this
+# project measures, and it is cheaper to find when the record carries a number.
 #
 # THE FIVE NAMES ARE NOT WRITTEN HERE. `spikes/transparency.py` reads them from
 # D029 §6.1, which owns them. A name that arrives without a handler is a
@@ -250,20 +257,10 @@ echo "  The wiring this footer used to say was missing LANDED: run_checks.sh has
 echo "  one group per transparency and leak_leg reads the rows above, so the"
 echo "  SKIPPED are counted by the harness verdict."
 echo ""
-echo "  ONE EDIT IS OWED IN run_checks.sh AND THIS SCRIPT CANNOT MAKE IT."
-echo "  The activation leg went from SKIPPED to MEASURED on 2026-08-26. Each"
-echo "  leg's group carries a static \`tp_measures_nothing\` declaration while"
-echo "  its leg is a skip, and leak_leg FAILS a MEASURED row whose group still"
-echo "  declares it — deliberately, so a leg that starts measuring cannot be"
-echo "  swallowed by a stale declaration. So run_checks.sh will report"
-echo ""
-echo "      FAIL this group declares tp_measures_nothing and the leak test for"
-echo "           activation MEASURED (...) — the declaration is now understating"
-echo "           the run; delete it so the ledger can count this leg"
-echo ""
-echo "  The fix is that message: delete the bare \`tp_measures_nothing\` line"
-echo "  between \`bears_on activation\` and \`leak_leg activation\` (line 4318"
-echo "  when this was written). The batch that closed the activation leak did"
-echo "  not own run_checks.sh and left the red rather than leaving a SKIPPED"
-echo "  that named a blocker it had removed."
+echo "  A leg that starts measuring while its group still declares"
+echo "  \`tp_measures_nothing\` makes run_checks.sh FAIL that row deliberately,"
+echo "  so the ledger cannot swallow a measurement. The activation instance of"
+echo "  that was settled on 2026-08-27 — the declaration is gone and a comment"
+echo "  stands where it was. This script billed for it until that day, citing a"
+echo "  line number the group had long since moved away from."
 exit $(( fails > 0 ? 1 : 0 ))

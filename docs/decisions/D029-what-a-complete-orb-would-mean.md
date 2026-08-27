@@ -361,17 +361,17 @@ T+ε에 건다. T에 RESIDENT였던 전문가가 그 사이 축출될 수 있고
 **No row's status changes here. This subsection cites instruments; it does not
 move a verdict.** §5 O0 landed and, on the same day, reached the harness:
 
+> **One table, since 2026-08-27.** This was two, split by a blank line, and the split had inverted itself: the *later* table's Lifecycle row still said *waits on a redirect emitted for a name* — the text the earlier table had already superseded — while its Activation rows were genuine updates to the earlier one. A reader met the contradiction and no tool could: `spikes/transparency.py` reads only the five-transparency table under this section's heading and stops at the next heading, so **neither of these rows is parsed by anything**. Merging them is the repair; keeping two tables is what let one of them go stale unnoticed.
+> *2026-08-27부터 표 하나다. 둘이었고 그 분리가 뒤집혀 있었다 — **나중** 표의 생애주기 행이 앞 표가 이미 대체한 문장을 그대로 달고 있었다. 사람만 그 모순을 만났고 도구는 어느 쪽도 읽지 않는다.*
+
 | Row | The instrument that could refute it | What it says today |
 |---|---|---|
 | Location | `what_a_caller_can_tell.rs` — a move under a live caller, and the caller's limits across it | measures |
 | Backend | the same file — the servant behind one reference replaced mid-session | measures |
 | Language | `spikes/leak_tests.sh`'s language leg | counted `SKIPPED`: waits on a Python servant mountable as a `Dispatch` in a server the test owns |
-| Activation / load | its activation leg | counted `SKIPPED`: waits on a POA-level activation path that reloads an evicted target |
-| Lifecycle stability | `spikes/orb_shutdown.sh` (D034) measures the removal; the leak leg is a counted `SKIPPED` | **the blocker changed on 2026-08-26 and the row did not.** It no longer waits on *a redirect emitted for a name* — that is built and measured (`crates/orbweaver-giop/tests/forward_for_a_name.rs`). It waits on **X**: a decision that the reference `Orb::server` hands out is *indirect*. See §6.1's lifecycle subsection, which is also why a forward can never be emitted by the party that went away |
-
 | Activation / load | its activation leg, over `crates/orbweaver-object/tests/what_a_caller_can_tell_about_load.rs` | **measures** (2026-08-26): one live `Connection`, one reference, the expert evicted underneath it, replies compared whole. Its control is in the tree — `the_refusing_miss_policies_are_the_leak` requires the same scenario to fail naming `OBJECT_NOT_EXIST` under the two refusing variants |
 | Activation / load, **on the mounted host** | `crates/orbweaver-object/tests/a_mounted_expert_host_across_an_eviction.rs` | **measures** (2026-08-26, later the same day): the same scenario against `expert_host::ExpertHost` — the servant a deployment constructs — over `moe::Expert`'s *declared* operations rather than a fixture's. Nine tests, three controls, all in the file: the two refusing policies (`OBJECT_NOT_EXIST` on `process` and on `describe`), a second servant whose `knows` reads residency (the `LocateRequest` probe leak, reproduced), and the nil-versus-real reference `delegate` would leak if it filtered. **Still does not measure time**, for the reason the row gives |
-| Lifecycle stability | `spikes/orb_shutdown.sh` (D034) measures the removal; the leak leg is a counted `SKIPPED` | waits on a redirect emitted for a **name** rather than for an object |
+| Lifecycle stability | `spikes/orb_shutdown.sh` (D034) measures the removal; the leak leg is a counted `SKIPPED` | **X was answered on 2026-08-27, and the answer was not X.** D035 asked the question this section requires — is a leak displaced from N to 1 a row that no longer leaks, or a row that leaks once instead of N times? — and the owner answered *the latter: displacement is not closure*, which is the answer the event-channel subsection below already gives for the bootstrap. So this row is **no longer waiting on a decision**: it waits on the work D035 approved first, which is to record the bootstrap leak as irreducible in a single-node deployment and turn the leg from a `SKIPPED` into a measurement with that floor named. What it must never become is *closed* — a caller has to be given one address to send a first packet to |
 
 Two things are worth stating rather than inferring. **A test existing does not
 move a row** — the two rows with a measuring leg are the two that already read
