@@ -64,6 +64,56 @@ printf 'pid %s in %s at %s\n' "$$" "$ROOT" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >"
 # hypothetical tidiness — the first version of this lock did use its own trap,
 # every run leaked a stale lock, and the next run refused to start.
 
+# ── The flight recorder ──────────────────────────────────────────────────────
+#
+# Started here, before any group, because the reading that matters is the one
+# taken by a run that does not finish.
+#
+# 2026-08-27, 15:17:50 KST: this machine stopped dead — no log entries at all
+# until the boot banner 77 seconds later, and `ResetCounter-...-151943.diag`
+# reads `Boot faults: btn_rst,finger_reset force_off`. No panic report, because
+# the kernel never got far enough to write one. Reconstructing it afterwards was
+# possible only by accident: the kernel stamps `memorystatus_available_pages`
+# onto unrelated idle-exit lines, and those said **available memory fell from
+# 6.42 GB to 0.75 GB in 33 seconds at 15:09, then sat between 0.06 and 0.36 GB
+# with the compressor holding 11.8 GB of 16 for the eight minutes up to the
+# freeze**. That reconstruction worked; it is not a thing to rely on. Nothing
+# was recording on purpose.
+#
+# So this appends a line every 5s and flushes as it goes, and the previous
+# run's file is moved aside rather than deleted — if a run dies with the power
+# button, that file is the only account of it and the next run must not be what
+# destroys it.
+#
+# **Its limit, stated rather than discovered later**: this covers a run, not a
+# machine. The freeze above happened while no harness was running, and this
+# recorder would have seen none of it. What eats a 16 GB machine here is
+# usually not this workspace — that day it was ~1,700 `node` processes from a
+# Vite toolchain in a different repository — and a per-run recorder cannot
+# testify about the hours between runs.
+MEMLOG=${ORBWEAVER_MEMLOG:-/tmp/orbweaver-memory.log}
+MEMLOG_PID=""
+HARNESS_START=$(date +%s)
+if [ -x "$ROOT/spikes/memlog.sh" ]; then
+  "$ROOT/spikes/memlog.sh" record --out "$MEMLOG" --interval 5 >/dev/null 2>&1 &
+  MEMLOG_PID=$!
+  # Without this the shell announces the recorder's death into the middle of
+  # the memory group's own output — `line 4891: 13986 Terminated: 15 …`, which
+  # looks exactly like a fixture crashing and is nothing of the kind. Measured
+  # on this group's first run. `disown` drops it from the job table without
+  # detaching it from the process group, so `cleanup`'s census still sees it if
+  # it ever outlives us.
+  disown "$MEMLOG_PID" 2>/dev/null || true
+else
+  echo "note: spikes/memlog.sh is not executable — this run records no memory trace"
+fi
+stop_memlog() {
+  [ -n "$MEMLOG_PID" ] || return 0
+  kill "$MEMLOG_PID" 2>/dev/null || true
+  MEMLOG_PID=""
+  return 0
+}
+
 # ── The dimension this harness did not have ──────────────────────────────────
 #
 # Every one of the groups below answers *did this break*. None of them answers
@@ -419,6 +469,58 @@ rc_says() {
 }
 
 own_pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
+
+# ── Who this run actually started, computed once ─────────────────────────────
+#
+# Two places need this set — `cleanup`'s backstop, which signals it, and the
+# `no fixture outlived this run` group, which counts it — and until today each
+# computed it with its own hand-written `awk`, both carrying the same sentence:
+#
+#     "this shell and its ancestors cannot match, because they have real parents"
+#
+# **That sentence is false, and it cost two days of red CI.** An ancestor is
+# reparented to init the moment ITS parent exits, so it has `ppid=1` while
+# still leading the process group this shell inherited — and then it is in the
+# candidate set. Measured 2026-08-27 by synthesising it: fork, let the middle
+# process exit, `setpgid(0,0)` in the survivor, run the harness as its child.
+# The survivor — an ancestor — appears in the set with `ppid=1` and our pgid.
+#
+# That is the shape of a CI runner: the agent is started by the machine's init
+# path, its launcher exits, it keeps `ppid=1`, and the step's shell inherits its
+# process group because nothing in between calls `setpgid`. Every run after the
+# backstop landed died with `Terminated` and `The operation was canceled`, at
+# whatever group happened to call `cleanup` next; the run immediately before it
+# had taken the same harness to completion in 23 minutes. It never showed
+# locally, because a Terminal's `zsh` has a live parent — the same
+# green-here-red-there shape this file records about the `mktemp -t` scan.
+#
+# So the predicate is one function, and it excludes our own ancestor chain by
+# walking it rather than by asserting something about it. A pid that is an
+# ancestor of this shell cannot be something this shell started, whatever its
+# parent happens to be.
+ancestor_pids() {
+  local p=$$ pp
+  while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ]; do
+    printf '%s\n' "$p"
+    pp=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+    [ -z "$pp" ] && break
+    [ "$pp" = "$p" ] && break
+    p=$pp
+  done
+}
+
+# Prints `pid comm` per line for everything this run started that has outlived
+# whatever started it. Empty output means nothing leaked; a non-zero exit means
+# the question could not be answered, which is never the same as "nothing".
+leaked_procs() {
+  [ -n "$own_pgid" ] || return 1
+  local anc
+  anc=$(ancestor_pids | tr '\n' ' ')
+  [ -n "$anc" ] || return 1
+  ps -eo pid=,ppid=,pgid=,comm= \
+    | awk -v g="$own_pgid" -v anc=" $anc " '
+        $2==1 && $3==g && index(anc, " " $1 " ")==0 { print $1" "$4 }'
+}
 fkill() {
   local pat="$1" pid pgid hit=0 seen=0
   for pid in $(pgrep -f "$pat" 2>/dev/null); do
@@ -470,17 +572,13 @@ cleanup() {
   # started the harness. `trap '' TERM` protects only this shell, not them.
   #
   # The precise target instead: a process in **our** group whose parent is
-  # **init**. Being in the group means this run started it; being `ppid=1`
-  # means whatever started it is gone. Nothing still parented is leaked, and
-  # neither this shell nor its ancestors can match, because they have real
-  # parents. That is exactly the class the census found and nothing else.
-  if [ -n "$own_pgid" ]; then
-    for _lpid in $(ps -eo pid=,ppid=,pgid= \
-        | awk -v g="$own_pgid" '$2==1 && $3==g {print $1}'); do
-      [ "$_lpid" = "$$" ] && continue
-      kill -TERM "$_lpid" 2>/dev/null || true
-    done
-  fi
+  # **init**, MINUS this shell's own ancestor chain. That last clause is not
+  # belt-and-braces — the first version of this backstop left it out on the
+  # reasoning that ancestors "have real parents", and on a CI runner they do
+  # not. See `leaked_procs` above for the measurement and what it cost.
+  for _lpid in $(leaked_procs | awk '{print $1}'); do
+    kill -TERM "$_lpid" 2>/dev/null || true
+  done
   return 0
 }
 
@@ -500,7 +598,7 @@ start_evolution_server() {
   return 1
 }
 release_lock() { rm -rf "$LOCK"; }
-trap 'cleanup; release_lock' EXIT
+trap 'stop_memlog; cleanup; release_lock' EXIT
 
 # Waits for the fixture to actually publish an IOR.
 #
@@ -3801,6 +3899,17 @@ if [ "$cd_failures" -eq 0 ]; then
   echo "  ok   the negative control is a test: serialized dispatch must NOT overlap,"
   echo "       and it fails on its deadline rather than hanging when it does"
 else
+  # The rate, said out loud. The loop does not stop at the first red — it runs
+  # all of them — but only failures print, so a reader of `FAIL run 1 of 5`
+  # cannot tell whether the other four ran and passed or never ran at all. That
+  # difference is the whole argument for repeating: **1 of 5 is a rate and
+  # 5 of 5 is a regression**, and they call for different work. Measured
+  # 2026-08-27, when this group reported one red run and the same command
+  # outside the harness went 52 runs without reproducing it — a distinction
+  # this line is what makes visible.
+  echo "  $cd_failures of $cd_runs runs failed — a rate, not a verdict on the cause;"
+  echo "       a single red among green runs is a race to reproduce under this"
+  echo "       harness's own conditions, not a regression to bisect"
   fail_total=$((fail_total+1))
 fi
 
@@ -4767,6 +4876,115 @@ esac
 # are now fixed (the anchors there are the full title, and `build` refuses a
 # driver that would re-enter), and the title stays distinct because a hang is the
 # one diagnostic nobody can read.
+# ── What memory did this run happen in? ─────────────────────────────────────
+#
+# Two claims, and they are deliberately different in kind.
+#
+# The **report** is the trace: how little memory was available at the tightest
+# moment of this run and what was holding it. It is a report and not a gate for
+# the same reason `entry_cost.py` and the CI disk steps are — there is no
+# defensible number for "too little left", and a threshold invented here would
+# be tuned until quiet, which this file calls the green-while-measuring-nothing
+# class with better manners.
+#
+# The **gate** is a different sentence: *did the kernel kill anything for
+# memory while this run was measuring?* If it did, then some group's fixture
+# may have been shot in the head, and its verdict is not evidence — an
+# unmeasured check is a failure, never a pass. That rule this harness already
+# owns; nothing about it needs a threshold.
+#
+# The gate SYNTHESISES its subject first. A kills query that returns nothing is
+# indistinguishable from one that cannot see, and on this platform the two look
+# identical: `log` is a zsh builtin taking no arguments, so `log show …` under
+# the wrong shell answers "too many arguments" on stderr and a caller reading
+# stdout sees a clean machine.
+#
+# **Three lines, one per decision the parser has to get right**, and each one is
+# a measurement rather than a guess about what might go wrong:
+#
+#   1. a machine-pressure kill — must be seen.
+#   2. an idle-exit reap — must NOT be. macOS retires idle daemons through the
+#      same subsystem and logged **782 such lines in fifty idle minutes** here,
+#      so a parser counting them is red forever and gets switched off.
+#   3. a `per-process-limit` kill — must NOT be, and this line exists because
+#      **the first version of this gate went red on its own first run**:
+#      `postersyncd` at `(per-process-limit …) 46592KB`, with
+#      `memorystatus_available_pages: 629074` — **9.8 GB free** — on the same
+#      line. A daemon hitting its own configured limit is not a machine out of
+#      memory, and it is a class this harness's fixtures cannot even be in,
+#      since a per-process limit is set by RunningBoard and everything here is
+#      spawned from a shell.
+#
+# The count must be exactly one before the query's silence over this machine is
+# allowed to mean anything.
+hr "memory this run ran in, and what the kernel killed for it"
+stop_memlog
+mem_probe=$(mktemp "${TMPDIR:-/tmp}/orbweaver-memkill.XXXXXX")
+{
+  # 1 — the machine was out of memory: this must be seen
+  printf '%s\n' 'kernel: memorystatus: killing_top_process pid 4242 [somed] (vm-pageshortage 0 12s) 812340KB - memorystatus_available_pages: 1204'
+  # 2 — an idle-exit reap: a KILL that must NOT count
+  printf '%s\n' 'kernel: memorystatus: killing_idle_process pid 94271 [warmd_agent] (idle-exit 0 25365s rf:- type:daemon) 3552KB'
+  # 3 — a daemon over its OWN limit on a machine with room: must NOT count
+  printf '%s\n' 'kernel: memorystatus: killing_specific_process pid 8953 [postersyncd] (per-process-limit 0 0s rf:- type:daemon) 46592KB - memorystatus_available_pages: 629074'
+} >"$mem_probe"
+mem_probe_out=$(./spikes/memlog.sh kills --from-file "$mem_probe" 2>&1); mem_probe_rc=$?
+mem_probe_n=$(printf '%s' "$mem_probe_out" | grep -c . || true)
+rm -f "$mem_probe"
+if [ "$mem_probe_rc" -ne 0 ] || [ "${mem_probe_n:-0}" -ne 1 ]; then
+  echo "  FAIL the memory-kill parser reported $mem_probe_n line(s) of a three-line probe"
+  echo "       whose first line is a machine-pressure kill and whose other two are a"
+  echo "       kill that is not one — an idle-exit reap and a daemon over its own"
+  echo "       limit — so it is not measuring what it claims and its silence over this"
+  echo "       machine means nothing ($(rc_says "$mem_probe_rc"))"
+  diag_out "$mem_probe_out" 4 head
+  fail_total=$((fail_total+1))
+else
+  # The subject is synthesisable, so that this gate's FAIL branch can be shown
+  # to fire without waiting for a machine to actually run out of memory. A run
+  # that uses it says so on the line above its own verdict, loudly, because a
+  # switch that can silence a gate and leave no trace is worse than the gate
+  # not existing — the whole class this harness keeps finding.
+  if [ -n "${ORBWEAVER_MEMKILL_SOURCE:-}" ]; then
+    echo "  note SYNTHESISED SOURCE: reading kills from ${ORBWEAVER_MEMKILL_SOURCE}"
+    echo "       — this run measured NOTHING about this machine's memory"
+    mem_kills=$(./spikes/memlog.sh kills --from-file "${ORBWEAVER_MEMKILL_SOURCE}" 2>&1); mem_kills_rc=$?
+  else
+    mem_kills=$(./spikes/memlog.sh kills --since "$HARNESS_START" 2>&1); mem_kills_rc=$?
+  fi
+  if [ "$mem_kills_rc" -eq 3 ]; then
+    # Not a pass and not a failure of the code under test: the kernel's own
+    # record was unreadable. It is counted as a SKIPPED naming its fixture,
+    # which is what D010 §2 requires of a claim nothing measured.
+    skip absent git:spikes/memlog.sh \
+      "the kernel's memory-kill record is unreadable here" \
+      "(dmesg restricted, or no /usr/bin/log) — whether a fixture was shot" \
+      "for memory during this run is unmeasured, not clean"
+  elif [ "$mem_kills_rc" -ne 0 ]; then
+    echo "  FAIL the memory-kill query could not run ($(rc_says "$mem_kills_rc"))"
+    diag_out "$mem_kills" 4 head
+    fail_total=$((fail_total+1))
+  else
+    mem_kills_n=$(printf '%s' "$mem_kills" | grep -c . || true)
+    if [ "${mem_kills_n:-0}" -gt 0 ]; then
+      echo "  FAIL the kernel killed $mem_kills_n process(es) for memory while this run was"
+      echo "       measuring. Every green above it is suspect: a fixture that was shot"
+      echo "       cannot report that it was, and an unmeasured check is a failure."
+      printf '%s\n' "$mem_kills" | head -8 | sed 's/^/         /'
+      fail_total=$((fail_total+1))
+    else
+      echo "  ok   no memory kill during this run, and the probe shows the query sees one"
+    fi
+  fi
+fi
+# The report, last, so it cannot be read as the verdict.
+if mem_sum=$(./spikes/memlog.sh summary --out "$MEMLOG" 2>&1); then
+  printf '%s\n' "$mem_sum" | sed 's/^/  note /'
+  echo "  note trace: $MEMLOG (the previous run's is beside it as .prev)"
+else
+  echo "  note no memory trace was recorded for this run — $mem_sum"
+fi
+
 # ── Did anything this run started outlive it? ───────────────────────────────
 #
 # `cleanup` reaps orphans in this process group at EXIT, and that is the floor.
@@ -4776,21 +4994,23 @@ esac
 # **Reaping is not reporting.** This group runs BEFORE the verdict and before
 # `cleanup`, so what it sees is what the run actually left.
 #
-# In our process group means this run started it; `ppid=1` means whatever
-# started it is gone. Nothing still parented is leaked, and this shell and its
-# ancestors cannot match, because they have real parents.
+# The predicate is `leaked_procs`, defined once beside `cleanup` — in our
+# process group, `ppid=1`, and not on this shell's own ancestor chain. That
+# third clause is the repair; the sentence that used to stand here said
+# ancestors "cannot match, because they have real parents", and it was wrong on
+# exactly the machine nobody runs this on by hand. The measurement is recorded
+# where the function is.
 #
 # Measured 2026-08-27 for scale: before the repair, one run of this harness left
 # **twelve** orphaned `orbweaver-py-bridge` processes, each holding a port, and
 # every test that leaked them passed.
 hr "no fixture outlived this run"
-if [ -z "$own_pgid" ]; then
-  echo "  FAIL this run could not read its own process group, so whether it leaked a"
-  echo "       fixture is unmeasured — and an unmeasured check is a failure, never a pass"
+if ! leaked=$(leaked_procs); then
+  echo "  FAIL this run could not read its own process group or its ancestor chain, so"
+  echo "       whether it leaked a fixture is unmeasured — and an unmeasured check is a"
+  echo "       failure, never a pass"
   fail_total=$((fail_total+1))
 else
-  leaked=$(ps -eo pid=,ppid=,pgid=,comm= \
-    | awk -v g="$own_pgid" -v me="$$" '$2==1 && $3==g && $1!=me {print $1" "$4}')
   leaked_n=$(printf '%s' "$leaked" | grep -c . || true)
   if [ "${leaked_n:-0}" -gt 0 ]; then
     echo "  FAIL $leaked_n process(es) this run started outlived it — a fixture is not"

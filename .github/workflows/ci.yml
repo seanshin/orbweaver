@@ -319,10 +319,66 @@ jobs:
           # the one printed AFTER the harness, and inventing a threshold for the
           # before-figure would be a number nobody could defend.
 
+      # The disk steps above have a sibling this job never had, and its absence
+      # cost the same kind of blindness twice.
+      #
+      # Locally, 2026-08-27: the machine froze at 15:17:50 with no panic report,
+      # and the only reason the cause could be named afterwards was that the
+      # kernel happens to stamp `memorystatus_available_pages` onto unrelated
+      # log lines — they showed available memory falling from 6.42 GB to
+      # 0.75 GB in 33 seconds and staying under 0.4 GB for eight minutes. That
+      # is a lucky reconstruction, not a measurement.
+      #
+      # On a runner the same blindness has a different face: a job whose runner
+      # runs out of memory does not report a failing step, it reports
+      # `The operation was canceled`, and there is nothing in the log to say
+      # which. So the figure is printed here, and the harness's own trace is
+      # kept as an artifact by a step that runs even when this one did not
+      # finish. A report, not a gate — the same reason the `df` lines are.
+      - name: memory before the harness
+        run: |
+          free -m || true
+          echo "--- MemAvailable:"; awk '/^MemAvailable:/{printf "%d MB\n",$2/1024}' /proc/meminfo
+          nproc
+
       - name: harness
         env:
           JAVA_HOME_21: ${{ env.JAVA_HOME }}
+          # A fixed path so the `always()` steps below can find it whatever the
+          # harness did. It is the same default the harness picks on its own;
+          # naming it here means the workflow and the script cannot drift into
+          # two different files, one of which nobody uploads.
+          ORBWEAVER_MEMLOG: /tmp/orbweaver-memory.log
         run: ./spikes/run_checks.sh
+
+      # `always()`, for the same reason as the disk step: the reading that
+      # matters is the one taken after a run that died, and a cancelled job
+      # skips everything that is not marked.
+      - name: what memory the job ran in
+        if: always()
+        run: |
+          echo "--- final:"; free -m || true
+          echo "--- kernel memory kills during this job:"
+          ./spikes/memlog.sh kills --since "$(( $(date +%s) - 3600 ))" || \
+            echo "(the kernel's record is unreadable here — unmeasured, not clean)"
+          echo "--- the harness's own trace, tightest samples last:"
+          if [ -s /tmp/orbweaver-memory.log ]; then
+            ./spikes/memlog.sh summary --out /tmp/orbweaver-memory.log || true
+            tail -20 /tmp/orbweaver-memory.log
+          else
+            echo "(no trace — the harness did not get far enough to record one)"
+          fi
+
+      - name: keep the memory trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-trace-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/orbweaver-memory.log
+            /tmp/orbweaver-memory.log.prev
+          if-no-files-found: ignore
+          retention-days: 14
 
       # `always()`, because the reading that matters is the one taken after a
       # run that died. This is the figure that was missing for eight pushes:

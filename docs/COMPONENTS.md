@@ -180,6 +180,46 @@ unmeasured (D031 H1/H2), so the answer stops being a reading assembled by hand.
 그렇다. 아직 바깥에 있는 것: `channel_found_by_name.rs`는 이 모양의 테스트이고
 부정 대조군 셋이 각각 붉어졌으나 선언 그룹이 없어 위 표에 아무것도 더하지 않는다.
 
+## What the harness records about the conditions it ran in / 하네스가 자기 실행 조건에 대해 남기는 것
+
+Added 2026-08-27, after a run that could not be explained afterwards. The
+machine froze at 15:17:50 KST with the unified log ending mid-second and no
+panic report, and the cause could only be named because the kernel happens to
+stamp `memorystatus_available_pages` onto unrelated idle-exit lines: they show
+available memory falling **6.42 GB → 0.75 GB in 33 seconds** at 15:09 and
+sitting between **0.06 and 0.36 GB** with the compressor holding **11.8 GB of
+16** until the machine stopped. That is a lucky reconstruction, not a
+measurement, and it does not survive the next incident.
+
+| | Status |
+|---|---|
+| the trace | ✅ `spikes/memlog.sh record`, started before the first group and stopped by the memory group; one line every 5s, appended and flushed, so it survives a machine that dies without unwinding. The previous run's file is moved to `.prev` rather than deleted — if a run died, that file is the only account of it |
+| the gate | ✅ *did the kernel kill anything for memory while this run was measuring* — a counted FAIL, because a fixture that was shot cannot report that it was, and an unmeasured check is a failure, never a pass. **No threshold anywhere**: "too little memory left" has no defensible number, so the trace is a report, exactly as `entry_cost.py` and the CI `df` steps are |
+| its negative controls | ✅ three, run 2026-08-27 — a pressure kill in the window goes FAIL; a parser widened to count `idle-exit` reaps goes FAIL rather than red-forever (782 such lines in fifty idle minutes here); the two-line probe must report exactly one before the query's silence over the machine means anything. The subject is synthesisable via `ORBWEAVER_MEMKILL_SOURCE`, and a run that uses it says so above its own verdict |
+| in CI | ✅ `free -m` either side of the harness, the kill query, and the trace kept as an artifact by an `if: always()` step — a runner that runs out of memory reports no failing step, only `The operation was canceled` |
+| what it does **not** cover | ◐ a run, not a machine. The freeze above happened while no harness was running, and this recorder would have seen none of it. What exhausted 16 GB that day was ~1,700 `node` processes from a Vite toolchain in a different repository |
+
+2026-08-27, 설명할 수 없었던 실행 하나 뒤에 추가. 15:17:50 KST에 머신이 멎었고
+통합 로그는 초 중간에 끊겼으며 패닉 리포트는 없다. 원인을 이름 붙일 수 있었던
+것은 커널이 무관한 idle-exit 줄에 `memorystatus_available_pages`를 찍어두기 때문
+이었다 — 15:09에 가용 메모리가 **33초 만에 6.42 GB → 0.75 GB**로 떨어졌고, 멎을
+때까지 **0.06–0.36 GB**에 컴프레서가 **16 중 11.8 GB**를 쥐고 있었다. 그것은 운
+좋은 복원이지 측정이 아니며, 다음 사고에서는 통하지 않는다.
+
+그래서 **기록기**가 첫 그룹 전에 시작해 5초마다 한 줄씩 덧붙이고 즉시 흘려보낸다 —
+되감기 없이 죽는 머신에서도 파일이 남도록. 이전 실행의 파일은 지우지 않고 `.prev`로
+옮긴다: 그 실행이 죽었다면 그 파일이 유일한 진술이고, 다음 실행이 증거를 없애는
+것이 되어서는 안 된다. **게이트는 다른 문장이다** — *이 실행이 재는 동안 커널이
+메모리 때문에 무언가를 죽였는가.* 죽였다면 계수되는 FAIL이다: 총 맞은 픽스처는
+자기가 맞았다고 보고하지 못하고, **측정되지 않은 검사는 통과가 아니라 실패**다.
+**어디에도 임계값은 없다** — "메모리가 너무 적다"에 방어 가능한 수는 없으므로 추이는
+게이트가 아니라 보고이며, 이는 `entry_cost.py`와 CI의 `df` 단계가 그런 것과 같은
+이유다. 부정 대조군 셋이 2026-08-27에 돌았고, 대상은 `ORBWEAVER_MEMKILL_SOURCE`로
+**합성**할 수 있으며 그것을 쓴 실행은 자기 판정 위에 그렇다고 크게 적는다.
+**덮지 못하는 것**: 이것은 실행을 덮지 머신을 덮지 않는다. 위의 프리즈는 하네스가
+돌지 않을 때 일어났고 이 기록기는 아무것도 보지 못했을 것이다 — 그날 16 GB를
+먹은 것은 다른 저장소의 Vite 도구 사슬이 띄운 `node` 프로세스 약 1,700개였다.
+
 ## Reading this honestly / 정직한 독해
 
 The wire→bridge spine (cdr→giop→idl→registry→dynamic→mcp→gen) is implemented

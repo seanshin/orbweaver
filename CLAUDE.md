@@ -271,6 +271,60 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   나무를 거두는 것이 아니다. 세 계층이 각자 자기 범위 안에서 옳았고, 그 사이를
   아무도 소유하지 않았다. 누수하는 테스트는 수정 전후 모두 초록이었다 — 그래서
   대조군은 판정을 읽지 않고 프로세스를 센다.*
+- **`ppid=1` is not a proof of ownership, and the sentence that says it is was
+  written by the person repairing the leak above.** That backstop's premise —
+  *"a process in our group whose parent is init; neither this shell nor its
+  ancestors can match, because they have real parents"* — is false in its last
+  clause. **An ancestor is reparented to init the moment *its* parent exits**,
+  so it carries `ppid=1` while still leading the process group this shell
+  inherited, and it lands in the candidate set. That is the shape of a CI
+  runner, and the cost was measured: every run after the backstop landed died
+  with `Terminated` and `The operation was canceled` at whatever group called
+  `cleanup` next, for two days, while the run immediately before it had taken
+  the same harness to completion in 23 minutes. **It never showed locally,
+  because a Terminal's `zsh` has a live parent** — the same green-here-red-
+  there shape as the `mktemp -t` scan. Compute ownership by **walking this
+  shell's ancestor chain and excluding it**, in one function that both the
+  reaping half and the counting half call: they had been restating the same
+  false sentence in two places, which is the `pub(crate)` rule wearing shell.
+  And the control synthesises the ancestor (fork, let the middle process exit,
+  `setpgid(0,0)`, run the subject as its child) — pointing it at a live process
+  tree measures today's machine, not the rule. *`ppid=1`은 소유의 증거가 아니다.
+  조상은 **그 부모**가 끝나는 순간 init에 재양자되어 `ppid=1`을 달고도 우리 그룹을
+  이끈다. 로컬에서는 드러나지 않는다 — 터미널의 `zsh`에는 살아 있는 부모가 있기
+  때문이다. 조상 사슬을 **걸어서** 제외하고, 대상은 **합성**한다.*
+- **A run that records nothing about its conditions cannot be explained after
+  it dies, and the reconstruction that saves you once will not be there twice.**
+  Measured 2026-08-27: this machine froze at 15:17:50 KST — the unified log ends
+  mid-second, there is no `.panic` report, and `ResetCounter` reads
+  `btn_rst,finger_reset force_off`. The cause could be named **only** because
+  the kernel happens to stamp `memorystatus_available_pages` onto unrelated
+  idle-exit lines: available memory fell **6.42 GB → 0.75 GB in 33 seconds** and
+  sat between **0.06 and 0.36 GB** with the compressor holding **11.8 GB of 16**
+  for the eight minutes up to the stop. Nothing was recording on purpose. So the
+  harness records: `spikes/memlog.sh` appends and flushes every 5s from before
+  the first group, and the previous run's trace moves to `.prev` rather than
+  being deleted — if a run died, that file is the only account of it. **The
+  trace is a report and the kill query is the gate, and they are different
+  claims.** There is no defensible number for "too little memory left", so no
+  threshold is a gate; what *is* a gate is *did the kernel kill anything for
+  memory while this run was measuring*, because a fixture that was shot cannot
+  report that it was and an unmeasured check is a failure, never a pass. Two
+  traps in that query, both measured here: `memorystatus: killing` is **not**
+  the pattern — macOS reaps idle daemons through the same subsystem, **782 lines
+  in fifty idle minutes** — so a gate on it is red forever and gets switched
+  off, and the probe's second line is an idle-exit that must **not** count. And
+  on Linux a window that cannot be applied is exit 3, not a wider answer: an OOM
+  kill from last Tuesday reported as this run's is a false red, which kills a
+  gate as surely as a true one nobody reads. **State what it does not cover**:
+  this covers a run, not a machine — the freeze above happened while no harness
+  was running, and what exhausted 16 GB was ~1,700 `node` processes from a Vite
+  toolchain in a different repository. *실행 조건을 기록하지 않는 실행은 죽은 뒤에
+  설명할 수 없고, 한 번 구해준 운 좋은 복원은 두 번째에는 없다. 추이는 보고이고
+  kill 질의가 게이트이며 둘은 다른 주장이다 — "메모리가 너무 적다"에 방어 가능한
+  수는 없다. `memorystatus: killing`은 패턴이 아니다(한가한 50분에 782줄). 적용할
+  수 없는 창은 더 넓은 답이 아니라 미측정이다. 그리고 **덮지 못하는 것을 적는다**:
+  이것은 실행을 덮지 머신을 덮지 않는다.*
 - **`target/` grows without bound, and it costs time rather than disk.** Cargo
   writes a new hash per build and evicts nothing, and this repository builds the
   same code many ways — a different `RUSTFLAGS`, a different feature set, a
