@@ -112,9 +112,34 @@ case "$mode" in
     [ -s "$out" ] && mv -f "$out" "$out.prev" 2>/dev/null
     printf '# epoch\tiso\ttotal_mb\tused_mb\tavail_mb\tswap_mb\ttop3\n' >"$out"
     printf '# recorder pid %s, interval %ss, host %s\n' "$$" "$interval" "$(uname -n)" >>"$out"
+    # ── Reap the sleep, or the recorder leaks one ────────────────────────────
+    #
+    # A recorder that is killed while blocked in `sleep` leaves that `sleep`
+    # behind: the signal reaches this shell, not its child, so the child is
+    # orphaned to init while keeping the process group it inherited from the
+    # harness — which is precisely the "a fixture this run started outlived
+    # it" class, produced by the very thing that watches for it.
+    #
+    # **Caught in CI, not here, and the reason is a lesson.** `run_checks.sh`
+    # stops the recorder at the top of its memory group and counts leaks a few
+    # lines later. On macOS the kills query in between is `log show` and takes
+    # about ten seconds, so a 5-second `sleep` had always finished on its own
+    # and the group said `ok` — twice. On Linux the same query is `dmesg` and
+    # returns instantly, so the orphan was still there and the group reported
+    # `1 process(es) this run started outlived it: 66664 sleep`. The leak was
+    # local too; a slow query was hiding it.
+    #
+    # So the sleep runs as a job whose pid is known, and the trap kills it.
+    # Backgrounding plus `wait` also makes the signal prompt: a foreground
+    # `sleep` would delay the trap until the interval elapsed.
+    _nap=""
+    trap '[ -n "$_nap" ] && kill "$_nap" 2>/dev/null; exit 0' TERM INT HUP
     while :; do
       sample >>"$out"
-      sleep "$interval"
+      sleep "$interval" &
+      _nap=$!
+      wait "$_nap" 2>/dev/null
+      _nap=""
     done
     ;;
 
