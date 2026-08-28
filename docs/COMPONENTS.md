@@ -204,6 +204,31 @@ decision and passes; a header that **defers** it (*"not wired into"*, *"named as
 undone"*, *"the recommended group"*) is an IOU and fails. Today: 47 cited spikes
 run, 1 states a refusal, 0 owe a group.
 
+**A fifth turned up one hour after that gate landed**, in a leg written the
+same day, and it is the class's other half: `spikes/leak_tests.sh` *ran* the
+removal-isolation test and only **narrated** its control —
+`say "control: ORBWEAVER_LEAK_CONTROL=removal_isolation ... Run 2026-08-27: the
+fresh dial of B answered Gone where it must answer Reply(22)"`. A control run
+once, by hand, on a day, recorded in prose. `spikes/leak_controls.sh`'s own
+header calls that *"a sentence in a commit message and not a property of the
+tree"*, and it did not catch this one because its subject was a single `SRC`
+naming one test file. The subject is a table now, computed to a path rather
+than typed a third time, and the harness runs 19 checks over two files where it
+ran 16 over one. Both negative controls were run: an injected subject whose file
+does not exist **fails** rather than silently skipping, and a subject stripped
+of its `THE CALLER …:` sentence is **refused** rather than passing vacuously
+(16 checks, 1 failure). The first attempt at the first control was itself the
+defect it was checking for — the copy ran from the scratchpad, so `ROOT` was a
+different tree and the live subject failed too.
+
+한 시간 뒤에 다섯째가, 같은 날 쓴 다리에서 나왔다 — 부류의 나머지 절반이다:
+`leak_tests.sh`는 테스트를 **돌리고** 그 대조군은 **서술만** 했다. 손으로 한 번
+돌리고 산문에 적어둔 대조군이며, `leak_controls.sh` 헤더가 바로 그것을 *"트리의
+성질이 아니라 커밋 메시지의 문장"*이라 부른다. 그것이 못 잡은 이유는 대상이 `SRC`
+하나였기 때문이고, 이제 대상은 표이며 경로는 타이핑이 아니라 계산된다. 부정 대조군
+둘 다 돌렸다. 첫 대조군의 첫 시도가 그 자신이 검사하던 결함이었다 — 복사본을 다른
+디렉터리에서 돌려 `ROOT`가 달랐다.
+
 It does **not** read `tests/*.rs` — `cargo test --workspace` is a group, so a
 cited Rust test is already taken. The first hand-written sweep of this class
 reported 53 hits and 47 were that false positive; the gate reports 0 because it
