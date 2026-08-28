@@ -592,6 +592,27 @@ static void set_deadline(int fd, double seconds)
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
 }
 
+/* `%.*s` with HOST_IN_WHY, not a bare `%s`, in every message this function
+   writes.
+
+   `host` can be 255 characters and `why` is 256, so the fixed text plus a
+   maximal host does not fit — GCC proves it once `dial` is inlined into its
+   caller and refuses the build:
+
+     c_peer.c:608:42: error: '%s' directive output may be truncated writing up
+     to 255 bytes into a region of size 244 [-Werror=format-truncation=]
+
+   `snprintf` truncates safely, so this was never a memory defect; it is a
+   message that could silently lose its tail. Bounding the host says which part
+   is allowed to be lost, and says it to the compiler as well as to the reader.
+
+   **This never fired on macOS.** clang's fortify does not see through the
+   inline the way glibc's does, and until 2026-08-28 `spikes/c_peer.sh` was in
+   no harness group at all — `grep -c c_peer spikes/run_checks.sh` was 0 — so
+   the peer had never been compiled on Linux. The group that found this was
+   written the same day, and this was its first run. */
+#define HOST_IN_WHY 180
+
 static int dial(const char *host, unsigned port, double deadline, char *why, size_t whyn)
 {
     char portstr[16];
@@ -605,7 +626,8 @@ static int dial(const char *host, unsigned port, double deadline, char *why, siz
     struct addrinfo *res = NULL;
     int rc = getaddrinfo(host, portstr, &hints, &res);
     if (rc != 0) {
-        snprintf(why, whyn, "getaddrinfo(%s:%u): %s", host, port, gai_strerror(rc));
+        snprintf(why, whyn, "getaddrinfo(%.*s:%u): %s", HOST_IN_WHY, host, port,
+                 gai_strerror(rc));
         return -1;
     }
     int fd = -1;
@@ -616,13 +638,15 @@ static int dial(const char *host, unsigned port, double deadline, char *why, siz
         set_deadline(fd, deadline);
         if (connect(fd, a->ai_addr, a->ai_addrlen) == 0)
             break;
-        snprintf(why, whyn, "connect(%s:%u): %s", host, port, strerror(errno));
+        snprintf(why, whyn, "connect(%.*s:%u): %s", HOST_IN_WHY, host, port,
+                 strerror(errno));
         close(fd);
         fd = -1;
     }
     freeaddrinfo(res);
     if (fd < 0 && !why[0])
-        snprintf(why, whyn, "no address for %s:%u could be dialed", host, port);
+        snprintf(why, whyn, "no address for %.*s:%u could be dialed", HOST_IN_WHY, host,
+                 port);
     if (fd >= 0) {
         int one = 1;
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);

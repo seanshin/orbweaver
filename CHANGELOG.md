@@ -10,6 +10,40 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**The C peer had never been compiled on Linux, and the group written today
+found that out on its first run.** `spikes/c_peer.sh` was in no harness group at
+all this morning — `grep -c c_peer spikes/run_checks.sh` returned 0, and
+`C-PEER-STATUS.md` §4 said why: *"That file is held by another batch and was not
+edited."* It is a group now, and CI answered:
+
+    c_peer.c:608:42: error: '%s' directive output may be truncated writing up
+    to 255 bytes into a region of size 244 [-Werror=format-truncation=]
+
+**GCC is right.** `host` can be 255 characters, `why` is 256, and the fixed text
+of `"getaddrinfo(%s:%u): %s"` takes the rest. `snprintf` truncates safely so
+this was never a memory defect — it is a diagnostic that could silently lose its
+tail, which in a peer whose whole job is to say *what it saw* is the wrong thing
+to lose. Every message `dial` writes now bounds the host with `%.*s`, which says
+which part may be dropped, to the compiler as well as to the reader.
+
+**clang never produced it and cannot.** It does not see through the inline the
+way glibc's `_FORTIFY_SOURCE` does; forcing `-D_FORTIFY_SOURCE=2` locally still
+compiles clean. So the finding was unreachable from this machine and CI was the
+only oracle — which is why the previous commit had to widen the group's
+diagnostic first. Eight lines showed the macro expansion and not the line
+number; thirty showed the message.
+
+**C 피어는 리눅스에서 컴파일된 적이 한 번도 없었고, 오늘 만든 그룹이 첫 실행에서
+그것을 찾았다.** 오늘 아침 `c_peer.sh`는 어떤 하네스 그룹에도 없었다 —
+`grep -c`가 0이었고 `C-PEER-STATUS.md`가 이유까지 적어두고 있었다. GCC가 옳다:
+`host`는 최대 255자이고 `why`는 256이며 고정 텍스트가 나머지를 먹는다.
+`snprintf`는 안전하게 자르므로 메모리 결함은 아니지만, **본 것을 말하는 것이
+일인 피어에서 잃으면 안 되는 것이 메시지의 꼬리다.** 이제 `dial`이 쓰는 모든
+메시지가 `%.*s`로 호스트를 묶어, **무엇이 잘려도 되는지를 컴파일러에게도
+사람에게도** 말한다. **clang은 이것을 내지 못한다** — 인라인을 꿰뚫어 보지 않으며
+`-D_FORTIFY_SOURCE=2`를 강제해도 조용하다. 이 머신에서는 닿을 수 없는 발견이었고
+CI가 유일한 오라클이었다.
+
 **Every production servant knows its own key now: the backend leak's landing
 site is empty.** `Dispatch::knows` defaults to accepting **every** object key,
 so for a servant that inherits it the key selects nothing and the *address* is
