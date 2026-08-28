@@ -89,7 +89,20 @@ type Fallible<T> = Result<T, Box<dyn std::error::Error>>;
 /// completed TCP handshake.
 struct Pong;
 
+const NAT_KEY: &[u8] = b"nat-servant";
+
 impl Dispatch for Pong {
+    // D029 §6.1's backend row: a servant that inherits `Dispatch::knows`'s
+    // accept-every-key default answers for keys nobody activated, so the object
+    // key selects nothing and the ADDRESS is the only thing naming a target — a
+    // caller establishes that in one call. §15.3.8.6's own default
+    // (`USE_ACTIVE_OBJECT_MAP_ONLY`) says `OBJECT_NOT_EXIST` and tells it
+    // nothing. This compares against the key this process was bound with rather
+    // than a literal typed a second time.
+    fn knows(&self, object_key: &[u8]) -> bool {
+        object_key == NAT_KEY
+    }
+
     fn dispatch(&mut self, req: &Request, out: &mut Encoder) -> Result<(), SystemException> {
         match req.operation.as_str() {
             "ping" => {
@@ -114,7 +127,7 @@ struct Servant {
 
 impl Servant {
     fn start(bind: &str) -> Fallible<Servant> {
-        let key = b"nat-servant".to_vec();
+        let key = NAT_KEY.to_vec();
         let server = Arc::new(Orb::new().server(bind, key.clone())?);
         let addr = server.local_addr()?;
         let stop = Arc::new(AtomicBool::new(false));

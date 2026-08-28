@@ -39,9 +39,23 @@ struct Held {
     entered: mpsc::Sender<()>,
     release: mpsc::Receiver<()>,
     held: bool,
+    /// The key this process was bound with. Carried rather than compiled in,
+    /// because `--object-key` chooses it at startup — so a literal here would
+    /// be right only for the default and would refuse the peer that passed the
+    /// flag, which is the fixture `spikes/orb_shutdown.sh` actually drives.
+    key: Vec<u8>,
 }
 
 impl Dispatch for Held {
+    // D029 §6.1's backend row: a servant that inherits `Dispatch::knows`'s
+    // accept-every-key default answers for keys nobody activated, so the object
+    // key selects nothing and the ADDRESS is the only thing naming a target.
+    // §15.3.8.6's own default (`USE_ACTIVE_OBJECT_MAP_ONLY`) answers
+    // `OBJECT_NOT_EXIST` instead and tells a caller nothing.
+    fn knows(&self, object_key: &[u8]) -> bool {
+        object_key == self.key
+    }
+
     fn dispatch(&mut self, req: &Request, out: &mut Encoder) -> Result<(), SystemException> {
         match req.operation.as_str() {
             "held" => {
@@ -84,7 +98,8 @@ fn main() -> std::process::ExitCode {
 
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
-    let mut servant = Held { entered: entered_tx, release: release_rx, held: false };
+    let mut servant =
+        Held { entered: entered_tx, release: release_rx, held: false, key: key.clone() };
 
     let orb = Orb::new();
     let server = match orb.server("127.0.0.1:0", key) {

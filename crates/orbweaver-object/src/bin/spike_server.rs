@@ -83,7 +83,20 @@ struct Echo {
     seen: std::collections::BTreeSet<(u8, u8)>,
 }
 
+const ECHO_KEY: &[u8] = b"OrbweaverEcho";
+
 impl Dispatch for Echo {
+    // D029 §6.1's backend row: a servant that inherits `Dispatch::knows`'s
+    // accept-every-key default answers for keys nobody activated, so the object
+    // key selects nothing and the ADDRESS is the only thing naming a target — a
+    // caller establishes that in one call. §15.3.8.6's own default
+    // (`USE_ACTIVE_OBJECT_MAP_ONLY`) says `OBJECT_NOT_EXIST` and tells it
+    // nothing. This compares against the key this process was bound with rather
+    // than a literal typed a second time.
+    fn knows(&self, object_key: &[u8]) -> bool {
+        object_key == ECHO_KEY
+    }
+
     fn redirect(&mut self, request: &Request) -> Option<Forward> {
         if request.operation != "ping" {
             return None;
@@ -299,7 +312,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host = std::env::args().nth(2).unwrap_or_else(|| "127.0.0.1".into());
     let port = std::env::args().nth(3).unwrap_or_else(|| "0".into());
 
-    let mut server = Orb::new().server(&format!("127.0.0.1:{port}"), b"OrbweaverEcho".to_vec())?;
+    let mut server = Orb::new().server(&format!("127.0.0.1:{port}"), ECHO_KEY.to_vec())?;
     // Neither available peer emits GIOP fragments, so the only way to test
     // fragment handling against an independent implementation is to make *us*
     // the fragmenting side and see whether they reassemble.
@@ -399,7 +412,7 @@ mod tests {
                 version: Version::V1_2,
                 host: "127.0.0.1".into(),
                 port,
-                object_key: b"OrbweaverEcho".to_vec(),
+                object_key: ECHO_KEY.to_vec(),
                 components: vec![],
             }],
         }

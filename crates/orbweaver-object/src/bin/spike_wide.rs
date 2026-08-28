@@ -142,6 +142,17 @@ impl Wide {
 }
 
 impl Dispatch for Wide {
+    // D029 §6.1's backend row: a servant that inherits `Dispatch::knows`'s
+    // accept-every-key default answers for keys nobody activated, so the object
+    // key selects nothing and the ADDRESS is the only thing naming a target — a
+    // caller establishes that in one call. §15.3.8.6's own default
+    // (`USE_ACTIVE_OBJECT_MAP_ONLY`) says `OBJECT_NOT_EXIST` and tells it
+    // nothing. This compares against the key this process was bound with rather
+    // than a literal typed a second time.
+    fn knows(&self, object_key: &[u8]) -> bool {
+        object_key == OBJECT_KEY
+    }
+
     fn dispatch(&mut self, req: &Request, out: &mut Encoder) -> Result<(), SystemException> {
         self.calls += 1;
         // The three columns every row on this seat carries, built once.

@@ -10,6 +10,59 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**Every production servant knows its own key now: the backend leak's landing
+site is empty.** `Dispatch::knows` defaults to accepting **every** object key,
+so for a servant that inherits it the key selects nothing and the *address* is
+the only thing naming a target — a caller establishes that in one call by
+fabricating a key and being answered, where §15.3.8.6's own default
+(`USE_ACTIVE_OBJECT_MAP_ONLY`) would say `OBJECT_NOT_EXIST` and tell it nothing.
+D029 §6.1's Backend row recorded it *"not changed, for a measured reason"*: the
+repair lands in crates the GIOP crate does not own.
+
+It landed. The roster the test computes from the tree:
+
+| | before | after |
+|---|---|---|
+| `Dispatch`/`SharedDispatch` impls | 72 | 81 |
+| override `knows` | 46 | **59** |
+| inherit the default | 26 | **22** |
+| **of those, production** | **6** | **0** |
+
+The 22 that remain are all test fixtures — eleven inside `server.rs`'s own
+`#[cfg(test)]` module, eight in test files, three that check the key in
+`dispatch_body` rather than in `knows`.
+
+**One of the six needed a different repair, and finding out why is the reason
+this was not a sweep.** `spike_mux` dials **two** keys at one endpoint on
+purpose — its pooling leg requires `echo` and `other` both to answer, because
+its claim is *two references to one endpoint share one connection*. Narrowing it
+to one key would have refused the second reference and turned a
+connection-pooling measurement into an `OBJECT_NOT_EXIST`. That spike genuinely
+serves two objects; it now says so instead of accepting everything. Verified
+after the change: `pool: dialed=1 reused=1`, unchanged.
+
+`spike_orb_shutdown` needed the other shape: its key is chosen at startup by
+`--object-key`, so the servant carries it. A literal would have been right only
+for the default and would have refused the peer that passes the flag — which is
+the fixture `spikes/orb_shutdown.sh` actually drives.
+
+**Not done, and named rather than implied:** the default itself is unchanged.
+Flipping `Dispatch::knows` to `false` moves all 22 remaining inheritors at once
+and must move with `default_knows_policy()`, whose gate already refuses either
+half alone. That is a separate decision. This batch removed its production
+surface.
+
+**모든 프로덕션 서번트가 자기 키를 안다 — 백엔드 누수의 착지 지점이 비었다.**
+D029 §6.1이 *"측정된 이유로 바꾸지 않았다 — 수리는 GIOP가 소유하지 않은 크레이트에
+착지한다"*고 기록한 그 착지가 끝났다. 트리에서 계산한 명단: 상속 26 → **22**,
+그중 **프로덕션 6 → 0**. 남은 22개는 전부 테스트 픽스처다. **여섯 중 하나는 다른
+수리를 받았고, 그 이유를 알아낸 것이 이것이 스윕이 아니었던 이유다**: `spike_mux`는
+한 엔드포인트에 **두 키**를 일부러 걸고 둘 다 답하기를 요구한다 — *한 엔드포인트에
+대한 두 참조는 연결 하나를 공유한다*가 그 측정이기 때문이다. 하나로 좁혔으면 연결
+풀링 측정이 `OBJECT_NOT_EXIST`로 바뀌었을 것이다. **기본값 자체는 바꾸지 않았다** —
+그것은 남은 22개를 한 번에 옮기며 `default_knows_policy()`와 함께 움직여야 하는 별개
+결정이다.
+
 **The Backend row's own evidence is in the harness now.** The row cites two
 things as what measures its open leak, and neither was a group.
 `a_key_nobody_activated.rs` — ten tests, three GIOP versions by two byte orders,

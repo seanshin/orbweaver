@@ -129,7 +129,27 @@ fn report(stats: MuxStats) {
 /// address more than one object.
 struct Echo;
 
+const MUX_KEYS: [&[u8]; 2] = [b"echo", b"other"];
+
 impl Dispatch for Echo {
+    // D029 §6.1's backend row: a servant that inherits `Dispatch::knows`'s
+    // accept-every-key default answers for keys nobody activated, so the object
+    // key selects nothing and the ADDRESS is the only thing naming a target — a
+    // caller establishes that in one call. §15.3.8.6's own default
+    // (`USE_ACTIVE_OBJECT_MAP_ONLY`) says `OBJECT_NOT_EXIST` and tells it
+    // nothing. This compares against the key this process was bound with rather
+    // than a literal typed a second time.
+    // TWO keys, not one, and that is the measurement rather than laxity: the
+    // pooling leg below dials `echo` and `other` at the same endpoint and
+    // requires both to answer, because its claim is *two references to one
+    // endpoint share one connection*. Narrowing this to one key would refuse
+    // the second reference and turn a connection-pooling measurement into an
+    // `OBJECT_NOT_EXIST`. This spike genuinely serves two objects; now it says
+    // so instead of accepting everything.
+    fn knows(&self, object_key: &[u8]) -> bool {
+        MUX_KEYS.contains(&object_key)
+    }
+
     fn dispatch(&mut self, request: &Request, out: &mut Encoder) -> Result<(), SystemException> {
         let n = request.body().and_then(|mut b| b.get_i32().map_err(Into::into)).unwrap_or(-1);
         out.put_i32(n);
