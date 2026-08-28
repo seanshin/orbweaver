@@ -667,13 +667,33 @@ fn the_pull_supplier_connect_and_disconnect_state_machine() {
     // twice under `--release`, once in the debug workspace run — each time
     // reporting `sourced=2`, which §4 permits.
     //
+    // The repair that widened it to `sourced == 2 && late_asks == 1` then failed
+    // on CI a fourth time, in its own new clause: `late_asks` was sampled after
+    // the offer, so the interleaving it was written to accept could make it read
+    // 0. A repair that adds a second number has to say where that number is
+    // measured from, and this one did not — see the sample point above.
+    //
     // **The window is not given up.** `sourced == 2` is accepted only together
     // with the evidence that it was the ONE permitted round: exactly one more
     // `try_pull` than had been made when the disconnect returned. Two would be
     // a real violation of "never a stream, and never a second one", and still
     // fails. That is the strongest claim this test can make that is also true.
-    supplier.source.offer(&TypeCode::ULong, Endian::native(), |e| e.put_u32(2)).unwrap();
+    // **Sampled where the window OPENS, not where the event is offered.** This
+    // line sat after the `offer` below for one afternoon and CI found the hole
+    // in it the same day: the one permitted late round is a network round trip,
+    // and on a loaded box it can land *between* the offer and this sample. Then
+    // its `try_pull` is already inside `asked_at_disconnect`, so `late_asks`
+    // reads 0 while `sourced` reads 2 — the two numbers describing the same
+    // fetch disagree, and the assertion below calls a permitted interleaving a
+    // defect. Sampling at the disconnect makes `late_asks` count every ask that
+    // followed it, which is what §4's bound is actually about.
+    //
+    // Nothing between the disconnect and here reconnects: lines above only read
+    // counters. A late ask landing in that stretch finds nothing offered yet, so
+    // it costs one ask and no fetch, which the two assertions below accept
+    // together and separately.
     let asked_at_disconnect = supplier.source.try_pull_calls();
+    supplier.source.offer(&TypeCode::ULong, Endian::native(), |e| e.put_u32(2)).unwrap();
     stops_being_asked(&chan.handle, &supplier.source, "a disconnected proxy is not asked");
 
     let after = chan.handle.stats();

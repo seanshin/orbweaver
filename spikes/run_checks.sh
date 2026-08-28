@@ -350,7 +350,20 @@ cargo_test_diag() {
   local out="$1" indent="${2:-       }" names why bin
   bin=$(awk '/^ *Running /{r=$0} /^test result: FAILED/{print r; exit}' <<<"$out")
   names=$(grep -E "^test .* \.\.\. FAILED$" <<<"$out" || true)
-  why=$(grep -E "panicked at|^assertion .* failed|^  left:|^ right:" <<<"$out" || true)
+  # The panic LINE and the panic MESSAGE. `assert!` with a custom message puts
+  # the message on the lines AFTER `panicked at …:`, matching none of the
+  # patterns this used to grep for — so a red run printed the file and line and
+  # threw away the sentence saying what was wrong. Measured 2026-08-28: CI run
+  # 33155952221 printed `panicked at …event_pull_supplier_model.rs:687:5:` and
+  # not one word of the message that names `sourced`, `dropped` and `late_asks`,
+  # which is the whole of the diagnosis. `assert_eq!`'s `left:`/`right:` were
+  # caught and `assert!`'s were not, which is why this looked fine for as long
+  # as the failures happened to be `assert_eq!`s.
+  why=$(awk '
+      /panicked at|^assertion .* failed|^  left:|^ right:/ { print; if (/panicked at/) tail=6; next }
+      tail > 0 && !/^(test |note: |failures:|error|$)/  { print; tail--; next }
+      { tail=0 }
+    ' <<<"$out" || true)
   [ -n "$bin" ]   && sed 's/^ *//' <<<"$bin" | sed "s/^/${indent}in /"
   [ -n "$names" ] && sed "s/^/${indent}/" <<<"$names"
   [ -n "$why" ]   && sed -n '1,20p' <<<"$why" | sed "s/^/${indent}| /"
