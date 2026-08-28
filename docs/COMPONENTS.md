@@ -147,7 +147,7 @@ unmeasured (D031 H1/H2), so the answer stops being a reading assembled by hand.
 | the five names | ✅ one home, `docs/decisions/D029-...md` §6.1, read by `spikes/transparency.py`; a harness tag naming anything else fails the run by name |
 | the ledger | ✅ printed before the verdict, computed from the run; no score, and an untagged run reads as `NONE measured`, not as a pass. It also distinguishes a group that **looked** from a group that **declared it had not** (`tp_measures_nothing`), so a transparency whose only declaring groups measured nothing still reads UNMEASURED with their blockers in the load-bearing column. Its eight negative controls run without the harness's lock in about a second — `./spikes/ledger_control.sh`, 33 assertion groups, 0 failed (2026-08-26) — and since that day they are **also a harness group**, which they were not when control 5 went red and stayed red unnoticed |
 | groups declaring | ◐ seventeen tags over all five names, measured 2026-08-26 (`location` 8, `backend` 3, `language` 3, `lifecycle` 2, `activation` 1). Every transparency now has at least one declaring group; **two of the five (`language`, `activation`) are declared only by groups that declared they measured nothing**, so the ledger still reads them UNMEASURED. Recompute rather than quote this: `python3 spikes/transparency.py --check spikes/run_checks.sh`, and the ledger of any run is the live answer |
-| leak tests per transparency | ◐ D029 §5 O0 landed and reaches the instruments (2026-08-26). `crates/orbweaver-test/tests/what_a_caller_can_tell.rs` changes the hidden property under a live caller; `spikes/leak_tests.sh` gives one leg per transparency, read from `spikes/transparency.py` and never retyped; `spikes/leak_controls.sh` puts each leak back and requires the test to see it (14 checks, 0 failures, 2026-08-26). **Three legs measure** — a target moved under a live caller, the implementation behind one reference replaced mid-session, and (since 2026-08-26) **a target evicted under a live caller**, whose test is `crates/orbweaver-object/tests/what_a_caller_can_tell_about_load.rs` and whose control is inside it rather than in `leak_controls.sh`. **Two are counted `SKIPPED`s naming a blocker**: a Python servant mountable as a `Dispatch` in a server the test owns (`language`), and a redirect emitted for a *name* rather than an object (`lifecycle`). **One line is owed in `run_checks.sh`**: `leak_leg` fails a `MEASURED` row whose group still carries the static `tp_measures_nothing` it was given while its leg was a skip, which is what stops a leg that starts measuring from being swallowed by a stale declaration. **The activation instance of that was settled on 2026-08-27** — the declaration is gone and a comment stands where it was. This row, and `leak_tests.sh` in two places, went on billing for it and all three cited line **4318** for a group that had moved to 4792: a debt naming a location nobody re-checked is a debt nobody re-checked, and the line number is what made it findable. The activation skip is the evidence for what a named blocker is worth: its sentence — *"a POA-level activation path that reloads an evicted target"* — was what the closing batch scoped itself from, and the **second** sentence of the same skip turned out to be wrong (it said the leak was `Router::select`), which a named blocker makes refutable and an absence does not. All five are harness groups, so the skips are counted by the verdict and cited in the ledger's `unmeasured:` column, which is what "reaches the instruments" means and is what they did not do on the day they landed. Still outside: `orbweaver-giop`'s `channel_found_by_name.rs` is a test of this shape with three controls each shown red, and it has no declaring group — it counts toward nothing above |
+| leak tests per transparency | ◐ D029 §5 O0 landed and reaches the instruments (2026-08-26). `crates/orbweaver-test/tests/what_a_caller_can_tell.rs` changes the hidden property under a live caller; `spikes/leak_tests.sh` gives one leg per transparency, read from `spikes/transparency.py` and never retyped; `spikes/leak_controls.sh` puts each leak back and requires the test to see it (14 checks, 0 failures, 2026-08-26). **Three legs measure** — a target moved under a live caller, the implementation behind one reference replaced mid-session, and (since 2026-08-26) **a target evicted under a live caller**, whose test is `crates/orbweaver-object/tests/what_a_caller_can_tell_about_load.rs` and whose control is inside it rather than in `leak_controls.sh`. **One is a counted `SKIPPED` naming a blocker**: a Python servant mountable as a `Dispatch` in a server the test owns (`language`). **Lifecycle stopped being the second on 2026-08-28** — D035 was approved with *displacement is not closure*, so the row was no longer waiting on a decision that could not reach zero, and `crates/orbweaver-giop/tests/what_a_caller_can_tell_about_a_removal.rs` measures what is above the floor: removing one target is invisible to a caller of another. The floor itself — a caller of a removed target can tell — is asserted rather than left to prose, so a change that made it stop being true could not pass unnoticed. Counted skips went 17 to 16. **One line is owed in `run_checks.sh`**: `leak_leg` fails a `MEASURED` row whose group still carries the static `tp_measures_nothing` it was given while its leg was a skip, which is what stops a leg that starts measuring from being swallowed by a stale declaration. **The activation instance of that was settled on 2026-08-27** — the declaration is gone and a comment stands where it was. This row, and `leak_tests.sh` in two places, went on billing for it and all three cited line **4318** for a group that had moved to 4792: a debt naming a location nobody re-checked is a debt nobody re-checked, and the line number is what made it findable. The activation skip is the evidence for what a named blocker is worth: its sentence — *"a POA-level activation path that reloads an evicted target"* — was what the closing batch scoped itself from, and the **second** sentence of the same skip turned out to be wrong (it said the leak was `Router::select`), which a named blocker makes refutable and an absence does not. All five are harness groups, so the skips are counted by the verdict and cited in the ledger's `unmeasured:` column, which is what "reaches the instruments" means and is what they did not do on the day they landed. Still outside: `orbweaver-giop`'s `channel_found_by_name.rs` is a test of this shape with three controls each shown red, and it has no declaring group — it counts toward nothing above. **Its peer half now does** (2026-08-28): `spikes/event_by_name.sh` was cited by D029 as what makes E3 *"a measurement rather than a self-test"* and was run by nothing — `grep -c` over the harness and over `ci.yml` both returned 0 — and it is a group declaring `location` now. Three more of that class were found the same day and are recorded below |
 
 완성 기준의 집은 D029 §6, 다섯 투명성과 그 구멍의 집은 §6.1이며 **여기서 다시 적지
 않는다.** 여기에 사는 것은 *계기*의 상태다: 2026-08-26부터 하네스는 투명성별로 어느
@@ -181,6 +181,46 @@ unmeasured (D031 H1/H2), so the answer stops being a reading assembled by hand.
 않은 투명성은 여전히 UNMEASURED로 읽힌다 — 다섯 중 둘(`language`, `activation`)이
 그렇다. 아직 바깥에 있는 것: `channel_found_by_name.rs`는 이 모양의 테스트이고
 부정 대조군 셋이 각각 붉어졌으나 선언 그룹이 없어 위 표에 아무것도 더하지 않는다.
+
+## What a document cites and what a run performs / 인용과 실행
+
+Added 2026-08-28, after the same defect turned up **four times in one day**: a
+document names a script as its evidence, and nothing runs that script, so the
+evidence is never taken.
+
+| | Found | What it had been |
+|---|---|---|
+| `spikes/c_peer.sh` | cited by `C-PEER-STATUS.md` and D029's Backend row | **never compiled on Linux.** Its first CI run failed on a glibc `-Werror=format-truncation` that macOS clang cannot produce |
+| `spikes/event_by_name.sh` | cited by D029 as what makes E3 *"a measurement rather than a self-test"* | run by nothing; its own header said *"Wiring it in is one `hr` group and is named as undone in the report"* |
+| `spikes/scope_controls.sh` | the negative control for two scope widenings | run by nothing — **and it had stopped being able to run**: the widening it controls gained a `git ls-files` scan, and the control feeds it a tree `git archive` extracted, which has no `.git` |
+| `spikes/half_reply.sh` | cited by this document and D017 | its row here said *"not yet a `run_checks.sh` group"*, and had said so since it was written |
+
+**Three of the four said so in their own headers.** That is the finding rather
+than a detail: a debt named in prose is a debt nobody counts.
+`spikes/cited_and_run.py` is the gate, and its distinction is the whole of it —
+a header that **refuses** the gate (*"a report, not a gate"*, which
+`gap_symbols.py` and `plan_numbers.py` say, and CLAUDE.md says why) is a
+decision and passes; a header that **defers** it (*"not wired into"*, *"named as
+undone"*, *"the recommended group"*) is an IOU and fails. Today: 47 cited spikes
+run, 1 states a refusal, 0 owe a group.
+
+It does **not** read `tests/*.rs` — `cargo test --workspace` is a group, so a
+cited Rust test is already taken. The first hand-written sweep of this class
+reported 53 hits and 47 were that false positive; the gate reports 0 because it
+was fixed rather than tuned. Two more of its own defects were fixed the same
+way: it globbed `spikes/*` and could not see `spikes/jacorb/setup.sh`, which
+`ci.yml` runs by that exact path, and its invocation check was one level deep
+when `trading_client.py` sits three.
+
+2026-08-28 추가. 같은 결함이 하루에 **네 번** 나왔다 — 문서가 스크립트를 증거로
+지목하는데 아무것도 그것을 돌리지 않아, 증거가 채택된 적이 없는 것. **넷 중 셋은
+자기 헤더에 그렇게 적어두고 있었다**, 그것이 세부가 아니라 발견이다: 산문에 이름
+붙인 빚은 아무도 세지 않는 빚이다. 게이트의 구분이 전부다 — **거절**(*"게이트가
+아니라 보고"*)은 결정이라 통과하고, **유예**(*"아직 연결 안 됨"*, *"미완으로 이름
+붙여둔다"*)는 차용증이라 실패한다. `tests/*.rs`는 읽지 않는다: `cargo test
+--workspace`가 그룹이므로 인용된 러스트 테스트는 이미 채택된다. 손으로 돌린 첫
+스윕은 53건을 냈고 47건이 그 오탐이었으며, 게이트가 0을 내는 것은 조인 것이 아니라
+고친 것이다.
 
 ## What the harness records about the conditions it ran in / 하네스가 자기 실행 조건에 대해 남기는 것
 

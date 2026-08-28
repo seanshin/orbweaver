@@ -4465,6 +4465,15 @@ else
       else
         echo "  FAIL --source-endian $pull_e: the pull direction ($(rc_says "$pull_rc"))"
         diag_out "$pull_out" 8
+        # The channel's own log, on failure and not only when it fails to come
+        # up. Measured 2026-08-28: this leg failed once in the harness with
+        # `try_pull=3` where eight standalone runs — five idle, three under ten
+        # CPU burners — all printed `try_pull=11` and passed. The peer's output
+        # says how many times OUR channel asked; only the channel says what it
+        # was doing between the asks, and printing one half of a two-process
+        # measurement is why that run could not be diagnosed at all.
+        echo "       and the channel's own log for the same leg:"
+        diag_log "$PULL_LOG" 12
         pull_fail=1
       fi
     fi
@@ -4976,6 +4985,60 @@ fi
 # are not importable" and is a counted SKIPPED naming the fixture; 1 is a
 # counted failure. Reading those the other way round is how an absent peer
 # becomes a green run.
+# ── A peer that closes between two writes of one reply ──────────────────────
+#
+# `docs/COMPONENTS.md` cites this as evidence and, in the same sentence, records
+# that it is **"not yet a `run_checks.sh` group — the runner exists and exits 3
+# for 'nothing measured' as distinct from 1 for 'refuted', but the harness does
+# not call it."** That sentence had been true since it was written. It is the
+# fourth cited-and-unrun executable found on 2026-08-28, after `c_peer.sh`,
+# `event_by_name.sh` and `scope_controls.sh`, and the last one the new
+# `cited_and_run.py` gate had to be taught to see (it was hidden behind a
+# one-level indirection check and a `spikes/*` glob that missed nested paths).
+#
+# What it measures: a peer that closes the connection between two writes of ONE
+# reply, and what each caller multiplexed on that connection is told. 16 cases,
+# both byte orders, both control messages.
+hr "a peer that closes between two writes of one reply (D017)"
+hrp_out=$(./spikes/half_reply.sh 2>&1); hrp_rc=$?
+if [ "$hrp_rc" -eq 0 ]; then
+  echo "  ok   $(grep -E "^half_reply: PASS" <<<"$hrp_out")"
+else
+  echo "  FAIL a half-written reply did not tell its callers what it should ($(rc_says "$hrp_rc"))"
+  diag_out "$hrp_out" 12
+  fail_total=$((fail_total+1))
+fi
+
+# ── Every executable a document cites either runs, or says it does not ──────
+#
+# Four times on 2026-08-28 a document named a script as its evidence and nothing
+# ran it, so the evidence was never taken: `c_peer.sh` (never compiled on
+# Linux), `event_by_name.sh` (D029 cites it as what makes E3 "a measurement
+# rather than a self-test"), `scope_controls.sh` (a negative control that had
+# also stopped being able to run), and `half_reply.sh` (whose own row in
+# COMPONENTS says "not yet a group"). Three of the four had said so in their own
+# headers. **A debt named in a header is a debt nobody counts.**
+#
+# The gate's distinction is the whole of it: a header that REFUSES the gate
+# ("a report, not a gate" — `gap_symbols.py`, `plan_numbers.py`) is a decision
+# and passes; a header that DEFERS it ("not wired into", "named as undone",
+# "the recommended group") is an IOU and fails.
+hr "every cited executable runs here, or says why it does not"
+car_probe_rc=0
+python3 spikes/cited_and_run.py --probe >/dev/null 2>&1 || car_probe_rc=$?
+if [ "$car_probe_rc" -ne 0 ]; then
+  echo "  FAIL the citation scan could not run at all ($(rc_says "$car_probe_rc")) — its"
+  echo "       silence over the tree would mean nothing"
+  fail_total=$((fail_total+1))
+else
+  car_out=$(python3 spikes/cited_and_run.py 2>&1); car_rc=$?
+  case "$car_rc" in
+    0) echo "  ok   $(head -1 <<<"$car_out" | sed 's/^ *//')" ;;
+    *) printf '%s\n' "$car_out" | sed 's/^/  /'
+       fail_total=$((fail_total+1)) ;;
+  esac
+fi
+
 hr "E3's peer half — omniORB finds our channel by name (D029 §6.1 location)"
 bears_on location
 ebn_out=$(./spikes/event_by_name.sh 2>&1); ebn_rc=$?

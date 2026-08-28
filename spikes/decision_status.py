@@ -391,6 +391,44 @@ def walk():
     """
     import subprocess
 
+    # A `--root` that is not a git work tree is enumerated by walking it, and the
+    # walk says so. This is not a softening of the rule below: on a tree git
+    # *should* be able to read, a git that fails is still an unmeasured check and
+    # still a failure. The two cases are told apart by asking git whether the
+    # root is a work tree at all, which is a different question from whether a
+    # command failed.
+    #
+    # Found 2026-08-28. `spikes/scope_controls.sh` — the negative control for
+    # this very widening — extracts an old tree with `git archive` and points
+    # `--root` at it. The extracted tree has no `.git`, so `ls-files` exited 128
+    # and the control could not run. **The widening broke its own control**, and
+    # nothing noticed because nothing runs that script: it is in no harness group
+    # by its own choice ("It is a control, not a gate"), which is defensible, and
+    # it had also stopped being re-runnable, which is not. Its own sentence:
+    # *"a control that cannot be re-run is a claim."*
+    inside = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if inside.returncode != 0 or inside.stdout.strip() != "true":
+        print(f"  note {ROOT} is not a git work tree; enumerating by walking it")
+        # `yield from`, not `return`. This is a generator, and a `return value`
+        # in one raises StopIteration with that value and yields NOTHING — the
+        # first draft of this fallback did exactly that, so zero files were
+        # scanned and `scope_controls.sh` reported five failures that read as
+        # *the widening does not catch what it was built for*. It caught them
+        # fine; nothing had been handed to it. Checked rather than believed,
+        # which is the only reason the widening was not blamed for it.
+        yield from sorted(
+            q
+            for q in ROOT.rglob("*")
+            if q.is_file()
+            and not any(part in PRUNE for part in q.relative_to(ROOT).parts[:-1])
+        )
+        return
+
     r = subprocess.run(
         ["git", "ls-files", "-z", "--cached"], cwd=ROOT, capture_output=True, text=True
     )

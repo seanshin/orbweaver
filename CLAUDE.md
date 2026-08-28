@@ -325,6 +325,59 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   수는 없다. `memorystatus: killing`은 패턴이 아니다(한가한 50분에 782줄). 적용할
   수 없는 창은 더 넓은 답이 아니라 미측정이다. 그리고 **덮지 못하는 것을 적는다**:
   이것은 실행을 덮지 머신을 덮지 않는다.*
+- **A document that cites an executable as its evidence owes a run, and a debt
+  named in a header is a debt nobody counts.** Four instances in one day,
+  2026-08-28: `spikes/c_peer.sh` had **never been compiled on Linux** (its first
+  CI run failed on a glibc `-Werror=format-truncation` macOS clang cannot
+  produce); `spikes/event_by_name.sh`, which D029 cites as what makes E3 *"a
+  measurement rather than a self-test"*, was run by nothing — `grep -c` over the
+  harness and over `ci.yml` both returned **0**; `spikes/scope_controls.sh`, the
+  negative control for two scope widenings, was run by nothing **and had stopped
+  being able to run**, because the widening it controls gained a `git ls-files`
+  scan and the control feeds it a tree `git archive` extracted, which has no
+  `.git`; and `spikes/half_reply.sh`'s own row in `COMPONENTS.md` said *"not yet
+  a `run_checks.sh` group"*. **Three of the four said so in their own headers**,
+  and that is the finding rather than a detail. The distinction the gate
+  (`spikes/cited_and_run.py`) draws is the whole of it: a header that **refuses**
+  the gate — *"a report, not a gate"* — is a decision and passes; one that
+  **defers** it — *"not wired into"*, *"named as undone"*, *"the recommended
+  group"* — is an IOU and fails. Its own first draft reported seven, of which
+  five were its blindness: it globbed `spikes/*` and could not see
+  `spikes/jacorb/setup.sh`, which `ci.yml` runs by that exact path, and its
+  invocation check was one level deep where `trading_client.py` sits three.
+  **It reports zero because it was fixed, not because it was tuned** — the
+  difference this file names elsewhere as the green-while-measuring-nothing
+  class with better manners. *문서가 실행물을 증거로 인용하면 실행을 빚진다.
+  하루에 넷, 그중 셋은 자기 헤더에 적어두고 있었다 — **산문에 이름 붙인 빚은
+  아무도 세지 않는다.** 거절은 결정이고 유예는 차용증이다. 게이트가 0을 내는 것은
+  조인 것이 아니라 고친 것이다.*
+- **A control must LIFT the code it controls, never restate it — and the
+  restatement is usually invisible until the control is asked to go red.** Six
+  instances in one day, 2026-08-28, every one caught only by trying to make the
+  control fail: a probe used `grep -n` where the scan it validates uses
+  `grep -rn`, so the comment filter anchored on `path:line:` matched nothing and
+  the probe reported its own comment as a hit; a control stubbed `diag_out` with
+  a four-line version and measured the stub, reporting 4 where the shipped
+  function shows 30; a control script was **an empty file** — a sed quoting
+  error swallowed by `2>/dev/null`, and `bash` exits 0 on an empty script, so it
+  passed while executing nothing; a fallback written into a **generator** used
+  `return` instead of `yield from`, which yields nothing, so a control reported
+  five failures that read as *the widening does not catch what it was built
+  for* when nothing had been handed to it. `spikes/ledger_control.sh` is the
+  shape that works: it lifts `hr`, `bears_on` and the ledger out of
+  `run_checks.sh` with `awk` and runs **those bytes**. *통제군은 통제 대상 코드를
+  **들어 써야** 하고 다시 적으면 안 된다. 하루에 여섯 번, 전부 통제군을 빨갛게
+  만들어 보려 할 때만 드러났다 — 빈 파일은 exit 0을 내고, 제너레이터의 `return`은
+  아무것도 내지 않는다.*
+- **Never conclude from a truncated read.** `transparency.py --cite location |
+  head -4` showed a leak that the very next clause said was **fixed**, and half
+  an afternoon was nearly spent on it; `diag_out … 8` cut a compiler error above
+  the line that named the warning, so two CI runs were spent widening the
+  diagnostic before the defect could be read at all; `cut -c1-155` hid the
+  message on a third. The defaults are the hazard: a head, a tail count, a
+  column cut. **Read the whole cell, the whole message, the whole verdict** —
+  and when a tool truncates by default, that is the tool to fix. *잘린 읽기에서
+  결론 내지 않는다. 기본값이 위험이다 — 잘린 바로 다음 절이 "Fixed"였다.*
 - **`target/` grows without bound, and it costs time rather than disk.** Cargo
   writes a new hash per build and evicts nothing, and this repository builds the
   same code many ways — a different `RUSTFLAGS`, a different feature set, a

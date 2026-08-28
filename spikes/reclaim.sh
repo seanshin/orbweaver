@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# A tool, not a gate: an operator runs it and reads the count. CLAUDE.md says
+# why there is no threshold — there is no defensible number for "too many
+# build artifacts" — and `spikes/cited_and_run.py` asks only that a script a
+# document cites either run in the harness or say, here, that it does not.
 # Reclaim what finished work is still holding / 끝난 작업이 붙들고 있는 것을 회수한다
 #
 # Parallel agent waves leave a worktree per batch. Landing merges the branch and
