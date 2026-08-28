@@ -10,6 +10,45 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**The Backend row's own evidence is in the harness now.** The row cites two
+things as what measures its open leak, and neither was a group.
+`a_key_nobody_activated.rs` — ten tests, three GIOP versions by two byte orders,
+seven counted controls — ran only inside `cargo test --workspace`, where a red
+says *1 failed* and not which property moved. `spikes/c_peer.sh` did not run
+here **at all**: `grep -c c_peer spikes/run_checks.sh` was 0, and
+`C-PEER-STATUS.md` §4 said so, named the shape a group should take, and gave the
+reason — *"That file is held by another batch and was not edited."* A row whose
+evidence sits outside the instrument is a row nobody can read from a run.
+
+The C peer is the one that matters most. omniORB and JacORB agree with us partly
+because they implement the same document and partly because **a convention both
+ends apply cannot be refuted by a round trip**; the C peer links nothing, builds
+every GIOP and IOR octet from the specification, and `build_c_peer.sh` greps its
+source for `omniorb|omniidl|tao/|ace/|jacorb` so *first-party C* is measured
+rather than promised. It is the peer that **found** this leak. It now reports
+`held 36 · refuted 0` into the run.
+
+Controls, all four run: a normal run is `ok`/`ok`; a measurement that cannot run
+is a counted failure; **a missing C compiler is a counted `SKIPPED` naming its
+fixture and not a pass** — reading exit 2 and exit 1 the other way round is
+exactly how an absent toolchain becomes a green run; a peer that fails a leg is
+a counted failure.
+
+One thing the first draft got wrong, and it is the day's recurring shape: the
+group grepped `^(ok|PASS|cell)` for the peer's leg lines, which are **indented**,
+so it printed *"no leg lines in the output"* over a run that had printed
+thirty-six. It now reads the verdict the producer actually writes.
+
+**백엔드 행의 증거가 이제 하네스 안에 있다.** 행이 인용하는 측정 둘 중 어느 것도
+그룹이 아니었다 — `a_key_nobody_activated.rs`는 `cargo test --workspace` 안에서만
+돌아 red가 *1 failed*라고만 말했고, `c_peer.sh`는 `run_checks.sh`에 **한 글자도**
+없었다. C 피어가 특히 값어치가 있다: omniORB·JacORB는 같은 문서를 구현하기에
+우리와 일치하고 **양쪽이 적용하는 관례는 왕복으로 반박되지 않지만**, C 피어는
+아무것도 링크하지 않는다. 이 누수를 **찾아낸** 것이 그 피어이며, 이제 실행에
+`held 36 · refuted 0`을 보고한다. 대조군 넷 모두 돌렸고, 그중 **C 컴파일러가 없으면
+계수된 SKIPPED이지 통과가 아니다** — 종료 코드 2와 1을 거꾸로 읽는 것이 없는
+툴체인을 초록으로 만드는 방법이다.
+
 **Two facts in D029's Backend row were false when they were written, and one
 of them sent today's work at an already-closed leak.** The cell opened by naming
 two leaks. The first — `spike_experts`' server root key colliding with its

@@ -4918,6 +4918,79 @@ hr "leak test — a move under a live caller (D029 §5 O0)"
 bears_on location
 leak_leg location
 
+# ── The Backend row's own measurements, in the harness ──────────────────────
+#
+# `D029` §6.1's Backend row cites two things as what measures its open leak —
+# a servant that inherits `Dispatch::knows`'s accept-every-key default answers
+# for keys nobody activated, so the object key names nothing and the *address*
+# is the only thing naming a target. **Neither citation was a harness group.**
+# `a_key_nobody_activated.rs` ran only inside `cargo test --workspace`, where a
+# red says "1 failed" and not which property moved; `spikes/c_peer.sh` — the
+# hand-written C peer that *found* the leak by dialling us — did not run here
+# at all, and `spikes/C-PEER-STATUS.md` §4 says so, names the shape a group
+# should take, and explains the omission: *"That file is held by another batch
+# and was not edited."*
+#
+# A row whose evidence is outside the instrument is a row nobody can read from
+# a run. These two groups are that evidence, run.
+hr "a key nobody activated — what a caller learns from an endpoint (D029 §6.1 backend)"
+bears_on backend
+# The leak is DECLARED, not closed: `Dispatch::knows` defaults to true and 26
+# of the workspace's 72 implementations inherit it, in crates `orbweaver-giop`
+# does not own. So this group measures the leak's SHAPE and refuses a silent
+# change to it — the file's own assertion message says as much: *"the Backend
+# observation this test records has been closed — move D029 §6.1's row rather
+# than editing this assertion."*
+kna_out=$(cargo test -q -p orbweaver-giop --test a_key_nobody_activated 2>&1); kna_rc=$?
+kna_line=$(grep -E '^test result:' <<<"$kna_out" | head -1)
+if [ "$kna_rc" -eq 0 ] && [ -n "$kna_line" ]; then
+  echo "  ok   $kna_line — 3 GIOP versions x 2 byte orders, and the roster of"
+  echo "       inheritors is COMPUTED from the tree rather than typed, because the"
+  echo "       typed one had already gone stale while its guard asserted only that"
+  echo "       the list was non-empty"
+else
+  echo "  FAIL the backend row's own measurement did not run ($(rc_says "$kna_rc"))"
+  cargo_test_diag "$kna_out"
+  fail_total=$((fail_total+1))
+fi
+
+hr "the C peer — a program that is not an ORB, dialling us (D029 §6.1 backend)"
+bears_on backend
+# The peer that found the leak. C99 + POSIX sockets, every GIOP and IOR octet
+# built from the published specification and nothing linked — which is why it
+# can say something omniORB and JacORB cannot: those two agree with us because
+# they implement the same document *and* because a convention both ends apply
+# cannot be refuted by a round trip. `build_c_peer.sh` greps the peer's own
+# source for `omniorb|omniidl|tao/|ace/|jacorb` so "first-party C" is measured
+# rather than promised.
+#
+# Exit conventions are the script's, not this group's: 2 is "no C compiler" and
+# is a counted SKIPPED naming the fixture; 1 is a counted failure. Reading them
+# the other way round is how an absent toolchain becomes a green run.
+cpeer_out=$(./spikes/c_peer.sh 2>&1); cpeer_rc=$?
+case "$cpeer_rc" in
+  0)
+    # Its own verdict line, not a pattern guessed at: `c_peer.sh` ends with
+    # `held N · refuted M`, and the first draft of this group grepped for
+    # `^(ok|PASS|cell)` — which its leg lines are INDENTED past, so the group
+    # printed "no leg lines in the output" over a run that had printed
+    # thirty-six of them. Read what the producer writes.
+    echo "  ok   the C peer dialled us: $(grep -E '^held [0-9]+ · refuted' <<<"$cpeer_out")"
+    echo "       — a program that links nothing, so what it agrees with us about is"
+    echo "       the specification rather than a convention we both inherited"
+    ;;
+  2)
+    skip absent git:spikes/c_peer.sh \
+      "no C compiler here, so the peer that found the backend leak did not run" \
+      "— its column is unmeasured, not passing"
+    ;;
+  *)
+    echo "  FAIL the C peer could not complete its call ($(rc_says "$cpeer_rc"))"
+    diag_out "$cpeer_out" 8
+    fail_total=$((fail_total+1))
+    ;;
+esac
+
 hr "leak test — the implementation behind one reference replaced mid-session (D029 §5 O0)"
 bears_on backend
 leak_leg backend
