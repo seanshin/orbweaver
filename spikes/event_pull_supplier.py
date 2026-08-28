@@ -23,6 +23,7 @@ channel asks in the order it is told to and a supplier replies in the order it
 was asked in, so that flag is what puts both byte orders on the wire.
 """
 
+import os
 import sys
 import time
 
@@ -239,4 +240,30 @@ if __name__ == "__main__":
     rc = main(sys.argv)
     if _TEARDOWN is not None:
         rc = stop_being_a_supplier(*_TEARDOWN) or rc
-    sys.exit(rc)
+    # ── Leave without running interpreter finalization ──────────────────────
+    #
+    # `sys.exit` unwinds into `Py_Finalize`, and omniORB's own C++ threads
+    # outlive that: the thread scavenger calls back into an interpreter that is
+    # being torn down. It has crashed this way twice, on two platforms, with two
+    # signals and one cause:
+    #
+    #   macOS   SIGSEGV in `omnipyThreadScavenger::run_undetached` ->
+    #           `_PyObject_Call` -> `_PyType_LookupStackRefAndVersion`, null
+    #           deref, while the main thread sat in `_Py_Finalize`
+    #           (2026-08-27, recorded in commit e2918ec).
+    #   Linux   SIGABRT, `terminate called without an active exception`, in CI
+    #           run 33126673869 — **after this script had printed PASS**. The
+    #           harness read 134 and reported the measurement as failed.
+    #
+    # Both are the same thing: the work was done and the shutdown died. `rc_says`
+    # made that legible in the harness's output; this makes it not happen. The
+    # exit code is unchanged, so a real failure is still a failure — the only
+    # thing skipped is finalization, and this file registers nothing with
+    # `atexit` that would be skipped with it.
+    #
+    # The flush is not optional. `os._exit` does not drain Python's buffers, and
+    # the harness reads this script's printed verdict; losing it would trade a
+    # rare crash for a routine silence, which is the worse of the two.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(rc)

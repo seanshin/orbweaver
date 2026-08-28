@@ -10,6 +10,42 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**A fixture that crashed on the way out finally failed a run, so it stopped
+being a printing problem.** CI run 33126673869: the event-channel pull leg died
+with **SIGABRT** — `terminate called without an active exception` — **after its
+body had printed `PASS`**. The harness read 134 and reported a measurement that
+had succeeded as failed. Same cause as the macOS SIGSEGV recorded in `e2918ec`
+(`omnipyThreadScavenger` calling into an interpreter being torn down), different
+signal, different platform. That commit deliberately changed only what is
+*printed*, on the ground that nothing had made the crash fail a run in 60 runs;
+something now has.
+
+`spikes/event_pull_supplier.py` leaves through `os._exit(rc)` after an explicit
+flush instead of unwinding into `Py_Finalize`, so omniORB's own C++ threads
+never meet a torn-down interpreter. The exit code is unchanged, so a real
+failure is still a failure — verified: a bad IOR still exits 1 with its output
+intact — and the flush is not optional, because `os._exit` does not drain
+Python's buffers and the harness reads this script's printed verdict.
+
+**One file, not the twenty-eight the rule covers, and that is deliberate.**
+Sweeping by rule rather than by file found **28 omniORB fixtures that exit
+through interpreter finalization**, none of which registers anything with
+`atexit`. They are all candidates. But this crash **does not reproduce locally**
+— it is 1 in 4 CI runs — so the repair is reasoned from a signature rather than
+measured, and changing 28 files at once would leave nothing able to say which
+change did what. The other 27 follow once CI has run this one green more than
+once. Locally: the leg passes in both byte orders after the change.
+
+**나가는 길에 죽던 픽스처가 마침내 한 실행을 실패시켰고, 그래서 출력 문제이기를
+그만두었다.** CI에서 이벤트 채널 pull 레그가 **본문에 `PASS`를 찍은 뒤** SIGABRT로
+죽었고 하네스는 134를 읽어 성공한 측정을 실패로 보고했다. `e2918ec`가 기록한 macOS
+SIGSEGV와 같은 원인, 다른 신호. 그 커밋은 *"60회에서 아무도 실패시키지 못했다"*는
+근거로 출력만 바꾸었는데, 이제 실패시킨 것이 나왔다. 이제 flush 후 `os._exit(rc)`로
+나간다 — 종료 코드는 그대로이므로 진짜 실패는 여전히 실패다. **규칙이 덮는 28개가
+아니라 한 개만 바꾼 것은 의도적이다**: 이 크래시는 로컬에서 재현되지 않으므로 수정은
+서명에서 추론한 것이고, 28개를 한 번에 바꾸면 무엇이 무엇을 고쳤는지 말할 수 있는
+것이 남지 않는다.
+
 **B landed: the lifecycle row stopped waiting on a decision that could not
 reach zero.** D035 §5's option B, approved 2026-08-27, is now a measurement —
 `crates/orbweaver-giop/tests/what_a_caller_can_tell_about_a_removal.rs`. The
@@ -41,11 +77,16 @@ stopped, since `Orb::shutdown` says §9.4.10's goodbye and a killed process
 leaves a reset. That is a second floor.
 
 Also: the status gate caught a CHANGELOG verb — the word *superseded* in prose
-about a table read as a claim that D029 had been superseded. Second time in a
-day that a verb tripped it (the first was *rejected* in README). The gate was
-not loosened: its own rule allows status vocabulary freely as long as the
-passage also names the current state, which is why every other `approved` in
-this file passes, and the prose was reworded instead.
+about a table, read as a claim about **D029, which is PROPOSED**. Third time in
+a day that a verb tripped it (*rejected* in README, then twice here — the second
+time in the sentence written to describe the first, which is the joke and also
+the lesson). The gate was **not** loosened. Its own rule allows status
+vocabulary freely as long as the passage also names the current state, which is
+why every other `approved` in this file passes and why this paragraph now says
+*which is PROPOSED* out loud. That is not a workaround: a sentence that uses
+status words about a decision and does not say where the decision actually
+stands is a sentence a reader can misread too. **Prose about a decision names
+its current state.**
 
 **B 착지: 생애주기 행이 0에 닿을 수 없는 결정을 기다리기를 그만두었다.** 하네스의
 계수된 스킵이 **17에서 16으로** 줄었고, 원장의 행이 *미측정, X 대기*에서 *측정됨,
