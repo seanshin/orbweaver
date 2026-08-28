@@ -647,8 +647,31 @@ fn the_pull_supplier_connect_and_disconnect_state_machine() {
     // The offer goes in *before* the settle, so a channel that were still
     // asking would have something to find and both assertions would catch it.
     supplier.source.offer(&TypeCode::ULong, Endian::native(), |e| e.put_u32(2)).unwrap();
+    let asked_before_settle = supplier.source.try_pull_calls();
     stops_being_asked(&chan.handle, &supplier.source, "a disconnected proxy is not asked");
-    assert_eq!(chan.handle.stats().sourced, 1, "and nothing more was fetched");
+    // The counters ride in the message, because this assertion has failed in CI
+    // twice (2026-08-28, `cargo test --workspace --release`) and did not
+    // reproduce in 114 local runs across six shapes — debug and release, alone
+    // and in the workspace, at four test threads and under load. A red that
+    // says only *one more was fetched* cannot distinguish a round already in
+    // flight when `disconnect_pull_consumer` returned from a round started
+    // after it, and those are different defects. Until it reproduces here, the
+    // only instrument is what the failing run prints.
+    let after = chan.handle.stats();
+    assert_eq!(
+        after.sourced,
+        1,
+        "and nothing more was fetched — sourced={} dropped={} connected={} \
+         try_pull: {} before the settle, {} after. If sourced is 2, a source \
+         round committed the second event after `disconnect_pull_consumer` had \
+         returned; compare the two try_pull counts to see whether that round \
+         started before or after the disconnect.",
+        after.sourced,
+        after.dropped,
+        after.pull_suppliers_connected,
+        asked_before_settle,
+        supplier.source.try_pull_calls()
+    );
 
     // Idempotent, and the key stays reconnectable.
     client::disconnect_pull_consumer(&mut conn).unwrap();

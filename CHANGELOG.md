@@ -10,6 +10,52 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**Two facts in D029's Backend row were false when they were written, and one
+of them sent today's work at an already-closed leak.** The cell opened by naming
+two leaks. The first — `spike_experts`' server root key colliding with its
+derived registry key — had been fixed in `bd88d36` at **15:54 on 2026-08-26**,
+and the commit that wrote the cell landed at **18:21 the same day**: two and a
+half hours later, with `CHANGELOG`, `D028` and `COMPONENTS` all already
+recording the fix. The second false line named `orbweaver-gen`'s `PyServant` as
+a servant that inherits `Dispatch::knows`'s permissive default; the seam
+refactor had already moved it to `crate::seam::ForeignServant`, which overrides
+`knows`. `a_key_nobody_activated.rs` records that same correction in its own
+header — it is why that file computes its roster from the tree instead of
+carrying a typed list whose guard only ever asserted the list was non-empty.
+
+The row now names **one** open leak. The closed one is named as closed rather
+than deleted, because a row that quietly loses a leak is indistinguishable from
+one that never had it.
+
+**How this was found is the part worth keeping.** Earlier the same day I picked
+the Location row's `move_to` leak as the next thing to close, from
+`transparency.py --cite location | head -4` — and the clause immediately after
+the truncation read *"Fixed; the class is the leak to watch."* **My own tool's
+truncation made a closed leak look open.** That is what prompted asking for
+whole cells rather than heads, which is what surfaced these two.
+
+**The release-profile regression is instrumented rather than diagnosed.**
+`the_pull_supplier_connect_and_disconnect_state_machine` has failed in CI's
+`cargo test --workspace --release` twice, after four green runs, and does **not**
+reproduce here: 114 local runs across six shapes — debug and release, the binary
+alone and the whole workspace, at four test threads, and under load — all green.
+Three hypotheses died: the new test binary this session added to the same crate,
+the runner's core count, and a slower machine. So the assertion now carries the
+counters in its message — `sourced`, `dropped`, `pull_suppliers_connected`, and
+the try_pull count either side of the settle — because a red that says only *one
+more was fetched* cannot tell a round already in flight when
+`disconnect_pull_consumer` returned from a round started after it, **and those
+are different defects**.
+
+**D029 백엔드 행의 사실 둘이 쓰일 때 이미 거짓이었고, 그중 하나가 오늘의 작업을
+이미 닫힌 누수로 보냈다.** 키 충돌은 08-26 **15:54**에 고쳐졌고 셀을 쓴 커밋은
+**18:21**이다. `PyServant` 언급도 seam 리팩터 뒤였다. 행은 이제 **하나**를 이름
+붙이며, 닫힌 것은 지우지 않고 닫혔다고 적는다 — 구멍을 조용히 잃은 행은 애초에
+없던 행과 구별되지 않기 때문이다. **찾은 경위가 남길 값어치다**: 같은 날 아침
+`--cite location | head -4`의 잘린 머리만 읽고 이미 닫힌 누수를 다음 목표로 골랐고,
+잘린 바로 다음 절이 *"Fixed"*였다. **릴리스 회귀는 진단이 아니라 계측했다** —
+로컬 114회 재현 0, 가설 셋 사망. 단언이 이제 카운터를 싣는다.
+
 **A chapter's reason for declining a service was prose, and now it is a gate.**
 `PLAN-DEFERRED` §3 declines the CORBA Time Service, and its argument is not "no
 consumer" — it is that `crates/orbweaver-object/src/residency.rs` and the whole
