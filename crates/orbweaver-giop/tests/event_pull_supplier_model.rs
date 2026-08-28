@@ -867,7 +867,10 @@ fn the_one_permitted_late_round_asks_once_and_fetches_what_was_offered() {
     assert_eq!(late, 1, "exactly one further call — never a stream, and never a second one");
     let stats = chan.handle.stats();
     assert_eq!(stats.sourced, 1, "and that one call fetched the event it was entitled to");
-    assert_eq!(stats.pull_rounds_cancelled, 0, "it had passed the commit point, so nothing was thrown away");
+    assert_eq!(
+        stats.pull_rounds_cancelled, 0,
+        "it had passed the commit point, so nothing was thrown away"
+    );
     assert_eq!(stats.pull_failures, 0, "and nobody failed");
     assert_eq!(stats.dropped, 0, "this proxy holds no queue");
     assert!(stats.split_adds_up(), "{stats:?}");

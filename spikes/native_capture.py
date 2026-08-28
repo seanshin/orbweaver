@@ -61,6 +61,7 @@ its output is read. Nothing is linked or redistributed.
 import re
 import shutil
 import subprocess
+import pathlib
 import sys
 import tempfile
 from pathlib import Path
@@ -101,7 +102,18 @@ for const, attr, endian in %r:
 # What the runtime says when asked for a native TypeCode by every route it has.
 # `tv_native` is omniORB's own descriptor tag; `create_native_tc` is the ORB
 # operation CORBA 2.3 §10.7.2 defines and this ORB does not implement.
+#
+# It creates an ORB, so it leaves the way every other fixture here leaves —
+# through `orbexit.leave`, which flushes and skips `Py_Finalize`. It did not,
+# and on 2026-08-28 it took the crash `orbexit` exists to prevent:
+# `omnipyThreadScavenger::run_undetached -> PyGILState_Ensure`, SIGSEGV, thread
+# 0 in `exit`. The harness read the -11 as "the probe did not run". A `-c`
+# child has no `spikes` on its path, so the path is prepended rather than the
+# two lines of `leave` being retyped here — one home, reached from the child.
 NATIVE_RUNTIME = """
+import sys
+sys.path.insert(0, {spikes})
+from orbexit import leave
 import CORBA
 from omniORB import tcInternal
 orb = CORBA.ORB_init(["p"], CORBA.ORB_ID)
@@ -114,7 +126,8 @@ try:
     print("createTypeCode built")
 except Exception as ex:
     print("createTypeCode", type(ex).__name__)
-"""
+leave(0)
+""".format(spikes=repr(str(pathlib.Path(__file__).resolve().parent)))
 
 
 def pad_mask(buf, little=True):
@@ -273,7 +286,14 @@ def probe_native(work):
 
     r = run([sys.executable, "-c", NATIVE_RUNTIME], work)
     if r.returncode != 0:
-        return None
+        # Say WHY. This returned a bare `None` and the caller printed "the probe
+        # did not run" — true, and unactionable. On 2026-08-28 the reason was
+        # -11: a SIGSEGV in omniORB's thread scavenger meeting a torn-down
+        # interpreter, which the crash reporter recorded and this harness did
+        # not, so a red run said nothing about the one thing that went wrong.
+        out["rt_probe_failed"] = "exit %d | stdout: %s | stderr: %s" % (
+            r.returncode, r.stdout.strip(), r.stderr.strip())
+        return out
     for line in r.stdout.strip().split("\n"):
         k, v = line.split(" ", 1)
         out["rt_" + k] = v
@@ -285,8 +305,10 @@ def check_native(work, bad):
     if rec is None:
         return bad + 1
     got = probe_native(work)
-    if got is None:
+    if got is None or "rt_probe_failed" in got:
         print("  FAIL the omniORB runtime probe did not run")
+        why = (got or {}).get("rt_probe_failed", "(no reason captured)")
+        print("       | %s" % why)
         return bad + 1
 
     def want(label, cond, detail):

@@ -247,6 +247,53 @@ when `trading_client.py` sits three.
 스윕은 53건을 냈고 47건이 그 오탐이었으며, 게이트가 0을 내는 것은 조인 것이 아니라
 고친 것이다.
 
+## One home, and the record of who reached it / 집 하나, 그리고 누가 그 집에 닿았는가의 기록
+
+`spikes/orbexit.py` is the one home for *how an omniORB fixture leaves*: flush,
+then `os._exit`, skipping the `Py_Finalize` that races omniORB's C++ thread
+scavenger. Twenty-three fixtures called it. **Four did not**, and nothing said
+so — the module was adopted by a sweep on the day it was written, and that
+sweep's scope became the record of who was covered. Same shape as *a sweep is
+scoped to a rule, not a file*, one layer up: here the rule had a home and the
+coverage had none.
+
+On 2026-08-28 one of the four took the crash the home exists to prevent:
+
+```
+Thread 0   __exit <- exit <- dyld4::LibSystemHelpers::exit      (finalization)
+Thread 1   bind_gilstate_tstate <- _PyThreadState_Attach
+           <- PyGILState_Ensure <- omnipyThreadScavenger::run_undetached
+           EXC_BAD_ACCESS (SIGSEGV) at 0x1cd8
+```
+
+It was the `-c` child carried as a string constant inside `native_capture.py`,
+and **the harness reported it as `FAIL the omniORB runtime probe did not
+run`** — the probe discarded the exit status, so the crash reporter held the
+whole diagnosis and the harness held none of it. Third instance that day of a
+red run throwing away the half that says why.
+
+Diagnosed rather than suspected: the old child, 12 runs, **one −11**; with
+`leave`, **40 runs, none**. The other three were `echo_server.py`,
+`evolution_server.py` and `matrix_server.py` — all three fall off the end of
+`__main__` after `orb.run()` returns, which is the finalization path.
+
+`spikes/leaves_cleanly.py` is the gate, a harness group since the same day. Its
+criterion is `orbexit`'s own — a file naming `ORB_init` owes the import — and
+it is a plain text search on purpose: the child that crashed lives in a string
+constant, where an AST walk over the file's own code would not have seen it.
+Today: 27 fixtures create an ORB, 27 leave through the home. Negative control:
+a synthesised `spikes/__probe_leaks.py` that calls `ORB_init` and falls off the
+end is caught by name, exit 1.
+
+`orbexit.py` 는 *omniORB 픽스처가 어떻게 나가는가*의 유일한 집이다. 23개가 그 집을
+불렀고 **넷은 아니었으며**, 아무것도 그렇게 말하지 않았다 — 모듈이 쓰인 날의 스윕
+범위가 곧 누가 덮였는지의 기록이 되었기 때문이다. 2026-08-28에 넷 중 하나가 그
+집이 막으려던 크래시를 가져갔고, 하네스는 그것을 *"프로브가 돌지 않았다"*고만
+적었다 — 프로브가 종료 상태를 버려서, 진단은 크래시 리포터에만 있었다. 추측이
+아니라 진단이다: 옛 형태 12회 중 **한 번 −11**, `leave` 적용 후 **40회 중 0회**.
+기준이 `ORB_init`이고 검사가 일부러 평문 탐색인 이유는 크래시가 **문자열 상수 안의
+자식 프로그램**에 있었기 때문이다 — 파일 자신의 코드를 도는 AST는 그것을 못 본다.
+
 ## What the harness records about the conditions it ran in / 하네스가 자기 실행 조건에 대해 남기는 것
 
 Added 2026-08-27, after a run that could not be explained afterwards. The

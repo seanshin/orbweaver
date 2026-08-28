@@ -5052,6 +5052,38 @@ else
   esac
 fi
 
+# ── Every ORB-creating fixture leaves the way the one home says ─────────────
+#
+# `spikes/orbexit.py` is that home: flush, then `os._exit`, skipping the
+# `Py_Finalize` that races omniORB's C++ thread scavenger. Twenty-three
+# fixtures called it and four did not, because the module was adopted by a
+# sweep and the sweep's scope became the record of who was covered — the same
+# shape as *a sweep is scoped to a rule, not a file*. On 2026-08-28 one of the
+# four took the crash: SIGSEGV in `omnipyThreadScavenger::run_undetached ->
+# PyGILState_Ensure` with thread 0 in `exit`. It was the `-c` child inside
+# `native_capture.py`, and this harness reported it as `FAIL the omniORB
+# runtime probe did not run` — the probe threw the exit status away, so the
+# crash reporter had the diagnosis and the harness had none of it.
+#
+# Reproduced before it was believed: the old child, 12 runs, one -11. With
+# `leave`, 40 runs, none. The scan runs its own probe first, because a scan
+# that cannot run is silence and silence here reads as coverage.
+hr "every ORB-creating fixture leaves through the one home (orbexit)"
+lcl_probe_rc=0
+python3 spikes/leaves_cleanly.py --probe >/dev/null 2>&1 || lcl_probe_rc=$?
+if [ "$lcl_probe_rc" -ne 0 ]; then
+  echo "  FAIL the orbexit scan could not run at all ($(rc_says "$lcl_probe_rc")) — its"
+  echo "       silence over the tree would mean nothing"
+  fail_total=$((fail_total+1))
+else
+  lcl_out=$(python3 spikes/leaves_cleanly.py 2>&1); lcl_rc=$?
+  case "$lcl_rc" in
+    0) echo "  ok   $(head -1 <<<"$lcl_out" | sed 's/^ *//')" ;;
+    *) printf '%s\n' "$lcl_out" | sed 's/^/  /'
+       fail_total=$((fail_total+1)) ;;
+  esac
+fi
+
 hr "E3's peer half — omniORB finds our channel by name (D029 §6.1 location)"
 bears_on location
 ebn_out=$(./spikes/event_by_name.sh 2>&1); ebn_rc=$?

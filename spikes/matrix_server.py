@@ -22,6 +22,8 @@ omniORB.importIDL(str(HERE / "matrix.idl"))
 import matrix  # noqa: E402
 import matrix__POA  # noqa: E402
 
+from orbexit import leave
+
 
 class TypeMatrix(matrix__POA.TypeMatrix):
     def __init__(self):
@@ -111,4 +113,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    leave(main())
