@@ -806,6 +806,86 @@ fn a_round_taken_before_a_disconnect_is_cancelled_rather_than_issued() {
     chan.shutdown();
 }
 
+/// **The other control, and the one the flake needed.** §4 permits exactly one
+/// call after `disconnect_pull_consumer` returns — the round whose commit point
+/// had already been passed. Every assertion this repository makes about that
+/// bound was sampling for it: green when the late round happened to land early,
+/// and on CI Linux, four times, it landed late.
+///
+/// [`ChannelHandle::set_source_gate`] cannot produce it. That seam is *before*
+/// the commit point, so a round held there is cancelled — which is exactly what
+/// `a_round_taken_before_a_disconnect_is_cancelled_rather_than_issued` proves,
+/// and why that control cannot also prove this. `set_committed_gate` is on the
+/// far side: the round has committed, nothing has gone out, and the test owns
+/// what happens next.
+///
+/// So the interleaving CI found by luck happens here every run: commit, hold,
+/// disconnect, offer, release. The two numbers that disagreed in run
+/// 33155952221 — one late ask, one fetch — are asserted as equalities rather
+/// than as a range, because with the ordering owned there is nothing left to be
+/// permissive about.
+///
+/// Its own negative control: delete the `committed_gate` call from
+/// `source_pull` and this fails on `wait_until_held` — the round is never held,
+/// so the ordering is back to luck and the test says so instead of passing.
+#[test]
+fn the_one_permitted_late_round_asks_once_and_fetches_what_was_offered() {
+    let chan = Channel::start();
+    let supplier = Supplier::start(b"CommittedRoundSupplier");
+    let (_, mut conn) = chan.pull_consumer_proxy_conn();
+
+    let gate = Arc::new(HeldRound::default());
+    let held = Arc::clone(&gate);
+    chan.handle.set_committed_gate(move |_proxy| held.hold());
+
+    client::connect_pull_supplier(&mut conn, &supplier.ior).unwrap();
+    assert!(gate.wait_until_held(T), "no round reached the commit point");
+    assert_eq!(
+        supplier.source.try_pull_calls(),
+        0,
+        "the barrier is past the commit point but before the request: nothing may have \
+         gone out yet"
+    );
+
+    // The disconnect returns while a committed round waits. This is the moment
+    // the bound is about, and the sample point the flaky assertion got wrong.
+    client::disconnect_pull_consumer(&mut conn).unwrap();
+    let asked_at_disconnect = supplier.source.try_pull_calls();
+    assert_eq!(
+        chan.handle.stats().pull_suppliers_connected,
+        0,
+        "the disconnect took effect even with a round in the air"
+    );
+
+    // Offered AFTER the disconnect returned, so a fetch of it can only be the
+    // one permitted late round — the ordering CI reached by being slow.
+    supplier.source.offer(&TypeCode::ULong, Endian::native(), |e| e.put_u32(7)).unwrap();
+    gate.release();
+
+    assert!(chan.handle.wait_source_idle(T), "the committed round never finished");
+    let late = supplier.source.try_pull_calls() - asked_at_disconnect;
+    assert_eq!(late, 1, "exactly one further call — never a stream, and never a second one");
+    let stats = chan.handle.stats();
+    assert_eq!(stats.sourced, 1, "and that one call fetched the event it was entitled to");
+    assert_eq!(stats.pull_rounds_cancelled, 0, "it had passed the commit point, so nothing was thrown away");
+    assert_eq!(stats.pull_failures, 0, "and nobody failed");
+    assert_eq!(stats.dropped, 0, "this proxy holds no queue");
+    assert!(stats.split_adds_up(), "{stats:?}");
+
+    // Nothing follows it: the proxy is disconnected, so the source loop has no
+    // further round to take and the count above is final.
+    std::thread::sleep(STILL);
+    assert_eq!(
+        supplier.source.try_pull_calls() - asked_at_disconnect,
+        1,
+        "and no round followed the permitted one"
+    );
+
+    drop(conn);
+    supplier.shutdown();
+    chan.shutdown();
+}
+
 /// `stop()` with a supplier connected, which is the question the module docs
 /// answer in prose and this answers in counters: a supplier connection is not
 /// a queue, so nothing is discarded on its account and the drop split stays

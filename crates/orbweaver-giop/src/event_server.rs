@@ -847,6 +847,9 @@ struct ChannelState {
     /// A test seam on the source loop; see [`ChannelHandle::set_source_gate`].
     /// `None` in every production configuration.
     source_gate: Option<SourceGate>,
+    /// The second seam, on the far side of the commit point; see
+    /// [`ChannelHandle::set_committed_gate`]. `None` in production too.
+    committed_gate: Option<SourceGate>,
     /// Jobs taken out of a queue but not yet recorded. Part of "idle".
     in_flight: usize,
     stats: ChannelStats,
@@ -924,6 +927,7 @@ impl ChannelState {
             source_cursor: Vec::new(),
             source_in_flight: None,
             source_gate: None,
+            committed_gate: None,
             in_flight: 0,
             stats: ChannelStats::default(),
         }
@@ -1470,6 +1474,25 @@ impl ChannelHandle {
         self.shared.lock().source_gate = Some(SourceGate(Arc::new(gate)));
     }
 
+    /// The same seam, on the far side of the commit point.
+    ///
+    /// [`Self::set_source_gate`] holds a round *before* it commits, which is
+    /// the ordering under which the commit point cancels it. This one holds a
+    /// round that has already committed and has not yet spoken, which is the
+    /// ordering under which §4's "at most one further call" actually happens —
+    /// the disconnect returns, an event is offered, and the committed round
+    /// asks for it. CI produced that interleaving by luck four times and no
+    /// local run ever did; with this it happens every run.
+    ///
+    /// The same warning applies: blocking here holds the source thread and
+    /// [`Delivery`]'s join, so a callback needs a deadline of its own.
+    pub fn set_committed_gate<F>(&self, gate: F)
+    where
+        F: Fn(&[u8]) + Send + Sync + 'static,
+    {
+        self.shared.lock().committed_gate = Some(SourceGate(Arc::new(gate)));
+    }
+
     /// Blocks until every connected proxy's queue is empty and no push is in
     /// flight. Returns whether that happened before `timeout`.
     pub fn wait_idle(&self, timeout: Duration) -> bool {
@@ -1766,9 +1789,19 @@ fn source_pull(
     // would say so — so what remains open is the gap between this line and the
     // request, which contains no I/O. That gap is the module docs' "at most
     // one further call", and it is the whole of it. ──
-    let wanted = shared.lock().source_still_wanted(&job.proxy, &job.supplier);
+    let (wanted, committed_gate) = {
+        let state = shared.lock();
+        (state.source_still_wanted(&job.proxy, &job.supplier), state.committed_gate.clone())
+    };
     if !wanted {
         return SourceOutcome::Cancelled;
+    }
+    // Past the commit point, nothing on the wire, no lock held: the one instant
+    // the module docs' "at most one further call" is entitled to exist in. A
+    // test that holds a round here owns the interleaving CI produced by luck
+    // four times. Production installs no gate.
+    if let Some(gate) = committed_gate {
+        (gate.0)(&job.proxy);
     }
 
     let reply = match conn.invoke_nullary("try_pull") {
