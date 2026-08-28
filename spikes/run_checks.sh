@@ -4986,7 +4986,15 @@ case "$cpeer_rc" in
     ;;
   *)
     echo "  FAIL the C peer could not complete its call ($(rc_says "$cpeer_rc"))"
-    diag_out "$cpeer_out" 8
+    # 30 lines, not 8. This group's first CI run failed on a COMPILE error —
+    # glibc's `_FORTIFY_SOURCE` wrapper under `-Werror`, which macOS never
+    # produces — and eight lines cut the diagnostic before the message that
+    # names the warning, leaving only the expansion of
+    # `__builtin___snprintf_chk`. A red whose cause is one scroll further down
+    # than the group prints is the same defect as `cargo test`'s two `failures:`
+    # headers: the output exists and the group declines to show it. A compiler
+    # error is the case that needs the most room, so it gets it.
+    diag_out "$cpeer_out" 30
     fail_total=$((fail_total+1))
     ;;
 esac
