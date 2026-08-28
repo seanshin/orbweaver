@@ -10,6 +10,65 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**The regression was the test, not the ORB — and finding that out took three
+corrections of my own reading.** `the_pull_supplier_connect_and_disconnect_state_machine`
+asserted `sourced == 1` after a disconnect, with an event deliberately offered
+before the settle. `event_server`'s §4 states the ORB's actual bound: a
+disconnect clears the flag and **returns without waiting for the source thread**
+— waiting would let a supplier tearing itself down hold this servant for an
+outbound timeout, which §4 weighs and refuses — so **one** round already past
+its commit point may still ask, and an event already offered is one it is
+entitled to fetch. The assertion was the opposite of the documented bound and
+passed only when the timing was kind: kind on macOS in 114 local runs across six
+shapes, unkind on CI Linux three times.
+
+It now asserts what is true: `sourced` is 1, **or** 2 together with the evidence
+that it was the one permitted round — exactly one more `try_pull` than at the
+disconnect. Two late asks still fail, because §4 says *"never a stream, and
+never a second one"*. The window is not given up; the conclusion drawn from it
+is.
+
+**Three readings corrected on the way, each by looking rather than reasoning.**
+The instrumented counters (`try_pull: 1 before, 2 after`) do **not** show that a
+round started after the disconnect — the increase happens during
+`wait_source_idle` and is consistent with a round already in flight, so the
+message that claimed the comparison settles it was wrong. The defence is
+**three** predicates, not two: `disconnect_pull_consumer` also sets
+`proxy.supplier = None`. And a first repair that moved the offer *after* the
+settle was withdrawn: it made the test green by no longer looking at the window
+at all, which three separate controls then failed to turn red.
+
+**What has no control, said in the file rather than implied.** The
+`sourced == 2 && late_asks == 1` branch cannot be driven red by editing a
+predicate: every predicate a control could weaken kills an earlier assertion
+first, because those same predicates are what make the proxy disconnected. The
+half *before* the commit point is deterministic —
+`a_round_taken_before_a_disconnect_is_cancelled_rather_than_issued` holds a
+round with `set_source_gate` and requires `try_pull_calls == 0`. The half after
+it has no seam, which is why it only ever appears on CI Linux under load.
+
+**Deferred with a trigger, in the bound's own home.** `event_server` §4 now
+records the tighter property available — re-read the predicate where the
+outcome is *recorded*, so a late round's event is discarded rather than
+delivered, moving the bound from *asks at most once more* to *fetches nothing
+more*. Not taken here: the supplier has already handed that event over and will
+not send it again, so discarding it trades a stray delivery for a lost event,
+and which is worse is not this module's decision alone. Trigger: a consumer for
+which a post-disconnect delivery is incorrect rather than untidy.
+
+**회귀는 ORB가 아니라 테스트였고, 그것을 알아내는 데 제 판독을 세 번 고쳐야
+했다.** §4는 disconnect가 소스 스레드를 **기다리지 않고 반환**한다고 명시한다 —
+기다리면 자기를 끊는 피어가 이 서번트를 아웃바운드 타임아웃만큼 붙잡을 수 있고,
+§4는 그것을 저울질해 거절한다. 그래서 커밋 포인트를 이미 지난 라운드 **하나**는
+물을 수 있고, 이미 제공된 이벤트는 그 라운드가 가져갈 권리가 있다. 단언은 그
+경계의 반대였고 타이밍이 친절할 때만 통과했다. **창은 포기하지 않았다** —
+`sourced=2`는 *허용된 그 하나였다는 증거*와 함께일 때만 받는다. 그리고 **통제군이
+없는 가지를 파일에 적었다**: 통제군이 건드릴 수 있는 모든 술어가 앞선 단언을 먼저
+죽인다. 더 강한 경계(늦은 라운드가 **가져오지 못하게**)는 방아쇠와 함께 §4에
+기록했다 — 공급자는 이미 그 이벤트를 넘겼고 다시 보내지 않으므로, 버리는 것은
+떠도는 배달을 잃어버린 이벤트와 맞바꾸는 일이며 어느 쪽이 나쁜지는 이 모듈 혼자
+정할 일이 아니다.
+
 **The C peer had never been compiled on Linux, and the group written today
 found that out on its first run.** `spikes/c_peer.sh` was in no harness group at
 all this morning — `grep -c c_peer spikes/run_checks.sh` returned 0, and

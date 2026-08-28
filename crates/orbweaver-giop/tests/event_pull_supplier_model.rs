@@ -643,35 +643,75 @@ fn the_pull_supplier_connect_and_disconnect_state_machine() {
     assert_eq!(chan.handle.stats().dropped, 0);
     assert!(chan.handle.stats().split_adds_up());
 
-    // It really stopped asking, and offering more does not reach the channel.
-    // The offer goes in *before* the settle, so a channel that were still
-    // asking would have something to find and both assertions would catch it.
+    // ── It stopped asking, and it fetched AT MOST the one round §4 permits ──
+    //
+    // The offer goes in **before** the settle on purpose, so a channel that
+    // were still asking has something to find. What changed on 2026-08-28 is
+    // not that, but what the assertion is allowed to conclude from it.
+    //
+    // `event_server`'s module docs §4 state the bound this ORB actually gives:
+    //
+    //   > once either of them has returned, the only `try_pull` that can still
+    //   > reach that supplier is one whose commit point had already been passed
+    //   > ... at most one further call, landing within the outbound timeout.
+    //
+    // `disconnect_pull_consumer` deliberately does not wait for the source
+    // thread — waiting would let a supplier tearing itself down hold this
+    // servant for an outbound timeout, which §4 weighs and refuses. So ONE late
+    // round is permitted, and an event already offered when it lands is an
+    // event that round is entitled to fetch.
+    //
+    // This assertion used to be `sourced == 1`, which is the opposite of that
+    // bound and passes only when the timing is kind. It was kind on macOS in
+    // 114 local runs across six shapes and unkind on CI Linux three times —
+    // twice under `--release`, once in the debug workspace run — each time
+    // reporting `sourced=2`, which §4 permits.
+    //
+    // **The window is not given up.** `sourced == 2` is accepted only together
+    // with the evidence that it was the ONE permitted round: exactly one more
+    // `try_pull` than had been made when the disconnect returned. Two would be
+    // a real violation of "never a stream, and never a second one", and still
+    // fails. That is the strongest claim this test can make that is also true.
     supplier.source.offer(&TypeCode::ULong, Endian::native(), |e| e.put_u32(2)).unwrap();
-    let asked_before_settle = supplier.source.try_pull_calls();
+    let asked_at_disconnect = supplier.source.try_pull_calls();
     stops_being_asked(&chan.handle, &supplier.source, "a disconnected proxy is not asked");
-    // The counters ride in the message, because this assertion has failed in CI
-    // twice (2026-08-28, `cargo test --workspace --release`) and did not
-    // reproduce in 114 local runs across six shapes — debug and release, alone
-    // and in the workspace, at four test threads and under load. A red that
-    // says only *one more was fetched* cannot distinguish a round already in
-    // flight when `disconnect_pull_consumer` returned from a round started
-    // after it, and those are different defects. Until it reproduces here, the
-    // only instrument is what the failing run prints.
+
     let after = chan.handle.stats();
-    assert_eq!(
-        after.sourced,
-        1,
-        "and nothing more was fetched — sourced={} dropped={} connected={} \
-         try_pull: {} before the settle, {} after. If sourced is 2, a source \
-         round committed the second event after `disconnect_pull_consumer` had \
-         returned; compare the two try_pull counts to see whether that round \
-         started before or after the disconnect.",
+    let late_asks = supplier.source.try_pull_calls() - asked_at_disconnect;
+    assert!(
+        late_asks <= 1,
+        "a disconnected proxy was asked {late_asks} more times; §4 permits at most one — \
+         the round already past its commit point — and says 'never a stream, and never a \
+         second one'"
+    );
+    assert!(
+        after.sourced == 1 || (after.sourced == 2 && late_asks == 1),
+        "more was fetched than the one permitted late round explains — sourced={} \
+         dropped={} connected={}, and {} late try_pull(s) after the disconnect returned. \
+         sourced=1 means the disconnect landed between rounds; sourced=2 with exactly one \
+         late ask is §4's documented bound; anything else is a defect.",
         after.sourced,
         after.dropped,
         after.pull_suppliers_connected,
-        asked_before_settle,
-        supplier.source.try_pull_calls()
+        late_asks
     );
+    // Nothing was queued here, so nothing was dropped either way.
+    assert_eq!(after.dropped, 0, "and nothing was queued to drop");
+    // **What has no deterministic control, and why — said rather than implied.**
+    // The `sourced == 2 && late_asks == 1` branch above cannot be driven red by
+    // editing a predicate. Every predicate a control could weaken —
+    // `proxy.supplier = None`, the two scheduling filters, `source_still_wanted`
+    // — kills an earlier assertion in this test first, because they also stop
+    // the proxy being *disconnected* at all. What that branch bounds is a
+    // TIMING window: a round already past its commit point when the disconnect
+    // landed. `set_source_gate` holds a round *before* the commit point, and
+    // that half IS deterministic — it is
+    // `a_round_taken_before_a_disconnect_is_cancelled_rather_than_issued`,
+    // which requires `try_pull_calls == 0`. The half after the commit point has
+    // no seam, which is why it surfaces on CI Linux under load and never here.
+    // So this assertion is a bound that goes red on a real violation (two late
+    // asks, or a fetch the late round cannot explain) and cannot be shown red
+    // on demand. That is a weaker thing to have, and it is what is available.
 
     // Idempotent, and the key stays reconnectable.
     client::disconnect_pull_consumer(&mut conn).unwrap();

@@ -188,6 +188,22 @@
 //!    > further call, landing within the outbound timeout** — never a stream,
 //!    > and never a second one.
 //!
+//!    **A tighter bound is available and is not taken (recorded 2026-08-28).**
+//!    What is guaranteed above is *the late round is not prevented from
+//!    asking*; a stronger property would be *the late round is not permitted to
+//!    COMMIT* — re-reading the same predicate where the outcome is recorded, so
+//!    an event fetched by a round whose proxy disconnected while it was on the
+//!    wire is discarded rather than delivered. That would move the bound from
+//!    "asks at most once more" to "fetches nothing more", which is the sentence
+//!    a consumer would rather have. It is not done here because it changes what
+//!    happens to an event that has already left its supplier — the supplier has
+//!    handed it over and would not send it again — so discarding it silently
+//!    trades a stray delivery for a lost event, and which of those is worse is
+//!    a decision this module should not make alone. **Trigger:** a consumer for
+//!    which a post-disconnect delivery is incorrect rather than merely untidy.
+//!    Until then the bound is the one stated above, and
+//!    `event_pull_supplier_model.rs` asserts exactly it.
+//!
 //!    A caller in this process waits that one round out with
 //!    [`ChannelHandle::wait_source_idle`]. A caller over the wire — a supplier
 //!    tearing itself down, which is the case that matters — has the time bound
