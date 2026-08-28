@@ -4954,6 +4954,47 @@ else
   fail_total=$((fail_total+1))
 fi
 
+# ── E3's peer half, which measured nothing because nothing ran it ───────────
+#
+# `channel_found_by_name.rs` makes the Location claim with our client at both
+# ends. `spikes/event_by_name.sh` makes the same claim with omniORB's client —
+# it resolves the name out of our naming server, narrows to
+# `CosEventChannelAdmin::EventChannel`, and receives an event over a reference
+# whose address it was never told. D029's *"Location, for event channels"*
+# subsection cites exactly that pairing as what makes it *"a measurement rather
+# than a self-test"*.
+#
+# **The peer half was in no group.** `grep -c event_by_name` over this file and
+# over `ci.yml` both returned 0 until today, and the script says why in its own
+# header: *"Not wired into run_checks.sh: that file is held by another batch as
+# this lands. Wiring it in is one `hr` group and is named as undone in the
+# report."* It stayed undone. This is that group — the second one today found by
+# asking which cited measurements actually run, after `spikes/c_peer.sh` turned
+# out never to have been compiled on Linux.
+#
+# Exit conventions are the script's: 2 is "omniORB's CosNaming/CosEvent stubs
+# are not importable" and is a counted SKIPPED naming the fixture; 1 is a
+# counted failure. Reading those the other way round is how an absent peer
+# becomes a green run.
+hr "E3's peer half — omniORB finds our channel by name (D029 §6.1 location)"
+bears_on location
+ebn_out=$(./spikes/event_by_name.sh 2>&1); ebn_rc=$?
+case "$ebn_rc" in
+  0)
+    echo "  ok   omniORB resolved the name and received an event over a reference whose"
+    echo "       address it was never told — the claim measured by a client we did not write"
+    diag "the peer's own lines" "$ebn_out" "$(grep -E "^event-by-name: (ok|PASS)" <<<"$ebn_out")" 4
+    ;;
+  2)
+    skip absent git:spikes/event_by_name.sh       "omniORB's CosNaming/CosEvent stubs are not importable here, so E3's peer"       "half did not run — its column is unmeasured, not passing"
+    ;;
+  *)
+    echo "  FAIL omniORB's client could not reach our channel by name ($(rc_says "$ebn_rc"))"
+    diag_out "$ebn_out" 12
+    fail_total=$((fail_total+1))
+    ;;
+esac
+
 hr "the C peer — a program that is not an ORB, dialling us (D029 §6.1 backend)"
 bears_on backend
 # The peer that found the leak. C99 + POSIX sockets, every GIOP and IOR octet

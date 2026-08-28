@@ -10,6 +10,48 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**E3's peer half measured nothing, because nothing ran it.** D029's *"Location,
+for event channels"* subsection cites a pairing as its evidence: our own client
+at both ends in `channel_found_by_name.rs`, **and** omniORB's client in
+`spikes/event_by_name.sh` — *"which is what makes it a measurement rather than a
+self-test."* `grep -c event_by_name` over `run_checks.sh` and `ci.yml` both
+returned **0**. The script says why in its own header: *"Not wired into
+run_checks.sh: that file is held by another batch as this lands. Wiring it in is
+one `hr` group and is named as undone in the report."* It stayed undone.
+
+It is a group now, and it passes here: omniORB resolves the name out of our
+naming server, narrows to `CosEventChannelAdmin::EventChannel`, and receives an
+event over a reference whose address it was never told. Controls: a normal run
+is `ok`; the script's exit 2 (*omniORB's CosNaming/CosEvent stubs are not
+importable*) is a **counted `SKIPPED` naming the fixture, not a pass**; exit 1 is
+a counted failure. Reading those the other way round is how an absent peer
+becomes a green run.
+
+**Second one today, and both came from the same question.** `spikes/c_peer.sh`
+turned out never to have been compiled on Linux, for the same reason: it was
+cited and not run. The question that found both is *which measurements does a
+document cite that no run actually performs?* — and it is worth asking again.
+
+**This came out of judging an unlanded branch rather than landing it.**
+`worktree-agent-adaa637f080c6eb6d` carries a parallel E3 implementation from the
+same merge-base that `main` implemented independently the same day. It is **not
+landed**: ~90% of its properties are on `main` already, `main` holds three it
+lacks, the merge is textually clean but produces two incompatible
+`publish_channels` definitions, and its own commit message says *"Not verified,
+not gated, not merged. Whoever resumes this must re-measure from scratch — a
+stopped batch's partial state is not a result."* What it did surface is this gap
+and one other worth doing separately: it puts the event server's registry mutex
+behind a `guarded::Section`, a build-enforced tripwire `main` argues for
+structurally but does not enforce. The branch is kept, not deleted.
+
+**E3의 피어 반쪽은 아무것도 재지 않았다 — 아무것도 그것을 돌리지 않았기 때문이다.**
+D029가 *"자기 테스트가 아니라 측정으로 만드는 것"*이라며 인용하는 짝의 절반인데,
+`run_checks.sh`와 `ci.yml` 양쪽에서 `grep -c`가 **0**이었다. 스크립트가 자기 헤더에
+이유까지 적어두었고, 그 미완이 그대로 남아 있었다. **오늘 두 번째다** — `c_peer.sh`도
+같은 이유로 리눅스에서 컴파일된 적이 없었다. 둘 다 *"문서가 인용하는 측정 중 실제로
+도는 것은 무엇인가"*를 물어서 나왔고, 그 질문은 다시 물을 값어치가 있다. **이것은
+미착지 브랜치를 착지시키는 대신 판정해서 나왔다.**
+
 **The regression was the test, not the ORB — and finding that out took three
 corrections of my own reading.** `the_pull_supplier_connect_and_disconnect_state_machine`
 asserted `sourced == 1` after a disconnect, with an event deliberately offered
