@@ -36,6 +36,9 @@ import shutil
 import subprocess
 import sys
 
+# How an omniORB fixture leaves: see spikes/orbexit.py.
+from orbexit import leave
+
 HERE = pathlib.Path(__file__).resolve().parent
 
 # OSF registry ids, from CORBA 3.4 Part 2 §7.10.2 and the OSF registry.
@@ -371,4 +374,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    leave(main())

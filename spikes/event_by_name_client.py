@@ -31,6 +31,9 @@ import CosEventChannelAdmin  # noqa: F401  (registers the stubs)
 import CosEventComm  # noqa: F401
 import CosEventComm__POA
 
+# How an omniORB fixture leaves: see spikes/orbexit.py.
+from orbexit import leave
+
 # The mapping, retyped here on purpose and for exactly one reason: this is the
 # foreign half. If it computed the name by calling our code it would not be
 # measuring whether a peer can construct the name from the documentation --- it
@@ -124,4 +127,4 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    leave(main(sys.argv))

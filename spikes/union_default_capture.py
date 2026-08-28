@@ -33,6 +33,9 @@ from pathlib import Path
 
 from union_label_capture import pad_mask
 
+# How an omniORB fixture leaves: see spikes/orbexit.py.
+from orbexit import leave
+
 ROOT = Path(__file__).resolve().parent.parent
 CODEC_TEST = ROOT / "crates/orbweaver-giop/tests/union_default_label_from_a_peer.rs"
 SHAPE_TEST = ROOT / "crates/orbweaver-registry/tests/union_shape_from_a_peer.rs"
@@ -197,4 +200,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    leave(main())

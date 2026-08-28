@@ -36,6 +36,9 @@ import sys
 from omniORB import CORBA
 import CosNaming  # noqa: E402
 
+# How an omniORB fixture leaves: see spikes/orbexit.py.
+from orbexit import leave
+
 SEED = pathlib.Path(__file__).resolve().parent.parent / "corpus" / "state" / "naming-graph.json"
 
 fails = 0
@@ -189,4 +192,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    leave(main())

@@ -49,6 +49,9 @@ measuring-nothing shape; the caller floors it.
 
 import sys
 
+# How an omniORB fixture leaves: see spikes/orbexit.py.
+from orbexit import leave
+
 try:
     import CORBA
     import omniORB
@@ -176,5 +179,6 @@ if wrong or unmeasured:
           "UNMEASURED, which is not a pass):")
     for f in wrong + unmeasured:
         print(f"  {f}")
-    raise SystemExit(3 if not wrong else 1)
+    leave(3 if not wrong else 1)
 print(f"\nrir-peer: every leg answered as expected ({legs} legs)")
+leave(0)

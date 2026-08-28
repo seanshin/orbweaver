@@ -24,6 +24,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+# How an omniORB fixture leaves: see spikes/orbexit.py.
+from orbexit import leave
+
 ROOT = Path(__file__).resolve().parent.parent
 TEST = ROOT / "crates/orbweaver-giop/tests/union_labels_from_a_peer.rs"
 
@@ -224,4 +227,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    leave(main())

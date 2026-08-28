@@ -39,6 +39,9 @@ import sys
 import threading
 import time
 
+# How an omniORB fixture leaves: see spikes/orbexit.py.
+from orbexit import leave
+
 HERE = pathlib.Path(__file__).resolve().parent
 
 ISO_8859_1 = 0x00010001
@@ -530,4 +533,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    leave(main())

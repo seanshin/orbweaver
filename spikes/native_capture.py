@@ -65,6 +65,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+# How an omniORB fixture leaves: see spikes/orbexit.py.
+from orbexit import leave
+
 ROOT = Path(__file__).resolve().parent.parent
 NATIVE_TEST = ROOT / "crates/orbweaver-giop/tests/native_typecode_from_a_peer.rs"
 VALUEBASE_TEST = ROOT / "crates/orbweaver-registry/tests/valuebase_shape_from_a_peer.rs"
@@ -405,4 +408,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    leave(main())

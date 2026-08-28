@@ -37,6 +37,9 @@ is a floor, not a figure -- adding definitions to `dkprobe.idl` raises it.
 
 import sys
 
+# How an omniORB fixture leaves: see spikes/orbexit.py.
+from orbexit import leave
+
 try:
     import CORBA
     import omniORB.ir_idl  # noqa: F401  (registers the IR stubs)
@@ -137,10 +140,10 @@ try:
     r = orb.string_to_object(ior)._narrow(CORBA.Repository)
 except UNREACHABLE as e:  # noqa: B014
     print(f"UNMEASURED: the peer was not reachable at all ({e!r})")
-    raise SystemExit(3) from None
+    leave(3)
 if r is None:
     print("NARROW FAILED: the IOR is not a CORBA::Repository")
-    raise SystemExit(2)
+    leave(2)
 
 print(f"== _get_def_kind for {len(EXPECT)} definitions ==")
 for oid, (ordinal, name) in EXPECT.items():
@@ -170,4 +173,4 @@ for oid, (ordinal, name) in EXPECT.items():
     else:
         print(f"  {oid}\t{k._v}\t{k._n}")
 
-raise SystemExit(verdict())
+leave(verdict())

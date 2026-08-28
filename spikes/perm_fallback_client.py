@@ -33,6 +33,9 @@ HERE = pathlib.Path(__file__).parent
 omniORB.importIDL(str(HERE / "echo.idl"))
 import spike  # noqa: E402
 
+# How an omniORB fixture leaves: see spikes/orbexit.py.
+from orbexit import leave
+
 DEADLINE_S = 30.0
 
 
@@ -78,4 +81,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    leave(main())

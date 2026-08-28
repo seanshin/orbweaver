@@ -20,6 +20,9 @@ import CosEventChannelAdmin  # noqa: F401  (registers the stubs)
 import CosEventComm  # noqa: F401
 import CosEventComm__POA
 
+# How an omniORB fixture leaves: see spikes/orbexit.py.
+from orbexit import leave
+
 
 class Consumer(CosEventComm__POA.PushConsumer):
     def __init__(self):
@@ -62,4 +65,4 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    leave(main(sys.argv))

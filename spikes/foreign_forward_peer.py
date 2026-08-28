@@ -54,6 +54,9 @@ HERE = pathlib.Path(__file__).parent
 omniORB.importIDL(str(HERE / "foreign_forward.idl"))
 import foreign_forward, foreign_forward__POA  # noqa: E402  (made by importIDL)
 
+# How an omniORB fixture leaves: see spikes/orbexit.py.
+from orbexit import leave
+
 # The object id the forwarding POA answers for. Any request naming it is
 # forwarded; the value itself is arbitrary and only has to match what the
 # client dials, which it does because the client dials the published IOR.
@@ -344,4 +347,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    leave(main())

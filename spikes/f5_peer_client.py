@@ -33,6 +33,9 @@ import subprocess
 import sys
 import tempfile
 
+# How an omniORB fixture leaves: see spikes/orbexit.py.
+from orbexit import leave
+
 IDL = "corpus/golden/23-moe-enterprise.idl"
 
 # The key template `tenant_service.rs`'s module docs publish.  Deriving a
@@ -320,7 +323,7 @@ def endpoint_of(stringified):
     # must not re-implement.
     m = re.search(rb"((?:\d{1,3}\.){3}\d{1,3})\x00", raw)
     if not m:
-        raise SystemExit("f5-peer: BLOCKED — no IIOP host in the IOR")
+        leave("f5-peer: BLOCKED — no IIOP host in the IOR")
     host = m.group(1).decode()
     after = m.end()
     after += (-after) % 2
@@ -329,4 +332,4 @@ def endpoint_of(stringified):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    leave(main(sys.argv[1:]))

@@ -10,6 +10,50 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**The teardown crash closed across every fixture that could have it, and a
+regex found the wrong `import`.** `spikes/orbexit.py` is the one home for *how
+an omniORB fixture leaves* — flush, then `os._exit`, never unwinding into
+``Py_Finalize`` where omniORB's own C++ threads meet a torn-down interpreter.
+**23 fixtures** call it; 5 more block in `orb.run()` forever and are killed by
+the harness, so they never reach finalization by their own path.
+
+Scoping by rule rather than by file narrowed the count **twice**, and both
+narrowings are measurements rather than judgements. The first sweep said 28; two
+of those — `coverage_tables.py`, `service_sweep.py` — have no `ORB_init` at all
+and were an artefact of a broad grep. And an exit that sits **before** its
+file's `ORB_init` was left alone: no ORB thread exists yet, so unwinding is
+safe, and converting it would be noise. Each one was decided by comparing line
+numbers, not by eye.
+
+**The mechanical pass broke seven files and the harness caught it in six
+groups.** The capture fixtures carry a *child program's source as a string
+constant* — they generate IDL, run `omniidl`, and execute the result in a temp
+directory — and a regex looking for the last `^import` line walked straight into
+that string. The child then could not import `orbexit` from a directory that
+does not contain it, so every recorded-bytes group failed: union labels, union
+defaults, valuetype, native/ValueBase, codeset, wide characters. **A regex over
+Python cannot tell code from a string literal.** Redone with `ast`: the last
+*top-level* import node and the last *top-level* `sys.exit` call, verified the
+same way — 23 files with a real `ImportFrom(module="orbexit")` in `tree.body`,
+zero inside a literal.
+
+Two smaller things worth their line. `raise SystemExit(3) from None` converted
+mechanically becomes `leave(3) from None`, which does not parse — `from None` is
+a clause of `raise` and not of a call. And `zsh` does not word-split an unquoted
+variable, so a `git checkout -- $BAD` reverting seven files passed all seven
+names as **one path**, printed a reassuring count, and reverted nothing; only
+re-checking with `ast` rather than believing that count caught it.
+
+**나가는 길의 크래시를 그것을 가질 수 있는 모든 픽스처에서 닫았고, 정규식이 엉뚱한
+`import`를 찾았다.** `spikes/orbexit.py`가 *omniORB 픽스처가 나가는 법*의 한 집이며
+23개가 그것을 호출한다. 규칙 범위로 세니 개수가 **두 번** 좁혀졌다 — `ORB_init`이
+없는 2개는 넓은 grep의 산물이었고, `ORB_init`보다 **앞**의 종료는 ORB 스레드가 아직
+없으므로 그대로 두었다. **기계적 변환이 7개를 깨뜨렸고 하네스가 6개 그룹으로
+잡았다**: capture 픽스처들은 자식 프로그램 소스를 문자열 상수로 들고 있고, 정규식이
+그 안으로 들어갔다. **파이썬 파일에서 정규식은 코드와 문자열 리터럴을 구분하지
+못한다.** `ast`로 다시 했고, 같은 방식으로 검증했다 — `tree.body`에 진짜
+`ImportFrom`이 있는 파일 23개, 리터럴 안 0개.
+
 **A fixture that crashed on the way out finally failed a run, so it stopped
 being a printing problem.** CI run 33126673869: the event-channel pull leg died
 with **SIGABRT** — `terminate called without an active exception` — **after its

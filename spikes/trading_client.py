@@ -25,6 +25,9 @@ from omniORB import CORBA
 import omniORB.COS.CosTrading_idl  # noqa: F401  (registers the COS stubs)
 import CosTrading  # noqa: E402
 
+# How an omniORB fixture leaves: see spikes/orbexit.py.
+from orbexit import leave
+
 L = CosTrading.Lookup
 
 fails = 0
@@ -324,4 +327,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    leave(main())

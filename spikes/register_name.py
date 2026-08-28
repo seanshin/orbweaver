@@ -11,6 +11,9 @@ HERE = pathlib.Path(__file__).parent
 omniORB.importIDL(str(HERE / "echo.idl"))
 import spike, spike__POA  # noqa: E402
 
+# How an omniORB fixture leaves: see spikes/orbexit.py.
+from orbexit import leave
+
 
 class Echo(spike__POA.Echo):
     def ping(self): return 42
@@ -35,7 +38,7 @@ def main():
     root = orb.string_to_object("corbaloc::127.0.0.1:2809/NameService")._narrow(
         CosNaming.NamingContext)
     if root is None:
-        print("could not reach the naming service", file=sys.stderr); sys.exit(1)
+        print("could not reach the naming service", file=sys.stderr); leave(1)
 
     ctx_name = [CosNaming.NameComponent("spike", "")]
     try:

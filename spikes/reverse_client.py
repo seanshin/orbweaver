@@ -12,13 +12,16 @@ HERE = pathlib.Path(__file__).parent
 omniORB.importIDL(str(HERE / "echo.idl"))
 import spike  # noqa: E402
 
+# How an omniORB fixture leaves: see spikes/orbexit.py.
+from orbexit import leave
+
 # Captured before ORB_init, which strips every -ORB option it recognises.
 ARGV = list(sys.argv)
 ior = pathlib.Path(sys.argv[1]).read_text().strip()
 orb = CORBA.ORB_init(sys.argv, CORBA.ORB_ID)
 echo = orb.string_to_object(ior)._narrow(spike.Echo)
 if echo is None:
-    print("FAIL narrow returned nil"); sys.exit(1)
+    print("FAIL narrow returned nil"); leave(1)
 
 fails = 0
 def check(label, got, want):
@@ -90,4 +93,4 @@ except CORBA.SystemException as e:
     print(f"  ok   unknown op -> {type(e).__name__}")
 
 print(f"\nasserted cases: 8, failures: {fails}")
-sys.exit(1 if fails else 0)
+leave(1 if fails else 0)

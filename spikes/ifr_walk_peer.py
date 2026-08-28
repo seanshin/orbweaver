@@ -25,6 +25,9 @@ import traceback
 import CORBA
 import omniORB.ir_idl  # noqa: F401  (registers the IR stubs)
 
+# How an omniORB fixture leaves: see spikes/orbexit.py.
+from orbexit import leave
+
 failures = []
 legs = 0
 
@@ -65,7 +68,7 @@ orb = CORBA.ORB_init(sys.argv)
 r = orb.string_to_object(open(sys.argv[1]).read().strip())._narrow(CORBA.Repository)
 if r is None:
     print("NARROW FAILED")
-    raise SystemExit(2)
+    leave(2)
 
 print("== Repository::contents(dk_all, exclude_inherited=1) ==")
 top = check("names", lambda: sorted(c._get_name() for c in r.contents(CORBA.dk_all, 1)))
@@ -270,5 +273,6 @@ if failures:
     print(f"\nFAILURES ({len(failures)}):")
     for f in failures:
         print(f"  {f}")
-    raise SystemExit(1)
+    leave(1)
 print(f"\nwalk: every leg answered ({legs} legs)")
+leave(0)

@@ -11,6 +11,9 @@ HERE = pathlib.Path(__file__).parent
 omniORB.importIDL(str(HERE / "echo.idl"))
 import spike  # noqa: E402
 
+# How an omniORB fixture leaves: see spikes/orbexit.py.
+from orbexit import leave
+
 fails = 0
 def check(label, got, want):
     global fails
@@ -22,7 +25,7 @@ def check(label, got, want):
 orb = CORBA.ORB_init(sys.argv, CORBA.ORB_ID)
 e = orb.string_to_object(pathlib.Path(sys.argv[1]).read_text().strip())._narrow(spike.Echo)
 if e is None:
-    print("FAIL narrow returned nil"); sys.exit(1)
+    print("FAIL narrow returned nil"); leave(1)
 
 check("_is_a(Echo)", e._is_a("IDL:spike/Echo:1.0"), True)
 check("_is_a(Object)", e._is_a("IDL:omg.org/CORBA/Object:1.0"), True)
@@ -35,4 +38,4 @@ check("get_self() is callable", me.ping(), 42)
 check("same_as(get_self())", e.same_as(me), True)
 
 print(f"\nasserted cases: 6, failures: {fails}")
-sys.exit(1 if fails else 0)
+leave(1 if fails else 0)
