@@ -10,6 +10,51 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**B landed: the lifecycle row stopped waiting on a decision that could not
+reach zero.** D035 §5's option B, approved 2026-08-27, is now a measurement —
+`crates/orbweaver-giop/tests/what_a_caller_can_tell_about_a_removal.rs`. The
+harness's counted skips went **17 to 16** and the ledger's lifecycle row moved
+from *unmeasured, waits on X* to *measured, over a floor that is named rather
+than closed*.
+
+**The test refuted its own first draft, twice, and both are kept in the file.**
+Draft one asserted that a caller *cannot tell which* target was removed. That is
+empty — the caller chose which reference to dial, so it knew before anything was
+removed — and the assertion failed on its first run for a better reason than it
+was written for. The property that is real, and that a deployment depends on, is
+**isolation**: removing one target must be invisible to a caller of another.
+Draft one also found that a removed target **still answered** on an already-open
+connection; that is not a bug but D034's graceful shutdown at request
+granularity, so the floor is observed the way a caller holding only a reference
+observes it — by **dialling again**.
+
+What is asserted: the floor (a caller of a removed target can tell it is gone,
+because it must be given one address to send a first packet to), isolation above
+it, and a **counted anti-vacuity companion** proving the two targets could be
+told apart while alive — because *cannot tell* passes in every world where
+nothing happens, which this project measured directly when the backend leg
+stayed green under a blanket `Dispatch::knows == false`. Control:
+`ORBWEAVER_LEAK_CONTROL=removal_isolation`, run red — and note that the **held
+connection stayed green under that leak**; only the redial caught it, which is
+why the leg has both. Named and not measured: a target *killed* rather than
+stopped, since `Orb::shutdown` says §9.4.10's goodbye and a killed process
+leaves a reset. That is a second floor.
+
+Also: the status gate caught a CHANGELOG verb — the word *superseded* in prose
+about a table read as a claim that D029 had been superseded. Second time in a
+day that a verb tripped it (the first was *rejected* in README). The gate was
+not loosened: its own rule allows status vocabulary freely as long as the
+passage also names the current state, which is why every other `approved` in
+this file passes, and the prose was reworded instead.
+
+**B 착지: 생애주기 행이 0에 닿을 수 없는 결정을 기다리기를 그만두었다.** 하네스의
+계수된 스킵이 **17에서 16으로** 줄었고, 원장의 행이 *미측정, X 대기*에서 *측정됨,
+닫힌 것이 아니라 이름 붙인 바닥 위*로 옮겨 갔다. **테스트가 자기 첫 초안을 두 번
+반박했고 둘 다 파일에 남겼다**: *"어느 대상이 제거됐는지 알 수 없다"*는 공허하고(호출자가
+어느 참조를 골랐는지 안다), 제거된 대상이 열린 연결에서 여전히 답한 것은 버그가 아니라
+D034의 요청 단위 우아한 종료다. 그래서 바닥은 **다시 다이얼해서** 관측한다. 통제군
+아래에서 **유지된 연결은 초록이었고 재다이얼만 잡았다** — 다리가 둘 다 갖는 이유다.
+
 **One rule had four copies, and the one missing a term was the one that
 mattered.** The licence boundary — *omniORB, ACE/TAO and JacORB are fixtures,
 never dependencies* — was checked in four places, each with its own pattern:
@@ -38,8 +83,8 @@ to 4792 and whose declaration had already been deleted, with a comment in its
 place saying why. The line number is the tell: a debt naming a location nobody
 re-checked is a debt nobody re-checked. Separately, D029 §6.1's instrument table
 was **two** tables split by a blank line, and the split had inverted — the later
-table's Lifecycle row still carried the text the earlier one had superseded,
-while its Activation rows were genuine updates. `transparency.py` reads neither,
+table's Lifecycle row still carried the text the earlier one had already
+replaced, while its Activation rows were genuine updates. `transparency.py` reads neither,
 so no tool could see the contradiction and only a reader met it. Merged into one
 table, with the Lifecycle row rewritten to what D035's approval established:
 **X was answered, and the answer was not X.** Also corrected: the comment

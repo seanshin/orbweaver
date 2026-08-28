@@ -211,24 +211,52 @@ for name in $NAMES; do
     ;;
 
   lifecycle)
-    emit "$name" SKIPPED "decision X: the reference Orb::server hands out is not indirect"
-    skip "no test removes a target under a live caller and finds the caller" \
-      "unable to tell, because today it can tell immediately." \
-      "THE BLOCKER CHANGED on 2026-08-26 and this leg did not. It no longer" \
-      "waits on a redirect emitted for a NAME: that is built and measured," \
-      "crates/orbweaver-giop/tests/forward_for_a_name.rs — a servant holding" \
-      "names and no objects, 7 tests, both byte orders, 3 negative controls." \
-      "It waits on decision X, D029 6.1's lifecycle subsection: that the" \
-      "reference Orb::server hands out is INDIRECT, its profile carrying a" \
-      "name-resolving endpoint and a name rather than the servant's own" \
-      "address. Until then a client holds the backend's own address, and no" \
-      "redirect can reach it once that address is dead — a forward is a" \
-      "reply and a reply needs a listener, so it can never be emitted by the" \
-      "party that went away. O1 landed, so removal has an implementation and" \
-      "a test — Orb::shutdown, measured from a peer's own socket — but the" \
-      "TRANSPARENCY of the removal did not move. Note what IS measured under" \
-      "location above: a target moving under a live caller is invisible." \
-      "Moving is the half of this row that works; removing is not."
+    # The blocker this leg named until 2026-08-27 was **decision X**, and X was
+    # answered: D035 was approved with the owner's answer to D029's required
+    # question — *displacement is not closure* — so the row is no longer waiting
+    # on a decision that could not reach zero. What landed is D035 §5's option
+    # B: the bootstrap leak is recorded as an irreducible floor of a single-node
+    # deployment, and everything ABOVE that floor is measured.
+    #
+    # Two things the first draft of that test got wrong, kept here because they
+    # are what makes the leg's claim the one it is:
+    #
+    #   * "a caller cannot tell WHICH target was removed" is empty — the caller
+    #     chose which reference to dial. The real property is ISOLATION:
+    #     removing one target must be invisible to a caller of another.
+    #   * a removed target still answered on an already-open connection. That
+    #     is not a bug, it is D034's graceful shutdown at request granularity.
+    #     The floor is therefore observed by DIALLING AGAIN, which is what a
+    #     caller holding only a reference does.
+    if run_tests_in orbweaver-giop what_a_caller_can_tell_about_a_removal \
+         "a removal under a live caller: the floor named, and isolation measured above it" \
+         removing_one_target_is_invisible_to_a_caller_of_another \
+         a_caller_of_a_removed_target_can_tell_it_is_gone_and_that_is_the_floor \
+         the_two_targets_could_be_told_apart_while_they_were_alive; then
+      measured=$((measured+1)); emit "$name" MEASURED "removal isolation, over a named bootstrap floor"
+    else
+      fails=$((fails+1)); emit "$name" RED "removal isolation, over a named bootstrap floor"
+    fi
+    say "       floor:      a caller of a removed target CAN tell it is gone, and"
+    say "                   nothing in one process changes that — it must be given"
+    say "                   one address to send a first packet to. D035 §4 calls"
+    say "                   this displacement rather than closure and the owner"
+    say "                   approved NAMING it. The leg asserts the floor rather"
+    say "                   than prose, so a change that made it stop being true"
+    say "                   cannot pass unnoticed."
+    say "       control:    ORBWEAVER_LEAK_CONTROL=removal_isolation — A's removal"
+    say "                   takes B down with it, the shape a shared pool or a"
+    say "                   process-wide stop produces. Run 2026-08-27: the fresh"
+    say "                   dial of B answered Gone where it must answer Reply(22),"
+    say "                   naming THE CALLER COULD TELL ANOTHER TARGET WAS REMOVED."
+    say "                   The HELD connection stayed green under that leak — only"
+    say "                   the redial caught it, which is why the leg has both."
+    say "       unmeasured: a target removed by being KILLED rather than stopped."
+    say "                   Orb::shutdown says GIOP 9.4.10's goodbye; a killed"
+    say "                   process leaves a reset, and a caller can tell those"
+    say "                   apart. That is a second floor, named rather than"
+    say "                   measured, because this repository stops ORBs and does"
+    say "                   not kill them."
     ;;
 
   *)

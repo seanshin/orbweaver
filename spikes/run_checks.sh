@@ -4872,7 +4872,13 @@ leak_leg activation
 
 hr "leak test — a target removed under a live caller (D029 §5 O0)"
 bears_on lifecycle
-tp_measures_nothing
+# `tp_measures_nothing` was here while this leg was a counted SKIPPED waiting on
+# decision X. X was answered on 2026-08-27 — D035, approved with *displacement
+# is not closure* — and the leg measures now: the bootstrap leak is a named
+# floor and isolation above it is asserted. Keeping the declaration would make
+# the ledger read a measurement as nothing, which is the swallow it exists to
+# prevent, upside down. `leak_leg` FAILS a MEASURED row whose group still
+# carries it, deliberately, so this deletion is not optional.
 leak_leg lifecycle
 
 # ── D029 §5 O1 / D034 — the removal itself, from the peer's socket ───────────
