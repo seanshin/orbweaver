@@ -1582,6 +1582,72 @@ else
   fail_total=$((fail_total+1))
 fi
 
+# ── The control plane reads no clock ────────────────────────────────────────
+#
+# `docs/PLAN-DEFERRED.md` §3 declines the CORBA Time Service, and its reason is
+# not "no consumer" — it is an architectural property, stated there as a
+# measurement: `crates/orbweaver-object/src/residency.rs` and the whole of
+# `crates/orbweaver-trading` contain **no clock read at all**. The residency
+# machine takes a window, not a moment, which is what makes the trading
+# engine's deterministic trace replay possible — and that replay is what the
+# oracle stands on. §3's own sentence: *"the moment any policy can call
+# `universal_time()`, a trace stops replaying and a deterministic oracle
+# becomes a flaky one."*
+#
+# **That argument was prose, and nothing kept it true.** One `Instant::now()`
+# added to a policy would retire the reason for declining a service, and
+# nothing would go red. A chapter whose decline rests on a measurement owes
+# that measurement a gate; that is the whole of this group.
+#
+# NOT a ban on clocks. The rest of this workspace reads them and should —
+# `orbweaver-giop` alone does so in six files, for timeouts and deadlines. The
+# claim is scoped to the two places §3 names, and the contrast is what makes it
+# a claim rather than a platitude.
+#
+# Limits, stated rather than discovered later: this reads source text, so a
+# clock reached through a macro, through a dependency, or spelled some way this
+# pattern does not know is not seen. It is a scan, and the probe below is what
+# says the scan can see anything at all.
+hr "the control plane reads no clock (PLAN-DEFERRED §3)"
+CLOCK_SCOPE="crates/orbweaver-object/src/residency.rs crates/orbweaver-trading"
+CLOCK_RE='(SystemTime|Instant)::now|OffsetDateTime::now|Utc::now|\.elapsed\(\)'
+# SYNTHESISE THE SUBJECT: line 1 is a clock read, line 2 is prose that merely
+# mentions one. A scan that reports neither measures nothing; a scan that
+# reports both is matching words rather than code.
+clk_probe=$(mktemp "${TMPDIR:-/tmp}/orbweaver-clock.XXXXXX")
+{
+  printf '%s\n' '    let started = std::time::Instant::now();'
+  printf '%s\n' '    // a window, not an Instant::now() — see PLAN-DEFERRED §3'
+} >"$clk_probe"
+# `-Hn`, not `-n`: the tree scan below is `grep -rn` over paths and prints
+# `path:line:text`, so its comment filter is anchored on `:LINE:`. A probe run
+# with bare `-n` prints `line:text`, the filter matches nothing, and the probe
+# would have reported the comment as a hit — which is exactly what it did on
+# the first run of this group. The probe must exercise the SAME shape as the
+# scan or it is testing a different expression.
+clk_hits=$(grep -HnE "$CLOCK_RE" "$clk_probe" | grep -vE ':[0-9]+:\s*//' | cut -d: -f2 | tr '\n' ',')
+if [ "$clk_hits" != "1," ]; then
+  echo "  FAIL the clock scan reported lines [$clk_hits] of a two-line probe whose first"
+  echo "       line is a clock read and whose second only mentions one in a comment —"
+  echo "       it is not measuring what it claims and its silence over the tree means"
+  echo "       nothing"
+  fail_total=$((fail_total+1))
+else
+  clk_out=$(grep -rnE "$CLOCK_RE" $CLOCK_SCOPE 2>/dev/null | grep -vE ':[0-9]+:\s*//' || true)
+  if [ -n "$clk_out" ]; then
+    echo "  FAIL the control plane read a clock, and PLAN-DEFERRED §3's reason for"
+    echo "       declining the Time Service was that it does not. A window is the unit;"
+    echo "       a moment makes the trading engine's trace replay non-deterministic and"
+    echo "       the oracle flaky. Either this is wrong, or §3 is:"
+    printf '%s\n' "$clk_out" | head -5 | sed 's/^/         /'
+    fail_total=$((fail_total+1))
+  else
+    echo "  ok   no clock read in residency.rs or orbweaver-trading, which is the"
+    echo "       measurement PLAN-DEFERRED §3 declines the Time Service on"
+  fi
+fi
+rm -f "$clk_probe"
+
 hr "the records keep up with the code"
 # A gate for decision *statuses* went in on 2026-08-18. It checks one field and
 # does not check whether the documents that describe the code were opened at

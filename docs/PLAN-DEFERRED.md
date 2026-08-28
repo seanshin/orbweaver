@@ -282,6 +282,22 @@ deterministic oracle becomes a flaky one.** A service that is trivial to build
 and whose mere availability erodes the harness's foundation is a bad trade at
 any price. Honest absence, with a reason stronger than absence of demand.
 
+**The argument is now measured, not asserted (2026-08-28).** Everything above
+rests on a reading of the code — *no clock read at all* — and until today
+nothing kept that reading true. One `Instant::now()` added to a policy would
+have retired the reason for declining this service and **nothing would have gone
+red**, which is the shape this project keeps finding. `run_checks.sh` now scans
+`residency.rs` and `orbweaver-trading` for a clock read and fails when it finds
+one, saying in its own message that either the code is wrong or this chapter is.
+
+It is **not** a ban on clocks: the rest of the workspace reads them and should —
+`orbweaver-giop` alone does so in six files, for timeouts and deadlines — and
+the contrast is what makes this a claim rather than a platitude. The negative
+control points the same scan at `mux.rs` and it reports five. Its limit, stated
+here rather than discovered later: it reads source text, so a clock reached
+through a macro, through a dependency, or spelled some way the pattern does not
+know is not seen.
+
 **Trigger.** A **peer** requires it: a legacy client in a pilot resolves
 `TimeService` from our Naming server and we must answer. That is the only
 clean trigger. A `CosTimerEvent`-driven consumer of ours would also do it, but
@@ -301,6 +317,17 @@ availability — **the crate that serves time is one nothing in the control plan
 may depend on**, enforced by the dependency direction the way F3 enforced
 `orbweaver-trading` depending on nothing of ours, not by a comment asking
 nicely.
+
+**2026-08-28: 논거가 주장이 아니라 측정이 되었다.** 위의 모든 것은 코드를 읽은
+결과 — *시계 읽기가 하나도 없다* — 에 기대고 있었고, 오늘까지 그 읽기를 지키는 것이
+없었다. 정책에 `Instant::now()` 하나가 들어가면 이 서비스를 거절한 이유가
+사라지는데 **아무것도 빨개지지 않았을 것**이다. 이제 `run_checks.sh`가
+`residency.rs`와 `orbweaver-trading`을 훑고, 찾으면 *코드가 틀렸거나 이 장이
+틀렸다*고 말하며 실패한다. **시계 금지가 아니다** — 나머지 워크스페이스는 시계를
+읽고 그래야 하며(`orbweaver-giop`만 6개 파일), 그 대비가 이것을 상투구가 아닌
+주장으로 만든다. 부정 대조군은 같은 스캔을 `mux.rs`로 겨누고 5건을 보고한다.
+한계도 여기 적는다: 소스 텍스트를 읽으므로 매크로·의존성·모르는 철자를 통한 시계는
+보지 못한다.
 
 **요지.** 만들기는 정말 쉽다 — 그래서 거절 사유가 "소비자 없음"보다 나아야 한다.
 실측: `residency.rs`와 `orbweaver-trading` 전체에 **시계 읽기가 하나도 없다**.

@@ -10,6 +10,55 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**A chapter's reason for declining a service was prose, and now it is a gate.**
+`PLAN-DEFERRED` §3 declines the CORBA Time Service, and its argument is not "no
+consumer" — it is that `crates/orbweaver-object/src/residency.rs` and the whole
+of `crates/orbweaver-trading` contain **no clock read at all**, which is what
+makes the trading engine's deterministic trace replay possible and therefore
+what the oracle stands on. §3's own sentence: *"the moment any policy can call
+`universal_time()`, a trace stops replaying and a deterministic oracle becomes a
+flaky one."*
+
+Nothing kept that true. One `Instant::now()` in a policy would have retired the
+reason for declining a whole service and **nothing would have gone red**.
+`run_checks.sh` now scans those two scopes and fails when it finds a clock,
+saying in its own message that either the code is wrong or the chapter is.
+
+It is **not** a ban on clocks — the rest of the workspace reads them and should;
+`orbweaver-giop` alone does so in six files — and the contrast is what makes
+this a claim rather than a platitude. Negative controls: the scan over the
+control plane is silent, and the same scan pointed at `mux.rs` reports five. Its
+limit is stated in §3 rather than left to be discovered: it reads source text,
+so a clock reached through a macro, through a dependency, or spelled some way
+the pattern does not know is not seen.
+
+**The probe caught the gate's author again.** Its first run reported *both*
+lines of a two-line probe, because the comment filter is anchored on the
+`path:line:` shape `grep -rn` prints and the probe used bare `grep -n`, which
+prints `line:text`. **The probe was exercising a different expression from the
+scan.** `-Hn` makes the shapes identical. This is the fourth time today a probe
+or control has failed its own author, and the third where the defect was that
+the control and the thing controlled were not the same code path.
+
+**Asked and answered: the Time Service was not missing.** The check that
+prompted this found `PLAN-DEFERRED` §3 already carries scope, refusal argument,
+trigger and a v1 sketch, in both languages. A new plan document would have had
+to restate all four to be readable on its own, which is the drift this project
+measures — so what was missing was not a document but the gate under the one
+sentence the chapter rests on.
+
+**한 장이 서비스를 거절한 근거가 산문이었고, 이제 게이트다.** `PLAN-DEFERRED` §3의
+거절 사유는 "소비자 없음"이 아니라 컨트롤 플레인에 **시계 읽기가 하나도 없다**는
+측정이며, 그것이 결정적 트레이스 재현을 가능하게 하고 오라클이 그 위에 선다. 그
+측정을 지키는 것이 없었다 — 정책에 `Instant::now()` 하나면 서비스를 거절한 이유가
+사라지는데 아무것도 빨개지지 않았을 것이다. **시계 금지가 아니다**: 나머지
+워크스페이스는 시계를 읽고 그래야 하며, 그 대비가 이것을 주장으로 만든다. 그리고
+**프로브가 또 자기 저자를 잡았다** — 필터가 `grep -rn`의 `path:line:` 모양에
+앵커돼 있는데 프로브는 `grep -n`이었다. **프로브가 스캔과 다른 표현을 시험하고
+있었다.** 오늘 네 번째다. **시간 서비스는 빠져 있지 않았다**: §3에 범위·거절
+사유·방아쇠·v1 스케치가 영·한으로 다 있고, 없던 것은 문서가 아니라 그 장이 딛고 선
+문장 아래의 게이트였다.
+
 **The teardown crash closed across every fixture that could have it, and a
 regex found the wrong `import`.** `spikes/orbexit.py` is the one home for *how
 an omniORB fixture leaves* — flush, then `os._exit`, never unwinding into
