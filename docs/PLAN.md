@@ -639,6 +639,13 @@ crate whose fuzz found that recursive types could not be marshalled at all.
 > Concurrency, Collections, federation, the Security Service beyond CSIv2) is
 > sketched with its un-defer trigger in
 > [`PLAN-DEFERRED.md`](PLAN-DEFERRED.md) (2026-08-13).
+>
+> What stands between the streams below and a **first complete ORB** — the open
+> transparency leaks in priority-zero order, and what each one lands with — is
+> [`PLAN-FIRST-COMPLETION.md`](PLAN-FIRST-COMPLETION.md) (2026-08-29). It plans
+> against the leak cells the harness reads out of D029 at run time rather than
+> against this document's streams, which is why it is a sibling and not a
+> section here.
 
 Every stream lists: **what** (unchanged scope from v0.5), **depends on**
 (all satisfied today unless named), **batch unit** (what one loop iteration

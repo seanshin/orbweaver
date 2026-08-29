@@ -176,7 +176,25 @@ fn run() -> orbweaver_giop::Result<()> {
         println!("published channel {:?} as {}", p.channel, stringify_name(&p.name));
     }
     println!("resolve {}", stringify_name(&channel_binding_name(&channel_name)));
-    println!("READY");
+
+    // `READY` is printed AFTER the self-checks below, and that ordering is the
+    // whole of what it means. It used to be printed here, and the shell reads
+    // this log by waiting for `READY` and then taking a SNAPSHOT — so whether
+    // the self-check lines were in that snapshot was a race between the
+    // shell's `cat` and a `NamingContext::connect` over a socket. It was won
+    // three harness runs running and lost on the fourth (2026-08-29), which
+    // reported `the fixture did not report on what its published file
+    // advertises` over a fixture that had reported it a moment later, and over
+    // a peer run that printed `PASS`.
+    //
+    // A premature `READY` is wrong on its own terms as well: the peer is
+    // launched on it, so it was being told the fixture was ready while the
+    // fixture was still asking the naming service questions.
+    //
+    // *`READY`는 자기검사 뒤에 찍힌다. 셸은 `READY`를 보고 **스냅샷**을 뜨므로,
+    // 그 앞에 찍히지 않은 줄이 스냅샷에 있는지는 소켓 왕복과의 경합이었다 — 세
+    // 번 이기고 네 번째에 졌다. 그리고 이른 `READY`는 그 자체로 틀렸다: 피어가
+    // 그것을 보고 출발하는데 픽스처는 아직 질문 중이었다.*
 
     // A self-check, so a failing fixture says so before a peer blames itself:
     // the name resolves, and to the channel's own reference.
@@ -215,6 +233,9 @@ fn run() -> orbweaver_giop::Result<()> {
     println!(
         "  ok   the peer's only file advertises {advertised:?} and not the channel's {ch_port}"
     );
+
+    // Everything the shell reads out of the snapshot has now been printed.
+    println!("READY");
 
     if hold {
         println!(

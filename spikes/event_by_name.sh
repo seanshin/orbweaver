@@ -76,13 +76,25 @@ done
 # Capture, then match with a herestring. Never `printf … | grep -q`: grep -q
 # exits on first match and SIGPIPEs the producer, and under pipefail an `if`
 # reads that as "no match".
+# A sleeping, DEADLINE-BOUNDED loop, not one retry. It was `sleep 1` and one
+# re-read, which is a wait that works only when the thing waited for is already
+# nearly there. Found 2026-08-29 by the control for the ordering bug below:
+# with `READY` moved to the end of the fixture's self-checks — where it belongs,
+# because the peer is launched on it — a fixture held for two seconds made this
+# report `the fixture never said READY` about a fixture that said it a second
+# later. The IOR file existing does not mean the self-checks are done, and that
+# is exactly the distinction `READY` now carries.
+ready_deadline=$(( $(date +%s) + 30 ))
 fixture_out="$(cat "$LOG")"
-if ! grep -q "READY" <<<"$fixture_out"; then
-    # READY may not have been flushed yet even though the IOR exists.
-    sleep 1
+while ! grep -q "READY" <<<"$fixture_out"; do
+    if ! kill -0 "$PID" 2>/dev/null; then
+        echo "$fixture_out"
+        fail "the fixture exited before saying READY"
+    fi
+    [ "$(date +%s)" -ge "$ready_deadline" ] && { echo "$fixture_out"; fail "the fixture never said READY"; }
+    sleep 0.2
     fixture_out="$(cat "$LOG")"
-    grep -q "READY" <<<"$fixture_out" || { echo "$fixture_out"; fail "the fixture never said READY"; }
-fi
+done
 echo "$fixture_out" | sed 's/^/  /'
 
 echo "running omniORB's client"

@@ -737,6 +737,7 @@ spikes/estate/              thirteen legacy contracts that include each other,
 spikes/                     fixtures, servers, the harness, and the measurement scripts
 docs/                       ARCHITECTURE (as built) · PLAN(.ko) · COMPONENTS (measured)
                             PLAN-MOE · PLAN-SERVICES · PLAN-DEFERRED · SERVICES-COVERAGE
+                            PLAN-FIRST-COMPLETION (the open leaks, priority-zero order)
                             decisions/ · pipeline-runs/ · PHASE0–6
 ```
 
