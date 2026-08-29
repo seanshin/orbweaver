@@ -5197,6 +5197,46 @@ bears_on activation
 # as nothing, which is the exact swallow it exists to prevent, upside down.
 leak_leg activation
 
+# ── The activation row, measured on the type a deployment constructs ────────
+#
+# `leak_leg activation` above runs `what_a_caller_can_tell_about_load.rs`, whose
+# servant is **test-private**: its `knows` is left at the default `true` on
+# purpose, so the POA alone takes the existence decision, and no deployment
+# could run it because it lives in a `tests/` file. That is a real property and
+# it is the right shape for measuring `MissPolicy::Activate` in isolation.
+#
+# It is not the only shape the row needs. `ExpertHost` — the mount, the answer
+# to *who owns an expert's server* — is what a deployment constructs, and
+# `a_mounted_expert_host_across_an_eviction.rs` measures the same row through
+# it. Until this group, that file counted toward NOTHING: it ran under
+# `cargo test --workspace` and the ledger's `activation` row was fed by the
+# isolated fixture alone. A row measured only by a servant no deployment can
+# run is a row measured beside the question rather than on it.
+#
+# The two things the mounted shape has and the fixture does not are its own
+# header's, not restated here: a `LocateRequest` surface (a `knows` that
+# consulted residency would leak the load state one message before an
+# invocation, on the message §9.4.5 guarantees is side-effect-free), and
+# `moe::Capability`'s `Residency state` member, which makes the contract's own
+# `describe()` report load state — held for an *ordering* reason rather than
+# because nothing in it depends on residency.
+#
+# Its four controls live in the same file and `cargo test` runs them; none is a
+# commit message.
+hr "leak test — a target evicted under a live caller, on the MOUNT (D029 §6.1 activation)"
+bears_on activation
+mhe_out=$(cargo test -q -p orbweaver-object --test a_mounted_expert_host_across_an_eviction 2>&1)
+mhe_rc=$?
+if [ "$mhe_rc" -eq 0 ]; then
+  echo "  ok   $(grep -E '^test result:' <<<"$mhe_out" | head -1 | sed 's/^ *//')"
+  echo "       measured on ExpertHost, the servant a deployment constructs — probe and"
+  echo "       invocation both, with the residency-reading knows kept as a control"
+else
+  echo "  FAIL the mounted host's activation legs did not pass ($(rc_says "$mhe_rc"))"
+  cargo_test_diag "$mhe_out"
+  fail_total=$((fail_total+1))
+fi
+
 hr "leak test — a target removed under a live caller (D029 §5 O0)"
 bears_on lifecycle
 # `tp_measures_nothing` was here while this leg was a counted SKIPPED waiting on

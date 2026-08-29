@@ -119,10 +119,25 @@ struct Plane {
 /// directly. A leak in it could not have been seen by any caller because no
 /// caller could reach it.
 ///
-/// `knows` is left at its default `true` **on purpose**: the object's
-/// existence is the POA's decision here, not a second one taken in front of
-/// it. A `knows` that answered for expert ids would decide the same question
-/// one layer earlier and this test would be measuring that instead.
+/// `knows` answers `true` for every key **on purpose**: the object's existence
+/// is the POA's decision here, not a second one taken in front of it. A `knows`
+/// that answered for expert ids would decide the same question one layer
+/// earlier and this test would be measuring that instead.
+///
+/// It said *"left at its default"* until 2026-08-29, when D036 deleted that
+/// default and made the method required. The choice is the same one and it is
+/// stated now instead of inherited — which is the whole of what D036 bought,
+/// arriving here as a sentence that had to stop being true.
+///
+/// **This servant's limit, said in both directions.** It is test-private and no
+/// deployment could run it. `orbweaver_object::expert_host::ExpertHost` is the
+/// mount a deployment constructs; its `knows` answers for its own keys, and
+/// `tests/a_mounted_expert_host_across_an_eviction.rs` measures this same row
+/// through it — including the two surfaces unreachable from here: a §9.4.5
+/// `LocateRequest`, and `moe::Capability`'s `Residency state` member. That file
+/// has named this one since it was written. This paragraph is the direction
+/// that was missing, added the day the mount's legs were given a harness group
+/// and began counting toward the ledger's activation row.
 struct ExpertHost {
     plane: Mutex<Plane>,
     miss: MissPolicy,

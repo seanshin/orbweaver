@@ -216,22 +216,38 @@ behaves the way the closed leak says a deployment does.
 
 **The work, in the order the review found it.**
 
-1. **Say which servant is which.** Two `ExpertHost`s share a name: the mount
-   here, which overrides `knows`, and the one defined inside
-   `what_a_caller_can_tell_about_load.rs`, which deliberately does not. The
-   ledger's `activation` row counts the second. Neither file names the other.
-   This costs nothing and is what stops the next reader from measuring one and
-   believing the other.
-2. **Decide which one the row should be measured against** — and it is not
-   obvious. The test's local servant exists so the POA takes the existence
-   decision alone, which is a real property to hold; the mount is what a
-   deployment would run. This is a choice with an argument on both sides, so it
-   is written down rather than assumed.
+1. **Say which servant is which — and the draft got this half wrong.** Two
+   `ExpertHost`s share a name: the mount here, whose `knows` answers for its
+   own keys, and the one inside `what_a_caller_can_tell_about_load.rs`, which
+   answers `true` for every key on purpose. This section said *"neither file
+   names the other"*. **That is false in one direction**:
+   `a_mounted_expert_host_across_an_eviction.rs` has named the isolated fixture
+   since it was written, and explains the distinction — *"a test-private
+   servant … which no deployment could run because it lives in a `tests/`
+   file"* — better than this plan did. The silence was one-way, and the missing
+   direction was written on 2026-08-29. **Done.**
+2. **Decide which one the row should be measured against — and the answer was
+   *both*.** The isolated servant exists so the POA takes the existence
+   decision alone, which is a real property; the mount is what a deployment
+   runs, and its file already measured this row through it with four controls
+   of its own. What was wrong was not which one measured the property but which
+   one **counted**: the mounted file ran under `cargo test --workspace` and
+   declared nothing, so the ledger's `activation` row was fed by the isolated
+   fixture alone — *a row measured only by a servant no deployment can run is a
+   row measured beside the question rather than on it.* It is a harness group
+   declaring `bears_on activation` now, and the row reads **2 groups** where it
+   read 1. **Done 2026-08-29.**
 3. **Then wire one existing binary to the mount**, so the property is exercised
    in a served shape. This is not a new capability: it is the difference between
    *a leak closed in a type* and *a leak closed where a caller could reach it*.
+   **Still open**, and it is now the whole of L3: steps 1 and 2 moved what is
+   *measured*, and this step is the only one that would move what is *deployed*.
 
-Ordered after L1 because step 2's answer changes under L1's change.
+Ordered after L1 because step 2's answer could have changed under L1's change.
+It did not — but the ordering was right for a reason that survives: this test's
+`ExpertHost` was one of the 22 inheritors, so L1 rewrote a line of it, and the
+sentence *"`knows` is left at its default"* in its rustdoc had to stop being
+true in the same batch.
 
 *L3 — 마운트는 **있고 취해지지 않았다**. 새 기능이 아니라, *타입에서 닫힌 구멍*과
 *호출자가 닿는 자리에서 닫힌 구멍*의 차이다.*
