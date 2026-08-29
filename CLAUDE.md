@@ -213,12 +213,29 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   the words this file refutes. The number was true and useless — **it measured
   the file, not the rule.** A sweep lands with the scan that produced it,
   runnable over the whole tree, or the next reader inherits a count instead of
-  a check. That scan is now a group in `run_checks.sh`, over `git ls-files`
+  a check. **And the unit a rule is asked of is not always a file.** Measured
+  2026-08-28, by the gate written that morning to close this very class: it
+  asked whether a *file* mentions `orbexit`, and printed `27 fixture(s) create
+  an ORB; 27 leave through orbexit.leave` while **eight programs those files
+  carry as string constants** — `-c` children run with `[sys.executable, "-c",
+  …]`, of which eight of nine call `ORB_init` — did not. A crash report four
+  hours after the first one named the difference: `Parent Process: Python`, and
+  thread 0 in `__cxa_finalize_ranges`, which `os._exit` does not reach. *A rule
+  about programs, checked against files, is green over every program a file
+  carries.* The repair is to ask the thing the rule is about — here **the
+  launch, never the string**, because that holds whether the child is a name, a
+  literal or a template assembled at run time. The first rewrite got that wrong
+  too and walked the AST for string constants that parse as Python: it found
+  **nothing** in the one fixture whose child is templated, and stayed green
+  when a spawn site was unwrapped. Only the control said so. That scan is now a group in `run_checks.sh`, over `git ls-files`
   rather than a directory walk, with a synthesised two-line probe — the defect
   and its repair — that it must report as exactly one hit before its silence
   over the tree is allowed to mean anything. *스윕의 범위는 규칙이지 파일이
   아니다. 76은 참이었고 쓸모없었다 — 규칙이 아니라 파일을 잰 수였기 때문이다.
-  스윕은 그것을 만든 스캔과 함께, 트리 전체에서 돌 수 있는 형태로 착지한다.*
+  스윕은 그것을 만든 스캔과 함께, 트리 전체에서 돌 수 있는 형태로 착지한다.
+  그리고 **규칙이 묻는 단위가 항상 파일인 것은 아니다** — 프로그램에 대한 규칙을
+  파일에 대고 물으면, 파일이 품은 모든 프로그램 위에서 초록이 된다. 문자열이
+  아니라 **기동**에 물어야 하며, 그 재작성의 첫 판도 대조군이 죽였다.*
 - **Never edit a script while it is running.** `bash` reads a script
   incrementally, so an edit that shifts byte offsets can make a running shell
   resume at the wrong place. Done 2026-08-25 — three gate repairs written into
