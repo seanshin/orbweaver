@@ -10,6 +10,63 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**Two crash reports, and the second one found the hole in the gate written for
+the first.** A fixture crashed with `omnipyThreadScavenger::run_undetached ->
+PyGILState_Ensure`, SIGSEGV — the crash `spikes/orbexit.py` exists to prevent by
+flushing and skipping `Py_Finalize`. Twenty-three fixtures called it; **four did
+not**, and nothing said so, because the module was adopted by a sweep and that
+sweep's scope became the record of who was covered. The harness had reported it
+as `FAIL the omniORB runtime probe did not run`: the probe discarded the exit
+status, so the crash reporter held the whole diagnosis and the harness held none
+of it. Reproduced before it was believed — the old child, 12 runs, one `-11`;
+through `leave`, 40 runs, none.
+
+Four hours later a second report arrived, and its two differences were the
+finding: `Parent Process: Python` where the first said `Exited process`, and
+thread 0 in `__cxa_finalize_ranges` running omniORB's C++ static destructors,
+which `os._exit` does not reach. Seven fixtures carry a second program as a
+string constant and run it with `[sys.executable, "-c", …]`; **eight of those
+nine children call `ORB_init`**, and the gate written that morning was green
+over all eight — it had asked whether the **file** mentions `orbexit`, and every
+one of those parents does. *A rule about programs, checked against files, is
+green over every program a file carries.* `orbexit.wrap_child` is the repair,
+applied at the launch; `spikes/leaves_cleanly.py` asks **the launch, never the
+string**, because one of those children is assembled at run time from a template
+and is not a constant at all.
+
+**A gate that a document's citation owes a run.** Four times in one day a
+document named a script as its evidence and nothing ran it: `c_peer.sh` had
+never been compiled on Linux, `event_by_name.sh` was run by nothing,
+`scope_controls.sh` was run by nothing **and had stopped being able to run**,
+and `half_reply.sh`'s own row said *"not yet a group"*. **Three of the four said
+so in their own headers.** `spikes/cited_and_run.py` draws the distinction that
+matters: a header that **refuses** the gate is a decision and passes; one that
+**defers** it is an IOU and fails.
+
+**The event-channel flake was the test, then the repair, then the ordering.**
+The assertion `sourced == 1` was the opposite of what §4 documents, and CI Linux
+said so four times. The repair that widened it failed a fourth time in its own
+new clause — `late_asks` was sampled *after* the offer, so the interleaving it
+was written to accept could make it read 0. `cargo_test_diag` had been throwing
+the panic message away for every bare `assert!`, which is why it took four runs
+to read. It is deterministic now: `ChannelHandle::set_committed_gate` holds a
+round on the far side of the commit point, so the ordering CI found by luck
+happens every run.
+
+**`READY` meant "up" and the reader needed "finished".**
+`spike_channel_by_name` printed `READY`, then did two self-checks — one a socket
+round trip — and only then printed the line the shell waits to read out of a
+snapshot taken at `READY`. It won three harness runs and lost the fourth. The
+control for that fix found a second defect: the shell's wait for `READY` was
+`sleep 1` and one re-read rather than a deadline loop.
+
+**A plan for what stands between here and a first complete ORB.**
+`docs/PLAN-FIRST-COMPLETION.md` orders the open transparency leaks by priority
+zero and records, for each, what it lands with. Reviewing it moved its own first
+item: `Dispatch::knows` cannot be "flipped to the specification default" —
+the trait default has no active object map in scope, and the one value available
+is `false`, which is already recorded as producing a vacuous green.
+
 **E3's peer half measured nothing, because nothing ran it.** D029's *"Location,
 for event channels"* subsection cites a pairing as its evidence: our own client
 at both ends in `channel_found_by_name.rs`, **and** omniORB's client in

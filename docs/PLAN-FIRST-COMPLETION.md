@@ -59,8 +59,8 @@ The order below is what survived that:
 | | | why here |
 |---|---|---|
 | 1 | **L1's decision** — where the key set lives | Opens the largest leak with the thing it actually needs. It blocks nothing else, so it starts first and finishes last. |
-| 2 | **L3** — wire one binary to `expert_host` | Small, concrete, independent of every other item, and it moves a leak from *closed in a type* to *closed where a caller reaches it*. |
-| 3 | **L5** — measure the killed target | A measurement, not a repair. Independent. Its result may be *"this is a floor too"*, which is a finding and not a failure. |
+| 2 | **L5** — measure the killed target | The one item measurement confirms is independent. The peer already exists and already treats a reset as an observation, so this is a second arm on an existing fixture pair. |
+| 3 | **L3** — the activation row's subject | **Not independent** — see below. Its subject is one of L1's population, so it is sequenced against L1 rather than run beside it. |
 | 4 | **L1 + L2 as one batch** | Once the decision lands. One fix per root cause, across every affected implementation — which is what makes L2 part of it rather than a separate patch. |
 | 5 | **L4** — a call travelling the other way through the seam | Retires the run's one language `SKIPPED` at the same time. |
 | 6 | **L6's decision** | A served contract with consumers. Opened by writing the decision, never by writing the patch. |
@@ -68,6 +68,36 @@ The order below is what survived that:
 **Two items are decisions and one is a measurement.** Only three of the six are
 repairs. A plan that reported *"six leaks"* as one number would be saying a
 number that means three different things, which §5 refuses.
+
+**L3 and L5 swapped places, and that is §4.5's fourth entry firing immediately.**
+The draft called L3 *"independent of every other item"*. It is not, and the way
+it is not was found by reading the code before starting rather than while:
+
+* The counted `activation` row is fed by `leak_leg activation` →
+  `what_a_caller_can_tell_about_load.rs`, which defines **its own** `ExpertHost`
+  and leaves `knows` at the default `true` **on purpose** — the file says why,
+  and the reason is good: *"the object's existence is the POA's decision here,
+  not a second one taken in front of it."*
+* The production mount `crates/orbweaver-object/src/expert_host.rs` is a
+  **different servant with the same name**, and it **does** override `knows`.
+  It has its own test, `a_mounted_expert_host_across_an_eviction.rs`, which runs
+  under `cargo test --workspace` and does **not** count toward the row.
+* So the row is measured against a servant that inherits the permissive
+  default — and the roster names that exact file as one of the 22. **L3's
+  subject is inside L1's population**, and L1's change alters what the
+  activation row measures.
+
+Neither file names the other. That is not a refusal and not a deferral — it is
+a **silence**, between two servants sharing a name, one of which the ledger
+counts and the other of which a deployment would use. Saying which is which is
+the cheap half of L3 and comes first.
+
+*L3와 L5가 자리를 바꿨고, 이것은 §4.5의 네 번째 항목이 곧바로 발동한 것이다.
+초안은 L3를 "모든 항목과 독립"이라 적었다. 아니다 — 계수된 `activation` 행은
+**테스트가 자기 안에 정의한** `ExpertHost`로 측정되고 그것은 기본값 `knows`를
+상속하며(그 이유는 파일에 적혀 있고 타당하다), 같은 이름의 **프로덕션 마운트는
+`knows`를 오버라이드하는 다른 서번트**다. 즉 **L3의 대상이 L1의 모집단 안에
+있다.** 두 파일은 서로를 언급하지 않는다 — 거절도 유예도 아닌 **침묵**이다.*
 
 *초안은 **구멍이 얼마나 열려 있는가**로 정렬했고 그래서 L1이 첫째였다. 검토가
 찾은 것은 L1의 작업이 **변경이 아니라 설계 질문**이라는 것이다 — 작아 보인다는
@@ -182,10 +212,24 @@ for, defaulting to `MissPolicy::Activate`. **Nothing constructs one.** The four
 `spike_*` binaries and both services build none, so no deployment in this tree
 behaves the way the closed leak says a deployment does.
 
-**The work.** Wire one existing binary to it, so the property is exercised in a
-served shape rather than only in a unit test. This is not a new capability: it
-is the difference between *a leak closed in a type* and *a leak closed where a
-caller could reach it*.
+**The work, in the order the review found it.**
+
+1. **Say which servant is which.** Two `ExpertHost`s share a name: the mount
+   here, which overrides `knows`, and the one defined inside
+   `what_a_caller_can_tell_about_load.rs`, which deliberately does not. The
+   ledger's `activation` row counts the second. Neither file names the other.
+   This costs nothing and is what stops the next reader from measuring one and
+   believing the other.
+2. **Decide which one the row should be measured against** — and it is not
+   obvious. The test's local servant exists so the POA takes the existence
+   decision alone, which is a real property to hold; the mount is what a
+   deployment would run. This is a choice with an argument on both sides, so it
+   is written down rather than assumed.
+3. **Then wire one existing binary to the mount**, so the property is exercised
+   in a served shape. This is not a new capability: it is the difference between
+   *a leak closed in a type* and *a leak closed where a caller could reach it*.
+
+Ordered after L1 because step 2's answer changes under L1's change.
 
 *L3 — 마운트는 **있고 취해지지 않았다**. 새 기능이 아니라, *타입에서 닫힌 구멍*과
 *호출자가 닿는 자리에서 닫힌 구멍*의 차이다.*
@@ -309,13 +353,40 @@ instrument, and an instrument that cannot go red makes §1 unfalsifiable.
 
 ## 4.5 Preconditions, and what would make this plan wrong / 전제조건과 반증
 
-**A precondition, not a work item.** Eight worktree branches are unlanded
-(2026-08-29). One has been judged — E3, judged *not landed*, with two things
-extracted from it — and **seven have not been read.** Planning §1 without
-knowing what is in them risks planning work that already exists, and that risk
-is a precondition of this plan rather than an item in it: it is cheap to
-discharge and expensive to skip. The first draft filed it as instrument debt,
-which was the wrong shelf.
+**A precondition, not a work item — and it is discharged.** Eight worktree
+branches are unlanded, all from 2026-08-26. Planning §1 without knowing what is
+in them risks planning work that already exists, which is a precondition rather
+than an item: cheap to discharge, expensive to skip. The first draft filed it as
+instrument debt, which was the wrong shelf.
+
+Discharged 2026-08-29:
+
+| branch | verdict |
+|---|---|
+| `a1591880` | superseded. Its D031 **is in main** and its ledger landed (38 `bears_on` tags). Its Rust `orbweaver-test/src/transparency.rs` was superseded by `spikes/transparency.py`, and by the better answer: the Python reader takes the five names from D029 §6.1 with no fall-back list, where the Rust one would have been a **second home** for them. |
+| `a194b897` `a5ba8ca8` `aacf7741` `ae15423a` | nothing to take: every artifact these four carry — `plan_numbers.py`, the language-binding decision document, `CHANGELOG`/`COMPONENTS` and `ifr_walk_peer.py` — is already in main. |
+| `a9bb59bf` | superseded. **This is L4's territory** — a Python bridge and servant — and `py_bridge.rs` and `python_rt.py` are in main and have diverged from it (458 lines the branch adds, 173 main has that it lacks). |
+| `ac991408` | superseded. **This is L1's territory** — `server.rs` and locate/forward — and `locate_forward_and_reply_contexts.rs` is in main while `server.rs` has moved **493 lines beyond** the branch. |
+| `adaa637f` | judged 2026-08-28: **not landed** (E3), with two things extracted from it. |
+
+`spikes/decision_status.py` refused a first wording of that row too — it said
+*"superseded"* beside a decision's identifier and the gate read it as a claim
+about **that decision's status**, which was the second time in this document
+that decision-status vocabulary was used for something that is not a decision.
+The row says what it means now.
+
+**What was read and what was not.** Presence, divergence direction and the two
+decision documents were read; the branches' small unique deltas (66 lines of
+`server.rs` on `ac991408`, for instance) were not read line by line. The
+question the precondition asks is narrower than that and is answered:
+**no branch closes a §1 leak**, because main's ledger still reports every one of
+them open, and main is ahead of both branches that touch their code. A branch
+holding a closure would have shown as a closed row or as the fix itself.
+
+*해소됨. 전제조건이 묻는 것은 "어느 브랜치가 §1의 구멍을 닫는가"이고, 답은 **아니오**다
+— main의 원장이 여전히 전부 열린 것으로 보고하고, 두 겹치는 브랜치의 코드에서
+main이 앞서 있기 때문이다. 각 브랜치의 고유 델타를 한 줄씩 읽지는 않았고, 그렇게
+적는다.*
 
 **What would make this plan wrong**, stated so that finding out is a result
 rather than an embarrassment:
