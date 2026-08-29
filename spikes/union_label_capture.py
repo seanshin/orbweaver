@@ -25,7 +25,7 @@ import tempfile
 from pathlib import Path
 
 # How an omniORB fixture leaves: see spikes/orbexit.py.
-from orbexit import leave
+from orbexit import leave, wrap_child
 
 ROOT = Path(__file__).resolve().parent.parent
 TEST = ROOT / "crates/orbweaver-giop/tests/union_labels_from_a_peer.rs"
@@ -173,7 +173,7 @@ def captured(work):
     subprocess.run(["omniidl", "-bpython", "u.idl"], cwd=work, check=True,
                    stdout=subprocess.DEVNULL)
     script = "import struct\n" + MARSHAL % str(work)
-    r = subprocess.run([sys.executable, "-c", script], cwd=work,
+    r = subprocess.run([sys.executable, "-c", wrap_child(script)], cwd=work,
                        capture_output=True, text=True)
     if r.returncode != 0:
         print("  the fixture could not marshal:", r.stderr.strip().splitlines()[-1:])

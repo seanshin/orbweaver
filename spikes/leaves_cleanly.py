@@ -19,12 +19,26 @@ It was the `-c` child inside `native_capture.py`, which the harness reported as
 all about the reason, because the probe discarded the exit status. The crash
 reporter had the diagnosis and the harness did not.
 
-**The criterion is `ORB_init`, not the file's name or where it lives.** That is
-`orbexit`'s own: it says it is "not for scripts that do not create an ORB —
-`coverage_tables.py` and `service_sweep.py` matched an early, broader sweep and
-have no `ORB_init` at all, which is why they are not here." A file that names
-`ORB_init` anywhere — in its own code or in a child program it carries as a
-string constant, which is where the crash actually lived — owes the import.
+**The unit is a PROGRAM, not a file, and the first draft of this gate got that
+wrong in a way that cost a second crash four hours later.** It asked whether the
+FILE mentions `orbexit`, and every one of these parents does — so it read
+`27 fixture(s) create an ORB; 27 leave through orbexit.leave` while EIGHT
+embedded children, carried as string constants and run with
+`[sys.executable, "-c", …]`, did not. Seven fixtures carry such a child; only
+the one that had just been repaired by hand was leaving cleanly. The second
+report named the shape the first had not: `Parent Process: Python`, and thread 0
+in `__cxa_finalize_ranges` running omniORB's C++ static destructors — which
+`os._exit` does not reach.
+
+*A rule about programs, checked against files, is green over every program a
+file carries.* That is *a sweep is scoped to a rule, not a file* one layer
+down, and it was written into CLAUDE.md the day before this gate repeated it.
+
+So this walks the AST for string constants that are programs, and asks of each:
+does it name `ORB_init`, and does it reach `leave`? A child reaches `leave`
+either by carrying it or by being handed to `orbexit.wrap_child` at its spawn
+site, which is where they are wrapped now — one home, applied once per launch
+rather than eight times by hand.
 
 *하나의 집이 있었고, 스윕이 그 집을 채운 날의 범위가 곧 누가 덮였는지의 기록이
 되었다. 넷이 빠졌고 아무것도 그렇게 말하지 않았으며, 2026-08-28에 그중 하나가
@@ -33,6 +47,7 @@ string constant, which is where the crash actually lived — owes the import.
 자식 프로그램도 포함한다 — 크래시는 바로 거기 있었다.*
 """
 
+import ast
 import pathlib
 import re
 import sys
@@ -43,6 +58,46 @@ HOME = "orbexit"
 #: the child program that crashed lives in a string constant, so an AST walk
 #: over the file's own code would not have seen it.
 CREATES_AN_ORB = re.compile(r"\bORB_init\b")
+
+#: Comments and docstrings quote `ORB_init` while creating nothing. Asked of the
+#: file's own code only — a string constant is handled separately, as a program.
+_STRINGS = re.compile(r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|#[^\n]*')
+
+
+def strip_strings(text):
+    return _STRINGS.sub("", text)
+
+
+def unwrapped_launches(text):
+    """Every `-c` launch in `text` whose program is not handed to `wrap_child`.
+
+    **Asked of the launch, never of the string.** The first attempt at this
+    walked the AST for string constants that parse as Python, and it found
+    nothing in `union_label_capture.py` — that child is assembled at run time
+    from a template, so the constant is not a program and never will be. The
+    control caught it: unwrapping a spawn site left the gate green over exactly
+    the case it exists for.
+
+    A launch is a list containing the constant `"-c"`; the element after it is
+    the program. That is true whether the program is a name, a template
+    substitution or a literal, which is why this is the question to ask.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.List):
+            continue
+        for i, el in enumerate(node.elts[:-1]):
+            if not (isinstance(el, ast.Constant) and el.value == "-c"):
+                continue
+            prog = node.elts[i + 1]
+            wrapped = (isinstance(prog, ast.Call)
+                       and isinstance(prog.func, ast.Name)
+                       and prog.func.id == "wrap_child")
+            if not wrapped:
+                yield node.lineno
 
 
 def main(argv):
@@ -61,22 +116,40 @@ def main(argv):
             text = p.read_text()
         except (OSError, UnicodeDecodeError):
             continue
-        if not CREATES_AN_ORB.search(text):
-            continue
-        (ok if HOME in text else owes).append(p.relative_to(ROOT).as_posix())
+        rel = p.relative_to(ROOT).as_posix()
+
+        # 1 — the file's own program.
+        if CREATES_AN_ORB.search(strip_strings(text)):
+            (ok if HOME in text else owes).append((rel, "the script itself"))
+
+        # 2 — every program it LAUNCHES. The file mentioning `orbexit` says
+        #     nothing about these, which is the hole the second crash found.
+        #     Every `-c` launch is required to go through `wrap_child`, whether
+        #     or not this scan can tell that its child creates an ORB: eight of
+        #     the nine did, and the one that does not is not worth a second
+        #     rule that would have to be kept true by hand.
+        seen_launch = False
+        for node in ast.walk(ast.parse(text)) if text.strip() else []:
+            if isinstance(node, ast.List) and any(
+                    isinstance(e, ast.Constant) and e.value == "-c" for e in node.elts):
+                seen_launch = True
+        for lineno in unwrapped_launches(text):
+            owes.append((rel, "the `-c` child launched at line %d" % lineno))
+        if seen_launch and not list(unwrapped_launches(text)):
+            ok.append((rel, "every `-c` child it launches"))
 
     if probe:
         return 0
 
-    print("  %d fixture(s) create an ORB; %d leave through %s.leave" % (
+    print("  %d program(s) create an ORB; %d leave through %s.leave" % (
         len(ok) + len(owes), len(ok), HOME))
     if owes:
-        print("  FAIL a fixture creates an omniORB ORB and does not leave through")
-        print("       spikes/orbexit.py. Falling off the end of __main__ runs")
-        print("       Py_Finalize into omniORB's thread scavenger, which is a SIGSEGV")
-        print("       that reads as a failed measurement rather than as a crash:")
-        for rel in owes:
-            print("         %s" % rel)
+        print("  FAIL a program creates an omniORB ORB and does not leave through")
+        print("       spikes/orbexit.py. Falling off the end runs Py_Finalize and")
+        print("       __cxa_finalize_ranges into omniORB's live thread scavenger,")
+        print("       which is a SIGSEGV that reads as a failed measurement:")
+        for rel, what in owes:
+            print("         %s — %s" % (rel, what))
         return 1
     return 0
 

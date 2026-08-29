@@ -39,7 +39,7 @@ import tempfile
 from pathlib import Path
 
 # How an omniORB fixture leaves: see spikes/orbexit.py.
-from orbexit import leave
+from orbexit import leave, wrap_child
 
 ROOT = Path(__file__).resolve().parent.parent
 CODEC_TEST = ROOT / "crates/orbweaver-giop/tests/valuetype_typecode_from_a_peer.rs"
@@ -204,7 +204,7 @@ def captured(work):
             print("  omniidl refused %s:" % src.name, r.stderr.strip().splitlines()[-1:])
             return None
     script = MARSHAL % (str(work), [(c, a, e) for c, a, e, _ in RECORDINGS])
-    r = subprocess.run([sys.executable, "-c", script], cwd=work,
+    r = subprocess.run([sys.executable, "-c", wrap_child(script)], cwd=work,
                        capture_output=True, text=True)
     if r.returncode != 0:
         print("  the fixture could not marshal:", r.stderr.strip().splitlines()[-1:])

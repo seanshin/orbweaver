@@ -37,7 +37,7 @@ import subprocess
 import sys
 
 # How an omniORB fixture leaves: see spikes/orbexit.py.
-from orbexit import leave
+from orbexit import leave, wrap_child
 
 HERE = pathlib.Path(__file__).resolve().parent
 
@@ -182,7 +182,7 @@ OMNIORB_CASES = [
 
 
 def run_omniorb(args):
-    cmd = [sys.executable, "-c", OMNIORB_SERVER, str(HERE / "echo.idl"), *args]
+    cmd = [sys.executable, "-c", wrap_child(OMNIORB_SERVER), str(HERE / "echo.idl"), *args]
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=180, cwd=str(HERE))
     if p.returncode != 0:
         raise RuntimeError((p.stderr or p.stdout).strip().replace("\n", " ")[-300:])

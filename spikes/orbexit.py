@@ -42,6 +42,7 @@ at all, which is why they are not here.
 """
 
 import os
+import pathlib
 import sys
 
 
@@ -66,3 +67,37 @@ def leave(rc=0):
     else:
         code = 1
     os._exit(code)
+
+
+def wrap_child(source, rc=0):
+    """`source` as a `-c` program that leaves the way this module says.
+
+    Seven capture and probe fixtures carry a second program as a string
+    constant and run it with ``[sys.executable, "-c", …]``. Eight of those nine
+    children call ``ORB_init``, and on 2026-08-28 one of them took the crash
+    this module exists to prevent — a second time, four hours after the first,
+    with ``Parent Process: Python`` in the report where the first had said
+    ``Exited process``. Thread 0 was in ``__cxa_finalize_ranges`` running
+    omniORB's C++ static destructors, which ``os._exit`` does not reach.
+
+    **The gate written that morning did not see them.** It asked whether the
+    FILE mentions ``orbexit``, and every one of those parents does. A rule about
+    programs, checked against files, is green over every program a file
+    carries — *a sweep is scoped to a rule, not a file*, one layer down.
+
+    A child that raises never reaches the tail, so a real failure still exits
+    non-zero and the parents that read ``returncode`` keep reading it.
+
+    *일곱 픽스처가 두 번째 프로그램을 문자열로 품고 있고, 아홉 자식 중 여덟이
+    ORB를 만든다. 그날 아침 만든 게이트는 **파일**이 ``orbexit``을 말하는지 물었고
+    부모들은 전부 말한다 — 프로그램에 대한 규칙을 파일에 대고 물으면, 파일이 품은
+    모든 프로그램 위에서 초록이 된다.*
+    """
+    home = str(pathlib.Path(__file__).resolve().parent)
+    return (
+        "import sys\n"
+        "sys.path.insert(0, %r)\n"
+        "from orbexit import leave\n" % home
+        + source
+        + "\nleave(%d)\n" % rc
+    )

@@ -40,7 +40,7 @@ import threading
 import time
 
 # How an omniORB fixture leaves: see spikes/orbexit.py.
-from orbexit import leave
+from orbexit import leave, wrap_child
 
 HERE = pathlib.Path(__file__).resolve().parent
 
@@ -302,7 +302,7 @@ def run_omniorb_client(ior, text):
     """omniORB 4.3.4, native `char` ISO-8859-1 by default (measured in
     `codeset_peer_probe.py`), which is what makes it worth asking."""
     return subprocess.run(
-        [sys.executable, "-c", OMNIORB_CLIENT, str(HERE / "echo.idl"), ior, text],
+        [sys.executable, "-c", wrap_child(OMNIORB_CLIENT), str(HERE / "echo.idl"), ior, text],
         capture_output=True,
         text=True,
         timeout=60,

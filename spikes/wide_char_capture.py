@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 # How an omniORB fixture leaves: see spikes/orbexit.py.
-from orbexit import leave
+from orbexit import leave, wrap_child
 
 ROOT = Path(__file__).resolve().parent.parent
 TEST = ROOT / "crates/orbweaver-giop/tests/wide_chars_from_a_peer.rs"
@@ -74,7 +74,7 @@ def main():
     if rec is None:
         return 1
     script = SCRIPT % {"writes": WRITES, "reads": READS}
-    r = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, "-c", wrap_child(script)], capture_output=True, text=True)
     if r.returncode != 0:
         tail = r.stderr.strip().splitlines()[-1:]
         print("  the fixture could not marshal:", tail)

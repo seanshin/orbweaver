@@ -277,13 +277,35 @@ Diagnosed rather than suspected: the old child, 12 runs, **one −11**; with
 `evolution_server.py` and `matrix_server.py` — all three fall off the end of
 `__main__` after `orb.run()` returns, which is the finalization path.
 
-`spikes/leaves_cleanly.py` is the gate, a harness group since the same day. Its
-criterion is `orbexit`'s own — a file naming `ORB_init` owes the import — and
-it is a plain text search on purpose: the child that crashed lives in a string
-constant, where an AST walk over the file's own code would not have seen it.
-Today: 27 fixtures create an ORB, 27 leave through the home. Negative control:
-a synthesised `spikes/__probe_leaks.py` that calls `ORB_init` and falls off the
-end is caught by name, exit 1.
+`spikes/leaves_cleanly.py` is the gate, a harness group since the same day —
+**and its first draft was green over eight more of them.** A second report
+arrived four hours later, and its differences from the first were the whole
+finding: `Parent Process: Python` where the first said `Exited process`, and
+thread 0 in `__cxa_finalize_ranges` running omniORB's C++ static destructors,
+which `os._exit` does not reach. Seven fixtures carry a second program as a
+string constant and run it with `[sys.executable, "-c", …]`; **eight of those
+nine children call `ORB_init`**, and only the one repaired by hand that morning
+was leaving cleanly. The gate had asked whether the FILE mentions `orbexit`,
+and every one of those parents does.
+
+*A rule about programs, checked against files, is green over every program a
+file carries.* That is *a sweep is scoped to a rule, not a file* one layer
+down — written into CLAUDE.md the day before, and repeated by the gate written
+to close it.
+
+The repair is one home applied at the launch: `orbexit.wrap_child(source)`
+returns the child as a program that leaves cleanly, and all nine launches go
+through it. The gate now asks **the launch, never the string** — every `-c`
+list must hand its program to `wrap_child`. Its own first rewrite walked the
+AST for string constants that parse as Python and found **nothing** in
+`union_label_capture.py`, whose child is assembled at run time from a template;
+the control caught that, by staying green when a spawn site was unwrapped.
+Today: 26 programs create an ORB, 26 leave through the home.
+
+Negative controls, both run and shown red: unwrapping one spawn site names
+`union_label_capture.py — the `-c` child launched at line 176`, exit 1; a
+synthesised top-level `__probe_leaks.py` names itself, exit 1. All five wrapped
+capture scripts run clean afterwards.
 
 `orbexit.py` 는 *omniORB 픽스처가 어떻게 나가는가*의 유일한 집이다. 23개가 그 집을
 불렀고 **넷은 아니었으며**, 아무것도 그렇게 말하지 않았다 — 모듈이 쓰인 날의 스윕
@@ -291,8 +313,15 @@ end is caught by name, exit 1.
 집이 막으려던 크래시를 가져갔고, 하네스는 그것을 *"프로브가 돌지 않았다"*고만
 적었다 — 프로브가 종료 상태를 버려서, 진단은 크래시 리포터에만 있었다. 추측이
 아니라 진단이다: 옛 형태 12회 중 **한 번 −11**, `leave` 적용 후 **40회 중 0회**.
-기준이 `ORB_init`이고 검사가 일부러 평문 탐색인 이유는 크래시가 **문자열 상수 안의
-자식 프로그램**에 있었기 때문이다 — 파일 자신의 코드를 도는 AST는 그것을 못 본다.
+그리고 **그 게이트의 첫 판이 여덟 개를 더 놓치고 있었다.** 네 시간 뒤 두 번째
+리포트가 왔고, 첫 번째와 다른 점이 곧 발견이었다 — 부모가 `Python`이고 thread 0이
+`__cxa_finalize_ranges`에 있었다. 일곱 픽스처가 두 번째 프로그램을 문자열로 품고
+`-c`로 돌리며, 그 아홉 자식 중 **여덟이 ORB를 만든다**. 게이트는 *파일*이
+`orbexit`을 말하는지 물었고 부모들은 전부 말한다 — **프로그램에 대한 규칙을 파일에
+대고 물으면, 파일이 품은 모든 프로그램 위에서 초록이 된다.** 수리는 기동 지점에
+집 하나를 적용하는 것(`wrap_child`)이고, 게이트는 이제 **문자열이 아니라 기동에**
+묻는다. 그 재작성의 첫 판도 대조군이 죽였다: 상수를 파싱하는 AST는 실행 시점에
+조립되는 자식을 찾지 못했다.
 
 ## What the harness records about the conditions it ran in / 하네스가 자기 실행 조건에 대해 남기는 것
 

@@ -67,7 +67,7 @@ import tempfile
 from pathlib import Path
 
 # How an omniORB fixture leaves: see spikes/orbexit.py.
-from orbexit import leave
+from orbexit import leave, wrap_child
 
 ROOT = Path(__file__).resolve().parent.parent
 NATIVE_TEST = ROOT / "crates/orbweaver-giop/tests/native_typecode_from_a_peer.rs"
@@ -104,16 +104,10 @@ for const, attr, endian in %r:
 # operation CORBA 2.3 §10.7.2 defines and this ORB does not implement.
 #
 # It creates an ORB, so it leaves the way every other fixture here leaves —
-# through `orbexit.leave`, which flushes and skips `Py_Finalize`. It did not,
-# and on 2026-08-28 it took the crash `orbexit` exists to prevent:
-# `omnipyThreadScavenger::run_undetached -> PyGILState_Ensure`, SIGSEGV, thread
-# 0 in `exit`. The harness read the -11 as "the probe did not run". A `-c`
-# child has no `spikes` on its path, so the path is prepended rather than the
-# two lines of `leave` being retyped here — one home, reached from the child.
+# through `orbexit.leave`. It is not prepended here: `orbexit.wrap_child` does
+# it at the spawn site, for this child and the seven others that were missed
+# when only this one was fixed.
 NATIVE_RUNTIME = """
-import sys
-sys.path.insert(0, {spikes})
-from orbexit import leave
 import CORBA
 from omniORB import tcInternal
 orb = CORBA.ORB_init(["p"], CORBA.ORB_ID)
@@ -126,8 +120,7 @@ try:
     print("createTypeCode built")
 except Exception as ex:
     print("createTypeCode", type(ex).__name__)
-leave(0)
-""".format(spikes=repr(str(pathlib.Path(__file__).resolve().parent)))
+"""
 
 
 def pad_mask(buf, little=True):
@@ -274,17 +267,21 @@ def probe_native(work):
     # The generated package imports only if nothing uses the ignored native.
     # `31-native-type.idl` uses it in five declarations, so this is the case
     # that matters: the module omniidl wrote cannot be loaded at all.
-    r = run([sys.executable, "-c",
+    # Wrapped like the other eight even though it only imports CORBA and never
+    # calls `ORB_init`: 30 runs of it never crashed, so this is uniformity
+    # rather than a measured need — and a rule with one hand-kept exception is
+    # a rule that grows a second one.
+    r = run([sys.executable, "-c", wrap_child(
              "import sys; sys.path.insert(0, '.')\n"
              "import CORBA\n"
              "try:\n"
              "    import gn31\n"
              "    print('IMPORTED')\n"
              "except Exception as ex:\n"
-             "    print(type(ex).__name__, ex)\n"], work)
+             "    print(type(ex).__name__, ex)\n")], work)
     out["import_text"] = r.stdout.strip()
 
-    r = run([sys.executable, "-c", NATIVE_RUNTIME], work)
+    r = run([sys.executable, "-c", wrap_child(NATIVE_RUNTIME)], work)
     if r.returncode != 0:
         # Say WHY. This returned a bare `None` and the caller printed "the probe
         # did not run" — true, and unactionable. On 2026-08-28 the reason was
@@ -348,7 +345,7 @@ def capture_valuebase(work):
         print("  omniidl refused %s:" % src.name, r.stderr.strip().splitlines()[-1:])
         return None
     script = MARSHAL % (str(work), RECORDINGS)
-    r = run([sys.executable, "-c", script], work)
+    r = run([sys.executable, "-c", wrap_child(script)], work)
     if r.returncode != 0:
         print("  the fixture could not marshal:", r.stderr.strip().splitlines()[-1:])
         return None
