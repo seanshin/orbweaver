@@ -40,6 +40,19 @@ this is the end that applies none of ours.
 - **3** — nothing measured (could not connect, could not read). Not a pass: an
   unmeasured check is a failure by this project's own rule.
 
+`--expect kill` measures the OTHER arm, and its claim runs the other way. D029's
+lifecycle row names a second floor: *a target removed by being killed rather
+than stopped — `Orb::shutdown` says §9.4.10's goodbye and a killed process
+leaves a reset, which a caller can tell apart.* With `--expect kill` this peer
+exits 0 when there was **no goodbye, no reply at all, and an abrupt end**, which
+is that floor asserted rather than left to prose. The absence of the goodbye is
+what is pinned; whether the abrupt end was an RST or a FIN is the platform's
+business and is only recorded.
+
+*`--expect kill`은 반대 방향의 주장을 잰다: **호출자가 구별할 수 있다**. 산문으로
+이름만 붙여둔 바닥은 조용히 참이 아니게 될 수 있고, 주장된 바닥은 그럴 수 없다.
+고정하는 것은 goodbye의 부재이고, RST냐 FIN이냐는 플랫폼의 일이라 기록만 한다.*
+
 Stdlib only. No ORB is imported, installed or required.
 """
 
@@ -176,6 +189,13 @@ def main():
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--object-key", default="StopProbe")
     ap.add_argument("--endian", choices=("big", "little"), default="big")
+    ap.add_argument(
+        "--expect",
+        choices=("stop", "kill"),
+        default="stop",
+        help="stop: D034 §3's goodbye. kill: the second floor — a target that "
+        "died rather than stopped, which a caller must be able to tell apart",
+    )
     ap.add_argument("--answer", type=int, default=42, help="what the servant returns")
     ap.add_argument(
         "--deadline-s",
@@ -234,6 +254,33 @@ def main():
         return UNMEASURED
 
     seen = report["seen"]
+    report["expect"] = args.expect
+
+    if args.expect == "kill":
+        # **The second floor, D029's lifecycle row.** `Orb::shutdown` says
+        # §9.4.10's goodbye; a process that was killed says nothing at all. The
+        # claim here is the opposite of every other claim this peer makes: not
+        # that a caller cannot tell, but that it CAN — and a floor that is
+        # asserted cannot quietly stop being true, where a floor that is only
+        # named in prose can.
+        #
+        # What is asserted is the ABSENCE of the goodbye, not the presence of a
+        # reset. Whether the kernel answers an aborted process with an RST or a
+        # FIN depends on what is unread in the receive queue and on the
+        # platform, and a test that pinned that would be measuring the OS. Both
+        # are recorded so the transcript says which happened.
+        ended_abruptly = len(seen) >= 1 and seen[-1]["kind"] in ("reset", "eof")
+        no_goodbye = not any(s["kind"] == "close_connection" for s in seen)
+        no_reply_at_all = not any(s["kind"] == "reply" for s in seen)
+        report["ended_abruptly"] = ended_abruptly
+        report["no_goodbye"] = no_goodbye
+        report["no_reply_at_all"] = no_reply_at_all
+        report["how_it_ended"] = seen[-1]["kind"] if seen else "nothing at all"
+        ok = ended_abruptly and no_goodbye and no_reply_at_all
+        report["verdict"] = "the caller can tell" if ok else "refuted"
+        print(json.dumps(report))
+        return 0 if ok else 1
+
     # The three sentences of D034 §3, each failing on its own.
     answered_in_full = (
         len(seen) >= 1

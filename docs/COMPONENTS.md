@@ -247,6 +247,52 @@ when `trading_client.py` sits three.
 스윕은 53건을 냈고 47건이 그 오탐이었으며, 게이트가 0을 내는 것은 조인 것이 아니라
 고친 것이다.
 
+## The second floor, measured / 두 번째 바닥, 측정됨
+
+D029's lifecycle row named a second floor and did not measure it: `Orb::shutdown`
+says §9.4.10's goodbye, a killed target says nothing, and *a caller can tell
+those apart*. Measured 2026-08-29 by a second arm on the existing fixture pair.
+
+| the fixture does | the peer sees |
+|---|---|
+| `Orb::shutdown` on the servant's entry signal | reply to request 1, then `CloseConnection` |
+| SIGKILL at that same instant, servant still held | one `reset` — no reply, no goodbye |
+
+**The measurement is the 2×2, not the two matching runs.** Each fixture is also
+driven against the *other* expectation and required to be refuted, because a run
+where the peer expects what it gets proves nothing on its own. That is this
+project's anti-vacuity rule read backwards: the claim here is that a caller
+**can** tell, so what has to be shown is that the two answers differ. `held 6 ·
+refuted-or-broken 0 · unmeasured 0`.
+
+What is asserted is the **absence of the goodbye**, not the presence of a reset.
+Whether an abruptly dead process is answered with an RST or a FIN depends on
+what is unread in the receive queue and on the platform; pinning it would be
+measuring the OS, so it is recorded and not pinned.
+
+**The arm was `abort()` first, and four hand runs left five
+`spike-orb-shutdown-*.ips` crash reports** in `~/Library/Logs/
+DiagnosticReports`. A harness group that files a crash report on every run
+trains its reader to ignore crash reports — the opposite of what the previous
+day established, when two of them were the only diagnosis available. SIGKILL
+leaves none, and is the more faithful model besides: a signal no handler can
+catch is what *killed* means. It is spawned (`kill -9` on its own pid) rather
+than called, because `unsafe_code = "forbid"` is a workspace rule.
+
+The row does not move. A caller can tell, which is what a floor means; what
+changed is that the floor can no longer stop being true without something going
+red.
+
+D029 생애주기 행이 이름만 붙이고 재지 않던 두 번째 바닥을 2026-08-29에 측정했다.
+**측정은 맞는 짝 둘이 아니라 2×2다** — 기대를 엇갈리게 건 두 실행이 반증되어야
+한다. 피어가 받을 것을 기대하는 실행은 그 자체로 아무것도 증명하지 않기 때문이며,
+이는 공허함-방지 규칙을 뒤집어 읽은 것이다: 주장이 *구별할 수 있다*이므로 보여야
+할 것은 두 답이 다르다는 것이다. 고정하는 것은 **작별의 부재**이지 리셋의 존재가
+아니다 — RST냐 FIN이냐를 고정하면 OS를 재게 된다. 처음엔 `abort()`였고 손으로 네
+번 돌린 것이 크래시 리포트 다섯 개를 남겼다: **매 실행마다 크래시 리포트를 쌓는
+그룹은 독자에게 크래시 리포트를 무시하도록 가르친다.** 행은 움직이지 않고, 바뀐
+것은 그 바닥이 조용히 참이 아니게 될 수 없다는 것이다.
+
 ## One home, and the record of who reached it / 집 하나, 그리고 누가 그 집에 닿았는가의 기록
 
 `spikes/orbexit.py` is the one home for *how an omniORB fixture leaves*: flush,

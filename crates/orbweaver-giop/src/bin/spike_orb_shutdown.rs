@@ -81,10 +81,29 @@ fn main() -> std::process::ExitCode {
     let mut args = std::env::args().skip(1);
     let mut port_file = None;
     let mut key = b"StopProbe".to_vec();
+    let mut on_entry = String::from("shutdown");
     while let Some(a) = args.next() {
         match a.as_str() {
             "--port-file" => port_file = args.next(),
             "--object-key" => key = args.next().unwrap_or_default().into_bytes(),
+            // D029's lifecycle row names a SECOND floor: a target removed by
+            // being *killed* rather than stopped. `Orb::shutdown` says
+            // §9.4.10's goodbye; a process that dies says nothing, and the
+            // claim is that a caller can tell those apart. This arm is how
+            // that stops being a sentence.
+            //
+            // The servant is still HELD when this fires, so nothing unwinds,
+            // no destructor closes a socket politely, and the peer's second
+            // request is sitting unread in the receive queue. Stopping the
+            // world at the same instant the graceful arm calls `shutdown` is
+            // what makes the two transcripts comparable.
+            "--on-entry" => {
+                on_entry = args.next().unwrap_or_default();
+                if on_entry != "shutdown" && on_entry != "kill" {
+                    eprintln!("spike-orb-shutdown: --on-entry takes shutdown or kill");
+                    return std::process::ExitCode::from(UNMEASURED as u8);
+                }
+            }
             other => {
                 eprintln!("spike-orb-shutdown: unknown argument {other:?}");
                 return std::process::ExitCode::from(UNMEASURED as u8);
@@ -132,6 +151,32 @@ fn main() -> std::process::ExitCode {
     // Not a sleep. The servant says when it is inside.
     if entered_rx.recv_timeout(DEADLINE).is_err() {
         eprintln!("spike-orb-shutdown: no peer reached the servant within {DEADLINE:?}");
+        return std::process::ExitCode::from(UNMEASURED as u8);
+    }
+    if on_entry == "kill" {
+        // **SIGKILL, and not `abort()`, for two reasons — one of them measured
+        // here.** `std::process::abort()` raises SIGABRT, and macOS files a
+        // crash report for it: four hand runs of this arm left five
+        // `spike-orb-shutdown-*.ips` files in `~/Library/Logs/
+        // DiagnosticReports`. A harness group that deposits a crash report on
+        // every run trains its reader to ignore crash reports, which is the
+        // opposite of what this repository spent 2026-08-28 learning.
+        //
+        // The other reason is that SIGKILL is the thing being modelled. D029's
+        // lifecycle row says *killed rather than stopped*; a signal no handler
+        // can catch is what that means, and `abort` is a raised signal this
+        // process could in principle have handled.
+        //
+        // Spawned rather than called: `unsafe_code = "forbid"` is a workspace
+        // rule and `libc::kill` would need it. The servant is still held, so
+        // nothing unwinds and the peer's second request stays unread in the
+        // receive queue — which is the condition under which the kernel
+        // answers with a reset.
+        let me = std::process::id().to_string();
+        let _ = std::process::Command::new("kill").arg("-9").arg(&me).status();
+        // Reached only if `kill` was not there to run. Say so rather than
+        // continuing into the graceful path and reporting a stop as a kill.
+        eprintln!("spike-orb-shutdown: could not signal itself; this arm measured nothing");
         return std::process::ExitCode::from(UNMEASURED as u8);
     }
     let report = orb.shutdown();

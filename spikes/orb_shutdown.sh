@@ -109,6 +109,69 @@ for endian in big little; do
     fi
 done
 
+# ── The second floor: a target that was KILLED rather than stopped ───────────
+#
+# D029's lifecycle row names it and does not measure it: `Orb::shutdown` says
+# §9.4.10's goodbye, a killed process says nothing, and *a caller can tell those
+# apart*. A floor named in prose can stop being true without anything going red;
+# a floor that is asserted cannot. So it is asserted here, and the claim runs
+# the other way from every other claim this pair makes — not *the caller cannot
+# tell*, but *the caller can*.
+#
+# The fixture aborts at the same instant the graceful arm calls `shutdown`, with
+# the servant still held, which is what makes the two transcripts comparable:
+# same connection, same two pipelined requests, same moment.
+#
+# **The 2x2 is the measurement, not the two matched runs.** A run where the peer
+# expects what it gets proves nothing on its own — this project's rule is that
+# indistinguishability is evidence only beside a demonstration that
+# distinguishing is possible, and the same holds inverted. So each fixture is
+# also driven against the OTHER expectation and required to be refuted. Without
+# those two, an `--expect kill` that had quietly stopped checking anything would
+# be green here forever.
+echo
+echo "the second floor: killed rather than stopped"
+kill_arm() {
+    local how="$1" expect="$2" want="$3" label="$4"
+    local pf="$work/port.$how.$expect"
+    rm -f "$pf"
+    "$fixture" --port-file "$pf" --on-entry "$how" \
+        >"$work/f.$how.$expect.json" 2>"$work/f.$how.$expect.err" &
+    local pid=$!
+    local port="" deadline=$((SECONDS + 20))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        [ -s "$pf" ] && { port="$(cat "$pf")"; break; }
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.05
+    done
+    if [ -z "$port" ]; then
+        echo "UNMEASURED  $label: the fixture never published a port"
+        kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true
+        unmeasured=$((unmeasured + 1)); return
+    fi
+    set +e
+    local out; out="$(python3 "$here/orb_shutdown_peer.py" --port "$port" --expect "$expect" 2>&1)"
+    local rc=$?
+    set -e
+    # The fixture is expected to be gone in the abort arm; its status is not read
+    # as a verdict here for the same reason D034 §5.1 gives for the graceful one.
+    wait "$pid" 2>/dev/null || true
+    echo "  $label: peer exit $rc  $out"
+    if [ "$rc" -eq "$want" ]; then
+        held=$((held + 1))
+    elif [ "$rc" -eq 3 ]; then
+        echo "UNMEASURED  $label: the peer could not measure"
+        unmeasured=$((unmeasured + 1))
+    else
+        echo "REFUTED     $label: expected exit $want, got $rc"
+        fail=$((fail + 1))
+    fi
+}
+kill_arm kill     kill 0 "killed, and the peer expects a kill — it must be able to tell"
+kill_arm shutdown stop 0 "stopped, and the peer expects a stop — D034 §3 again, as the pair's control"
+kill_arm kill     stop 1 "killed, and the peer expects a STOP — must be refuted"
+kill_arm shutdown kill 1 "stopped, and the peer expects a KILL — must be refuted"
+
 echo
 echo "held $held · refuted-or-broken $fail · unmeasured $unmeasured"
 if [ "$unmeasured" -gt 0 ]; then

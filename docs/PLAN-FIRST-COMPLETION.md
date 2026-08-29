@@ -59,7 +59,7 @@ The order below is what survived that:
 | | | why here |
 |---|---|---|
 | 1 | **L1's decision** — where the key set lives | Opens the largest leak with the thing it actually needs. It blocks nothing else, so it starts first and finishes last. |
-| 2 | **L5** — measure the killed target | The one item measurement confirms is independent. The peer already exists and already treats a reset as an observation, so this is a second arm on an existing fixture pair. |
+| 2 | **L5** — measure the killed target | **Done 2026-08-29.** The one item measurement confirmed was independent, and it was: a second arm on an existing fixture pair, landed without touching anything else. |
 | 3 | **L3** — the activation row's subject | **Not independent** — see below. Its subject is one of L1's population, so it is sequenced against L1 rather than run beside it. |
 | 4 | **L1 + L2 as one batch** | Once the decision lands. One fix per root cause, across every affected implementation — which is what makes L2 part of it rather than a separate patch. |
 | 5 | **L4** — a call travelling the other way through the seam | Retires the run's one language `SKIPPED` at the same time. |
@@ -253,14 +253,38 @@ before anything that retires neither.
 caller can tell those apart. D034 and O1 measure the stop from a peer's own
 socket; nothing measures the kill.
 
-Named in D029 as a second floor rather than a leak, so **what is owed here is a
-measurement, not a repair** — and possibly the finding that it is a floor too.
-That distinction is the work: a floor that is measured and named costs nothing
-to leave open, and one that is assumed is the same as unmeasured.
+**DONE 2026-08-29.** `spikes/orb_shutdown.sh` drives both arms from one fixture:
+the graceful one calls `Orb::shutdown` on the servant's entry signal, the other
+SIGKILLs itself at that same instant with the servant still held. Killed: one
+`reset`, no reply, no goodbye. Stopped: a reply to request 1, then
+`CloseConnection`.
 
-*L5 — 여기서 빚진 것은 수리가 아니라 **측정**이며, 그것이 바닥이라는 결론도
-결과다. 측정되어 이름 붙은 바닥은 열어두는 데 비용이 없고, 가정된 바닥은
-미측정과 같다.*
+**The measurement is the 2×2, not the two matching runs.** Each fixture is also
+driven against the *other* expectation and required to be refuted — a run where
+the peer expects what it gets proves nothing on its own, which is this project's
+anti-vacuity rule read backwards: here the claim is that a caller *can* tell, so
+what must be shown is that the two answers differ.
+
+Two things the doing changed. **The arm was `abort()` first, and four hand runs
+left five `spike-orb-shutdown-*.ips` crash reports** in
+`~/Library/Logs/DiagnosticReports` — a harness group that files a crash report
+on every run trains its reader to ignore crash reports, which is the opposite of
+what the previous day established. SIGKILL leaves none and is the more faithful
+model besides: a signal no handler can catch is what *killed* means. And it is
+spawned (`kill -9 $$`) rather than called, because `unsafe_code = "forbid"` is a
+workspace rule and `libc::kill` would need it.
+
+The row does not move. A caller can tell, which is what a floor means; what
+changed is that the floor can no longer stop being true without something going
+red.
+
+*L5 — 완료(2026-08-29). 측정은 맞는 짝 둘이 아니라 **2×2**다: 기대를 엇갈리게 건
+두 실행이 반증되어야 한다 — 피어가 받을 것을 기대하는 실행은 그 자체로 아무것도
+증명하지 않기 때문이다. 주장이 *구별할 수 있다*이므로 보여야 할 것은 두 답이
+다르다는 것이다. 처음엔 `abort()`였고 손으로 네 번 돌린 것이 크래시 리포트 다섯
+개를 남겼다 — 매 실행마다 크래시 리포트를 쌓는 그룹은 독자에게 크래시 리포트를
+무시하도록 가르친다. 행은 움직이지 않는다: 호출자가 구별할 수 있다는 것이 바닥의
+뜻이고, 바뀐 것은 그 바닥이 이제 조용히 참이 아니게 될 수 없다는 것이다.*
 
 ### L6 — Location: `moe::Router::select` hands out N addresses at once
 
