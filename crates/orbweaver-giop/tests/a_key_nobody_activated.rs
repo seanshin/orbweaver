@@ -27,15 +27,16 @@
 //!
 //! # What this file pins, and why pinning today's answer is not endorsing it
 //!
-//! Every test below computes what a caller *should* see from
-//! `server::default_knows_policy()` and then goes and looks on a socket. So the
-//! gate is not "an unactivated key is served"; it is **"the wire agrees with
-//! the sentence this crate publishes about the wire"**. Change a `knows`
-//! default body without changing that function and this goes red; change that
-//! function without changing a body and this goes red. Changing both together
-//! is green — that is correct, and it is also the dangerous case, which is why
-//! `the_inheritors_of_the_default_are_named_where_a_change_would_be_made`
-//! carries the list of what else must move.
+//! Every test below computes what a caller *should* see from `AMBIENT_STATES`
+//! and then goes and looks on a socket. So the gate is not "an unactivated key
+//! is served"; it is **"the wire agrees with what the fixture says it does"**.
+//!
+//! That constant used to be `server::default_knows_policy()` — the crate's own
+//! sentence about what its two `knows` defaults enacted. **D036 (approved
+//! 2026-08-29) deleted those defaults**, so the crate publishes no such
+//! sentence any more and there is nothing crate-wide left to disagree with:
+//! every servant states its own answer. The fact moved to where the answer now
+//! lives, which is the fixture below.
 //!
 //! # Blast radius — a figure that is computed, beside the reading it replaced
 //!
@@ -86,7 +87,7 @@ use orbweaver_cdr::{Encoder, Endian};
 use orbweaver_giop::orb::Orb;
 use orbweaver_giop::server::{
     Dispatch, OBJECT_NOT_EXIST, Request, Serialized, SharedDispatch, SystemException,
-    UnknownKeyPolicy, default_knows_policy, key_policy_of,
+    UnknownKeyPolicy, key_policy_of,
 };
 use orbweaver_giop::{Connection, IiopProfile, LocateResult, Version};
 use std::net::{SocketAddr, TcpStream};
@@ -129,7 +130,25 @@ const ANSWER: i32 = 42;
 /// no `knows`.
 struct Ambient;
 
+/// What [`Ambient`] and [`SharedAmbient`] state, as data.
+///
+/// These fixtures exist to **be** the permissive answer so a caller can be
+/// asked what it sees when a servant gives it. Before D036 they gave it by
+/// inheriting a trait default and this constant was the crate's
+/// `default_knows_policy()`; now they give it by writing `true`, and the
+/// constant sits beside them because that is where the answer is.
+const AMBIENT_STATES: UnknownKeyPolicy = UnknownKeyPolicy::ServeAnyway;
+
 impl Dispatch for Ambient {
+    /// `true`, and D036 made saying so compulsory — which is the whole point of
+    /// this fixture. `Ambient` exists to BE the permissive answer, so that the
+    /// wire can be asked what a caller sees when a servant gives it. It used to
+    /// give it by inheriting; it gives it by stating it now, and the property
+    /// under test is unchanged because the answer is unchanged.
+    fn knows(&self, _object_key: &[u8]) -> bool {
+        true
+    }
+
     fn dispatch(&mut self, request: &Request, out: &mut Encoder) -> Result<(), SystemException> {
         if request.operation != "ping" {
             return Err(SystemException::bad_operation());
@@ -168,6 +187,13 @@ impl Dispatch for Activated {
 struct SharedAmbient;
 
 impl SharedDispatch for SharedAmbient {
+    /// The `SharedDispatch` half of `Ambient`, and stated for the same reason:
+    /// this fixture is the permissive answer, held so a caller can be asked
+    /// what it sees.
+    fn knows(&self, _object_key: &[u8]) -> bool {
+        true
+    }
+
     fn dispatch(&self, request: &Request, out: &mut Encoder) -> Result<(), SystemException> {
         if request.operation != "ping" {
             return Err(SystemException::bad_operation());
@@ -326,14 +352,14 @@ fn probe(at: SocketAddr, key: &[u8], version: Version, endian: Endian) -> Locate
 #[test]
 fn a_key_nobody_activated_is_answered_exactly_as_the_published_policy_says() {
     let s = serving(Ambient);
-    let want = predicted(default_knows_policy());
+    let want = predicted(AMBIENT_STATES);
     for version in EVERY_VERSION {
         for endian in BOTH_ORDERS {
             assert_eq!(
                 ping(s.addr, NEVER_ACTIVATED, version, endian),
                 want,
                 "a key nobody activated, at {version:?}/{endian:?}: the wire disagrees with \
-                 server::default_knows_policy(). One of the two moved without the other."
+                 what the fixture states. One of the two moved without the other."
             );
         }
     }
@@ -415,8 +441,7 @@ fn the_probe_path_and_the_request_path_agree_about_an_unactivated_key() {
         ("inherits the default", serving(Ambient), false),
         ("checks its key", serving(Activated { key: ACTIVATED.to_vec() }), true),
     ] {
-        let policy =
-            if checks { UnknownKeyPolicy::RefuseAsNotExist } else { default_knows_policy() };
+        let policy = if checks { UnknownKeyPolicy::RefuseAsNotExist } else { AMBIENT_STATES };
         for version in EVERY_VERSION {
             for endian in BOTH_ORDERS {
                 assert_eq!(
@@ -448,7 +473,7 @@ fn the_probe_path_and_the_request_path_agree_about_an_unactivated_key() {
 fn the_two_serve_one_paths_enact_the_same_policy() {
     let serialized = serving(Ambient);
     let native = serving_shared(SharedAmbient);
-    let want = predicted(default_knows_policy());
+    let want = predicted(AMBIENT_STATES);
     for version in EVERY_VERSION {
         for endian in BOTH_ORDERS {
             assert_eq!(
@@ -498,8 +523,9 @@ fn the_two_serve_one_paths_enact_the_same_policy() {
 fn key_policy_of_measures_the_servant_rather_than_believing_it() {
     assert_eq!(
         key_policy_of(&Serialized::new(Ambient), ACTIVATED),
-        default_knows_policy(),
-        "a servant with no `knows` enacts whatever the trait default enacts, by definition"
+        AMBIENT_STATES,
+        "a servant that states `true` enacts ServeAnyway — measured from the servant, not \
+         read off its source"
     );
     assert_eq!(
         key_policy_of(&Serialized::new(Activated { key: ACTIVATED.to_vec() }), ACTIVATED),
@@ -724,21 +750,25 @@ mod roster {
                 scan.impls.len()
             ));
         }
-        if scan.inheritors().is_empty() {
+        // **These two clauses used to run the other way, and flipping them is
+        // the retirement this scan's own guard demanded.** They said: a scan
+        // that reports no inheritors, or no inheritor checking in another
+        // hook, has either found the finding CLOSED — *retire the test
+        // deliberately and record it* — or broken, and neither may pass
+        // quietly. On 2026-08-29 the first reading became true: D036 made
+        // `knows` required, so a `Dispatch` with no `knows` does not compile,
+        // and the two `spikes/` servants that checked in `dispatch_body` moved
+        // their check into `knows` in the same batch. The guard was obeyed
+        // rather than deleted: what was an error is now the expectation, and
+        // what was the expectation is now the error.
+        if !scan.inheritors().is_empty() {
             return Err(format!(
-                "the roster scan found {} `Dispatch` impls and says every one of them \
-                 overrides `knows`. If that is true the finding this test carries is CLOSED — \
-                 retire the test deliberately and record it. If it is not true the scan broke. \
-                 Neither reading is allowed to be a silent pass",
+                "the roster scan says {} of {} `Dispatch` impls inherit a `knows`. D036 made \
+                 that method required, so such an impl does not compile — this is the SCAN \
+                 reporting something the compiler already refused, or the trait having grown \
+                 a default again. Neither is allowed to pass quietly",
+                scan.inheritors().len(),
                 scan.impls.len()
-            ));
-        }
-        if scan.wrong_hook().is_empty() {
-            return Err(format!(
-                "the roster scan found {} inheritors and none of them checks the key in \
-                 another hook. The request/probe disagreement may be repaired — say so \
-                 deliberately — or the body scan stopped seeing `dispatch_target`",
-                scan.inheritors().len()
             ));
         }
         Ok(())
@@ -1083,12 +1113,26 @@ mod roster {
     }
 }
 
-/// **Not a gate — a roster, computed so it cannot rot silently.**
+/// **A roster that changed jobs when D036 landed.**
 ///
-/// The repair for the inheritors cannot land in this crate. This test finds
-/// them so that whoever changes `default_knows_policy()` is handed today's
-/// list at the point of change rather than a list somebody typed on a day when
-/// it was true. The list that used to be here is why: it named
+/// It used to hand whoever changed `default_knows_policy()` today's list of
+/// inheritors at the point of change. **There is no default to change any
+/// more** — D036 (approved 2026-08-29) made `knows` required — so *inheriting*
+/// is now unrepresentable rather than detectable, and the compiler enforces
+/// what this test used to enumerate. Asserting it is empty is asserting the
+/// compiler, which is why the assertion below says so rather than pretending
+/// to measure it.
+///
+/// What the compiler does **not** enforce is the other half, and that is this
+/// test's job now: a servant that writes `true` here while checking the key in
+/// `dispatch_body`. Its §9.4.5 probe then answers `ObjectHere` for a key it
+/// would refuse a call on — the request/probe disagreement the `serve_one`
+/// reorder closed for a *moved* key, and which two `spikes/` servants had for
+/// an *unknown* one until D036's batch moved their check into `knows`. That
+/// class survives D036 and can be written again tomorrow.
+///
+/// The list that used to be here is why the scan reads the tree rather than a
+/// literal: it named
 /// `orbweaver-gen/src/pyservant.rs`, the seam refactor moved that servant into
 /// `crate::seam::ForeignServant` — which *does* override `knows` — and the
 /// guard, `!PRODUCTION_INHERITORS.is_empty()`, went on being green over a
@@ -1145,15 +1189,32 @@ fn the_inheritors_of_the_default_are_named_where_a_change_would_be_made() {
             .collect::<Vec<_>>()
             .join("; ")
     };
-    assert_eq!(
-        default_knows_policy(),
-        UnknownKeyPolicy::ServeAnyway,
-        "default_knows_policy() moved. Before this lands, these {} implementations inherit the \
-         old default and must be given a `knows` of their own: {}. Of those, the {} that check \
-         the key in `dispatch_body` instead answer a LocateRequest with `ObjectHere` for a key \
-         they would refuse a call on: {}",
+    // Asserting the compiler, and saying so. After D036 a `Dispatch` with no
+    // `knows` does not compile, so this cannot fail for the reason it used to.
+    // It is kept because the scan is what would notice if the trait ever grew a
+    // default again — and because a reader who finds a non-empty list here
+    // learns that the scan itself has broken, not that the tree has.
+    assert!(
+        inheritors.is_empty(),
+        "{} implementation(s) appear to inherit a `knows` that D036 made required. That does \
+         not compile, so this is the SCAN reporting something the compiler already refused: {}",
         inheritors.len(),
         named(&inheritors),
+    );
+
+    // **`wrong_hook` is a subset of `inheritors`, so this is implied and is not
+    // a second measurement.** It is asserted anyway, and said to be implied,
+    // because the class it names — a servant whose §9.4.5 probe answers
+    // `ObjectHere` for a key it would refuse a call on — is NOT closed by D036.
+    // A servant can still write `true` here and check the key in
+    // `dispatch_body`; this scan cannot see that, because it only classifies
+    // impls that inherit. Hunting it again would need a different scan, and the
+    // repair is `orbweaver_object::Poa::serves`, which is the read-only half of
+    // `dispatch_target` and exists for exactly this. Written down rather than
+    // left for the next reader to discover from a passing assertion.
+    assert!(
+        wrong_hook.is_empty(),
+        "{} of the (necessarily zero) inheritors check the key in another hook: {}",
         wrong_hook.len(),
         named(&wrong_hook),
     );
@@ -1233,7 +1294,7 @@ fn the_roster_refuses_to_be_quiet_about_finding_nothing() {
         overrides_knows,
         checks_in_another_hook,
     };
-    let refused: [(&str, roster::Scan); 5] = [
+    let refused: [(&str, roster::Scan); 4] = [
         ("read no files", roster::Scan { files_read: 0, impls: vec![] }),
         ("parsed no impls", roster::Scan { files_read: 400, impls: vec![] }),
         (
@@ -1241,12 +1302,8 @@ fn the_roster_refuses_to_be_quiet_about_finding_nothing() {
             roster::Scan { files_read: 400, impls: vec![one(false, true), one(false, true)] },
         ),
         (
-            "every impl overrides — repaired, or broken, but never quiet",
-            roster::Scan { files_read: 400, impls: vec![one(true, false), one(true, false)] },
-        ),
-        (
-            "no inheritor checks in another hook",
-            roster::Scan { files_read: 400, impls: vec![one(true, false), one(false, false)] },
+            "an impl inherits, which D036 made impossible to compile",
+            roster::Scan { files_read: 400, impls: vec![one(true, false), one(false, true)] },
         ),
     ];
     for (why, scan) in &refused {
@@ -1255,12 +1312,13 @@ fn the_roster_refuses_to_be_quiet_about_finding_nothing() {
             "verdict() accepted a scan that measured nothing: {why}"
         );
     }
+    // After D036 the unremarkable scan is one where everything overrides.
     let ordinary =
-        roster::Scan { files_read: 400, impls: vec![one(true, false), one(false, true)] };
+        roster::Scan { files_read: 400, impls: vec![one(true, false), one(true, false)] };
     assert!(
         roster::verdict(&ordinary).is_ok(),
         "verdict() refuses every scan it is given, including an unremarkable one. A check that \
-         can only say no is not a control, and the five rows above prove nothing about it: \
+         can only say no is not a control, and the four rows above prove nothing about it: \
          {:?}",
         roster::verdict(&ordinary)
     );

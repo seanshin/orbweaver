@@ -151,7 +151,9 @@ because a server that serves nothing answers both keys identically too. The
 obvious repair produces a vacuous green, which is the failure mode this project
 names most often.
 
-**So the work is a design question before it is a change**: the default needs
+**The design question is answered: [`D036`](decisions/D036-what-a-servant-answers-for-a-key-nobody-activated.md), approved 2026-08-29 — option A.** `knows` becomes **required**: the default is deleted so the gap is unrepresentable rather than detectable, with L2's two spikes in the same batch and the existing gate kept. D036 says plainly that **no candidate closes the leak** — what A buys is that the next production servant cannot leak by omission, which is how this one arrived. The approval accepts D036 §6.3's trap explicitly: **A's evidence is a compile error at 22 sites, not a test going red**, and `a_key_nobody_activated.rs` stays green across the change by construction.
+
+**The shape of the question**: the default needs
 something to check against, which means either servants declare their keys, or
 the trait gains a required method, or `Server` keeps the active object map
 itself and `knows` consults it. Each of those touches every implementation. This

@@ -243,6 +243,22 @@ impl<D: Dispatch> Dispatch for PoaFront<D> {
         self.dispatch_body(request, out).map(|_| ())
     }
 
+    /// The same question `dispatch_body` asks, asked where a §9.4.5 probe
+    /// reaches it.
+    ///
+    /// D036 made this required, and the requirement is what brought a reader
+    /// here: before it, this servant checked the key on the request path and
+    /// inherited a permissive `knows`, so a `LocateRequest` for a key this
+    /// POA calls `Unknown` was answered `ObjectHere`. That is the
+    /// request/probe disagreement the `serve_one` reorder closed for a *moved*
+    /// key and left open for an *unknown* one.
+    ///
+    /// [`Poa::serves`] is called rather than the check being written a second
+    /// time here: one question, one home, two callers.
+    fn knows(&self, object_key: &[u8]) -> bool {
+        self.poa.serves(object_key)
+    }
+
     fn dispatch_body(
         &mut self,
         request: &Request,

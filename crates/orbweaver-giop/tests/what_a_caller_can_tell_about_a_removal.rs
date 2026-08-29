@@ -128,6 +128,16 @@ impl Leak {
 struct One(i32);
 
 impl Dispatch for One {
+    /// Stated, because D036 made it required.
+    ///
+    /// `One` is distinguished by the number it answers, not by the key it is
+    /// reached at — two of them run on two servers, which is what makes the
+    /// removal of one invisible to a caller of the other. Answering for any key
+    /// is therefore right here and is now said rather than inherited.
+    fn knows(&self, _object_key: &[u8]) -> bool {
+        true
+    }
+
     fn dispatch(&mut self, req: &Request, out: &mut Encoder) -> Result<(), SystemException> {
         if req.operation == "ping" {
             out.put_i32(self.0);

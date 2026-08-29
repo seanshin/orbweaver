@@ -838,22 +838,34 @@ pub trait Dispatch {
     /// entries and `PyServant` bridges whatever arrives. The defect is that
     /// meaning it and forgetting it are spelled the same way.
     ///
-    /// # Why the default was not changed
+    /// # Why there is no default
     ///
-    /// Because changing it changes what existing servants answer, and this
-    /// crate cannot make that change alone. Measured 2026-08-26: **26 of this
-    /// workspace's 72 `Dispatch`/`SharedDispatch` implementations inherit this
-    /// method**, and the production ones among them live in crates this one
-    /// does not own. `tests/a_key_nobody_activated.rs` names them, measures what
-    /// a caller sees today, and is the gate that goes red if this default moves
-    /// without them.
+    /// Because *meaning it and forgetting it were spelled the same way*, which
+    /// the paragraph above already says and which is the whole argument of
+    /// D036 (approved 2026-08-29). There was a default and it accepted every
+    /// key; nobody chose that for the servants that had it — twenty-two
+    /// inherited it and a hand-written C peer noticed.
+    ///
+    /// **This closes nothing by itself and D036 says so.** A servant that
+    /// writes `true` here leaks exactly as one that inherited `true` did. What
+    /// changed is that it cannot happen by omission: the gap is
+    /// unrepresentable rather than detectable, which is the same repair this
+    /// crate's cascade rule describes for a walker that must ask the mapper at
+    /// every node instead of keeping its own list.
+    ///
+    /// The alternative — a default of `false` — was measured and refused:
+    /// under it the leak test stayed **green**, because a server that serves
+    /// nothing answers both keys identically too. See D036 §3.
+    ///
+    /// `tests/a_key_nobody_activated.rs` measures what a caller sees, and
+    /// after D036 its roster hunts a different thing: a servant that states
+    /// `true` here while checking the key in `dispatch_body`, whose §9.4.5
+    /// probe then answers `ObjectHere` for a key it would refuse a call on.
     ///
     /// [`locate`](Dispatch::locate) reads this method, so whatever it answers it
     /// answers to a §9.4.5 probe as well — which is why the two paths cannot be
     /// repaired independently.
-    fn knows(&self, _object_key: &[u8]) -> bool {
-        true
-    }
+    fn knows(&self, object_key: &[u8]) -> bool;
 
     /// What to answer a §9.4.5 `LocateRequest` for `object_key`.
     ///
@@ -1014,14 +1026,11 @@ pub trait SharedDispatch: Sync {
 
     /// Whether this servant answers to `object_key`.
     ///
-    /// The default accepts every key. See [`Dispatch::knows`] for the decision
-    /// of 2026-08-26 about that default, which is the same decision for this
-    /// trait and is deliberately not restated here — including why CORBA 3.4
-    /// §15.3.8.6 makes it a divergence rather than a choice, and why it was not
-    /// changed. [`default_knows_policy`] is that fact as data.
-    fn knows(&self, _object_key: &[u8]) -> bool {
-        true
-    }
+    /// Required, like [`Dispatch::knows`], and for the same reason — which is
+    /// written there and deliberately not restated here, including why CORBA
+    /// 3.4 §15.3.8.6 makes the permissive answer a divergence rather than a
+    /// choice, and why a default of `false` was refused rather than adopted.
+    fn knows(&self, object_key: &[u8]) -> bool;
 
     /// What to answer a §9.4.5 `LocateRequest` for `object_key`. See
     /// [`Dispatch::locate`], including why it does not consult `redirect` and
@@ -1176,29 +1185,16 @@ pub enum UnknownKeyPolicy {
     /// Every key reaches the servant.
     ///
     /// §15.3.8.6's `USE_DEFAULT_SERVANT`, which that section requires a POA to
-    /// be created with and to have a servant registered for — and which the
-    /// default bodies of [`Dispatch::knows`] and [`SharedDispatch::knows`]
-    /// enact by omission. [`default_knows_policy`] is that fact as data.
+    /// be created with and to have a servant registered for.
+    ///
+    /// **No default enacts this any more.** It was the body both `knows`
+    /// defaults carried, and `default_knows_policy()` was the one home for that
+    /// fact — until D036 (approved 2026-08-29) deleted the defaults and made
+    /// `knows` required. A servant that wants this policy states it; there is
+    /// no longer an answer given by omission, which is the whole of what D036
+    /// bought. What remains here is the *name* for the answer, so
+    /// [`key_policy_of`] has something to report.
     ServeAnyway,
-}
-
-/// The policy the default bodies of [`Dispatch::knows`] and
-/// [`SharedDispatch::knows`] enact, as data.
-///
-/// This exists to be the **one home** for that fact, in the same way and for
-/// the same reason as [`serve_one_ordering`]. Two trait defaults, this crate's
-/// prose and `tests/a_key_nobody_activated.rs` all mean this one sentence, and a
-/// sentence four places retype is a sentence that goes false in three of them.
-///
-/// The gate does not compare this against a literal — it computes what a caller
-/// on a socket should see **from this value**, and then goes and looks. So
-/// changing a default body without changing this is red, and changing this
-/// without changing a default body is red. Changing both together is green,
-/// which is correct and is also the dangerous case: the 26 implementations that
-/// inherit those bodies live in four other crates, and that test's failure
-/// message carries the list rather than leaving it to be rediscovered.
-pub const fn default_knows_policy() -> UnknownKeyPolicy {
-    UnknownKeyPolicy::ServeAnyway
 }
 
 /// Which [`UnknownKeyPolicy`] `servant` actually enacts — **measured, not
@@ -2364,6 +2360,13 @@ mod tests {
     fn redirect_defaults_to_a_temporary_forward_and_permanent_reaches_the_server() {
         struct OnlyForward(crate::Ior);
         impl Dispatch for OnlyForward {
+            // Stated, because D036 made it required. This fixture is not about
+            // key selection — it answers for any key, and now says so instead of
+            // inheriting a default that said it silently.
+            fn knows(&self, _object_key: &[u8]) -> bool {
+                true
+            }
+
             fn dispatch(
                 &mut self,
                 _: &Request,
@@ -2377,6 +2380,13 @@ mod tests {
         }
         struct Moved(crate::Ior);
         impl Dispatch for Moved {
+            // Stated, because D036 made it required. This fixture is not about
+            // key selection — it answers for any key, and now says so instead of
+            // inheriting a default that said it silently.
+            fn knows(&self, _object_key: &[u8]) -> bool {
+                true
+            }
+
             fn dispatch(
                 &mut self,
                 _: &Request,
@@ -2484,6 +2494,13 @@ mod tests {
     struct Pong;
 
     impl SharedDispatch for Pong {
+        // Stated, because D036 made it required. This fixture is not about
+        // key selection — it answers for any key, and now says so instead of
+        // inheriting a default that said it silently.
+        fn knows(&self, _object_key: &[u8]) -> bool {
+            true
+        }
+
         fn dispatch(
             &self,
             req: &Request,
@@ -2500,6 +2517,13 @@ mod tests {
     }
 
     impl Dispatch for Pong {
+        // Stated, because D036 made it required. This fixture is not about
+        // key selection — it answers for any key, and now says so instead of
+        // inheriting a default that said it silently.
+        fn knows(&self, _object_key: &[u8]) -> bool {
+            true
+        }
+
         fn dispatch(
             &mut self,
             req: &Request,
@@ -2957,6 +2981,13 @@ mod tests {
     }
 
     impl Dispatch for Counting {
+        // Stated, because D036 made it required. This fixture is not about
+        // key selection — it answers for any key, and now says so instead of
+        // inheriting a default that said it silently.
+        fn knows(&self, _object_key: &[u8]) -> bool {
+            true
+        }
+
         fn dispatch(
             &mut self,
             req: &Request,
@@ -3060,6 +3091,13 @@ mod tests {
     }
 
     impl Dispatch for Relay {
+        // Stated, because D036 made it required. This fixture is not about
+        // key selection — it answers for any key, and now says so instead of
+        // inheriting a default that said it silently.
+        fn knows(&self, _object_key: &[u8]) -> bool {
+            true
+        }
+
         fn dispatch(
             &mut self,
             req: &Request,
@@ -3136,6 +3174,13 @@ mod tests {
     }
 
     impl Dispatch for SelfCaller {
+        // Stated, because D036 made it required. This fixture is not about
+        // key selection — it answers for any key, and now says so instead of
+        // inheriting a default that said it silently.
+        fn knows(&self, _object_key: &[u8]) -> bool {
+            true
+        }
+
         fn dispatch(
             &mut self,
             req: &Request,
@@ -3289,6 +3334,13 @@ mod tests {
     }
 
     impl SharedDispatch for Rendezvous {
+        // Stated, because D036 made it required. This fixture is not about
+        // key selection — it answers for any key, and now says so instead of
+        // inheriting a default that said it silently.
+        fn knows(&self, _object_key: &[u8]) -> bool {
+            true
+        }
+
         fn dispatch(
             &self,
             req: &Request,
@@ -3310,6 +3362,13 @@ mod tests {
     }
 
     impl Dispatch for Rendezvous {
+        // Stated, because D036 made it required. This fixture is not about
+        // key selection — it answers for any key, and now says so instead of
+        // inheriting a default that said it silently.
+        fn knows(&self, _object_key: &[u8]) -> bool {
+            true
+        }
+
         fn dispatch(
             &mut self,
             req: &Request,
@@ -3516,6 +3575,13 @@ mod tests {
     }
 
     impl SharedDispatch for SharedRelay {
+        // Stated, because D036 made it required. This fixture is not about
+        // key selection — it answers for any key, and now says so instead of
+        // inheriting a default that said it silently.
+        fn knows(&self, _object_key: &[u8]) -> bool {
+            true
+        }
+
         fn dispatch(
             &self,
             req: &Request,
@@ -3649,6 +3715,13 @@ mod tests {
     }
 
     impl SharedDispatch for SharedSelfCaller {
+        // Stated, because D036 made it required. This fixture is not about
+        // key selection — it answers for any key, and now says so instead of
+        // inheriting a default that said it silently.
+        fn knows(&self, _object_key: &[u8]) -> bool {
+            true
+        }
+
         fn dispatch(
             &self,
             req: &Request,

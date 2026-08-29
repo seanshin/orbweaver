@@ -416,6 +416,30 @@ impl Poa {
         })
     }
 
+    /// Whether `key` names something this POA serves **right now**, asked
+    /// without the power to change the answer.
+    ///
+    /// This is the read-only half of [`Poa::dispatch_target`], and it exists
+    /// because `Dispatch::knows` takes `&self` while `dispatch_target` takes
+    /// `&mut self` — **which is why the two paths diverged in the first
+    /// place.** Two servants in `spikes/` checked the key in `dispatch_body`
+    /// and could not ask the same question from `knows`, so their §9.4.5 probe
+    /// path answered `ObjectHere` for a key their own POA calls `Unknown`.
+    ///
+    /// It is deliberately *not* `dispatch_target`'s whole answer: that method
+    /// may **activate** through a `ServantLocator`, which is a side effect and
+    /// cannot be had from `&self`. For a POA with no locator the two agree,
+    /// which is the case both callers are in; for one with a locator this
+    /// answers *is it here already*, and a servant that wants the other answer
+    /// has to say so on the request path where it has `&mut self`.
+    ///
+    /// *`knows`는 `&self`이고 `dispatch_target`은 `&mut self`다 — 두 경로가
+    /// 갈라진 이유가 바로 그것이다. 이것은 읽기 전용 절반이며, 활성화는 부수
+    /// 효과라 `&self`에서 얻을 수 없으므로 포함하지 않는다.*
+    pub fn serves(&self, key: &[u8]) -> bool {
+        self.parse_key(key).is_some_and(|id| self.is_active(&id))
+    }
+
     /// Decides how to handle a request addressed to `key`.
     pub fn dispatch_target(
         &mut self,

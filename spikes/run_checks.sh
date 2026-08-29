@@ -2616,9 +2616,37 @@ else
   fkill "classes Server"
   rm -f "$ROOT/spikes/jacorb.ior"
   ( cd "$ROOT/spikes/jacorb" && exec "$JH/bin/java" -cp "$JCP" Server ../jacorb.ior >/tmp/orbweaver-jacorb.log 2>&1 & )
+  # **Three things, and the file is only the first of them.** This was
+  # `[ -s jacorb.ior ] && { sleep 0.5; jup=1; }` — the IOR existing, plus a
+  # fixed guess. Harness 34 (2026-08-29) failed here with
+  # `ping(): io: Resource temporarily unavailable (os error 35)` and then two
+  # desynchronized-connection errors behind it, while the GIOP 1.1 group three
+  # rows below drove the SAME direction against the same peer and passed. Six
+  # standalone runs did not reproduce it, so the transient is NOT diagnosed —
+  # what is repaired is the wait, which was a fixed sleep after a side effect
+  # rather than a check that the server can accept. That is the hazard this
+  # file already names twice: *a completed client connect does not mean the
+  # server can accept yet*, and *wait loops must sleep, bounded by a deadline*.
+  #
+  # 1. the IOR file — JacORB has written something;
+  # 2. its own `READY` line, printed after `the_POAManager().activate()` and
+  #    after the file, so it is strictly later than what was waited for before;
+  # 3. the advertised endpoint actually accepting a TCP connection, which is
+  #    the only one of the three that is about the thing the client is about
+  #    to do. The address is decoded by `spike-dump` rather than parsed out of
+  #    the hex here — the port is two CDR bytes inside an `IOR:` string, and a
+  #    shell that went looking for it would be the same defect this repository
+  #    already paid for once in `spike_channel_by_name`.
   jup=0
-  for _ in $(seq 1 150); do
-    [ -s "$ROOT/spikes/jacorb.ior" ] && { sleep 0.5; jup=1; break; }
+  jdead=$(( $(date +%s) + 30 ))
+  while [ "$(date +%s)" -lt "$jdead" ]; do
+    [ -s "$ROOT/spikes/jacorb.ior" ] || { sleep 0.1; continue; }
+    grep -q "^READY$" /tmp/orbweaver-jacorb.log 2>/dev/null || { sleep 0.1; continue; }
+    jaddr=$(cargo run -q --bin spike-dump -- "$ROOT/spikes/jacorb.ior" 2>/dev/null \
+            | sed -n 's/^endpoint \([^ ]*\) .*/\1/p' | head -1)
+    if [ -n "$jaddr" ] && (exec 3<>"/dev/tcp/${jaddr%:*}/${jaddr##*:}") 2>/dev/null; then
+      jup=1; break
+    fi
     sleep 0.1
   done
   if [ "$jup" -eq 1 ]; then
@@ -2645,7 +2673,10 @@ else
       jfail=1
     fi
   else
-    echo "  FAIL JacORB server did not publish an IOR"; jfail=1
+    echo "  FAIL JacORB server was not ready within 30s — the IOR, its own READY line,"
+    echo "       or a TCP connect to the endpoint it advertises. Its log:"
+    diag_log /tmp/orbweaver-jacorb.log 8
+    jfail=1
   fi
   fkill "classes Server"
   [ "$jfail" -eq 0 ] || fail_total=$((fail_total+1))

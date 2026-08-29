@@ -77,6 +77,12 @@ struct Held {
 }
 
 impl Dispatch for Held {
+    /// Stated, because D036 made it required. This fixture is about what a peer
+    /// sees when the ORB stops the server under it — not about key selection.
+    fn knows(&self, _object_key: &[u8]) -> bool {
+        true
+    }
+
     fn dispatch(&mut self, req: &Request, out: &mut Encoder) -> Result<(), SystemException> {
         match req.operation.as_str() {
             "held" => {
@@ -101,6 +107,12 @@ impl Dispatch for Held {
 struct Ping;
 
 impl Dispatch for Ping {
+    /// Stated, because D036 made it required. `Ping` answers everything at once
+    /// by design, and the key is one more thing it does not discriminate on.
+    fn knows(&self, _object_key: &[u8]) -> bool {
+        true
+    }
+
     fn dispatch(&mut self, req: &Request, out: &mut Encoder) -> Result<(), SystemException> {
         if req.operation == "ping" {
             out.put_i32(ANSWER);

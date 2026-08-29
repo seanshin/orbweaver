@@ -41,6 +41,12 @@ const DEADLINE: Duration = Duration::from_secs(5);
 struct Silent;
 
 impl Dispatch for Silent {
+    /// Stated, because D036 made it required. This fixture is about ORB config
+    /// reaching the wire, not about key selection: it answers for any key.
+    fn knows(&self, _object_key: &[u8]) -> bool {
+        true
+    }
+
     fn dispatch(&mut self, _req: &Request, _out: &mut Encoder) -> Result<(), SystemException> {
         Ok(())
     }
@@ -204,6 +210,12 @@ fn orb_max_connections_refuses_the_second_connection() {
 struct Loud;
 
 impl Dispatch for Loud {
+    /// Stated, because D036 made it required. Same as `Silent` above: this
+    /// fixture is about message size on the wire, not about key selection.
+    fn knows(&self, _object_key: &[u8]) -> bool {
+        true
+    }
+
     fn dispatch(&mut self, _req: &Request, out: &mut Encoder) -> Result<(), SystemException> {
         out.put_octet_seq(&vec![0x5A; 8192]);
         Ok(())

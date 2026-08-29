@@ -247,6 +247,57 @@ when `trading_client.py` sits three.
 스윕은 53건을 냈고 47건이 그 오탐이었으며, 게이트가 0을 내는 것은 조인 것이 아니라
 고친 것이다.
 
+## `knows` is required now / `knows`는 이제 필수다
+
+D036, approved 2026-08-29 (option A). The default that accepted every object key
+is deleted from both `Dispatch` and `SharedDispatch`; **22 implementations now
+state their answer** where they used to inherit one.
+
+**It closes nothing by itself, and the decision says so.** A servant that writes
+`true` leaks exactly as one that inherited `true` did. What changed is that it
+cannot happen by omission — the gap is unrepresentable rather than detectable —
+and *meaning it and forgetting it are no longer spelled the same way*, which is
+a sentence `Dispatch::knows`'s own rustdoc had been carrying since before the
+decision.
+
+Three things the doing found:
+
+1. **`cargo build --workspace` does not reach two of the sites.**
+   `spikes/estate/servant.rs` and `spikes/e2e/servant.rs` are copied into a
+   generated crate by their own `run.sh`, so the compiler-error evidence D036
+   §4 rests on stops at the workspace edge. The second file's own comment had
+   said so: *"compiled standalone, outside the workspace … which is exactly how
+   it survived two sweeps."* The harness is the only judge for those two.
+2. **The two paths diverged because of mutability.** `knows` takes `&self` and
+   `Poa::dispatch_target` takes `&mut self`, so a servant checking the key on
+   the request path *could not ask the same question* from `knows`.
+   `orbweaver_object::Poa::serves` is the read-only half, and both spikes call
+   it rather than restating the check — one question, one home, two callers. It
+   deliberately excludes `dispatch_target`'s activation, which is a side effect
+   and cannot be had from `&self`.
+3. **The roster's own guard demanded its retirement, and got it.** With every
+   impl overriding, `verdict()` refused: *"the finding this test carries is
+   CLOSED — retire the test deliberately and record it. If it is not true the
+   scan broke. Neither reading is allowed to be a silent pass."* The guard was
+   obeyed rather than deleted: its two clauses are **flipped**, so what was an
+   error is now the expectation and a non-empty inheritor list is now the
+   error. `default_knows_policy()` lost its referent with the defaults and is
+   gone; the fixtures that state `ServeAnyway` carry that constant now, beside
+   the answer.
+
+`wrong_hook` is a subset of `inheritors` and is therefore vacuous now. It is
+asserted anyway **and named as vacuous**, because the class it described — a
+servant stating `true` while checking the key in `dispatch_body` — is *not*
+closed by D036 and would need a different scan to hunt again.
+
+D036 승인(선택지 A). 모든 키를 받던 기본값을 두 트레이트에서 지웠고 **22개 구현이
+이제 자기 답을 말한다**. **그 자체로는 아무것도 닫지 않으며 결정서가 그렇게 적는다** —
+바뀐 것은 그것이 **누락으로는** 일어날 수 없다는 것뿐이다. 하는 중에 셋이 드러났다:
+`cargo build --workspace`가 두 자리에 닿지 않는다(스파이크 서번트는 실행 시점에
+복사된다); 두 경로가 갈라진 이유는 **가변성**이었다(`knows`는 `&self`, `dispatch_target`은
+`&mut self`); 그리고 **로스터의 가드가 스스로 은퇴를 요구했고** 그것을 지우는 대신
+방향을 뒤집었다.
+
 ## The second floor, measured / 두 번째 바닥, 측정됨
 
 D029's lifecycle row named a second floor and did not measure it: `Orb::shutdown`

@@ -222,6 +222,14 @@ fn tabled(out: &mut Encoder, leak: Leak) {
 }
 
 impl SharedDispatch for Account {
+    /// Stated, because D036 made it required. This fixture is the subject of the
+    /// location and backend leak tests, whose claims are about what a caller can
+    /// tell across a MOVE and a SWAP — not about which keys exist. It answers
+    /// for any key, and now says so.
+    fn knows(&self, _object_key: &[u8]) -> bool {
+        true
+    }
+
     fn dispatch(
         &self,
         request: &Request,

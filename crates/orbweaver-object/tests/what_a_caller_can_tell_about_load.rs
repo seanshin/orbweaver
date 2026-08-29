@@ -199,6 +199,21 @@ impl ExpertHost {
 }
 
 impl SharedDispatch for ExpertHost {
+    /// `true` for every key, and D036 made saying so compulsory.
+    ///
+    /// The reason is the struct's own and is unchanged: the object's existence
+    /// is the POA's decision here, not a second one taken in front of it. A
+    /// `knows` that answered for expert ids would decide the same question one
+    /// layer earlier and this test would be measuring that instead.
+    ///
+    /// This is the case D036 §6.3 names: the leak test stays green across that
+    /// change **by construction**, because what was inherited is now stated. The
+    /// evidence for D036 is the compile error that brought a reader to this
+    /// line, not a test going red.
+    fn knows(&self, _object_key: &[u8]) -> bool {
+        true
+    }
+
     fn dispatch(&self, request: &Request, out: &mut Encoder) -> Result<(), SystemException> {
         let mut p = self.plane.lock().expect("plane");
         let Plane { poa, loader } = &mut *p;
