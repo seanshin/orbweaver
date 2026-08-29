@@ -45,6 +45,35 @@ in silence and a gate stays green over the drift.
 
 ## 1. Open leaks, in priority-zero order / 열린 구멍, 0순위 순서로
 
+### 1.0 The order, and what reviewing this plan changed about it
+
+The first draft ordered §1 by *how open the leak is*, which put L1 first because
+its measurement already exists and is green. Reviewing it found that L1's work
+is **a design question, not a change** — the trait default has nothing to check
+against and the one value it can be changed to is known to produce a vacuous
+green. Ranking it first because it looked small was ranking it on an unchecked
+guess about its size.
+
+The order below is what survived that:
+
+| | | why here |
+|---|---|---|
+| 1 | **L1's decision** — where the key set lives | Opens the largest leak with the thing it actually needs. It blocks nothing else, so it starts first and finishes last. |
+| 2 | **L3** — wire one binary to `expert_host` | Small, concrete, independent of every other item, and it moves a leak from *closed in a type* to *closed where a caller reaches it*. |
+| 3 | **L5** — measure the killed target | A measurement, not a repair. Independent. Its result may be *"this is a floor too"*, which is a finding and not a failure. |
+| 4 | **L1 + L2 as one batch** | Once the decision lands. One fix per root cause, across every affected implementation — which is what makes L2 part of it rather than a separate patch. |
+| 5 | **L4** — a call travelling the other way through the seam | Retires the run's one language `SKIPPED` at the same time. |
+| 6 | **L6's decision** | A served contract with consumers. Opened by writing the decision, never by writing the patch. |
+
+**Two items are decisions and one is a measurement.** Only three of the six are
+repairs. A plan that reported *"six leaks"* as one number would be saying a
+number that means three different things, which §5 refuses.
+
+*초안은 **구멍이 얼마나 열려 있는가**로 정렬했고 그래서 L1이 첫째였다. 검토가
+찾은 것은 L1의 작업이 **변경이 아니라 설계 질문**이라는 것이다 — 작아 보인다는
+확인되지 않은 추측으로 순위를 매긴 것이었다. 여섯 중 셋만 수리이고, 둘은 결정,
+하나는 측정이다.*
+
 ### L1 — Backend: `Dispatch::knows` accepts a key nobody activated
 
 **The leak.** A servant that inherits the default `knows` answers for any
@@ -68,16 +97,42 @@ CLAUDE.md gives, so it only helps somebody who runs it.
 
 **What changed since the cell was written.** The reason recorded for not
 changing it was that the repair lands in crates the GIOP crate does not own.
-**That reason has been overtaken.** The roster computed from the tree on
-2026-08-29 reads *81 `Dispatch`/`SharedDispatch` impls, 59 override `knows`, 22
-inherit it, of which 3 check the key in another hook* — and the production
-inheritors went to zero on 2026-08-28 (`6034243`). Every remaining inheritor is
-a test fixture. **The landing site the objection named is empty.**
+That reason is **weaker than it was**, and the review of this plan on 2026-08-29
+had to make it precise rather than let the first draft's *"every remaining
+inheritor is a test fixture"* stand. The roster computed from the tree that day
+reads *81 `Dispatch`/`SharedDispatch` impls, 59 override `knows`, 22 inherit it*,
+and the 22 classify as:
 
-**The work.** A `default_knows_policy()` that the default consults, defaulting
-to the specification's, with the permissive behaviour available where a fixture
-wants it. Lands with `a_key_nobody_activated.rs`'s existing controls shown red
-against the new default, and with the roster re-read rather than re-typed.
+| | |
+|---|---|
+| 20 | test fixtures — 11 below `src/server.rs`'s line-2200 `#[cfg(test)]`, 9 under `tests/` |
+| 2 | `spikes/estate/servant.rs` and `spikes/e2e/servant.rs`, which are **not** test fixtures — they are L2 |
+
+So the objection's landing site is not empty; it is **two files, and they are
+the two L2 already names.** L1 and L2 are one batch.
+
+**The work is not a default flip, and the first draft of this plan said it was.**
+`fn knows(&self, _object_key: &[u8]) -> bool { true }` is a trait default with
+no POA and no active object map in scope, so there is no
+`USE_ACTIVE_OBJECT_MAP_ONLY` for it to be changed *to*. The only value it can be
+changed to is `false` — **and that experiment has already been run and is
+recorded in CLAUDE.md**: the leak test *stayed green* under a blanket `false`,
+because a server that serves nothing answers both keys identically too. The
+obvious repair produces a vacuous green, which is the failure mode this project
+names most often.
+
+**So the work is a design question before it is a change**: the default needs
+something to check against, which means either servants declare their keys, or
+the trait gains a required method, or `Server` keeps the active object map
+itself and `knows` consults it. Each of those touches every implementation. This
+is **not the small item the first draft ranked first** — see §1.0.
+
+**How it lands.** With `a_key_nobody_activated.rs`'s existing controls shown red
+against whatever the new default is, with the roster re-read rather than
+re-typed, **and with the anti-vacuity companion that the blanket-`false`
+experiment proves is required** — a counted demonstration that an activated key
+and an unactivated one *can* be told apart, beside the assertion that a caller
+cannot tell anything else.
 
 **Watch for.** D029's backend cell quotes *"26 of the workspace's 72"* with no
 date beside it, and the computed roster says 22 of 81 today. The figure is a
@@ -85,11 +140,21 @@ dated reading being read as a current one — the class this project calls *a
 floor is not a figure*. Fix the cell in the same change, or it will be quoted
 again.
 
-*L1 — 유일하게 **측정이 이미 있고 초록인** 구멍이므로 첫째다. 바꾸지 않은 이유로
-기록된 것("수리가 GIOP 크레이트가 소유하지 않는 크레이트에 착지한다")은 이미
-뒤집혔다: 프로덕션 상속자는 2026-08-28에 0이 되었고 남은 22는 전부 테스트
-픽스처다 — **반대 이유가 지목한 착지 지점이 비어 있다.** D029 셀의 "72 중 26"은
-날짜 없이 인용된 옛 측정이며, 같은 변경에서 고친다.*
+*L1 — 측정이 이미 있고 초록인 유일한 구멍이다. 이 계획서의 초안은 남은 22를
+"전부 테스트 픽스처"라고 적었고, 검토가 그것을 정확하게 만들었다: 20은 픽스처지만
+2는 아니며, 그 둘이 바로 L2다 — 반대 이유가 지목한 착지 지점은 비어 있지 않고,
+**두 파일이며 L1과 L2는 한 배치다.**
+
+그리고 **작업은 기본값 뒤집기가 아니다 — 초안은 그렇게 썼다.** 트레이트 기본값의
+스코프에는 POA도 활성 객체 맵도 없으므로 `USE_ACTIVE_OBJECT_MAP_ONLY`로 바꿀
+대상 자체가 없고, 바꿀 수 있는 값은 `false`뿐인데 **그 실험은 이미 돌았고
+CLAUDE.md에 기록돼 있다**: 일괄 `false` 아래에서 누출 테스트는 **초록으로
+남았다** — 아무것도 서비스하지 않는 서버는 두 키에 똑같이 답하기 때문이다.
+명백한 수정이 공허한 초록을 만든다.
+
+그러므로 이것은 변경이기 이전에 **설계 질문**이고, 초안이 첫째로 놓았던 작은
+항목이 아니다 — §1.0을 보라. D029 셀의 "72 중 26"은 날짜 없이 인용된 옛 측정이며
+같은 변경에서 고친다.*
 
 ### L2 — Backend: two servants check the key in the wrong hook
 
@@ -221,10 +286,6 @@ instrument, and an instrument that cannot go red makes §1 unfalsifiable.
    36 groups took under 2s each (measured 2026-08-27). A split is a change to
    how work is scheduled, not to what is measured, so it lands only with a
    demonstration that the same groups still run.
-6. **Eight unlanded worktree branches**, of which one has been judged (E3 — not
-   landed, with two things extracted from it) and seven have not. An unjudged
-   branch is not a debt until somebody asks what is in it; it becomes one when a
-   plan is written without knowing.
 
 *이것들은 구멍을 닫지 않는다. §1의 모든 항목이 계기로 판정되고, 빨개질 수 없는
 계기는 §1을 반증 불가능하게 만들기 때문에 여기 있다.*
@@ -243,6 +304,52 @@ instrument, and an instrument that cannot go red makes §1 unfalsifiable.
   down rather than left to be inferred from what is absent.
 
 *여기 없는 것을 부재로 추론하게 두지 않으려고 이 절이 있다.*
+
+---
+
+## 4.5 Preconditions, and what would make this plan wrong / 전제조건과 반증
+
+**A precondition, not a work item.** Eight worktree branches are unlanded
+(2026-08-29). One has been judged — E3, judged *not landed*, with two things
+extracted from it — and **seven have not been read.** Planning §1 without
+knowing what is in them risks planning work that already exists, and that risk
+is a precondition of this plan rather than an item in it: it is cheap to
+discharge and expensive to skip. The first draft filed it as instrument debt,
+which was the wrong shelf.
+
+**What would make this plan wrong**, stated so that finding out is a result
+rather than an embarrassment:
+
+1. **If closing all six still leaves the ORB incomplete** — and it does. Two
+   floors are named in D029 and neither moves: a caller of a removed target must
+   be given one address to send a first packet to, and a caller that resolves a
+   name learns the address it resolved to. This plan closes leaks *above* the
+   floors. Anyone reading it as *"six items and then it is done"* is reading it
+   wrong, and that is the reading this paragraph exists to refuse.
+2. **If L1's design question has no answer that is not a vacuous green.** The
+   blanket-`false` experiment is the warning, not the boundary — but if every
+   candidate turns out to be *the server serves nothing*, then the honest
+   outcome is a recorded refusal with its reason, not a change.
+3. **If a leak cell is stale.** Two figures in the §6.1 table were quoted
+   without their dates, and a re-measurement on 2026-08-29 has already overtaken
+   one of them — the roster reads 22 of 81 where the cell says *"26 of 72"*.
+   This plan is built on those cells; a cell whose figure has moved makes the
+   item built on it wrong. §3's first two entries exist because of that.
+
+   `spikes/decision_status.py` refused the first wording of this paragraph:
+   it said the figure *"is already superseded"* next to the decision's name, and
+   the gate read that as a claim about the **decision's status**. It was right
+   to — a reader can misread it the same way, and a document that plans against
+   a decision must not look like it is restating one.
+4. **If the ordering is wrong because the sizes are wrong.** L1 was reordered
+   once already, on discovering its size. L3, L4 and L5 have not been sized by
+   anything better than reading the cell — which is exactly the mistake L1's
+   reorder corrects. **Size each before starting it, not while.**
+
+*여기 있는 것을 반증하는 방법을 적어둔다 — 알아내는 것이 결과가 되도록, 창피가
+되지 않도록. 여섯을 다 닫아도 ORB는 완성되지 않는다: 바닥 둘은 움직이지 않고 이
+계획서는 그 **위**의 구멍을 닫는다. 그리고 L1은 크기를 잘못 재서 이미 한 번 순서가
+바뀌었다 — 나머지도 시작하기 전에 크기를 잰다.*
 
 ---
 
