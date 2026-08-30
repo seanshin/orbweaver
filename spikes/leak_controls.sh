@@ -58,6 +58,7 @@ ROOT=$(pwd)
 SUBJECTS=(
   "orbweaver-test|what_a_caller_can_tell|no_forward:a_move_under_a_live_caller_is_invisible limits_survive_a_move|address:a_move_under_a_live_caller_is_invisible|backend:backend_swapped_under_a_live_caller"
   "orbweaver-giop|what_a_caller_can_tell_about_a_removal|removal_isolation:removing_one_target_is_invisible_to_a_caller_of_another"
+  "orbweaver-gen|what_a_caller_can_tell_about_a_language|language:a_language_swapped_under_a_live_caller_is_invisible"
 )
 
 fails=0
@@ -194,7 +195,7 @@ cat <<'NOTE'
   ORBWEAVER_LEAK_CONTROL arm. It is a temporary edit — deleting
   `self.set_orb_limits(limits);` from `Connection::move_to` — and what it
   printed is recorded in that test's own rustdoc and in 6e7249a's message.
-  This script therefore proves four of the five controls it names, not five.
+  This script therefore proves five of the six controls it names, not six.
 NOTE
 
 say "verdict"

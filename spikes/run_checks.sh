@@ -5185,7 +5185,15 @@ leak_leg backend
 
 hr "leak test — the servant's language changed under a live caller (D029 §5 O0)"
 bears_on language
-tp_measures_nothing
+# `tp_measures_nothing` was here while this leg was a counted SKIPPED. It
+# measures now (2026-08-30): `pychild::PythonChild` makes a Python servant a
+# plain `Dispatch`, so Rust and Python sit behind one server, one reference and
+# one open connection, and the language changes under a caller that never
+# learns a new address. Keeping the declaration would make the ledger read that
+# measurement as nothing — the exact swallow it exists to prevent, upside down,
+# which is the third time that has been written here and the third leg it is
+# true of. `leak_leg` FAILS a MEASURED row whose group still carries it,
+# deliberately, so this deletion is not optional.
 leak_leg language
 
 hr "leak test — a target evicted under a live caller (D029 §5 O0)"

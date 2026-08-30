@@ -147,7 +147,11 @@ unmeasured (D031 H1/H2), so the answer stops being a reading assembled by hand.
 | the five names | ✅ one home, `docs/decisions/D029-...md` §6.1, read by `spikes/transparency.py`; a harness tag naming anything else fails the run by name |
 | the ledger | ✅ printed before the verdict, computed from the run; no score, and an untagged run reads as `NONE measured`, not as a pass. It also distinguishes a group that **looked** from a group that **declared it had not** (`tp_measures_nothing`), so a transparency whose only declaring groups measured nothing still reads UNMEASURED with their blockers in the load-bearing column. Its eight negative controls run without the harness's lock in about a second — `./spikes/ledger_control.sh`, 33 assertion groups, 0 failed (2026-08-26) — and since that day they are **also a harness group**, which they were not when control 5 went red and stayed red unnoticed |
 | groups declaring | ◐ seventeen tags over all five names, measured 2026-08-26 (`location` 8, `backend` 3, `language` 3, `lifecycle` 2, `activation` 1). Every transparency now has at least one declaring group; **two of the five (`language`, `activation`) are declared only by groups that declared they measured nothing**, so the ledger still reads them UNMEASURED. Recompute rather than quote this: `python3 spikes/transparency.py --check spikes/run_checks.sh`, and the ledger of any run is the live answer |
-| leak tests per transparency | ◐ D029 §5 O0 landed and reaches the instruments (2026-08-26). `crates/orbweaver-test/tests/what_a_caller_can_tell.rs` changes the hidden property under a live caller; `spikes/leak_tests.sh` gives one leg per transparency, read from `spikes/transparency.py` and never retyped; `spikes/leak_controls.sh` puts each leak back and requires the test to see it (14 checks, 0 failures, 2026-08-26). **Three legs measure** — a target moved under a live caller, the implementation behind one reference replaced mid-session, and (since 2026-08-26) **a target evicted under a live caller**, whose test is `crates/orbweaver-object/tests/what_a_caller_can_tell_about_load.rs` and whose control is inside it rather than in `leak_controls.sh`. **One is a counted `SKIPPED` naming a blocker**: a Python servant mountable as a `Dispatch` in a server the test owns (`language`). **Lifecycle stopped being the second on 2026-08-28** — D035 was approved with *displacement is not closure*, so the row was no longer waiting on a decision that could not reach zero, and `crates/orbweaver-giop/tests/what_a_caller_can_tell_about_a_removal.rs` measures what is above the floor: removing one target is invisible to a caller of another. The floor itself — a caller of a removed target can tell — is asserted rather than left to prose, so a change that made it stop being true could not pass unnoticed. Counted skips went 17 to 16. **One line is owed in `run_checks.sh`**: `leak_leg` fails a `MEASURED` row whose group still carries the static `tp_measures_nothing` it was given while its leg was a skip, which is what stops a leg that starts measuring from being swallowed by a stale declaration. **The activation instance of that was settled on 2026-08-27** — the declaration is gone and a comment stands where it was. This row, and `leak_tests.sh` in two places, went on billing for it and all three cited line **4318** for a group that had moved to 4792: a debt naming a location nobody re-checked is a debt nobody re-checked, and the line number is what made it findable. The activation skip is the evidence for what a named blocker is worth: its sentence — *"a POA-level activation path that reloads an evicted target"* — was what the closing batch scoped itself from, and the **second** sentence of the same skip turned out to be wrong (it said the leak was `Router::select`), which a named blocker makes refutable and an absence does not. All five are harness groups, so the skips are counted by the verdict and cited in the ledger's `unmeasured:` column, which is what "reaches the instruments" means and is what they did not do on the day they landed. Still outside: `orbweaver-giop`'s `channel_found_by_name.rs` is a test of this shape with three controls each shown red, and it has no declaring group — it counts toward nothing above. **Its peer half now does** (2026-08-28): `spikes/event_by_name.sh` was cited by D029 as what makes E3 *"a measurement rather than a self-test"* and was run by nothing — `grep -c` over the harness and over `ci.yml` both returned 0 — and it is a group declaring `location` now. Three more of that class were found the same day and are recorded below |
+| leak tests per transparency | ◐ D029 §5 O0 landed and reaches the instruments (2026-08-26). `crates/orbweaver-test/tests/what_a_caller_can_tell.rs` changes the hidden property under a live caller; `spikes/leak_tests.sh` gives one leg per transparency, read from `spikes/transparency.py` and never retyped; `spikes/leak_controls.sh` puts each leak back and requires the test to see it (14 checks, 0 failures, 2026-08-26). **Three legs measure** — a target moved under a live caller, the implementation behind one reference replaced mid-session, and (since 2026-08-26) **a target evicted under a live caller**, whose test is `crates/orbweaver-object/tests/what_a_caller_can_tell_about_load.rs` and whose control is inside it rather than in `leak_controls.sh`. **None is a counted `SKIPPED` any more.** The last of them was `language`, and it
+retired on 2026-08-30: it waited on *a Python servant mountable as a `Dispatch`
+in a server the test owns*, which `orbweaver_gen::pychild::PythonChild` now is.
+Counted skips went 16 to 15, and every one of D029 §6.1's five transparencies
+is `MEASURED` by a leak leg with a live caller. **Lifecycle stopped being the second on 2026-08-28** — D035 was approved with *displacement is not closure*, so the row was no longer waiting on a decision that could not reach zero, and `crates/orbweaver-giop/tests/what_a_caller_can_tell_about_a_removal.rs` measures what is above the floor: removing one target is invisible to a caller of another. The floor itself — a caller of a removed target can tell — is asserted rather than left to prose, so a change that made it stop being true could not pass unnoticed. Counted skips went 17 to 16. **One line is owed in `run_checks.sh`**: `leak_leg` fails a `MEASURED` row whose group still carries the static `tp_measures_nothing` it was given while its leg was a skip, which is what stops a leg that starts measuring from being swallowed by a stale declaration. **The activation instance of that was settled on 2026-08-27** — the declaration is gone and a comment stands where it was. This row, and `leak_tests.sh` in two places, went on billing for it and all three cited line **4318** for a group that had moved to 4792: a debt naming a location nobody re-checked is a debt nobody re-checked, and the line number is what made it findable. The activation skip is the evidence for what a named blocker is worth: its sentence — *"a POA-level activation path that reloads an evicted target"* — was what the closing batch scoped itself from, and the **second** sentence of the same skip turned out to be wrong (it said the leak was `Router::select`), which a named blocker makes refutable and an absence does not. All five are harness groups, so the skips are counted by the verdict and cited in the ledger's `unmeasured:` column, which is what "reaches the instruments" means and is what they did not do on the day they landed. Still outside: `orbweaver-giop`'s `channel_found_by_name.rs` is a test of this shape with three controls each shown red, and it has no declaring group — it counts toward nothing above. **Its peer half now does** (2026-08-28): `spikes/event_by_name.sh` was cited by D029 as what makes E3 *"a measurement rather than a self-test"* and was run by nothing — `grep -c` over the harness and over `ci.yml` both returned 0 — and it is a group declaring `location` now. Three more of that class were found the same day and are recorded below |
 
 완성 기준의 집은 D029 §6, 다섯 투명성과 그 구멍의 집은 §6.1이며 **여기서 다시 적지
 않는다.** 여기에 사는 것은 *계기*의 상태다: 2026-08-26부터 하네스는 투명성별로 어느
@@ -246,6 +250,42 @@ when `trading_client.py` sits three.
 --workspace`가 그룹이므로 인용된 러스트 테스트는 이미 채택된다. 손으로 돌린 첫
 스윕은 53건을 냈고 47건이 그 오탐이었으며, 게이트가 0을 내는 것은 조인 것이 아니라
 고친 것이다.
+
+## The language row, with the caller in the room / 호출자가 있는 방에서의 언어 행
+
+Measured 2026-08-30. Rust and Python behind **one** server, **one** reference
+and **one** open connection; the language changes underneath a caller that
+never learns a new address.
+
+`spikes/leak_tests.sh`'s language leg had been a counted `SKIPPED` since it was
+written — the last of the five — and the blocker it named was not *nobody wrote
+it*: the only route to a Python servant bound its own listener, so the swap
+became an address swap, which is the **location** row. A test built that way
+would have measured the wrong row and been green while it did.
+
+Control, run by `spikes/leak_controls.sh` rather than narrated:
+`ORBWEAVER_LEAK_CONTROL=language` makes the Python half answer a different
+number — `left: [0,0,0,4] right: [0,0,0,3]`, naming *THE CALLER COULD TELL WHAT
+LANGUAGE ANSWERED* — and reddens exactly that one test. The file's second test
+is the anti-vacuity companion: both counters must show a servant ran, or a run
+where the swap silently did not happen would compare one implementation with
+itself and pass.
+
+**`tp_measures_nothing` came off the group in the same change**, for the third
+time on the third leg: the declaration exists so a group that measures nothing
+cannot flip a ledger row, and a group that has *started* measuring must lose it
+or the ledger reads the measurement as nothing.
+
+**Not measured**: two languages, not N — and one **operation**. A pair agreeing
+on `count` and diverging on a `wstring` is not measured by any number of runs.
+`python_servant.rs` is the wide comparison (19 calls × 3 GIOP versions × 2 byte
+orders) and has no live caller; this has the live caller and the narrow pair.
+
+2026-08-30 측정. 러스트와 파이썬이 **하나의** 서버·참조·연결 뒤에 앉고, 호출자는
+새 주소를 배우지 않는다. 다섯 중 마지막 계수된 SKIPPED였으며, 막고 있던 것은
+*아무도 안 썼다*가 아니라 유일한 경로가 리스너를 바인딩해 교체가 **주소 교체**가
+된다는 것 — 그렇게 만든 테스트는 틀린 행을 재면서 초록으로 보였을 것이다.
+`tp_measures_nothing`을 같은 변경에서 뗐다: **세 번째 다리에서 세 번째로.**
 
 ## A Python servant this process owns / 이 프로세스가 소유하는 파이썬 서번트
 

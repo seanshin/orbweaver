@@ -152,27 +152,39 @@ for name in $NAMES; do
     ;;
 
   language)
-    emit "$name" SKIPPED "a Python servant mountable in a server the test owns"
-    skip "no test changes the servant's LANGUAGE under a live caller." \
-      "waits on: a Python servant that can be mounted as a \`Dispatch\` in a" \
-      "server the caller's test owns. \`PyServant\` IS such a \`Dispatch\` and a" \
-      "bilingual dispatcher holding it beside a Rust servant is a few lines —" \
-      "that is NOT what this waits on. What it waits on is a real Python" \
-      "process reachable from one: the only route today is" \
-      "\`orbweaver-py-bridge --serve\`, which BINDS ITS OWN LISTENER, so the" \
-      "Python servant arrives as an endpoint rather than as a servant and a" \
-      "swap becomes a move. The alternative — this script speaking the seam's" \
-      "JSON protocol to a python3 child of its own — is refused: that protocol" \
-      "has one home (py_bridge's \`Parent\` and _rt's \`Bridge\`) and a second" \
-      "implementation of it here is the very drift CLAUDE.md's one-home rule" \
-      "forbids. The change is therefore in orbweaver-gen, which another batch" \
-      "holds this wave: a serve path that hands back a \`Dispatch\` instead of" \
-      "binding. Measured 2026-08-26." \
-      "what exists instead: orbweaver-gen's python_servant.rs compares a" \
-      "Python and a Rust servant over SEPARATE runs — 19 calls x 3 GIOP" \
-      "versions x 2 orders, byte-identical. That measures that two servants" \
-      "agree, which is not the same claim as a caller being unable to tell" \
-      "them apart, because no caller was there when the language changed."
+    # This leg was a counted SKIPPED from the day it was written until
+    # 2026-08-30, and it named its own blocker rather than leaving it to be
+    # guessed at: the only route to a Python servant was
+    # `orbweaver-py-bridge --serve`, **which binds its own listener**, so the
+    # Python side arrived as an ENDPOINT and a language swap became an address
+    # swap. A caller made to dial elsewhere has been *moved*, which is the
+    # location row — a test built that way would have measured the wrong row
+    # and been green while it did.
+    #
+    # `orbweaver_gen::pychild::PythonChild` closed that: python3 as a child of
+    # the test's own process, wrapped by `seam::ForeignServant` into a plain
+    # `Dispatch`. Both implementations now sit behind ONE server, ONE reference
+    # and ONE open connection.
+    if run_tests_in orbweaver-gen what_a_caller_can_tell_about_a_language \
+         "a language swapped under a live caller: one reference, one connection" \
+         a_language_swapped_under_a_live_caller_is_invisible \
+         the_two_languages_are_two_implementations_and_not_one; then
+      measured=$((measured+1)); emit "$name" MEASURED "Rust and Python behind one reference"
+    else
+      fails=$((fails+1)); emit "$name" RED "Rust and Python behind one reference"
+    fi
+    say "       control:    ORBWEAVER_LEAK_CONTROL=language — the Python half"
+    say "                   answers a different number, which is what a caller"
+    say "                   would see if the language behind a reference were"
+    say "                   observable. RUN BY spikes/leak_controls.sh, not by"
+    say "                   this sentence."
+    say "       unmeasured: two languages, not N — and one OPERATION. A pair"
+    say "                   that agreed on \`count\` and diverged on a \`wstring\`"
+    say "                   is not measured by any number of runs of this."
+    say "                   \`python_servant.rs\` is the wide comparison (19"
+    say "                   calls x 3 versions x 2 orders) and has NO live"
+    say "                   caller; this has the live caller and the narrow"
+    say "                   pair. Neither is the other."
     ;;
 
   activation)
