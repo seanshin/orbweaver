@@ -5099,6 +5099,38 @@ fi
 # Reproduced before it was believed: the old child, 12 runs, one -11. With
 # `leave`, 40 runs, none. The scan runs its own probe first, because a scan
 # that cannot run is silence and silence here reads as coverage.
+# ── How many servers nothing can stop ───────────────────────────────────────
+#
+# A REPORT, not a gate, and the header of `spikes/serve_sites.py` says why:
+# there is no defensible number for how many servers may be unstoppable, and a
+# fixture that serves for the length of one assertion has no use for a stop
+# predicate. It runs here because D029 §6.1's Lifecycle cell cites it, and a
+# document that cites an executable owes a run.
+#
+# It exists because that cell carried `17 of 63` from 2026-08-27 with NOTHING
+# COMPUTING IT. Today the same tree answers 21 of 80: both halves drifted and
+# no gate could go red, because there was no gate. Its own first two answers
+# were 513 and 509 — comments quoting `serve(..., || false)` counted as
+# servers, and a directory walk counting the eight agent worktrees as eight
+# more copies of the repository.
+hr "how many servers nothing can stop (D029 §6.1 lifecycle, a report)"
+ss_probe_rc=0
+python3 spikes/serve_sites.py --probe >/dev/null 2>&1 || ss_probe_rc=$?
+if [ "$ss_probe_rc" -ne 0 ]; then
+  echo "  FAIL the serve-site scan could not read its own two synthetic sites"
+  echo "       ($(rc_says "$ss_probe_rc")), so its count over the tree means nothing"
+  fail_total=$((fail_total+1))
+else
+  ss_out=$(python3 spikes/serve_sites.py 2>&1); ss_rc=$?
+  if [ "$ss_rc" -eq 0 ]; then
+    echo "  ok   $(head -1 <<<"$ss_out" | sed 's/^ *//')"
+    echo "       $(sed -n '2p' <<<"$ss_out" | sed 's/^ *//')"
+  else
+    printf '%s\n' "$ss_out" | sed 's/^/  /'
+    fail_total=$((fail_total+1))
+  fi
+fi
+
 hr "every ORB-creating fixture leaves through the one home (orbexit)"
 lcl_probe_rc=0
 python3 spikes/leaves_cleanly.py --probe >/dev/null 2>&1 || lcl_probe_rc=$?

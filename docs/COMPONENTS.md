@@ -251,6 +251,47 @@ when `trading_client.py` sits three.
 스윕은 53건을 냈고 47건이 그 오탐이었으며, 게이트가 0을 내는 것은 조인 것이 아니라
 고친 것이다.
 
+## Two figures that had no method, and a test that had no control / 방법 없는 수치와 대조군 없는 테스트
+
+**`17 of 63` was never computed.** D029 §6.1's Lifecycle cell carried it from
+2026-08-27 as a hand-typed count of serve sites passing `|| false` — servers
+nothing can stop. `spikes/serve_sites.py` is the method now and the same tree
+answers **21 of 80** (2026-08-30): both halves drifted and no gate could go red,
+because there was no gate. Its own first two answers were **513** and **509** —
+comments quoting `serve(…, || false)` counted as servers, then a directory walk
+counting the eight agent worktrees as eight more copies of the repository, which
+is the `git ls-files` rule this file already carries arriving from the other
+side. A **report, not a gate**: there is no defensible number for how many
+servers may be unstoppable, and the count is a **lower bound** because it
+classifies spellings, so a stop handed in through a binding reads as stoppable.
+
+**The ledger was swallowing the end of that sentence.** `transparency.py` split
+each markdown row on every `|`, so a cell holding an inline-code pipe was cut in
+half and the words *fixable rather than fixed* never reached a reader. The
+splitter respects backtick spans now. D029's pipes were not escaped to suit the
+parser — that makes the document worse for every other reader to spare this one.
+
+**Two tests were asserting timing rather than a property**, both found by CI and
+neither reproducible here:
+
+| | what it asserted | what it asserts now |
+|---|---|---|
+| `spike_events`'s phase 2 | that the dead consumer *had* a backlog (`dropped_on_failure_disconnect > 0`) | that every discarded event names a cause (`split_adds_up`) |
+| `handles::expired_entries_stop_counting_against_the_bound` | that ten insertions finish inside a 30 ms TTL | that the **bound** is reclaimed — which is what its own docstring claims |
+
+The second is the sharper finding: its control had been **green**. `len()`
+filters by liveness, so it answers the same whether an expired entry was
+reclaimed or merely hidden, and stripping the reclaim left the old test passing.
+`issue_checked` bounds on the raw map size, so the property lives at the bound;
+asserted there, the stripped-reclaim control fails with the sentence that names
+it.
+
+`17 of 63`은 계산된 적이 없다 — 손으로 적히고 인용만 되었으며, 오늘 같은 트리는
+**21 of 80**을 답한다. 그 스크립트의 첫 두 답(513, 509)도 틀렸다: 주석 속 예시를
+서버로 셌고, 순회가 워크트리 여덟 개를 셌다. 그리고 **대조군이 초록이던 테스트**가
+하나 있었다 — `len()`이 만료를 걸러 세므로 회수와 은닉을 구별하지 못했고, 성질은
+한계에 있었다.
+
 ## The language row, with the caller in the room / 호출자가 있는 방에서의 언어 행
 
 Measured 2026-08-30. Rust and Python behind **one** server, **one** reference

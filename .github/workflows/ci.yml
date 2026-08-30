@@ -17,6 +17,22 @@ on:
   pull_request:
   workflow_dispatch:
 
+# **Only the newest push to a ref runs to completion.** Measured 2026-08-31 over
+# this repository's own last 100 runs — all 100 of them `push`, and there has
+# never been a pull request: 4,679 wall minutes, of which **35 runs were still
+# going when the next push arrived** and 2,105 minutes (45%) were spent finishing
+# work a newer commit had already superseded.
+#
+# This is not a saving at the cost of coverage. Today a superseded run finishes
+# AND the newer one runs; with this, the newer one still runs to completion, so
+# every ref's final state is verified exactly as before. What stops is paying to
+# learn the verdict of a commit nobody will look at again — and, incidentally,
+# the thing that made HEAD carry no verdict at all on 2026-08-30, when two runs
+# were cut by something else while the older one kept going.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -135,6 +151,14 @@ jobs:
   interop:
     name: interop harness (omniORB + JacORB)
     runs-on: ubuntu-latest
+    # **A stuck run, not a slow one.** Measured 2026-08-31: the last 25
+    # runs' successful interop jobs took 22, 23 (x8), 24 and 29 minutes,
+    # and a failing one ran 48. 30 would leave the slowest success one
+    # minute of headroom, and a timeout that turns a green run red on a
+    # slow runner is a false red — which kills a gate as surely as a true
+    # one nobody reads. 45 clears the slowest observed success by 16
+    # minutes and still cuts the runaway.
+    timeout-minutes: 45
     # Disk discipline, and it belongs here rather than in a cleanup step: the
     # cache below restores `target`, and a restored `target` only ever grows —
     # cargo evicts nothing, and `restore-keys` falls back to an older, larger

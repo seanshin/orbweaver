@@ -327,15 +327,37 @@ fn run(
     )?;
     ok("dead consumer disconnected after the failure threshold; live one got all 6, in order");
 
-    // The dead consumer's backlog is counted as dropped by the relay thread
-    // *after* it disconnects the consumer, so a snapshot taken the instant
-    // `disconnected_for_failure` reads 1 can still show dropped == 0. It did,
-    // once, on a loaded CI runner (2026-08-19, run for 46ccaae) — every other
-    // phase-2 condition here waits with a deadline; this one read a counter
-    // another thread was about to increment. Wait for it like the rest.
+    // **What is asserted here is that nothing vanished unattributed — not that
+    // a backlog existed.**
+    //
+    // This read `wait_until(T, |s| s.dropped_on_failure_disconnect > 0)`, and
+    // the deadline was added on 2026-08-19 after it failed once on a loaded CI
+    // runner. The deadline was the right repair for the reason given then and
+    // the wrong assertion to keep: it waits for a counter to become positive,
+    // which requires the dead consumer to have HAD a backlog, and whether it
+    // did is a race. On Linux the failing pushes come back `Connection refused`
+    // immediately, so the three-failure threshold is reached before anything
+    // queues and the honest answer is `0 queued event(s) dropped`. Measured
+    // 2026-08-30, CI run for 6ca51ac: `fanned_out=32 dropped=3` where the run
+    // before it had `31` and `2`, over a commit that touched two documents and
+    // a markdown parser. A test that turns *there was nothing to count* into a
+    // failure is asserting the timing, not the property.
+    //
+    // The property is that every discarded event names a cause, and
+    // `split_adds_up` is that invariant with nothing to race against: it
+    // compares the total against the sum of the causes. The *loudness* half —
+    // that the drops are attributed to the cut consumer and to nothing else —
+    // is already asserted, in phase 1, by a leg that passed on both runs; this
+    // one was restating it through a counter that happened to be non-zero.
+    //
+    // *여기서 단언하는 것은 **원인 없이 사라진 것이 없다**이지 백로그가 있었다가
+    // 아니다. 마감 시한은 옳은 수리였고 유지할 단언은 아니었다 — 리눅스에서는
+    // 큐가 쌓이기 전에 임계값에 닿으므로 정직한 답이 0이다. **셀 것이 없었다**를
+    // 실패로 바꾸는 테스트는 성질이 아니라 타이밍을 단언한다.*
     require(
-        handle.wait_until(T, |s| s.dropped_on_failure_disconnect > 0),
-        "the dead consumer's backlog must be counted as dropped, loudly",
+        handle.wait_until(T, |s| s.split_adds_up()),
+        "every discarded event must name a cause: the total and the per-cause \
+         counts disagree, so something was thrown away without saying why",
     )?;
     let stats = handle.stats();
     println!(

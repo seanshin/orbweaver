@@ -478,13 +478,51 @@ mod tests {
     /// long-lived session hits the bound on handles nobody can use.
     #[test]
     fn expired_entries_stop_counting_against_the_bound() {
-        let mut t = CapabilityTable::new("s1").with_ttl(Duration::from_millis(30));
+        // **Issued under a TTL nothing can outrun, then retired by shortening
+        // it** — the shape `a_shortened_policy_retires_what_is_out` above
+        // already uses.
+        //
+        // This began `with_ttl(Duration::from_millis(30))` and asserted
+        // `len() == 10` after the loop, which requires ten insertions plus an
+        // assertion to finish inside 30 ms. On a loaded machine they do not:
+        // CI answered `left: 6, right: 10` on 2026-08-30 — four had expired
+        // before the count was taken, and the test read that as the table
+        // losing entries. Eighteen runs here did not reproduce it (twelve
+        // alone, six under eight CPU burners), which is why the repair is to
+        // the shape rather than to a margin: a bigger constant would move the
+        // load at which this fails, not remove the race.
+        //
+        // The property is unchanged — expiry must RECLAIM space rather than
+        // hide entries — and it is now measured without a stopwatch on the
+        // insertions.
+        //
+        // *첫 단언이 기계 속도를 재고 있었다: 30 ms 안에 열 번 발급이 끝나야
+        // 했다. 상수를 키우면 실패하는 부하가 옮겨갈 뿐 경합은 남는다.*
+        // **Asserted at the bound, because that is where the docstring's claim
+        // lives.** `len()` filters by liveness, so it answers the same whether
+        // an expired entry was reclaimed or merely hidden — the assertion this
+        // test carried could not tell those apart, and a control that stripped
+        // the reclaim left it green. `issue_checked` bounds on the RAW map
+        // size, so a table that hides rather than reclaims hits the bound on
+        // handles nobody can use, which is the sentence above this function.
+        let mut t = CapabilityTable::new("s1").with_ttl(Duration::from_secs(60));
+        t.set_max_per_session(10);
         for _ in 0..10 {
             t.issue_checked(&ior(b"k")).unwrap();
         }
-        assert_eq!(t.len(), 10);
-        std::thread::sleep(Duration::from_millis(50));
-        t.issue_checked(&ior(b"k")).unwrap();
-        assert_eq!(t.len(), 1, "the ten expired entries were reclaimed");
+        assert_eq!(t.len(), 10, "ten live handles, under a TTL no loop can outrun");
+        assert!(
+            matches!(t.issue_checked(&ior(b"k")), Err(HandleError::TooMany(10))),
+            "the bound is in force while all ten are live"
+        );
+
+        t.set_ttl(Duration::from_millis(1));
+        std::thread::sleep(Duration::from_millis(20));
+        t.issue_checked(&ior(b"k")).expect(
+            "an eleventh must be issuable once the ten have expired: the bound counts \
+             stored entries, so this fails unless expiry RECLAIMED them rather than \
+             hiding them behind a liveness filter",
+        );
+        assert_eq!(t.len(), 1, "and only the new one is live");
     }
 }
