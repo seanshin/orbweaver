@@ -63,7 +63,7 @@ The order below is what survived that:
 | 3 | **L3** — the activation row's subject | **Not independent** — see below. Its subject is one of L1's population, so it is sequenced against L1 rather than run beside it. |
 | 4 | **L1 + L2 as one batch** | Once the decision lands. One fix per root cause, across every affected implementation — which is what makes L2 part of it rather than a separate patch. |
 | 5 | **L4** — a call travelling the other way through the seam | Its `SKIPPED` half retired 2026-08-30; what is left is the protocol addition, the largest single item in §1. |
-| 6 | **L6's decision** | A served contract with consumers. Opened by writing the decision, never by writing the patch. |
+| 6 | **L6's decision** | **Written 2026-08-30 as D037**, awaiting the owner. A served contract with consumers — opened by writing the decision, never by writing the patch. |
 
 **Two items are decisions and one is a measurement.** Only three of the six are
 repairs. A plan that reported *"six leaks"* as one number would be saying a
@@ -324,10 +324,23 @@ key. A caller learns where every candidate expert runs.
 `corpus/golden/22`'s own comment beside the operation already says so, and
 §4.7's bearer-address rule is the authority half of the same fact.
 
-**Recorded, not changed, and it needs a decision before it needs code**:
-`select` is served and has consumers, so the choice is between changing a served
-contract and accepting the leak with its reason written down. Do not open this
-one by writing a patch — open it by writing the decision.
+**The decision is written: [`D037`](decisions/D037-what-a-selection-hands-back.md),
+drafted 2026-08-30.** It recommends **accepting the leak as a named floor** —
+not for comfort, but because the candidate that would close the row needs
+`Router::dispatch`, which the project has declined to serve on separate grounds,
+and the candidate that narrows it buys **displacement, which D035 has already
+ruled is not closure**.
+
+Its §2 is the part worth reading twice: whether a caller may know *which*
+experts exist is not the question — it may, and a control-plane gate whose
+callers cannot is not a gate. What does not carry across is **addresses**. Load
+state has two contract homes where it is a value a caller asks for; an address
+has none, so learning it is not being told, it is reading a fact off the
+marshalled form of something given for another purpose.
+
+§5 lists what acceptance must include to be worth more than silence, and §6.4
+names the cost honestly: a criterion whose rows are mostly named floors is
+measuring the shape of the repository rather than the transparency.
 
 *L6 — 코드보다 **결정**이 먼저 필요하다. 이미 서비스되고 소비자가 있으므로,
 계약을 바꾸는 것과 이유를 적고 받아들이는 것 사이의 선택이다. 패치를 써서 열지
