@@ -62,7 +62,7 @@ The order below is what survived that:
 | 2 | **L5** — measure the killed target | **Done 2026-08-29.** The one item measurement confirmed was independent, and it was: a second arm on an existing fixture pair, landed without touching anything else. |
 | 3 | **L3** — the activation row's subject | **Not independent** — see below. Its subject is one of L1's population, so it is sequenced against L1 rather than run beside it. |
 | 4 | **L1 + L2 as one batch** | Once the decision lands. One fix per root cause, across every affected implementation — which is what makes L2 part of it rather than a separate patch. |
-| 5 | **L4** — a call travelling the other way through the seam | Retires the run's one language `SKIPPED` at the same time. |
+| 5 | **L4** — a call travelling the other way through the seam | Its `SKIPPED` half retired 2026-08-30; what is left is the protocol addition, the largest single item in §1. |
 | 6 | **L6's decision** | A served contract with consumers. Opened by writing the decision, never by writing the patch. |
 
 **Two items are decisions and one is a measurement.** Only three of the six are
@@ -258,12 +258,24 @@ What is left under this row is one thing and it is stated as one: a reference
 *arriving* at a foreign servant is a handle it cannot invoke, which needs a
 call travelling the other way through `orbweaver_gen::seam`.
 
-It also carries the run's one language `SKIPPED`: *no leak test changes language
-under a live caller yet; it waits on a Python servant mountable in a server the
-test owns.* One piece of work retires both — which is the reason to take it
-before anything that retires neither.
+**The `SKIPPED` half is done (2026-08-30) and the leak half is not.** That leg
+waited on *a Python servant mountable in a server the test owns*, which
+`orbweaver_gen::pychild::PythonChild` now is;
+`crates/orbweaver-gen/tests/what_a_caller_can_tell_about_a_language.rs` swaps
+Rust for Python behind one reference on one open connection, with its control
+run by `leak_controls.sh`. Counted skips went 16 to 15 and every one of the five
+transparencies is `MEASURED` by a leak leg with a live caller.
 
-*L4 — 남은 것은 하나이며, 그 하나가 계수된 `SKIPPED` 하나도 함께 물러나게 한다.*
+**What is left is the leak itself**, and it is a protocol addition rather than a
+test: `Answerer::ask` is *put this document, give me the next one*, and invoking
+an arriving reference needs a call travelling the other way — a message the seam
+does not have. Sized 2026-08-30 by reading it: a second message kind, the Rust
+side resolving a handle and invoking it, the Python runtime able to issue it,
+and a test. It is the largest single item left in §1.
+
+*L4 — `SKIPPED` 절반은 2026-08-30에 끝났다(다섯 투명성 전부 살아 있는 호출자로
+`MEASURED`). 남은 것은 테스트가 아니라 **프로토콜 추가**다: 도착한 참조를 호출하려면
+반대 방향으로 가는 호출이 필요한데 seam에 그 메시지가 없다. §1에 남은 가장 큰 항목이다.*
 
 ### L5 — Lifecycle: the second floor, a target *killed* rather than stopped
 
