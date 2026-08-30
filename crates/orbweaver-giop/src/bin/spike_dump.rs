@@ -21,11 +21,31 @@ fn hex_dump(label: &str, bytes: &[u8]) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let path = std::env::args().nth(1).unwrap_or_else(|| "spikes/echo.ior".into());
-    let op = std::env::args().nth(2).unwrap_or_else(|| "ping".into());
+    // `--address` prints the endpoint and stops. **This tool dials**: it makes
+    // a real call and prints what came back, which is what it is for — and it
+    // is therefore the wrong instrument to point at a fixture whose traffic is
+    // being recorded. Measured 2026-08-29: using it to find an address for a
+    // readiness probe in `spikes/wide_rust.sh` injected a call into the tap's
+    // conversation and took that script from 0 failures to 10. A probe must
+    // not be a caller, and a decoder that can only decode by dialling leaves a
+    // shell no choice but to parse CDR out of hex, which this repository has
+    // already refused once.
+    //
+    // *이 도구는 다이얼한다. 기록 중인 대화에 겨누면 안 된다 — 0 실패를 10으로
+    // 만들었다. **탐침은 호출자여서는 안 된다.***
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let address_only = args.first().map(String::as_str) == Some("--address");
+    let rest: Vec<&String> =
+        if address_only { args[1..].iter().collect() } else { args.iter().collect() };
+    let path = rest.first().map(|s| s.to_string()).unwrap_or_else(|| "spikes/echo.ior".into());
+    let op = rest.get(1).map(|s| s.to_string()).unwrap_or_else(|| "ping".into());
 
     let ior = Ior::parse(std::fs::read_to_string(&path)?.trim())?;
     let p = ior.primary()?;
+    if address_only {
+        println!("{}:{}", p.host, p.port);
+        return Ok(());
+    }
     println!(
         "endpoint {}:{}  object_key {} bytes  (IIOP {}.{})\n",
         p.host,

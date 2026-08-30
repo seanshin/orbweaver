@@ -156,6 +156,17 @@ start_rust_server() {
   "$BIN" serve "$D/$tag.server.ior" >"$D/$tag.rust.log" 2>&1 &
   RUST_PID=$!; PIDS+=("$RUST_PID")
   wait_for_file "$D/$tag.server.ior" 15 || { fail "$tag: our server did not publish an IOR"; sed 's/^/       /' "$D/$tag.rust.log" | tail -3; return 1; }
+  # **A fixed settle, kept deliberately.** Everywhere else in this repository a
+  # sleep after a readiness wait is the defect — *a published IOR is not an
+  # accepting listener* — and it was converted to a connect probe on
+  # 2026-08-29 in the JacORB group. It was tried here the same day and MADE
+  # THINGS WORSE: this fixture's traffic is being RECORDED by a tap, so any
+  # probe is traffic. Dialling with `spike-dump` injected a call and took this
+  # script from 0 failures to 10; a bare TCP connect, with nothing sent, still
+  # took it to 6. **A probe must not be a caller, and where everything that
+  # reaches the subject is recorded, there is no probe that is not one.** So
+  # this stays a sleep, and it is a refusal with a reason rather than an
+  # unconverted site.
   sleep 0.2
 }
 
@@ -165,6 +176,8 @@ start_tap() {
   python3 "$TAP" --ior "$ior" --out "$D/$tag.tapped.ior" --log "$D/$tag.tap.log" --op echo_wchar "$@" >"$D/$tag.tap.out" 2>&1 &
   TAP_PID=$!; PIDS+=("$TAP_PID")
   wait_for_file "$D/$tag.tapped.ior" 15 || { fail "$tag: the tap did not publish an IOR"; sed 's/^/       /' "$D/$tag.tap.out"; return 1; }
+  # A fixed settle, for the reason given at `start_server` above: the tap is
+  # the thing recording, so probing it is writing to the record.
   sleep 0.2
 }
 

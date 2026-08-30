@@ -81,6 +81,7 @@ __all__ = [
     "ValueType",
     "TYPES", "NAMES", "register", "register_alias", "register_name", "resolve",
     "to_json", "from_json", "call", "Bridge", "Loopback", "connect", "property",
+    "answer_calls", "serve_on_pipes",
     # The serving direction. `Servant` and `Op` are what a generated servant
     # class is built from, `Raise`/`Raising` are how one refuses, and
     # `dispatch_call` is the whole of it as a pure function.
@@ -1910,6 +1911,76 @@ def dispatch_call(servant, call):
     return {SEAM_REPLY_OK: {SEAM_REPLY_RETURNS: returns, SEAM_REPLY_OUTPUTS: outputs}}
 
 
+def answer_calls(servant, read_line, write_to, note, stop=None):
+    """The seam's servant loop, over whatever pipes it is handed.
+
+    Read a line, answer the call in it, write the reply, flush. Both directions
+    of the bridge use it: :meth:`Host.run`, where this process is the *parent*
+    and the pipes belong to a child bridge, and :func:`serve_on_pipes`, where
+    this process is the *child* and the pipes are its own.
+
+    ``stop`` is consulted after each call rather than between reads, because
+    this loop blocks on a line.
+    """
+    while True:
+        line = read_line()
+        if not line:
+            return
+        if not line.strip():
+            continue
+        document = json.loads(line)
+        call = document.get(SEAM_ENVELOPE_CALL)
+        if call is None:
+            continue
+        try:
+            reply = dispatch_call(servant, call)
+        except ServantError as e:
+            # The seam could not carry the answer. The caller is told the least
+            # wrong true thing — UNKNOWN, completion MAYBE, because the
+            # servant's method may well have run before the shape failed — and
+            # the message stays in this process, where somebody can act on it.
+            reply = {SEAM_REPLY_SYSTEM_EXCEPTION: {
+                SEAM_EXCEPTION_ID: "IDL:omg.org/CORBA/UNKNOWN:1.0",
+                SEAM_EXCEPTION_MINOR: 0,
+                SEAM_EXCEPTION_COMPLETED: SEAM_COMPLETED_MAYBE}}
+            note(str(e))
+        write_to.write(json.dumps(reply) + "\n")
+        write_to.flush()
+        if stop is not None and stop():
+            return
+
+
+def serve_on_pipes(servant, stop=None):
+    """Answer seam calls arriving on **this process's own** stdin.
+
+    The inverse of :class:`Host`, and the reason it exists is one sentence in
+    `spikes/leak_tests.sh`: the language leak leg could not be measured because
+    the only route to a Python servant was ``orbweaver-py-bridge --serve``,
+    **which binds its own listener** — so the Python servant arrived as an
+    *endpoint* rather than as a servant, and swapping the language became
+    swapping the address. A caller that dials a different address has been
+    *moved*, not re-implemented, and the two are different rows of D029 §6.1.
+
+    With this, a Rust process can spawn ``python3`` as a child, hand it a
+    servant, and mount the result as a `Dispatch` in a server **it owns** —
+    which is exactly what that leg says it waits on.
+
+    **stdout is the protocol.** Anything the servant prints there corrupts the
+    conversation; print to ``sys.stderr``. This function does not redirect
+    stdout on the servant's behalf, because silently moving a stream is worse
+    than a garbled line somebody can see.
+
+    *`Host`의 역. 언어 누출 다리가 막혀 있던 이유 한 문장 — 유일한 경로가 자기
+    리스너를 바인딩해서 파이썬 서번트가 서번트가 아니라 **엔드포인트**로
+    도착했고, 그러면 언어 교체가 **이동**이 된다. stdout은 프로토콜이다.*
+    """
+    import sys
+    def note(message):
+        sys.stderr.write("orbweaver servant: %s\n" % (message,))
+        sys.stderr.flush()
+    return answer_calls(servant, sys.stdin.readline, sys.stdout, note, stop)
+
+
 class Host(object):
     """The ``orbweaver-py-bridge`` process, serving a Python object.
 
@@ -1966,34 +2037,20 @@ class Host(object):
         ``stop`` is consulted after each call rather than between reads,
         because this loop blocks on a line; a servant that wants to stop while
         idle closes the host from another thread.
+
+        The loop itself is :func:`answer_calls`, shared with
+        :func:`serve_on_pipes`. What differs between the two is only *which*
+        pipes carry the conversation — writing it twice would be one protocol
+        with two implementations, which is the drift this project's one-home
+        rule exists to prevent.
         """
-        while True:
-            line = self._proc.stdout.readline()
-            if not line:
-                return
-            if not line.strip():
-                continue
-            document = json.loads(line)
-            call = document.get(SEAM_ENVELOPE_CALL)
-            if call is None:
-                continue
-            try:
-                reply = dispatch_call(servant, call)
-            except ServantError as e:
-                # The seam could not carry the answer. The caller is told the
-                # least wrong true thing — UNKNOWN, completion MAYBE, because
-                # the servant's method may well have run before the shape
-                # failed — and the message stays in this process, where
-                # somebody can act on it.
-                reply = {SEAM_REPLY_SYSTEM_EXCEPTION: {
-                    SEAM_EXCEPTION_ID: "IDL:omg.org/CORBA/UNKNOWN:1.0",
-                    SEAM_EXCEPTION_MINOR: 0,
-                    SEAM_EXCEPTION_COMPLETED: SEAM_COMPLETED_MAYBE}}
-                self._note(str(e))
-            self._proc.stdin.write(json.dumps(reply) + "\n")
-            self._proc.stdin.flush()
-            if stop is not None and stop():
-                return
+        return answer_calls(
+            servant,
+            self._proc.stdout.readline,
+            self._proc.stdin,
+            self._note,
+            stop,
+        )
 
     def _note(self, message):
         import sys

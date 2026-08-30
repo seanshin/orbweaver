@@ -247,6 +247,43 @@ when `trading_client.py` sits three.
 스윕은 53건을 냈고 47건이 그 오탐이었으며, 게이트가 0을 내는 것은 조인 것이 아니라
 고친 것이다.
 
+## A Python servant this process owns / 이 프로세스가 소유하는 파이썬 서번트
+
+`spikes/leak_tests.sh`'s language leg has been a counted `SKIPPED` since it was
+written, and it named its own blocker: the only route to a Python servant was
+`orbweaver-py-bridge --serve`, **which binds its own listener**, so the servant
+arrived as an *endpoint* and swapping the language became swapping the address.
+A caller made to dial elsewhere has been **moved** — a different row of D029
+§6.1 — so a leak test built that way would have measured the wrong row and
+looked green doing it.
+
+The route exists now, in two pieces and no new protocol:
+
+| | |
+|---|---|
+| `python_rt.serve_on_pipes` | the inverse of `Host`: answers seam documents on **this process's own** stdin/stdout |
+| `orbweaver_gen::pychild::PythonChild` | spawns `python3` as a child of this process and is an `Answerer`, so `seam::ForeignServant` makes it a plain `Dispatch` |
+
+`Host.run`'s loop was **extracted** into `python_rt.answer_calls` and both
+directions call it: writing it twice would be one protocol with two
+implementations. The child is spawned into its own process group and the group
+is signalled in `Drop` — *reaping a child is not reaping its tree*, measured
+once at twelve leaked processes.
+
+`crates/orbweaver-gen/tests/a_python_servant_this_process_owns.rs` measures the
+route and **says it is not the leak test**: the caller-across-a-swap test is
+what this unblocks, not what it is. Its controls: the Python servant answering a
+different value is caught (`left: 38, right: 37`, which is why the value is not
+0 — a default would answer that); a child that never serves is refused with
+`UNKNOWN`/`Maybe` rather than passing; and five runs leave **no `python3 -c`
+process and no orphan**, counted rather than read off a verdict.
+
+언어 다리가 막혀 있던 이유는 유일한 경로가 자기 리스너를 바인딩해서 파이썬
+서번트가 **엔드포인트로** 도착했기 때문이다 — 주소를 바꿔 다이얼하면 그것은
+**이동**이고, 이동과 언어는 D029 §6.1의 다른 행이다. 새 프로토콜은 없다:
+`Host.run`의 루프를 추출해 양방향이 함께 부른다. 이 테스트는 **누출 테스트가
+아니며** 그렇게 적는다.
+
 ## `knows` is required now / `knows`는 이제 필수다
 
 D036, approved 2026-08-29 (option A). The default that accepted every object key

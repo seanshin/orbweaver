@@ -84,6 +84,7 @@
 #![deny(missing_docs)]
 
 pub mod java;
+pub mod pychild;
 pub mod pyservant;
 pub mod python;
 pub mod rt;

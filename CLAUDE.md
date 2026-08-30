@@ -414,6 +414,25 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   그 비용은 디스크가 아니라 시간이다. 86만 파일에서 50분, 청소 후 221초, CI는
   194초. cargo는 매 호출마다 그 디렉터리를 읽는다. 테스트가 느린 것이 아니었다 —
   2002개가 85초에 통과한다.*
+- **A probe must not be a caller, and where everything reaching the subject is
+  recorded there is no probe that is not one.** The rule above — *a published
+  IOR is not an accepting listener, so wait until it accepts* — was converted
+  in the JacORB group on 2026-08-29 and then tried on `spikes/wide_rust.sh` the
+  same day, where it **made things worse**: that fixture's traffic is captured
+  by a tap and compared against recorded octets, so `spike-dump` (which
+  **dials**, and prints `sequential calls on one connection: 1` while doing it)
+  injected a call and took the script from **0 failures to 10**; a bare TCP
+  connect that sent nothing still took it to **6**. The fixed `sleep 0.2` there
+  is a **refusal with a reason**, not an unconverted site, and it says so where
+  it sits. `spike-dump --address` decodes and stops, because a decoder that can
+  only decode by dialling leaves a shell no choice but to parse CDR out of hex,
+  which this repository has already refused once. A sweep for this class found
+  **53 sites in 18 files** (2026-08-29) — converting them by count would be *a
+  batch scoped to a keyword rather than to the rule*, since some of those
+  sleeps are this same refusal. *탐침은 호출자여서는 안 되며, 대상에 닿는 모든
+  것이 기록되는 곳에는 호출자가 아닌 탐침이 없다. 규칙을 옮겨 적용했더니 0 실패가
+  10이 되었다 — 실행해서 알았지 읽어서 알지 못했다. 53곳을 수로 세어 바꾸는 것은
+  규칙이 아니라 키워드에 범위를 맞춘 배치다.*
 - **A completed client `connect` does not mean the server can accept yet.**
   On macOS loopback a non-blocking single `accept()` misses fresh connections
   ~5% of the time (measured 25/500 in stream E batch 2). Accept-side checks
