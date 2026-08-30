@@ -288,6 +288,28 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   나무를 거두는 것이 아니다. 세 계층이 각자 자기 범위 안에서 옳았고, 그 사이를
   아무도 소유하지 않았다. 누수하는 테스트는 수정 전후 모두 초록이었다 — 그래서
   대조군은 판정을 읽지 않고 프로세스를 센다.*
+- **A cleanup step that silently does nothing makes the next one load-bearing,
+  and the next one is usually the dangerous one.** Measured 2026-08-30.
+  `PythonChild::drop` began `let _ = self.child.stdin.take();` under a comment
+  reading *"Close stdin first"* — but `spawn` had already taken it, the live
+  `ChildStdin` was in `self.stdin`, and **the line closed nothing**. So the
+  child never saw EOF, never left by its own route, and the `kill -TERM
+  -<pgid>` underneath it became the thing actually reaping — a **process
+  group** signal, in a file whose child spawns nothing and therefore has no
+  tree. CI went from green in 22–29 minutes to **cancelled at four**, every run
+  after the commit that added the type, all three as `cargo test --workspace`
+  began, with the other two jobs green in each; **four harness runs here were
+  green over the same tree**, which is the `ppid=1` shape again — it does not
+  show locally. *Reaping a child is not reaping its tree* is a rule about
+  children that HAVE trees; applying it where there is none buys nothing and
+  puts the only cross-boundary signal in the file. NOT DIAGNOSED — a runner
+  cannot be reproduced from here — and the honest claim is the checkable one:
+  the only code that could signal outside its own child was removed, the no-op
+  that made it necessary was fixed, and CI was asked. It went green.
+  *조용히 아무것도 하지 않는 정리 단계는 다음 단계에 하중을 싣고, 그 다음 단계가
+  보통 위험한 쪽이다. 주석은 "stdin을 먼저 닫는다"였고 그 줄은 아무것도 닫지
+  않았다. 나무가 없는 자식에게 그룹 신호를 쓰는 것은 사는 것 없이 파일에서 유일한
+  경계 밖 신호를 두는 일이다. 로컬 네 번 초록, CI 세 번 4분 취소.*
 - **`ppid=1` is not a proof of ownership, and the sentence that says it is was
   written by the person repairing the leak above.** That backstop's premise —
   *"a process in our group whose parent is init; neither this shell nor its

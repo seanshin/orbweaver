@@ -417,12 +417,20 @@ here rather than above L1.
 These close no leak. They are here because every item in §1 is judged by an
 instrument, and an instrument that cannot go red makes §1 unfalsifiable.
 
-1. **The ledger renderer truncates a cell at an embedded pipe.** The lifecycle
-   cell ends `17 of this workspace's 63 serve sites pass ` in the harness's
-   output; in D029 the sentence is *"pass `|| false` — fixable rather than
-   fixed."* The renderer cut at the backtick-pipe. **Never conclude from a
-   truncated read** — applied to the instrument that reports priority zero.
-   Small, and it is the reader that must be fixed, not the sentence.
+1. ~~**The ledger renderer truncates a cell at an embedded pipe.**~~ **Fixed
+   2026-08-30.** `transparency.py` split each markdown row on every `|`, so a
+   cell containing an inline-code pipe was cut in half: the Lifecycle cell
+   reached the reader as `17 of this workspace's 63 serve sites pass ` and
+   stopped, losing *`|| false` — fixable rather than fixed*. The splitter
+   respects backtick spans now. Control: the old splitter, lifted from
+   `git show HEAD:`, **run inside the repository** — the first attempt ran it
+   from the scratchpad, where `ROOT` resolves elsewhere and it could not find
+   D029 at all, which is the same mistake this session made once already and
+   would have read as a passing control.
+
+   The sentence was not escaped in D029 to suit the parser: that would make the
+   document worse for every other reader to spare this one. *The tool is the
+   thing to fix.*
 2. **17 of 63 serve sites pass `|| false`** (D029's figure, dated 2026-08-27 by
    the cell it sits in). Fixable rather than fixed, and a re-measurement is owed
    before the number is quoted again — a crude grep on 2026-08-29 returns

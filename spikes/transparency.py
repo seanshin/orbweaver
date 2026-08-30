@@ -81,6 +81,42 @@ def _slug(display):
     return re.sub(r"[^a-z]", "", word.lower())
 
 
+def _split_row(line):
+    """A markdown table row into cells, respecting inline code spans.
+
+    **A naive `split("|")` cuts a cell in half at the first pipe inside a
+    backtick span**, and D029 §6.1's Lifecycle cell ends with ``pass `|| false`
+    — fixable rather than fixed``. The harness's ledger printed that cell as
+
+        17 of this workspace's 63 serve sites pass `
+
+    and stopped: the rest of the sentence, including the words *fixable rather
+    than fixed*, never reached the reader. Found 2026-08-29 by reading the
+    decision after reading the ledger and finding them different.
+
+    This is the *never conclude from a truncated read* rule turned on the
+    instrument that reports priority zero — and the tool is the thing to fix,
+    not the sentence. Escaping the pipes in D029 would make the document worse
+    for every other reader to spare this one parser.
+
+    *마크다운 셀을 파이프에서 그냥 쪼개면 백틱 안의 파이프에서 잘린다. 0순위를
+    보고하는 계기가 문장의 뒤쪽을 통째로 삼키고 있었다 — 문장이 아니라 도구를
+    고친다.*
+    """
+    out, cur, in_code = [], [], False
+    for ch in line.strip().strip("|"):
+        if ch == "`":
+            in_code = not in_code
+            cur.append(ch)
+        elif ch == "|" and not in_code:
+            out.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    out.append("".join(cur).strip())
+    return out
+
+
 def rows():
     try:
         with open(DOC, encoding="utf-8") as fh:
@@ -115,7 +151,7 @@ def rows():
             break
         if not line.startswith("|"):
             continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        cells = _split_row(line)
         if len(cells) < 3:
             continue
         if set("".join(cells)) <= set("-: "):
