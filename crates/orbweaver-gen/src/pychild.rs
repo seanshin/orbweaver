@@ -58,7 +58,12 @@ use crate::seam::Answerer;
 /// [`crate::seam::ForeignServant::new`].
 pub struct PythonChild {
     child: Child,
-    stdin: ChildStdin,
+    /// `Option` so `Drop` can actually **close** it. It was a bare
+    /// `ChildStdin` and `Drop` took `self.child.stdin` instead — which spawn
+    /// had already emptied — so the line whose comment said *close stdin first*
+    /// closed nothing, the child never saw EOF, and the signal below became
+    /// load-bearing when it was meant to be a backstop.
+    stdin: Option<ChildStdin>,
     stdout: BufReader<std::process::ChildStdout>,
     /// Set once the child has closed its end, so a servant whose Python side
     /// has gone answers the next call with a seam failure instead of blocking.
@@ -97,7 +102,7 @@ impl PythonChild {
         let mut child = cmd.spawn().map_err(|e| format!("python3 did not start: {e}"))?;
         let stdin = child.stdin.take().ok_or("the child has no stdin")?;
         let stdout = child.stdout.take().ok_or("the child has no stdout")?;
-        Ok(Self { child, stdin, stdout: BufReader::new(stdout), gone: false })
+        Ok(Self { child, stdin: Some(stdin), stdout: BufReader::new(stdout), gone: false })
     }
 }
 
@@ -107,8 +112,9 @@ impl Answerer for PythonChild {
             return Err("the servant closed its end".to_owned());
         }
         let document = Json::Object([("call".to_owned(), call.clone())].into_iter().collect());
-        writeln!(self.stdin, "{document}").map_err(|e| e.to_string())?;
-        self.stdin.flush().map_err(|e| e.to_string())?;
+        let pipe = self.stdin.as_mut().ok_or("the servant's input is already closed")?;
+        writeln!(pipe, "{document}").map_err(|e| e.to_string())?;
+        pipe.flush().map_err(|e| e.to_string())?;
         let mut line = String::new();
         loop {
             line.clear();
@@ -127,18 +133,37 @@ impl Answerer for PythonChild {
 
 impl Drop for PythonChild {
     fn drop(&mut self) {
-        // Close stdin first: a child blocked on `readline` leaves when its
-        // input ends, which is the exit that runs its own cleanup. The signal
-        // below is for the one that does not.
-        let _ = self.child.stdin.take();
-        #[cfg(unix)]
-        {
-            // The GROUP, not the leaf. `python3` may itself have children, and
-            // reaping a child is not reaping its tree — measured, twelve
-            // leaked processes from one harness run.
-            let pid = self.child.id() as i32;
-            let _ = Command::new("kill").arg("-TERM").arg(format!("-{pid}")).status();
-        }
+        // **Close the pipe, and mean it.** `serve_on_pipes` blocks on
+        // `sys.stdin.readline()`, so an EOF is how it leaves — through its own
+        // return, running whatever cleanup it has. This line used to be
+        // `self.child.stdin.take()`, which `spawn` had already emptied: it
+        // closed nothing, the child never saw EOF, and the group signal that
+        // followed became the thing actually doing the work.
+        drop(self.stdin.take());
+
+        // **No group signal, and that is a change of position.** This type's
+        // first version shelled out to `kill -TERM -<pgid>` on the reasoning
+        // that *reaping a child is not reaping its tree*, which is a rule this
+        // repository paid twelve leaked processes for. It does not apply here:
+        // a `serve_on_pipes` child spawns nothing, so there is no tree, and a
+        // group signal buys nothing while being the only thing in this file
+        // that reaches beyond the child.
+        //
+        // It is removed on evidence rather than on taste. CI runs went from
+        // green (22–29 minutes) to **cancelled at four minutes**, every one
+        // after the commit that added this type, all three dying as
+        // `cargo test --workspace` began, and none of it visible in four green
+        // harness runs here — which is the exact shape CLAUDE.md records for
+        // the `ppid=1` backstop: *it never showed locally, because a Terminal's
+        // `zsh` has a live parent.* NOT DIAGNOSED — a Linux runner cannot be
+        // reproduced from here — but this was the only mechanism in this code
+        // that signals anything it does not own, and the defect above is what
+        // made it load-bearing.
+        //
+        // *그룹 신호를 뺀다. 이 자식은 나무가 없어 그것이 사는 것은 없고, 이
+        // 파일에서 자기 것이 아닌 것에 닿는 유일한 기제였다. 진단이 아니라
+        // 증거다: 이 타입을 넣은 커밋부터 CI가 4분 만에 취소되기 시작했고
+        // 로컬에서는 네 번 초록이었다.*
         let _ = self.child.kill();
         let _ = self.child.wait();
     }

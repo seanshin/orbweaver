@@ -60,9 +60,9 @@ The order below is what survived that:
 |---|---|---|
 | 1 | **L1's decision** — where the key set lives | Opens the largest leak with the thing it actually needs. It blocks nothing else, so it starts first and finishes last. |
 | 2 | **L5** — measure the killed target | **Done 2026-08-29.** The one item measurement confirmed was independent, and it was: a second arm on an existing fixture pair, landed without touching anything else. |
-| 3 | **L3** — the activation row's subject | **Not independent** — see below. Its subject is one of L1's population, so it is sequenced against L1 rather than run beside it. |
+| 3 | **L3** — the activation row's subject | Steps 1–2 done 2026-08-30. **Step 3 downgraded** on sizing: it adds a deployment shape and no measurement, and priority zero ranks a leak above a capability. |
 | 4 | **L1 + L2 as one batch** | Once the decision lands. One fix per root cause, across every affected implementation — which is what makes L2 part of it rather than a separate patch. |
-| 5 | **L4** — a call travelling the other way through the seam | Its `SKIPPED` half retired 2026-08-30; what is left is the protocol addition, the largest single item in §1. |
+| 5 | **L4** — a call travelling the other way through the seam | `SKIPPED` half retired 2026-08-30. **D038 written**, awaiting the owner: the remaining half makes the seam re-entrant, which is a property and not a detail. |
 | 6 | **L6's decision** | **Written 2026-08-30 as D037**, awaiting the owner. A served contract with consumers — opened by writing the decision, never by writing the patch. |
 
 **Two items are decisions and one is a measurement.** Only three of the six are
@@ -237,11 +237,27 @@ behaves the way the closed leak says a deployment does.
    row measured beside the question rather than on it.* It is a harness group
    declaring `bears_on activation` now, and the row reads **2 groups** where it
    read 1. **Done 2026-08-29.**
-3. **Then wire one existing binary to the mount**, so the property is exercised
-   in a served shape. This is not a new capability: it is the difference between
-   *a leak closed in a type* and *a leak closed where a caller could reach it*.
-   **Still open**, and it is now the whole of L3: steps 1 and 2 moved what is
-   *measured*, and this step is the only one that would move what is *deployed*.
+3. **Wire one existing binary to the mount** — **downgraded 2026-08-30, after
+   sizing it.** The step was justified as *the difference between a leak closed
+   in a type and a leak closed where a caller could reach it*. **That difference
+   was already gone when the sentence was written**:
+   `a_mounted_expert_host_across_an_eviction.rs` binds a real server and dials
+   it over a socket (`Connection::connect`, then `process`, `describe` and
+   `delegate` as GIOP calls), so a caller does reach it, and since step 2 the
+   ledger counts it.
+
+   What step 3 would still add is a **deployment shape** — `spike_experts`
+   serving the mount beside `ExpertService`, routed by `knows`, which would be
+   a satisfying demonstration of the method D036 just made required. It adds no
+   measurement. **Priority zero ranks a leak above a capability, and this is
+   the capability**, so it stays named and unscheduled rather than done because
+   it was on a list. It becomes worth doing the moment something needs an
+   expert hosted in a running deployment; nothing does today.
+
+   *크기를 재고 강등했다(2026-08-30). "타입에서 닫힌 것과 호출자가 닿는 자리에서
+   닫힌 것의 차이"라는 근거는 그 문장을 쓸 때 이미 사라져 있었다 — 마운트
+   테스트는 진짜 서버를 띄우고 소켓으로 다이얼한다. 남는 것은 **배포 모양**이지
+   측정이 아니며, 0순위는 구멍을 기능보다 앞에 둔다.*
 
 Ordered after L1 because step 2's answer could have changed under L1's change.
 It did not — but the ordering was right for a reason that survives: this test's
@@ -266,12 +282,36 @@ Rust for Python behind one reference on one open connection, with its control
 run by `leak_controls.sh`. Counted skips went 16 to 15 and every one of the five
 transparencies is `MEASURED` by a leak leg with a live caller.
 
-**What is left is the leak itself**, and it is a protocol addition rather than a
-test: `Answerer::ask` is *put this document, give me the next one*, and invoking
-an arriving reference needs a call travelling the other way — a message the seam
-does not have. Sized 2026-08-30 by reading it: a second message kind, the Rust
-side resolving a handle and invoking it, the Python runtime able to issue it,
-and a test. It is the largest single item left in §1.
+**What is left is the leak itself, and the decision for it is written:**
+[`D038`](decisions/D038-a-call-travelling-the-other-way.md), drafted 2026-08-30.
+
+Sizing it changed what it is. It is not *a second message kind*; it is that
+`Answerer::ask` is strict request/response and every way of letting the far side
+invoke makes the seam **re-entrant** — the child sends a request while the
+parent waits for a reply, and the parent must answer it from inside its own
+`dispatch_body`. Three consequences that are properties rather than details: a
+**deadlock shape that does not exist today** becomes reachable; **all three**
+implementations of the protocol change; and the handle table, which is §4.7's
+enforcement point, stops being read-only.
+
+D038 recommends the nested-request candidate with three invariants that do not
+move — the far side never learns an address, the handle table stays the
+boundary, `ask`'s error contract is unchanged — and one rule the deadlock
+forces: *the nested call is made on a connection the servant owns, never on the
+one the request arrived on*. It refuses the *record it as a floor* candidate for
+a reason worth keeping: **nothing about being written in another language makes
+invoking impossible**, so filing it as a floor would be filing missing work as a
+property, and a row that does that has stopped measuring.
+
+It is the largest item in §1, and D038 asks for the owner's answer **before the
+work starts** rather than after: the protocol has three implementations and a
+re-entrancy no test currently reaches.
+
+(`spikes/decision_status.py` refused a first wording of that sentence — it said
+*"approved before it is started"* beside the decision's identifier and the gate
+read it as a claim about **that decision's status**. Third time in three days
+that decision-status vocabulary has been used here for something that is not a
+decision's status; the gate has caught all three.)
 
 *L4 — `SKIPPED` 절반은 2026-08-30에 끝났다(다섯 투명성 전부 살아 있는 호출자로
 `MEASURED`). 남은 것은 테스트가 아니라 **프로토콜 추가**다: 도착한 참조를 호출하려면
