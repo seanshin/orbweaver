@@ -152,8 +152,19 @@ o2=$(bash "$WORK/d2.sh" 2>&1); rc=$?
 want "declared transparencies print a count and their groups" "$o2" \
      "group(s) in this run, 0 of them red" \
      "ok          NAT rewriting"
-want "§6.1 is cited for every transparency, measured or not" "$o2" \
-     "unmeasured, per D029 §6.1 — where it leaks today:"
+# **What is asserted is that §6.1 is READ per row, and both halves of it are.**
+# The wording moved on 2026-08-31 and this expectation moved with it, which is
+# the control doing its job rather than being tuned: the ledger used to print
+# the whole cell under the single heading *"unmeasured, per D029 §6.1 — where it
+# leaks today"*, which labelled the entire cell unmeasured when a cell says both
+# what holds and what leaks. It now prints a STATUS token read from a fixed
+# position, then the cell. The token is the half that matters here — a row's
+# standing must not be something a reader infers from which sentence happens to
+# come first, because these cells grow by appending corrections and the oldest
+# claim keeps the front.
+want "§6.1's standing token and its cell are both read, per transparency" "$o2" \
+     "standing, per D029 §6.1: " \
+     "the cell in full — where it leaks today, and what closed:"
 # The property under test: *a group that declares a transparency and measures
 # none of it must not flip the row to measured.* It is a property of the LEDGER
 # and of nothing else, and until 2026-08-26 both this control and control 8

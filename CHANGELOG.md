@@ -10,6 +10,39 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**Every run now says where priority zero stands, and one row's opening had been
+contradicting its own table.** D029 §6.1's five cells grow by appending
+corrections, so the oldest claim keeps the position a reader takes as the
+answer. The Language row opened *"the construction leak is closed; three
+narrower ones remain (2026-08-26)"* while §6.1.1 — the table that sentence
+summarises — said both of the two it calls *"the ones worth closing next"* were
+closed, one of them that same afternoon. The three it was counting are that
+table's items 1–3, which its own header calls *differences in what a servant
+author can get wrong, not in what a correct servant answers*, each ending in a
+legal CORBA refusal. **A count of author-error cases is not a count of leaks.**
+
+Each row carries a `STANDING:` token in a fixed position now, from a closed set
+of three — `held`, `named floor`, `open leak` — and `transparency.py` refuses to
+read §6.1 at all if a row lacks one or invents a fourth. The harness prints the
+token per row and a tally after them, which is what makes D037 §6.4's sentence
+readable: *a criterion whose rows are mostly named floors is measuring the shape
+of the repository rather than the transparency.*
+
+**The five rows today: 1 held, 3 named floor, 1 open leak.** Language is held;
+backend is the one open leak, and its own body says why it stays open even
+though no servant this workspace builds answers for a key nobody activated.
+
+`STANDING:` and not `STATUS:`, and the gate is the reason: the first draft used
+`STATUS:`, which `spikes/decision_status.py` owns for a decision's own state, so
+five transparency rows became five unreadable decision markers and D029 read as
+claiming two states at once. **That gate has now refused decision vocabulary
+being borrowed for something that is not a decision four times in four days** —
+three of them already recorded in the plan, and this one mine.
+
+*이제 모든 실행이 0순위가 어디에 서 있는지 말한다. Language 행의 첫 문장이 자기
+표와 어긋나 있었다 — 저자 실수 사례의 수는 구멍의 수가 아니다. 다섯 행 오늘: held 1,
+named floor 3, open leak 1. `STATUS`가 아니라 `STANDING`인 이유는 게이트다.*
+
 **`Router::select`'s addresses are an accepted floor, and a test asserts it.**
 D037 approved 2026-08-31, option C. A caller learns where every candidate expert
 runs, and that is now a named limit under D029 §6.1's Location row rather than a

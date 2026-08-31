@@ -5764,11 +5764,39 @@ else
       diag_out "$tp_cite" 4 head
       fail_total=$((fail_total+1))
     else
-      echo "              unmeasured, per D029 §6.1 — where it leaks today:"
+      # **The row's STANDING, read from a fixed position rather than inferred
+      # from which sentence comes first.** These cells grow by appending
+      # corrections, so the oldest claim keeps the front — and until 2026-08-31
+      # the Language row opened *"three narrower ones remain (2026-08-26)"*
+      # while its own §6.1.1 table said both of the two it called *worth
+      # closing next* were closed. A reader takes the first sentence as the
+      # answer; the truth was in the last.
+      tp_status=$(python3 spikes/transparency.py --status "$tp_name" 2>&1); tp_st_rc=$?
+      if [ "$tp_st_rc" -ne 0 ] || [ -z "$tp_status" ]; then
+        echo "              FAIL D029 §6.1's STANDING token for $tp_name could not be read"
+        diag_out "$tp_status" 4 head
+        fail_total=$((fail_total+1))
+      else
+        echo "              standing, per D029 §6.1: $tp_status"
+      fi
+      echo "              the cell in full — where it leaks today, and what closed:"
       sed -e 's/^/                | /' <<<"$tp_cite"
     fi
   done <<<"$TP_NAMES"
   echo ""
+  # A tally, not a score. D037 §6.4 is the reason it is printed: *a criterion
+  # whose rows are mostly named floors is measuring the shape of the repository
+  # rather than the transparency.* That sentence is unreadable unless somebody
+  # can see how many floors there are, and counting five rows of prose by hand
+  # is how it stayed unread. No threshold and no verdict attaches to it.
+  tp_tally=$(python3 spikes/transparency.py --statuses 2>/dev/null | cut -f2 | sort | uniq -c \
+             | awk '{printf "%s %s, ", $1, substr($0, index($0,$2))}' | sed 's/, $//')
+  if [ -n "$tp_tally" ]; then
+    echo "  The five rows today: $tp_tally."
+    echo "  A tally and not a score — D037 §6.4: a criterion whose rows are mostly"
+    echo "  named floors is measuring the shape of the repository, not the transparency."
+    echo ""
+  fi
   echo "  Where a line above says D029 §6.1, the sentence is READ from that table"
   echo "  at run time, not copied into this harness. No score is printed here and"
   echo "  none should be derived: a shrinking unmeasured list is progress only"

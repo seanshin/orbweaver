@@ -30,6 +30,8 @@ Modes
   --title  <slug>       the display name §6.1 uses for it
   --tell   <slug>       §6.1's "the caller must not be able to tell" cell
   --cite   <slug>       §6.1's "status today" cell, wrapped, for the ledger
+  --status <slug>       that cell's status token: held | named floor | open leak
+  --statuses            every slug and its token, one per line
   --check  <file>...    every `bears_on <name>` in those files, validated
                         against §6.1 without running the harness
 
@@ -63,6 +65,48 @@ def _die(msg):
         "  this reader has no fall-back list on purpose.\n" % (DOC, SECTION)
     )
     raise SystemExit(2)
+
+
+#: What a §6.1 row's status cell may open with, and nothing else.
+#:
+#: **A row's standing should be READ, not inferred from where a sentence sits.**
+#: These cells grow by appending corrections, so the oldest claim keeps the
+#: leading position and the newest sits at the end — and the ledger prints the
+#: whole cell, which means a reader takes the standing from the first sentence
+#: and the truth is in the last. Measured 2026-08-31: the Language row opened
+#: *"the construction leak is closed; three narrower ones remain (2026-08-26)"*
+#: while its own §6.1.1 table said the two that were *"worth closing next"* were
+#: both closed, one of them that same afternoon. The count was typed, dated, and
+#: contradicted by the table it summarised.
+#:
+#: **`STANDING:` and not `STATUS:`, and the gate is why.** The first draft used
+#: `STATUS:`, which is the vocabulary `spikes/decision_status.py` reads for a
+#: DECISION's state — so five transparency rows became five unreadable decision
+#: markers, and that gate reported D029 as claiming APPROVED and PROPOSED in one
+#: file. It has refused this confusion four times now, three of them recorded in
+#: `PLAN-FIRST-COMPLETION`: a row's standing is not a decision's status and does
+#: not get to borrow its word.
+#:
+#: A closed set on purpose. `held` and `named floor` and `open leak` are the
+#: three things a transparency row can be, and a row that wants a fourth is
+#: making a claim this criterion has no vocabulary for — which is a conversation
+#: to have in the document, not a string to invent in a cell.
+STATUSES = ("held", "named floor", "open leak")
+
+
+def _status_of(cell):
+    """The status token a §6.1 status cell opens with, or `None`.
+
+    Read from the front, because that is the position a reader's eye takes as
+    the answer, and matched whole so `named floor` cannot be read out of a
+    sentence that merely contains the words.
+    """
+    text = _demarkup(cell).lstrip()
+    low = text.lower()
+    for token in sorted(STATUSES, key=len, reverse=True):
+        if low.startswith("standing: " + token):
+            return token
+    return None
 
 
 def _demarkup(s):
@@ -159,7 +203,13 @@ def rows():
         if cells[0].lower().startswith("transparency"):
             continue
         out.append(
-            (_slug(cells[0]), _demarkup(cells[0]), _demarkup(cells[1]), _demarkup(cells[2]))
+            (
+                _slug(cells[0]),
+                _demarkup(cells[0]),
+                _demarkup(cells[1]),
+                _demarkup(cells[2]),
+                _status_of(cells[2]),
+            )
         )
 
     if len(out) != 5:
@@ -171,6 +221,15 @@ def rows():
     slugs = [r[0] for r in out]
     if len(set(slugs)) != 5 or not all(slugs):
         _die("§%s produced non-unique or empty slugs: %s" % (SECTION, slugs))
+    missing = [r[0] for r in out if r[4] is None]
+    if missing:
+        _die(
+            "§%s row(s) %s open with no status token. Every status cell must begin "
+            "`**STANDING: <held|named floor|open leak>**` — a row's standing is read "
+            "from a fixed position, not inferred from which sentence happens to "
+            "come first, because these cells grow by appending corrections and the "
+            "oldest claim keeps the front" % (SECTION, ", ".join(missing))
+        )
     return out
 
 
@@ -183,12 +242,23 @@ def _find(slug):
 
 def main(argv):
     if len(argv) < 2:
-        _die("no mode given (--names, --title, --tell, --cite, --check)")
+        _die("no mode given (--names, --title, --tell, --cite, --status, --statuses, --check)")
     mode = argv[1]
 
     if mode == "--names":
         for r in rows():
             print(r[0])
+        return 0
+
+    if mode == "--status":
+        if len(argv) < 3:
+            _die("--status needs a name")
+        print(_find(argv[2])[4])
+        return 0
+
+    if mode == "--statuses":
+        for r in rows():
+            print("%s\t%s" % (r[0], r[4]))
         return 0
 
     if mode in ("--title", "--tell", "--cite"):
