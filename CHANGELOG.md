@@ -10,6 +10,40 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**The Backend row's own lower bound, half closed by looking — and there is one
+deployable servant behind it.** When that cell was rewritten on 2026-08-31 it
+recorded what it could not see: *a `knows` that consults something and still
+answers for a superset of the keys its servant holds.* The roster now also asks
+whether `knows` has a **branch** whose whole answer is `true`, rather than a
+body that is `true`, and the tree answers: **22 such servants, exactly 1 of
+which a build emits.**
+
+That one is `orbweaver_gen::seam::ForeignServant`:
+`match &self.identity { Some(i) => …, None => true }`. A foreign servant built
+without a home answers for every key a caller can fabricate — this row's leak
+with a deployment behind it. **And the rustdoc justifying it appeals to
+`Dispatch`'s default, which D036 deleted two days earlier**: the sentence
+outlived the thing it cited.
+
+It is pinned at one, by name and in both directions — a second such servant
+fails naming itself, and a count that *drops* fails saying the row moved,
+because a number that quietly falls is indistinguishable from a scan that
+stopped looking. Both controls were run.
+
+**What to do about it is asked, not settled**:
+[`D039`](docs/decisions/D039-what-a-servant-with-no-home-answers-for.md). The
+obvious repair — always carry an identity, the way D036 made `knows` always
+carry an answer — runs into an ordering fact rather than a preference: a servant
+is usually constructed before the server it will be mounted in has bound. Every
+*other* single-object servant in this workspace compares against the key it
+serves, so the seam is the outlier and it is the outlier in the direction of
+answering for more.
+
+*백엔드 행이 스스로 적어 둔 하한의 절반을 들여다봄으로써 닫았고, 그 뒤에 배포
+가능한 서번트가 **하나** 있었다. 그 옆의 근거는 D036이 이틀 전에 지운 기본값을
+인용하고 있었다. 하나로, 이름과 함께, 양방향으로 고정했다 — 수가 조용히 줄어드는
+것은 스캔이 그만 본 것과 구별되지 않는다. 무엇을 할지는 D039로 물었다.*
+
 **Every run now says where priority zero stands, and one row's opening had been
 contradicting its own table.** D029 §6.1's five cells grow by appending
 corrections, so the oldest claim keeps the position a reader takes as the

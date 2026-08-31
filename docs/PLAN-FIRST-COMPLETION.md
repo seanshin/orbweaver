@@ -47,8 +47,19 @@ in silence and a gate stays green over the drift.
 
 ### 1.0 The order, and what reviewing this plan changed about it
 
-> **Every repair in §1 has landed as of 2026-08-31; what is left here is two
-> decisions awaiting the owner.** This block exists because the table below and
+> **Every repair in §1 has landed as of 2026-08-31, and re-reading the criterion
+> afterwards found one more instance under the Backend row** — measured, pinned,
+> and asked in [`D039`](decisions/D039-what-a-servant-with-no-home-answers-for.md).
+> That is §0's method working rather than a gap in it: the list here comes from
+> the criterion at run time, so closing everything on it is the moment to read
+> the criterion again, not the moment to stop.
+>
+> The five rows today, as the harness prints them: **1 held, 3 named floor,
+> 1 open leak.**
+>
+> *§1의 수리는 전부 착지했고, 그 뒤에 기준을 다시 읽자 백엔드 행 아래에서 한
+> 사례가 더 나왔다 — 재고, 고정하고, D039로 물었다. 목록을 다 비운 순간은 멈출
+> 때가 아니라 기준을 다시 읽을 때다.* This block exists because the table below and
 > the sections under it went on reading as future work for two days after
 > `81cc546` closed rows 1 and 4 — while §L3's own text referred to L1's change
 > in the past tense, so the document disagreed with itself. It was found by

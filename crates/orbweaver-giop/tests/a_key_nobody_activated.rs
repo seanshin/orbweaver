@@ -711,6 +711,25 @@ mod roster {
         /// consults something can still answer for a superset of the keys its
         /// servant holds, and nothing here sees that.
         pub answers_unconditionally: bool,
+        /// `knows` has a branch whose whole answer is `true` — a `match` arm, an
+        /// `if`/`else` side, or the body itself.
+        ///
+        /// **The superset case, and the reason it is a separate field.**
+        /// [`answers_unconditionally`] asks whether the body IS `true`, which
+        /// D029 §6.1's Backend cell named as its own lower bound: *a `knows`
+        /// that consults something can still answer for a superset of the keys
+        /// its servant holds, and nothing here sees that.* This is what sees
+        /// part of it. Measured 2026-08-31, one deployable servant matched and
+        /// it was not a fixture: `seam::ForeignServant::knows` reads
+        /// `match &self.identity { Some(i) => …, None => true }`, so one built
+        /// without a home answers for every key a caller can fabricate.
+        ///
+        /// A **lower bound too**, and in the same direction: a `knows` that
+        /// answers from a set which is merely wider than the servant's holds no
+        /// `true` literal at all and is invisible here. What this closes is the
+        /// gap between *the body is `true`* and *some path is `true`*, which is
+        /// where the one real instance was hiding.
+        pub answers_true_on_some_path: bool,
         /// The impl is not compiled into any artifact a deployment runs: it
         /// sits inside a `#[cfg(test)]` item, or its file is a cargo test or
         /// bench target.
@@ -746,6 +765,14 @@ mod roster {
         /// Every servant whose `knows` never reads the key.
         pub fn unconditional(&self) -> Vec<&DispatchImpl> {
             self.impls.iter().filter(|i| i.answers_unconditionally).collect()
+        }
+        /// Every servant with a branch that answers `true` without reading it.
+        pub fn true_on_some_path(&self) -> Vec<&DispatchImpl> {
+            self.impls.iter().filter(|i| i.answers_true_on_some_path).collect()
+        }
+        /// The same, restricted to what a build emits — the reachable set.
+        pub fn true_on_some_path_in_a_build(&self) -> Vec<&DispatchImpl> {
+            self.impls.iter().filter(|i| i.answers_true_on_some_path && !i.test_only).collect()
         }
         /// The same, restricted to impls a build actually emits — which is the
         /// set a caller could ever reach, and therefore the one the Backend row
@@ -1161,6 +1188,7 @@ mod roster {
         overrides: bool,
         elsewhere: bool,
         unconditional: bool,
+        true_on_some_path: bool,
         /// Offset of the impl's opening brace, for the span test.
         at: usize,
     }
@@ -1247,10 +1275,26 @@ mod roster {
         // nothing but `true` trims to exactly that. The test is on the whole
         // body rather than on a `contains`, because `k == KEY || true` and
         // `if x { true } else { … }` both contain it and neither is this.
-        let unconditional = fn_body(body, b"knows")
-            .map(|inner| {
-                let text = String::from_utf8_lossy(inner);
-                matches!(text.trim(), "true" | "true;")
+        let knows_body = fn_body(body, b"knows").map(|b| String::from_utf8_lossy(b).into_owned());
+        let unconditional =
+            knows_body.as_deref().map(|t| matches!(t.trim(), "true" | "true;")).unwrap_or(false);
+        // A branch whose whole answer is `true`: a `match` arm (`=> true,`), an
+        // `if`/`else` side (`{ true }`), or the body itself. Comments were
+        // blanked to spaces before this ran, so a `true` in prose is invisible;
+        // `k == KEY || true` is deliberately NOT matched, because the `true`
+        // there is an operand rather than a branch's whole answer and catching
+        // it would make this flag every short-circuit in the tree.
+        let true_on_some_path = knows_body
+            .as_deref()
+            .map(|t| {
+                unconditional
+                    || t.contains("=> true,")
+                    || t.contains("=> true }")
+                    || t.contains("{ true }")
+                    || t.split_whitespace()
+                        .collect::<Vec<_>>()
+                        .windows(2)
+                        .any(|w| w == ["{", "true"] || w == ["true", "}"])
             })
             .unwrap_or(false);
         // **The wrong-hook hunt, widened to the population D036 left behind.**
@@ -1265,7 +1309,7 @@ mod roster {
         let elsewhere = (!overrides || unconditional)
             && (code[brace..end.min(n)].contains("dispatch_target")
                 || code[brace..end.min(n)].contains("parse_key"));
-        Some(Found { subject, overrides, elsewhere, unconditional, at: brace })
+        Some(Found { subject, overrides, elsewhere, unconditional, true_on_some_path, at: brace })
     }
 
     /// `root` decides only whether `rel` is a cargo test target; pass
@@ -1287,6 +1331,7 @@ mod roster {
                         overrides_knows: found.overrides,
                         checks_in_another_hook: found.elsewhere,
                         answers_unconditionally: found.unconditional,
+                        answers_true_on_some_path: found.true_on_some_path,
                         test_only: target_only
                             || spans.iter().any(|(s, e)| found.at > *s && found.at < *e),
                     });
@@ -1431,6 +1476,19 @@ fn no_servant_a_build_emits_answers_for_a_key_nobody_activated() {
         unconditional.len(),
         reachable.len(),
     );
+    let superset = scan.true_on_some_path_in_a_build();
+    println!(
+        "  of those, {} answer `true` on SOME path without reading the key, {} in code a \
+         build emits",
+        scan.true_on_some_path().len(),
+        superset.len(),
+    );
+    for i in &superset {
+        println!(
+            "  true-on-a-path  {}:{}  {}   ** a build emits this **",
+            i.file, i.line, i.subject
+        );
+    }
     for i in &unconditional {
         println!(
             "  unconditional  {}:{}  {}{}",
@@ -1506,6 +1564,47 @@ fn no_servant_a_build_emits_answers_for_a_key_nobody_activated() {
         wrong_hook_in_a_build.len(),
         named(&wrong_hook_in_a_build),
     );
+    // **The superset case, measured rather than described.** D029 §6.1's Backend
+    // cell named this as its own lower bound — *a `knows` that consults
+    // something can still answer for a superset of the keys its servant holds,
+    // and nothing here sees that.* Part of it is visible: a `knows` with a
+    // branch whose whole answer is `true`. Measured 2026-08-31, the tree holds
+    // exactly ONE such servant that a build emits, and it is not a fixture:
+    // `seam::ForeignServant`, whose `knows` reads
+    // `match &self.identity { Some(i) => …, None => true }`.
+    //
+    // **Pinned at one, with its name, and the number is not to be edited.** A
+    // second such servant is a second endpoint where a caller can fabricate a
+    // key and be answered, and what to do about the first is a design question
+    // — a `ForeignServant` usually exists before its server binds, so an
+    // identity cannot simply be required — which is why it is asked in a
+    // decision rather than settled here. A reader who finds this red has added
+    // one: name it in that decision, do not widen the number.
+    //
+    // The bound is a lower one in the same direction as everything else on this
+    // row: a `knows` answering from a set merely wider than its servant's holds
+    // no `true` literal and is invisible to any of this.
+    let superset_known: &[&str] = &["crates/orbweaver-gen/src/seam.rs"];
+    let unexpected: Vec<&roster::DispatchImpl> =
+        superset.iter().copied().filter(|i| !superset_known.contains(&i.file.as_str())).collect();
+    assert!(
+        unexpected.is_empty(),
+        "{} servant(s) a build emits answer `true` on some path of `knows` without reading \
+         the key, beyond the one D029 §6.1's Backend cell names. Each is an endpoint where a \
+         caller can fabricate an object key and be answered: {}",
+        unexpected.len(),
+        named(&unexpected),
+    );
+    assert_eq!(
+        superset.len(),
+        1,
+        "the Backend row names exactly one such servant and the roster found {}. If one was \
+         REMOVED, that is the row moving and D029 §6.1 is what to edit — a count that quietly \
+         drops is indistinguishable from a scan that stopped looking: {}",
+        superset.len(),
+        named(&superset),
+    );
+
     // **The measurement this test carries now, and the one D029 §6.1's Backend
     // row is a claim about.**
     //
@@ -1597,11 +1696,20 @@ fn the_roster_refuses_to_be_quiet_about_finding_nothing() {
                 fn knows(&self, _k: &[u8]) -> bool { true }
             }
         }
+        impl Dispatch for SupersetOnOnePath {
+            // The shape that was really in this tree: it READS the key on one
+            // path and answers `true` on another, so `answers_unconditionally`
+            // is false and the servant still answers for every key a caller
+            // fabricates when the option is `None`.
+            fn knows(&self, k: &[u8]) -> bool {
+                match &self.home { Some(h) => h.oid_of(k).is_some(), None => true }
+            }
+        }
     "##;
 
     let mut found = Vec::new();
     roster::scan_source("synthetic.rs", SYNTHETIC, &mut found);
-    let seen: Vec<(&str, bool, bool, bool, bool)> = found
+    let seen: Vec<(&str, bool, bool, bool, bool, bool)> = found
         .iter()
         .map(|i| {
             (
@@ -1610,19 +1718,25 @@ fn the_roster_refuses_to_be_quiet_about_finding_nothing() {
                 i.checks_in_another_hook,
                 i.answers_unconditionally,
                 i.test_only,
+                i.answers_true_on_some_path,
             )
         })
         .collect();
     assert_eq!(
         seen,
+        // The last column is `answers_true_on_some_path`, and the two rows that
+        // differ from `answers_unconditionally` are the whole point of adding
+        // it: `AlsoLooksUnconditional` has a `{ true }` branch and reads the
+        // key, and `SupersetOnOnePath` is the shape that was really in the tree.
         vec![
-            ("Overrider", true, false, false, false),
-            ("Inheritor<D>", false, false, false, false),
-            ("WrongHook<D>", false, true, false, false),
-            ("Unconditional", true, false, true, false),
-            ("LooksUnconditional", true, false, false, false),
-            ("AlsoLooksUnconditional", true, false, false, false),
-            ("BehindCfgTest", true, false, true, true),
+            ("Overrider", true, false, false, false, false),
+            ("Inheritor<D>", false, false, false, false, false),
+            ("WrongHook<D>", false, true, false, false, false),
+            ("Unconditional", true, false, true, false, true),
+            ("LooksUnconditional", true, false, false, false, false),
+            ("AlsoLooksUnconditional", true, false, false, false, true),
+            ("BehindCfgTest", true, false, true, true, true),
+            ("SupersetOnOnePath", true, false, false, false, true),
         ],
         "the roster parser mis-read source written to be read: it either lost an impl, \
          counted a decoy, or put an impl in the wrong class. Anything it reports about the \
@@ -1667,6 +1781,9 @@ fn the_roster_refuses_to_be_quiet_about_finding_nothing() {
         overrides_knows,
         checks_in_another_hook,
         answers_unconditionally,
+        // The control's synthetic rows exercise `verdict`, which does not read
+        // this field; the parser rows above are what exercise it.
+        answers_true_on_some_path: answers_unconditionally,
         test_only,
     };
     // A scan this workspace could produce and which nothing is wrong with:
