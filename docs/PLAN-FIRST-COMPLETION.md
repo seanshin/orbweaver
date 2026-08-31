@@ -79,7 +79,7 @@ The order below is what survived that:
 | 3 | **L3** — the activation row's subject | Steps 1–2 done 2026-08-30. **Step 3 downgraded** on sizing: it adds a deployment shape and no measurement, and priority zero ranks a leak above a capability. |
 | 4 | **L1 + L2 as one batch** | **Done 2026-08-29 in `81cc546`**, as one batch exactly as this row asked. The default is deleted, 22 implementations state their answer, and both L2 spikes moved their check into `knows` via `Poa::serves`. |
 | 5 | **L4** — a call travelling the other way through the seam | **Done 2026-08-31.** D038 approved, option A; the seam is re-entrant and a foreign servant invokes a reference it was handed. This was the largest item in §1 and is the last leak in it. |
-| 6 | **L6's decision** | **Approved 2026-08-31** — D037 option C, a named floor. What remains is landing §5's three conditions, which is what separates an accepted floor from silence. |
+| 6 | **L6's decision** | **Done 2026-08-31.** D037 approved, option C, and §5's three conditions landed with it: the floor stated in the contract, asserted by a test with its own control, and the reason recorded as a reason. |
 
 **Two items are decisions and one is a measurement.** Only three of the six are
 repairs. A plan that reported *"six leaks"* as one number would be saying a

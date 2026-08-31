@@ -18,6 +18,27 @@ that names a file will sweep that file.* So the sweep lands with the scan, over
 `git ls-files`, and the rule's implementation lives in one place
 (`spikes/lib/accepting.sh`) rather than being restated at each good site.
 
+# What this scan does NOT see, and how that was found
+
+**It hunts a spelling, and the rule is wider than the spelling.** On 2026-08-31
+harness 59 failed `LOCATION_FORWARD vs _PERM` with *"the client never made its
+first call"* while four standalone runs passed. The cause was in
+`spikes/perm_fallback.sh`, which waits with its own `wait_file` helper and then
+a `sleep 0.3` — the same defect in a shape this regex cannot match, and the
+script **named it in its own comment**: *"The IOR file is written before the
+accept loop starts; give it a beat (the same 0.3 s run_checks.sh gives
+spike-server)."* The diagnosis was right, the remedy was a guess, and the
+precedent it cited had just been deleted.
+
+That site is converted. What is recorded here is the limit: *a batch scoped to a
+keyword will fix a keyword.* A wait that stops at the IOR file can be written as
+`[ -s x.ior ] && sleep`, as a helper called with the path, or as anything else,
+and only the first is caught. Widening the regex to every `.ior` near every
+`sleep` was tried and rejected — it flags correct loops that sleep BETWEEN
+tries, which is the shape the rule asks for. The durable defence is that the
+helper exists and is the obvious thing to reach for, not that this scan is
+exhaustive; it is not, and saying so is better than a number that implies it is.
+
 # What is excluded, by the rule and not by oversight
 
 `spikes/nat/` measures an address that is deliberately NOT dialable from where

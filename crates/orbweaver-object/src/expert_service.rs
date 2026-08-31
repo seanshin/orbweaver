@@ -1935,6 +1935,117 @@ mod tests {
             .collect()
     }
 
+    /// Distinct addresses, one per expert, for the floor below.
+    ///
+    /// `expert_ref` gives every expert the same host and port, which is right
+    /// for the ordering tests and wrong for a test about **addresses**: three
+    /// identical ones would let a `select` that dropped every profile but the
+    /// first still pass.
+    fn expert_ref_at(name: &str, host: &str, port: u16) -> Ior {
+        Ior {
+            type_id: EXPERT_ID.to_owned(),
+            profiles: vec![IiopProfile {
+                version: Version::V1_2,
+                host: host.into(),
+                port,
+                object_key: name.as_bytes().to_vec(),
+                components: Vec::new(),
+            }],
+        }
+    }
+
+    /// The same routing history `routed()` builds, with one address per expert.
+    fn routed_at_distinct_addresses() -> (ExpertService, Vec<(String, u16)>) {
+        const PLACES: [(&str, u16); 3] =
+            [("192.0.2.7", 4242), ("192.0.2.8", 4243), ("192.0.2.9", 4244)];
+        let names = ["expert-a", "expert-b", "expert-c"];
+        let svc = service();
+        for (name, (host, port)) in names.iter().zip(PLACES) {
+            svc.register_expert(expert_ref_at(name, host, port), &cap(name, 10)).unwrap();
+        }
+        for _ in 0..3 {
+            svc.record_hit("expert-b");
+        }
+        svc.record_hit("expert-c");
+        let expected = ["expert-b", "expert-c", "expert-a"]
+            .iter()
+            .map(|n| {
+                let at = names.iter().position(|x| x == n).unwrap();
+                (PLACES[at].0.to_owned(), PLACES[at].1)
+            })
+            .collect();
+        (svc, expected)
+    }
+
+    /// **The named floor: a selection hands the caller every candidate address.**
+    ///
+    /// D037, approved 2026-08-31, option C — the exposure is accepted as a
+    /// floor under D029 §6.1's Location row, and §5's second condition is *a
+    /// test that the addresses are what the caller sees, so the day somebody
+    /// proxies them the row moves deliberately.*
+    ///
+    /// **A floor nobody asserts is a floor that can quietly stop being one.**
+    /// That is the argument D035's approval made for the lifecycle floor and
+    /// the reason L5 was worth measuring though its row did not move. What this
+    /// prevents is not somebody re-introducing a leak — it is somebody removing
+    /// one while nothing records that a criterion row became false in the good
+    /// direction, which reads exactly like a row nobody measured.
+    ///
+    /// **If this fails because the addresses are gone, do not repair the
+    /// assertion.** The floor has moved; D029's Location cell and D037 are what
+    /// should be edited.
+    ///
+    /// The reason it is a floor is a reason and not an intention (§5's third
+    /// condition): closing the row needs `Router::dispatch` to be the only way
+    /// through, refused on separate grounds (D006 option E) that D037 does not
+    /// reopen, and the candidate that narrows the exposure buys displacement,
+    /// which D035 already ruled is not closure.
+    ///
+    /// *아무도 주장하지 않는 바닥은 조용히 바닥이기를 그만둘 수 있다.*
+    #[test]
+    fn a_selection_hands_the_caller_every_candidate_address() {
+        let (svc, expected) = routed_at_distinct_addresses();
+        let (g, qos) = open(10);
+        let chosen = svc.select(&g, &qos).expect("the selection succeeds");
+
+        assert_eq!(chosen.len(), 3, "three registered, top_k 10, so all three come back");
+        let places: Vec<(String, u16)> = chosen
+            .iter()
+            .flat_map(|i| i.profiles.iter().map(|p| (p.host.clone(), p.port)))
+            .collect();
+        assert_eq!(
+            places, expected,
+            "the references a caller decodes carry the host and port each expert was \
+             registered under — D029 §6.1's Location row leaking, accepted as a named floor \
+             by D037 option C"
+        );
+        assert!(
+            chosen.iter().all(|i| !i.profiles.is_empty()),
+            "an entry with no profile carries no address at all, which is the shape a \
+             proxying `select` would produce — the change this test exists to make \
+             deliberate rather than silent"
+        );
+    }
+
+    /// The other half of D037 §2, so the assertion above is not misread.
+    ///
+    /// Whether a caller may know **which** experts exist is not the question:
+    /// it may. `Router` is a control-plane gate and a gate whose callers cannot
+    /// see the candidates is not a gate. What does not carry across is
+    /// addresses — load state has two contract homes where it is a value a
+    /// caller asks for, and an address has none.
+    #[test]
+    fn which_experts_exist_is_not_the_part_that_leaks() {
+        let (svc, _) = routed_at_distinct_addresses();
+        let (g, qos) = open(10);
+        assert_eq!(
+            keys(&svc.select(&g, &qos).unwrap()),
+            ["expert-b", "expert-c", "expert-a"],
+            "the caller learns which experts were selected and in what order, and that is a \
+             value it asked for rather than a side channel"
+        );
+    }
+
     /// The ordering and the truncation, together: best first by `route_freq`,
     /// ties on ascending id, and never more than `top_k`.
     #[test]

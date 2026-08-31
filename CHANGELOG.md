@@ -10,6 +10,43 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**`Router::select`'s addresses are an accepted floor, and a test asserts it.**
+D037 approved 2026-08-31, option C. A caller learns where every candidate expert
+runs, and that is now a named limit under D029 §6.1's Location row rather than a
+hazard nobody had decided about. §5's three conditions landed with it, and they
+are the whole of what separates an accepted floor from silence: the floor is
+**stated where the contract is** — `corpus/golden/22`'s comment beside `select`
+is a statement of the limit rather than an observation about a risk; it is
+**asserted by a test**, so the day somebody proxies those references the row
+moves deliberately instead of quietly; and **the reason is a reason, not an
+intention** — closing it needs `Router::dispatch`, refused on separate grounds
+that D037 does not reopen, and narrowing it buys displacement, which D035
+already ruled is not closure.
+
+A second test sits beside the first so the floor is not misread: whether a
+caller may know *which* experts exist is not the question — it may, `Router`
+being a control-plane gate. What does not carry across is addresses. The
+control for the floor is a `select` that hands back references with no profile,
+and the test goes red.
+
+**And a fixed guess that named its own defect.** Harness 59 failed
+`LOCATION_FORWARD vs _PERM` with *"the client never made its first call"* while
+four standalone runs passed. `spikes/perm_fallback.sh` waits with its own
+helper and then `sleep 0.3`, under a comment reading *"The IOR file is written
+before the accept loop starts; give it a beat (the same 0.3 s run_checks.sh
+gives spike-server)."* The diagnosis was right, the remedy was a guess, and the
+precedent it cited had just been deleted. It shares the accept-wait now.
+
+That also names what the sweep's scan does not see: **it hunts a spelling**, and
+this was the same rule written as a helper call. The scan says so rather than
+implying it is exhaustive — widening it to every `.ior` near every `sleep` was
+tried and rejected, because it flags the correct loops that sleep *between*
+tries.
+
+*`select`의 주소는 이제 **이름 붙인 바닥**이고, 테스트가 그것을 주장한다 — 서술이
+아니라. 그리고 자기 결함을 주석에 적어 두고도 추측으로 처리하던 `sleep 0.3`이
+하나 더 있었다. 스캔은 규칙이 아니라 **철자**를 사냥한다는 것을 스스로 적는다.*
+
 **A call travels the other way through the seam, and the last leak under the
 Language row is closed.** D038 approved 2026-08-31, option A. A reference
 *arriving* at a foreign servant used to be a handle it could pass back and not

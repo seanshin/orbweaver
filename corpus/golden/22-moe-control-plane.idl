@@ -62,9 +62,33 @@ module moe {
 
   //@ ai_desc: Control-plane gate: selects and dispatches to experts
   interface Router {
-    // Hands back a whole sequence of dialable experts. Reading nothing and
-    // widening reach by N addresses at once is precisely the case §4.7's
-    // bearer-address rule exists for.
+    // ACCEPTED LIMIT, not a hazard to be fixed later: this hands back a whole
+    // sequence of dialable experts, so a caller learns where every candidate
+    // runs. D037, approved 2026-08-31, option C — a named floor under D029
+    // §6.1's Location row.
+    //
+    // The reason is a reason and not an intention. Closing it needs
+    // `Router::dispatch` to be the only way through, which this project has
+    // declined to serve on separate grounds (D006 option E), and that refusal
+    // is a different decision from this one. The candidate that merely narrows
+    // the exposure buys displacement, which D035 already ruled is not closure.
+    //
+    // What is NOT the question, per D037 §2: whether a caller may know *which*
+    // experts exist. It may — this interface is a control-plane gate and a gate
+    // whose callers cannot is not a gate. What does not carry across is
+    // ADDRESSES: load state has two contract homes where it is a value a caller
+    // asks for, and an address has none, so learning it is not being told, it
+    // is reading a fact off the marshalled form of something given for another
+    // purpose.
+    //
+    // `crates/orbweaver-trading/tests/a_selection_hands_back_addresses.rs`
+    // asserts this floor rather than describing it, so the day somebody proxies
+    // these references the row moves deliberately instead of quietly.
+    //
+    // *받아들인 한계이지 나중에 고칠 위험이 아니다. 닫으려면 `Router::dispatch`가
+    // 필요하고 그 거절은 별개의 결정이며, 좁히는 후보는 D035가 이미 폐쇄가
+    // 아니라고 판정한 변위를 살 뿐이다. 질문은 어떤 전문가가 있는지 알아도 되는가가
+    // 아니다 — 그건 알아도 된다. 건너가지 않는 것은 **주소**다.*
     //@ ai_effect: read_only
     //@ ai_authz: moe.router.select
     ExpertSeq  select(in GateSignal g, in Constraints qos);

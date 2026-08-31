@@ -70,6 +70,8 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
+# The accept-wait, so this script asks the same question `run_checks.sh` does.
+. "$ROOT/spikes/lib/accepting.sh"
 
 expect_temporary=reask
 expect_permanent=report
@@ -190,22 +192,28 @@ run_omni() {
     ORBWEAVER_PING_ANSWER=2 "$bin" "$tior" 127.0.0.1 0 >"$tlog" 2>&1 &
     local tpid=$!
     pids+=("$tpid")
-    if ! wait_file "$tior" 20; then
-      fail "$label  $st: the target server did not publish an IOR ($(tail -2 "$tlog" | tr '\n' ' '))"
+    if ! wait_accepting "$tior" --deadline 20 --ready "$tlog" "^READY$"; then
+      fail "$label  $st: the target server never accepted ($(tail -2 "$tlog" | tr '\n' ' '))"
       continue
     fi
     ORBWEAVER_FORWARD_TO="$tior" ORBWEAVER_FORWARD_STATUS="$st" ORBWEAVER_PING_ANSWER=1 \
       "$bin" "$oior" 127.0.0.1 0 >"$olog" 2>&1 &
     local opid=$!
     pids+=("$opid")
-    if ! wait_file "$oior" 20; then
-      fail "$label  $st: the original server did not publish an IOR ($(tail -2 "$olog" | tr '\n' ' '))"
+    if ! wait_accepting "$oior" --deadline 20 --ready "$olog" "^READY$"; then
+      fail "$label  $st: the original server never accepted ($(tail -2 "$olog" | tr '\n' ' '))"
       kill "$tpid" 2>/dev/null; wait "$tpid" 2>/dev/null
       continue
     fi
-    # The IOR file is written before the accept loop starts; give it a beat
-    # (the same 0.3 s run_checks.sh gives spike-server).
-    sleep 0.3
+    # **The `sleep 0.3` that stood here named its own defect and did it anyway.**
+    # It read: *"The IOR file is written before the accept loop starts; give it
+    # a beat (the same 0.3 s run_checks.sh gives spike-server)."* The diagnosis
+    # was right and the remedy was a guess — and the precedent it cited is gone,
+    # because that 0.3 s in `run_checks.sh` was replaced on 2026-08-31 by the
+    # accept-wait this file now shares. Harness 59 is what found it: this group
+    # failed with *"the client never made its first call"* while four standalone
+    # runs passed, which is what a race under load looks like. The wait above
+    # asks the endpoint, so there is nothing left to give a beat to.
 
     python3 spikes/perm_fallback_client.py "$oior" "$ready" "$go" >"$cout" 2>"$cerr" &
     local cpid=$!
