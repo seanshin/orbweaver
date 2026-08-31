@@ -5113,6 +5113,53 @@ fi
 # were 513 and 509 — comments quoting `serve(..., || false)` counted as
 # servers, and a directory walk counting the eight agent worktrees as eight
 # more copies of the repository.
+# ── Nothing in CI bills, while this repository is public ────────────────────
+#
+# A GATE, unlike the report below it, because unlike "how many servers may be
+# unstoppable" this one HAS a defensible number and the number is zero: a public
+# repository's standard runners cost nothing, and the two things that bill
+# anyway — a larger runner and Git LFS — are either present or not.
+#
+# Measured 2026-08-31 against the account's own billing rather than a policy
+# page: `orbweaver` shows grossAmount $43.93 and **netAmount $0.00 on every line**
+# in August and does not appear in July at all, while `werubworker`, also public,
+# ran 145 minutes of macOS 3-core at $0.062/min in the same month and also netted
+# $0.00. That is this account's evidence that visibility, not SKU, is what makes
+# a run free.
+#
+# The claim it replaces was a sentence in a conversation. One edited `runs-on:`
+# would have made it false with nothing going red.
+#
+# The scan is an ALLOW-list over the standard runner labels, not a blocklist over
+# the billed ones: an organisation names its own larger runners, so the hazard's
+# namespace is open and a blocklist is green on every name nobody thought of.
+# Its own negative control found two — `ubuntu-22.04-arm64-xl` and the hazard
+# moved one line away into a `matrix` — before it landed.
+#
+# The `--probe` gate is what makes silence here mean anything, and it asserts the
+# REASON each hazard is refused rather than the refusal: three separate strips of
+# the scan left an earlier probe green, because with the allow-list gone an
+# expression is still refused for naming an unknown label, and with block-form
+# reading gone a `group:` is still refused for naming nothing at all.
+hr "nothing in CI bills while this repository is public"
+nb_probe_rc=0
+python3 spikes/no_billable_ci.py --probe >/dev/null 2>&1 || nb_probe_rc=$?
+if [ "$nb_probe_rc" -ne 0 ]; then
+  echo "  FAIL the billable-surface scan cannot see, for the reason it exists to"
+  echo "       see it by, a hazard it synthesises ($(rc_says "$nb_probe_rc")), so"
+  echo "       its silence over ci.yml means nothing"
+  python3 spikes/no_billable_ci.py --probe 2>&1
+  fail_total=$((fail_total+1))
+else
+  # The whole verdict, never its first line: the second carries the measurement
+  # the first one's "nothing here bills" is a claim about.
+  nb_out=$(python3 spikes/no_billable_ci.py 2>&1); nb_rc=$?
+  printf '%s\n' "$nb_out"
+  if [ "$nb_rc" -ne 0 ]; then
+    fail_total=$((fail_total+1))
+  fi
+fi
+
 hr "how many servers nothing can stop (D029 §6.1 lifecycle, a report)"
 ss_probe_rc=0
 python3 spikes/serve_sites.py --probe >/dev/null 2>&1 || ss_probe_rc=$?

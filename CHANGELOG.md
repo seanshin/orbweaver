@@ -10,6 +10,40 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**Nothing in CI bills while this repository is public — a gate, and the blocklist
+it started as could not have said so.** The claim was a sentence in a
+conversation: `orbweaver` shows `netAmount $0.00` on every August line, and
+another public repository netted $0.00 over 145 minutes of macOS 3-core, so it
+is visibility rather than SKU that makes a run free. One edited `runs-on:` would
+have made that false with nothing going red, so `spikes/no_billable_ci.py` asks
+the two surfaces GitHub bills whatever the visibility — a larger runner, and Git
+LFS.
+
+Its first draft matched `\d+-core|larger|group:|self-hosted` and its own
+negative control took it apart before it landed. **The hazard's namespace is
+open** — an organisation names its own larger runners — so `ubuntu-22.04-arm64-xl`
+walked through, and so did `runs-on: ${{ matrix.os }}` with the `-8-core` label
+one line away in the matrix. *A gate over an open namespace is green on every
+name nobody thought of.* The set it checks is the closed one: the standard labels
+the $0.00 was measured over, everything else red, an expression refused because
+the scan cannot see through it. The allow-list was already in the file, written
+as an unused constant beside the blocklist that shipped.
+
+**And the probe asserted the refusal rather than the reason, which is its own
+class.** Three strips of the scan — the allow-list, the expression check,
+block-form `runs-on:` reading — each left the probe green: with the allow-list
+gone an expression is still refused for naming an unknown label, and with
+block-form reading gone a `group:` is still refused for naming nothing at all.
+Right answer, wrong route, silent. Each case names the sentence it must produce
+now, and all four strips go red naming the route they removed.
+
+*이 저장소가 public인 동안 CI는 비용을 만들지 않는다 — 문장이 아니라 게이트다.
+초안은 **차단 목록**이었고 착지 전에 자기 부정 대조군이 해체했다: 위험의
+이름공간은 열려 있어서(조직이 자기 larger runner 이름을 짓는다) `-core` 없는 이름
+하나와 `${{ matrix.os }}` 한 줄이 그냥 지나갔다. 검사하는 집합은 **닫힌 쪽**이다.
+그리고 탐침이 **거절 여부**만 물었다: 세 번의 제거가 전부 초록으로 남았다 — 답은
+맞고 경로는 사라진 채로. 이제 각 사례는 나와야 할 문장을 지목한다.*
+
 **Two crash reports, and the second one found the hole in the gate written for
 the first.** A fixture crashed with `omnipyThreadScavenger::run_undetached ->
 PyGILState_Ensure`, SIGSEGV — the crash `spikes/orbexit.py` exists to prevent by
