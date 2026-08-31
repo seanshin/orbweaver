@@ -1,15 +1,32 @@
 # D038 — A call travelling the other way through the seam
 
-**STATUS: PROPOSED** — drafted 2026-08-30 as
-[`PLAN-FIRST-COMPLETION.md`](../PLAN-FIRST-COMPLETION.md) §1's L4, the last named
-leak under D029 §6.1's Language row. **Not self-approvable**: every candidate
-that closes it makes the seam **re-entrant**, which is a property of the
-protocol and not an implementation detail, and it carries a deadlock hazard §4
-names rather than discovers later.
+**STATUS: APPROVED 2026-08-31 — option A.** The owner chose **A: the nested
+request**, which is §5's recommendation unchanged, together with §3's three
+invariants and the rule §2.1 forces: **the nested call is made on a connection
+the servant owns, never on the one the request arrived on.**
 
-**상태: 제안** — 2026-08-30 작성. **스스로 승인할 수 없음**: 구멍을 닫는 모든 후보가
-seam을 **재진입 가능**하게 만들며, 그것은 구현 세부가 아니라 프로토콜의 성질이고
-교착 위험을 동반한다.
+The approval is recorded as accepting what §5 says the alternatives cost: B's
+price is per-language and permanent, paid by every binding that ever exists,
+while the hazard it avoids has to be handled either way; and **C is not a
+floor** — nothing about being written in another language makes invoking
+impossible, so filing it as one would be filing missing work as a property.
+
+It was asked for before the work started rather than after, for the reason §5
+gives: the protocol has three implementations and a re-entrancy no test
+currently reaches. Landing is planned as five steps whose order is the
+protocol's — the message, the Rust re-entrancy with its deadlock control, the
+other two runtimes in the same batch, the handle table, then the leak leg —
+recorded in [`PLAN-FIRST-COMPLETION.md`](../PLAN-FIRST-COMPLETION.md) §1's L4
+rather than restated here.
+
+**상태: 승인 2026-08-31 — 선택지 A.** 소유자가 **A: 중첩 요청**을 골랐고, 이는 §5의
+권고 그대로이며, §3의 불변식 셋과 §2.1이 강제하는 규칙 — **중첩 호출은 서번트가
+소유한 연결로 하고, 요청이 도착한 연결로는 절대 하지 않는다** — 을 함께 승인한 것이다.
+
+이 승인은 §5가 말하는 대안의 비용을 받아들인 것으로 기록된다: B의 값은 **언어마다,
+영구적으로** 치러지는 반면 그것이 피하는 위험은 어차피 다뤄야 하고, **C는 바닥이
+아니다** — 다른 언어로 쓰였다는 사실이 호출을 불가능하게 만들지 않으므로 그것을
+바닥으로 분류하는 것은 빠진 작업을 성질로 기록하는 일이다.
 
 > **Priority zero.** The completion criterion's home is
 > [`D029`](D029-what-a-complete-orb-would-mean.md) §6 and is **not restated

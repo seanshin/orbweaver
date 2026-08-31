@@ -332,8 +332,10 @@ Rust for Python behind one reference on one open connection, with its control
 run by `leak_controls.sh`. Counted skips went 16 to 15 and every one of the five
 transparencies is `MEASURED` by a leak leg with a live caller.
 
-**What is left is the leak itself, and the decision for it is written:**
-[`D038`](decisions/D038-a-call-travelling-the-other-way.md), drafted 2026-08-30.
+**What is left is the leak itself, and its decision is
+[`D038`](decisions/D038-a-call-travelling-the-other-way.md)** — read its status
+there; this plan does not restate it. What this plan carries is the order the
+work lands in, below.
 
 Sizing it changed what it is. It is not *a second message kind*; it is that
 `Answerer::ask` is strict request/response and every way of letting the far side
@@ -414,9 +416,9 @@ key. A caller learns where every candidate expert runs.
 `corpus/golden/22`'s own comment beside the operation already says so, and
 §4.7's bearer-address rule is the authority half of the same fact.
 
-**The decision is written: [`D037`](decisions/D037-what-a-selection-hands-back.md),
-drafted 2026-08-30.** It recommends **accepting the leak as a named floor** —
-not for comfort, but because the candidate that would close the row needs
+**Its decision is [`D037`](decisions/D037-what-a-selection-hands-back.md)** —
+read its status there. The shape of the answer is **a named floor**, not for
+comfort but because the candidate that would close the row needs
 `Router::dispatch`, which the project has declined to serve on separate grounds,
 and the candidate that narrows it buys **displacement, which D035 has already
 ruled is not closure**.

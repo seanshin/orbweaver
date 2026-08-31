@@ -10,6 +10,41 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**A published IOR is not an accepting listener, and the repair that already
+knew that had been scoped to one group.** `81cc546` replaced
+`[ -s jacorb.ior ] && sleep 0.5` with a three-part wait on 2026-08-29, after
+`ping(): io: Resource temporarily unavailable (os error 35)`. Harness 51 showed
+the same `os error 35` against **omniORB** this time, 24 of 24 cases red, and it
+did not reproduce in 12 standalone runs. Sweeping for the *rule* rather than the
+file found **eighteen sites with the shape and seventeen still carrying it** —
+six against the same JacORB peer with the same 0.5s guess, and three in binding
+cells that keep their own copies and were never in that batch's reach.
+
+The rule has one home now (`spikes/lib/accepting.sh`): the IOR file, then the
+fixture's own `READY` where it prints one, then **a TCP connect to the endpoint
+`spike-dump --address` decodes** — the only one of the three about what the
+caller is about to do. The site that was already correct **calls it** instead of
+restating it, which is what let the other seventeen keep the bad shape.
+
+The probe is a bare connect and never a call, and that is checked rather than
+assumed: no recorder sits in `echo_server.py`'s or the JacORB fixtures' path,
+which is why the `wide_rust.sh` hazard (0 failures to 10 with a dialling probe,
+6 with a bare connect) does not apply here. **`spikes/nat/` is excluded by the
+rule**, not by oversight: its addresses are deliberately not dialable from where
+the harness runs, so an accept-probe would score the fixture's purpose as a
+failure.
+
+The sweep lands with its scan — `spikes/ior_wait_shape.py`, over `git ls-files`,
+with a probe that synthesises the defect in both spellings and the two correct
+shapes. **The transient itself is not diagnosed**: this closes the one recorded
+candidate, and "did not reproduce in 12 runs" is what was measured.
+
+*발행된 IOR은 accept하는 리스너가 아니며, 그것을 이미 알고 있던 수리가 그룹 하나에만
+범위가 맞춰져 있었다. 열여덟 곳 중 열일곱이 옛 모양 그대로였다 — 여섯은 같은 피어에
+같은 0.5초. 규칙의 집은 이제 하나이고, 이미 옳던 자리는 그것을 **호출한다**. NAT
+픽스처는 규칙에 의해 제외된다. **transient 자체는 진단되지 않았다** — 기록된 후보
+하나를 닫았을 뿐이다.*
+
 **A third IDL front end, and running it found more than standing it up did.**
 D035 §8 step 2 asked for a TAO fixture on the same terms as omniORB and JacORB,
 and said that failing to stand one up would itself be the result. It stood up:

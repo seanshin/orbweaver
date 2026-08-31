@@ -1,16 +1,34 @@
 # D037 — What a selection hands back, and whether it may name places
 
-**STATUS: PROPOSED** — drafted 2026-08-30 as
-[`PLAN-FIRST-COMPLETION.md`](../PLAN-FIRST-COMPLETION.md) §1's L6. **Not
-self-approvable**: `moe::Router::select` is a **served operation with
-consumers**, and every candidate below either changes what it answers on the
-wire or records a leak as accepted. §5's recommendation is the second, which is
-the kind of answer that must be somebody's decision rather than an author's
-convenience.
+**STATUS: APPROVED 2026-08-31 — option C.** The owner chose **C: accept the
+exposure as a named floor**, which is §5's recommendation unchanged, with B
+recorded as available and refused for now.
 
-**상태: 제안** — 2026-08-30 작성. **스스로 승인할 수 없음**: `select`는 이미
-서비스되고 소비자가 있으며, 모든 후보가 와이어의 답을 바꾸거나 누출을 받아들인
-것으로 기록한다.
+The approval carries §5's three conditions, and they are the whole of what
+separates an accepted floor from silence: the floor is **stated where the
+contract is** (`corpus/golden/22`'s comment becomes a statement of an accepted
+limit rather than an observation about a hazard); there is **a test that the
+addresses are what the caller sees**, so the day somebody proxies them the row
+moves deliberately rather than quietly; and **the reason is recorded as a reason
+and not as an intention** — not *"until we get to it"* but *"closing it requires
+`Router::dispatch`, and that refusal is a separate decision"*.
+
+§6.4's cost is accepted with it and not waived: a criterion whose rows are mostly
+named floors is measuring the shape of the repository rather than the
+transparency. This is the second such floor, after D035's lifecycle one.
+
+**상태: 승인 2026-08-31 — 선택지 C.** 소유자가 **C: 노출을 이름 붙인 바닥으로
+수용**을 골랐고, 이는 §5의 권고 그대로이며 B는 가능하나 지금은 거절된 것으로
+기록한다.
+
+승인은 §5의 조건 셋을 함께 지고 가며, 그 셋이 바로 **수용된 바닥과 침묵을 가르는
+전부**다: 바닥은 **계약이 있는 자리에** 적히고(`corpus/golden/22`의 주석이 위험에
+대한 관찰이 아니라 받아들인 한계의 진술이 된다), **주소가 호출자에게 보이는 것임을
+주장하는 테스트**가 있어야 하며(누군가 프록시하는 날 행이 조용히가 아니라
+의도적으로 움직이도록), **이유는 의도가 아니라 이유로** 기록된다 — "나중에 할
+때까지"가 아니라 "닫으려면 `Router::dispatch`가 필요하고 그 거절은 별개의
+결정이다". §6.4의 비용도 함께 받아들인다: 행 대부분이 이름 붙인 바닥인 기준은
+투명성이 아니라 저장소의 모양을 재는 것이다.
 
 > **Priority zero.** The completion criterion's home is
 > [`D029`](D029-what-a-complete-orb-would-mean.md) §6 and is **not restated

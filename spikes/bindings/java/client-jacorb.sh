@@ -110,11 +110,12 @@ trap cleanup EXIT INT TERM
 # ── the JacORB server ───────────────────────────────────────────────────────
 ( cd "$JDIR" && exec "$JH/bin/java" -cp "$JCP" Server "$D/j.ior" >"$D/server.log" 2>&1 ) &
 PIDS+=("$!")
+# See spikes/lib/accepting.sh. JacORB's own READY line is printed after
+# the_POAManager().activate() and after the file, so it is strictly later than
+# what this used to wait for — and the TCP connect is later still.
+. "$ROOT/spikes/lib/accepting.sh"
 started=0
-for _ in $(seq 1 150); do
-  if [ -s "$D/j.ior" ]; then sleep 0.5; started=1; break; fi
-  sleep 0.1
-done
+wait_accepting "$D/j.ior" --deadline 30 --ready "$D/server.log" "^READY$" && started=1
 if [ "$started" != 1 ]; then
   echo "FAIL	the JacORB fixture is installed but published no IOR within 15s —"
   echo "FAIL	a fixture that will not start is a failure, not a skip"

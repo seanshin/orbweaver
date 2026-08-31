@@ -61,11 +61,10 @@ rm -f "$ROOT/spikes/echo.ior"
 # this project its first phantom failure.
 ( cd "$ROOT/spikes" && exec python3 echo_server.py >"$D/fixture.log" 2>&1 ) &
 PIDS+=("$!")
+# See spikes/lib/accepting.sh: the IOR existing is not the endpoint accepting.
+. "$ROOT/spikes/lib/accepting.sh"
 started=0
-for _ in $(seq 1 100); do
-  if [ -s "$ROOT/spikes/echo.ior" ]; then sleep 0.2; started=1; break; fi
-  sleep 0.1
-done
+wait_accepting "$ROOT/spikes/echo.ior" --deadline 15 && started=1
 if [ "$started" != 1 ]; then
   echo "FAIL	the omniORB fixture is installed but published no IOR within 10s —"
   echo "FAIL	a fixture that will not start is a failure, not a skip"

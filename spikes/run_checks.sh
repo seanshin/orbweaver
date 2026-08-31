@@ -643,10 +643,7 @@ start_evolution_server() {
   rm -f "$ROOT/spikes/evolution.ior"
   ( cd "$ROOT/spikes" && exec python3 evolution_server.py ${1:+"$1"} \
       >/tmp/orbweaver-evolution.log 2>&1 & )
-  for _ in $(seq 1 100); do
-    [ -s "$ROOT/spikes/evolution.ior" ] && { sleep 0.2; return 0; }
-    sleep 0.1
-  done
+  wait_accepting "$ROOT/spikes/evolution.ior" --deadline 10 && return 0
   fixture_died "evolution fixture did not publish an IOR within 10s" \
     /tmp/orbweaver-evolution.log
   return 1
@@ -675,14 +672,19 @@ fixture_died() {
   fi
 }
 
+# ── The rule about waiting for a fixture, in one place ──────────────────────
+#
+# `wait_accepting` replaces every `[ -s x.ior ] && { sleep N; }` in this file —
+# a fixed guess after a side effect. See `spikes/lib/accepting.sh` for what it
+# does, why the probe is a bare TCP connect, and why the NAT fixtures are
+# excluded from it by the rule rather than by oversight.
+. "$ROOT/spikes/lib/accepting.sh"
+
 start_server() {
   cleanup
   rm -f "$ROOT/spikes/echo.ior"
   ( cd "$ROOT/spikes" && exec python3 echo_server.py "$@" >/tmp/orbweaver-fixture.log 2>&1 & )
-  for _ in $(seq 1 100); do
-    [ -s "$ROOT/spikes/echo.ior" ] && { sleep 0.2; return 0; }  # settle after publish
-    sleep 0.1
-  done
+  wait_accepting "$ROOT/spikes/echo.ior" --deadline 10 && return 0
   fixture_died "fixture did not publish an IOR within 10s" /tmp/orbweaver-fixture.log
   return 1
 }
@@ -697,10 +699,7 @@ start_rust_server() {
   rm -f "$ROOT/spikes/server.ior"
   ( cd "$ROOT" && exec cargo run -q --bin spike-server -- spikes/server.ior 127.0.0.1 0 \
       >/tmp/orbweaver-srv.log 2>&1 & )
-  for _ in $(seq 1 100); do
-    [ -s "$ROOT/spikes/server.ior" ] && { sleep 0.3; return 0; }
-    sleep 0.1
-  done
+  wait_accepting "$ROOT/spikes/server.ior" --deadline 10 && return 0
   echo "  FAIL our server did not publish an IOR"
   return 1
 }
@@ -1993,10 +1992,7 @@ rm -f "$ROOT/spikes/server.ior"
 ( cd "$ROOT" && ORBWEAVER_FRAGMENT_THRESHOLD=4096 exec cargo run -q --bin spike-server -- \
     spikes/server.ior 127.0.0.1 0 >/tmp/orbweaver-frag.log 2>&1 & )
 frag_up=0
-for _ in $(seq 1 100); do
-  [ -s "$ROOT/spikes/server.ior" ] && { sleep 0.3; frag_up=1; break; }
-  sleep 0.1
-done
+wait_accepting "$ROOT/spikes/server.ior" --deadline 15 && frag_up=1
 if [ "$frag_up" -eq 0 ]; then
   echo "  FAIL fragmenting server did not start"; fail_total=$((fail_total+1))
 else
@@ -2054,10 +2050,7 @@ for peer in omni jacorb; do
   ( cd "$ROOT" && ORBWEAVER_FORWARD_PING=1 exec cargo run -q --bin spike-server -- \
       spikes/server.ior 127.0.0.1 0 >/tmp/orbweaver-fwd.log 2>&1 & )
   up=0
-  for _ in $(seq 1 100); do
-    [ -s "$ROOT/spikes/server.ior" ] && { sleep 0.3; up=1; break; }
-    sleep 0.1
-  done
+  wait_accepting "$ROOT/spikes/server.ior" --deadline 15 && up=1
   [ "$up" -eq 1 ] || { echo "  FAIL forwarding server did not start"; fwd_fail=1; break; }
 
   if [ "$peer" = omni ]; then
@@ -2238,10 +2231,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   ( cd "$ROOT/spikes/jacorb" && exec "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Server ../jacorb.ior \
       >/tmp/orbweaver-jreg.log 2>&1 & )
   jr=0
-  for _ in $(seq 1 150); do
-    [ -s "$ROOT/spikes/jacorb.ior" ] && { sleep 0.5; jr=1; break; }
-    sleep 0.1
-  done
+  wait_accepting "$ROOT/spikes/jacorb.ior" --deadline 30 --ready /tmp/orbweaver-jreg.log "^READY$" && jr=1
   if [ "$jr" -eq 1 ]; then
     rc=$(cargo run -q --bin registry-check -- spikes/jacorb.ior spikes/echo.idl spike::Ragged 2>/dev/null)
     if grep -q "registry: PASS" <<<"$rc"; then
@@ -2637,18 +2627,16 @@ else
   #    the hex here — the port is two CDR bytes inside an `IOR:` string, and a
   #    shell that went looking for it would be the same defect this repository
   #    already paid for once in `spike_channel_by_name`.
+  #
+  # **This block used to be written out here and is now a call.** It was the
+  # only converted site in the tree; a sweep on 2026-08-31 found seventeen
+  # others with the shape it replaced, six of them against this same peer with
+  # the same 0.5s guess. Restating a rule at its one good site is what let the
+  # other seventeen keep the bad one, so the rule lives in
+  # `spikes/lib/accepting.sh` and this reads it.
   jup=0
-  jdead=$(( $(date +%s) + 30 ))
-  while [ "$(date +%s)" -lt "$jdead" ]; do
-    [ -s "$ROOT/spikes/jacorb.ior" ] || { sleep 0.1; continue; }
-    grep -q "^READY$" /tmp/orbweaver-jacorb.log 2>/dev/null || { sleep 0.1; continue; }
-    jaddr=$(cargo run -q --bin spike-dump -- "$ROOT/spikes/jacorb.ior" 2>/dev/null \
-            | sed -n 's/^endpoint \([^ ]*\) .*/\1/p' | head -1)
-    if [ -n "$jaddr" ] && (exec 3<>"/dev/tcp/${jaddr%:*}/${jaddr##*:}") 2>/dev/null; then
-      jup=1; break
-    fi
-    sleep 0.1
-  done
+  wait_accepting "$ROOT/spikes/jacorb.ior" --deadline 30 \
+    --ready /tmp/orbweaver-jacorb.log "^READY$" && jup=1
   if [ "$jup" -eq 1 ]; then
     out=$(cargo run -q --bin spike-interop -- spikes/jacorb.ior 2>&1)
     if grep -q "assumption A: PASS" <<<"$out"; then
@@ -2968,10 +2956,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   ( cd "$ROOT/spikes/jacorb" && exec "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Server ../jacorb.ior \
       >/tmp/orbweaver-jdyn.log 2>&1 & )
   jd=0
-  for _ in $(seq 1 150); do
-    [ -s "$ROOT/spikes/jacorb.ior" ] && { sleep 0.5; jd=1; break; }
-    sleep 0.1
-  done
+  wait_accepting "$ROOT/spikes/jacorb.ior" --deadline 30 --ready /tmp/orbweaver-jdyn.log "^READY$" && jd=1
   if [ "$jd" -eq 1 ]; then
     dv=$(cargo run -q --bin spike-dynamic -- spikes/jacorb.ior spikes/echo.idl \
          IDL:spike/Echo:1.0 2>&1)
@@ -3134,10 +3119,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   ( cd "$ROOT/spikes/jacorb" && exec "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Server ../jacorb.ior \
       >/tmp/orbweaver-jloc.log 2>&1 & )
   jl=0
-  for _ in $(seq 1 150); do
-    [ -s "$ROOT/spikes/jacorb.ior" ] && { sleep 0.5; jl=1; break; }
-    sleep 0.1
-  done
+  wait_accepting "$ROOT/spikes/jacorb.ior" --deadline 30 --ready /tmp/orbweaver-jloc.log "^READY$" && jl=1
   if [ "$jl" -eq 1 ]; then
     lv=$(cargo run -q --bin spike-locate -- spikes/jacorb.ior 2>&1)
     if grep -q "locate: PASS" <<<"$lv"; then
@@ -3185,10 +3167,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   ( cd "$ROOT/spikes/jacorb" && exec "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Server ../jacorb.ior \
       >/tmp/orbweaver-jfo.log 2>&1 & )
   jf=0
-  for _ in $(seq 1 150); do
-    [ -s "$ROOT/spikes/jacorb.ior" ] && { sleep 0.5; jf=1; break; }
-    sleep 0.1
-  done
+  wait_accepting "$ROOT/spikes/jacorb.ior" --deadline 30 --ready /tmp/orbweaver-jfo.log "^READY$" && jf=1
   if [ "$jf" -eq 1 ]; then
     fv=$(cargo run -q --bin spike-failover -- spikes/jacorb.ior 2>&1)
     if grep -q "failover: PASS" <<<"$fv"; then
@@ -3233,10 +3212,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   ( cd "$ROOT/spikes/jacorb" && exec "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Server ../jacorb.ior \
       >/tmp/orbweaver-jcan.log 2>&1 & )
   jc=0
-  for _ in $(seq 1 150); do
-    [ -s "$ROOT/spikes/jacorb.ior" ] && { sleep 0.5; jc=1; break; }
-    sleep 0.1
-  done
+  wait_accepting "$ROOT/spikes/jacorb.ior" --deadline 30 --ready /tmp/orbweaver-jcan.log "^READY$" && jc=1
   if [ "$jc" -eq 1 ]; then
     cv=$(cargo run -q --bin spike-cancel -- spikes/jacorb.ior 2>&1)
     if grep -q "cancel: PASS" <<<"$cv"; then
@@ -4573,10 +4549,7 @@ if [ -d "$ROOT/spikes/jacorb/classes" ] && [ -x "$JH_CHECK/bin/java" ]; then
   ( cd "$ROOT/spikes/jacorb" && exec "$JH_CHECK/bin/java" -cp "$JCP_CHECK" Server ../jacorb.ior \
       >/tmp/orbweaver-jcsi.log 2>&1 & )
   ji=0
-  for _ in $(seq 1 150); do
-    [ -s "$ROOT/spikes/jacorb.ior" ] && { sleep 0.5; ji=1; break; }
-    sleep 0.1
-  done
+  wait_accepting "$ROOT/spikes/jacorb.ior" --deadline 30 --ready /tmp/orbweaver-jcsi.log "^READY$" && ji=1
   if [ "$ji" -eq 1 ]; then
     csi=$(cargo run -q --bin spike-dump -- spikes/jacorb.ior 2>/dev/null | grep '^csiv2')
     if grep -q "advertises no mechanism list" <<<"$csi"; then
@@ -5123,6 +5096,30 @@ fi
 # were 513 and 509 — comments quoting `serve(..., || false)` counted as
 # servers, and a directory walk counting the eight agent worktrees as eight
 # more copies of the repository.
+# ── No fixture is waited for by its IOR file plus a guess ───────────────────
+#
+# A GATE, and it lands with the sweep that produced it rather than after it.
+# `81cc546` repaired this shape on 2026-08-29 for the one group that had gone
+# red with `os error 35`; a sweep on 2026-08-31 found **seventeen more**, six of
+# them against the same JacORB peer with the same 0.5s guess, and three in
+# binding cells that keep their own copies and were never in that batch's reach.
+# The rule now has one home (`spikes/lib/accepting.sh`) and this asks the tree.
+hr "no fixture is waited for by an IOR file and a fixed sleep"
+iws_probe_rc=0
+python3 spikes/ior_wait_shape.py --probe >/dev/null 2>&1 || iws_probe_rc=$?
+if [ "$iws_probe_rc" -ne 0 ]; then
+  echo "  FAIL the IOR-wait scan cannot see a defective wait it synthesises"
+  echo "       ($(rc_says "$iws_probe_rc")), so its silence over the tree means nothing"
+  python3 spikes/ior_wait_shape.py --probe 2>&1
+  fail_total=$((fail_total+1))
+else
+  iws_out=$(python3 spikes/ior_wait_shape.py 2>&1); iws_rc=$?
+  printf '%s\n' "$iws_out"
+  if [ "$iws_rc" -ne 0 ]; then
+    fail_total=$((fail_total+1))
+  fi
+fi
+
 # ── Nothing in CI bills, while this repository is public ────────────────────
 #
 # A GATE, unlike the report below it, because unlike "how many servers may be

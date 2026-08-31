@@ -48,11 +48,12 @@ fixture_down
 rm -f "$ROOT/spikes/echo.ior"
 ( cd "$ROOT/spikes" && exec python3 echo_server.py >/tmp/orbweaver-binding-fixture.log 2>&1 & )
 
+# A published IOR is not an accepting listener; the rule and its probe live in
+# spikes/lib/accepting.sh. This cell had its own copy of the fixed-guess wait,
+# which is why the sweep that fixed the harness in 81cc546 never reached it.
+. "$ROOT/spikes/lib/accepting.sh"
 started=0
-for _ in $(seq 1 100); do
-  if [ -s "$ROOT/spikes/echo.ior" ]; then sleep 0.2; started=1; break; fi
-  sleep 0.1
-done
+wait_accepting "$ROOT/spikes/echo.ior" --deadline 15 && started=1
 if [ "$started" != 1 ]; then
   echo "FAIL	the omniORB fixture is installed but published no IOR within 10s —"
   echo "FAIL	a fixture that will not start is a failure, not a skip"
