@@ -10,6 +10,45 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**A third IDL front end, and running it found more than standing it up did.**
+D035 §8 step 2 asked for a TAO fixture on the same terms as omniORB and JacORB,
+and said that failing to stand one up would itself be the result. It stood up:
+`spikes/tao/setup.sh` builds `tao_idl` 4.0.7 from ACE+TAO source — Homebrew's
+`ace` formula fetches that tarball and builds only `ace/`, so there is nothing to
+install — and the differential runs **99 files through three front ends** with no
+unexplained divergence. The counted `SKIPPED tao_idl absent` is retired where the
+fixture is built: 15 skips to 14.
+
+**The first run with the oracle present reported 37 divergences and 29 of them
+were the harness.** `tao_idl_verdict` had never been executed, because no
+`tao_idl` had ever been on this machine. It returned TAO's own exit status — `2`
+on a parse error — into a protocol compared with `-ne` against `0` or `1`, so
+every correct rejection read as a divergence; and it asked the oracle about IDL
+3, TAO's default, against a corpus written to 4.2. *An oracle configured for
+another version of the specification is not a second opinion about this one.*
+The remaining **8 are real**, each narrowed to a rule by probe and recorded —
+three of the probes did not reproduce on the first shape tried, which is the only
+reason the rules are narrower than the files.
+
+**And the gate that asks which cited executables run had three defects, all
+surfaced by adding one file.** It walked the directory, so it began enumerating
+the ignored ACE tree; a shared basename stood in for a path, so the new
+`setup.sh` counted as run because `ci.yml` runs the JacORB one; and a name in a
+comment counted as an invocation. Fixing the third exposed two debts the accident
+had covered, and they were not the same kind: `jacorb_python_servant.sh` — D029's
+and D032's big-endian servant reading — **is** run, through a manifest path
+assembled at run time, and would have been a false red over evidence that runs;
+`gen_claude.sh` is run by nothing, correctly, because it makes a model call, and
+that had been written down nowhere. Its probe returned 0 having asserted nothing;
+it now runs the shipped matcher against synthesised cases, and each of the four
+changes, stripped alone, takes it to exit 2.
+
+*세 번째 프런트엔드가 섰고, **세운 것보다 돌린 것이 더 많이 찾았다.** 오라클이
+있는 첫 실행이 37건을 보고했고 그중 29건은 트리가 아니라 하네스였다 — 종료 코드
+2가 0/1 프로토콜로 새고, 코퍼스가 4.2인데 오라클엔 IDL 3을 물었다. 남은 8건은
+진짜이며 각각 규칙으로 좁혀 기록했다. 그리고 인용된 실행물이 실제로 도는지 묻는
+게이트에 결함이 셋 있었고, 파일 하나를 더한 것이 전부 드러냈다.*
+
 **The Backend row describes the leak that exists, and its figure is computed.**
 D029 §6.1's Backend cell is the priority-zero criterion's own text, and the
 harness reads it at run time and prints it. Every clause it carried about the
