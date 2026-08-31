@@ -364,6 +364,22 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   수는 없다. `memorystatus: killing`은 패턴이 아니다(한가한 50분에 782줄). 적용할
   수 없는 창은 더 넓은 답이 아니라 미측정이다. 그리고 **덮지 못하는 것을 적는다**:
   이것은 실행을 덮지 머신을 덮지 않는다.*
+- **A gate that enumerates with `git ls-files` reads a different tree before and
+  after `git add`, and the run that blessed it was the one where it could not
+  see itself.** Measured 2026-08-31. `spikes/ior_wait_shape.py` hunts
+  `[ -s x.ior ] && sleep N` and carries that shape twice as probe literals. It
+  ran green in harness 54 and red in harness 55 over the same logic, and CI
+  failed the commit that landed it — because in 54 the file was **untracked**,
+  so `git ls-files` never handed the scan its own source, and `git add` is what
+  put it in scope. *The local run that proved the gate was a run against an
+  input set the commit did not have.* The repair is the rule, not an exemption:
+  the shape is shell syntax, so the scan reads `.sh` and a Python file cannot
+  contain a shell wait — checked before narrowing, because narrowing until the
+  complaint stops is the tune-until-quiet defect. **`git ls-files` is still
+  right** (it is what keeps a scan out of an ignored 532 MB vendor tree); what
+  is wrong is validating such a gate before staging it. Stage first, then run
+  it. *`git ls-files`로 열거하는 게이트는 `git add` 전후로 다른 트리를 읽고, 그것을
+  통과시킨 실행은 게이트가 자기 자신을 볼 수 없던 실행이다. 스테이징한 뒤에 돌린다.*
 - **A branch written against an absent oracle has never been executed, and it
   fails the way unexecuted code fails: confidently.** Measured 2026-08-31, the
   first time a `tao_idl` was present on this machine. `differential.sh` had had
