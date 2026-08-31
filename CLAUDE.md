@@ -364,6 +364,28 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   수는 없다. `memorystatus: killing`은 패턴이 아니다(한가한 50분에 782줄). 적용할
   수 없는 창은 더 넓은 답이 아니라 미측정이다. 그리고 **덮지 못하는 것을 적는다**:
   이것은 실행을 덮지 머신을 덮지 않는다.*
+- **A branch written against an absent oracle has never been executed, and it
+  fails the way unexecuted code fails: confidently.** Measured 2026-08-31, the
+  first time a `tao_idl` was present on this machine. `differential.sh` had had
+  a `tao_idl_verdict` for as long as the script had existed, and two things in
+  it were wrong in ways no review had caught. It ended in the bare compiler
+  invocation, so it returned **TAO's own exit status — `2` on a parse error** —
+  into a protocol `examine` compares with `-ne` against `0` or `1`; the two
+  neighbouring verdict functions end in `[ -z "$err" ]` and are normalised by
+  construction. And it asked the oracle about **IDL 3**, TAO's default, while
+  this corpus is IDL 4.2 — *an oracle configured for another version of the
+  specification is not a second opinion about this one.* The first run reported
+  **37 unexplained divergences**; those two causes were **29** of them, and the
+  real 8 were invisible underneath. The comment above the function asserted the
+  exact behaviour that was wrong (*"it sets a non-zero exit status on error,
+  which is the verdict"* — true, and not what the code did with it). **A
+  `SKIPPED` for an absent fixture says the column is unmeasured; it does not say
+  the code that would fill it has never run.** When a fixture arrives, the first
+  run is a measurement of the harness, not of the tree. *부재한 오라클을 상대로
+  쓰인 분기는 실행된 적이 없고, 실행되지 않은 코드가 그렇듯 자신 있게 틀린다.
+  종료 코드 2가 0/1 프로토콜로 새고, 코퍼스가 4.2인데 오라클엔 IDL 3을 물었다 —
+  37건 중 29건이 그 둘이었다. **부재 `SKIPPED`는 열이 미측정이라고 말할 뿐, 그
+  열을 채울 코드가 한 번도 돌지 않았다고는 말해 주지 않는다.***
 - **A document that cites an executable as its evidence owes a run, and a debt
   named in a header is a debt nobody counts.** Four instances in one day,
   2026-08-28: `spikes/c_peer.sh` had **never been compiled on Linux** (its first
@@ -696,7 +718,10 @@ cargo run -q -p orbweaver-test --bin contract-check -- corpus/golden/*.idl
                                 # property (defects) + annotation advice (never gates)
 cargo run -q --bin idl-diff -- <released>.idl <proposed>.idl   # §5.3, exit 1 on breaking
 omniidl -b dump <file>.idl      # the conformance oracle for one file
-./spikes/differential.sh        # two front ends over the corpus, divergences recorded
+./spikes/differential.sh        # three front ends over the corpus, divergences recorded
+                                # (omniidl, tao_idl, jacorb_idl; the third needs
+                                # spikes/tao/setup.sh, and is a counted SKIPPED
+                                # rather than a silent pass where it is absent)
 python3 spikes/decision_status.py  # every restated decision status vs its decision
 ```
 
@@ -739,7 +764,12 @@ python3 spikes/entry_cost.py    # what a newcomer must name to serve an object a
 ```
 
 Fixture setup: `brew install omniorb` (interop peer and oracle only);
-`spikes/jacorb/setup.sh` for the second oracle and its Interface Repository.
+`spikes/jacorb/setup.sh` for the second oracle and its Interface Repository;
+`spikes/tao/setup.sh` for the third front end — it builds `tao_idl` from the
+ACE+TAO source because Homebrew's `ace` formula fetches that tarball and builds
+only `ace/`, so there is no packaged `tao_idl` to install. All three are
+fixtures on the same terms: separate processes and external programs whose
+output we read, never dependencies, never published.
 
 ## Layout
 

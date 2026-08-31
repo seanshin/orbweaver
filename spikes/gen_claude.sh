@@ -1,6 +1,20 @@
 #!/bin/sh
 # gen_claude.sh — the generator command forge-pipeline invokes (docs/PLAN.md §5.1).
 #
+# **A producer, not a gate**, and nothing in `run_checks.sh` or `ci.yml`
+# invokes it — deliberately. It makes a model call, so it is neither
+# deterministic nor free, and a gate that calls a model is a gate whose red
+# means "the weather changed". `forge-pipeline` runs it when a producer
+# command is configured, which is what the harness's S1-S3 leg reports as a
+# counted SKIPPED naming its fixture (`E2E_MODEL=1` with a producer command
+# and its key). That SKIPPED is the honest state and this line is the reason
+# for it, written where `spikes/cited_and_run.py` looks — it had not been
+# written anywhere, and D003 has cited this script since it landed.
+#
+# *게이트가 아니라 생산자다. 모델을 호출하므로 결정적이지도 공짜도 아니고,
+# 모델을 부르는 게이트의 빨강은 "날씨가 바뀌었다"는 뜻이다. 하네스의
+# S1-S3 다리가 계수된 SKIPPED로 보고하는 것이 정직한 상태다.*
+#
 #   $1 = requirement file (one natural-language requirement, UTF-8)
 #   $2 = repair prompt file (optional; rounds 2+ only — the S4 repair_prompt(),
 #        appended verbatim per §3.3: the diagnostics ARE the feedback channel)

@@ -72,3 +72,8 @@ spikes/jacorb.ior
 
 # Agent worktrees (embedded checkouts, never part of the tree)
 .claude/worktrees/
+
+# The TAO front-end fixture: built by spikes/tao/setup.sh, never vendored.
+# DOC-licensed source and its build output — publishing it would be redistribution.
+spikes/tao/ACE_wrappers/
+spikes/tao/*.tar.bz2

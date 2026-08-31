@@ -450,6 +450,33 @@ leaks above:
   **never a dependency**. Two rows move for one fixture: it is what could refute
   the step after it, and it retires the differential's standing `tao_idl` skip.
   **If it will not stand up, that is a result** and is what should be recorded.
+
+  **DONE 2026-08-31.** It stood up: `spikes/tao/setup.sh` builds `tao_idl`
+  4.0.7 from the ACE+TAO 8.0.7 source in about three minutes (Homebrew's `ace`
+  formula downloads that tarball and builds only `ace/`, so there is no
+  packaged `tao_idl` to install). The differential runs **99 files through
+  three front ends** and finds no unexplained divergence; the standing
+  `SKIPPED tao_idl absent` is retired wherever the fixture is built, and still
+  printed, correctly, where it is not.
+
+  **What running it found is worth more than the fixture.** The `tao_idl`
+  column had been written against an absent oracle and had never been
+  executed: its verdict function leaked TAO's own exit status — **2** on a
+  parse error — into a protocol with room for `0` and `1`, so every correct
+  rejection read as a divergence. And it asked the oracle about **IDL 3**,
+  TAO's default, while this corpus is IDL 4.2. The first run reported **37**
+  unexplained divergences; those two causes account for **29** of them.
+  The remaining **8** are real, each narrowed to a rule by probe and recorded
+  in `corpus/divergences.tsv` — and three of the probes did not reproduce on
+  the first shape tried, which is the only reason the rules are narrower than
+  the files.
+
+  *2026-08-31 완료. 픽스처는 섰다. 그리고 **세운 것보다 돌린 것이 더 많이
+  찾았다**: `tao_idl` 열은 오라클이 없는 채로 쓰였고 한 번도 실행된 적이 없었다 —
+  파스 오류의 종료 코드 **2**가 0/1 프로토콜로 새어 들어가 모든 올바른 거절이
+  불일치로 읽혔고, 코퍼스가 IDL 4.2인데 오라클에는 TAO 기본값인 **IDL 3**을
+  물었다. 37건 중 29건이 그 둘이었고, 남은 8건은 진짜이며 각각 규칙으로 좁혀
+  기록했다.*
 - Its step 3 is conditional on step 2 existing. A cheap experiment with no
   possible refutation is not cheap.
 

@@ -65,10 +65,34 @@ omniidl_verdict() {
 # tao_idl writes C++ stubs, so it needs somewhere to put them; -Sa -St suppress
 # the Any and TypeCode files we have no use for. Unlike the other two it sets a
 # non-zero exit status on error, which is the verdict.
+#
+# **The `if` is load-bearing and this function was wrong without it for as long
+# as it had existed, which is exactly as long as no `tao_idl` was on this
+# machine.** `examine` compares a verdict against `want`, which is 0 or 1, with
+# `-ne` — an exact comparison, not a truthiness test — and TAO 4.0.7 exits **2**
+# on a parse error. So every correct rejection read as a divergence: the first
+# run with the oracle present reported **37 unexplained divergences**, of which
+# the great majority were files all three front ends agree about, `tao_idl`
+# among them. `agree` compares the raw values too, so `omniidl=1` beside
+# `tao_idl=2` also read as disagreement.
+#
+# The other two verdict functions end in `[ -z "$err" ]` and are normalised to
+# 0/1 by construction; this one ended in the command itself and leaked the
+# compiler's own status into a protocol that has room for two values. *A branch
+# written against an absent oracle owes a run with it present* — nothing here
+# was ever executed until 2026-08-31.
 tao_idl_verdict() {
   local out="$TMP/tao"
   rm -rf "$out"; mkdir -p "$out"
-  tao_idl -Sa -St -o "$out" "$1" >/dev/null 2>&1
+  #
+  # **`--idl-version 4` because the corpus is IDL 4.2 and TAO defaults to 3.**
+  # `tao_idl --default-idl-version` answers `3`, and under 3 an anonymous type
+  # is an error — so `06-union.idl`, `23-moe-enterprise.idl` and
+  # `30-const-type.idl` were reported as three divergences when what had
+  # actually happened is that the oracle was asked a different question from
+  # the one the corpus answers. An oracle configured for another version of the
+  # specification is not a second opinion about this one.
+  if tao_idl --idl-version 4 -Sa -St -o "$out" "$1" >/dev/null 2>&1; then return 0; else return 1; fi
 }
 
 # JacORB's IDL compiler: a second deployed front end, independently written in
@@ -90,9 +114,29 @@ jacorb_idl_verdict() {
   [ -z "$err" ]
 }
 
+# TAO is not on anybody's PATH by default and `brew` has no formula that ships
+# `tao_idl`, so `spikes/tao/setup.sh` builds it in-tree. Look there as well as on
+# PATH, and export what the binary needs to run — otherwise the fixture exists,
+# the differential still reports `SKIPPED tao_idl absent`, and the only thing
+# standing between them is whether somebody remembered to export four variables.
+# That is this project's *a prohibition without its replacement* in fixture
+# form: a check nobody can run without a ritual is a check that does not run.
+ACE_LOCAL="$ROOT/spikes/tao/ACE_wrappers"
+
+have_tao_idl() {
+  command -v tao_idl >/dev/null 2>&1 && return 0
+  [ -x "$ACE_LOCAL/bin/tao_idl" ] || return 1
+  export ACE_ROOT="$ACE_LOCAL" TAO_ROOT="$ACE_LOCAL/TAO"
+  export PATH="$ACE_LOCAL/bin:$PATH"
+  export LD_LIBRARY_PATH="$ACE_LOCAL/lib:${LD_LIBRARY_PATH:-}"
+  export DYLD_LIBRARY_PATH="$ACE_LOCAL/lib:${DYLD_LIBRARY_PATH:-}"
+  command -v tao_idl >/dev/null 2>&1
+}
+
 have_oracle() {
   case "$1" in
     jacorb_idl) have_jacorb_idl ;;
+    tao_idl) have_tao_idl ;;
     *) command -v "$1" >/dev/null 2>&1 ;;
   esac
 }

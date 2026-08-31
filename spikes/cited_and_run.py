@@ -62,6 +62,7 @@ green-while-measuring-nothing, and no scan of citations can see it.
 """
 
 import pathlib
+import subprocess
 import re
 import sys
 
@@ -128,27 +129,106 @@ def main(argv):
     # exact path — a scan that cannot see a file cannot be trusted about its
     # silence either. Keyed by path-relative-to-root AND by basename, because a
     # runner may spell it either way.
+    #
+    # **`git ls-files`, not a directory walk**, and the difference is not
+    # hypothetical: `spikes/tao/setup.sh` builds a DOC-licensed front end into
+    # `spikes/tao/ACE_wrappers/`, which is gitignored and holds **thousands** of
+    # upstream `.sh` files. A walk enumerates all of them and asks whether the
+    # harness runs `run_test.sh`. This repository already learned this from the
+    # other side, when a serve-site count read the eight agent worktrees under
+    # `.claude/` as eight more copies of itself: *ask git what this repository
+    # is, rather than asking the filesystem what is under this path.*
+    tracked = subprocess.run(
+        ["git", "ls-files", "spikes"], cwd=ROOT, capture_output=True, text=True
+    ).stdout.split()
     spikes = {
-        str(q.relative_to(ROOT)): q.read_text(errors="replace")
-        for q in ROOT.glob("spikes/**/*")
-        if q.is_file() and q.suffix in (".sh", ".py")
+        rel: (ROOT / rel).read_text(errors="replace")
+        for rel in tracked
+        if rel.endswith((".sh", ".py")) and (ROOT / rel).is_file()
     }
 
+    # **What needs a runner and what can BE one are different sets.** A cited
+    # executable is a `.sh` or a `.py`; a thing that invokes one is any file the
+    # harness reaches. `spikes/binding_suite.sh` is a group and invokes its cells
+    # through `spikes/bindings/<language>.manifest`, whose rows are
+    # `cell servant jacorb spikes/bindings/python/servant-jacorb.sh` — so the
+    # chain to `jacorb_python_servant.sh`, which D029 and D032 both cite as the
+    # big-endian servant reading, runs through a file this scan would not open.
+    # Restricting the *runner* side to `.sh`/`.py` broke that chain the moment
+    # the accidental basename match stopped covering for it.
+    carriers = {
+        rel: (ROOT / rel).read_text(errors="replace")
+        for rel in tracked
+        if (ROOT / rel).is_file() and not rel.endswith((".idl", ".tsv"))
+    }
+
+    # A basename identifies a spike only when it is the only one with that name.
+    # **`spikes/tao/setup.sh` was reported as run the moment it existed**, because
+    # `ci.yml` runs `spikes/jacorb/setup.sh` and the two share a basename — a
+    # false green in the gate written to catch exactly this class of false green.
+    # Five `run.sh`, two `agent.py` and two `client-omniorb.sh` are in the same
+    # position and were before today. A name that does not identify a thing
+    # cannot be used to say the thing was run.
+    ambiguous = {
+        name
+        for name in (pathlib.Path(rel).name for rel in spikes)
+        if sum(1 for r in spikes if pathlib.Path(r).name == name) > 1
+    }
+
+    def code_only(text):
+        """The text with `#` comment lines removed.
+
+        **A mention is not an invocation.** `differential.sh` explains in a
+        comment that `spikes/tao/setup.sh` builds the fixture it looks for, and
+        that sentence alone made this gate report the setup script as run — the
+        gate is transitive, `differential.sh` is a group, and a name in a
+        comment reads exactly like a name in a command. It is the shape
+        CLAUDE.md already names for a different gate: *ask the launch, never the
+        string.* Full-line comments are what carry prose here; stripping them is
+        not a parser and does not pretend to be one, but it is the difference
+        between reading code and reading commentary.
+        """
+        return "\n".join(
+            l for l in text.splitlines() if not l.lstrip().startswith("#")
+        )
+
     def named_in(text, rel):
-        return rel in text or pathlib.Path(rel).name in text
+        code = code_only(text)
+        if rel in code:
+            return True
+        # **A directory a runner names, it drives.** `binding_suite.sh` reaches
+        # its cells through `spikes/bindings/<language>.manifest`, a path
+        # assembled at run time — `BDIR="$ROOT/spikes/bindings"` and the
+        # language appended — so no literal for the manifest exists to match.
+        # This is the shape CLAUDE.md already records for `leaves_cleanly.py`:
+        # a child that is *"assembled at run time from a template and is not a
+        # constant at all"*. Naming the directory is the strongest literal such
+        # a runner can offer, and taking it is what keeps the chain to
+        # `jacorb_python_servant.sh` — D029's and D032's big-endian servant
+        # reading — from breaking at exactly one link. It errs toward calling
+        # something run; the cost of that is a missed debt, against a false red
+        # over evidence that IS run, which kills a gate faster.
+        parent = str(pathlib.Path(rel).parent)
+        if parent not in ("", ".", "spikes") and parent in code:
+            return True
+        name = pathlib.Path(rel).name
+        return name not in ambiguous and name in code
 
     # TRANSITIVE, not one level. `trading_client.py` is invoked by
     # `service_sweep.py`, which is invoked by `service_sweep.sh`, which is a
     # group — three deep. A fixed depth is a threshold in disguise, and this one
     # was wrong at depth 1.
-    reached = {rel for rel in spikes if named_in(run_text, rel)}
+    # Reached directly by the harness or the workflow, then transitively through
+    # anything already reached — including a manifest or a data file, which is
+    # why the closure walks `carriers` and not just the candidates.
+    reached = {rel for rel in carriers if named_in(run_text, rel)}
     changed = True
     while changed:
         changed = False
-        for rel in spikes:
+        for rel in carriers:
             if rel in reached:
                 continue
-            if any(named_in(spikes[r], rel) for r in reached):
+            if any(named_in(carriers[r], rel) for r in reached):
                 reached.add(rel)
                 changed = True
 
@@ -165,6 +245,49 @@ def main(argv):
             owed.append((rel, sorted(where), "no group, and its header says nothing"))
 
     if probe:
+        # **The probe used to return 0 having asserted nothing** — it proved the
+        # scan could execute, which is not the same as proving it can see. Each
+        # case below is a way this scan was wrong on 2026-08-31, and each is run
+        # against the shipped `named_in`/`code_only` rather than a restatement
+        # of them.
+        cases = [
+            ("an invocation is a reach",
+             "out=$(./spikes/x/y.sh --flag)\n", "spikes/x/y.sh", True),
+            ("a COMMENT mention is not an invocation",
+             "# see spikes/x/y.sh for why\n", "spikes/x/y.sh", False),
+            ("a directory a runner names, it drives",
+             'BDIR="$ROOT/spikes/bindings"\n', "spikes/bindings/p.manifest", True),
+            ("a bare unambiguous basename still reaches",
+             "bash uniquely_named_thing.sh\n", "spikes/uniquely_named_thing.sh", True),
+        ]
+        for what, text, rel, want in cases:
+            got = named_in(text, rel)
+            if got != want:
+                print("  FAIL the probe %r came back %s and must be %s, so this scan"
+                      % (what, got, want))
+                print("       cannot see what it exists to see and its silence over the")
+                print("       tree means nothing")
+                return 2
+        # The ambiguity rule needs the real ambiguous set, which is computed from
+        # the tree: `setup.sh` is shared by the JacORB and TAO fixtures, and
+        # matching it by basename reported `spikes/tao/setup.sh` as run the day
+        # it was written, because `ci.yml` runs the other one.
+        if "setup.sh" not in ambiguous:
+            print("  FAIL `setup.sh` is not in this scan's ambiguous set, though two")
+            print("       fixtures carry that name. The rule that stops a shared")
+            print("       basename standing in for a path is not in force")
+            return 2
+        if named_in("bash spikes/jacorb/setup.sh\n", "spikes/tao/setup.sh"):
+            print("  FAIL running one `setup.sh` counts as running another. That is the")
+            print("       false green this gate exists to refuse, in this gate")
+            return 2
+        # And the walk must be `git ls-files`: the TAO fixture builds thousands
+        # of upstream scripts into an ignored directory, and a scan that reads
+        # them is asking whether the harness runs `run_test.sh`.
+        if any("ACE_wrappers" in rel for rel in spikes):
+            print("  FAIL this scan is reading the ignored TAO build tree, so it is")
+            print("       enumerating upstream files as though they were ours")
+            return 2
         return 0
 
     print(f"  {len(ran)} cited spike(s) run; {len(refused)} state a refusal;"
