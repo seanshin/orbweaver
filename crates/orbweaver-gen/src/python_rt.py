@@ -215,10 +215,25 @@ _PRINCIPAL = _subject("predeclared type", "::CORBA::Principal",
 # reason, as the five wire-refusal families above.
 
 #: The protocol version this runtime speaks.
-SEAM_VERSION = "1"
+#: 2 since 2026-08-31: the far side gained a message of its own, so the
+#: direction the conversation can travel changed. D038 option A.
+SEAM_VERSION = "2"
 
 #: The envelope the bridge wraps a call in when Python is the *parent*.
 SEAM_ENVELOPE_CALL = "call"
+
+#: The envelope a servant wraps a NESTED REQUEST in, mid-answer: it was handed a
+#: reference, it cannot dial (it has never been told an address), so it asks the
+#: other side to dial by handle. This is what makes the seam re-entrant.
+SEAM_ENVELOPE_INVOKE = "invoke"
+#: The envelope the other side answers a nested request in -- distinct from
+#: ``call`` so a servant waiting on its own nested answer cannot mistake it for
+#: a fresh call addressed to it.
+SEAM_ENVELOPE_ANSWER = "answer"
+
+SEAM_INVOKE_HANDLE = "handle"
+SEAM_INVOKE_OPERATION = "op"
+SEAM_INVOKE_ARGUMENTS = "args"
 
 SEAM_CALL_INTERFACE = "id"
 SEAM_CALL_OPERATION = "op"
@@ -290,6 +305,13 @@ def seam_protocol():
             "maybe": SEAM_COMPLETED_MAYBE,
         },
         "reference": {"own_object_prefix": SEAM_OWN_OBJECT_PREFIX},
+        "invoke": {
+            "envelope": SEAM_ENVELOPE_INVOKE,
+            "answer_envelope": SEAM_ENVELOPE_ANSWER,
+            "handle": SEAM_INVOKE_HANDLE,
+            "operation": SEAM_INVOKE_OPERATION,
+            "arguments": SEAM_INVOKE_ARGUMENTS,
+        },
     }
 
 
@@ -607,6 +629,26 @@ class ObjectRef(object):
 
     def __hash__(self):
         return hash(self.handle)
+
+    def invoke(self, op, **args):
+        """Invoke ``op`` on the object behind this handle.
+
+        **Only while this servant is answering a call**, and never by dialling:
+        the request goes back through the seam and the other side dials on this
+        servant's behalf. The handle is what travels; an address never does,
+        which is §4.7 and is the reason this method exists at all rather than a
+        ``connect``.
+
+        Returns the declared result, or raises :class:`SystemException` /
+        :class:`UserException` exactly as a client call does -- so a servant can
+        implement a ``raises`` clause on an operation it calls, which D038 §3's
+        third invariant is about.
+
+        Added 2026-08-31 (D038 option A). Before it, a reference arriving at a
+        Python servant was a handle it could pass back and not use, which was
+        D029 §6.1's last named leak under the Language row.
+        """
+        return _reply_or_raise(_nested_invoke(self.handle, op, args), op)
 
     @staticmethod
     def own(oid):
@@ -1817,6 +1859,109 @@ class ServantError(Error):
     """
 
 
+#: The channel a servant may invoke a received reference through, while it is
+#: being called. Installed by :func:`answer_calls` around each dispatch and
+#: removed afterwards.
+#:
+#: **A module global rather than an argument to** :func:`dispatch_call`, and that
+#: is deliberate: that function is a pure function of a servant and a dict, which
+#: is what lets every branch of it be executed with no bridge, no socket and no
+#: peer. Threading a channel through it would buy nothing a servant can use --
+#: the servant does not call ``dispatch_call``, it is called BY it -- and would
+#: cost the property that makes the servant direction testable.
+_NESTED_CHANNEL = None
+
+
+class NestedChannel(object):
+    """Sends one nested request and reads its answer, on this process's pipes.
+
+    D038 option A, approved 2026-08-31. A servant that was handed a reference
+    holds an :class:`ObjectRef` -- a handle, never an address, and §4.7 is why.
+    It still cannot dial. What it can now do is ask the other side to dial for
+    it, by handle, while the other side waits for this servant's own reply.
+
+    **The conversation nests**, and the loop below is this runtime's half of
+    that: write the request, then read documents until one is the answer.
+    """
+
+    def __init__(self, read_line, write_to):
+        self._read_line = read_line
+        self._write_to = write_to
+
+    def invoke(self, handle, op, args):
+        """Ask the other side to invoke ``op`` on ``handle``; return its reply."""
+        self._write_to.write(json.dumps({SEAM_ENVELOPE_INVOKE: {
+            SEAM_INVOKE_HANDLE: handle,
+            SEAM_INVOKE_OPERATION: op,
+            SEAM_INVOKE_ARGUMENTS: args or {},
+        }}) + "\n")
+        self._write_to.flush()
+        while True:
+            line = self._read_line()
+            if not line:
+                raise ServantError(
+                    "the other side closed while this servant waited for the answer "
+                    "to a nested call on %r" % (handle,))
+            if not line.strip():
+                continue
+            document = json.loads(line)
+            if SEAM_ENVELOPE_ANSWER in document:
+                return document[SEAM_ENVELOPE_ANSWER]
+            # A `call` arriving here would be the other side starting a second
+            # conversation while this one is unfinished. The protocol has no
+            # reading under which that is well formed -- this servant is
+            # mid-answer and cannot begin another -- so it is named rather than
+            # silently dropped, which would hang both ends.
+            raise ServantError(
+                "expected the answer to a nested call on %r and read %r; the seam "
+                "carries one conversation at a time" % (handle, sorted(document)))
+
+
+def _reply_or_raise(reply, op):
+    """One nested reply to a result, or to the exception it carries.
+
+    The same four branches a client call takes -- ``error``,
+    ``system_exception``, ``user_exception``, ``ok`` -- so a servant catches
+    what a client would catch and D038 §3's third invariant holds: a nested call
+    that raises comes back as an answer this servant can catch, which is what
+    lets it implement a ``raises`` clause on an operation it calls.
+
+    **The result is AnyJSON and not a mapped value, and that is a boundary this
+    says out loud.** A client knows its callee's contract because a generated
+    stub carries the descriptors; a servant invoking a handle it was HANDED
+    knows only the repository id the reference advertises. The other side
+    resolves the operation in the registry and marshals it correctly -- that is
+    where the contract is known -- and what comes back here is the value in the
+    protocol's own form. Mapping it would need a descriptor this side does not
+    have, and inventing one would be guessing at a contract.
+    """
+    if "error" in reply:
+        raise TransportError(reply["error"].get("message", "the seam reported a failure"))
+    if SEAM_REPLY_SYSTEM_EXCEPTION in reply:
+        e = reply[SEAM_REPLY_SYSTEM_EXCEPTION]
+        raise SystemException(e.get("id", ""), e.get("minor", 0), e.get("completed", 2))
+    if SEAM_REPLY_USER_EXCEPTION in reply:
+        u = reply[SEAM_REPLY_USER_EXCEPTION]
+        cls = TYPES.get(u.get("id"))
+        if cls is None or not (isinstance(cls, type) and issubclass(cls, UserException)):
+            raise SystemException("IDL:omg.org/CORBA/UNKNOWN:1.0", 0x4f4d0001, 0)
+        raise from_json(cls, u.get("members") or {}, "")
+    if SEAM_REPLY_OK not in reply:
+        raise TransportError(
+            "the answer to %r carried neither a result nor a failure" % (op,))
+    return reply[SEAM_REPLY_OK].get(SEAM_REPLY_RETURNS)
+
+
+def _nested_invoke(handle, op, args):
+    """Invoke ``op`` on a received handle, through the channel now installed."""
+    if _NESTED_CHANNEL is None:
+        raise ServantError(
+            "this reference can only be invoked while a servant is answering a call: "
+            "a handle is not a proxy and there is no channel to ask through outside "
+            "a dispatch")
+    return _NESTED_CHANNEL.invoke(handle, op, args)
+
+
 def dispatch_call(servant, call):
     """One call document to one reply document, with no process in sight.
 
@@ -1932,6 +2077,15 @@ def answer_calls(servant, read_line, write_to, note, stop=None):
         call = document.get(SEAM_ENVELOPE_CALL)
         if call is None:
             continue
+        # **The channel is installed for the duration of one dispatch.** A
+        # servant may invoke a reference it was handed only while it is
+        # answering, because that is the only time the other side is listening
+        # for a nested request -- outside a dispatch there is nobody waiting and
+        # a handle is not a proxy. Removed in `finally` so a servant that
+        # squirrels the reference away and invokes it later gets the refusal
+        # `_nested_invoke` writes rather than a write into a pipe nobody reads.
+        global _NESTED_CHANNEL
+        _NESTED_CHANNEL = NestedChannel(read_line, write_to)
         try:
             reply = dispatch_call(servant, call)
         except ServantError as e:
@@ -1944,6 +2098,8 @@ def answer_calls(servant, read_line, write_to, note, stop=None):
                 SEAM_EXCEPTION_MINOR: 0,
                 SEAM_EXCEPTION_COMPLETED: SEAM_COMPLETED_MAYBE}}
             note(str(e))
+        finally:
+            _NESTED_CHANNEL = None
         write_to.write(json.dumps(reply) + "\n")
         write_to.flush()
         if stop is not None and stop():

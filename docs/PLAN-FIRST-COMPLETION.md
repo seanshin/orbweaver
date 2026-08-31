@@ -78,8 +78,8 @@ The order below is what survived that:
 | 2 | **L5** — measure the killed target | **Done 2026-08-29.** The one item measurement confirmed was independent, and it was: a second arm on an existing fixture pair, landed without touching anything else. |
 | 3 | **L3** — the activation row's subject | Steps 1–2 done 2026-08-30. **Step 3 downgraded** on sizing: it adds a deployment shape and no measurement, and priority zero ranks a leak above a capability. |
 | 4 | **L1 + L2 as one batch** | **Done 2026-08-29 in `81cc546`**, as one batch exactly as this row asked. The default is deleted, 22 implementations state their answer, and both L2 spikes moved their check into `knows` via `Poa::serves`. |
-| 5 | **L4** — a call travelling the other way through the seam | `SKIPPED` half retired 2026-08-30. **D038 written**, awaiting the owner: the remaining half makes the seam re-entrant, which is a property and not a detail. |
-| 6 | **L6's decision** | **Written 2026-08-30 as D037**, awaiting the owner. A served contract with consumers — opened by writing the decision, never by writing the patch. |
+| 5 | **L4** — a call travelling the other way through the seam | **Done 2026-08-31.** D038 approved, option A; the seam is re-entrant and a foreign servant invokes a reference it was handed. This was the largest item in §1 and is the last leak in it. |
+| 6 | **L6's decision** | **Approved 2026-08-31** — D037 option C, a named floor. What remains is landing §5's three conditions, which is what separates an accepted floor from silence. |
 
 **Two items are decisions and one is a measurement.** Only three of the six are
 repairs. A plan that reported *"six leaks"* as one number would be saying a

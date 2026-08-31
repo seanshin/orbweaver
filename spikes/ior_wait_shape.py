@@ -71,12 +71,31 @@ def offenders(files):
 
 
 def tracked():
+    """The shell scripts under `spikes/`, and only those.
+
+    **`.sh` and not `.py`, by the rule rather than for quiet.** The shape this
+    hunts is shell syntax — `[ -s x.ior ] && { sleep 0.2; }` — and only a shell
+    executes it; a Python fixture that waits does it in Python and would need a
+    rule of its own. Checked before narrowing, because narrowing a scan until it
+    stops complaining is the tune-until-quiet defect this project names: of the
+    tracked `spikes/*.py`, **none waits for an IOR in any form** (the only `.ior`
+    hits are this file's own probe table and one `os.path.exists` in
+    `service_sweep.py`, which is a read and not a wait). If a Python fixture ever
+    grows a wait, this scan does not cover it and this paragraph is the record
+    of that.
+
+    It also settles a self-reference the first version had: this file carries the
+    defective shapes as probe literals, so scanning `.py` made the gate fail on
+    its own probe table — correctly, and uselessly. Excluding it by name would
+    have been a pin on a live subject; excluding it by *what a shell can run* is
+    the rule.
+    """
     return [
         r
         for r in subprocess.run(
             ["git", "ls-files", "spikes"], cwd=ROOT, capture_output=True, text=True
         ).stdout.split()
-        if r.endswith((".sh", ".py"))
+        if r.endswith(".sh")
     ]
 
 
@@ -94,6 +113,14 @@ PROBES = [
 
 
 def probe():
+    # This file carries the defect as literals, so a scan that read it would
+    # flag its own probe table. It reads shell scripts; assert that, or the
+    # next reader learns it from a red run.
+    if any(r.endswith(".py") for r in tracked()):
+        print("  FAIL this scan is reading Python files, where the shape it hunts")
+        print("       cannot execute — and where its own probe table lives, so it")
+        print("       would flag itself and mean nothing")
+        return 2
     for what, line, want in PROBES:
         got = bool(SHAPE.search(line))
         if got != want:

@@ -115,6 +115,44 @@ impl Answerer for PythonChild {
         let pipe = self.stdin.as_mut().ok_or("the servant's input is already closed")?;
         writeln!(pipe, "{document}").map_err(|e| e.to_string())?;
         pipe.flush().map_err(|e| e.to_string())?;
+        self.read_answer(&mut |_| {
+            // `ask` is `ask_resolving` with nobody to resolve, and a nested
+            // request arriving here is the far side using a message this caller
+            // did not agree to answer. It is refused as a seam failure rather
+            // than ignored, because ignoring it deadlocks both ends: the child
+            // waits for an answer that is never written and the parent waits
+            // for a reply that is never sent.
+            crate::seam::nested_refusal("this caller does not answer nested requests")
+        })
+    }
+
+    fn ask_resolving(
+        &mut self,
+        call: &Json,
+        resolve: &mut dyn FnMut(&Json) -> Json,
+    ) -> Result<Json, String> {
+        if self.gone {
+            return Err("the servant closed its end".to_owned());
+        }
+        let document = Json::Object([("call".to_owned(), call.clone())].into_iter().collect());
+        let pipe = self.stdin.as_mut().ok_or("the servant's input is already closed")?;
+        writeln!(pipe, "{document}").map_err(|e| e.to_string())?;
+        pipe.flush().map_err(|e| e.to_string())?;
+        self.read_answer(resolve)
+    }
+}
+
+impl PythonChild {
+    /// Read documents until one is the reply, answering nested requests on the
+    /// way.
+    ///
+    /// **This is the loop D038 §2 says every implementation of the protocol
+    /// grows.** It used to be *read the reply*; it is now *read the next
+    /// document, which may be a reply or may be a request.* The recursion is
+    /// bounded by the far side: each nested request is answered before the next
+    /// document is read, so the depth is however deep the far side nests and the
+    /// pipe stays in step either way.
+    fn read_answer(&mut self, resolve: &mut dyn FnMut(&Json) -> Json) -> Result<Json, String> {
         let mut line = String::new();
         loop {
             line.clear();
@@ -126,7 +164,17 @@ impl Answerer for PythonChild {
             if line.trim().is_empty() {
                 continue;
             }
-            return Json::parse(line.trim()).map_err(|e| e.to_string());
+            let document = Json::parse(line.trim()).map_err(|e| e.to_string())?;
+            let Some(invoke) = document.get(crate::seam::ENVELOPE_INVOKE) else {
+                return Ok(document);
+            };
+            let answered = resolve(invoke);
+            let envelope = Json::Object(
+                [(crate::seam::ENVELOPE_ANSWER.to_owned(), answered)].into_iter().collect(),
+            );
+            let pipe = self.stdin.as_mut().ok_or("the servant's input is already closed")?;
+            writeln!(pipe, "{envelope}").map_err(|e| e.to_string())?;
+            pipe.flush().map_err(|e| e.to_string())?;
         }
     }
 }

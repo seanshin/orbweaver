@@ -29,6 +29,17 @@
 # here would score those fixtures' whole purpose as a failure. They wait on the
 # IOR and sleep between tries, which is correct for what they measure.
 #
+# THREE CHECKS, AND THE MIDDLE ONE IS NOT DECORATION. `echo_server.py` prints
+# `READY` **after** `the_POAManager().activate()` and after writing the IOR, so
+# it is strictly later than either — and it is what the fixed `sleep 0.2` was
+# standing in for. The first conversion of `start_server` left it out and asked
+# only for the file and the accept, which can both be true *earlier* than the
+# old sleep returned: harness 56 failed `type registry` with omniORB
+# disagreeing about a TypeCode, where 54 and 55 had passed. A wait that is
+# merely DIFFERENT from a fixed guess is not an improvement; it has to be
+# strictly stronger, which is what the `--ready` leg makes it. Fixtures that
+# print no readiness line pass no `--ready` and get the two checks they have.
+#
 # *발행된 IOR은 accept하는 리스너가 아니다. 2026-08-29의 수리는 빨개진 그룹에만
 # 범위가 맞춰져 있었다 — 열여덟 곳 중 열일곱이 그대로였고, 그중 여섯은 같은 피어에
 # 같은 0.5초 추측이었다. **스윕의 범위는 규칙이지 파일이 아니다.** 탐침은 TCP

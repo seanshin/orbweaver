@@ -684,7 +684,8 @@ start_server() {
   cleanup
   rm -f "$ROOT/spikes/echo.ior"
   ( cd "$ROOT/spikes" && exec python3 echo_server.py "$@" >/tmp/orbweaver-fixture.log 2>&1 & )
-  wait_accepting "$ROOT/spikes/echo.ior" --deadline 10 && return 0
+  wait_accepting "$ROOT/spikes/echo.ior" --deadline 15 \
+    --ready /tmp/orbweaver-fixture.log "^READY$" && return 0
   fixture_died "fixture did not publish an IOR within 10s" /tmp/orbweaver-fixture.log
   return 1
 }
@@ -699,7 +700,8 @@ start_rust_server() {
   rm -f "$ROOT/spikes/server.ior"
   ( cd "$ROOT" && exec cargo run -q --bin spike-server -- spikes/server.ior 127.0.0.1 0 \
       >/tmp/orbweaver-srv.log 2>&1 & )
-  wait_accepting "$ROOT/spikes/server.ior" --deadline 10 && return 0
+  wait_accepting "$ROOT/spikes/server.ior" --deadline 15 \
+    --ready /tmp/orbweaver-srv.log "^READY$" && return 0
   echo "  FAIL our server did not publish an IOR"
   return 1
 }
@@ -1992,7 +1994,8 @@ rm -f "$ROOT/spikes/server.ior"
 ( cd "$ROOT" && ORBWEAVER_FRAGMENT_THRESHOLD=4096 exec cargo run -q --bin spike-server -- \
     spikes/server.ior 127.0.0.1 0 >/tmp/orbweaver-frag.log 2>&1 & )
 frag_up=0
-wait_accepting "$ROOT/spikes/server.ior" --deadline 15 && frag_up=1
+wait_accepting "$ROOT/spikes/server.ior" --deadline 15 \
+  --ready /tmp/orbweaver-frag.log "^READY$" && frag_up=1
 if [ "$frag_up" -eq 0 ]; then
   echo "  FAIL fragmenting server did not start"; fail_total=$((fail_total+1))
 else
@@ -2050,7 +2053,8 @@ for peer in omni jacorb; do
   ( cd "$ROOT" && ORBWEAVER_FORWARD_PING=1 exec cargo run -q --bin spike-server -- \
       spikes/server.ior 127.0.0.1 0 >/tmp/orbweaver-fwd.log 2>&1 & )
   up=0
-  wait_accepting "$ROOT/spikes/server.ior" --deadline 15 && up=1
+  wait_accepting "$ROOT/spikes/server.ior" --deadline 15 \
+    --ready /tmp/orbweaver-fwd.log "^READY$" && up=1
   [ "$up" -eq 1 ] || { echo "  FAIL forwarding server did not start"; fwd_fail=1; break; }
 
   if [ "$peer" = omni ]; then
@@ -3665,6 +3669,38 @@ fi
 #   - an axis value removed from AXES -> exit 1 before any cell runs, naming the
 #     manifest row and the bad name.
 #   - a cell's runner made to exit 1 -> the group goes red naming the cell.
+# ── A call travelling the other way through the seam (D038, L4) ─────────────
+#
+# The last open leak under D029 §6.1's Language row, closed 2026-08-31 under
+# D038 option A. A reference ARRIVING at a foreign servant used to be a handle
+# it could pass back and not use, because invoking it needs a call to travel the
+# other way and the protocol had no message for one. It has one now: the far
+# side sends `{"invoke": …}` naming a handle, this side dials, and the answer
+# comes back before the reply to the call the servant is still inside.
+#
+# **What this measures and what it does not.** It measures that a Python servant
+# handed a reference INVOKES it — the Rust target on a real socket records
+# exactly one call, and the servant refuses unless the value it read back is the
+# one that target answers. Neither assertion is sufficient alone, which is why
+# both are there: a servant that did nothing would satisfy the second by never
+# failing, and a connection made without the answer arriving would satisfy the
+# first. It is NOT a side-by-side comparison of a Rust and a Python servant
+# doing the same thing — the parity it establishes is that the Python one CAN,
+# which is the half that was missing. Its own control is the same servant with
+# the nested call removed: the target is never reached.
+hr "a call travelling the other way — a foreign servant invokes what it was handed (D038)"
+bears_on language
+otw_out=$(cargo test -q -p orbweaver-gen --test a_call_travelling_the_other_way 2>&1); otw_rc=$?
+otw_line=$(grep -E '^test result:' <<<"$otw_out" | head -1)
+if [ "$otw_rc" -eq 0 ] && [ -n "$otw_line" ]; then
+  echo "  ok   $otw_line — a Python servant invoked a reference it was handed,"
+  echo "       and the control that makes no nested call left the target unreached"
+else
+  echo "  FAIL the other-way call did not run ($(rc_says "$otw_rc"))"
+  cargo_test_diag "$otw_out"
+  fail_total=$((fail_total+1))
+fi
+
 hr "language bindings — one suite, parameterised by language, and what it does not measure (D032 §4)"
 # The same transparency the group above declares, and for the sharper reason:
 # this one measures BOTH directions, so it is the first group in this harness

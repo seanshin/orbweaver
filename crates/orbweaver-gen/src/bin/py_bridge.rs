@@ -51,11 +51,10 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 use std::time::Duration;
 
-use orbweaver_dynamic::anyjson::{self, LocalReferences};
-use orbweaver_dynamic::invoke::{self, InvokeError};
+use orbweaver_dynamic::anyjson::LocalReferences;
 use orbweaver_dynamic::json::Json;
 use orbweaver_giop::typecode::TypeCode;
-use orbweaver_giop::{Connection, Error as GiopError, Ior};
+use orbweaver_giop::{Connection, Ior};
 use orbweaver_idl::include::SearchPath;
 use orbweaver_registry::{
     Contract, Entry, OperationSig, ParamDirection, ParamSig, Registry, Strictness,
@@ -323,6 +322,13 @@ mod serve {
 }
 
 /// One request, from the line that carried it to the line that answers it.
+///
+/// **The framing moved to `orbweaver_gen::seam::perform_call` on 2026-08-31**
+/// and this parses the line and calls it. D038's nested request has to say the
+/// same sentence — convert arguments, invoke, frame `ok`/`user_exception`/
+/// `system_exception` — for a handle rather than for a line, and two copies of
+/// a reply framing drift the first time a completion status changes. What is
+/// left here is what is genuinely the bridge's: a line is a request.
 fn serve(
     conn: &mut Connection,
     registry: &Registry,
@@ -330,88 +336,7 @@ fn serve(
     line: &str,
 ) -> Result<Json, String> {
     let request = Json::parse(line).map_err(|e| e.to_string())?;
-    let id = request.get("id").and_then(Json::as_str).ok_or("a request needs an \"id\"")?;
-    let op = request.get("op").and_then(Json::as_str).ok_or("a request needs an \"op\"")?;
-    let (_, sig) = registry
-        .resolve_operation(id, op)
-        .ok_or_else(|| format!("{id} has no operation {op:?}"))?;
-    let sig = sig.clone();
-
-    let Some(Json::Object(given)) = request.get("args") else {
-        return Err("a request needs an \"args\" object".to_owned());
-    };
-
-    // Arguments are converted before anything is sent, so a bad one is a local
-    // error rather than a half-written message — the same order the dynamic
-    // invoker uses, for the same reason.
-    let mut args: BTreeMap<String, orbweaver_dynamic::Value> = BTreeMap::new();
-    for p in &sig.params {
-        if !matches!(p.direction, ParamDirection::In | ParamDirection::InOut) {
-            continue;
-        }
-        let Some(j) = given.get(&p.name) else {
-            return Err(format!("{op} needs an argument {:?}", p.name));
-        };
-        let v = anyjson::from_json(&p.tc, j, handles)
-            .map_err(|e| format!("argument {}: {e}", p.name))?;
-        args.insert(p.name.clone(), v);
-    }
-
-    match invoke::invoke(conn, registry, id, op, &args) {
-        Ok(outcome) => {
-            let returns = if matches!(sig.returns, TypeCode::Void) {
-                Json::Null
-            } else {
-                anyjson::to_json(&sig.returns, &outcome.returns, handles)
-                    .map_err(|e| format!("the reply's return value: {e}"))?
-            };
-            let mut outputs = BTreeMap::new();
-            for p in &sig.params {
-                if !matches!(p.direction, ParamDirection::Out | ParamDirection::InOut) {
-                    continue;
-                }
-                let Some(v) = outcome.outputs.get(&p.name) else { continue };
-                outputs.insert(
-                    p.name.clone(),
-                    anyjson::to_json(&p.tc, v, handles)
-                        .map_err(|e| format!("out parameter {}: {e}", p.name))?,
-                );
-            }
-            Ok(object([("ok", object([("returns", returns), ("outputs", Json::Object(outputs))]))]))
-        }
-        Err(InvokeError::User(u)) => {
-            let members = match (&u.members, registry.typecode(&u.id)) {
-                (Some(v), Some(tc)) => anyjson::to_json(tc, v, handles)
-                    .map_err(|e| format!("the raised {}: {e}", u.id))?,
-                // An id the registry never heard of still names a contract the
-                // caller was not built against, which is the useful half.
-                _ => Json::Null,
-            };
-            Ok(object([(
-                "user_exception",
-                object([("id", Json::String(u.id.clone())), ("members", members)]),
-            )]))
-        }
-        Err(InvokeError::Transport(GiopError::SystemException { id, minor, completed })) => {
-            Ok(object([(
-                "system_exception",
-                object([
-                    ("id", Json::String(id)),
-                    ("minor", Json::Number(minor.to_string())),
-                    // The ordinal, passed through unchanged. §4.11.4 numbers
-                    // `completion_status` COMPLETED_YES, COMPLETED_NO,
-                    // COMPLETED_MAYBE, and this project has already had those
-                    // first two transposed once — see
-                    // `orbweaver_giop::server::Completion`, where the comment
-                    // is longer than the enum. Naming the value here would be
-                    // a second place to get the same numbering wrong, so the
-                    // bridge reports the number the peer sent.
-                    ("completed", Json::Number(completed.to_string())),
-                ]),
-            )]))
-        }
-        Err(e) => Err(e.to_string()),
-    }
+    orbweaver_gen::seam::perform_call(conn, registry, handles, &request)
 }
 
 /// A registry in which every attribute's `_get_`/`_set_` accessors are ordinary

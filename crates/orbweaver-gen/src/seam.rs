@@ -74,11 +74,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbweaver_cdr::Encoder;
 use orbweaver_dynamic::anyjson::{self, References};
+use orbweaver_dynamic::invoke::{self, InvokeError};
 use orbweaver_dynamic::json::Json;
 use orbweaver_giop::Version;
 use orbweaver_giop::codeset::{CodeSetId, WideCodec};
 use orbweaver_giop::server::{Completion, Dispatch, DispatchBody, Request, SystemException};
 use orbweaver_giop::typecode::TypeCode;
+use orbweaver_giop::{Connection, Error as GiopError};
 use orbweaver_registry::{OperationSig, ParamDirection, Registry};
 
 use crate::rt::{OBJECT_ID, ObjectHome, UNKNOWN};
@@ -157,8 +159,249 @@ pub const OWN_OBJECT_PREFIX: &str = "oid:";
 /// not know that.
 pub const SEAM_FAILURE: &str = UNKNOWN;
 
+/// `{k: v, …}` as a `Json`, for the reply documents this module frames.
+fn json_object<const N: usize>(pairs: [(&str, Json); N]) -> Json {
+    Json::Object(pairs.into_iter().map(|(k, v)| (k.to_owned(), v)).collect())
+}
+
+/// Dial one call over `conn` and frame its answer as a seam reply document.
+///
+/// **One function, two callers, because it is one sentence.** `orbweaver-py-bridge`
+/// has said it since the bridge existed — take a request naming an interface, an
+/// operation and arguments; convert the arguments; invoke; frame `ok`,
+/// `user_exception` or `system_exception`. D038's nested request needs exactly
+/// that sentence said again, for a handle the far side names instead of for a
+/// line the bridge read, and this project's rule is that a sentence more than
+/// one layer must give belongs to one function reachable from every layer that
+/// owes it. Restating it in `ForeignServant` would have been the `pub(crate)`
+/// defect with a new coat: two framings of the same reply, drifting the first
+/// time a completion status or an exception shape changed.
+///
+/// `request` carries `id`, `op` and `args`; the caller decides where those came
+/// from.
+pub fn perform_call(
+    conn: &mut Connection,
+    registry: &Registry,
+    handles: &mut dyn References,
+    request: &Json,
+) -> Result<Json, String> {
+    let id = request.get("id").and_then(Json::as_str).ok_or("a request needs an \"id\"")?;
+    let op = request.get("op").and_then(Json::as_str).ok_or("a request needs an \"op\"")?;
+    let (_, sig) = registry
+        .resolve_operation(id, op)
+        .ok_or_else(|| format!("{id} has no operation {op:?}"))?;
+    let sig = sig.clone();
+
+    let Some(Json::Object(given)) = request.get("args") else {
+        return Err("a request needs an \"args\" object".to_owned());
+    };
+
+    // Arguments are converted before anything is sent, so a bad one is a local
+    // error rather than a half-written message — the same order the dynamic
+    // invoker uses, for the same reason.
+    let mut args: BTreeMap<String, orbweaver_dynamic::Value> = BTreeMap::new();
+    for p in &sig.params {
+        if !matches!(p.direction, ParamDirection::In | ParamDirection::InOut) {
+            continue;
+        }
+        let Some(j) = given.get(&p.name) else {
+            return Err(format!("{op} needs an argument {:?}", p.name));
+        };
+        let v = anyjson::from_json(&p.tc, j, handles)
+            .map_err(|e| format!("argument {}: {e}", p.name))?;
+        args.insert(p.name.clone(), v);
+    }
+
+    match invoke::invoke(conn, registry, id, op, &args) {
+        Ok(outcome) => {
+            let returns = if matches!(sig.returns, TypeCode::Void) {
+                Json::Null
+            } else {
+                anyjson::to_json(&sig.returns, &outcome.returns, handles)
+                    .map_err(|e| format!("the reply's return value: {e}"))?
+            };
+            let mut outputs = BTreeMap::new();
+            for p in &sig.params {
+                if !matches!(p.direction, ParamDirection::Out | ParamDirection::InOut) {
+                    continue;
+                }
+                let Some(v) = outcome.outputs.get(&p.name) else { continue };
+                outputs.insert(
+                    p.name.clone(),
+                    anyjson::to_json(&p.tc, v, handles)
+                        .map_err(|e| format!("out parameter {}: {e}", p.name))?,
+                );
+            }
+            Ok(json_object([(
+                "ok",
+                json_object([("returns", returns), ("outputs", Json::Object(outputs))]),
+            )]))
+        }
+        Err(InvokeError::User(u)) => {
+            let members = match (&u.members, registry.typecode(&u.id)) {
+                (Some(v), Some(tc)) => anyjson::to_json(tc, v, handles)
+                    .map_err(|e| format!("the raised {}: {e}", u.id))?,
+                // An id the registry never heard of still names a contract the
+                // caller was not built against, which is the useful half.
+                _ => Json::Null,
+            };
+            Ok(json_object([(
+                "user_exception",
+                json_object([("id", Json::String(u.id.clone())), ("members", members)]),
+            )]))
+        }
+        Err(InvokeError::Transport(GiopError::SystemException { id, minor, completed })) => {
+            Ok(json_object([(
+                "system_exception",
+                json_object([
+                    ("id", Json::String(id)),
+                    ("minor", Json::Number(minor.to_string())),
+                    // The ordinal, passed through unchanged. §4.11.4 numbers
+                    // `completion_status` COMPLETED_YES, COMPLETED_NO,
+                    // COMPLETED_MAYBE, and this project has already had those
+                    // first two transposed once — see
+                    // `orbweaver_giop::server::Completion`, where the comment
+                    // is longer than the enum. Naming the value here would be
+                    // a second place to get the same numbering wrong, so the
+                    // bridge reports the number the peer sent.
+                    ("completed", Json::Number(completed.to_string())),
+                ]),
+            )]))
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Carry out one nested request from the far side, or refuse it.
+///
+/// D038 option A. Three things this must not do, and each is one of §3's
+/// invariants:
+///
+/// * **It never tells the far side an address.** The request names a handle;
+///   the `Ior` behind it is read here and never travels back. A design that
+///   answered `local-3` with a stringified IOR would close L4 by opening the
+///   leak §4.7 exists to prevent.
+/// * **The handle table is the boundary.** A handle nobody issued is refused —
+///   `resolve` returns `None` and that is the end of it — so the far side
+///   guessing `local-99` reaches nothing. It cannot name an address it was not
+///   handed, because the only names it has are the ones this table minted.
+/// * **A refusal is an answer, not an `Err`.** Every path here returns a
+///   document, so a foreign servant can catch a failed nested call and go on
+///   answering the call it is inside.
+///
+/// **And the connection is a fresh one, which is §2.1's rule rather than an
+/// implementation choice.** The nested call is made on a connection this
+/// servant owns and never on the one the request arrived on: that connection is
+/// mid-request — its reply has not been written — and writing a second request
+/// down it would interleave two conversations on a stream that has no room for
+/// two. It is also the deadlock D038 §2.1 names: a server that serves one
+/// message at a time cannot answer a nested call that arrives on the socket it
+/// is already busy with. Dialling out is what makes the shape reachable at all,
+/// and dialling *here* is what keeps it survivable.
+fn resolve_nested(refs: &SeamReferences, registry: &Registry, invoke: &Json) -> Json {
+    let Some(handle) = invoke.get(INVOKE_HANDLE).and_then(Json::as_str) else {
+        return nested_refusal("a nested request needs a \"handle\"");
+    };
+    let Some(op) = invoke.get(INVOKE_OPERATION).and_then(Json::as_str) else {
+        return nested_refusal("a nested request needs an \"op\"");
+    };
+    let Some(ior) = References::resolve(refs, handle) else {
+        return nested_refusal(&format!(
+            "no reference has been issued the handle {handle:?} — the handle table is the \
+             boundary, and a handle nobody issued names nothing"
+        ));
+    };
+    let args = invoke.get(INVOKE_ARGUMENTS).cloned().unwrap_or(Json::Object(BTreeMap::new()));
+
+    // A connection of this servant's own, per §2.1. Short timeout on purpose:
+    // this dial happens while a caller waits on a reply two layers up, so a
+    // hung connect must come back as an answer rather than hold that reply.
+    let mut conn = match Connection::connect(&ior, std::time::Duration::from_secs(10)) {
+        Ok(c) => c,
+        Err(e) => return nested_refusal(&format!("dialling {handle:?} failed: {e}")),
+    };
+    let request = json_object([
+        ("id", Json::String(ior.type_id.clone())),
+        ("op", Json::String(op.to_owned())),
+        ("args", args),
+    ]);
+    // The table is read-only for a nested call: a reference coming back in the
+    // ANSWER would need issuing, and that is the widening §3 does not grant
+    // here. `LocalReferences` gives the framing somewhere to put one and keeps
+    // it out of the boundary table.
+    let mut scratch = orbweaver_dynamic::anyjson::LocalReferences::new();
+    match perform_call(&mut conn, registry, &mut scratch, &request) {
+        Ok(answer) => answer,
+        Err(e) => nested_refusal(&format!("the nested call to {handle:?} failed: {e}")),
+    }
+}
+
+/// The answer to a nested request that this side will not carry out.
+///
+/// **A seam failure, not a servant's refusal** — D038 §3's second invariant.
+/// The far side naming a handle nobody issued is a wiring mistake inside one
+/// process; it never travelled a wire and no peer did anything wrong, so it
+/// must not be framed as a `user_exception` the calling contract appears to
+/// declare. It comes back as `UNKNOWN` with completion `MAYBE`, which is the
+/// same sentence [`ForeignServant::seam_failure`] gives for the same class, and
+/// `ask`'s error contract is untouched: this is a well-formed answer, not
+/// `Err`. That is §3's third invariant, and it is what lets a foreign servant
+/// catch a failed nested call instead of losing the conversation.
+pub fn nested_refusal(why: &str) -> Json {
+    json_object([(
+        REPLY_SYSTEM_EXCEPTION,
+        json_object([
+            (EXCEPTION_ID, Json::String(SEAM_FAILURE.to_owned())),
+            (EXCEPTION_MINOR, Json::Number("0".to_owned())),
+            (EXCEPTION_COMPLETED, Json::Number(completion_ordinal(Completion::Maybe).to_string())),
+            // Not part of the protocol document and deliberately so: the far
+            // side dispatches on the three keys above, and this is for whoever
+            // is reading the conversation. A refusal nobody can explain is the
+            // one this project pays for twice.
+            ("why", Json::String(why.to_owned())),
+        ]),
+    )])
+}
+
 /// What version of this protocol [`protocol()`] describes.
-pub const PROTOCOL_VERSION: &str = "1";
+///
+/// **2 since 2026-08-31**, when the far side gained a message of its own
+/// ([`ENVELOPE_INVOKE`]). A version-1 parent reading a version-2 child would
+/// see an `invoke` document where it expected a reply and would fail as though
+/// the servant had answered nonsense, so this is not a compatible addition
+/// dressed as one: the direction the conversation can travel changed. D038,
+/// approved 2026-08-31, option A.
+pub const PROTOCOL_VERSION: &str = "2";
+
+/// The envelope the **far side** wraps a nested request in, mid-answer.
+///
+/// D038 option A. While the far side is answering a call it may need to invoke
+/// a reference it was handed — `local-3` in the handle table — and it cannot
+/// dial: it has never been told an address, which is §4.7's rule and stays
+/// true. So it asks this side to dial on its behalf, by handle.
+///
+/// **This is what makes the seam re-entrant**, which D038 §2 says is a property
+/// and not a detail: while the parent waits for the reply to call *C*, the
+/// child sends one of these, and the parent must answer it before the reply to
+/// *C* can arrive. The read loop on both sides stops being *read the reply* and
+/// becomes *read the next document, which may be a reply or may be a request.*
+pub const ENVELOPE_INVOKE: &str = "invoke";
+
+/// The envelope **this side** wraps the answer to a nested request in.
+///
+/// Distinct from [`ENVELOPE_CALL`] so the far side's reader can tell a fresh
+/// call from the answer to the request it is waiting on — without that, a
+/// servant that invoked while being called would take the answer to its own
+/// nested request as a new call addressed to it.
+pub const ENVELOPE_ANSWER: &str = "answer";
+
+/// Which handle the far side is asking us to invoke. A handle, never an
+/// address: D038 §3's first invariant.
+pub const INVOKE_HANDLE: &str = "handle";
+/// The operation to invoke on it.
+pub const INVOKE_OPERATION: &str = "op";
+/// Its arguments, in AnyJSON v1 as everywhere else in this protocol.
+pub const INVOKE_ARGUMENTS: &str = "args";
 
 /// The whole seam, as one document, built from the constants above.
 ///
@@ -224,6 +467,18 @@ pub fn protocol() -> Json {
             ]),
         ),
         ("reference", o([("own_object_prefix", s(OWN_OBJECT_PREFIX))])),
+        // D038's nested request: the far side's own message, and the envelope
+        // this side answers it in.
+        (
+            "invoke",
+            o([
+                ("envelope", s(ENVELOPE_INVOKE)),
+                ("answer_envelope", s(ENVELOPE_ANSWER)),
+                ("handle", s(INVOKE_HANDLE)),
+                ("operation", s(INVOKE_OPERATION)),
+                ("arguments", s(INVOKE_ARGUMENTS)),
+            ]),
+        ),
     ])
 }
 
@@ -410,6 +665,30 @@ pub trait Answerer {
     /// and comes back as `Ok` carrying [`REPLY_USER_EXCEPTION`] or
     /// [`REPLY_SYSTEM_EXCEPTION`].
     fn ask(&mut self, call: &Json) -> Result<Json, String>;
+
+    /// [`ask`](Self::ask), but `resolve` answers any **nested request** the far
+    /// side sends while it is answering.
+    ///
+    /// D038 option A, approved 2026-08-31. The far side may be holding a
+    /// reference it was handed and unable to dial it — it has never been told
+    /// an address, which is §4.7's rule and stays true — so mid-answer it sends
+    /// `{"invoke": …}` naming a handle, and this side answers `{"answer": …}`
+    /// before the reply to the original call can arrive. **The conversation
+    /// nests**, which is why this is a protocol property and not a detail.
+    ///
+    /// The default implementation ignores `resolve` and delegates to `ask`,
+    /// which is exactly what a runtime written before this message existed
+    /// does: it never sends one, so it never needs one answered. That default
+    /// is not a stub — it is the honest behaviour of a version-1 far side, and
+    /// it means adding this method broke no implementation.
+    fn ask_resolving(
+        &mut self,
+        call: &Json,
+        resolve: &mut dyn FnMut(&Json) -> Json,
+    ) -> Result<Json, String> {
+        let _ = resolve;
+        self.ask(call)
+    }
 }
 
 /// A servant written in another language, dispatched into by our Rust ORB.
@@ -657,7 +936,16 @@ impl<A: Answerer> Dispatch for ForeignServant<A> {
         }
         let call = Json::Object(call);
 
-        let reply = self.answerer.ask(&call).map_err(|_| Self::seam_failure())?;
+        // **The seam is re-entrant here and nowhere else.** While the far
+        // side answers this call it may send `{"invoke": …}` naming a handle it
+        // was given; `resolve_nested` dials on its behalf and the answer goes
+        // back before the reply to this call arrives. The borrow is split
+        // deliberately: the resolver needs the handle table while the answerer
+        // holds the pipe, and both are fields of `self`.
+        let Self { answerer, refs, registry, .. } = self;
+        let reply = answerer
+            .ask_resolving(&call, &mut |invoke| resolve_nested(refs, registry, invoke))
+            .map_err(|_| Self::seam_failure())?;
 
         if sig.oneway {
             // §9.4.1: no reply may be written at all. An empty one is a whole

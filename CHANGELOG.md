@@ -10,6 +10,46 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**A call travels the other way through the seam, and the last leak under the
+Language row is closed.** D038 approved 2026-08-31, option A. A reference
+*arriving* at a foreign servant used to be a handle it could pass back and not
+use — invoking it needs a call going the other way and the protocol had no
+message for one. It has one now (`invoke`, answered as `answer`, version 2),
+which makes the seam **re-entrant**: the far side asks mid-answer, this side
+dials, and the answer arrives before the reply to the call the servant is still
+inside.
+
+**The three invariants held and are what make this a closure rather than a
+move.** The far side never learns an address — it names a handle, and §4.7 is
+untouched. The handle table stays the boundary: a handle nobody issued resolves
+to nothing, so `local-99` reaches nothing. And a refused nested call is a
+well-formed answer rather than an `Err`, which is what lets a foreign servant
+catch one and go on answering the call it is inside. D038 §2.1's rule is in the
+code and in its comment: the nested call goes on a connection the servant owns,
+never the one the request arrived on — that connection is mid-request, and a
+server that serves one message at a time could not answer on it anyway.
+
+**One function, not two framings.** The nested call has to say what
+`orbweaver-py-bridge` has said since the bridge existed — convert arguments,
+invoke, frame `ok`/`user_exception`/`system_exception` — so that moved into
+`seam::perform_call` and the bridge calls it. Restating it would have been the
+`pub(crate)` defect in a new coat: two reply framings, drifting the first time a
+completion status changed.
+
+Measured by `a_call_travelling_the_other_way.rs`: a Python servant handed a
+reference to a Rust target on a real socket invokes it, the target records
+**exactly one** call, and the servant refuses unless the value it read back is
+the one that target answers. **Neither assertion is sufficient alone.** Its
+control is the same servant with the nested call removed, and the target is
+never reached. Two further controls, each making the machinery fail: resolution
+disabled, and a child that answers no nested request — both take the leg red
+while the control stays green.
+
+*도착한 참조를 저쪽이 **호출한다**. 프로토콜에 메시지가 생겼고 seam은 **재진입**이
+되었다. 불변식 셋이 지켜졌기에 이것은 이동이 아니라 폐쇄다 — 저쪽은 주소를 배우지
+않고, 핸들 표가 경계로 남고, 거절은 `Err`가 아니라 잡을 수 있는 답이다. 답을
+짜는 문장은 하나이고 브리지가 그것을 호출한다.*
+
 **A published IOR is not an accepting listener, and the repair that already
 knew that had been scoped to one group.** `81cc546` replaced
 `[ -s jacorb.ior ] && sleep 0.5` with a three-part wait on 2026-08-29, after
