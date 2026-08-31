@@ -4988,19 +4988,29 @@ leak_leg location
 # a run. These two groups are that evidence, run.
 hr "a key nobody activated — what a caller learns from an endpoint (D029 §6.1 backend)"
 bears_on backend
-# The leak is DECLARED, not closed: `Dispatch::knows` defaults to true and 26
-# of the workspace's 72 implementations inherit it, in crates `orbweaver-giop`
-# does not own. So this group measures the leak's SHAPE and refuses a silent
-# change to it — the file's own assertion message says as much: *"the Backend
-# observation this test records has been closed — move D029 §6.1's row rather
-# than editing this assertion."*
+# **What this group asserts changed on 2026-08-31, and the sentence that used to
+# stand here is why.** It read: *the leak is DECLARED, not closed: `Dispatch`
+# `::knows` defaults to true and 26 of the workspace's 72 implementations
+# inherit it.* Every clause of that died in `81cc546` two days earlier — D036
+# deleted the default, so inheriting does not compile and the count is of an
+# empty set — and nothing went red, because a comment beside a gate is prose.
+# D029's cell said the same thing and the harness READS that cell at run time,
+# so the dead figure was printed on every run in between.
+#
+# The population is nameable again: the leak is now spelled *`knows` answers
+# `true` without reading the key*, which D036 says leaks exactly as inheriting
+# it did. The test computes that set and the half of it a build emits, and
+# asserts the second is empty — the first servant compiled into a binary or a
+# library that answers for every key fails by name and line. No figure is
+# repeated here; the test prints today's under `--nocapture`.
 kna_out=$(cargo test -q -p orbweaver-giop --test a_key_nobody_activated 2>&1); kna_rc=$?
 kna_line=$(grep -E '^test result:' <<<"$kna_out" | head -1)
 if [ "$kna_rc" -eq 0 ] && [ -n "$kna_line" ]; then
-  echo "  ok   $kna_line — 3 GIOP versions x 2 byte orders, and the roster of"
-  echo "       inheritors is COMPUTED from the tree rather than typed, because the"
-  echo "       typed one had already gone stale while its guard asserted only that"
-  echo "       the list was non-empty"
+  echo "  ok   $kna_line — 3 GIOP versions x 2 byte orders, and a roster COMPUTED"
+  echo "       from the tree rather than typed: no servant a build emits answers"
+  echo "       an unconditional true from knows, nor answers true while checking"
+  echo "       the key on the request path. The typed figure this replaced had"
+  echo "       gone stale while its guard asserted only that the list was non-empty"
 else
   echo "  FAIL the backend row's own measurement did not run ($(rc_says "$kna_rc"))"
   cargo_test_diag "$kna_out"

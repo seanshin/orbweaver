@@ -41,7 +41,7 @@
 //! # Blast radius — a figure that is computed, beside the reading it replaced
 //!
 //! **Today's figure is not written here.** It is computed from the tree by
-//! `the_inheritors_of_the_default_are_named_where_a_change_would_be_made` and
+//! `no_servant_a_build_emits_answers_for_a_key_nobody_activated` and
 //! printed under `--nocapture`, because the reading that used to stand in this
 //! paragraph had already drifted and nothing could go red on it.
 //!
@@ -694,6 +694,37 @@ mod roster {
         /// `the_probe_path_and_the_request_path_agree_about_an_unactivated_key`
         /// exists to catch.
         pub checks_in_another_hook: bool,
+        /// `knows`'s whole body is `true`: it never reads the key it is given.
+        ///
+        /// **This is the population D029 §6.1's Backend row is about after
+        /// D036, and it is not the one that row was written against.** Before
+        /// D036 the leak was spelled *inheriting a permissive default* and the
+        /// cell counted inheritors; the default is gone and inheriting no
+        /// longer compiles, so the same leak is now spelled *writing `true`*.
+        /// D036 says so in as many words — a servant that writes it leaks
+        /// exactly as one that inherited it did — which is why retiring the
+        /// inheritor count without putting this one in its place would have
+        /// been a row quietly losing its leak rather than closing it.
+        ///
+        /// A **lower bound**, in one direction only: every unconditional
+        /// `true` answers for a key nobody activated, but a `knows` that
+        /// consults something can still answer for a superset of the keys its
+        /// servant holds, and nothing here sees that.
+        pub answers_unconditionally: bool,
+        /// The impl is not compiled into any artifact a deployment runs: it
+        /// sits inside a `#[cfg(test)]` item, or its file is a cargo test or
+        /// bench target.
+        ///
+        /// **A fact about what the compiler emits, not a judgement about which
+        /// servants are "production"** — and that distinction is why the field
+        /// exists at all. This file's own documentation refuses the judgement
+        /// for a good reason: *deciding which servants are production by
+        /// matching path substrings would put the same hand-typed classifier
+        /// back one layer down.* `#[cfg(test)]` is not that classifier; it is
+        /// the condition under which the code is emitted, so a reader
+        /// disputing it is disputing `rustc` rather than somebody's taste in
+        /// directory names.
+        pub test_only: bool,
     }
 
     #[derive(Debug, Default)]
@@ -711,6 +742,16 @@ mod roster {
         }
         pub fn wrong_hook(&self) -> Vec<&DispatchImpl> {
             self.impls.iter().filter(|i| i.checks_in_another_hook).collect()
+        }
+        /// Every servant whose `knows` never reads the key.
+        pub fn unconditional(&self) -> Vec<&DispatchImpl> {
+            self.impls.iter().filter(|i| i.answers_unconditionally).collect()
+        }
+        /// The same, restricted to impls a build actually emits — which is the
+        /// set a caller could ever reach, and therefore the one the Backend row
+        /// is a claim about.
+        pub fn unconditional_in_a_build(&self) -> Vec<&DispatchImpl> {
+            self.impls.iter().filter(|i| i.answers_unconditionally && !i.test_only).collect()
         }
     }
 
@@ -768,6 +809,31 @@ mod roster {
                  reporting something the compiler already refused, or the trait having grown \
                  a default again. Neither is allowed to pass quietly",
                 scan.inheritors().len(),
+                scan.impls.len()
+            ));
+        }
+        // **The population D036 left behind, and the same guard over it.**
+        // `answers_unconditionally` is what the Backend row counts now, so it
+        // owes the same two refusals `overrides_knows` owes: a classifier that
+        // has only ever given one answer on this tree is not evidence for that
+        // answer, in either direction.
+        if scan.unconditional().is_empty() {
+            return Err(format!(
+                "the roster scan found {} `Dispatch` impls and says not one of them answers an                  unconditional `true`. If that is true the Backend leak is closed in this tree                  and D029 §6.1's row should be MOVED by a person, not discovered by a scan                  going quiet; if it is not true the body test broke. Neither reading is                  allowed to be a silent pass",
+                scan.impls.len()
+            ));
+        }
+        if scan.unconditional().len() == scan.impls.len() {
+            return Err(format!(
+                "the roster scan says all {} `Dispatch` impls answer an unconditional `true`.                  A classifier that only ever gives one answer is not evidence for that answer                  — see CLAUDE.md, indistinguishability",
+                scan.impls.len()
+            ));
+        }
+        // And the same for the reachability half, which is the one that turns
+        // a count into a claim about what a caller could dial.
+        if scan.impls.iter().all(|i| i.test_only) || !scan.impls.iter().any(|i| i.test_only) {
+            return Err(format!(
+                "the roster scan put all {} `Dispatch` impls on one side of `#[cfg(test)]`.                  This workspace has servants on both sides, so the reachability classifier is                  stuck and `unconditional_in_a_build()` means nothing",
                 scan.impls.len()
             ));
         }
@@ -950,6 +1016,132 @@ mod roster {
         false
     }
 
+    /// The brace-matched body of `fn <name>` inside `body`, braces excluded.
+    ///
+    /// `declares_fn` above answers *is it there*; this answers *what does it
+    /// say*, and the two are kept apart because a required method in a trait
+    /// declaration has the first and not the second.
+    fn fn_body<'a>(body: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
+        let mut i = 0usize;
+        while i < body.len() {
+            if word_at(body, i, b"fn") {
+                let mut j = i + 2;
+                while j < body.len() && (body[j] as char).is_whitespace() {
+                    j += 1;
+                }
+                if word_at(body, j, name) {
+                    // The first `{` at nesting zero after the signature opens
+                    // the body; a `;` first means there is none.
+                    let mut k = j + name.len();
+                    let (mut angle, mut paren) = (0i32, 0i32);
+                    while k < body.len() {
+                        match body[k] {
+                            b'<' => angle += 1,
+                            b'>' => angle -= 1,
+                            b'(' | b'[' => paren += 1,
+                            b')' | b']' => paren -= 1,
+                            b';' if angle <= 0 && paren <= 0 => return None,
+                            b'{' if angle <= 0 && paren <= 0 => break,
+                            _ => {}
+                        }
+                        k += 1;
+                    }
+                    if k >= body.len() {
+                        return None;
+                    }
+                    let open = k;
+                    let mut depth = 0i32;
+                    while k < body.len() {
+                        if body[k] == b'{' {
+                            depth += 1;
+                        } else if body[k] == b'}' {
+                            depth -= 1;
+                            if depth == 0 {
+                                return Some(&body[open + 1..k]);
+                            }
+                        }
+                        k += 1;
+                    }
+                    return None;
+                }
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// Byte ranges of every item guarded by `#[cfg(test)]`.
+    ///
+    /// The attribute's item is taken as *everything up to the end of the next
+    /// brace-matched block*, which covers the `mod tests { … }` this workspace
+    /// uses everywhere and is why `server.rs`'s eleven fixture servants — all
+    /// of them below its line-2196 `#[cfg(test)]` — are not counted as
+    /// something a deployment runs.
+    ///
+    /// `#[cfg(all(test, …))]` and `#[cfg_attr(test, …)]` are **not** matched,
+    /// deliberately: this returns spans it is sure about, so a miss classifies
+    /// an impl as reachable, which is the direction that goes red rather than
+    /// quiet.
+    fn cfg_test_spans(code: &str) -> Vec<(usize, usize)> {
+        let b = code.as_bytes();
+        let n = b.len();
+        let needle = b"#[cfg(test)]";
+        let mut spans = Vec::new();
+        let mut i = 0usize;
+        while i + needle.len() <= n {
+            if &b[i..i + needle.len()] == needle {
+                let mut k = i + needle.len();
+                while k < n && b[k] != b'{' && b[k] != b';' {
+                    k += 1;
+                }
+                if k < n && b[k] == b'{' {
+                    let open = k;
+                    let mut depth = 0i32;
+                    while k < n {
+                        if b[k] == b'{' {
+                            depth += 1;
+                        } else if b[k] == b'}' {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        k += 1;
+                    }
+                    spans.push((open, k.min(n)));
+                }
+                i = k.max(i + needle.len());
+                continue;
+            }
+            i += 1;
+        }
+        spans
+    }
+
+    /// Whether a path is a cargo target that only a test run builds.
+    ///
+    /// Cargo's own layout rule, not a naming convention: `tests/` and
+    /// `benches/` directly beneath a package root are test and bench targets.
+    /// The package root is located by walking up to the directory holding a
+    /// `Cargo.toml`, so `src/tests/mod.rs` — which *is* compiled into the
+    /// library — is not mistaken for one.
+    fn is_test_target(rel: &str, root: &Path) -> bool {
+        let parts: Vec<&str> = rel.split('/').collect();
+        for (i, part) in parts.iter().enumerate() {
+            if *part != "tests" && *part != "benches" {
+                continue;
+            }
+            if i == 0 {
+                return true;
+            }
+            let pkg: PathBuf = root.join(parts[..i].join("/"));
+            if pkg.join("Cargo.toml").is_file() {
+                return true;
+            }
+        }
+        false
+    }
+
     fn strip_where(s: &str) -> &str {
         let b = s.as_bytes();
         let mut i = 0usize;
@@ -962,7 +1154,18 @@ mod roster {
         s
     }
 
-    fn at_impl(code: &str, start: usize) -> Option<(String, bool, bool)> {
+    /// What `at_impl` reads off one `impl … Dispatch for …`, before the file's
+    /// `#[cfg(test)]` spans decide whether a build emits it.
+    struct Found {
+        subject: String,
+        overrides: bool,
+        elsewhere: bool,
+        unconditional: bool,
+        /// Offset of the impl's opening brace, for the span test.
+        at: usize,
+    }
+
+    fn at_impl(code: &str, start: usize) -> Option<Found> {
         let b = code.as_bytes();
         let n = b.len();
         let mut i = start + 4;
@@ -1040,31 +1243,62 @@ mod roster {
         }
         let body = &b[brace..end.min(n)];
         let overrides = declares_fn(body, b"knows");
-        let elsewhere = !overrides
+        // Comments were blanked to spaces before this ran, so a body that is
+        // nothing but `true` trims to exactly that. The test is on the whole
+        // body rather than on a `contains`, because `k == KEY || true` and
+        // `if x { true } else { … }` both contain it and neither is this.
+        let unconditional = fn_body(body, b"knows")
+            .map(|inner| {
+                let text = String::from_utf8_lossy(inner);
+                matches!(text.trim(), "true" | "true;")
+            })
+            .unwrap_or(false);
+        // **The wrong-hook hunt, widened to the population D036 left behind.**
+        // It used to require `!overrides`, which made it a subset of the
+        // inheritors — and when D036 emptied that set the hunt went vacuous
+        // while the class it names stayed open. This file said so and said the
+        // class "would need a different scan"; it needs the same scan asking
+        // about the body instead of about the absence of one. A servant that
+        // says `true` here and consults the POA on the request path has a
+        // §9.4.5 probe answering `ObjectHere` for a key it would refuse a call
+        // on, whether it wrote that `true` or inherited it.
+        let elsewhere = (!overrides || unconditional)
             && (code[brace..end.min(n)].contains("dispatch_target")
                 || code[brace..end.min(n)].contains("parse_key"));
-        Some((subject, overrides, elsewhere))
+        Some(Found { subject, overrides, elsewhere, unconditional, at: brace })
     }
 
-    pub fn scan_source(rel: &str, src: &str, out: &mut Vec<DispatchImpl>) {
+    /// `root` decides only whether `rel` is a cargo test target; pass
+    /// `Path::new("")` when scanning source that is not on disk, and every impl
+    /// is then classified by `#[cfg(test)]` alone.
+    pub fn scan_source_at(rel: &str, src: &str, root: &Path, out: &mut Vec<DispatchImpl>) {
         let code = blank_noncode(src);
         let b = code.as_bytes();
+        let spans = cfg_test_spans(&code);
+        let target_only = is_test_target(rel, root);
         let mut i = 0usize;
         while i < b.len() {
             if word_at(b, i, b"impl") {
-                if let Some((subject, overrides_knows, checks_in_another_hook)) = at_impl(&code, i)
-                {
+                if let Some(found) = at_impl(&code, i) {
                     out.push(DispatchImpl {
                         file: rel.to_string(),
                         line: 1 + b[..i].iter().filter(|c| **c == b'\n').count(),
-                        subject,
-                        overrides_knows,
-                        checks_in_another_hook,
+                        subject: found.subject,
+                        overrides_knows: found.overrides,
+                        checks_in_another_hook: found.elsewhere,
+                        answers_unconditionally: found.unconditional,
+                        test_only: target_only
+                            || spans.iter().any(|(s, e)| found.at > *s && found.at < *e),
                     });
                 }
             }
             i += 1;
         }
+    }
+
+    /// `scan_source_at` with no package root, for source written in a test.
+    pub fn scan_source(rel: &str, src: &str, out: &mut Vec<DispatchImpl>) {
+        scan_source_at(rel, src, Path::new(""), out)
     }
 
     pub fn workspace_root() -> Result<PathBuf, String> {
@@ -1104,7 +1338,7 @@ mod roster {
                     let Ok(src) = std::fs::read_to_string(&p) else { continue };
                     scan.files_read += 1;
                     let rel = p.strip_prefix(root).unwrap_or(&p).to_string_lossy().into_owned();
-                    scan_source(&rel.replace('\\', "/"), &src, &mut scan.impls);
+                    scan_source_at(&rel.replace('\\', "/"), &src, root, &mut scan.impls);
                 }
             }
         }
@@ -1113,7 +1347,13 @@ mod roster {
     }
 }
 
-/// **A roster that changed jobs when D036 landed.**
+/// **A roster that changed jobs twice, and is named for the second one.**
+///
+/// It was `the_inheritors_of_the_default_are_named_where_a_change_would_be_made`
+/// until 2026-08-31. That name described a set the compiler has kept empty
+/// since D036, and a test named for a set that cannot be non-empty tells its
+/// next reader it is asserting the compiler — which one of its assertions still
+/// is, and says so. The rest of it measures something else now.
 ///
 /// It used to hand whoever changed `default_knows_policy()` today's list of
 /// inheritors at the point of change. **There is no default to change any
@@ -1145,34 +1385,61 @@ mod roster {
 /// is the whole point: a count that has to be maintained by hand is a sentence
 /// that will drift, and this one already had.
 ///
-/// What is *not* computed here is the production/fixture split. Deciding which
-/// servants are "production" by matching path substrings would put the same
-/// hand-typed classifier back one layer down, so the split stays prose: what
-/// the assertion hands the next reader is every inheritor, and the judgement
-/// about which of them matter is theirs to make with the tree in front of them.
+/// **The split this file used to refuse, and the reason it is now computed.**
+/// This paragraph said the production/fixture split stays prose, because
+/// *deciding which servants are "production" by matching path substrings would
+/// put the same hand-typed classifier back one layer down*. That refusal was
+/// right about path substrings and it left the row with nothing to assert: a
+/// count of servants that answer for every key is not a claim about anything
+/// until you can say which of them a caller could dial.
+///
+/// `#[cfg(test)]` is not that classifier. It is the condition under which the
+/// code is emitted, so `test_only` is a fact about the build rather than a
+/// judgement about naming, and a reader who disputes it is disputing `rustc`.
+/// The cargo half — `tests/` and `benches/` directly beneath a package root —
+/// is cargo's own layout rule, and it is checked by locating the `Cargo.toml`
+/// rather than by matching the word, which is why `src/tests/` is correctly
+/// read as library code. The control asserts both halves.
+///
+/// What stays prose is only what should: which of the fixtures below would
+/// matter if something ever served them.
 ///
 /// The ready-made repair exists and is not wired up: `orbweaver_object::Poa`
 /// has `parse_key` and `dispatch_target`, and `Target` already distinguishes
 /// `Forward` from `Unknown` — which a boolean `knows` cannot, and which is the
 /// reason the right hook for a POA-backed servant is `locate` and not `knows`.
 #[test]
-fn the_inheritors_of_the_default_are_named_where_a_change_would_be_made() {
+fn no_servant_a_build_emits_answers_for_a_key_nobody_activated() {
     let root = roster::workspace_root().unwrap_or_else(|why| panic!("{why}"));
     let scan = roster::scan_tree(&root);
     roster::verdict(&scan).unwrap_or_else(|why| panic!("{why}"));
 
     let inheritors = scan.inheritors();
     let wrong_hook = scan.wrong_hook();
+    let unconditional = scan.unconditional();
+    let reachable = scan.unconditional_in_a_build();
     println!(
         "roster, computed from {} .rs files under {}: {} Dispatch/SharedDispatch impls, \
-         {} override `knows`, {} inherit it, of which {} check the key in another hook",
+         {} override `knows`, {} inherit it, of which {} check the key in another hook; \
+         {} answer an unconditional `true`, {} of them in code a build emits",
         scan.files_read,
         root.display(),
         scan.impls.len(),
         scan.overriders().len(),
         inheritors.len(),
         wrong_hook.len(),
+        unconditional.len(),
+        reachable.len(),
     );
+    for i in &unconditional {
+        println!(
+            "  unconditional  {}:{}  {}{}",
+            i.file,
+            i.line,
+            i.subject,
+            if i.test_only { "   (no build emits it)" } else { "   ** a build emits this **" }
+        );
+    }
     for i in &inheritors {
         println!(
             "  inherits  {}:{}  {}{}",
@@ -1202,21 +1469,68 @@ fn the_inheritors_of_the_default_are_named_where_a_change_would_be_made() {
         named(&inheritors),
     );
 
-    // **`wrong_hook` is a subset of `inheritors`, so this is implied and is not
-    // a second measurement.** It is asserted anyway, and said to be implied,
-    // because the class it names — a servant whose §9.4.5 probe answers
-    // `ObjectHere` for a key it would refuse a call on — is NOT closed by D036.
-    // A servant can still write `true` here and check the key in
-    // `dispatch_body`; this scan cannot see that, because it only classifies
-    // impls that inherit. Hunting it again would need a different scan, and the
-    // repair is `orbweaver_object::Poa::serves`, which is the read-only half of
-    // `dispatch_target` and exists for exactly this. Written down rather than
-    // left for the next reader to discover from a passing assertion.
+    // **`wrong_hook` stopped being a subset of `inheritors`, and stopped being
+    // vacuous with it.** It required `!overrides`, so when D036 emptied the
+    // inheritors it emptied this too — while the class it names stayed open,
+    // which this file recorded and said would need a different scan. It needed
+    // the same scan asking about the *body* rather than about the absence of
+    // one. A servant that says `true` here and consults the POA on the request
+    // path has a §9.4.5 probe answering `ObjectHere` for a key it would refuse a
+    // call on, and it is spelled the same whether the `true` was written or
+    // inherited.
+    //
+    // **It runs before the broader assertion below, and that ordering is what
+    // keeps it reachable at all.** `wrong_hook` implies `answers_unconditionally`
+    // now that inheriting cannot compile, so it is a strict subset: asserted
+    // second, it could never have failed without the broader one failing first,
+    // and an assertion that cannot be reached is one more green that means
+    // nothing happened. Measured — control 2 below fired the wrong message
+    // until they were swapped.
+    //
+    // The hunt finds one today and it is **deliberate**: the test-private
+    // `ExpertHost` in `what_a_caller_can_tell_about_load.rs`, whose rustdoc
+    // gives the reason — *the object's existence is the POA's decision here, not
+    // a second one taken in front of it.* So the assertion is the same shape as
+    // the one above rather than `is_empty()`: what must not happen is a servant
+    // a build emits having that disagreement. A deliberate fixture is allowed to
+    // hold it, and is allowed **because nothing serves it** — which is a
+    // property the scan checks, not a name it was told to skip.
+    let wrong_hook_in_a_build: Vec<&roster::DispatchImpl> =
+        wrong_hook.iter().copied().filter(|i| !i.test_only).collect();
     assert!(
-        wrong_hook.is_empty(),
-        "{} of the (necessarily zero) inheritors check the key in another hook: {}",
-        wrong_hook.len(),
-        named(&wrong_hook),
+        wrong_hook_in_a_build.is_empty(),
+        "{} servant(s) that a build EMITS answer `true` from `knows` while checking the key on \
+         the request path, so their probe path answers `ObjectHere` for a key their own POA \
+         calls Unknown. The repair is `orbweaver_object::Poa::serves`, the read-only half of \
+         `dispatch_target`, which exists for exactly this: {}",
+        wrong_hook_in_a_build.len(),
+        named(&wrong_hook_in_a_build),
+    );
+    // **The measurement this test carries now, and the one D029 §6.1's Backend
+    // row is a claim about.**
+    //
+    // D036 deleted the default and made every servant state its answer; it
+    // closed nothing, and says so. What it did was make the population
+    // *nameable*: the leak is no longer "inherits a permissive default", it is
+    // "answers `true` without reading the key", and the reachable half of that
+    // set is what a caller could ever dial. That set is empty in this tree, and
+    // this is the assertion that keeps it empty — the first servant compiled
+    // into a binary or a library that answers for every key fails here, by name
+    // and line.
+    //
+    // It is **not** the same claim as "the leak is closed", and the row is not
+    // moved on the strength of it. Two things stay open above this line and are
+    // written here so a green run cannot be read as more than it is: a `knows`
+    // that consults something can still answer for a superset of the keys its
+    // servant holds, which this scan cannot see; and every fixture below is a
+    // servant that would leak if anything ever served it.
+    assert!(
+        reachable.is_empty(),
+        "{} servant(s) that a build EMITS answer an unconditional `true` from `knows`, so a \
+         caller can fabricate any object key at their endpoint and be answered. That is \
+         D029 §6.1's Backend leak with a deployment behind it, not a fixture: {}",
+        reachable.len(),
+        named(&reachable),
     );
 }
 
@@ -1266,44 +1580,135 @@ fn the_roster_refuses_to_be_quiet_about_finding_nothing() {
             let _ = r#"impl Dispatch for InARawString { fn knows() {} }"#;
         }
         impl Debug for NotEvenDispatch { fn fmt(&self) {} }
+        impl Dispatch for Unconditional {
+            fn knows(&self, _k: &[u8]) -> bool { true }
+        }
+        impl Dispatch for LooksUnconditional {
+            // `contains("true")` says yes to both of these and both do read
+            // the key, which is why the body is compared whole.
+            fn knows(&self, k: &[u8]) -> bool { k == b"x" || true }
+        }
+        impl Dispatch for AlsoLooksUnconditional {
+            fn knows(&self, k: &[u8]) -> bool { if k.is_empty() { true } else { false } }
+        }
+        #[cfg(test)]
+        mod tests {
+            impl Dispatch for BehindCfgTest {
+                fn knows(&self, _k: &[u8]) -> bool { true }
+            }
+        }
     "##;
 
     let mut found = Vec::new();
     roster::scan_source("synthetic.rs", SYNTHETIC, &mut found);
-    let seen: Vec<(&str, bool, bool)> = found
+    let seen: Vec<(&str, bool, bool, bool, bool)> = found
         .iter()
-        .map(|i| (i.subject.as_str(), i.overrides_knows, i.checks_in_another_hook))
+        .map(|i| {
+            (
+                i.subject.as_str(),
+                i.overrides_knows,
+                i.checks_in_another_hook,
+                i.answers_unconditionally,
+                i.test_only,
+            )
+        })
         .collect();
     assert_eq!(
         seen,
         vec![
-            ("Overrider", true, false),
-            ("Inheritor<D>", false, false),
-            ("WrongHook<D>", false, true),
+            ("Overrider", true, false, false, false),
+            ("Inheritor<D>", false, false, false, false),
+            ("WrongHook<D>", false, true, false, false),
+            ("Unconditional", true, false, true, false),
+            ("LooksUnconditional", true, false, false, false),
+            ("AlsoLooksUnconditional", true, false, false, false),
+            ("BehindCfgTest", true, false, true, true),
         ],
         "the roster parser mis-read source written to be read: it either lost an impl, \
          counted a decoy, or put an impl in the wrong class. Anything it reports about the \
          real tree is worth nothing until this row is right"
     );
 
+    // The cargo-target half of `test_only`, which the synthetic source above
+    // cannot show because it has no path: the same text, read as a file under
+    // a package's `tests/`, puts every impl out of a deployment's reach.
+    let root = roster::workspace_root().unwrap_or_else(|why| panic!("{why}"));
+    let mut as_target = Vec::new();
+    roster::scan_source_at(
+        "crates/orbweaver-giop/tests/synthetic.rs",
+        SYNTHETIC,
+        &root,
+        &mut as_target,
+    );
+    assert!(
+        as_target.iter().all(|i| i.test_only),
+        "an impl in a package's `tests/` directory was classified as something a build emits. \
+         Cargo builds that directory only for a test run, so `unconditional_in_a_build()` \
+         would be counting fixtures: {:?}",
+        as_target.iter().filter(|i| !i.test_only).map(|i| &i.subject).collect::<Vec<_>>()
+    );
+    let mut as_src = Vec::new();
+    roster::scan_source_at("crates/orbweaver-giop/src/tests/x.rs", SYNTHETIC, &root, &mut as_src);
+    assert!(
+        as_src.iter().any(|i| !i.test_only),
+        "`src/tests/` was read as a cargo test target. It is not one — it is compiled into the \
+         library — and a rule that cannot tell those apart is the path-substring classifier \
+         this file refuses"
+    );
+
     // Every way a scan can be broken, and the one way it can be ordinary.
-    let one = |overrides_knows: bool, checks_in_another_hook: bool| roster::DispatchImpl {
+    let one = |overrides_knows: bool,
+               checks_in_another_hook: bool,
+               answers_unconditionally: bool,
+               test_only: bool| roster::DispatchImpl {
         file: "synthetic.rs".into(),
         line: 1,
         subject: "Synthetic".into(),
         overrides_knows,
         checks_in_another_hook,
+        answers_unconditionally,
+        test_only,
     };
-    let refused: [(&str, roster::Scan); 4] = [
+    // A scan this workspace could produce and which nothing is wrong with:
+    // both `knows` answers present, and servants on both sides of `#[cfg(test)]`.
+    let ordinary = || vec![one(true, false, false, false), one(true, false, true, true)];
+    let refused: [(&str, roster::Scan); 7] = [
         ("read no files", roster::Scan { files_read: 0, impls: vec![] }),
         ("parsed no impls", roster::Scan { files_read: 400, impls: vec![] }),
         (
             "every impl inherits — the classifier is stuck",
-            roster::Scan { files_read: 400, impls: vec![one(false, true), one(false, true)] },
+            roster::Scan {
+                files_read: 400,
+                impls: vec![one(false, true, false, false), one(false, true, false, true)],
+            },
         ),
         (
             "an impl inherits, which D036 made impossible to compile",
-            roster::Scan { files_read: 400, impls: vec![one(true, false), one(false, true)] },
+            roster::Scan {
+                files_read: 400,
+                impls: vec![one(true, false, false, false), one(false, true, true, true)],
+            },
+        ),
+        (
+            "nothing answers unconditionally — either the leak closed or the body test broke",
+            roster::Scan {
+                files_read: 400,
+                impls: vec![one(true, false, false, false), one(true, false, false, true)],
+            },
+        ),
+        (
+            "everything answers unconditionally — the body test is stuck",
+            roster::Scan {
+                files_read: 400,
+                impls: vec![one(true, false, true, false), one(true, false, true, true)],
+            },
+        ),
+        (
+            "every impl on one side of `#[cfg(test)]` — the reachability half is stuck",
+            roster::Scan {
+                files_read: 400,
+                impls: vec![one(true, false, false, false), one(true, false, true, false)],
+            },
         ),
     ];
     for (why, scan) in &refused {
@@ -1313,13 +1718,12 @@ fn the_roster_refuses_to_be_quiet_about_finding_nothing() {
         );
     }
     // After D036 the unremarkable scan is one where everything overrides.
-    let ordinary =
-        roster::Scan { files_read: 400, impls: vec![one(true, false), one(true, false)] };
+    let ok = roster::Scan { files_read: 400, impls: ordinary() };
     assert!(
-        roster::verdict(&ordinary).is_ok(),
+        roster::verdict(&ok).is_ok(),
         "verdict() refuses every scan it is given, including an unremarkable one. A check that \
-         can only say no is not a control, and the four rows above prove nothing about it: \
+         can only say no is not a control, and the seven rows above prove nothing about it: \
          {:?}",
-        roster::verdict(&ordinary)
+        roster::verdict(&ok)
     );
 }

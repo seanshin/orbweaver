@@ -47,6 +47,22 @@ in silence and a gate stays green over the drift.
 
 ### 1.0 The order, and what reviewing this plan changed about it
 
+> **Every repair in §1 has landed as of 2026-08-31; what is left here is two
+> decisions awaiting the owner.** This block exists because the table below and
+> the sections under it went on reading as future work for two days after
+> `81cc546` closed rows 1 and 4 — while §L3's own text referred to L1's change
+> in the past tense, so the document disagreed with itself. It was found by
+> starting the batch and being stopped by the roster scan, which is the second
+> time this project has paid for *a planning pass spent on finished work*. **A
+> plan is where what landed against it gets written down**; nothing compiles a
+> table of intentions, so the only thing that keeps one true is landing the
+> record with the batch.
+>
+> *2026-08-31 기준 §1의 수리는 전부 착지했고, 남은 것은 소유자를 기다리는 결정
+> 둘이다. 이 문단이 있는 이유는 아래 표가 `81cc546` 이후 이틀 동안 미래의 일처럼
+> 읽혔기 때문이다 — 같은 문서의 §L3는 L1의 변경을 과거형으로 적고 있었으니
+> 문서가 스스로와 어긋나 있었다. 배치를 시작했다가 명단 스캔에 막혀서 알았다.*
+
 The first draft ordered §1 by *how open the leak is*, which put L1 first because
 its measurement already exists and is green. Reviewing it found that L1's work
 is **a design question, not a change** — the trait default has nothing to check
@@ -58,10 +74,10 @@ The order below is what survived that:
 
 | | | why here |
 |---|---|---|
-| 1 | **L1's decision** — where the key set lives | Opens the largest leak with the thing it actually needs. It blocks nothing else, so it starts first and finishes last. |
+| 1 | **L1's decision** — where the key set lives | **Done.** [`D036`](decisions/D036-what-a-servant-answers-for-a-key-nobody-activated.md) approved 2026-08-29, option A. |
 | 2 | **L5** — measure the killed target | **Done 2026-08-29.** The one item measurement confirmed was independent, and it was: a second arm on an existing fixture pair, landed without touching anything else. |
 | 3 | **L3** — the activation row's subject | Steps 1–2 done 2026-08-30. **Step 3 downgraded** on sizing: it adds a deployment shape and no measurement, and priority zero ranks a leak above a capability. |
-| 4 | **L1 + L2 as one batch** | Once the decision lands. One fix per root cause, across every affected implementation — which is what makes L2 part of it rather than a separate patch. |
+| 4 | **L1 + L2 as one batch** | **Done 2026-08-29 in `81cc546`**, as one batch exactly as this row asked. The default is deleted, 22 implementations state their answer, and both L2 spikes moved their check into `knows` via `Poa::serves`. |
 | 5 | **L4** — a call travelling the other way through the seam | `SKIPPED` half retired 2026-08-30. **D038 written**, awaiting the owner: the remaining half makes the seam re-entrant, which is a property and not a detail. |
 | 6 | **L6's decision** | **Written 2026-08-30 as D037**, awaiting the owner. A served contract with consumers — opened by writing the decision, never by writing the patch. |
 
@@ -105,6 +121,30 @@ the cheap half of L3 and comes first.
 하나는 측정이다.*
 
 ### L1 — Backend: `Dispatch::knows` accepts a key nobody activated
+
+> **DONE 2026-08-29 (`81cc546`), with L2 in the same batch.** The default is
+> deleted and `knows` is required. **It closes nothing and D036 says so** — a
+> servant that writes `true` leaks exactly as one that inherited it did — so
+> what follows below is kept as written rather than edited into hindsight, and
+> the row stays open.
+>
+> **What landed on 2026-08-31 is the part this section only flagged.** Its
+> *Watch for* said D029's Backend cell quotes a dated figure with no date and
+> *"fix the cell in the same change, or it will be quoted again."* It was not
+> fixed in that change and it was quoted again — by the harness, which reads
+> that cell at run time, on every run for two days. The cell now describes the
+> leak that exists, and its figure is computed: the population is *a `knows`
+> whose body never reads the key* (20 of 82 implementations), and the half of it
+> a build emits is **0** and is now an assertion rather than an observation.
+> The probe/request hunt, which had gone vacuous when D036 emptied the set it
+> was scoped to, is live again over the new population and finds the one
+> deliberate fixture.
+>
+> *L1은 2026-08-29에 L2와 한 배치로 착지했다. **아무것도 닫지 않으며 D036이 그렇게
+> 적는다** — 그래서 아래 본문은 사후 시점으로 고쳐 적지 않고 그대로 둔다. 2026-08-31에
+> 착지한 것은 이 절이 *Watch for*로 지목만 해 두었던 부분이다: D029 셀의 날짜 없는
+> 수치를 같은 변경에서 고치지 않았고, 하네스가 그 셀을 실행 시점에 읽으므로 이틀
+> 동안 모든 실행에 다시 인용되었다.*
 
 **The leak.** A servant that inherits the default `knows` answers for any
 object key at its endpoint. A caller fabricates a key, is answered, and has
@@ -189,6 +229,16 @@ CLAUDE.md에 기록돼 있다**: 일괄 `false` 아래에서 누출 테스트는
 같은 변경에서 고친다.*
 
 ### L2 — Backend: two servants check the key in the wrong hook
+
+> **DONE 2026-08-29 (`81cc546`), inside L1's batch and said out loud, which is
+> what this section asked for.** Both servants call `orbweaver_object::Poa`
+> `::serves` from `knows` — the read-only half of `dispatch_target`, which is
+> why the two paths had diverged: `knows` takes `&self` and `dispatch_target`
+> takes `&mut self`, so the request-path check could not be asked from `knows`
+> at all.
+>
+> *L2는 L1의 배치 안에서, 이 절이 요구한 대로 **조용히 섞이지 않고** 착지했다. 두
+> 경로가 갈라져 있던 이유는 가변성이었다.*
 
 `spikes/e2e/servant.rs` and `spikes/estate/servant.rs` do check the object key,
 but in `dispatch_body` rather than in `knows`. So their **probe** path answers

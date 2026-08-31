@@ -10,6 +10,49 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**The Backend row describes the leak that exists, and its figure is computed.**
+D029 §6.1's Backend cell is the priority-zero criterion's own text, and the
+harness reads it at run time and prints it. Every clause it carried about the
+leak's shape died two days earlier in `81cc546`: it said the leak was
+*inheriting a permissive default* (D036 deleted the default, so inheriting does
+not compile), counted `26 of the workspace's 72` implementations as inheritors
+(a count of an empty set), named `spike-server` as one (it answers
+`object_key == ECHO_KEY`), and named the two `spikes/` servants as checking in
+`dispatch_body` (both moved into `knows` in that same batch). **Nothing could go
+red on any of it**, so the dead figure was printed on every run in between —
+and this plan's own *Watch for* had predicted exactly that: *fix the cell in the
+same change, or it will be quoted again.*
+
+**The leak is the same leak.** D036 closed nothing and says so: writing `true`
+answers a caller identically to inheriting it. What it bought is that the
+population is nameable — *a `knows` whose body never reads the key* — so
+`a_key_nobody_activated.rs` computes it instead of the cell quoting it. Today:
+**20 of 82 implementations, 0 of them in code a build emits.**
+
+**The reachable half being empty is an assertion now, not an observation.** The
+first servant compiled into a binary or a library that answers for every key
+fails by name and line. `test_only` is what makes that a claim rather than a
+count, and it is a fact about what `rustc` emits — `#[cfg(test)]` enclosure, plus
+cargo's own `tests/`/`benches/` target rule resolved by locating the
+`Cargo.toml` — rather than the path-substring classifier this file had
+explicitly refused, correctly, and which had left the row with nothing to
+assert.
+
+**And the probe/request hunt was vacuous and nobody could tell.** `wrong_hook`
+required `!overrides`, so when D036 emptied the inheritors it emptied the hunt
+while the class it names stayed open — this file recorded that and said it
+*"would need a different scan"*. It needed the same scan asking about the body
+rather than the absence of one. Live again, it finds one servant, and that one
+is deliberate and documented, which is why the assertion is *no servant a build
+emits* rather than `is_empty()`.
+
+*백엔드 행이 실제로 있는 구멍을 적고, 그 수치는 계산된다. 그 셀은 0순위 기준
+문서 자신의 문장이고 하네스가 실행 시점에 읽는데, 구멍의 모양에 대해 적힌 모든
+절이 이틀 전에 죽어 있었다 — 그리고 **아무것도 빨개질 수 없었다.** D036은
+아무것도 닫지 않았다; 산 것은 모집단에 **이름을 붙일 수 있게 된 것**이다.
+오늘 82개 중 20개, 그중 빌드가 내보내는 것은 0개다. 그 0은 이제 관측이 아니라
+단언이다. 그리고 요청/탐침 사냥은 공허해져 있었고 아무도 알 수 없었다.*
+
 **Nothing in CI bills while this repository is public — a gate, and the blocklist
 it started as could not have said so.** The claim was a sentence in a
 conversation: `orbweaver` shows `netAmount $0.00` on every August line, and
