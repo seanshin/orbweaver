@@ -10,6 +10,41 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**`COMPONENTS.md` said the inbound half was still open, one day after it
+closed.** That file states *what is measured now*, so a stale row there is a
+false claim rather than untidiness — and three were, all about work from the
+previous day: the seam's inbound half described as having *"no message in this
+protocol"* when it has `invoke`/`answer`; the same fact restated a paragraph
+earlier; and `Router::select` recorded as an unaccepted observation when D037
+had made it a floor with a test under it.
+
+**And the reason nothing was red is worth more than the corrections.**
+`records_keep_up.py` checks that these files were *opened*, and CLAUDE.md says
+why it can do no more: *a script cannot check either for truth.* That is right
+in general and wrong for one narrow class. D029 §6.1.1 is a numbered table whose
+rows are struck through when they close, and a sentence elsewhere that **cites**
+an item is restating a fact that table owns.
+
+`spikes/leak_item_status.py` compares those citations against the table.
+It checks citations and **not prose**, deliberately: a document describing the
+same fact without naming the item is not checked and cannot be, and pretending
+otherwise would be the tune-until-quiet defect wearing a gate's coat. The gate
+therefore gets stronger the more the tree cites, which is the direction worth
+rewarding — *a claim whose home is elsewhere should name the home.*
+
+Controls: the sentence that was false yesterday, restored with its citation →
+flagged by name; a citation of an item the table does not have → flagged; and
+the table stripped of its strike-throughs → the probe refuses, because a scan
+that tells open from closed by a strike has shown nothing if it has only ever
+seen one of them. That third control's first attempt removed only the opening
+`~~` and changed nothing, which the run made obvious.
+
+*`COMPONENTS.md`가 닫힌 다음 날 "아직 열려 있다"고 적고 있었다 — 셋. 빨간 게
+없었던 이유가 정정보다 중요하다: 기록의 참을 검사할 수 없다는 말은 일반적으로
+맞지만 한 부류에는 틀리다. §6.1.1을 **인용한** 문장은 그 표가 소유한 사실을 다시
+적은 것이고, 그것은 비교할 수 있다. 산문이 아니라 인용을 검사하며, 그래서 트리가
+더 많이 인용할수록 게이트가 강해진다.*
+
 **The Backend row's own lower bound, half closed by looking — and there is one
 deployable servant behind it.** When that cell was rewritten on 2026-08-31 it
 recorded what it could not see: *a `knows` that consults something and still

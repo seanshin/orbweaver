@@ -5132,6 +5132,39 @@ fi
 # were 513 and 509 — comments quoting `serve(..., || false)` counted as
 # servers, and a directory walk counting the eight agent worktrees as eight
 # more copies of the repository.
+# ── A citation of D029 §6.1.1 agrees with D029 §6.1.1 ──────────────────────
+#
+# `records_keep_up.py` checks that `COMPONENTS.md` was OPENED recently, and
+# CLAUDE.md says why it can do no more: a script cannot check a record for
+# truth. That is right in general and wrong for one narrow class — a sentence
+# that CITES §6.1.1's numbered items is restating facts that table owns, and a
+# restatement drifts from its home silently.
+#
+# Measured 2026-09-01: `COMPONENTS.md` said *"Still open under this row and
+# unchanged: the inbound half — a reference arriving is a handle the far side
+# cannot invoke … and has no message in this protocol"* while §6.1.1's item 4
+# had been struck through as closed the day before, by the batch that added the
+# message. Two more sentences in the same file were in the same position.
+#
+# It checks citations and not prose, deliberately: a document that describes the
+# same fact without naming the item is not checked and cannot be. So the gate
+# gets stronger the more the tree cites, which is the direction worth rewarding.
+hr "a citation of D029 §6.1.1 agrees with §6.1.1"
+lis_probe_rc=0
+python3 spikes/leak_item_status.py --probe >/dev/null 2>&1 || lis_probe_rc=$?
+if [ "$lis_probe_rc" -ne 0 ]; then
+  echo "  FAIL the §6.1.1 citation scan cannot tell an agreeing citation from a"
+  echo "       disagreeing one ($(rc_says "$lis_probe_rc")), so its silence means nothing"
+  python3 spikes/leak_item_status.py --probe 2>&1
+  fail_total=$((fail_total+1))
+else
+  lis_out=$(python3 spikes/leak_item_status.py 2>&1); lis_rc=$?
+  printf '%s\n' "$lis_out"
+  if [ "$lis_rc" -ne 0 ]; then
+    fail_total=$((fail_total+1))
+  fi
+fi
+
 # ── No fixture is waited for by its IOR file plus a guess ───────────────────
 #
 # A GATE, and it lands with the sweep that produced it rather than after it.
