@@ -10,6 +10,39 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**Java's GIOP version coverage, and a 1.0 that is unread for a stated reason.**
+Both directions gained versions by republishing the profile — a peer's outbound
+version follows the profile it dialled, which is how `jacorb_giop11.sh` has
+always reached 1.1. The **servant** direction now reads **1.0, 1.1 and 1.2** off
+the wire with `neither[]`; the **client** direction reads 1.1 and 1.2.
+
+**The client direction's 1.0 is unread, and the run says why rather than leaving
+it blank**: `EchoClient` drives wide text, and our own runtime refuses it — *GIOP
+1.0 cannot carry wchar or wstring data (§9.3.1.6); this connection negotiated
+it*. That is a **correct refusal** and a limit of the fixture, not of the stack,
+and the servant direction reading 1.0 **from the same peer** is what makes that
+distinction checkable instead of a story. A version the peer or the contract
+will not carry is a result; only the 1.2 pass is required to pass.
+
+**Three shell defects found by running it, two of them by this repository's own
+gates.** `"${arr[@]}"` on an empty array is an unbound variable under `set -u` in
+macOS's bash 3.2, so the pass with no `--minor` died before the tap forked and
+the script reported *"the recording tap did not come up"* — true, and pointing at
+the wrong thing. Then the harness's early-exit gate caught `grep … | head -1` and
+`printf … | grep -q`, the second being the form CLAUDE.md names as *not* the
+sanctioned repair. Both are herestrings now.
+
+And the third was mine, on the harness itself: running it as
+`./spikes/run_checks.sh | head -8` SIGPIPEd the run and left a **stale lock** —
+the construct the gate exists for, applied to the gate. The holder was confirmed
+dead before the lock was cleared.
+
+*자바의 GIOP 버전 커버리지. 서번트 방향은 1.0·1.1·1.2를 와이어에서 읽고
+`neither[]`다. 클라이언트 방향의 1.0은 **이유가 적힌 채로** 안 읽혔다 — 드라이버가
+와이드 텍스트를 쓰고 §9.3.1.6이 그것을 1.0에 실을 수 없게 한다. 스택이 아니라
+픽스처의 한계이며, 같은 피어에게서 서번트 방향이 1.0을 읽는다는 것이 그 구분을
+이야기가 아니라 검사 가능하게 만든다.*
+
 **The Java servant direction stops claiming and starts reading.** Two lines the
 suite had been printing every run as unmeasured are gone: `servant × little
 (claimed, never read)` and `servant GIOP 1.1`.

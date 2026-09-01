@@ -364,7 +364,7 @@ fn jacorb_calls_a_java_servant() {
     // reads `servant: read[1.2] … neither[1.0 1.1]`, and a version nobody read
     // is the same kind of not-a-measurement as an order nobody read.
     let mut readings: Vec<(String, &'static str)> = Vec::new();
-    for minor in [None, Some(1u8)] {
+    for minor in [None, Some(1u8), Some(0u8)] {
         let log = dir.join(format!("tap-{}.log", minor.unwrap_or(2)));
         let mut client_out = String::new();
         with_java_servant(&java, &classes, |ior, _addr| {
@@ -385,13 +385,28 @@ fn jacorb_calls_a_java_servant() {
             let _ = tap.kill();
             let _ = tap.wait();
         });
+        let ok = client_out.contains("ping()") && !client_out.contains("FAIL");
+        let seen = peer_request_orders(&log);
+        if minor == Some(0) {
+            // **1.0 is asked and the answer is recorded, not assumed.** A peer
+            // that will not speak it is a fact about the peer; a pass that
+            // required it would turn that fact into a red run, and a version
+            // this grid cannot reach is exactly what the suite's `neither`
+            // column is for.
+            println!(
+                "note IIOP 1.0: JacORB {} the calls, tap read {} request(s)",
+                if ok { "completed" } else { "did not complete" },
+                seen.len()
+            );
+            readings.extend(seen);
+            continue;
+        }
         assert!(
-            client_out.contains("ping()") && !client_out.contains("FAIL"),
+            ok,
             "JacORB's client did not complete its calls against the Java servant at IIOP \
              1.{}:\n{client_out}",
             minor.unwrap_or(2)
         );
-        let seen = peer_request_orders(&log);
         assert!(
             !seen.is_empty(),
             "the calls completed at IIOP 1.{} and the tap recorded no request, so the byte \
