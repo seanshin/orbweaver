@@ -11,12 +11,13 @@
 # generated `<Name>Servant` base, driven over a real contract.
 #
 # **It is NOT the `servant × self`, `servant × omniorb` or `servant × jacorb`
-# cell**, and those stay counted `SKIPPED`. A cell needs a Rust process that
-# spawns `java` as a seam child — the Java equivalent of
-# `orbweaver_gen::pychild::PythonChild` — which does not exist yet. Claiming a
-# cell on the strength of this would be the *green because nothing happened*
-# shape this repository keeps finding, one row up: the half that would sit under
-# those cells works, and the cells are not run.
+# cell**, and those stay counted `SKIPPED`. The spawner they were waiting on
+# landed the same day — `SeamChild::java`, and
+# `tests/a_java_servant_this_process_owns.rs` mounts a Java servant behind a
+# `Dispatch` this process owns — so what a CELL still needs is narrower than it
+# was: a runner script in the acceptance grid, which is what the suite counts.
+# Claiming a cell on the strength of either would be the *green because nothing
+# happened* shape this repository keeps finding, one row up.
 #
 # ── Why it can be measured with no bridge at all ────────────────────────────
 #
@@ -97,8 +98,10 @@ expect string             '{"ok":{"returns":"java:hello","outputs":{}}}' || fail
 expect not-implemented    '{"system_exception":{"id":"IDL:omg.org/CORBA/NO_IMPLEMENT:1.0","minor":0,"completed":1}}' || fails=$((fails+1))
 expect no-such-operation  '{"system_exception":{"id":"IDL:omg.org/CORBA/BAD_OPERATION:1.0","minor":0,"completed":1}}' || fails=$((fails+1))
 
-echo "  note the three Java servant CELLS stay SKIPPED: a cell needs a Rust process"
-echo "       that spawns java as a seam child, which does not exist yet"
+echo "  note the three Java servant CELLS stay SKIPPED. The spawner they were waiting"
+echo "       on now exists (SeamChild::java) and the route is measured by"
+echo "       tests/a_java_servant_this_process_owns.rs; what a CELL additionally needs"
+echo "       is a runner script in the acceptance grid, and those are not written"
 if [ "$fails" -ne 0 ]; then
   echo "java servant half: $fails case(s) answered the wrong document"
   exit 1

@@ -51,7 +51,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use orbweaver_cdr::{Decoder, Encoder, Endian};
-use orbweaver_gen::pychild::PythonChild;
+use orbweaver_gen::pychild::SeamChild;
 use orbweaver_gen::seam::ForeignServant;
 use orbweaver_giop::orb::Orb;
 use orbweaver_giop::server::{Dispatch, Request, SystemException, decode_request};
@@ -175,7 +175,7 @@ fn with_target<F: FnOnce(&Ior)>(pings: Arc<AtomicU32>, f: F) {
 }
 
 /// Encodes `bind("k", <ior>)` the way a peer would and dispatches it.
-fn bind_through(servant: &mut ForeignServant<PythonChild>, target: &Ior) -> Result<(), String> {
+fn bind_through(servant: &mut ForeignServant<SeamChild>, target: &Ior) -> Result<(), String> {
     let wire = encode_request(Version::V1_2, Endian::Big, 1, ROOT, "bind", true, |e| {
         e.put_str("k");
         target.write_to(e).expect("an IOR encodes");
@@ -199,7 +199,7 @@ fn run(nested: bool) -> (Result<(), String>, u32) {
     let counted = pings.clone();
     let mut result = Err("never ran".to_owned());
     with_target(counted, |ior| {
-        let child = PythonChild::spawn(&program(nested), &[&root]).expect("python3 starts");
+        let child = SeamChild::python(&program(nested), &[&root]).expect("python3 starts");
         let mut servant =
             ForeignServant::new(&registry(), REGISTRY_ID, child).expect("Registry resolves");
         result = bind_through(&mut servant, ior);

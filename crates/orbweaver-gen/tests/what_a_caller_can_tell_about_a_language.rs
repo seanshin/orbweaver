@@ -11,7 +11,7 @@
 //! and *language* are different rows — a test built that way would have
 //! measured the wrong row and been green while it did.
 //!
-//! `orbweaver_gen::pychild::PythonChild` closed that: `python3` as a child of
+//! `orbweaver_gen::pychild::SeamChild` closed that: `python3` as a child of
 //! this process, wrapped by `seam::ForeignServant` into a plain `Dispatch`. So
 //! both implementations can sit behind **one** server, one reference and one
 //! open connection, and the language can change underneath a caller that never
@@ -50,7 +50,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use orbweaver_cdr::Encoder;
-use orbweaver_gen::pychild::PythonChild;
+use orbweaver_gen::pychild::SeamChild;
 use orbweaver_gen::rt::{Dispatch, DispatchBody, ObjRef, ObjectHome, SystemException};
 use orbweaver_gen::seam::ForeignServant;
 use orbweaver_giop::orb::Orb;
@@ -144,7 +144,7 @@ impl DirectoryServant for Tree {
 /// line — and counted, so a run where the swap did not happen says so.
 struct Bilingual {
     rust: std::sync::Mutex<DirectorySkeleton<Tree>>,
-    python: std::sync::Mutex<ForeignServant<PythonChild>>,
+    python: std::sync::Mutex<ForeignServant<SeamChild>>,
     /// 0 = Rust, 1 = Python.
     language: AtomicUsize,
     served: [AtomicUsize; 2],
@@ -231,7 +231,7 @@ impl Fixture {
         ));
         std::fs::create_dir_all(&dir).expect("a work directory");
         let (program, site) = python_program(&dir);
-        let child = PythonChild::spawn(&program, &[&site]).expect("python3 starts");
+        let child = SeamChild::python(&program, &[&site]).expect("python3 starts");
         let python = ForeignServant::new(&registry(), TYPE_ID, child)
             .expect("the contract names Directory")
             .with_home(ObjectHome::new("127.0.0.1", 0, ROOT.to_vec()));

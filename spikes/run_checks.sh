@@ -5146,6 +5146,20 @@ fi
 # here is the half those cells would sit on, and saying so is the difference
 # between a measurement and the *green because nothing happened* shape.
 hr "the Java serving half — a generated servant answers a call document (D032)"
+# The route as well as the half: `java` as a child of the test's own process,
+# wrapped by `seam::ForeignServant` into a plain `Dispatch`. Named beside the
+# document check rather than replacing it — the document check runs with no
+# process at all, which is a different thing to have working.
+jsr_out=$(cargo test -q -p orbweaver-gen --test a_java_servant_this_process_owns 2>&1); jsr_rc=$?
+jsr_line=$(grep -E '^test result:' <<<"$jsr_out" | head -1)
+if [ "$jsr_rc" -eq 0 ] && [ -n "$jsr_line" ]; then
+  echo "  ok   $jsr_line — a Java servant answered through a Dispatch this process"
+  echo "       owns: no listener, no address, so a language swap stays a language swap"
+else
+  echo "  FAIL the Java servant route did not run ($(rc_says "$jsr_rc"))"
+  cargo_test_diag "$jsr_out"
+  fail_total=$((fail_total+1))
+fi
 jsh_out=$(./spikes/java_servant_half.sh 2>&1); jsh_rc=$?
 case "$jsh_rc" in
   0) printf '%s\n' "$jsh_out" | grep -E '^  (ok|note)' ;;

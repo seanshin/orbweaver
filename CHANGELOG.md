@@ -10,6 +10,40 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**A Java servant answers through a `Dispatch` this process owns, and the child
+type stopped being one language's.** `PythonChild` became `SeamChild` with
+`python` and `java` constructors, because **only the command was ever
+language-specific** — the document framing, D038's re-entrancy loop, the process
+group and the `Drop` that reaps a tree are the seam's. A `JavaChild` beside a
+`PythonChild` would have been a second copy of `read_answer`, the loop that
+answers a nested request: two loops that must stay in step with one protocol, in
+a repository whose rule is that a sentence more than one layer must give belongs
+to one function. **The rename touched the constructor and nothing else**, which
+is the evidence the split was in the right place.
+
+`tests/a_java_servant_this_process_owns.rs` mounts `java` as a child of the
+test's own process behind a `ForeignServant`, and a request built the way a peer
+builds one — encoded, framed, decoded — comes back carrying the Java object's
+answer. No listener and no address, so a language swap stays a language swap; a
+caller sent to a different endpoint has been *moved*, and those are different
+rows of D029 §6.1.
+
+Two controls: the servant answering a default (`left: 0, right: 42`), and the
+child never calling `serveOnPipes` — which comes back as a seam failure rather
+than a hang, the behaviour D038's error contract was written for.
+
+**The three Java servant CELLS are still counted `SKIPPED`, and what they wait
+on is narrower than it was.** The spawner exists and the route is measured; a
+cell is a row in the acceptance grid with a runner script, and those are not
+written. The check's own output says exactly that — it said *"which does not
+exist yet"* until this batch made it false, and correcting it was part of the
+batch rather than a later sweep.
+
+*자바 서번트가 이 프로세스가 소유한 `Dispatch`를 통해 답하고, 자식 타입은 더 이상
+한 언어의 것이 아니다 — 언어에 따라 다른 것은 **명령뿐**이었다. 이름 변경이
+생성자만 건드렸다는 것이 분리 지점이 옳았다는 증거다. **칸 셋은 여전히
+SKIPPED**이고, 기다리는 것이 좁아졌을 뿐이다.*
+
 **The Java serving half of the seam, and the sentence that scoped it was right
 about what it would cost.** `COMPONENTS.md` had recorded what a Java servant
 owed as two things — *"an `Answerer` over the bridge's pipes and a

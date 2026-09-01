@@ -15,7 +15,7 @@
 //! and *language* are different rows of D029 §6.1 — so a leak test that swapped
 //! endpoints would be measuring the wrong row and looking green while it did.
 //!
-//! [`orbweaver_gen::pychild::PythonChild`] is the route that was missing:
+//! [`orbweaver_gen::pychild::SeamChild`] is the route that was missing:
 //! `python3` as a child of **this** process, answering the seam's documents on
 //! its own pipes through `python_rt.serve_on_pipes`, wrapped by
 //! `seam::ForeignServant` into a plain `Dispatch`. No listener, no address, no
@@ -37,7 +37,7 @@
 //! **경로가 동작한다**만 잰다. 누출 테스트 자체가 아니다.*
 
 use orbweaver_cdr::{Decoder, Encoder, Endian};
-use orbweaver_gen::pychild::PythonChild;
+use orbweaver_gen::pychild::SeamChild;
 use orbweaver_gen::seam::ForeignServant;
 use orbweaver_giop::server::{Dispatch, decode_request};
 use orbweaver_giop::{DEFAULT_MAX_MESSAGE_SIZE, Version, encode_request, read_message};
@@ -105,7 +105,7 @@ fn a_python_servant_answers_through_a_dispatch_this_process_holds() {
     std::fs::create_dir_all(&dir).expect("a work directory");
     let root = site(&dir);
 
-    let child = match PythonChild::spawn(&program(), &[&root]) {
+    let child = match SeamChild::python(&program(), &[&root]) {
         Ok(c) => c,
         Err(why) => panic!("python3 did not start: {why}"),
     };

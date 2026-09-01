@@ -16,7 +16,7 @@
 //! server the test owns — so the Python side has to arrive as a `Dispatch`,
 //! not as an endpoint.
 //!
-//! [`PythonChild`] is that: it spawns `python3`, speaks the seam's line-framed
+//! [`SeamChild`] is that: it spawns `python3`, speaks the seam's line-framed
 //! JSON to the child over its own pipes, and is an [`Answerer`] — so
 //! [`ForeignServant`] turns it into a `Dispatch` with no new protocol and no
 //! second implementation of one.
@@ -52,11 +52,30 @@ use orbweaver_dynamic::json::Json;
 
 use crate::seam::Answerer;
 
-/// A `python3` child that answers seam calls on its own pipes.
+/// A child process that answers seam calls on its own pipes.
 ///
-/// Construct it with [`PythonChild::spawn`] and hand it to
+/// Construct it with [`SeamChild::python`] or [`SeamChild::java`] and hand it to
 /// [`crate::seam::ForeignServant::new`].
-pub struct PythonChild {
+///
+/// # Why one type and not one per language
+///
+/// **Only the command is language-specific.** Everything below it — the
+/// document framing, the re-entrancy loop D038 added, the process group, the
+/// `Drop` that reaps a tree rather than a leaf — is the seam's, and the seam
+/// stopped being one language's on 2026-08-26. A `JavaChild` beside a
+/// `SeamChild` would have been a second copy of `read_answer`, which is the
+/// half that answers a nested request: two copies of a loop that has to stay in
+/// step with a protocol, in a repository whose rule is that a sentence more
+/// than one layer must give belongs to one function.
+///
+/// Renamed from `SeamChild` on 2026-09-01, when the Java servant cells needed
+/// the same child. The evidence for that being the right shape is that the
+/// rename touched the constructor and nothing else.
+///
+/// *언어에 따라 다른 것은 **명령뿐**이다. 문서 프레이밍도, D038이 더한 재진입
+/// 루프도, 프로세스 그룹도 seam의 것이다. `JavaChild`를 따로 두면 중첩 요청에
+/// 답하는 루프가 두 벌이 된다.*
+pub struct SeamChild {
     child: Child,
     /// `Option` so `Drop` can actually **close** it. It was a bare
     /// `ChildStdin` and `Drop` took `self.child.stdin` instead — which spawn
@@ -70,7 +89,7 @@ pub struct PythonChild {
     gone: bool,
 }
 
-impl PythonChild {
+impl SeamChild {
     /// Spawns `python3 -c <program>`, with `sys.path` carrying `paths`.
     ///
     /// `program` is expected to end by calling
@@ -82,31 +101,52 @@ impl PythonChild {
     /// corrupts it. `python_rt.serve_on_pipes` says so in its own docstring and
     /// this does not redirect it — silently moving a stream is worse than a
     /// garbled line somebody can see.
-    pub fn spawn(program: &str, paths: &[&std::path::Path]) -> Result<Self, String> {
+    pub fn python(program: &str, paths: &[&std::path::Path]) -> Result<Self, String> {
         let prologue: String = paths
             .iter()
             .map(|p| format!("import sys; sys.path.insert(0, {:?})\n", p.display().to_string()))
             .collect();
         let mut cmd = Command::new("python3");
-        cmd.arg("-c")
-            .arg(format!("{prologue}{program}"))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+        cmd.arg("-c").arg(format!("{prologue}{program}"));
+        Self::spawn(cmd).map_err(|e| format!("python3 did not start: {e}"))
+    }
+
+    /// A `java` child running `class` with `classpath`, answering on its pipes.
+    ///
+    /// The Java side is `_Rt.serveOnPipes(servant)`, which is the mirror of
+    /// `python_rt.serve_on_pipes` and reads the same documents — the seam's
+    /// protocol is a published value and neither side gets its own.
+    ///
+    /// `java` rather than a path: the caller supplies one through `java_home`
+    /// when it has one, because a test that found a JDK already knows where it
+    /// is and this type should not go looking a second time.
+    pub fn java(
+        java: &std::path::Path,
+        classpath: &std::path::Path,
+        class: &str,
+    ) -> Result<Self, String> {
+        let mut cmd = Command::new(java);
+        cmd.arg("-cp").arg(classpath).arg(class);
+        Self::spawn(cmd).map_err(|e| format!("java did not start: {e}"))
+    }
+
+    /// The part that is not about a language: pipes, a process group, a child.
+    fn spawn(mut cmd: Command) -> Result<Self, String> {
+        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
         // Its own group, so `Drop` can reap the tree rather than the leaf.
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
             cmd.process_group(0);
         }
-        let mut child = cmd.spawn().map_err(|e| format!("python3 did not start: {e}"))?;
+        let mut child = cmd.spawn().map_err(|e| e.to_string())?;
         let stdin = child.stdin.take().ok_or("the child has no stdin")?;
         let stdout = child.stdout.take().ok_or("the child has no stdout")?;
         Ok(Self { child, stdin: Some(stdin), stdout: BufReader::new(stdout), gone: false })
     }
 }
 
-impl Answerer for PythonChild {
+impl Answerer for SeamChild {
     fn ask(&mut self, call: &Json) -> Result<Json, String> {
         if self.gone {
             return Err("the servant closed its end".to_owned());
@@ -142,7 +182,7 @@ impl Answerer for PythonChild {
     }
 }
 
-impl PythonChild {
+impl SeamChild {
     /// Read documents until one is the reply, answering nested requests on the
     /// way.
     ///
@@ -179,7 +219,7 @@ impl PythonChild {
     }
 }
 
-impl Drop for PythonChild {
+impl Drop for SeamChild {
     fn drop(&mut self) {
         // **Close the pipe, and mean it.** `serve_on_pipes` blocks on
         // `sys.stdin.readline()`, so an EOF is how it leaves — through its own
