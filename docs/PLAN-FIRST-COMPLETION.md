@@ -528,6 +528,54 @@ figure, one layer up — and this session has now paid for that class four times
 적힌 결정이 사실은 결정되었는지는 검사할 수 없다 — 다른 질문이다. D034가 그
 두 번째 부류로 보인다. **분류는 내 몫이고 승인은 아니다.***
 
+#### B.1 The classification, done 2026-09-01 / 분류 결과
+
+`spikes/decision_backlog.py` reports the computable signals; the judgement below
+is a person's and **approving is not part of it**.
+
+**The pattern is one pattern, not three populations.** Nearly every `PROPOSED`
+decision has its recommendation standing in the tree: D015 recommended cutting a
+release and **seven have been cut**; D011's in-process fan-out ships in
+`event_server.rs`; D012 and D013 recommended *building nothing* and are cited as
+limits in `COMPONENTS.md`; D020's POA policies are types in eight files. Of the
+24, **18 record in their own text that they were acted on** — a `Result,
+appended`, a `Corrected`, an `amended`.
+
+So the backlog is not mostly *undecided work*. It is mostly **work that went
+ahead while the document's status never moved**, which is a different thing and
+a smaller one — but it means the marker no longer separates *decided* from
+*not*, and that is what makes reading these documents unreliable.
+
+**The sharpest instance is D029, and it is the criterion itself.** `CLAUDE.md`
+opens by saying priority zero was *"set by the project owner 2026-08-26"* and
+names D029 §6 as its home. D029 says `STATUS: PROPOSED`. Five row standings, this
+plan, and the harness ledger every run all rest on it.
+
+`decision_status.py` cannot see this, and correctly: it compares **restatements**
+of a status against the decision, and `CLAUDE.md` does not restate a marker — it
+says the owner set the direction, which is a sentence about a different thing.
+The gap is real and neither instrument was wrong.
+
+**What this does not claim.** That any of the 24 *should* be `APPROVED`. A
+recommendation standing in the tree is evidence that it was acted on, not that
+it was approved, and the difference is exactly what a status marker exists to
+record. Whether work proceeding ahead of an approval is a problem here or the
+normal way this project moves is the owner's reading, not mine — and it is the
+one question in this section I cannot answer by measuring.
+
+**What would be wrong to do.** Editing 24 markers to match the tree. That would
+make the gate green and destroy the only record of which decisions the owner
+actually took, which is worse than the drift: a status that agrees with the code
+by construction has stopped being evidence about anything.
+
+*계산 가능한 신호는 스크립트가, 판단은 사람이 적는다 — **승인은 그 판단에 들어
+있지 않다.** 부류는 셋이 아니라 하나였다: 대부분이 *결정되지 않은 일*이 아니라
+**문서의 상태가 움직이지 않은 채 진행된 일**이다. 24개 중 18개가 자기 본문에
+착지를 기록한다. 가장 날카로운 사례는 D029 자신이다 — `CLAUDE.md`는 0순위가
+*"소유자가 정했다"*고 적고, 문서는 `제안`이라 적는다. **24개 표지를 트리에 맞춰
+고치는 것은 틀린 수리다**: 게이트는 초록이 되고, 소유자가 실제로 내린 결정의
+유일한 기록은 사라진다.*
+
 ---
 
 ### C. The two C cells — cheaper than they were called, and bounded / C 칸 둘

@@ -5168,6 +5168,37 @@ case "$jsh_rc" in
      fail_total=$((fail_total+1)) ;;
 esac
 
+# ── How many decisions are open, and which the tree has acted on ───────────
+#
+# A REPORT, not a gate, and for the reason this file gives elsewhere: there is
+# no defensible number for how many decisions should be open. A project that
+# decided nothing and one that decided everything would both be suspicious, and
+# neither is a threshold.
+#
+# It exists because `decision_status.py` answers a different question and cannot
+# answer this one. That gate compares every RESTATEMENT of a status against its
+# decision; it cannot ask whether a document saying `PROPOSED` describes
+# something already decided, which is judgement about content. Measured
+# 2026-09-01: 24 of 39 say `PROPOSED` and 18 of those record in their own text
+# that they were acted on — including D029, the completion criterion this
+# harness reads at run time, which `CLAUDE.md` says the owner set.
+hr "how many decisions are open (a report, not a gate)"
+db_probe_rc=0
+python3 spikes/decision_backlog.py --probe >/dev/null 2>&1 || db_probe_rc=$?
+if [ "$db_probe_rc" -ne 0 ]; then
+  echo "  FAIL the decision-backlog scan cannot read the statuses it reports"
+  echo "       ($(rc_says "$db_probe_rc")), so its count means nothing"
+  python3 spikes/decision_backlog.py --probe 2>&1
+  fail_total=$((fail_total+1))
+else
+  db_out=$(python3 spikes/decision_backlog.py 2>&1); db_rc=$?
+  head -1 <<<"$db_out" | sed 's/^ */  info /'
+  if [ "$db_rc" -ne 0 ]; then
+    printf '%s\n' "$db_out"
+    fail_total=$((fail_total+1))
+  fi
+fi
+
 # ── A citation of D029 §6.1.1 agrees with D029 §6.1.1 ──────────────────────
 #
 # `records_keep_up.py` checks that `COMPONENTS.md` was OPENED recently, and

@@ -10,6 +10,41 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**24 of 39 decisions say `PROPOSED`, and the criterion itself is one of them.**
+The classification §1.9 asked for, done and written down — with the judgement in
+the plan and the computable signals in `spikes/decision_backlog.py`, which is a
+**report and not a gate** because there is no defensible number for how many
+decisions should be open.
+
+**The backlog turned out to be one pattern, not three populations.** Nearly every
+`PROPOSED` decision has its recommendation standing in the tree — D015
+recommended cutting a release and seven have been cut; D011's fan-out ships;
+D012 and D013 recommended building nothing and are cited as limits — and **18 of
+the 24 record in their own text that they were acted on.** So this is not
+undecided work. It is work that went ahead while the status never moved, which
+is smaller and still means the marker no longer separates *decided* from *not*.
+
+**The sharpest instance is D029.** `CLAUDE.md` opens by saying priority zero was
+*"set by the project owner 2026-08-26"* and names D029 §6 as its home; D029 says
+`STATUS: PROPOSED`. Five row standings, the plan, and the harness ledger every
+run rest on it. `decision_status.py` cannot see this and is not wrong to miss it:
+it compares **restatements** of a status, and `CLAUDE.md` does not restate a
+marker — it says the owner set a direction, which is a sentence about a different
+thing.
+
+**What was deliberately not done: editing 24 markers to match the tree.** That
+would make everything agree and destroy the only record of which decisions the
+owner actually took. A status that agrees with the code by construction has
+stopped being evidence. Whether work proceeding ahead of an approval is a problem
+here or simply how this project moves is the owner's reading — the one question
+in that section that cannot be answered by measuring.
+
+*39개 중 24개가 `제안`이고 기준 문서 자신이 그중 하나다. 부류는 셋이 아니라
+하나였다 — 결정되지 않은 일이 아니라 **상태가 움직이지 않은 채 진행된 일**이며,
+24개 중 18개가 자기 본문에 착지를 기록한다. **24개 표지를 트리에 맞춰 고치는 것은
+하지 않았다**: 그러면 모두 일치하고, 소유자가 실제로 내린 결정의 유일한 기록이
+사라진다.*
+
 **Java's GIOP version coverage, and a 1.0 that is unread for a stated reason.**
 Both directions gained versions by republishing the profile — a peer's outbound
 version follows the profile it dialled, which is how `jacorb_giop11.sh` has
