@@ -53,6 +53,49 @@ read_reply_orders() {
   return 0
 }
 
+# read_request_orders — the same reading, for the SERVANT direction.
+#
+# **Which side is the peer depends on the direction, and that is the whole of
+# the difference.** In the client direction we are the caller and the peer
+# answers, so the peer's writing is in the REPLIES. In the servant direction the
+# peer is the caller, so its writing is in the REQUESTS — and reading the
+# replies there would be reading our own order, which is not evidence about a
+# peer.
+#
+# Two functions rather than one with a flag, because the mistake this prevents
+# is picking the wrong one, and a flag is a thing to pick wrongly. A cell that
+# called `read_reply_orders` in the servant direction would report OUR order as
+# `observed` from a foreign peer, which is the strongest wrong claim this suite
+# can make: it is exactly the claim `claimed` exists to keep separate.
+#
+# *어느 쪽이 피어인지는 방향에 달렸고, 그것이 차이의 전부다. 서번트 방향에서
+# 피어는 부르는 쪽이므로 그 쓰기는 **요청**에 있다. 거기서 답신을 읽으면 우리
+# 순서를 외래 피어의 판독으로 보고하게 되는데, 그것이 이 스위트가 할 수 있는 가장
+# 강한 거짓 주장이다.*
+read_request_orders() {
+  local log="$1" requests line v order key seen=""
+  requests=$(grep "C->S GIOP" "$log" 2>/dev/null | grep " Request ")
+  if [ -z "$requests" ]; then
+    echo "FAIL	the calls completed but the tap recorded no request, so the byte order"
+    echo "FAIL	was NOT read off the wire. An absent reading cannot count as covered."
+    return 1
+  fi
+  while IFS= read -r line; do
+    v=$(sed -n 's/.*GIOP \([0-9]\.[0-9]\).*/\1/p' <<<"$line")
+    case "$line" in
+      *" BE "*|*" BE") order=big ;;
+      *" LE "*|*" LE") order=little ;;
+      *) echo "FAIL	a tap line names no byte order: $line"; return 1 ;;
+    esac
+    [ -n "$v" ] || { echo "FAIL	a tap line names no GIOP version: $line"; return 1; }
+    key="$v/$order"
+    case " $seen " in *" $key "*) continue ;; esac
+    seen="$seen $key"
+    printf 'observed\tgiop=%s\torder=%s\n' "$v" "$order"
+  done <<<"$requests"
+  return 0
+}
+
 note_request_orders() {
   local log="$1" orders
   orders=$(grep "C->S GIOP" "$log" 2>/dev/null | grep " Request " \

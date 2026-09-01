@@ -77,7 +77,7 @@ cell	client	self	spikes/bindings/java/client-self.sh
 # ── the servant row, stated so it is printed rather than remembered ──────────
 
 cell	servant	omniorb	spikes/bindings/java/servant-omniorb.sh
-waits	servant	jacorb	as servant/omniorb above. Note what is NOT missing: JacORB already drives a Python servant behind our ORB (spikes/bindings/python/servant-jacorb.sh), so the peer, the tap and the byte-order reading all exist — what is missing is the Java half of the seam, not the fixture.
+cell	servant	jacorb	spikes/bindings/java/servant-jacorb.sh
 cell	servant	self	cargo test -q -p orbweaver-gen --test a_java_servant_this_process_owns
 
 # ── the C peer, which arrived on the axis after this manifest was written ────

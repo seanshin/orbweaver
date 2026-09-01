@@ -95,7 +95,45 @@ public final class Node extends EchoServant {
 
     @Override
     public String echo_string(String msg) {
-        return "java:" + msg;
+        return msg;
+    }
+
+    @Override
+    public int ping() {
+        return 42;
+    }
+
+    @Override
+    public double scale(double v, double by) {
+        return v * by;
+    }
+
+    @Override
+    public echo.spike.Ragged echo_ragged(echo.spike.Ragged v) {
+        return v;
+    }
+
+    @Override
+    public byte[] blob(long size) {
+        // `% 251` because that is what `spikes/jacorb/Client.java` checks. It
+        // is a fixture agreeing with a peer's fixture, and getting it wrong
+        // looked exactly like a size limit: blob(100) passed and blob(40000)
+        // and blob(250000) failed, because `(byte) i` and `(byte)(i % 251)`
+        // agree until i reaches 251.
+        byte[] out = new byte[(int) size];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = (byte) (i % 251);
+        }
+        return out;
+    }
+
+    @Override
+    public int blob_sum(byte[] b) {
+        int total = 0;
+        for (byte x : b) {
+            total += x & 0xff;
+        }
+        return total;
     }
 
     public static void main(String[] argv) throws Exception {
@@ -124,6 +162,7 @@ if echo is None:
 
 print("add -> %d" % (echo.add(40, 2),))
 print("echo_string -> %s" % (echo.echo_string("hello"),))
+print("ping -> %d" % (echo.ping(),))
 print("is_a Echo -> %s" % (echo._is_a("IDL:spike/Echo:1.0"),))
 "#;
 
@@ -156,6 +195,200 @@ fn build(javac: &Path, dir: &Path) -> PathBuf {
         String::from_utf8_lossy(&out.stderr)
     );
     classes
+}
+
+/// Binds a server holding the Java servant and hands its address to `f`.
+///
+/// Split out when the JacORB test needed the same three lines the omniORB one
+/// had inline: bind, mount, serve on a thread. Two copies of a server setup is
+/// two places to get the shutdown wrong, and the shutdown here is the part with
+/// a trap in it — the accept loop only sees the stop flag after one more
+/// connection, which is why the dial below is not decoration.
+fn with_java_servant<F: FnOnce(&orbweaver_giop::Ior, std::net::SocketAddr)>(
+    java: &Path,
+    classes: &Path,
+    f: F,
+) {
+    let server = Orb::new().server("127.0.0.1:0", ROOT.to_vec()).expect("bind");
+    let addr = server.local_addr().expect("addr");
+    let ior = server.ior(TYPE_ID, "127.0.0.1").expect("ior");
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = stop.clone();
+    let classes = classes.to_path_buf();
+    let java = java.to_path_buf();
+    let serving = std::thread::spawn(move || {
+        let child = SeamChild::java(&java, &classes, "Node")
+            .expect("the JDK was found and then would not start");
+        let mut servant =
+            ForeignServant::new(&registry(), TYPE_ID, child).expect("the contract names Echo");
+        let _ = server.serve(&mut servant, || flag.load(Ordering::SeqCst));
+    });
+
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&ior, addr)));
+
+    stop.store(true, Ordering::SeqCst);
+    // Unblock the accept loop so the thread can see the flag.
+    let _ = orbweaver_giop::Connection::connect(&ior, std::time::Duration::from_millis(500));
+    let _ = serving.join();
+    if let Err(e) = outcome {
+        std::panic::resume_unwind(e);
+    }
+}
+
+/// JacORB drives the Java servant, and the tap reads what JacORB wrote.
+///
+/// **This is the cell that closes clause 6 for the servant direction.** The
+/// `servant × omniorb` cell reports `claimed`: no tap sits between the peers and
+/// the little-endian order is inferred from the host. Here a recording tap sits
+/// in front of our server, so the order is read off §15.4.1's flag byte of the
+/// peer's own REQUESTS — and in the servant direction the requests are the
+/// peer's writing, which is the inversion `spikes/lib/tap_orders.sh` keeps in
+/// two functions rather than in a flag.
+///
+/// JacORB is the only peer in this grid that writes big-endian, which is why it
+/// is this cell and not another that the servant direction was waiting on.
+#[test]
+fn jacorb_calls_a_java_servant() {
+    let Some((javac, java)) = jdk() else {
+        println!(
+            "UNMEASURED: no JDK — set ORBWEAVER_JAVA_HOME. JacORB driving a Java servant is              unmeasured, not passing."
+        );
+        return;
+    };
+    let jdir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spikes/jacorb");
+    if !jdir.join("classes/Client.class").is_file() {
+        println!(
+            "UNMEASURED: the JacORB fixture is not compiled (spikes/jacorb/classes) — run              spikes/jacorb/setup.sh. Foreign peer x big-endian is unmeasured, not passing."
+        );
+        return;
+    }
+
+    let dir = std::env::temp_dir().join(format!("orbweaver-java-jwire-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a work directory");
+    let classes = build(&javac, &dir);
+
+    let log = dir.join("tap.log");
+    let tapped = dir.join("tapped.ior");
+    let mut client_out = String::new();
+    with_java_servant(&java, &classes, |ior, addr| {
+        let ior_path = dir.join("echo.ior");
+        std::fs::write(&ior_path, ior.to_stringified().expect("stringify")).expect("write");
+
+        // The tap in front of our server. It republishes the profile, so what
+        // JacORB dials is the tap and what the tap forwards is the servant.
+        let mut tap = Command::new("python3")
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spikes/jacorb_giop11_tap.py"))
+            .arg("--ior")
+            .arg(&ior_path)
+            .arg("--out")
+            .arg(&tapped)
+            .arg("--log")
+            .arg(&log)
+            .arg("--op")
+            .arg("echo_string")
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("the tap starts");
+        let _ = addr;
+        // The tap says READY on stdout after it binds; wait for the file AND
+        // that line, because a published path is not a listening socket.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while std::time::Instant::now() < deadline {
+            if tapped.is_file() && std::fs::metadata(&tapped).map(|m| m.len() > 0).unwrap_or(false)
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(tapped.is_file(), "the recording tap never published a tapped IOR");
+
+        // Built by joining rather than as one literal. The literal had a line
+        // continuation in the middle of the slf4j entry, which collapsed to a
+        // run of spaces INSIDE the path — `…jboss-rmi-api.jar:      /lib/slf4j…`
+        // — so that jar was never on the classpath and JacORB died with
+        // `NoClassDefFoundError: org/slf4j/LoggerFactory`. A string that reads
+        // correct in the source and is not.
+        let j = jdir.display().to_string();
+        let jcp = [
+            format!("{j}/lib/jacorb.jar"),
+            format!("{j}/lib/jacorb-omgapi.jar"),
+            format!("{j}/lib/jboss-rmi-api.jar"),
+            format!("{j}/lib/slf4j-api-1.7.36.jar"),
+            format!("{j}/classes"),
+        ]
+        .join(":");
+        let out = Command::new(&java)
+            .arg("-cp")
+            .arg(&jcp)
+            .arg("Client")
+            .arg(&tapped)
+            .current_dir(&jdir)
+            .output()
+            .expect("run JacORB's client");
+        client_out = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let _ = tap.kill();
+        let _ = tap.wait();
+    });
+
+    assert!(
+        client_out.contains("ping()") && !client_out.contains("FAIL"),
+        "JacORB's client did not complete its calls against the Java servant:\n{client_out}"
+    );
+
+    // What JacORB wrote, read off the flag byte of its own requests.
+    let tap_log = std::fs::read_to_string(&log).unwrap_or_default();
+    let orders: Vec<&str> = tap_log
+        .lines()
+        .filter(|l| l.contains("C->S GIOP") && l.contains(" Request "))
+        .filter_map(|l| {
+            if l.contains(" BE ") || l.ends_with(" BE") {
+                Some("big")
+            } else if l.contains(" LE ") || l.ends_with(" LE") {
+                Some("little")
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert!(
+        !orders.is_empty(),
+        "the calls completed and the tap recorded no request, so the byte order was NOT read \
+         off the wire. An absent reading cannot count as covered.\ntap log:\n{tap_log}"
+    );
+    assert!(
+        orders.contains(&"big"),
+        "JacORB is the only peer in this grid that writes big-endian and the tap read none: \
+         {orders:?}"
+    );
+
+    // The cell parses this line. Printed by the test rather than recomputed by
+    // the shell, because the tap log lives in a directory this test owns and
+    // hands to nobody — the same shape the Python servant cell uses.
+    let versions: Vec<&str> = {
+        let mut v: Vec<&str> = tap_log
+            .lines()
+            .filter(|l| l.contains("C->S GIOP") && l.contains(" Request "))
+            .filter_map(|l| l.split("GIOP ").nth(1).and_then(|r| r.get(..3)))
+            .collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    for v in &versions {
+        println!("read off the wire at {v} order=big");
+    }
+    println!(
+        "note {} request(s) from JacORB, order read off §15.4.1's flag byte of what the PEER \
+         wrote — in the servant direction the requests are the peer's writing",
+        orders.len()
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -219,7 +452,7 @@ fn omniorb_calls_a_java_servant() {
     let _ = orbweaver_giop::Connection::connect(&ior, std::time::Duration::from_millis(500));
     let _ = serving.join();
 
-    for wanted in ["add -> 42", "echo_string -> java:hello", "is_a Echo -> True"] {
+    for wanted in ["add -> 42", "echo_string -> hello", "ping -> 42", "is_a Echo -> True"] {
         assert!(
             stdout.contains(wanted),
             "omniORB's client did not see {wanted:?} from the Java servant.\n\

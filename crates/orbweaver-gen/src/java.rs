@@ -1479,6 +1479,16 @@ fn emit_servant(
     let _ = writeln!(s, "    private static final java.util.Map<String, _Rt.Op> _OPS =");
     let _ = writeln!(s, "            new java.util.LinkedHashMap<String, _Rt.Op>();");
     let _ = writeln!(s, "    static {{");
+    // **The names, before any descriptor is built.** A stub registers them from
+    // its constructor; a servant never constructs a stub, so without this line
+    // nothing does — and a `Ref` descriptor resolves through that registry.
+    // Found 2026-09-01 by JacORB, not by the in-process probe: that probe drove
+    // `add` and `echo_string`, both primitives, and a primitive needs no lookup.
+    // The peer drove `echo_ragged` and got `no type is registered under
+    // IDL:spike/Ragged:1.0`. **A foreign peer found what a self-test could
+    // not**, which is the argument for having one and is why the manifest
+    // refused to supply the `servant × self` cell before a foreign one.
+    let _ = writeln!(s, "        {}._Types._ensure();", cx.root());
     for (op_name, sig) in &ops {
         let _ = writeln!(
             s,

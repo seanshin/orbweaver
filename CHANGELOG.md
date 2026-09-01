@@ -10,6 +10,41 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**JacORB drives a Java servant with a tap, and clause 6 closes in the servant
+direction.** The third Java servant cell. `servant × omniorb` reports `claimed`
+— no tap, the order inferred from the host — and this one reads it: eight
+requests at GIOP 1.2, all big-endian, off §15.4.1's flag byte of what JacORB
+wrote. **Java is 6 of 8 cells, 0 red**, and D032 §4's clause 6 is met in both
+directions; counted skips went 13 to 10 across the three cells.
+
+**Which side is the peer depends on the direction, and that is the whole of the
+difference.** In the client direction the peer answers, so its writing is in the
+replies; in the servant direction the peer is the caller, so its writing is in
+the **requests**. Reading the replies here would report our own order as a
+foreign peer's — the strongest wrong claim this suite can make, and precisely
+what `claimed` exists to keep separate. `tap_orders.sh` keeps the two readings
+in two functions rather than one with a flag, because the mistake being
+prevented is picking the wrong one.
+
+**Two defects only the foreign peer found**, which is the argument for having
+one. The generated servant base never called `_Types._ensure()`, so a `Ref`
+descriptor could not resolve and `echo_ragged` failed with *no type is registered
+under `IDL:spike/Ragged:1.0`* — a stub registers the names from its constructor
+and a servant never constructs a stub. The in-process probe drove `add` and
+`echo_string`, both primitives, and a primitive needs no lookup. That is exactly
+why `java.manifest` had refused to supply the cheap `servant × self` cell before
+a foreign one existed.
+
+The second was mine and looked like something else: `blob(100)` passed while
+`blob(40000)` and `blob(250000)` failed, which reads like a size limit and was a
+fixture returning `(byte) i` where the peer's fixture checks `(byte)(i % 251)` —
+they agree until 251. Measured before concluding, which is the only reason it
+was not filed as a seam limit.
+
+*JacORB가 탭을 통해 자바 서번트를 몰고, 서번트 방향의 clause 6이 닫혔다. 어느 쪽이
+피어인지는 방향에 달렸다 — 서번트 방향에서 피어의 쓰기는 **요청**에 있다.
+**외래 피어만이 찾은 결함 둘**이 있었고, 그것이 외래 피어를 두는 이유다.*
+
 **omniORB drives a Java servant, and two of the three Java servant cells land —
 in the order the manifest had chosen.** `java.manifest` refused the cheapest
 cell first and recorded why: *"a self cell that existed while the foreign ones
