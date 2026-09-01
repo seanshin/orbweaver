@@ -64,7 +64,7 @@ cell	servant	jacorb	spikes/bindings/python/servant-jacorb.sh
 cell	servant	self	cargo test -q -p orbweaver-gen --test python_servant
 
 # The gap, stated so it is printed rather than remembered.
-waits	client	jacorb	a JacORB SERVER that generated Python dials. Every JacORB leg in this tree has JacORB as the CLIENT (spikes/jacorb_giop11.sh, jacorb_wchar11.sh, jacorb_python_servant.sh) or drives a JacORB server from a RUST client (run_checks.sh's "our client -> JacORB server"). Nothing drives generated Python at a JacORB server, and that is precisely the cell that would give the client direction a big-endian reading off a foreign peer's flag byte — D030 §3.1's "not established by that batch and not by this one", as a cell rather than a sentence.
+cell	client	jacorb	spikes/bindings/python/client-jacorb.sh
 
 # ── clauses 3, 4 and 5 — language-scoped, no peer and no wire ────────────────
 

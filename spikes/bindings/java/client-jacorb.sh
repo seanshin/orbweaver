@@ -167,39 +167,14 @@ fi
 calls=$(grep -c '^  ok' <<<"$run_out")
 
 # ── what the peer wrote, read off §15.4.1's flag byte ───────────────────────
-# The REPLIES: in the client direction the peer is the one answering, so its
-# order is the order of what it wrote. The requests are ours and are reported as
-# a note, never as the observation — our own order is not evidence about a peer.
-replies=$(grep "S->C GIOP" "$D/tap.log" | grep " Reply ")
-if [ -z "$replies" ]; then
-  echo "FAIL	the calls completed but the tap recorded no reply, so the byte order"
-  echo "FAIL	was NOT read off the wire. An absent reading cannot count as covered."
-  exit 1
-fi
-seen=""
-while IFS= read -r line; do
-  v=$(sed -n 's/.*GIOP \([0-9]\.[0-9]\).*/\1/p' <<<"$line")
-  # The flag byte, as the tap wrote it: `... Reply size=16 BE id=1 status=0`.
-  # A `case` and not a `sed`: the tap puts the request id and the operation
-  # AFTER the order, so an end-anchored match found nothing — and the obvious
-  # repair, `sed -n 's/.*\(BE\|LE\).*/\1/p'`, is a GNU extension that BSD sed
-  # on this machine reads as a literal `\|`. Both spellings turned a cell that
-  # had reached the wire into one that looked unable to parse it.
-  case "$line" in
-    *" BE "*|*" BE") order=big ;;
-    *" LE "*|*" LE") order=little ;;
-    *) echo "FAIL	a tap line names no byte order: $line"; exit 1 ;;
-  esac
-  [ -n "$v" ] || { echo "FAIL	a tap line names no GIOP version: $line"; exit 1; }
-  key="$v/$order"
-  case " $seen " in *" $key "*) continue ;; esac
-  seen="$seen $key"
-  printf 'observed\tgiop=%s\torder=%s\n' "$v" "$order"
-done <<<"$replies"
+# Lifted into spikes/lib/tap_orders.sh on 2026-09-01, when the Python cell for
+# this same peer needed the identical reading. The two parsing bugs this code
+# shipped — an end-anchored sed, and BSD sed reading `\|` as a literal — are
+# recorded there so a third cell cannot rediscover them.
+. "$ROOT/spikes/lib/tap_orders.sh"
+read_reply_orders "$D/tap.log" || exit 1
+note_request_orders "$D/tap.log"
 
-req_orders=$(grep "C->S GIOP" "$D/tap.log" | grep " Request " \
-             | grep -oE ' (BE|LE) ' | tr -d ' ' | sort -u | tr '\n' ' ')
 printf 'note\t%s generated call(s) completed over the wire against JacORB, no Rust stub and no org.omg.CORBA in the path\n' "$calls"
-printf 'note\tour own requests were written %s— reported as a note, because our order is not evidence about a peer\n' "$req_orders"
 printf 'note\tD030 §3.1 records the client direction as "not established"; this cell is a reading off a foreign peer in that direction\n'
 exit 0

@@ -10,6 +10,40 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**The Python client direction gets a big-endian reading off a foreign peer, and
+a counted `SKIPPED` becomes a measurement.** `spikes/bindings/python.manifest`
+had named this cell since the suite was written, and named it precisely: *"a
+JacORB SERVER that generated Python dials … precisely the cell that would give
+the client direction a big-endian reading off a foreign peer's flag byte."*
+Every JacORB leg in the tree had JacORB as the **client**, or drove a JacORB
+server from a **Rust** client.
+
+`spikes/bindings/python/client-jacorb.sh` drives generated Python at
+`spikes/jacorb/Server.java` through the recording tap: **`observed giop=1.2
+order=big`**, twelve generated calls, no Rust stub in the path. Python goes to
+6 of 6 cells, 0 red, and D032 §4's clause 6 is met in the client direction as
+well as the servant one. Counted skips: **14 to 13**.
+
+**What it does not move, and the suite prints both**: `client × little` and
+`servant × little` are still *claimed* and never read, and GIOP 1.0 is reached
+by no cell in either direction. An order read off §15.4.1's flag byte is
+`observed`; one inferred from a peer's host is `claimed`; only `observed`
+counts, which is the whole reason this cell was worth building rather than
+asserting.
+
+The reading itself is not restated. `spikes/lib/tap_orders.sh` owns it, lifted
+out of the Java cell for this one, together with the **two parsing bugs that
+reading has already shipped** — the tap puts the order in the middle of the
+line, so an end-anchored `sed` found nothing, and the obvious repair
+`s/.*\(BE\|LE\).*/\1/` is a GNU extension BSD sed reads as a literal `\|`.
+Both turned a cell that had reached the wire into one that looked unable to
+parse it. The Java cell now calls the shared reader and its output is unchanged.
+
+*파이썬 클라이언트 방향이 외래 피어의 플래그 바이트에서 빅엔디언 판독을 얻었고,
+계수된 `SKIPPED` 하나가 측정이 되었다(14 → 13). 매니페스트가 이 칸을 "바로 그
+칸"이라 적어 둔 지 오래다. **움직이지 않는 것**도 적는다: little 쪽 둘은 여전히
+주장일 뿐 읽히지 않았고, GIOP 1.0은 어느 방향에서도 읽히지 않았다.*
+
 **`COMPONENTS.md` said the inbound half was still open, one day after it
 closed.** That file states *what is measured now*, so a stale row there is a
 false claim rather than untidiness — and three were, all about work from the
