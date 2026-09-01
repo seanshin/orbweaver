@@ -10,6 +10,44 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**The Java serving half of the seam, and the sentence that scoped it was right
+about what it would cost.** `COMPONENTS.md` had recorded what a Java servant
+owed as two things — *"an `Answerer` over the bridge's pipes and a
+`_Rt.Host`/`dispatchCall` in `java_rt.java` … and **not** anything in the seam's
+definition."* The second of those landed: `_Rt.dispatchCall`, `_Rt.Servant`,
+`_Rt.Op`, `_Rt.Raise`, `_Rt.serveOnPipes`, and a generated `<Name>Servant` base
+beside every stub whose methods refuse with `NO_IMPLEMENT` until overridden and
+whose dispatch is a generated `switch` rather than reflection. **Nothing in the
+seam's definition changed**, exactly as predicted — `seam::protocol()` is
+untouched and the two-implementation equality test still passes.
+
+The split is the client half's, stated the same way: this runtime owns every
+conversion and the shape of every reply, and generated code contributes only
+names, order, descriptors and the `switch`. That is why a third language enrols
+by adding one function and one row rather than by reimplementing a seam.
+
+Measured over `spikes/echo.idl`: four call documents in, four reply documents
+compared **whole** rather than by substring — a converted result, a string
+result, `NO_IMPLEMENT` for an operation the contract has and this servant has
+not written, and `BAD_OPERATION` for one the contract does not have. The two
+refusals are deliberately different answers, and asserting both is what keeps
+them so.
+
+**The three Java servant CELLS are unchanged and still counted `SKIPPED`.** A
+cell needs a Rust process that spawns `java` as a seam child — the Java
+equivalent of `pychild::PythonChild` — which does not exist. This measures the
+half those cells would sit on; claiming a cell on it would be the *green because
+nothing happened* shape one row up, and the check says so in its own output.
+
+It needs no bridge and no socket because `dispatchCall` is a pure function of a
+servant and a parsed document — the same design decision that makes it
+measurable, which is worth noticing rather than treating as luck.
+
+*자바의 서빙 절반이 착지했고, 범위를 정한 문장이 비용에 대해 옳았다 — **seam의
+정의는 아무것도 바뀌지 않았다.** 계약 위에서 문서 넷을 통째로 비교했다. **세 개의
+서번트 칸은 그대로 SKIPPED다**: 칸에는 `java`를 seam 자식으로 띄우는 러스트 쪽이
+필요하고 그것은 없다. 다리가 놓일 절반이지 건넌 것이 아니다.*
+
 **The Python client direction gets a big-endian reading off a foreign peer, and
 a counted `SKIPPED` becomes a measurement.** `spikes/bindings/python.manifest`
 had named this cell since the suite was written, and named it precisely: *"a

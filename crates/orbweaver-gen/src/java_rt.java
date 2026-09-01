@@ -53,8 +53,11 @@
 // 않는다 — IDL 식별자는 `_`로 시작할 수 없기 때문이다.*
 
 import java.io.BufferedReader;
+import java.io.FileDescriptor;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.PrintStream;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
@@ -1735,6 +1738,282 @@ public final class _Rt {
             _values.add(_fromJson(_o.desc, _outMap.get(_o.name), _o.name));
         }
         return _values.toArray();
+    }
+
+    // ── the serving direction ───────────────────────────────────────────────
+    //
+    // The inverse of `_call`, and split the same way: this runtime owns every
+    // conversion and the shape of every reply, and generated code contributes
+    // only names, order, descriptors and a `switch`. That split is what let the
+    // client half say *the stub contributes no conversion logic at all*, and it
+    // is the reason a third language enrols by adding one function and one row
+    // rather than by reimplementing the seam.
+    //
+    // Added 2026-09-01. `COMPONENTS.md` had recorded the gap as *"an `Answerer`
+    // over the bridge's pipes and a `_Rt.Host`/`dispatchCall` in
+    // `java_rt.java` — the two things `python_rt.py` has and `java_rt.java`
+    // does not — and NOT anything in the seam's definition."* That was right:
+    // nothing below changes the protocol, which `seam::protocol()` publishes and
+    // `tests/the_seam_is_one_protocol.rs` asserts both implementations against.
+
+    /** One parameter of an operation, as the servant side needs it. */
+    public static final class Param {
+        public final String name;
+        public final Desc desc;
+        /** `true` for `out` and `inout` — what the reply carries back. */
+        public final boolean isOut;
+        /** `true` for `in` and `inout` — what the call carries in. */
+        public final boolean isIn;
+
+        public Param(String _name, Desc _desc, boolean _isIn, boolean _isOut) {
+            this.name = _name;
+            this.desc = _desc;
+            this.isIn = _isIn;
+            this.isOut = _isOut;
+        }
+    }
+
+    /** One operation a servant answers: its parameters, result and mode. */
+    public static final class Op {
+        public final String name;
+        public final Param[] params;
+        public final Desc returns;
+        public final boolean oneway;
+
+        public Op(String _name, Param[] _params, Desc _returns, boolean _oneway) {
+            this.name = _name;
+            this.params = _params;
+            this.returns = _returns;
+            this.oneway = _oneway;
+        }
+    }
+
+    /**
+     * What a generated `<Name>Servant` supplies so this runtime can dispatch.
+     *
+     * `_idlOperations` is the resolved set — inherited operations flattened —
+     * which is the same table the client stub carries, because one function
+     * decides both. `_invokeOp` is a generated `switch` and not reflection: a
+     * name that reaches it has already been found in that table.
+     */
+    public interface Servant {
+        String _idlId();
+
+        Map<String, Op> _idlOperations();
+
+        /**
+         * Calls one operation. `argv` holds the `in` and `inout` values in
+         * declaration order; the return is the declared result, or an
+         * `Object[]` of the result followed by the `out` and `inout` values
+         * when there is more than one thing to answer with — the same tuple
+         * shape a client receives, read from the other end.
+         */
+        Object _invokeOp(String _operation, Object[] _argv);
+    }
+
+    /** Raised by a servant to answer with a system exception. */
+    public static final class Raise extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+        public final String id;
+        public final long minor;
+        public final int completed;
+
+        private Raise(String _id, long _minor, int _completed) {
+            super(_id);
+            this.id = _id;
+            this.minor = _minor;
+            this.completed = _completed;
+        }
+
+        /**
+         * The operation did not run. §4.11.4's COMPLETED_NO is `1`.
+         *
+         * The three constructors exist rather than one taking an int because
+         * the completion status decides whether a caller may retry, and a
+         * generator-picked default gets that wrong silently — which is the
+         * argument `#[must_use] Raising` makes on the Rust side and the reason
+         * `python_rt.py` refuses a raise that names no status.
+         */
+        public static Raise didNotRun(String _id, long _minor) {
+            return new Raise(_id, _minor, 1);
+        }
+
+        /** The operation ran to completion. COMPLETED_YES is `0`. */
+        public static Raise ranToCompletion(String _id, long _minor) {
+            return new Raise(_id, _minor, 0);
+        }
+
+        /** It may have run. COMPLETED_MAYBE is `2`. */
+        public static Raise mayHaveRun(String _id, long _minor) {
+            return new Raise(_id, _minor, 2);
+        }
+    }
+
+    /** The seam could not carry the answer — this side's fault, not the caller's. */
+    public static final class ServantError extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        public ServantError(String _message) {
+            super(_message);
+        }
+    }
+
+    /**
+     * One call document to one reply document, with no process in sight.
+     *
+     * A pure function of a servant and a parsed map, for the same reason
+     * `python_rt.dispatch_call` is one: it lets a test execute every branch —
+     * every refusal, every conversion — with no bridge, no socket and no peer.
+     */
+    public static Map<String, Object> dispatchCall(Servant _servant, Map<?, ?> _call) {
+        Object _opName = _call.get("op");
+        if (!(_opName instanceof String)) {
+            throw new ServantError("a call document needs an \"op\"");
+        }
+        Op _op = _servant._idlOperations().get(_opName);
+        if (_op == null) {
+            // The operation is not in this contract at all, which is a
+            // different answer from one the servant has not implemented.
+            return _systemReply("IDL:omg.org/CORBA/BAD_OPERATION:1.0", 0L, 1);
+        }
+        Object _rawArgs = _call.get("args");
+        Map<?, ?> _args = _rawArgs instanceof Map ? (Map<?, ?>) _rawArgs
+                : new LinkedHashMap<String, Object>();
+
+        ArrayList<Object> _argv = new ArrayList<Object>();
+        for (Param _p : _op.params) {
+            if (!_p.isIn) {
+                continue;
+            }
+            if (!_args.containsKey(_p.name)) {
+                throw new ServantError(_op.name + " needs an argument " + _p.name);
+            }
+            _argv.add(_fromJson(_p.desc, _args.get(_p.name), _p.name));
+        }
+
+        Object _answer;
+        try {
+            _answer = _servant._invokeOp(_op.name, _argv.toArray());
+        } catch (Raise _r) {
+            return _systemReply(_r.id, _r.minor, _r.completed);
+        } catch (UserException _u) {
+            LinkedHashMap<String, Object> _body = new LinkedHashMap<String, Object>();
+            _body.put("id", _u._id());
+            _body.put("members", _toJson(new Ref(_u._id()), _u, "<raised>"));
+            LinkedHashMap<String, Object> _reply = new LinkedHashMap<String, Object>();
+            _reply.put("user_exception", _body);
+            return _reply;
+        }
+
+        if (_op.oneway) {
+            // §9.4.1 gives a oneway no reply to travel in. One is rendered
+            // anyway and the bridge drops it — visibly — because a server whose
+            // oneway operations fail invisibly is one nobody can debug.
+            return _okReply(null, new LinkedHashMap<String, Object>());
+        }
+
+        boolean _isVoid = _resolve(_op.returns, "<return>") instanceof Prim
+                && ((Prim) _resolve(_op.returns, "<return>")).kind.equals("void");
+        int _wanted = (_isVoid ? 0 : 1);
+        for (Param _p : _op.params) {
+            if (_p.isOut) {
+                _wanted++;
+            }
+        }
+        Object[] _parts;
+        if (_wanted <= 1) {
+            _parts = _wanted == 0 ? new Object[0] : new Object[] {_answer};
+        } else {
+            if (!(_answer instanceof Object[]) || ((Object[]) _answer).length != _wanted) {
+                throw new ServantError(_op.name + " must answer " + _wanted
+                        + " values — the result then the out and inout values in declaration"
+                        + " order — and answered " + _answer);
+            }
+            _parts = (Object[]) _answer;
+        }
+
+        int _at = 0;
+        Object _returns = null;
+        if (!_isVoid) {
+            _returns = _toJson(_op.returns, _parts[_at], "<return>");
+            _at++;
+        }
+        LinkedHashMap<String, Object> _outputs = new LinkedHashMap<String, Object>();
+        for (Param _p : _op.params) {
+            if (!_p.isOut) {
+                continue;
+            }
+            _outputs.put(_p.name, _toJson(_p.desc, _parts[_at], _p.name));
+            _at++;
+        }
+        return _okReply(_returns, _outputs);
+    }
+
+    private static Map<String, Object> _okReply(Object _returns, Map<String, Object> _outputs) {
+        LinkedHashMap<String, Object> _body = new LinkedHashMap<String, Object>();
+        _body.put("returns", _returns);
+        _body.put("outputs", _outputs);
+        LinkedHashMap<String, Object> _reply = new LinkedHashMap<String, Object>();
+        _reply.put("ok", _body);
+        return _reply;
+    }
+
+    private static Map<String, Object> _systemReply(String _id, long _minor, int _completed) {
+        LinkedHashMap<String, Object> _body = new LinkedHashMap<String, Object>();
+        _body.put("id", _id);
+        _body.put("minor", Num.of(_minor));
+        _body.put("completed", Num.of(_completed));
+        LinkedHashMap<String, Object> _reply = new LinkedHashMap<String, Object>();
+        _reply.put("system_exception", _body);
+        return _reply;
+    }
+
+    /**
+     * Answer seam calls arriving on **this process's own** stdin.
+     *
+     * The inverse of `Bridge`, and the mirror of `python_rt.serve_on_pipes`: a
+     * Rust process spawns `java`, hands it a servant, and mounts the result as a
+     * `Dispatch` in a server it owns. No listener, no address — which is what
+     * keeps a language swap a language swap rather than a move to another
+     * endpoint, and those are different rows of D029 §6.1.
+     *
+     * **stdout is the protocol.** Anything the servant prints there corrupts the
+     * conversation; print to `System.err`. This does not redirect stdout on the
+     * servant's behalf, because silently moving a stream is worse than a garbled
+     * line somebody can see.
+     */
+    public static void serveOnPipes(Servant _servant) throws IOException {
+        BufferedReader _in = new BufferedReader(
+                new InputStreamReader(System.in, StandardCharsets.UTF_8));
+        PrintStream _out = new PrintStream(new FileOutputStream(FileDescriptor.out), true, "UTF-8");
+        String _line;
+        while ((_line = _in.readLine()) != null) {
+            if (_line.trim().isEmpty()) {
+                continue;
+            }
+            Object _document = _parseJson(_line);
+            if (!(_document instanceof Map)) {
+                continue;
+            }
+            Object _call = ((Map<?, ?>) _document).get("call");
+            if (!(_call instanceof Map)) {
+                continue;
+            }
+            Map<String, Object> _reply;
+            try {
+                _reply = dispatchCall(_servant, (Map<?, ?>) _call);
+            } catch (ServantError _e) {
+                // The seam could not carry the answer. The caller is told the
+                // least wrong true thing — UNKNOWN, completion MAYBE, because
+                // the servant's method may well have run before the shape
+                // failed — and the message stays in this process, where
+                // somebody can act on it.
+                _reply = _systemReply("IDL:omg.org/CORBA/UNKNOWN:1.0", 0L, 2);
+                System.err.println("orbweaver servant: " + _e.getMessage());
+            }
+            _out.println(_writeJson(_reply));
+            _out.flush();
+        }
     }
 
     /**

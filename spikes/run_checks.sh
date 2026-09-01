@@ -5132,6 +5132,28 @@ fi
 # were 513 and 509 — comments quoting `serve(..., || false)` counted as
 # servers, and a directory walk counting the eight agent worktrees as eight
 # more copies of the repository.
+# ── The Java serving half of the seam, executed ────────────────────────────
+#
+# `COMPONENTS.md` recorded what a Java servant owed as two things: an `Answerer`
+# over the bridge's pipes, and a `_Rt.Host`/`dispatchCall` in `java_rt.java` —
+# *"the two things `python_rt.py` has and `java_rt.java` does not — and NOT
+# anything in the seam's definition."* That was right, and this is the second of
+# them, driven over a real contract.
+#
+# **The three Java servant CELLS stay SKIPPED and this does not touch them.** A
+# cell needs a Rust process that spawns `java` as a seam child — the Java
+# equivalent of `pychild::PythonChild` — which does not exist. What is measured
+# here is the half those cells would sit on, and saying so is the difference
+# between a measurement and the *green because nothing happened* shape.
+hr "the Java serving half — a generated servant answers a call document (D032)"
+jsh_out=$(./spikes/java_servant_half.sh 2>&1); jsh_rc=$?
+case "$jsh_rc" in
+  0) printf '%s\n' "$jsh_out" | grep -E '^  (ok|note)' ;;
+  2) skip_age absent git:spikes/java_servant_half.sh ;;
+  *) printf '%s\n' "$jsh_out" | sed 's/^/  /'
+     fail_total=$((fail_total+1)) ;;
+esac
+
 # ── A citation of D029 §6.1.1 agrees with D029 §6.1.1 ──────────────────────
 #
 # `records_keep_up.py` checks that `COMPONENTS.md` was OPENED recently, and

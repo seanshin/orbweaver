@@ -653,6 +653,17 @@ pub fn emit_java(registry: &Registry, package: &str) -> JavaPackage {
                 out.files.insert(file_of(&pkg, &class), text);
                 if registers {
                     registrations.push(format!("{pkg}.{class}._register();"));
+                    // The servant base beside the stub, for the interfaces that
+                    // got one. `registers` is true exactly for an interface that
+                    // emitted a body, which is the same set that can be served —
+                    // asking that flag rather than re-deciding is what keeps the
+                    // two from drifting into different sets.
+                    if let Ok((sclass, sbody)) = emit_servant(registry, id, &name, cx) {
+                        let mut stext = header(&pkg, package);
+                        stext.push_str(&sbody);
+                        out.files.insert(file_of(&pkg, &sclass), stext);
+                        out.emitted += 1;
+                    }
                 }
             }
             Err(why) => {
@@ -1361,9 +1372,10 @@ fn emit_interface(
                  expressed as Java inheritance, which is the same resolved set the Rust and\n\
                  Python stubs carry: one interface cannot answer for two different sets\n\
                  depending on which target generated it.\n\n\
-                 This is a client and not a servant. D030 §5 L2 scopes the second language\n\
-                 to clients; a Java servant needs the bridge's serving direction, which is a\n\
-                 seam question rather than a language one."
+                 A servant base is emitted beside this, as `<Name>Servant` — see it for\n\
+                 the serving direction. D030 §5 L2 scoped the second language to clients;\n\
+                 the seam stopped being one language's on 2026-08-26 and Java's half of it\n\
+                 landed 2026-09-01."
             ),
         ),
     );
@@ -1406,6 +1418,201 @@ fn method_name(op: &str) -> String {
         return java_ident(attr);
     }
     java_ident(op)
+}
+
+/// The servant base for one interface: `<Name>Servant`.
+///
+/// The mirror of `python.rs`'s, and named the same way for the same reason:
+/// `<Name>Servant` beside `<Name>`, never `POA_<Name>`, because both targets of
+/// this project put a servant beside its stub and one spelling for both is one
+/// fact. The collision that spelling can have — a contract declaring
+/// `interface EchoServant` beside `interface Echo` — is the one the Python
+/// target already records.
+///
+/// # What is generated and what is not
+///
+/// This writes names, order, descriptors and a `switch`. Every conversion and
+/// the shape of every reply live in `_Rt.dispatchCall`, which is the same split
+/// the client half makes and states: *the stub contributes no conversion logic
+/// at all.* It is why the seam's protocol did not have to change for a third
+/// language — `seam::protocol()` publishes it and
+/// `tests/the_seam_is_one_protocol.rs` asserts the implementations against it.
+///
+/// Each method answers `NO_IMPLEMENT` until it is overridden, and deliberately
+/// not `BAD_OPERATION`: the operation is in the contract and this servant has
+/// not implemented it, which is a different thing from there being no such
+/// operation. `_is_a` and `_non_existent` are absent and must stay absent — the
+/// bridge answers them from the registry's resolved inheritance chain, so a
+/// servant cannot make its object un-narrowable by getting them wrong.
+fn emit_servant(
+    registry: &Registry,
+    id: &str,
+    name: &str,
+    cx: &Jx<'_>,
+) -> Result<(String, String), String> {
+    let class = format!("{}Servant", java_ident(name));
+    let ops = crate::python::client_operations(registry, id);
+    let mut s = String::new();
+    javadoc(
+        &mut s,
+        "",
+        &item_doc(
+            registry.annotations(id),
+            &format!(
+                "Servant base for `{id}`.\n\n\
+                 Subclass it, write the method bodies, and hand an instance to\n\
+                 `_Rt.serveOnPipes(...)` — the far side of `orbweaver_gen::seam`, which\n\
+                 mounts it as a plain `Dispatch` in a server the Rust process owns. No\n\
+                 listener and no address: a language swapped behind one reference is a\n\
+                 language swap, and a caller sent to another endpoint has been *moved*,\n\
+                 which is a different row of D029 §6.1.\n\n\
+                 Every operation and attribute accessor this interface has is declared\n\
+                 below, inherited ones included and flattened — the same resolved set the\n\
+                 client stub carries, because one function decides both."
+            ),
+        ),
+    );
+    let _ = writeln!(s, "public abstract class {class} implements _Rt.Servant {{");
+    let _ = writeln!(s, "    public static final String _ID = {};", java_str(id));
+    let _ = writeln!(s, "    public static final String _NAME = {};", java_str(name));
+    let _ = writeln!(s);
+    let _ = writeln!(s, "    private static final java.util.Map<String, _Rt.Op> _OPS =");
+    let _ = writeln!(s, "            new java.util.LinkedHashMap<String, _Rt.Op>();");
+    let _ = writeln!(s, "    static {{");
+    for (op_name, sig) in &ops {
+        let _ = writeln!(
+            s,
+            "        _OPS.put({}, new _Rt.Op({},",
+            java_str(op_name),
+            java_str(op_name)
+        );
+        let _ = writeln!(s, "                new _Rt.Param[] {{");
+        for p in &sig.params {
+            let is_in = matches!(p.direction, ParamDirection::In | ParamDirection::InOut);
+            let is_out = matches!(p.direction, ParamDirection::Out | ParamDirection::InOut);
+            let _ = writeln!(
+                s,
+                "                    new _Rt.Param({}, {}, {}, {}),",
+                java_str(&p.name),
+                descriptor(&p.tc)?,
+                is_in,
+                is_out
+            );
+        }
+        let _ = writeln!(s, "                }},");
+        let _ = writeln!(s, "                {}, {}));", descriptor(&sig.returns)?, sig.oneway);
+    }
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s);
+    let _ = writeln!(s, "    /** The repository id this servant answers for. */");
+    let _ = writeln!(s, "    @Override");
+    let _ = writeln!(s, "    public String _idlId() {{");
+    let _ = writeln!(s, "        return _ID;");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s);
+    let _ = writeln!(s, "    /** The resolved operation set, inherited members flattened. */");
+    let _ = writeln!(s, "    @Override");
+    let _ = writeln!(s, "    public java.util.Map<String, _Rt.Op> _idlOperations() {{");
+    let _ = writeln!(s, "        return _OPS;");
+    let _ = writeln!(s, "    }}");
+
+    // One overridable method per operation, refusing until it is written.
+    for (op_name, sig) in &ops {
+        let method = method_name(op_name);
+        let ins: Vec<_> = sig
+            .params
+            .iter()
+            .filter(|p| matches!(p.direction, ParamDirection::In | ParamDirection::InOut))
+            .collect();
+        let outs: Vec<_> = sig
+            .params
+            .iter()
+            .filter(|p| matches!(p.direction, ParamDirection::Out | ParamDirection::InOut))
+            .collect();
+        let returns_void = matches!(sig.returns, TypeCode::Void | TypeCode::Null);
+        // A servant answering several values hands back `Object[]` rather than
+        // a holder class: it is what `_Rt.dispatchCall` reads, and it is the
+        // same tuple the Python servant returns — one rule, read from both ends.
+        let multi = usize::from(!returns_void) + outs.len() > 1;
+        let return_type = if multi {
+            "Object[]".to_owned()
+        } else if !returns_void {
+            java_type(&sig.returns, cx)?
+        } else if outs.len() == 1 {
+            java_type(&outs[0].tc, cx)?
+        } else {
+            "void".to_owned()
+        };
+        let params: Vec<String> = ins
+            .iter()
+            .map(|p| Ok(format!("{} {}", java_type(&p.tc, cx)?, java_ident(&p.name))))
+            .collect::<Result<_, String>>()?;
+        let _ = writeln!(s);
+        javadoc(
+            &mut s,
+            "    ",
+            &item_doc(
+                Some(&sig.annotations),
+                &format!(
+                    "Answers `{op_name}` — the name that travels, whatever this method is\n\
+                     called. Refuses with `NO_IMPLEMENT` until overridden."
+                ),
+            ),
+        );
+        let _ = writeln!(s, "    public {return_type} {method}({}) {{", params.join(", "));
+        let _ = writeln!(
+            s,
+            "        throw _Rt.Raise.didNotRun(\"IDL:omg.org/CORBA/NO_IMPLEMENT:1.0\", 0L);"
+        );
+        let _ = writeln!(s, "    }}");
+    }
+
+    // The generated dispatch: a `switch` and never reflection, so a name that
+    // reaches a method has already been found in `_OPS`.
+    let _ = writeln!(s);
+    let _ = writeln!(s, "    /** Calls one operation by the name that travelled. */");
+    let _ = writeln!(s, "    @Override");
+    let _ = writeln!(s, "    public Object _invokeOp(String _operation, Object[] _argv) {{");
+    for (op_name, sig) in &ops {
+        let method = method_name(op_name);
+        let ins: Vec<_> = sig
+            .params
+            .iter()
+            .filter(|p| matches!(p.direction, ParamDirection::In | ParamDirection::InOut))
+            .collect();
+        let outs: Vec<_> = sig
+            .params
+            .iter()
+            .filter(|p| matches!(p.direction, ParamDirection::Out | ParamDirection::InOut))
+            .collect();
+        let returns_void = matches!(sig.returns, TypeCode::Void | TypeCode::Null);
+        let multi = usize::from(!returns_void) + outs.len() > 1;
+        let args: Vec<String> = ins
+            .iter()
+            .enumerate()
+            .map(|(i, p)| unbox_expr(&p.tc, &format!("_argv[{i}]"), cx))
+            .collect::<Result<_, String>>()?;
+        let call = format!("{method}({})", args.join(", "));
+        let _ = writeln!(s, "        if (_operation.equals({})) {{", java_str(op_name));
+        if multi {
+            let _ = writeln!(s, "            return {call};");
+        } else if !returns_void {
+            let _ = writeln!(s, "            return {};", box_expr(&sig.returns, &call, cx)?);
+        } else if outs.len() == 1 {
+            let _ = writeln!(s, "            return {};", box_expr(&outs[0].tc, &call, cx)?);
+        } else {
+            let _ = writeln!(s, "            {call};");
+            let _ = writeln!(s, "            return null;");
+        }
+        let _ = writeln!(s, "        }}");
+    }
+    let _ = writeln!(
+        s,
+        "        throw _Rt.Raise.didNotRun(\"IDL:omg.org/CORBA/BAD_OPERATION:1.0\", 0L);"
+    );
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "}}");
+    Ok((class, s))
 }
 
 fn emit_operation(
