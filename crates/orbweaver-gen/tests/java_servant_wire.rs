@@ -442,6 +442,97 @@ fn jacorb_calls_a_java_servant() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A first-party C peer calls the Java servant.
+///
+/// # What this buys, bounded by the axis file that defines it
+///
+/// `spikes/bindings/AXES` decided this when the peer landed, and refused to
+/// answer it by declaring:
+///
+/// > `independent` refutes coding errors and does NOT satisfy clause 6.
+///
+/// The peer shares **no code** with `crates/` — so an error on our side is not
+/// mirrored on the other, which is real evidence and more than `self` can give.
+/// It shares the same reading of the same specification by the same process,
+/// and *a convention both ends apply cannot be refuted by a round trip.* So this
+/// closes no clause and refutes a class of defect, and the cell says so rather
+/// than counting itself as coverage.
+///
+/// The `java.manifest` row for the sibling cell claimed such a cell would be
+/// *"the strongest form of clause 6 this grid can offer"*, which is wrong by
+/// that decision and was corrected the same day this landed.
+///
+/// # Why it is worth having anyway
+///
+/// Every other peer that has driven this servant — omniORB and JacORB — is an
+/// ORB. The C peer is a program that speaks GIOP and nothing else, so it
+/// exercises the seam's answer through a stack with no ORB assumptions in it at
+/// all. `c_peer.sh` already drives it at Rust servants; this is the same peer
+/// at a **Java** one, which is the half that did not exist until this session.
+#[test]
+fn a_c_peer_calls_a_java_servant() {
+    let Some((javac, java)) = jdk() else {
+        println!(
+            "UNMEASURED: no JDK — set ORBWEAVER_JAVA_HOME. A C peer calling a Java servant \
+             is unmeasured, not passing."
+        );
+        return;
+    };
+    let peer = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/c_peer");
+    if !peer.is_file() {
+        println!(
+            "UNMEASURED: the C peer is not built (target/c_peer) — run \
+             spikes/build_c_peer.sh. Unmeasured, not passing."
+        );
+        return;
+    }
+
+    let dir = std::env::temp_dir().join(format!("orbweaver-java-cwire-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a work directory");
+    let classes = build(&javac, &dir);
+
+    let mut out = String::new();
+    with_java_servant(&java, &classes, |ior, _addr| {
+        let ior_path = dir.join("echo.ior");
+        std::fs::write(&ior_path, ior.to_stringified().expect("stringify")).expect("write");
+        // `add` with two longs, the peer's own default operation, and the
+        // answer decoded by the peer rather than compared as bytes — the rule
+        // this repository applies to every peer: compare decoded values.
+        let run = Command::new(&peer)
+            .arg("--role")
+            .arg("client")
+            .arg("--ior-file")
+            .arg(&ior_path)
+            .arg("--op")
+            .arg("add")
+            .arg("--arg-long")
+            .arg("40")
+            .arg("--arg-long")
+            .arg("2")
+            .arg("--expect")
+            .arg("long")
+            .output()
+            .expect("run the C peer");
+        out = format!(
+            "{}{}",
+            String::from_utf8_lossy(&run.stdout),
+            String::from_utf8_lossy(&run.stderr)
+        );
+    });
+
+    assert!(
+        out.contains("42"),
+        "the C peer did not read 42 back from the Java servant's `add(40, 2)`:\n{out}"
+    );
+    println!(
+        "note a C peer that links no ORB called a Java servant and decoded its answer; \
+         `independent` refutes coding errors and closes no clause (spikes/bindings/AXES)"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn omniorb_calls_a_java_servant() {
     let Some((javac, java)) = jdk() else {

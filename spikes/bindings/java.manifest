@@ -89,8 +89,8 @@ cell	servant	self	cargo test -q -p orbweaver-gen --test a_java_servant_this_proc
 # the rows are here because the absence has a cause worth stating rather than a
 # blank to be read as an oversight.
 
-waits	client	c	`spikes/c_peer.c` is a first-party C peer that links no ORB. Nothing has driven generated Java at it, and the cell is cheap rather than free: the peer's own axis row says it shares no reading with `crates/`, so a cell here would be a THIRD independent implementation of the same call in one run — which is the strongest form of clause 6 this grid can offer and is worth doing deliberately rather than as an afterthought to a Java batch.
-waits	servant	c	as `servant/omniorb`: the Java half of the seam is what is missing, not the peer. A C peer calling a Java servant needs both this row's peer and that row's seam.
+waits	client	c	`spikes/c_peer.c` is a first-party C peer that links no ORB. Nothing has driven generated Java at it. **This row said such a cell would be "the strongest form of clause 6 this grid can offer" — that is wrong by the axis file's own decision and was corrected 2026-09-01.** `spikes/bindings/AXES` defines the property: `independent` refutes coding errors and does NOT satisfy clause 6, because the peer shares the same reading of the same specification by the same process, and a convention both ends apply cannot be refuted by a round trip. `binding_suite.sh` already implements that correctly — its clause 2 and 6 checks both require `observed` from a `foreign` peer — so only this sentence was wrong. What the cell buys is a third implementation that shares no code with `crates/`, which refutes coding errors and closes no clause.
+cell	servant	c	spikes/bindings/java/servant-c.sh
 
 # ── clauses 3, 4 and 5 — language-scoped, no peer and no wire ────────────────
 

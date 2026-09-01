@@ -10,6 +10,39 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**A C program that links no ORB calls a Java servant — and the manifest row
+beside it was overstating what that buys.** `java.manifest` said `servant × c`
+waited on *"the Java half of the seam … not the peer"*; that half landed this
+session, so the row's own sentence is what said the cell became possible. Java
+goes to **7 of 8 cells, 0 red**; counted skips **10 to 9**.
+
+**The correction is the better half.** The sibling `client × c` row claimed such
+a cell would be *"the strongest form of clause 6 this grid can offer."* That is
+wrong by the decision `spikes/bindings/AXES` made when the peer landed:
+
+> `independent` refutes coding errors and does NOT satisfy clause 6.
+
+The peer shares **no code** with `crates/` — real evidence, more than `self` can
+offer — and shares the same reading of the same specification by the same
+process, and *a convention both ends apply cannot be refuted by a round trip.*
+`binding_suite.sh` already implements that correctly: clause 2 and clause 6 both
+require `observed` from a **foreign** peer. Only the prose was wrong, and it is
+corrected in place with the reason.
+
+**Had that row been believed instead of the axis file, this cell would have
+shipped reporting coverage it cannot give.** It was caught because §1.9 was
+written from AXES two commits earlier — the plan doing the job a plan is for.
+
+The cell therefore prints no `observed` line at all, and says why: reporting one
+would be claiming coverage the axis file says this peer cannot give. What it is
+worth is stated instead — every other peer that has driven this servant is an
+ORB, and this one is a program that speaks GIOP and nothing else.
+
+*ORB를 링크하지 않는 C 프로그램이 자바 서번트를 호출한다. 그런데 옆 행이 그것이
+사는 것을 **과장하고 있었다** — `independent`는 코딩 오류를 반증하지 clause 6을
+충족하지 않는다고 AXES가 이미 정해 두었다. 그 행을 믿었다면 이 칸은 줄 수 없는
+커버리지를 보고하며 배포됐을 것이다.*
+
 **24 of 39 decisions say `PROPOSED`, and the criterion itself is one of them.**
 The classification §1.9 asked for, done and written down — with the judgement in
 the plan and the computable signals in `spikes/decision_backlog.py`, which is a
