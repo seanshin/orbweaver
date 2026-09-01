@@ -1,0 +1,31 @@
+// The contract `spikes/c_peer.c` serves in its `--role server` mode.
+//
+// It exists so a GENERATED client can dial that peer. The peer answers
+// `IDL:orbweaver/CPeerEcho:1.0` at object key `c-peer-echo` and implements one
+// operation; this file is that fact written where a compiler can read it,
+// rather than a repository id spelled twice in two languages.
+//
+// **Why the peer is not simply pointed at `spikes/echo.idl`.** Its type id is
+// compiled in, and a fixture that took its identity from a flag would let a
+// caller assert whatever it expected — a contract is what a target claims to
+// be, and letting the test choose it would make `_is_a` unfalsifiable here.
+//
+// The repository id comes from the prefix pragma and not from a comment: the
+// peer builds `IDL:orbweaver/CPeerEcho:1.0` in C, this builds it from the
+// declaration, and `repository-ids` checks ours against omniidl's. If the two
+// ever disagreed the mismatch would be a failed narrow rather than a silent
+// wrong answer.
+//
+// *`c_peer.c`가 서버 역할로 서비스하는 계약. 생성된 클라이언트가 그 피어에 걸 수
+// 있도록 존재한다. 피어에 타입 id가 컴파일되어 있고, 플래그로 정체를 받는 픽스처는
+// 호출자가 기대하는 무엇이든 주장하게 만든다 — 계약은 대상이 스스로 무엇이라고
+// 주장하는가이다.*
+
+#pragma prefix "orbweaver"
+
+//@ ai_desc: The one operation spikes/c_peer.c answers in its server role
+interface CPeerEcho {
+  //@ ai_desc: Adds two longs and answers the sum
+  //@ ai_effect: read_only
+  long add(in long a, in long b);
+};

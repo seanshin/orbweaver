@@ -82,3 +82,5 @@ clause	a-stub-is-found-by-the-name-the-emitter-gave-it	cargo test -q -p orbweave
 # language it is for; `binding-words` looks the target up in
 # `orbweaver_gen::targets::TARGETS`.
 clause	keyword-escaping-is-executed	cargo run -q -p orbweaver-gen --bin binding-words -- --language python --allow spikes/bindings/keywords-not-executed.tsv --idl corpus/golden/28-target-keywords.idl
+cell	servant	c	spikes/bindings/python/servant-c.sh
+cell	client	c	spikes/bindings/python/client-c.sh

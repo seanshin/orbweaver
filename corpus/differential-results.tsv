@@ -14,7 +14,7 @@
 # 오늘의 것인지는 differential 자신만 말할 수 있고, 매번 전체를 다시 쓴다.
 #
 # Columns: file <TAB> filed as <TAB> our verdict <TAB> each oracle's verdict
-# Measured: 2026-08-31 · oracles: omniidl tao_idl jacorb_idl
+# Measured: 2026-09-01 · oracles: omniidl tao_idl jacorb_idl
 
 01-primitives.idl	accept	accept	omniidl=accept,tao_idl=accept,jacorb_idl=accept
 02-alignment.idl	accept	accept	omniidl=accept,tao_idl=accept,jacorb_idl=accept
@@ -50,6 +50,7 @@
 32-valuebase.idl	accept	accept	omniidl=accept,tao_idl=accept,jacorb_idl=reject
 33-const-values.idl	accept	accept	omniidl=accept,tao_idl=reject,jacorb_idl=reject
 34-corba-principal.idl	accept	accept	omniidl=accept,tao_idl=reject,jacorb_idl=reject
+cpeer.idl	accept	accept	omniidl=accept,tao_idl=accept,jacorb_idl=accept
 deferred-reach.idl	accept	accept	omniidl=accept,tao_idl=accept,jacorb_idl=accept
 dkprobe.idl	accept	accept	omniidl=accept,tao_idl=accept,jacorb_idl=accept
 echo.idl	accept	accept	omniidl=accept,tao_idl=accept,jacorb_idl=accept

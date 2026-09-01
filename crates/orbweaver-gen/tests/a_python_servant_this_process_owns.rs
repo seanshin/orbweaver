@@ -97,6 +97,84 @@ _rt.serve_on_pipes(Node())
     )
 }
 
+/// A first-party C peer calls the Python servant.
+///
+/// The Java sibling of this landed first (`java_servant_wire.rs`), and its
+/// bound is this one's: `spikes/bindings/AXES` decided, when the peer landed,
+/// that **`independent` refutes coding errors and does NOT satisfy clause 6** —
+/// the peer shares no code with `crates/`, which is real evidence, and shares
+/// the same reading of the same specification by the same process, which *a
+/// convention both ends apply cannot be refuted by a round trip* disposes of.
+///
+/// Worth having for the reason the Java one is: every other peer that has driven
+/// a Python servant here is an ORB, and this is a program that speaks GIOP and
+/// nothing else, so the servant's answer crosses a stack with no ORB assumptions.
+#[test]
+fn a_c_peer_calls_a_python_servant() {
+    let peer = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/c_peer");
+    if !peer.is_file() {
+        println!(
+            "UNMEASURED: the C peer is not built (target/c_peer) — run \
+             spikes/build_c_peer.sh. Unmeasured, not passing."
+        );
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("orbweaver-pyc-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a work directory");
+    let root = site(&dir);
+
+    let Ok(child) = SeamChild::python(&program(), &[&root]) else {
+        println!("UNMEASURED: python3 did not start; the Python servant was not mounted");
+        return;
+    };
+    let mut servant =
+        ForeignServant::new(&registry(), TYPE_ID, child).expect("the contract names Directory");
+
+    // The server this test owns; the Python servant is its `Dispatch`. No
+    // second listener, so the servant arrives as a servant and not as an
+    // endpoint — the distinction this file exists to keep.
+    let server =
+        orbweaver_giop::orb::Orb::new().server("127.0.0.1:0", b"dirs".to_vec()).expect("bind");
+    let ior = server.ior(TYPE_ID, "127.0.0.1").expect("ior");
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = stop.clone();
+    let serving = std::thread::spawn(move || {
+        let _ = server.serve(&mut servant, || flag.load(std::sync::atomic::Ordering::SeqCst));
+    });
+
+    let ior_path = dir.join("dirs.ior");
+    std::fs::write(&ior_path, ior.to_stringified().expect("stringify")).expect("write");
+    let run = std::process::Command::new(&peer)
+        .arg("--role")
+        .arg("client")
+        .arg("--ior-file")
+        .arg(&ior_path)
+        .arg("--op")
+        .arg("count")
+        .arg("--expect")
+        .arg("long")
+        .output()
+        .expect("run the C peer");
+    let out =
+        format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = orbweaver_giop::Connection::connect(&ior, std::time::Duration::from_millis(500));
+    let _ = serving.join();
+
+    assert!(
+        out.contains(&COUNT.to_string()),
+        "the C peer did not read {COUNT} back from the Python servant's `count()`:\n{out}"
+    );
+    println!(
+        "note a C peer that links no ORB called a Python servant and decoded its answer; \
+         `independent` refutes coding errors and closes no clause (spikes/bindings/AXES)"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The route the language row was waiting on, exercised end to end in one
 /// process: `python3` as this process's child, wrapped as a `Dispatch`.
 #[test]

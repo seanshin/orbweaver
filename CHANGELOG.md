@@ -10,6 +10,39 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**Both binding grids are complete: Java 8 of 8, Python 8 of 8, 0 red.** The
+three C-peer cells landed together because they are one peer and one shape — a
+generated client calling `c_peer --role server`, and `c_peer --role client`
+calling a generated servant. Counted skips **9 to 6**, and **every one that
+remains is a condition rather than work**: docker, multipass, `VOYAGE_API_KEY`,
+a CSIv2 issuer, omniORBpy sslTP, and the per-release S1–S3 cadence.
+
+`spikes/cpeer.idl` is new and small: the peer answers
+`IDL:orbweaver/CPeerEcho:1.0` with its type id **compiled in**, so this is that
+fact written where a compiler can read it. A fixture that took its identity from
+a flag would let a caller assert whatever it expected, and `_is_a` would be
+unfalsifiable here — a contract is what a target claims to be. Its repository id
+is built from the declaration and checked against omniidl's, so a mismatch would
+be a failed narrow rather than a silently wrong answer. 100 files now cross all
+three front ends with no unexplained divergence.
+
+**What the four cells buy is stated and bounded, not counted as coverage.**
+`spikes/bindings/AXES` decided it when the peer landed: *`independent` refutes
+coding errors and does NOT satisfy clause 6.* The peer shares no code with
+`crates/`, so an error on our side is not mirrored — real evidence, more than
+`self` can offer — and shares the same reading of the same specification by the
+same process, which *a convention both ends apply cannot be refuted by a round
+trip* settles. So the cells print **no `observed` line at all** and say why.
+
+The Java `client × c` row's own prose had claimed such a cell would be *"the
+strongest form of clause 6 this grid can offer"*; that was corrected two commits
+ago and the cell that replaced the row now carries the correction.
+
+*두 바인딩 격자가 완성되었다 — Java 8/8, Python 8/8, 0 red. 계수된 스킵 9 → 6이고
+**남은 것은 전부 작업이 아니라 조건**이다. 네 칸이 사는 것은 적혀 있고 한정되어
+있다: `independent`는 코딩 오류를 반증하지 clause 6을 충족하지 않으므로, 칸들은
+`observed` 줄을 아예 찍지 않는다.*
+
 **A C program that links no ORB calls a Java servant — and the manifest row
 beside it was overstating what that buys.** `java.manifest` said `servant × c`
 waited on *"the Java half of the seam … not the peer"*; that half landed this
