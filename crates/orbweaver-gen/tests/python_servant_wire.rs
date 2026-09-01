@@ -503,9 +503,21 @@ fn omniorb_calls_a_python_servant() {
     std::fs::copy(contract(), &idl).expect("copy the contract");
     let script = dir.path().join("drive.py");
     std::fs::write(&script, OMNIORB_DRIVER).expect("write the driver");
+    // **The tap, so this cell READS rather than claims.** It reported
+    // `claimed giop=1.2 order=little` until 2026-09-02 — a sound inference from
+    // omniORB writing its host's native order, and still not a reading. The
+    // relay was already in this file for the JacORB test one function over;
+    // there was no reason left for the two cells to be different kinds of
+    // evidence.
+    let target: SocketAddr = {
+        let p = servant.ior().profiles.first().expect("the servant published a profile");
+        format!("{}:{}", p.host, p.port).parse().expect("the servant's address")
+    };
+    let tap = Tap::start(target);
+    let tapped = tap.through(servant.ior(), None);
     let ior_path = dir.path().join("gauge.ior");
     let mut f = std::fs::File::create(&ior_path).expect("create");
-    write!(f, "{}", servant.ior().to_stringified().expect("stringify")).expect("write the ior");
+    write!(f, "{}", tapped.to_stringified().expect("stringify")).expect("write the ior");
     drop(f);
 
     let out = std::process::Command::new("python3")
@@ -517,6 +529,7 @@ fn omniorb_calls_a_python_servant() {
         .expect("run omniORB's client");
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
+    let frames = tap.frames();
 
     for wanted in [
         "label = driven by omniORB",
@@ -553,6 +566,32 @@ fn omniorb_calls_a_python_servant() {
              reached its caller:\n{stdout}"
         );
     }
+
+    // **What omniORB wrote, read off §15.4.1's flag byte of its own requests.**
+    // The requests and not the replies: in the servant direction the peer is the
+    // caller, so its writing is what it sent, and reading the replies here would
+    // report OUR order as a foreign peer's. The same split
+    // `spikes/lib/tap_orders.sh` keeps in two functions one layer up.
+    let requests: Vec<&Frame> = frames.iter().filter(|f| f.from_client && f.mtype == 0).collect();
+    assert!(
+        !requests.is_empty(),
+        "omniORB's client completed its calls and the tap recorded no request, so the byte \
+         order was NOT read off the wire. An absent reading cannot count as covered."
+    );
+    let seen = orders(&requests);
+    assert!(
+        seen.contains(&"little"),
+        "omniORB writes its host's native order and this host is little-endian; the tap read \
+         no little-endian request: {seen:?}"
+    );
+    for v in versions(&requests) {
+        println!("read off the wire at {v} order={}", seen[0]);
+    }
+    println!(
+        "note {} request(s) from omniORB, order read off §15.4.1's flag byte of what the PEER \
+         wrote",
+        requests.len()
+    );
 }
 
 // ── The other endianness ─────────────────────────────────────────────────────

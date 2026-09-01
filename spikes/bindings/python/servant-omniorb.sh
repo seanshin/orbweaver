@@ -2,23 +2,21 @@
 # Cell: servant × omniorb. omniORB's own Python client drives the Python servant
 # behind our ORB.
 #
-# ── Why this cell reports `claimed` and not `observed` ──────────────────────
+# ── It reports `observed`, and reported `claimed` until 2026-09-02 ──────────
 #
-# `omniorb_calls_a_python_servant` dials the servant's IOR directly. There is no
-# tap between them, so no byte of any request is ever inspected: the exchange is
-# little-endian because omniORB writes its host's native order and our server
-# replies in the request's order, and on a little-endian host that is what
-# happens. **That is a sound inference and it is still not a reading.** The
-# JacORB cell one row over reads the flag bit; this one does not, and the suite
-# is told so rather than left to assume the two are the same kind of evidence.
+# It used to say: *"there is no tap between them, so no byte of any request is
+# ever inspected; the exchange is little-endian because omniORB writes its host's
+# native order — a sound inference and still not a reading."* It also named its
+# own repair — *"closing it is a tap in `python_servant_wire.rs`, of the shape
+# `jacorb_calls_a_python_servant` already has"* — and deferred it with a reason
+# that was good on the day: that test had landed hours earlier and changing it
+# would have put a byte-identity oracle and an improvement in one commit where
+# neither could be read.
 #
-# The honest consequence, which the coverage verdict prints every run: the
-# servant direction's LITTLE-endian half is exercised by a foreign peer but has
-# never been read off §15.4.1's flag byte. Closing it is a tap in
-# `python_servant_wire.rs`, of the shape `jacorb_calls_a_python_servant` already
-# has — deliberately not written by this batch, because that test landed hours
-# earlier and changing it would put the migration's byte-identity oracle and the
-# improvement in one commit where neither could be read.
+# **The reason expired and the deferral outlived it.** The relay has been in that
+# file since; the tap is now in front of omniORB too, and the order comes off
+# §15.4.1's flag byte of the peer's own **requests** — in the servant direction
+# the peer is the caller, so the requests are its writing.
 #
 # ── The fixture ─────────────────────────────────────────────────────────────
 #
@@ -47,6 +45,20 @@ if grep -q "UNMEASURED" <<<"$out"; then
   exit 2
 fi
 
-printf 'claimed\tgiop=1.2\torder=little\tomniORB writes its host'"'"'s native order and our server replies in the request'"'"'s, so this exchange is little-endian on a little-endian host — inferred, with no tap between the peers and no flag byte read\n'
+# The readings the test printed. An absent reading is a failure and not a quiet
+# pass: the calls can complete while nothing is read off the wire, which is the
+# side of that distinction this cell reported on until 2026-09-02.
+wire=$(grep "read off the wire at" <<<"$out")
+if [ -z "$wire" ]; then
+  echo "FAIL	the calls completed and no order was read off the wire, so this cell"
+  echo "FAIL	measured nothing it could not have claimed"
+  exit 1
+fi
+while IFS= read -r line; do
+  v=$(sed -n 's/.*read off the wire at \([0-9.]*\).*/\1/p' <<<"$line")
+  o=$(sed -n 's/.*order=\([a-z]*\).*/\1/p' <<<"$line")
+  [ -n "$v" ] && [ -n "$o" ] || { echo "FAIL	a reading names no version or order: $line"; exit 1; }
+  printf 'observed\tgiop=%s\torder=%s\n' "$v" "$o"
+done <<<"$wire"
 printf 'note\tomniORB drove the Python servant and nothing about the servant'"'"'s language reached it\n'
 exit 0

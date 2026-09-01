@@ -68,17 +68,89 @@ if ! cargo run -q --bin gen-python -- --out "$pyout" spikes/echo.idl >/dev/null 
   exit 1
 fi
 
-pyrun=$(python3 crates/orbweaver-gen/python/echo_client.py "$pyout" \
-        spikes/echo.idl spikes/echo.ior ./target/debug/orbweaver-py-bridge 2>&1)
+# ── one pass per GIOP version, each through a recording tap ─────────────────
+#
+# **1.2 is what the fixture publishes; 1.1 and 1.0 are reached by republishing
+# the profile**, because a peer's outbound version follows the profile it
+# dialled. Without the passes the suite reads `client: … neither[1.0 1.1]`, and
+# a version nobody read is the same kind of not-a-measurement as an order nobody
+# read. A version this pair cannot carry is a RESULT: only the 1.2 pass must
+# pass, and the others say what happened.
+. "$ROOT/spikes/lib/tap_orders.sh"
+D=/tmp/orbweaver-binding-pyclient; rm -rf "$D"; mkdir -p "$D"
+TAPS=()
+tap_down() { for t in "${TAPS[@]:-}"; do [ -n "$t" ] && kill "$t" >/dev/null 2>&1; done; fixture_down; }
+trap tap_down EXIT
 
-case "$pyrun" in
-  *"python target: PASS"*) ;;
-  *) echo "FAIL	the Python client did not complete its calls"
-     printf '%s\n' "$pyrun" | tail -12
-     exit 1 ;;
-esac
+calls=0
+readings=""
+for minor in "" 1 0; do
+  label=${minor:-2}
+  log="$D/tap-$label.log"
+  out_ior="$D/tapped-$label.ior"
+  tap_out="$D/tap-$label.out"
+  # Two invocations, not an array: macOS ships bash 3.2, where `"${arr[@]}"` on
+  # an EMPTY array is an unbound variable under `set -u` — the defect that made
+  # the Java cell's 1.2 pass die before its tap ever forked.
+  if [ -n "$minor" ]; then
+    python3 spikes/jacorb_giop11_tap.py --ior "$ROOT/spikes/echo.ior" --out "$out_ior" \
+            --log "$log" --op echo_string --minor "$minor" >"$tap_out" 2>&1 &
+  else
+    python3 spikes/jacorb_giop11_tap.py --ior "$ROOT/spikes/echo.ior" --out "$out_ior" \
+            --log "$log" --op echo_string >"$tap_out" 2>&1 &
+  fi
+  TAPS+=("$!")
+  tapped=0
+  for _ in $(seq 1 150); do
+    if [ -s "$out_ior" ] && grep -q "^READY" "$tap_out" 2>/dev/null; then tapped=1; break; fi
+    sleep 0.1
+  done
+  if [ "$tapped" != 1 ]; then
+    echo "FAIL	the recording tap did not come up at IIOP 1.$label, so no flag byte could be read"
+    tail -5 "$tap_out" 2>/dev/null
+    exit 1
+  fi
 
-calls=$(grep -c '^  ok' <<<"$pyrun")
-printf 'claimed\tgiop=1.2\torder=little\tomniORB writes its host'"'"'s native order; no tap sits between the generated Python and the fixture, so no flag byte is read in this direction by any cell\n'
-printf 'note\t%s generated call(s) completed over the wire, no Rust stub in the path\n' "$calls"
+  pyrun=$(python3 crates/orbweaver-gen/python/echo_client.py "$pyout" \
+          spikes/echo.idl "$out_ior" ./target/debug/orbweaver-py-bridge 2>&1)
+  case "$pyrun" in
+    *"python target: PASS"*)
+      [ "$label" = 2 ] && calls=$(grep -c '^  ok' <<<"$pyrun")
+      readings="$readings$(read_reply_orders "$log")
+"
+      ;;
+    *)
+      if [ "$label" = 2 ]; then
+        echo "FAIL	the Python client did not complete its calls"
+        printf '%s\n' "$pyrun" | tail -12
+        exit 1
+      fi
+      # The EXCEPTION line, not the `raise` that produced it. The first draft
+      # matched `Error` and caught the source line out of the traceback, so the
+      # note carried a fragment of `_rt.py` where the reason should have been —
+      # the truncated-read class, in the sentence that explains a result.
+      why_all=$(grep -E "^[A-Za-z._]+(Error|Exception): |^  FAIL" <<<"$pyrun")
+      why=$(head -1 <<<"$why_all")
+      # **Whose refusal it is matters and the note says which.** At 1.1 and 1.0
+      # against this peer the answer comes back as a SystemException from
+      # omniORB — its own vendor minor code — which is the peer declining, not
+      # our stack failing. The Java client cell's 1.0 is the other kind: our own
+      # runtime refusing per §9.3.1.6 because the driver carries wide text. Both
+      # leave the version unread and they are not the same finding.
+      printf 'note\tIIOP 1.%s: the calls did not complete, so that version stays unread — a result, not a failure (%s)\n' "$label" "${why:-no message; see the pass output}"
+      ;;
+  esac
+done
+
+# ── what the peer wrote, read off §15.4.1's flag byte ───────────────────────
+# The REPLIES: in the client direction the peer is the one answering, so its
+# order is the order of what it wrote. This cell reported `claimed` here until
+# 2026-09-02 and said why — no tap sat between the generated Python and the
+# fixture. One does now.
+sort -u <<<"$(grep -E "^observed" <<<"$readings")"
+if ! grep -q "^observed" <<<"$readings"; then
+  echo "FAIL	no order was read off the wire in any pass, so this cell measured nothing"
+  exit 1
+fi
+printf 'note\t%s generated call(s) completed over the wire at 1.2, no Rust stub in the path\n' "$calls"
 exit 0

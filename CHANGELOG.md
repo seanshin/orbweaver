@@ -10,6 +10,38 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**Python stops claiming: every byte order it reports is now read off the wire.**
+Both `claimed-only` columns are empty. The servant cell put the recording relay
+— already in `python_servant_wire.rs` for the JacORB test one function over — in
+front of omniORB too, and the client cell put the tap between the generated
+Python and the fixture. Twelve requests read at 1.2, little-endian, off
+§15.4.1's flag byte of what the peer wrote.
+
+**A deferral that outlived its reason.** The servant cell had named its own
+repair — *"closing it is a tap in `python_servant_wire.rs`, of the shape
+`jacorb_calls_a_python_servant` already has"* — and deferred it for a reason
+that was good on the day: that test had landed hours earlier and changing it
+would have put a byte-identity oracle and an improvement in one commit where
+neither could be read. The relay has been there since; the reason expired and
+the deferral did not.
+
+**Two versions stay unread, for two different reasons, and the notes say which.**
+At 1.1 omniORB answers `BAD_PARAM` with its own vendor minor code — **the peer
+declining**. At 1.0 our own runtime refuses: *GIOP 1.0 cannot carry wchar or
+wstring data (§9.3.1.6)*, because the driver carries wide text — the same
+correct refusal Java's client cell meets. Both leave a version unread and they
+are not the same finding.
+
+The first draft of that note matched `Error` and caught a `raise` line out of
+the traceback, so it carried a fragment of `_rt.py` where the reason should
+have been — the truncated-read class, inside the sentence that explains a
+result.
+
+*파이썬이 주장을 그만두었다 — 보고하는 모든 바이트 순서가 와이어에서 읽힌다. 스스로
+수리 방법을 적어두고 유예했던 셀이 있었고, **유예의 이유는 만료됐는데 유예는 남아
+있었다.** 안 읽힌 두 버전은 이유가 서로 다르다: 1.1은 피어가 거절, 1.0은 우리
+런타임이 §9.3.1.6대로 거절.*
+
 **Both binding grids are complete: Java 8 of 8, Python 8 of 8, 0 red.** The
 three C-peer cells landed together because they are one peer and one shape — a
 generated client calling `c_peer --role server`, and `c_peer --role client`
