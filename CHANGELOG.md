@@ -10,6 +10,36 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**omniORB drives a Java servant, and two of the three Java servant cells land —
+in the order the manifest had chosen.** `java.manifest` refused the cheapest
+cell first and recorded why: *"a self cell that existed while the foreign ones
+did not would report a seam we had never run against anybody else."* So the
+foreign peer went first and `servant × self` followed it.
+
+`omniorb_calls_a_java_servant` binds a server **this test owns**, mounts the Java
+servant as its `Dispatch`, and lets omniORB's own Python client import the
+contract through `omniidl`, narrow to `spike::Echo`, and call — `add -> 42`,
+`echo_string -> java:hello`, `is_a Echo -> True`. **The route is not the Python
+one and is better for what the language row measures**: the Python servant cells
+reach their servant through `orbweaver-py-bridge --serve`, which binds its own
+listener, so the servant arrives as an *endpoint*; since `SeamChild::java` a Java
+servant arrives as a **servant**, and a caller sent to a different address has
+been *moved*, which is a different row of D029 §6.1.
+
+Java goes **3 cells run to 5, 0 red**; the harness's counted skips **13 to 11**.
+
+**What the third cell's absence costs, printed rather than implied**: the servant
+direction has no reading off the wire at all — `claimed` only — so D032 §4's
+clause 6 is unmet there for Java, where Python has it. This cell reports
+`claimed` deliberately: no tap sits between omniORB and the servant, the
+little-endian order is inferred from the peer's host, and **a sound inference is
+still not a reading.**
+
+*omniORB가 자바 서번트를 몰고, 서번트 칸 셋 중 둘이 — 매니페스트가 정해 둔
+순서대로 — 착지했다. 싼 self 칸을 먼저 두면 아무에게도 돌려보지 않은 seam을
+보고하게 된다는 그 이유를 지켰다. 경로는 파이썬의 것이 아니고 언어 행이 재는 것에
+더 맞다: 서번트가 엔드포인트가 아니라 서번트로 도착한다. 스킵 13 → 11.*
+
 **A Java servant answers through a `Dispatch` this process owns, and the child
 type stopped being one language's.** `PythonChild` became `SeamChild` with
 `python` and `java` constructors, because **only the command was ever
