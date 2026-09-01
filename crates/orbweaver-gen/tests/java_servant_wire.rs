@@ -38,7 +38,6 @@
 //! 것이 아니다: 자바 서번트는 **이 테스트가 바인드한** 서버에 평범한 `Dispatch`로
 //! 올라가므로, 서번트가 엔드포인트가 아니라 서번트로 도착한다.*
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -197,6 +196,84 @@ fn build(javac: &Path, dir: &Path) -> PathBuf {
     classes
 }
 
+/// Starts the recording tap in front of `ior` and returns (process, tapped-ior).
+///
+/// The tap is peer-agnostic — its own header says *"the version and the codeset
+/// choice come from the ORBs, and the log is what they did"* — so the same one
+/// sits in front of omniORB and JacORB. `minor` republishes the profile at IIOP
+/// 1.`minor`, which is how a peer whose outbound version follows the profile is
+/// made to speak an older one.
+///
+/// **Waits for the published file to be non-empty, not merely to exist.** The
+/// tap writes it after it binds; an empty file is a path that exists and a
+/// listener that does not, which is the shape `spikes/lib/accepting.sh` exists
+/// to refuse one layer down.
+fn start_tap(
+    ior: &orbweaver_giop::Ior,
+    dir: &Path,
+    log: &Path,
+    minor: Option<u8>,
+) -> (std::process::Child, PathBuf) {
+    let ior_path = dir.join(format!("real-{}.ior", minor.unwrap_or(2)));
+    std::fs::write(&ior_path, ior.to_stringified().expect("stringify")).expect("write");
+    let tapped = dir.join(format!("tapped-{}.ior", minor.unwrap_or(2)));
+    let mut cmd = Command::new("python3");
+    cmd.arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spikes/jacorb_giop11_tap.py"))
+        .arg("--ior")
+        .arg(&ior_path)
+        .arg("--out")
+        .arg(&tapped)
+        .arg("--log")
+        .arg(log)
+        .arg("--op")
+        .arg("echo_string");
+    if let Some(m) = minor {
+        cmd.arg("--minor").arg(m.to_string());
+    }
+    let child = cmd.stdout(std::process::Stdio::piped()).spawn().expect("the tap starts");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
+        if std::fs::metadata(&tapped).map(|m| m.len() > 0).unwrap_or(false) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        std::fs::metadata(&tapped).map(|m| m.len() > 0).unwrap_or(false),
+        "the recording tap never published a tapped IOR"
+    );
+    (child, tapped)
+}
+
+/// Every (version, order) a peer's REQUESTS carry, read off §15.4.1's flag byte.
+///
+/// The requests and not the replies: in the servant direction the peer is the
+/// caller, so its writing is what it sent. Reading the replies here would report
+/// our own order as a foreign peer's, which is the one claim `claimed` exists to
+/// keep separate — the same split `spikes/lib/tap_orders.sh` keeps in two
+/// functions rather than in a flag.
+fn peer_request_orders(log: &Path) -> Vec<(String, &'static str)> {
+    let text = std::fs::read_to_string(log).unwrap_or_default();
+    let mut out: Vec<(String, &'static str)> = text
+        .lines()
+        .filter(|l| l.contains("C->S GIOP") && l.contains(" Request "))
+        .filter_map(|l| {
+            let v = l.split("GIOP ").nth(1)?.get(..3)?.to_owned();
+            let order = if l.contains(" BE ") || l.ends_with(" BE") {
+                "big"
+            } else if l.contains(" LE ") || l.ends_with(" LE") {
+                "little"
+            } else {
+                return None;
+            };
+            Some((v, order))
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// Binds a server holding the Java servant and hands its address to `f`.
 ///
 /// Split out when the JacORB test needed the same three lines the omniORB one
@@ -268,124 +345,83 @@ fn jacorb_calls_a_java_servant() {
     std::fs::create_dir_all(&dir).expect("a work directory");
     let classes = build(&javac, &dir);
 
-    let log = dir.join("tap.log");
-    let tapped = dir.join("tapped.ior");
-    let mut client_out = String::new();
-    with_java_servant(&java, &classes, |ior, addr| {
-        let ior_path = dir.join("echo.ior");
-        std::fs::write(&ior_path, ior.to_stringified().expect("stringify")).expect("write");
-
-        // The tap in front of our server. It republishes the profile, so what
-        // JacORB dials is the tap and what the tap forwards is the servant.
-        let mut tap = Command::new("python3")
-            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spikes/jacorb_giop11_tap.py"))
-            .arg("--ior")
-            .arg(&ior_path)
-            .arg("--out")
-            .arg(&tapped)
-            .arg("--log")
-            .arg(&log)
-            .arg("--op")
-            .arg("echo_string")
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .expect("the tap starts");
-        let _ = addr;
-        // The tap says READY on stdout after it binds; wait for the file AND
-        // that line, because a published path is not a listening socket.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-        while std::time::Instant::now() < deadline {
-            if tapped.is_file() && std::fs::metadata(&tapped).map(|m| m.len() > 0).unwrap_or(false)
-            {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        assert!(tapped.is_file(), "the recording tap never published a tapped IOR");
-
-        // Built by joining rather than as one literal. The literal had a line
-        // continuation in the middle of the slf4j entry, which collapsed to a
-        // run of spaces INSIDE the path — `…jboss-rmi-api.jar:      /lib/slf4j…`
-        // — so that jar was never on the classpath and JacORB died with
-        // `NoClassDefFoundError: org/slf4j/LoggerFactory`. A string that reads
-        // correct in the source and is not.
+    let jcp = {
         let j = jdir.display().to_string();
-        let jcp = [
+        [
             format!("{j}/lib/jacorb.jar"),
             format!("{j}/lib/jacorb-omgapi.jar"),
             format!("{j}/lib/jboss-rmi-api.jar"),
             format!("{j}/lib/slf4j-api-1.7.36.jar"),
             format!("{j}/classes"),
         ]
-        .join(":");
-        let out = Command::new(&java)
-            .arg("-cp")
-            .arg(&jcp)
-            .arg("Client")
-            .arg(&tapped)
-            .current_dir(&jdir)
-            .output()
-            .expect("run JacORB's client");
-        client_out = format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
-        let _ = tap.kill();
-        let _ = tap.wait();
-    });
-
-    assert!(
-        client_out.contains("ping()") && !client_out.contains("FAIL"),
-        "JacORB's client did not complete its calls against the Java servant:\n{client_out}"
-    );
-
-    // What JacORB wrote, read off the flag byte of its own requests.
-    let tap_log = std::fs::read_to_string(&log).unwrap_or_default();
-    let orders: Vec<&str> = tap_log
-        .lines()
-        .filter(|l| l.contains("C->S GIOP") && l.contains(" Request "))
-        .filter_map(|l| {
-            if l.contains(" BE ") || l.ends_with(" BE") {
-                Some("big")
-            } else if l.contains(" LE ") || l.ends_with(" LE") {
-                Some("little")
-            } else {
-                None
-            }
-        })
-        .collect();
-    assert!(
-        !orders.is_empty(),
-        "the calls completed and the tap recorded no request, so the byte order was NOT read \
-         off the wire. An absent reading cannot count as covered.\ntap log:\n{tap_log}"
-    );
-    assert!(
-        orders.contains(&"big"),
-        "JacORB is the only peer in this grid that writes big-endian and the tap read none: \
-         {orders:?}"
-    );
-
-    // The cell parses this line. Printed by the test rather than recomputed by
-    // the shell, because the tap log lives in a directory this test owns and
-    // hands to nobody — the same shape the Python servant cell uses.
-    let versions: Vec<&str> = {
-        let mut v: Vec<&str> = tap_log
-            .lines()
-            .filter(|l| l.contains("C->S GIOP") && l.contains(" Request "))
-            .filter_map(|l| l.split("GIOP ").nth(1).and_then(|r| r.get(..3)))
-            .collect();
-        v.sort_unstable();
-        v.dedup();
-        v
+        .join(":")
     };
-    for v in &versions {
-        println!("read off the wire at {v} order=big");
+
+    // **1.2 and 1.1.** 1.2 is JacORB's default; 1.1 is reached the way
+    // `spikes/jacorb_giop11.sh` reaches it — not by a property but by
+    // republishing the profile, because a peer's outbound version follows the
+    // profile it dialled. Without the second pass the suite's version line
+    // reads `servant: read[1.2] … neither[1.0 1.1]`, and a version nobody read
+    // is the same kind of not-a-measurement as an order nobody read.
+    let mut readings: Vec<(String, &'static str)> = Vec::new();
+    for minor in [None, Some(1u8)] {
+        let log = dir.join(format!("tap-{}.log", minor.unwrap_or(2)));
+        let mut client_out = String::new();
+        with_java_servant(&java, &classes, |ior, _addr| {
+            let (mut tap, tapped) = start_tap(ior, &dir, &log, minor);
+            let out = Command::new(&java)
+                .arg("-cp")
+                .arg(&jcp)
+                .arg("Client")
+                .arg(&tapped)
+                .current_dir(&jdir)
+                .output()
+                .expect("run JacORB's client");
+            client_out = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let _ = tap.kill();
+            let _ = tap.wait();
+        });
+        assert!(
+            client_out.contains("ping()") && !client_out.contains("FAIL"),
+            "JacORB's client did not complete its calls against the Java servant at IIOP \
+             1.{}:\n{client_out}",
+            minor.unwrap_or(2)
+        );
+        let seen = peer_request_orders(&log);
+        assert!(
+            !seen.is_empty(),
+            "the calls completed at IIOP 1.{} and the tap recorded no request, so the byte \
+             order was NOT read off the wire. An absent reading cannot count as covered.",
+            minor.unwrap_or(2)
+        );
+        readings.extend(seen);
+    }
+    readings.sort();
+    readings.dedup();
+
+    assert!(
+        readings.iter().any(|(_, o)| *o == "big"),
+        "JacORB is the only peer in this grid that writes big-endian and the tap read none: \
+         {readings:?}"
+    );
+    assert!(
+        readings.iter().any(|(v, _)| v == "1.1") && readings.iter().any(|(v, _)| v == "1.2"),
+        "both versions must be read off the wire, and were not: {readings:?}"
+    );
+
+    // The cell parses these. Printed by the test rather than recomputed by the
+    // shell, because the tap logs live in a directory this test owns.
+    for (v, order) in &readings {
+        println!("read off the wire at {v} order={order}");
     }
     println!(
-        "note {} request(s) from JacORB, order read off §15.4.1's flag byte of what the PEER \
-         wrote — in the servant direction the requests are the peer's writing",
-        orders.len()
+        "note {} (version, order) reading(s) from JacORB, off §15.4.1's flag byte of what the \
+         PEER wrote — in the servant direction the requests are the peer's writing",
+        readings.len()
     );
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -433,20 +469,26 @@ fn omniorb_calls_a_java_servant() {
     std::fs::copy(contract(), &idl).expect("copy the contract");
     let script = dir.join("drive.py");
     std::fs::write(&script, OMNIORB_DRIVER).expect("write the driver");
-    let ior_path = dir.join("echo.ior");
-    let mut f = std::fs::File::create(&ior_path).expect("create");
-    write!(f, "{}", ior.to_stringified().expect("stringify")).expect("write the ior");
-    drop(f);
+
+    // **The tap, so this cell READS rather than claims.** It reported
+    // `claimed giop=1.2 order=little` until 2026-09-01 — a sound inference from
+    // omniORB writing its host's native order, and still not a reading. The tap
+    // is peer-agnostic and was already in front of JacORB one test over; there
+    // was no reason left for the two cells to be different kinds of evidence.
+    let log = dir.join("tap-omni.log");
+    let (mut tap, tapped) = start_tap(&ior, &dir, &log, None);
 
     let out = Command::new("python3")
         .arg(&script)
-        .arg(&ior_path)
+        .arg(&tapped)
         .arg(&idl)
         .current_dir(&dir)
         .output()
         .expect("run omniORB's client");
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = tap.kill();
+    let _ = tap.wait();
 
     stop.store(true, Ordering::SeqCst);
     let _ = orbweaver_giop::Connection::connect(&ior, std::time::Duration::from_millis(500));
@@ -459,6 +501,25 @@ fn omniorb_calls_a_java_servant() {
              stdout:\n{stdout}\nstderr:\n{stderr}"
         );
     }
+
+    let readings = peer_request_orders(&log);
+    assert!(
+        !readings.is_empty(),
+        "omniORB's client completed its calls and the tap recorded no request, so the byte \
+         order was NOT read off the wire. An absent reading cannot count as covered."
+    );
+    assert!(
+        readings.iter().any(|(_, o)| *o == "little"),
+        "omniORB writes its host's native order and this host is little-endian; the tap read \
+         no little-endian request: {readings:?}"
+    );
+    for (v, order) in &readings {
+        println!("read off the wire at {v} order={order}");
+    }
+    println!(
+        "note {} reading(s) from omniORB, off §15.4.1's flag byte of the peer's own requests",
+        readings.len()
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

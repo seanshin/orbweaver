@@ -10,6 +10,34 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**The Java servant direction stops claiming and starts reading.** Two lines the
+suite had been printing every run as unmeasured are gone: `servant × little
+(claimed, never read)` and `servant GIOP 1.1`.
+
+The omniORB cell reported `claimed giop=1.2 order=little` — a sound inference
+from omniORB writing its host's native order, and **still not a reading**. The
+tap is peer-agnostic, says so in its own header, and was already sitting in
+front of JacORB one cell over; there was no reason left for the two cells to be
+different kinds of evidence. It reads now, off §15.4.1's flag byte of omniORB's
+own **requests**, because in the servant direction the peer is the caller.
+
+The JacORB cell drives a second pass at IIOP 1.1, reached the way
+`jacorb_giop11.sh` reaches it — not by a property but by republishing the
+profile, because a peer's outbound version follows the profile it dialled.
+
+**The Java servant direction is now fully read: both byte orders, two versions,
+none of it claimed.** What is left for Java is GIOP 1.0 in either direction and
+1.1 in the client one, and the suite prints both.
+
+The tap start-up and the request reading are lifted into helpers rather than
+copied into the second test — the readiness wait in particular, which waits for
+the published file to be **non-empty** and not merely to exist, because an empty
+file is a path that exists and a listener that does not.
+
+*자바 서번트 방향이 주장을 그만두고 읽기 시작했다. 탭은 피어를 가리지 않고 한 칸
+옆에서 이미 돌고 있었으니, 두 칸이 서로 다른 종류의 증거일 이유가 없었다. 이제 두
+바이트 순서와 두 버전 모두 읽혔고 주장은 없다.*
+
 **JacORB drives a Java servant with a tap, and clause 6 closes in the servant
 direction.** The third Java servant cell. `servant × omniorb` reports `claimed`
 — no tap, the order inferred from the host — and this one reads it: eight
