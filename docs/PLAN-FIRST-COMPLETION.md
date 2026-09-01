@@ -451,6 +451,165 @@ measuring the shape of the repository rather than the transparency.
 
 ---
 
+## 1.9 What is left when §1 is empty / §1이 비었을 때 남는 것
+
+**Re-derived 2026-09-01 from the tree, not from this document's memory** — which
+is §0's method, and the third time this session it has produced something a
+remembered list would have missed. §1's repairs are done; what follows is a
+different kind of work and is ranked by priority zero all the same.
+
+| | measured 2026-09-01 |
+|---|---|
+| the five rows | **1 held, 3 named floor, 1 open leak** (`transparency.py --statuses`) |
+| harness | all measured checks green; **10** counted `SKIPPED` |
+| decisions | **39 total — 14 APPROVED, 24 PROPOSED** |
+
+*2026-09-01, 문서의 기억이 아니라 트리에서 다시 유도했다 — §0의 방법이고, 이번
+세션에 그것이 기억된 목록이 놓쳤을 것을 찾아낸 세 번째다.*
+
+---
+
+### A. The one open leak's one instance — D039 / 유일한 열린 구멍
+
+`backend` is the only row standing at `open leak`, and the roster pins its
+deployable population at exactly one: `seam::ForeignServant`, whose `knows`
+answers `true` when it has no home.
+[`D039`](decisions/D039-what-a-servant-with-no-home-answers-for.md) recommends
+**A — the servant is told which key it serves** — and is **not
+self-approvable** for D036's reason: it changes what a public type answers a
+peer for.
+
+**It blocks nothing else and nothing else blocks it.** Ranked first because
+priority zero ranks a leak above everything here, and because it is the only
+item on this list that would move a row.
+
+*유일한 `open leak` 행의 유일한 배포 사례. D039의 권고는 A이며, 그 상태는 그
+문서에서 읽는다 — 여기서 다시 적지 않는다. (첫 판은 여기에 결정 어휘를 썼고
+게이트가 거절했다: 이 문서가 D039의 상태를 주장하는 것으로 읽혔기 때문이다.
+그 게이트가 결정 어휘의 오용을 거절한 것은 이번이 다섯 번째다.)*
+
+---
+
+### B. The decision backlog, and the thing nobody computes / 결정 적체
+
+**24 of 39 decisions sit at `PROPOSED`, and no instrument distinguishes the two
+kinds inside that number.** `spikes/decision_status.py` checks that every
+*restatement* of a status matches its decision — it cannot check whether a
+decision that says `PROPOSED` has in fact been decided, and that is a different
+question with a different answer per document.
+
+At least one is demonstrably the second kind. **D034** is `PROPOSED`, and its
+question — *what a caller holding a reference sees when the ORB stops* — was
+answered by the owner through D035's amended ordering, with the work landed
+(`spikes/orb_shutdown.sh`, and §1's L5 done 2026-08-29). Its content is treated
+as settled by D029's Lifecycle cell, which is a named floor **because of that
+answer**.
+
+So the backlog holds at least three populations and nobody has separated them:
+
+1. **awaiting a genuine decision** — D037 and D038 were these until 2026-08-31,
+   and D039 is one now;
+2. **settled in fact, awaiting only a status edit** — D034 looks like this;
+3. **superseded** — a question a later decision answered differently.
+
+**What is mine to do and what is not.** Producing the classification is mine:
+one pass, each document read against the tree, and a table saying which
+population it is and on what evidence. **Approving is not** — that is what
+`PROPOSED` means, and a classification that approved anything would be the
+author's convenience wearing a decision's coat.
+
+**Why this ranks above the cells below.** Everything in this repository is
+chosen by reading these documents. A backlog where a settled decision and an
+open one are spelled identically is the same defect as the Backend cell's stale
+figure, one layer up — and this session has now paid for that class four times.
+
+*39개 중 24개가 `PROPOSED`이고, 그 수 안의 두 종류를 가르는 계기가 없다.
+`decision_status.py`는 **다시 적힌** 상태가 결정과 맞는지 검사할 뿐, `PROPOSED`라고
+적힌 결정이 사실은 결정되었는지는 검사할 수 없다 — 다른 질문이다. D034가 그
+두 번째 부류로 보인다. **분류는 내 몫이고 승인은 아니다.***
+
+---
+
+### C. The two C cells — cheaper than they were called, and bounded / C 칸 둘
+
+**Correction of record: these do not need a C runtime.** They were described
+that way in this session's reporting and it was wrong. `spikes/c_peer.c` (1688
+lines) already exists, speaks GIOP from the published specification, links no
+ORB, and has **both roles** — it connects and it binds/listens — with
+`--request-endian`, `--reply-endian` and `--giop` under the caller's control. So
+`servant × c` is the shape `servant × omniorb` already has with `c_peer` as the
+driver, and `client × c` is that with `c_peer` serving. Shell work over a
+fixture the harness already gates.
+
+**And what they buy is bounded by `spikes/bindings/AXES`, which decided it when
+the peer landed and refused to answer it by declaring:**
+
+> `independent` refutes coding errors and does NOT satisfy clause 6.
+
+The C peer shares no code with `crates/`, so an error on our side is not
+mirrored on the other — real evidence, and more than `self` can offer. It shares
+the same reading of the same specification by the same process, and *a
+convention both ends apply cannot be refuted by a round trip.* Clause 6 is
+already met for Java in both directions, so these cells add evidence and close
+no clause.
+
+*기록 정정: C 런타임이 필요하지 않다. 이 세션의 보고가 그렇게 말한 것은 틀렸다.
+`c_peer.c`는 이미 있고 두 역할을 다 한다. 다만 사는 것은 AXES가 이미 정해 두었다 —
+`independent`는 코딩 오류를 반증하지 클라우즈 6을 충족하지 않는다.*
+
+---
+
+### D. The claims that are conditions, not work / 작업이 아니라 조건인 것
+
+Six of the ten `SKIPPED`s wait on something absent from this machine rather than
+on anything undone: docker and multipass (NAT), `VOYAGE_API_KEY`, an
+`ORBWEAVER_IDP_URL` issuer for CSIv2, omniORBpy `sslTP` / JacORB SSL, and the
+live S1–S3 pass which PLAN §8 puts on a **per-release** cadence rather than a
+per-run one.
+
+**They are counted, aged, and correct as they stand.** Listing them here is so
+that a future reader does not mistake a long `SKIPPED` list for undone work —
+the verdict already says *unmeasured, not passing*, and the honest number is the
+one it prints.
+
+*열 중 여섯은 이 머신에 없는 것을 기다리지, 하지 않은 일을 기다리지 않는다. 계수되고
+나이가 붙어 있으며 지금 그대로가 정확하다.*
+
+---
+
+### E. TAO in CI — the owner's, and measured / TAO를 CI에
+
+Not a leak and not a skip: the `tao_idl` column is retired wherever the fixture
+is built, and CI is where it is not. The cost is measured rather than estimated —
+the differential job takes **57 seconds** and the build takes **~3 minutes and
+532 MB**, so it multiplies that job by roughly four on every push, and caching a
+DOC-licensed tree is a licensing judgement `spikes/tao/setup.sh` declines to make
+alone. The refusal and its cost are in that script's header; the choice is §2's
+to record when it is made.
+
+---
+
+### The order, and why / 순서와 이유
+
+| | | why here |
+|---|---|---|
+| 1 | **D039** | the only item that would move a criterion row; awaits the owner |
+| 2 | **B, the classification** | everything else is chosen by reading these documents, and two kinds of `PROPOSED` are spelled the same |
+| 3 | **C, the two cells** | cheap, and honest about buying evidence rather than coverage |
+| 4 | **D and E** | conditions and a costed choice, not work |
+
+**What would make this plan wrong.** If the classification in B finds that the
+24 are all genuinely open, then B is a report rather than a repair and C should
+have gone first. That is checkable by doing B, which is the argument for doing
+it before ranking anything under it — the same mistake §1.0 records making about
+L1, where ranking on an unchecked guess about size put the wrong item first.
+
+*이 계획이 틀리는 경우: B의 분류가 24개 전부 진짜로 열려 있다고 밝히면 B는 수리가
+아니라 보고이고 C가 먼저였어야 한다. 그것은 B를 해 보면 확인된다 — §1.0이 L1에
+대해 기록한, 크기에 대한 확인되지 않은 추측으로 순위를 매긴 실수와 같은 부류다.*
+
+---
+
 ## 2. The decision path already approved / 이미 승인된 결정 경로
 
 D035's §8 records an ordering the owner set, and its step 1 landed on
