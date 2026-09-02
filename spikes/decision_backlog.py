@@ -11,7 +11,9 @@ judgement about content, not agreement between two strings.
 This does not answer that question either. It reports the **computable signals**
 a person needs to answer it, and says so: the count, how widely each is cited,
 and whether the document itself records having been acted on. The judgement stays
-in `docs/PLAN-FIRST-COMPLETION.md` §1.9, where a person wrote it.
+in `docs/PLAN-FIRST-COMPLETION.md` §B, where a person wrote it — made
+2026-09-02, and until that date this sentence pointed at a section that did
+not yet hold one, which is the debt-named-in-prose shape one layer down.
 
 **A report, not a gate.** There is no defensible number for "too many open
 decisions" — a project that decided nothing and a project that decided everything
@@ -22,8 +24,10 @@ would both be suspicious, and neither is a threshold. The same reason
 
 Measured 2026-09-01: **24 of 39 decisions say `PROPOSED`**, and essentially every
 one has its recommendation standing in the tree — D015 recommended cutting a
-release and seven have been cut; D011's fan-out ships; D012 and D013 recommended
-building nothing and are cited as limits.
+release and seven have been cut; D012 and D013 recommended building nothing and are cited as limits. (D011's
+`TelemetrySink` ships, but §B records that its third clause was resolved by
+graduating the row rather than closing it as written — the reading is the
+owner's, and this sentence used to assert it as shipped.)
 
 The sharpest is **D029**. `CLAUDE.md` opens by saying priority zero was *"set by
 the project owner 2026-08-26"* and names D029 §6 as its home; D029 says
@@ -67,6 +71,30 @@ def decisions():
         m = re.search(r"\*\*Status:?\*?\*?:?\s*\**\s*([A-Za-z]+)", head, re.I)
         out.append((p.name.split("-")[0], p, m.group(1) if m else None, text))
     return out
+
+
+def depends_on(num):
+    """Where the tree DEPENDS on a decision's content rather than discussing it.
+
+    The classification in `docs/PLAN-FIRST-COMPLETION.md` §B turns on one
+    question a citation count cannot answer: would rejecting this decision break
+    something that is running? Two places answer yes and are computable —
+
+      `rules`   the decision is cited by `CLAUDE.md`, whose contents are the
+                working rules every batch is held to;
+      `runtime` a script under `spikes/` names the decision's own file, so a
+                run reads it rather than a person quoting it.
+
+    Neither is a proof of settlement and this function claims none. They are the
+    two signals that separate *operated on* from *written about*, which is the
+    separation §B asks a person to make.
+    """
+    rules = num in (ROOT / "CLAUDE.md").read_text(errors="replace")
+    r = subprocess.run(["git", "grep", "-l", "decisions/%s" % num, "--", "spikes/"],
+                       cwd=ROOT, capture_output=True, text=True)
+    runtime = [f for f in r.stdout.split()
+               if "decision_backlog" not in f and "decision_status" not in f]
+    return rules, runtime
 
 
 def cited_by(num):
@@ -113,7 +141,13 @@ def main(argv):
         title = text.splitlines()[0].lstrip("# ").strip()
         n_cites = len(cited_by(num))
         acted = "acted" if ACTED.search(text) else "  -  "
-        print("    %-5s %-5s cited-by=%-2d  %s" % (num, acted, n_cites, title[:60]))
+        rules, runtime = depends_on(num)
+        dep = "".join(["R" if rules else "-", "T" if runtime else "-"])
+        print("    %-5s %-5s %s cited-by=%-2d  %s"
+              % (num, acted, dep, n_cites, title[:56]))
+    print("  R = cited by CLAUDE.md's working rules; T = a spikes/ script names the")
+    print("  decision's file, so a run reads it. Neither proves settlement; together")
+    print("  they separate `operated on` from `written about` (see PLAN-FIRST-COMPLETION §B).")
     print("  A report, not a gate: there is no defensible number for how many")
     print("  decisions should be open, which is why none is asserted here.")
     return 0

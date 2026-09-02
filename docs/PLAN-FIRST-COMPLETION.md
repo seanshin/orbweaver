@@ -493,7 +493,9 @@ item on this list that would move a row.
 ### B. The decision backlog, and the thing nobody computes / 결정 적체
 
 **24 of 39 decisions sit at `PROPOSED`, and no instrument distinguishes the two
-kinds inside that number.** `spikes/decision_status.py` checks that every
+kinds inside that number.** (Still true of the *instrument*: the separation
+below was made by reading, and `decision_backlog.py` reports the signals a
+person needs rather than the answer.) `spikes/decision_status.py` checks that every
 *restatement* of a status matches its decision — it cannot check whether a
 decision that says `PROPOSED` has in fact been decided, and that is a different
 question with a different answer per document.
@@ -505,12 +507,94 @@ answered by the owner through D035's amended ordering, with the work landed
 as settled by D029's Lifecycle cell, which is a named floor **because of that
 answer**.
 
-So the backlog holds at least three populations and nobody has separated them:
+So the backlog holds at least three populations, and until 2026-09-02 nobody had separated them:
 
 1. **awaiting a genuine decision** — D037 and D038 were these until 2026-08-31,
    and D039 is one now;
 2. **settled in fact, awaiting only a status edit** — D034 looks like this;
 3. **superseded** — a question a later decision answered differently.
+
+**The classification, made 2026-09-02.** One pass, each document read against
+the tree. The evidence column says what was *checked*, never what was inferred
+from a recommendation resembling something in `crates/`. Recompute the
+mechanical half with `python3 spikes/decision_backlog.py`, whose `R`/`T` columns
+are the two signals that separate *operated on* from *written about*: `R` = cited
+by `CLAUDE.md`'s working rules, `T` = a `spikes/` script names the decision's own
+file, so a run reads it.
+
+**Settled in fact — the tree depends on the content, and no residue was found.**
+Rejecting any of these would break something that is running.
+
+| | evidence checked |
+|---|---|
+| **D010** | `R T`. `CLAUDE.md` carries §2's class split and §7.2's negative-control rule as working rules; a `spikes/` script reads the file. D016 §6 records the entire class-A programme executed with every commit verified, and nothing in class C built |
+| **D029** | `R T`. `CLAUDE.md` names §6 the criterion's home and calls it priority zero; **the harness reads §6.1 at run time** and prints the ledger every run. This is the sharpest instance in the backlog |
+| **D034** | `R`. `CLAUDE.md` carries §5.1 as a hard rule (*our own counters are not what a peer saw*); `spikes/orb_shutdown.sh` landed; D029's lifecycle row is a named floor **because of** its answer |
+| **D033** | `T`. A script reads the file; its Stage 3 — C and Java, *named essential by the owner* — is complete: both binding grids 8 of 8, 0 red |
+| **D031** | H2's ledger is computed and printed by every harness run and H4 landed; `run_checks.sh` cites it ten times |
+| **D032** | All four items B1–B4 record landing; `binding_suite.sh` and `binding_words.rs` execute its rule, and the acceptance grid it defines is what both languages are measured by |
+| **D028** | M1 and M2 landed; M2's rule is in `CLAUDE.md` as the `pub(crate)` rule, and `crossing_facts.py` runs |
+
+**Executed, with a residue that is work rather than a decision.** Substantially
+built; what is left is buildable and waits on nobody.
+
+| | landed | residue |
+|---|---|---|
+| **D020** | Stage A (recorded in the document), Stage B — `IdAssignment` is a real policy in `policy.rs` | Stages C/D — POAManager, the standard names |
+| **D021** | E2, E3, E4 — `event_channels_in_one_server.rs`, `spikes/event_by_name.sh` | E1, gated on §2's trigger |
+| **D022** | `T`, T1; `lookup.rs` and `trading_server.rs` carry the surface | T2, T3 |
+| **D023** | R3; phase 2 the document calls *already running* | phase 3, named as later |
+| **D024** | `orbweaver-console` exists, with the ORB administration surface | §5's agent tools |
+| **D025** | P1 — both inert keys reach `infer.rs` and `annotate.rs` — and P4 | P2, P3 |
+| **D030** | L1 (the Python servant, 2026-08-30), L2, L4 | L3, the developer tools |
+
+**In effect by default, and the evidence is an absence.** Both recommend
+*building nothing*, so **the empty tree cannot testify** — it looks identical
+whether the recommendation was adopted or nobody acted. What can testify is the
+affirmative half, and it did:
+
+| | evidence checked |
+|---|---|
+| **D012** | No cap outside tests; `COMPONENTS.md` documents the limit and cites D012 by name |
+| **D013** | No identity map anywhere in `crates/`; `COMPONENTS.md` documents the boundary and cites D013 as *recommending not building* |
+
+**Awaiting a genuine decision — population 1.** Something here waits on an answer.
+
+| | what waits |
+|---|---|
+| **D039** | The criterion's one `open leak` has one deployable instance, and §5's recommendation A is unbuilt. §1 of this plan ranks it first |
+| **D015** | The release half **landed** — v0.7.0 was cut 2026-08-26, the day after this was drafted. *"Then ask for a pilot"* is unanswered, and D016 §6 asks it again |
+| **D016** | A question document: its §6 asks the owner two things — D010's status, and a pilot. Nothing but an answer can settle it |
+| **D018** | *Which absence does a consumer meet first* — nothing in the tree presumes an answer, and its §4.1 says what must not happen before one |
+| **D026** | S1, S2 and S4 landed (the harness ages every skip). **S3 is exactly the unanswered part**: the two paid fixtures still stand as counted `SKIPPED`, and §6 proposes spending money and CI minutes |
+| **D017** | §5 costs harness time on every run, which the document says is a budget the owner holds |
+| **D011** | Two clauses shipped — publish nothing, and `TelemetrySink` exists. The third did not happen as written: §10's row was resolved by **graduating** (`PLAN-SERVICES` §4, 2026-08-25), not closed as *deliberately not built*. Whether that satisfies the recommendation is the owner's reading, not mine |
+
+**Could not classify from the tree — 1 of 24.** **D014.** Its `acted` marker is
+set and its W1 items name defects, but D016 was drafted the same day and
+rearranges the same work by footprint, so which document the work landed *under*
+is not decidable from the tree. Recorded as unclassified rather than guessed.
+
+**Two things this pass got wrong first, both worth keeping.** A keyword scan for
+supersession raised a false hit against the priority-zero decision; reading the
+context showed the matched words were *"leaks once instead of N times"* and
+*"not §8's original C then B"*, inside a later decision amending **its own**
+§8 ordering. **A keyword cannot read direction.** (Said this way on purpose:
+the first draft of this paragraph put the two document numbers either side of
+the word, and `decision_status.py` read the narration as a claim and went red —
+correctly, since a gate cannot tell a reported false positive from an
+assertion.) And for a *build-nothing* decision the first instinct was to read the empty
+tree as adoption, which is this repository's own lesson that a green meaning
+*nothing occurred* is indistinguishable from one meaning *the property held*.
+
+*2026-09-02에 만든 분류. 24건 중 — **사실상 확정** 7건(트리가 내용에 의존하며,
+거부하면 도는 것이 깨진다), **실행되었고 남은 것은 결정이 아니라 작업** 7건,
+**부재가 증거인 것** 2건(아무것도 짓지 말라는 권고라 **빈 트리는 증언할 수 없다** —
+증언하는 것은 긍정 쪽 절반이고, 그것은 착지했다), **진짜로 열려 있는 것** 7건,
+**트리만으로 분류할 수 없는 것** 1건(D014, 추측하지 않고 미분류로 기록). 이 패스가
+처음에 틀린 두 가지: 키워드는 **방향을 읽지 못한다**(D029가 D035에 의해 대체되었다는
+오탐), 그리고 빈 트리를 채택으로 읽으려 한 것 — **아무 일도 일어나지 않은 초록과
+성질이 지켜진 초록은 똑같이 보인다**.*
 
 **What is mine to do and what is not.** Producing the classification is mine:
 one pass, each document read against the tree, and a table saying which
@@ -642,7 +726,7 @@ to record when it is made.
 | | | why here |
 |---|---|---|
 | 1 | **D039** | the only item that would move a criterion row; awaits the owner |
-| 2 | **B, the classification** | everything else is chosen by reading these documents, and two kinds of `PROPOSED` are spelled the same |
+| 2 | **B, the classification** | ~~everything else is chosen by reading these documents, and two kinds of `PROPOSED` are spelled the same~~ — **done 2026-09-02**, and its own §B holds the table. It came out a repair rather than a report: 16 of 24 are executed in fact, so the ranking below stands |
 | 3 | **C, the two cells** | cheap, and honest about buying evidence rather than coverage |
 | 4 | **D and E** | conditions and a costed choice, not work |
 
@@ -651,6 +735,13 @@ to record when it is made.
 have gone first. That is checkable by doing B, which is the argument for doing
 it before ranking anything under it — the same mistake §1.0 records making about
 L1, where ranking on an unchecked guess about size put the wrong item first.
+
+**Answered 2026-09-02, and the plan is not wrong.** B was done and came out a
+repair: **16 of 24 are executed in fact** — 7 the tree depends on, 7 executed
+with a residue that is work rather than a decision, 2 in effect by default — and
+**7 genuinely await an answer**, with 1 (D014) recorded as unclassifiable from
+the tree rather than guessed. Had it gone the other way the ranking would have
+had to change; it did not, so C keeps its place.
 
 *이 계획이 틀리는 경우: B의 분류가 24개 전부 진짜로 열려 있다고 밝히면 B는 수리가
 아니라 보고이고 C가 먼저였어야 한다. 그것은 B를 해 보면 확인된다 — §1.0이 L1에

@@ -10,6 +10,50 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**The decision backlog is separated: 24 documents read against the tree.**
+`PLAN-FIRST-COMPLETION.md` §B has held the question since it was written — *24
+of 39 decisions say `PROPOSED`, and no instrument distinguishes the two kinds
+inside that number* — and named producing the classification as the author's
+work and approving as the owner's. This is the classification, in §B where the
+question lives. **16 of 24 are executed in fact**: 7 the tree depends on
+(rejecting them breaks something running), 7 executed with a residue that is
+work rather than a decision, and 2 in effect by default. **7 genuinely await an
+answer.** **1 — D014 — is recorded as unclassifiable from the tree**, because
+D016 was drafted the same day and rearranges the same work, so which document
+the work landed under is not decidable; recorded rather than guessed.
+
+**Nothing was approved and no `PROPOSED` marker was touched.** Editing them
+would destroy the only record of which decisions the owner actually took.
+
+**The sharpest instance stays sharp.** D029 says `PROPOSED` while `CLAUDE.md`
+names its §6 the criterion's home and the harness **reads §6.1 at run time**;
+D010's §2 and §7.2 are working rules in `CLAUDE.md`; D034 §5.1 is a hard rule
+and its work landed. Those three are the population the plan predicted.
+
+**Two things this pass got wrong first.** A keyword scan for supersession raised
+a false hit against the priority-zero decision — the matched words were *"leaks
+once instead of N times"* and *"not §8's original C then B"*, inside a later
+decision amending its own ordering. **A keyword cannot read direction.** And the
+first instinct was to read an *empty tree* as adoption for the two decisions
+that recommend building nothing — which is this repository's own lesson that a
+green meaning *nothing occurred* is indistinguishable from one meaning *the
+property held*. What can testify there is the affirmative half, and it did:
+`COMPONENTS.md` documents both limits by name.
+
+`decision_backlog.py` gains the two signals that separate *operated on* from
+*written about* — `R`, cited by `CLAUDE.md`'s working rules, and `T`, a
+`spikes/` script names the decision's own file so a run reads it. Neither proves
+settlement and it claims none; it stays a report. Its docstring had also pointed
+at a section holding a judgement nobody had written yet, and asserted D011's
+third clause as shipped when §10's row was resolved by graduating rather than by
+being closed as written — both corrected.
+
+*결정 적체를 분리했다: 24건을 트리에 대고 읽었다. **24건 중 16건은 사실상 실행되어
+있고** 7건이 진짜로 답을 기다리며, 1건(D014)은 추측하지 않고 **미분류로 기록**했다.
+**아무것도 승인하지 않았고 `PROPOSED` 표시는 하나도 건드리지 않았다** — 그것을
+고치면 소유자가 실제로 내린 결정이 무엇인지에 대한 유일한 기록이 사라진다. 처음에
+틀린 두 가지: 키워드는 **방향을 읽지 못하고**, 빈 트리는 채택을 증언하지 못한다.*
+
 **Two gates were green and neither was wrong: each was scoped to a place, and
 the rule is about a claim.** `gap_symbols.py` printed `22 symbol(s) named by gap
 columns, 22 exist in the tree` while four sites named
