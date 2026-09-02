@@ -199,7 +199,7 @@ it. Both branches were exercised.
 기록했다. 그리고 아슬아슬했던 것: `"id"`를 전부 치환할 뻔했는데 910행은 **타입
 서술자**의 것이었다 — 규칙이 아니라 키워드에 범위를 맞춘 배치.*
 
-### S3 — a nested read that shares the one reader
+### S3 — a nested read that shares the one reader — **DONE 2026-09-02**
 
 **This step was wrong in the first draft of this plan and is corrected here.**
 It said the top-level serve loop must become *reply-or-request*. Reading
@@ -225,7 +225,7 @@ one reader serves both loops.
   child, so the reader is proven to have been left in a usable state. One
   exchange proves nothing about the stream position.
 
-### S4 — `ObjectRef.invoke`, and the channel that exists only during a dispatch
+### S4 — `ObjectRef.invoke`, and the channel that exists only during a dispatch — **DONE 2026-09-02**
 
 Mirrors `_NESTED_CHANNEL`: installed for the duration of one dispatch, removed
 after.
@@ -251,7 +251,7 @@ after.
   same four branches Python's does — `error`, `system_exception`,
   `user_exception`, `ok` — or the invariant is only half held.
 
-### S5 — the measurement that makes it a Language claim
+### S5 — the measurement that makes it a Language claim — **DONE 2026-09-02**
 
 A Java mirror of `crates/orbweaver-gen/tests/a_call_travelling_the_other_way.rs`:
 a Java servant is handed a reference to a **Rust** `Target` on a **real socket**
@@ -263,7 +263,7 @@ and invokes it.
   Java servant refuses unless the value it read back is the expected one (so the
   answer travelled back **intact**, not merely that a connection happened).
 
-### S6 — the suite gains a `clause` row, and the acceptance question is flagged
+### S6 — the suite gains a `clause` row, and the acceptance question is flagged — **DONE 2026-09-02**
 
 `spikes/bindings/java.manifest` already has the row type this needs:
 `clause <name> <command>` — *clauses 3/4/5, no peer and no wire* — which is
@@ -296,6 +296,45 @@ to, and D032's whole argument is that a binding is accepted by passing a suite.
 넣을지는 **D032의 몫이지 이 문서의 몫이 아니다**.*
 
 ---
+
+**S3–S6 landed as one batch, 2026-09-02, and the plan is complete.** What each
+step predicted and what it met:
+
+- **The Rust side needed nothing.** `SeamChild` already implements
+  `ask_resolving` and `read_answer`, and it is the shared spawner behind both
+  `python()` and `java()` — so the parent has been able to answer a Java child's
+  nested request since the day it could answer a Python one. Checked before
+  writing rather than assumed.
+- **S3's hazard was the one named**, and the repair is the one named: the
+  channel is handed `serveOnPipes`'s own reader and writer rather than making
+  its own, and it is cleared in a `finally` so a reference kept past its
+  dispatch has nothing to write into.
+- **S4 did not write a second copy of the four branches.** They came out of
+  `_call` into `_okOrRaise`, which both the client path and `ObjectRef.invoke`
+  now take — so D038 §3's third invariant holds *by construction* rather than by
+  two functions having been written the same way.
+- **The pin proved itself.** With S4 done and the pin unedited the agreement
+  test **failed**, naming the two differences as pinned-but-no-longer-found.
+  That is what an exact pin buys over a floor, and it was not hypothetical: the
+  pin is now one line, `call.object`, which is the finding S1 turned up.
+- **S5's controls fail differently, which is the point.** Deleting the channel
+  gives `minor 0, Maybe` — the servant could not invoke at all; returning a
+  wrong value gives `minor 1, Yes` — it invoked and read the wrong thing. Two
+  assertions that fail the same way are one assertion.
+- **The older half of §5.3's question is closed too.** The Java serving-half
+  group had the same gap the protocol group was built to close — both its tests
+  print `SKIPPED` and return Ok without a JDK, so the group read `ok` over a
+  route nobody measured. It asks the fixture now.
+
+**§5.1's risk did not fire.** No second thread, and the reason is the one
+Python already demonstrated: the child is in strict alternation, not concurrent.
+
+*S3–S6은 2026-09-02에 한 배치로 착지했고 계획은 끝났다. **Rust 쪽은 할 일이 없었다** —
+`SeamChild`가 이미 양쪽 언어의 공용 스포너다. 네 갈래는 두 번째 사본이 되지 않고
+`_okOrRaise`로 빠져나왔다. **핀이 스스로를 증명했다**: S4를 끝내고 핀을 그대로 두자
+테스트가 실패하며 "고정되었으나 더 이상 발견되지 않음"을 이름 붙였다 — 하한이 아니라
+정확한 핀이 사는 것이고, 가정이 아니었다. 대조군 둘은 **서로 다르게** 실패한다.
+§5.1의 위험은 발화하지 않았다.*
 
 ## 4. What must not happen / 해서는 안 되는 것
 

@@ -10,6 +10,62 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**A Java servant invokes a reference it was handed, and §1's last work item is
+closed.** D038 option A now has all three implementations. `PLAN-SEAM-JAVA.md`
+S3–S6 landed as one batch; the plan is complete and marked so.
+
+**The Rust side needed nothing, which was checked rather than assumed.**
+`SeamChild` already implements `ask_resolving` and `read_answer`, and it is the
+shared spawner behind both `python()` and `java()` — so the parent has been able
+to answer a Java child's nested request since the day it could answer a Python
+one. The work was Java's alone.
+
+**The four reply branches did not become a second copy.** `error`,
+`system_exception`, `user_exception`, `ok` came out of `_call` into
+`_okOrRaise`, which both the client path and `ObjectRef.invoke` take. D038 §3's
+third invariant — *a nested call that raises comes back as an answer the servant
+can catch, so a foreign servant can implement a `raises` clause on an operation
+it calls* — therefore holds by construction rather than by two functions having
+been written the same way.
+
+**The nested channel reads `serveOnPipes`'s own reader.** A second
+`BufferedReader` over `System.in` would buffer ahead and eat lines the serve
+loop is owed — a defect that shows as a hang rather than a wrong answer. It is
+cleared in a `finally`, so a reference kept past its dispatch has nothing to
+write into and is refused: *a handle is not a proxy*, asserted by a control that
+keeps one and tries.
+
+**The pin proved itself, and it was not hypothetical.** With the work done and
+the pinned differences unedited, the agreement test **failed** — naming the
+absent `invoke` section and `version: "2" vs "1"` as pinned-but-no-longer-found.
+That is what an exact pin buys over a floor. Java's document is now equal to the
+ORB's except for one line, `call.object`, which is the finding writing that
+document turned up.
+
+**Two controls that fail differently, which is the point.** Deleting the channel
+gives `minor 0, Maybe` — the servant could not invoke at all. Returning a wrong
+value gives `minor 1, Yes` — it invoked and read the wrong thing. Two assertions
+that fail the same way are one assertion.
+
+**And the older half of the same question is closed.** The Java serving-half
+group had the gap the protocol group was built to close: both its tests print
+`SKIPPED` and return Ok without a JDK, so the group read `ok` over a route
+nobody measured. It asks the fixture now and prints a counted `SKIPPED` naming
+it.
+
+**The acceptance suite gains a `clause` row and the acceptance question is
+flagged, not answered.** `AXES` is built from D032 §4's six clauses and a nested
+invoke is not among them, so the row measures the property every run without
+making it a seventh — that is D032's to say, and an acceptance standard that
+arrives because somebody added a line is not one anybody agreed to.
+
+*자바 서번트가 건네받은 참조를 호출한다 — §1의 마지막 작업 항목이 닫혔다. **Rust
+쪽은 할 일이 없었고**(공용 스포너), 네 갈래는 `_okOrRaise`로 빠져나와 두 번째 사본이
+되지 않았다. 중첩 채널은 serve 루프의 **그 리더**를 읽고, `finally`에서 치워진다 —
+디스패치가 끝난 뒤의 참조는 거절된다. **핀이 스스로를 증명했다**: 일을 끝내고 핀을
+그대로 두자 테스트가 실패했다. 대조군 둘은 서로 다르게 실패한다. 합격 정의에 절을
+더할지는 **D032의 몫**이므로 행은 측정만 하고 주장하지 않는다.*
+
 **Java joins the seam's protocol agreement, and it was not the row the test's
 header promised.** `the_seam_is_one_protocol.rs` has said since it was written
 that *a binding in a third language adds a function and a row here, and nothing

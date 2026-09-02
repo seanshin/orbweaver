@@ -113,4 +113,12 @@ clause	a-stub-is-found-by-the-name-the-emitter-gave-it	ORBWEAVER_JAVA_HOME="${OR
 # Clause 5. `--language` is passed through rather than the binary knowing which
 # language it is for; `binding-words` looks the target up in
 # `orbweaver_gen::targets::TARGETS`.
+# D038's other direction, and **flagged rather than asserted as acceptance.**
+# `spikes/bindings/AXES` is built from D032 §4's SIX clauses and a nested invoke
+# is not among them, so adding this row does not make it a seventh: whether *a
+# servant can invoke a reference it was handed* belongs in what a language
+# binding must do to be one is **D032's to say**, not a line's. It is here so
+# the property is measured every run; calling it acceptance would be an
+# acceptance standard that arrived because somebody added a line.
+clause	a-servant-invokes-a-reference-it-was-handed	ORBWEAVER_JAVA_HOME="${ORBWEAVER_JAVA_HOME:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home}" cargo test -q -p orbweaver-gen --test a_java_call_travelling_the_other_way
 clause	keyword-escaping-is-executed	cargo run -q -p orbweaver-gen --bin binding-words -- --language java --allow spikes/bindings/keywords-not-executed.tsv --idl corpus/golden/28-target-keywords.idl

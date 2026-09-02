@@ -5225,15 +5225,45 @@ hr "the Java serving half — a generated servant answers a call document (D032)
 # wrapped by `seam::ForeignServant` into a plain `Dispatch`. Named beside the
 # document check rather than replacing it — the document check runs with no
 # process at all, which is a different thing to have working.
-jsr_out=$(cargo test -q -p orbweaver-gen --test a_java_servant_this_process_owns 2>&1); jsr_rc=$?
-jsr_line=$(grep -E '^test result:' <<<"$jsr_out" | head -1)
-if [ "$jsr_rc" -eq 0 ] && [ -n "$jsr_line" ]; then
-  echo "  ok   $jsr_line — a Java servant answered through a Dispatch this process"
-  echo "       owns: no listener, no address, so a language swap stays a language swap"
+#
+# **The fixture is asked first, and that was added 2026-09-02.** Both tests below
+# print `SKIPPED` and return Ok without a JDK, so this group used to read `ok`
+# over a route nobody measured — the same gap the protocol group beside it was
+# built to close, and this was the older half of it. A class-B claim lands as a
+# counted SKIPPED naming its fixture, never as `ok` (D010 §2).
+if [ -x "$JH_CHECK/bin/javac" ] && [ -x "$JH_CHECK/bin/java" ]; then
+  jsr_out=$(cargo test -q -p orbweaver-gen --test a_java_servant_this_process_owns 2>&1)
+  jsr_rc=$?
+  jsr_line=$(grep -E '^test result:' <<<"$jsr_out" | head -1)
+  if [ "$jsr_rc" -eq 0 ] && [ -n "$jsr_line" ]; then
+    echo "  ok   $jsr_line — a Java servant answered through a Dispatch this process"
+    echo "       owns: no listener, no address, so a language swap stays a language swap"
+  else
+    echo "  FAIL the Java servant route did not run ($(rc_says "$jsr_rc"))"
+    cargo_test_diag "$jsr_out"
+    fail_total=$((fail_total+1))
+  fi
+
+  # D038's other direction, through the third implementation: a reference
+  # ARRIVING at a Java servant, invoked. Three tests — the leg and two controls,
+  # one of which is `a handle is not a proxy` and fails if a reference kept past
+  # its dispatch can still be used.
+  jow_out=$(cargo test -q -p orbweaver-gen --test a_java_call_travelling_the_other_way 2>&1)
+  jow_rc=$?
+  jow_line=$(grep -E '^test result:' <<<"$jow_out" | head -1)
+  if [ "$jow_rc" -eq 0 ] && [ -n "$jow_line" ]; then
+    echo "  ok   $jow_line — a Java servant invoked a reference it was"
+    echo "       handed, over a real socket, and never learned an address"
+  else
+    echo "  FAIL a Java servant could not invoke a reference it was handed ($(rc_says "$jow_rc"))"
+    cargo_test_diag "$jow_out"
+    fail_total=$((fail_total+1))
+  fi
 else
-  echo "  FAIL the Java servant route did not run ($(rc_says "$jsr_rc"))"
-  cargo_test_diag "$jsr_out"
-  fail_total=$((fail_total+1))
+  skip absent "@$(date +%F)" \
+    "no JDK at $JH_CHECK — whether a Java servant answers through a Dispatch, and" \
+    "whether it can invoke a reference it was handed, are UNMEASURED and not passing." \
+    "Set ORBWEAVER_JAVA_HOME."
 fi
 jsh_out=$(./spikes/java_servant_half.sh 2>&1); jsh_rc=$?
 case "$jsh_rc" in

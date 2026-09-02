@@ -99,13 +99,12 @@ const BINDINGS: [Binding; 2] = [
             // description of the protocol instead of a statement of what the
             // file reads — the one thing it must not be. Work, not a property.
             "call.object: \"oid\" vs absent",
-            // Java does not serve the far side's own message yet.
-            // `PLAN-SEAM-JAVA.md` S3-S5 is the work that strikes this line.
-            "invoke: {\"answer_envelope\":\"answer\",\"arguments\":\"args\",\"envelope\":\"invoke\",\"handle\":\"handle\",\"operation\":\"op\"} vs absent",
-            // The other half of the same fact, and the reason it is not "2": a
-            // runtime announcing a version it does not implement is the
-            // claimed-versus-observed distinction the grid exists to refuse.
-            "version: \"2\" vs \"1\"",
+            // Two more lines stood here until 2026-09-02 — the absent `invoke`
+            // section and `version: "2" vs "1"` — and PLAN-SEAM-JAVA.md S3-S4
+            // struck them by making them false. **The test refused to let them
+            // linger**: with the work done and the pin unedited it failed,
+            // naming both as pinned-but-no-longer-found. That is what an exact
+            // pin buys over a floor, and it was not hypothetical.
         ],
     },
 ];

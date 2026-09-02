@@ -135,16 +135,33 @@ public final class _Rt {
 
     /** The protocol version this runtime speaks. */
     //
-    // **1, not 2, and deliberately.** 2 is the version with a message from the
-    // far side (`invoke`), and this runtime does not serve one yet: a servant
-    // here cannot invoke a reference it was handed. A runtime announcing a
-    // version it does not implement is the *claimed versus observed*
-    // distinction the acceptance grid exists to refuse, one layer down. It
-    // becomes "2" in the same change that makes it true, and not before.
-    public static final String _SEAM_VERSION = "1";
+    // **2 since 2026-09-02**, in the change that made it true and not before:
+    // this runtime now serves the far side's own message, so a servant here can
+    // invoke a reference it was handed. It read "1" for exactly as long as that
+    // was the honest answer — a runtime announcing a version it does not
+    // implement is the *claimed versus observed* distinction the acceptance
+    // grid exists to refuse, one layer down.
+    public static final String _SEAM_VERSION = "2";
 
     /** The envelope the bridge wraps a call in. */
     public static final String _SEAM_ENVELOPE_CALL = "call";
+
+    /**
+     * The envelope a servant wraps a NESTED REQUEST in, mid-answer: it was
+     * handed a reference, it cannot dial (it has never been told an address),
+     * so it asks the other side to dial by handle. D038 option A.
+     */
+    public static final String _SEAM_ENVELOPE_INVOKE = "invoke";
+    /**
+     * The envelope the other side answers a nested request in — distinct from
+     * `call` so a servant waiting on its own nested answer cannot mistake it
+     * for a fresh call addressed to it.
+     */
+    public static final String _SEAM_ENVELOPE_ANSWER = "answer";
+
+    public static final String _SEAM_INVOKE_HANDLE = "handle";
+    public static final String _SEAM_INVOKE_OPERATION = "op";
+    public static final String _SEAM_INVOKE_ARGUMENTS = "args";
 
     public static final String _SEAM_CALL_INTERFACE = "id";
     public static final String _SEAM_CALL_OPERATION = "op";
@@ -228,10 +245,92 @@ public final class _Rt {
         _ref.put("own_object_prefix", _SEAM_OWN_OBJECT_PREFIX);
         _d.put("reference", _ref);
 
-        // No `invoke` section: this runtime does not serve that message. Its
-        // absence is what `_SEAM_VERSION` being 1 means, said in data.
+        Map<String, Object> _inv = new LinkedHashMap<String, Object>();
+        _inv.put("envelope", _SEAM_ENVELOPE_INVOKE);
+        _inv.put("answer_envelope", _SEAM_ENVELOPE_ANSWER);
+        _inv.put("handle", _SEAM_INVOKE_HANDLE);
+        _inv.put("operation", _SEAM_INVOKE_OPERATION);
+        _inv.put("arguments", _SEAM_INVOKE_ARGUMENTS);
+        _d.put("invoke", _inv);
+
         return _d;
     }
+
+    /**
+     * The way back out, open only while this servant is answering a call.
+     *
+     * <p>A servant handed a reference cannot dial: it has never been told an
+     * address, which is §4.7 and the reason this exists rather than a
+     * `connect`. It asks the other side to dial <em>by handle</em>.
+     *
+     * <p><b>It reads from the same reader `serveOnPipes` reads from</b>, and
+     * that is the whole of the care this class needs. A second
+     * `BufferedReader` over `System.in` would buffer ahead and eat lines the
+     * serve loop is owed — a defect that shows up as a hang rather than as a
+     * wrong answer, which is why the reader is passed in and never made here.
+     */
+    static final class NestedChannel {
+        private final BufferedReader _in;
+        private final PrintStream _out;
+
+        NestedChannel(BufferedReader _in, PrintStream _out) {
+            this._in = _in;
+            this._out = _out;
+        }
+
+        /** Ask the other side to invoke `op` on `handle`; return its reply. */
+        Map<String, Object> invoke(String _handle, String _op, Map<String, Object> _args) {
+            Map<String, Object> _body = new LinkedHashMap<String, Object>();
+            _body.put(_SEAM_INVOKE_HANDLE, _handle);
+            _body.put(_SEAM_INVOKE_OPERATION, _op);
+            _body.put(_SEAM_INVOKE_ARGUMENTS, _args == null
+                    ? new LinkedHashMap<String, Object>() : _args);
+            Map<String, Object> _document = new LinkedHashMap<String, Object>();
+            _document.put(_SEAM_ENVELOPE_INVOKE, _body);
+            _out.println(_writeJson(_document));
+            _out.flush();
+
+            // Strict alternation, not concurrency: this servant is mid-answer,
+            // so the other side is waiting for its reply and will send nothing
+            // else. The loop reads until the answer and names anything else.
+            while (true) {
+                String _line;
+                try {
+                    _line = _in.readLine();
+                } catch (IOException _e) {
+                    throw new ServantError("reading the answer to a nested call on " + _handle
+                            + " failed: " + _e.getMessage());
+                }
+                if (_line == null) {
+                    throw new ServantError("the other side closed while this servant waited for"
+                            + " the answer to a nested call on " + _handle);
+                }
+                if (_line.trim().isEmpty()) {
+                    continue;
+                }
+                Object _d = _parseJson(_line);
+                if (!(_d instanceof Map)) {
+                    continue;
+                }
+                Object _answer = ((Map<?, ?>) _d).get(_SEAM_ENVELOPE_ANSWER);
+                if (_answer instanceof Map) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> _m = (Map<String, Object>) _answer;
+                    return _m;
+                }
+                // A `call` arriving here would be the other side starting a
+                // second conversation while this one is unfinished. The
+                // protocol has no reading under which that is well formed, so
+                // it is named rather than dropped — dropping it hangs both ends.
+                throw new ServantError("expected the answer to a nested call on " + _handle
+                        + " and read " + ((Map<?, ?>) _d).keySet()
+                        + "; the seam carries one conversation at a time");
+            }
+        }
+    }
+
+    /** Installed for the duration of one dispatch, and null outside one. */
+    private static NestedChannel _nestedChannel;
 
     /** Prints {@link #seamProtocol} as one JSON line, for the agreement test. */
     public static void main(String[] _argv) {
@@ -766,6 +865,50 @@ public final class _Rt {
         @Override
         public String toString() {
             return "ObjectRef(" + handle + (typeId.isEmpty() ? "" : ", " + typeId) + ")";
+        }
+
+        /**
+         * Invoke `op` on the object behind this handle.
+         *
+         * <p><b>Only while this servant is answering a call</b>, and never by
+         * dialling: the request goes back through the seam and the other side
+         * dials on this servant's behalf. The handle is what travels; an
+         * address never does, which is §4.7 and the reason this method exists
+         * at all rather than a `connect`.
+         *
+         * <p>Raises {@link SystemException} or a {@link UserException} exactly
+         * as a client call does — so a servant can implement a `raises` clause
+         * on an operation it calls, which is D038 §3's third invariant. Both go
+         * through {@link _Rt#_okOrRaise}, the same four branches a client
+         * takes, rather than a second copy of them.
+         *
+         * <p><b>The result is AnyJSON and not a mapped value</b>, and that is a
+         * boundary rather than a shortfall. A client knows its callee's
+         * contract because a generated stub carries the descriptors; a servant
+         * invoking a handle it was <em>handed</em> does not, so there is nothing
+         * to narrow against and the answer comes back as it crossed. Java says
+         * this in its type — the return is `Object` — where Python says it in
+         * prose.
+         *
+         * <p>Added 2026-09-02 (D038 option A). Before it, a reference arriving
+         * at a Java servant was a handle it could pass back and not use, which
+         * was the last thing `PLAN-FIRST-COMPLETION` §1's L4 named under D029
+         * §6.1's Language row.
+         */
+        public Object invoke(String _op, Map<String, Object> _args) {
+            NestedChannel _c = _nestedChannel;
+            if (_c == null) {
+                throw new ServantError("this reference can only be invoked while a servant is"
+                        + " answering a call: a handle is not a proxy and there is no channel"
+                        + " to ask through outside a dispatch");
+            }
+            Map<?, ?> _ok = _okOrRaise(_c.invoke(handle, _op, _args));
+            return _ok.get(_SEAM_REPLY_RETURNS);
+        }
+
+        /** {@link #invoke(String, Map)} with no arguments. */
+        public Object invoke(String _op) {
+            return invoke(_op, new LinkedHashMap<String, Object>());
         }
     }
 
@@ -1788,29 +1931,19 @@ public final class _Rt {
     }
 
     /**
-     * One operation, from the arguments a caller passed to the values it gets
-     * back — the declared result first when it is not `void`, then the `out` and
-     * `inout` values in declaration order.
+     * One reply to its `ok` body, or to the exception it carries.
      *
-     * Everything a generated stub does goes through here. The stub contributes
-     * names, order and descriptors — the facts of one contract — and no
-     * conversion logic at all.
+     * The four branches a reply can take — `error`, `system_exception`,
+     * `user_exception`, `ok` — in one place, because **two callers need them
+     * and a second copy is how a refusal goes false in one of them.** `_call`
+     * takes this path for a client's call, and {@link ObjectRef#invoke} takes
+     * it for a servant's nested one, so D038 §3's third invariant holds by
+     * construction rather than by both being written the same way: a nested
+     * call that raises comes back as something the servant can catch, which is
+     * what lets a foreign servant implement a `raises` clause on an operation
+     * it calls.
      */
-    public static Object[] _call(Invoker _invoker, String _id, String _operation, Arg[] _args,
-            Desc _returns, Out[] _outs, boolean _oneway) {
-        LinkedHashMap<String, Object> _body = new LinkedHashMap<String, Object>();
-        for (Arg _a : _args) {
-            _body.put(_a.name, _toJson(_a.desc, _a.value, _a.name));
-        }
-        LinkedHashMap<String, Object> _request = new LinkedHashMap<String, Object>();
-        _request.put(_SEAM_CALL_INTERFACE, _id);
-        _request.put(_SEAM_CALL_OPERATION, _operation);
-        _request.put(_SEAM_CALL_ARGUMENTS, _body);
-        if (_oneway) {
-            _request.put(_SEAM_CALL_ONEWAY, Boolean.TRUE);
-        }
-        Map<String, Object> _reply = _invoker.invoke(_request);
-
+    public static Map<?, ?> _okOrRaise(Map<?, ?> _reply) {
         if (_reply.containsKey(_SEAM_REPLY_ERROR)) {
             Object _e = _reply.get(_SEAM_REPLY_ERROR);
             Object _message = _e instanceof Map ? ((Map<?, ?>) _e).get("message") : null;
@@ -1847,7 +1980,34 @@ public final class _Rt {
             throw new TransportError("the bridge answered with neither a result nor a failure");
         }
 
-        Map<?, ?> _ok = (Map<?, ?>) _reply.get(_SEAM_REPLY_OK);
+        return (Map<?, ?>) _reply.get(_SEAM_REPLY_OK);
+    }
+
+    /**
+     * One operation, from the arguments a caller passed to the values it gets
+     * back — the declared result first when it is not `void`, then the `out` and
+     * `inout` values in declaration order.
+     *
+     * Everything a generated stub does goes through here. The stub contributes
+     * names, order and descriptors — the facts of one contract — and no
+     * conversion logic at all.
+     */
+    public static Object[] _call(Invoker _invoker, String _id, String _operation, Arg[] _args,
+            Desc _returns, Out[] _outs, boolean _oneway) {
+        LinkedHashMap<String, Object> _body = new LinkedHashMap<String, Object>();
+        for (Arg _a : _args) {
+            _body.put(_a.name, _toJson(_a.desc, _a.value, _a.name));
+        }
+        LinkedHashMap<String, Object> _request = new LinkedHashMap<String, Object>();
+        _request.put(_SEAM_CALL_INTERFACE, _id);
+        _request.put(_SEAM_CALL_OPERATION, _operation);
+        _request.put(_SEAM_CALL_ARGUMENTS, _body);
+        if (_oneway) {
+            _request.put(_SEAM_CALL_ONEWAY, Boolean.TRUE);
+        }
+        Map<String, Object> _reply = _invoker.invoke(_request);
+
+        Map<?, ?> _ok = _okOrRaise(_reply);
         ArrayList<Object> _values = new ArrayList<Object>();
         boolean _isVoid = _resolve(_returns, "<return>") instanceof Prim
                 && ((Prim) _resolve(_returns, "<return>")).kind.equals("void");
@@ -2126,6 +2286,12 @@ public final class _Rt {
                 continue;
             }
             Map<String, Object> _reply;
+            // The way back out, open only for this dispatch. It reads from the
+            // SAME reader this loop reads from — a second one over System.in
+            // would buffer ahead and eat lines this loop is owed — and it is
+            // cleared afterwards so a reference kept past the call refuses
+            // rather than writing into a conversation that has ended.
+            _nestedChannel = new NestedChannel(_in, _out);
             try {
                 _reply = dispatchCall(_servant, (Map<?, ?>) _call);
             } catch (ServantError _e) {
@@ -2136,6 +2302,8 @@ public final class _Rt {
                 // somebody can act on it.
                 _reply = _systemReply("IDL:omg.org/CORBA/UNKNOWN:1.0", 0L, 2);
                 System.err.println("orbweaver servant: " + _e.getMessage());
+            } finally {
+                _nestedChannel = null;
             }
             _out.println(_writeJson(_reply));
             _out.flush();
