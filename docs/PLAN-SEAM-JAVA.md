@@ -81,11 +81,12 @@ comments and **hand-typed string literals at every site that read a key**, and
 - its serve loop reads the envelope key as a **hardcoded literal**
   (`serveOnPipes` :1985, `((Map<?, ?>) _document).get("call")`), which is
   precisely the defect the test was built to prevent, reintroduced;
-- **19 protocol-key literal occurrences** sit in that file, counted 2026-09-02
-  and broken out rather than asserted as a total: `id` ×7, `returns` ×3, `op` ×2,
-  `minor` ×2, `completed` ×2, `args` ×2, `call` ×1. Recompute it rather than
-  quote it — this is a figure, and a figure in prose carries the date it was
-  measured;
+- **37 protocol-key literal occurrences** sat in that file. This line first
+  said **19**, which was the count for a **narrower key list I had typed** — not
+  for the protocol's own keys. Doing S2 replaced the typed list with the keys
+  read out of `seam::protocol()` itself, and the number moved. *A figure in
+  prose carries the date it was measured*, and it also carries the question it
+  answered: the first one answered a worse question;
 - and nothing could go red about any of it.
 
 **Java is 8 of 8 on the binding grid and unenrolled here, and both are correct.**
@@ -111,7 +112,7 @@ is the reason the first step below is a red test rather than a feature.
 Each step names the measurement that would **refuse** it. A step whose
 measurement is "it compiles" is not on this list.
 
-### S1 — Java publishes a protocol document, and the row lands red
+### S1 — Java publishes a protocol document, and the row lands red — **DONE 2026-09-02**
 
 Java gains `seamProtocol()`, assembled **from the constants it reads with**, and
 `BINDINGS` gains its row.
@@ -140,7 +141,7 @@ promising something no one has done.
   a second would be caught by nothing else.
 - **The absent-JDK question is decided here, not discovered later** — see §5.4.
 
-### S2 — Java's protocol keys stop being literals
+### S2 — Java's protocol keys stop being literals — **DONE 2026-09-02, with S1**
 
 The 19 occurrences become named constants, and `seamProtocol()` is assembled
 from **those**.
@@ -152,6 +153,51 @@ from **those**.
   *what the code reads with*.
 - **Measurement:** change one constant; the test goes red. Restore it; green.
   Both directions, because only the red one is evidence.
+
+**S1 and S2 landed together, and they had to.** They were written as two
+steps and they interlock: a document *assembled from the constants the runtime
+reads with* cannot be assembled before those constants exist. Splitting them
+would have produced a hand-written document at S1 — the very *second copy with
+better manners* S2 exists to prevent. One pass: constants, document, and all 37
+read sites.
+
+**What S1 found, which is the mechanism working before it had even landed.**
+Java's `seamProtocol()` must state what the file *reads*, and writing it that
+way exposed something no one was looking for: **Java never reads the call's
+`oid`.** Its `Servant` interface has no member for it and `dispatchCall` never
+asks, so **a Java servant cannot tell which object of its interface it was
+addressed to**, where a Python one can through `own_oid()`. Publishing
+`call.object` would have made the document a *description of the protocol*
+instead of a *statement of what the file reads* — the one thing it must not be.
+So the key is absent from Java's document, the difference is pinned by name with
+its reason, and it is recorded as **work rather than a property**. It is outside
+this plan's scope; it is no longer invisible.
+
+**And one near-miss worth keeping.** The conversion was nearly done by replacing
+every `"id"` in the file. `java_rt.java:910` reads `_m.get("id")` beside
+`_m.get("kind")` and `_m.get("digits")` — that is the **type-descriptor**
+vocabulary, a different document entirely, and converting it would have been
+*a batch scoped to a keyword rather than to the rule*. Each site was classified
+before any was changed.
+
+**The pin is exact, not a floor**, and both directions are controlled: a **new**
+divergence fails (a Java constant changed → `reply.ok: "ok" vs "okay"`), and a
+pinned difference that has **gone away** fails too (Java made to publish
+`call.object` → the pinned line no longer matches). A pin nobody has to maintain
+is a floor, and a floor here would let a difference rot while reading green.
+
+**Landed with the harness group §5.3 requires**, because the two halves are only
+honest together: the cargo test skips without a JDK, and the harness now asks
+the **fixture** — not the test's output — and prints a counted `SKIPPED` naming
+it. Both branches were exercised.
+
+*S1과 S2는 함께 착지했고, 그래야 했다 — "읽는 상수로부터" 조립하는 문서는 그 상수가
+생기기 전에는 조립할 수 없다. S1이 찾은 것: **Java는 호출의 `oid`를 한 번도 읽지
+않는다.** Java 서번트는 자기가 어느 객체로 불렸는지 모른다. 그 키를 발행했다면 이
+문서는 "파일이 읽는 것에 대한 진술"이 아니라 "프로토콜에 대한 서술"이 되었을 것이다 —
+절대 되어서는 안 되는 것. 그래서 빼고, 이름을 붙여 고정하고, **성질이 아니라 작업**으로
+기록했다. 그리고 아슬아슬했던 것: `"id"`를 전부 치환할 뻔했는데 910행은 **타입
+서술자**의 것이었다 — 규칙이 아니라 키워드에 범위를 맞춘 배치.*
 
 ### S3 — a nested read that shares the one reader
 

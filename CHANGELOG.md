@@ -10,6 +10,59 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**Java joins the seam's protocol agreement, and it was not the row the test's
+header promised.** `the_seam_is_one_protocol.rs` has said since it was written
+that *a binding in a third language adds a function and a row here, and nothing
+else*. **That was not true**: `theirs()` hardcoded `python3` and wrote
+`python::RUNTIME` to `_rt.py`, so Java — whose servant half landed 2026-09-01 —
+could not be added and was not. It published no document, read its envelope key
+as `get("call")`, and **nothing could go red about any of it** while the binding
+grid read 8 of 8. The grid enrols a binding's *cells*; this enrols its
+*protocol*; the test's own header draws that line, and both gates were correct.
+
+`_Rt.seamProtocol()` is assembled from named constants and from nothing else,
+and all **37** protocol-key literals now read through them. The count is 37 and
+not the 19 the plan first carried: that figure was for a narrower key list
+someone had typed, and doing the work replaced the typed list with the keys read
+out of `seam::protocol()` itself.
+
+**Java's version stays `"1"`, deliberately.** 2 is the version with a message
+from the far side, and this runtime does not serve one. A runtime announcing a
+version it does not implement is the *claimed versus observed* distinction the
+acceptance grid exists to refuse, one layer down.
+
+**What writing the document found, which nobody was looking for.** A document
+that states *what the file reads* exposed that **Java never reads the call's
+`oid`**: its `Servant` interface has no member for it and `dispatchCall` never
+asks, so a Java servant cannot tell which object of its interface it was
+addressed to, where a Python one can through `own_oid()`. Publishing
+`call.object` would have made the document a description of the protocol rather
+than a statement about the file — so the key is absent, the difference is pinned
+by name with its reason, and it is recorded as work rather than as a property.
+
+**The pin is exact and not a floor**, controlled in both directions: a new
+divergence fails, and a pinned difference that has *gone away* fails too, so it
+cannot rot in place while reading green.
+
+**A near-miss kept as a note.** The conversion was nearly done by replacing every
+`"id"` in the file; `java_rt.java:910` reads one beside `"kind"` and `"digits"`
+and belongs to the **type-descriptor** vocabulary, a different document. That
+would have been a batch scoped to a keyword rather than to the rule.
+
+**And the skip is only honest with its other half.** Without a JDK the cargo
+test prints `SKIPPED` and returns Ok, which the harness would read as a pass
+over an agreement nobody measured — the *skip disguised as a pass* the test's
+own header refuses. A harness group now asks the **fixture** (never the test's
+output) and prints a counted `SKIPPED` naming it. The Java servant group beside
+it has the same gap and is now visibly the older half of the same question.
+
+*Java가 seam 프로토콜 합의에 합류했다 — 그런데 그 테스트 헤더가 약속한 "행 하나"가
+아니었다: **그 규칙은 구현되어 있지 않았다.** 37개 리터럴이 명명 상수를 통하게 되었고,
+버전은 **의도적으로 `"1"`** 이다. 문서를 쓰다가 찾은 것: **Java는 호출의 `oid`를 한
+번도 읽지 않는다** — 그 키를 발행했다면 문서가 "파일이 읽는 것"이 아니라 "프로토콜에
+대한 서술"이 되었을 것이다. 핀은 하한이 아니라 **정확**하며 양방향으로 통제된다.
+그리고 JDK 부재의 건너뜀은 **세어지는 SKIPPED**와 함께여야만 정직하다.*
+
 **The decision backlog is separated: 24 documents read against the tree.**
 `PLAN-FIRST-COMPLETION.md` §B has held the question since it was written — *24
 of 39 decisions say `PROPOSED`, and no instrument distinguishes the two kinds

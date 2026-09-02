@@ -5183,6 +5183,43 @@ fi
 # equivalent of `pychild::PythonChild` — which does not exist. What is measured
 # here is the half those cells would sit on, and saying so is the difference
 # between a measurement and the *green because nothing happened* shape.
+# ── Every binding publishes the protocol the ORB dispatches with ────────────
+#
+# `the_seam_is_one_protocol.rs` is the gate; this group exists because of what
+# `cargo test --workspace` cannot say. That test asks each binding's runtime to
+# PRINT its document and compares it with `orbweaver_gen::seam::protocol()`.
+# Python's runner is `python3`, which is always here. **Java's needs a JDK**,
+# and where there is none the test prints `SKIPPED` and returns Ok — so the
+# harness would read a pass over an agreement nobody measured.
+#
+# That is precisely the "skip disguised as a pass" the test's own header
+# refuses, and `PLAN-SEAM-JAVA.md` §5.3 records why the two halves are only
+# honest together: the cargo test skips (making a JDK a hard dependency of
+# `cargo test --workspace` would be a larger change decided as a side effect),
+# AND the harness counts it, naming the fixture. A class-B claim lands as a
+# counted SKIPPED naming its fixture, never as `ok` (D010 §2).
+#
+# The question is asked of the FIXTURE, not of the test's output: a probe reads
+# an exit code, never a marker somebody could print by accident.
+hr "every binding publishes the protocol the ORB dispatches with"
+if [ -x "$JH_CHECK/bin/javac" ] && [ -x "$JH_CHECK/bin/java" ]; then
+  sop_out=$(cargo test -q -p orbweaver-gen --test the_seam_is_one_protocol 2>&1); sop_rc=$?
+  sop_line=$(grep -E '^test result:' <<<"$sop_out" | head -1)
+  if [ "$sop_rc" -eq 0 ] && [ -n "$sop_line" ]; then
+    echo "  ok   $sop_line — python and java each print a document, and each"
+    echo "       differs from the ORB's in exactly the ways this repository has"
+    echo "       written down and in no others"
+  else
+    echo "  FAIL the seam's one-protocol gate did not pass ($(rc_says "$sop_rc"))"
+    cargo_test_diag "$sop_out"
+    fail_total=$((fail_total+1))
+  fi
+else
+  skip absent "@$(date +%F)" \
+    "no JDK at $JH_CHECK — whether the Java runtime speaks the protocol the ORB" \
+    "dispatches with is UNMEASURED, not passing. Set ORBWEAVER_JAVA_HOME."
+fi
+
 hr "the Java serving half — a generated servant answers a call document (D032)"
 # The route as well as the half: `java` as a child of the test's own process,
 # wrapped by `seam::ForeignServant` into a plain `Dispatch`. Named beside the

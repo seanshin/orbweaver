@@ -41,14 +41,74 @@ use orbweaver_gen::seam;
 /// *cells* are enrolled; this is where its **protocol** is, and the two are
 /// different questions: a binding can have no peer to be driven against and
 /// still owe the same document.
-const BINDINGS: [(&str, &str); 1] = [(
-    "python",
-    // Printed by the runtime rather than parsed out of it: what is being
-    // compared is what the module *computes*, which is the only thing that
-    // tracks what it reads with.
-    "import json, sys; sys.path.insert(0, sys.argv[1]); import _rt; \
-     print(json.dumps(_rt.seam_protocol(), sort_keys=True))",
-)];
+///
+/// # The extension rule, which was aspirational until 2026-09-02
+///
+/// The header above has said since this file was written that *a binding in a
+/// third language adds a function and a row here, and nothing else*. **It was
+/// not true.** `theirs()` hardcoded `python3` and wrote `python::RUNTIME` to
+/// `_rt.py`, and a row's second field was a Python `-c` snippet — so Java, whose
+/// servant half landed 2026-09-01, could not be added and was not. It published
+/// no document at all, read its envelope key as `get("call")`, and nothing here
+/// could go red about any of it. The rule is true now; that is what `Runner` is.
+struct Binding {
+    language: &'static str,
+    runner: Runner,
+    /// Differences from [`seam::protocol()`] this binding is **known** to have,
+    /// each named exactly as `differences` renders it.
+    ///
+    /// **Exact, not a floor.** A floor would prove nothing about the count and
+    /// would let a difference rot in place; this list must match what the
+    /// comparison finds, so a difference that *disappears* fails here too and
+    /// has to be struck. Every entry carries its reason in the comment beside
+    /// it, and an entry still present when the work it names is done is a
+    /// failure rather than a smaller number.
+    pinned: &'static [&'static str],
+}
+
+/// How one binding's runtime is made to print its document.
+enum Runner {
+    /// A Python `-c` snippet, run with the runtime written beside it.
+    Python(&'static str),
+    /// `javac` the runtime, then run its `main`. Needs a JDK; see the test.
+    Java,
+}
+
+const BINDINGS: [Binding; 2] = [
+    Binding {
+        language: "python",
+        // Printed by the runtime rather than parsed out of it: what is being
+        // compared is what the module *computes*, which is the only thing that
+        // tracks what it reads with.
+        runner: Runner::Python(
+            "import json, sys; sys.path.insert(0, sys.argv[1]); import _rt; \
+             print(json.dumps(_rt.seam_protocol(), sort_keys=True))",
+        ),
+        pinned: &[],
+    },
+    Binding {
+        language: "java",
+        runner: Runner::Java,
+        // In the order `differences` renders them, which is sorted by path.
+        pinned: &[
+            // Found by writing `seamProtocol()`, not by looking for it: Java's
+            // `Servant` has no member for the call's object and `dispatchCall`
+            // never reads the key, so a Java servant cannot tell which object of
+            // its interface it was addressed to, where a Python one can through
+            // `own_oid()`. Publishing the key would have made this document a
+            // description of the protocol instead of a statement of what the
+            // file reads — the one thing it must not be. Work, not a property.
+            "call.object: \"oid\" vs absent",
+            // Java does not serve the far side's own message yet.
+            // `PLAN-SEAM-JAVA.md` S3-S5 is the work that strikes this line.
+            "invoke: {\"answer_envelope\":\"answer\",\"arguments\":\"args\",\"envelope\":\"invoke\",\"handle\":\"handle\",\"operation\":\"op\"} vs absent",
+            // The other half of the same fact, and the reason it is not "2": a
+            // runtime announcing a version it does not implement is the
+            // claimed-versus-observed distinction the grid exists to refuse.
+            "version: \"2\" vs \"1\"",
+        ],
+    },
+];
 
 /// The Rust side, canonicalised so two documents can be compared as text.
 fn ours() -> Json {
@@ -60,41 +120,100 @@ fn ours() -> Json {
 /// An interpreter that will not run is a **failure**, never a skip disguised as
 /// a pass: this file's whole claim is that the far side agrees, and it cannot
 /// report anything without asking the far side.
-fn theirs(runner: &str) -> Json {
-    let dir = std::env::temp_dir().join(format!("orbweaver-seam-{}", std::process::id()));
+fn theirs(binding: &Binding) -> Option<Json> {
+    let dir = std::env::temp_dir().join(format!(
+        "orbweaver-seam-{}-{}",
+        binding.language,
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).expect("a directory to write the runtime into");
-    std::fs::write(dir.join("_rt.py"), orbweaver_gen::python::RUNTIME).expect("the runtime");
 
-    let out =
-        Command::new("python3").arg("-c").arg(runner).arg(&dir).output().unwrap_or_else(|e| {
-            panic!(
-                "python3 could not be run ({e}). An unmeasured check is a failure, never a \
-                 pass: this test exists to ask the other implementation what protocol it \
-                 speaks, and cannot answer without it."
-            )
-        });
+    let out = match binding.runner {
+        Runner::Python(runner) => {
+            std::fs::write(dir.join("_rt.py"), orbweaver_gen::python::RUNTIME)
+                .expect("the runtime");
+            Command::new("python3").arg("-c").arg(runner).arg(&dir).output().unwrap_or_else(|e| {
+                panic!(
+                    "python3 could not be run ({e}). An unmeasured check is a failure, never \
+                     a pass: this test exists to ask the other implementation what protocol \
+                     it speaks, and cannot answer without it."
+                )
+            })
+        }
+        Runner::Java => {
+            // A JDK may genuinely be absent, where python3 may not, so this is
+            // the one runner that can decline. It declines the way the Java
+            // tests in this crate already do — and `PLAN-SEAM-JAVA.md` §5.3
+            // records that a skip here is only honest beside a counted
+            // `SKIPPED` in the harness, because on its own it is the
+            // skip-disguised-as-a-pass this file's header refuses.
+            let (javac, java) = jdk()?;
+            std::fs::write(dir.join("_Rt.java"), orbweaver_gen::java::RUNTIME)
+                .expect("the runtime");
+            let built = Command::new(&javac)
+                .arg("-d")
+                .arg(&dir)
+                .arg(dir.join("_Rt.java"))
+                .output()
+                .expect("javac runs once it has been found");
+            assert!(
+                built.status.success(),
+                "the Java runtime did not compile:\n{}",
+                String::from_utf8_lossy(&built.stderr)
+            );
+            Command::new(&java).arg("-cp").arg(&dir).arg("_Rt").output().expect("java runs")
+        }
+    };
     assert!(
         out.status.success(),
-        "the runtime could not publish its protocol:\n{}",
+        "the {} runtime could not publish its protocol:\n{}",
+        binding.language,
         String::from_utf8_lossy(&out.stderr)
     );
-    Json::parse(String::from_utf8_lossy(&out.stdout).trim()).expect("the runtime prints JSON")
+    Some(Json::parse(String::from_utf8_lossy(&out.stdout).trim()).expect("the runtime prints JSON"))
+}
+
+/// `javac` and `java`, or `None` — the same discipline the Java tests in this
+/// crate use, and deliberately the same environment variable.
+fn jdk() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let home = std::env::var("ORBWEAVER_JAVA_HOME").unwrap_or_else(|_| {
+        "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home".to_owned()
+    });
+    let javac = std::path::Path::new(&home).join("bin/javac");
+    let java = std::path::Path::new(&home).join("bin/java");
+    (javac.is_file() && java.is_file()).then_some((javac, java))
 }
 
 /// **The gate.** Every binding speaks the protocol the ORB dispatches with.
 #[test]
 fn every_binding_publishes_the_protocol_the_orb_dispatches_with() {
     let ours = ours();
-    for (language, runner) in BINDINGS {
-        let theirs = theirs(runner);
+    let mut asked = 0;
+    for binding in BINDINGS {
+        let Some(theirs) = theirs(&binding) else {
+            println!(
+                "SKIPPED  {} — no JDK, set ORBWEAVER_JAVA_HOME. Its agreement with the \
+                 protocol the ORB dispatches with is UNMEASURED, not passing.",
+                binding.language
+            );
+            continue;
+        };
+        asked += 1;
+        let found = differences(&ours, &theirs, "");
+        let expected: Vec<String> = binding.pinned.iter().map(|d| (*d).to_owned()).collect();
+        // Equality against the pin, in both directions on purpose: a NEW
+        // divergence fails, and so does a pinned one that has gone away without
+        // being struck from the list. A pin nobody has to maintain is a floor,
+        // and a floor here would let a difference rot while reading green.
         assert_eq!(
-            differences(&ours, &theirs, ""),
-            Vec::<String>::new(),
-            "the {language} runtime and orbweaver_gen::seam do not speak one protocol.\n\
-             ours:   {ours}\n\
-             theirs: {theirs}"
+            found, expected,
+            "the {} runtime and orbweaver_gen::seam do not differ in the way this file \
+             says they do.\n  found:    {found:#?}\n  pinned:   {expected:#?}\n\
+             ours:   {ours}\ntheirs: {theirs}",
+            binding.language
         );
     }
+    assert!(asked > 0, "no binding could be asked; this gate measured nothing");
 }
 
 /// The control: a language-shaped assumption reintroduced, and the count moving.

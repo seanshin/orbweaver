@@ -112,6 +112,132 @@ public final class _Rt {
         return _subject("predeclared type", "::CORBA::Principal", _PRINCIPAL_ID);
     }
 
+    // ── the seam protocol ───────────────────────────────────────────────────
+    //
+    // The names below are the ONLY spelling of the seam's document keys
+    // anywhere in this runtime: every call this file reads and every reply it
+    // builds goes through one of them. `seamProtocol()` is assembled from
+    // exactly these, so a runtime that started reading a different key would
+    // change the document it publishes rather than drift from the one the ORB
+    // dispatches with.
+    //
+    // Compared against `orbweaver_gen::seam::protocol()` by
+    // `crates/orbweaver-gen/tests/the_seam_is_one_protocol.rs`. Java cannot
+    // import a Rust constant, which is why this is an equality across the
+    // crate boundary rather than a shared symbol — the same shape and the same
+    // reason as the refusal families above.
+    //
+    // Added 2026-09-02. Before it, this file read `_call.get("call")` and
+    // thirty-six other literals, and published no document at all, so nothing
+    // could go red when it disagreed with the ORB. The test's own header had
+    // said since it was written that a third language "adds a function and a
+    // row here, and nothing else" — Java landed on 2026-09-01 without either.
+
+    /** The protocol version this runtime speaks. */
+    //
+    // **1, not 2, and deliberately.** 2 is the version with a message from the
+    // far side (`invoke`), and this runtime does not serve one yet: a servant
+    // here cannot invoke a reference it was handed. A runtime announcing a
+    // version it does not implement is the *claimed versus observed*
+    // distinction the acceptance grid exists to refuse, one layer down. It
+    // becomes "2" in the same change that makes it true, and not before.
+    public static final String _SEAM_VERSION = "1";
+
+    /** The envelope the bridge wraps a call in. */
+    public static final String _SEAM_ENVELOPE_CALL = "call";
+
+    public static final String _SEAM_CALL_INTERFACE = "id";
+    public static final String _SEAM_CALL_OPERATION = "op";
+    // No `_SEAM_CALL_OBJECT`, and its absence is a finding rather than an
+    // oversight. Python's runtime reads the call's `oid` and a servant reaches
+    // it through `Servant.own_oid()`; **Java's `Servant` interface has no such
+    // member and `dispatchCall` never reads the key**, so a Java servant cannot
+    // tell which object of its interface it was addressed to. Publishing
+    // `call.object` here would make this document a description of the protocol
+    // rather than a statement of what this file reads — which is the one thing
+    // it must not be. The gap is named in the agreement test's pinned
+    // differences and is work, not a property.
+    public static final String _SEAM_CALL_ARGUMENTS = "args";
+    public static final String _SEAM_CALL_ONEWAY = "oneway";
+
+    public static final String _SEAM_REPLY_OK = "ok";
+    public static final String _SEAM_REPLY_RETURNS = "returns";
+    public static final String _SEAM_REPLY_OUTPUTS = "outputs";
+    public static final String _SEAM_REPLY_USER_EXCEPTION = "user_exception";
+    public static final String _SEAM_REPLY_SYSTEM_EXCEPTION = "system_exception";
+    public static final String _SEAM_REPLY_ERROR = "error";
+
+    public static final String _SEAM_EXCEPTION_ID = "id";
+    public static final String _SEAM_EXCEPTION_MEMBERS = "members";
+    public static final String _SEAM_EXCEPTION_MINOR = "minor";
+    public static final String _SEAM_EXCEPTION_COMPLETED = "completed";
+
+    /** §4.11.4's ordinals, crossing as numbers rather than as second names. */
+    public static final long _SEAM_COMPLETED_YES = 0L;
+    public static final long _SEAM_COMPLETED_NO = 1L;
+    public static final long _SEAM_COMPLETED_MAYBE = 2L;
+
+    /** The prefix a servant names one of its own objects with. */
+    public static final String _SEAM_OWN_OBJECT_PREFIX = "oid:";
+
+    /**
+     * This runtime's copy of the seam's document shape, as data.
+     *
+     * <p>Built from the constants above and from nothing else, so it is a
+     * statement about what this file actually reads rather than a description
+     * of it.
+     */
+    public static Map<String, Object> seamProtocol() {
+        Map<String, Object> _d = new LinkedHashMap<String, Object>();
+        _d.put("version", _SEAM_VERSION);
+
+        Map<String, Object> _env = new LinkedHashMap<String, Object>();
+        _env.put("call", _SEAM_ENVELOPE_CALL);
+        _d.put("envelope", _env);
+
+        Map<String, Object> _call = new LinkedHashMap<String, Object>();
+        _call.put("interface", _SEAM_CALL_INTERFACE);
+        _call.put("operation", _SEAM_CALL_OPERATION);
+        _call.put("arguments", _SEAM_CALL_ARGUMENTS);
+        _call.put("oneway", _SEAM_CALL_ONEWAY);
+        _d.put("call", _call);
+
+        Map<String, Object> _reply = new LinkedHashMap<String, Object>();
+        _reply.put("ok", _SEAM_REPLY_OK);
+        _reply.put("returns", _SEAM_REPLY_RETURNS);
+        _reply.put("outputs", _SEAM_REPLY_OUTPUTS);
+        _reply.put("user_exception", _SEAM_REPLY_USER_EXCEPTION);
+        _reply.put("system_exception", _SEAM_REPLY_SYSTEM_EXCEPTION);
+        _reply.put("error", _SEAM_REPLY_ERROR);
+        _d.put("reply", _reply);
+
+        Map<String, Object> _exc = new LinkedHashMap<String, Object>();
+        _exc.put("id", _SEAM_EXCEPTION_ID);
+        _exc.put("members", _SEAM_EXCEPTION_MEMBERS);
+        _exc.put("minor", _SEAM_EXCEPTION_MINOR);
+        _exc.put("completed", _SEAM_EXCEPTION_COMPLETED);
+        _d.put("exception", _exc);
+
+        Map<String, Object> _done = new LinkedHashMap<String, Object>();
+        _done.put("yes", Num.of(_SEAM_COMPLETED_YES));
+        _done.put("no", Num.of(_SEAM_COMPLETED_NO));
+        _done.put("maybe", Num.of(_SEAM_COMPLETED_MAYBE));
+        _d.put("completed", _done);
+
+        Map<String, Object> _ref = new LinkedHashMap<String, Object>();
+        _ref.put("own_object_prefix", _SEAM_OWN_OBJECT_PREFIX);
+        _d.put("reference", _ref);
+
+        // No `invoke` section: this runtime does not serve that message. Its
+        // absence is what `_SEAM_VERSION` being 1 means, said in data.
+        return _d;
+    }
+
+    /** Prints {@link #seamProtocol} as one JSON line, for the agreement test. */
+    public static void main(String[] _argv) {
+        System.out.println(_writeJson(seamProtocol()));
+    }
+
     // ── errors ──────────────────────────────────────────────────────────────
 
     /** Every failure this runtime raises, so a caller can catch one thing. */
@@ -1677,32 +1803,32 @@ public final class _Rt {
             _body.put(_a.name, _toJson(_a.desc, _a.value, _a.name));
         }
         LinkedHashMap<String, Object> _request = new LinkedHashMap<String, Object>();
-        _request.put("id", _id);
-        _request.put("op", _operation);
-        _request.put("args", _body);
+        _request.put(_SEAM_CALL_INTERFACE, _id);
+        _request.put(_SEAM_CALL_OPERATION, _operation);
+        _request.put(_SEAM_CALL_ARGUMENTS, _body);
         if (_oneway) {
-            _request.put("oneway", Boolean.TRUE);
+            _request.put(_SEAM_CALL_ONEWAY, Boolean.TRUE);
         }
         Map<String, Object> _reply = _invoker.invoke(_request);
 
-        if (_reply.containsKey("error")) {
-            Object _e = _reply.get("error");
+        if (_reply.containsKey(_SEAM_REPLY_ERROR)) {
+            Object _e = _reply.get(_SEAM_REPLY_ERROR);
             Object _message = _e instanceof Map ? ((Map<?, ?>) _e).get("message") : null;
             throw new TransportError(_message instanceof String ? (String) _message
                     : "the bridge reported a failure");
         }
-        if (_reply.containsKey("system_exception")) {
-            Map<?, ?> _s = (Map<?, ?>) _reply.get("system_exception");
-            Object _sid = _s.get("id");
-            Object _minor = _s.get("minor");
-            Object _completed = _s.get("completed");
+        if (_reply.containsKey(_SEAM_REPLY_SYSTEM_EXCEPTION)) {
+            Map<?, ?> _s = (Map<?, ?>) _reply.get(_SEAM_REPLY_SYSTEM_EXCEPTION);
+            Object _sid = _s.get(_SEAM_EXCEPTION_ID);
+            Object _minor = _s.get(_SEAM_EXCEPTION_MINOR);
+            Object _completed = _s.get(_SEAM_EXCEPTION_COMPLETED);
             throw new SystemException(_sid instanceof String ? (String) _sid : "",
                     _minor instanceof Num ? ((Num) _minor).asLong() : 0L,
                     _completed instanceof Num ? (int) ((Num) _completed).asLong() : 2);
         }
-        if (_reply.containsKey("user_exception")) {
-            Map<?, ?> _u = (Map<?, ?>) _reply.get("user_exception");
-            Object _uid = _u.get("id");
+        if (_reply.containsKey(_SEAM_REPLY_USER_EXCEPTION)) {
+            Map<?, ?> _u = (Map<?, ?>) _reply.get(_SEAM_REPLY_USER_EXCEPTION);
+            Object _uid = _u.get(_SEAM_EXCEPTION_ID);
             Type _t = _uid instanceof String ? TYPES.get(_uid) : null;
             if (_t == null || !_t.kind.equals("except")) {
                 // An id we cannot decode still names a contract the caller was
@@ -1712,23 +1838,23 @@ public final class _Rt {
                 // puts the peer's ordinal.
                 throw new SystemException("IDL:omg.org/CORBA/UNKNOWN:1.0", 0x4f4d0001L, 0);
             }
-            Object _members = _u.get("members");
+            Object _members = _u.get(_SEAM_EXCEPTION_MEMBERS);
             Object _raised = _fromJson(new Ref((String) _uid),
                     _members == null ? new LinkedHashMap<String, Object>() : _members, "");
             throw (UserException) _raised;
         }
-        if (!_reply.containsKey("ok")) {
+        if (!_reply.containsKey(_SEAM_REPLY_OK)) {
             throw new TransportError("the bridge answered with neither a result nor a failure");
         }
 
-        Map<?, ?> _ok = (Map<?, ?>) _reply.get("ok");
+        Map<?, ?> _ok = (Map<?, ?>) _reply.get(_SEAM_REPLY_OK);
         ArrayList<Object> _values = new ArrayList<Object>();
         boolean _isVoid = _resolve(_returns, "<return>") instanceof Prim
                 && ((Prim) _resolve(_returns, "<return>")).kind.equals("void");
         if (!_isVoid) {
-            _values.add(_fromJson(_returns, _ok.get("returns"), "<return>"));
+            _values.add(_fromJson(_returns, _ok.get(_SEAM_REPLY_RETURNS), "<return>"));
         }
-        Object _outputs = _ok.get("outputs");
+        Object _outputs = _ok.get(_SEAM_REPLY_OUTPUTS);
         Map<?, ?> _outMap = _outputs instanceof Map ? (Map<?, ?>) _outputs
                 : new LinkedHashMap<String, Object>();
         for (Out _o : _outs) {
@@ -1866,7 +1992,7 @@ public final class _Rt {
      * every refusal, every conversion — with no bridge, no socket and no peer.
      */
     public static Map<String, Object> dispatchCall(Servant _servant, Map<?, ?> _call) {
-        Object _opName = _call.get("op");
+        Object _opName = _call.get(_SEAM_CALL_OPERATION);
         if (!(_opName instanceof String)) {
             throw new ServantError("a call document needs an \"op\"");
         }
@@ -1876,7 +2002,7 @@ public final class _Rt {
             // different answer from one the servant has not implemented.
             return _systemReply("IDL:omg.org/CORBA/BAD_OPERATION:1.0", 0L, 1);
         }
-        Object _rawArgs = _call.get("args");
+        Object _rawArgs = _call.get(_SEAM_CALL_ARGUMENTS);
         Map<?, ?> _args = _rawArgs instanceof Map ? (Map<?, ?>) _rawArgs
                 : new LinkedHashMap<String, Object>();
 
@@ -1898,10 +2024,10 @@ public final class _Rt {
             return _systemReply(_r.id, _r.minor, _r.completed);
         } catch (UserException _u) {
             LinkedHashMap<String, Object> _body = new LinkedHashMap<String, Object>();
-            _body.put("id", _u._id());
-            _body.put("members", _toJson(new Ref(_u._id()), _u, "<raised>"));
+            _body.put(_SEAM_EXCEPTION_ID, _u._id());
+            _body.put(_SEAM_EXCEPTION_MEMBERS, _toJson(new Ref(_u._id()), _u, "<raised>"));
             LinkedHashMap<String, Object> _reply = new LinkedHashMap<String, Object>();
-            _reply.put("user_exception", _body);
+            _reply.put(_SEAM_REPLY_USER_EXCEPTION, _body);
             return _reply;
         }
 
@@ -1951,20 +2077,20 @@ public final class _Rt {
 
     private static Map<String, Object> _okReply(Object _returns, Map<String, Object> _outputs) {
         LinkedHashMap<String, Object> _body = new LinkedHashMap<String, Object>();
-        _body.put("returns", _returns);
-        _body.put("outputs", _outputs);
+        _body.put(_SEAM_REPLY_RETURNS, _returns);
+        _body.put(_SEAM_REPLY_OUTPUTS, _outputs);
         LinkedHashMap<String, Object> _reply = new LinkedHashMap<String, Object>();
-        _reply.put("ok", _body);
+        _reply.put(_SEAM_REPLY_OK, _body);
         return _reply;
     }
 
     private static Map<String, Object> _systemReply(String _id, long _minor, int _completed) {
         LinkedHashMap<String, Object> _body = new LinkedHashMap<String, Object>();
-        _body.put("id", _id);
-        _body.put("minor", Num.of(_minor));
-        _body.put("completed", Num.of(_completed));
+        _body.put(_SEAM_EXCEPTION_ID, _id);
+        _body.put(_SEAM_EXCEPTION_MINOR, Num.of(_minor));
+        _body.put(_SEAM_EXCEPTION_COMPLETED, Num.of(_completed));
         LinkedHashMap<String, Object> _reply = new LinkedHashMap<String, Object>();
-        _reply.put("system_exception", _body);
+        _reply.put(_SEAM_REPLY_SYSTEM_EXCEPTION, _body);
         return _reply;
     }
 
@@ -1995,7 +2121,7 @@ public final class _Rt {
             if (!(_document instanceof Map)) {
                 continue;
             }
-            Object _call = ((Map<?, ?>) _document).get("call");
+            Object _call = ((Map<?, ?>) _document).get(_SEAM_ENVELOPE_CALL);
             if (!(_call instanceof Map)) {
                 continue;
             }
@@ -2049,9 +2175,9 @@ public final class _Rt {
             }
             LinkedHashMap<String, Object> _ok = new LinkedHashMap<String, Object>();
             LinkedHashMap<String, Object> _body = new LinkedHashMap<String, Object>();
-            _body.put("returns", null);
-            _body.put("outputs", new LinkedHashMap<String, Object>());
-            _ok.put("ok", _body);
+            _body.put(_SEAM_REPLY_RETURNS, null);
+            _body.put(_SEAM_REPLY_OUTPUTS, new LinkedHashMap<String, Object>());
+            _ok.put(_SEAM_REPLY_OK, _body);
             return _ok;
         }
     }
