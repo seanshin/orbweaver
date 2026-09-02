@@ -10,6 +10,70 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**Two gates were green and neither was wrong: each was scoped to a place, and
+the rule is about a claim.** `gap_symbols.py` printed `22 symbol(s) named by gap
+columns, 22 exist in the tree` while four sites named
+`orbweaver_gen::pychild::PythonChild`, a type renamed to `SeamChild` the day
+before — it asks the question of the COMPONENTS **gap columns**, and the stale
+names were in prose, in a table row, and in a plan document.
+`cited_and_run.py` printed `0 owe a group` while **two rows of `COMPONENTS.md`**
+said `spike-rir` is *"not yet a `run_checks.sh` group"* over a group that has
+been running at `run_checks.sh:2442` against a floor of 9 — it reads spike
+**headers**, and the IOU was in the document. This is *a sweep is scoped to a
+rule; a sweep that names a file will sweep that file*, wearing symbols instead
+of shell.
+
+`spikes/doc_symbols.py` is the rule asked of the claim: every symbol this
+repository owns that a current-status document names, checked against a
+**definition** in the tree. Its first draft reported **0** over the known
+defect, because the leaf `PythonChild` still occurred in a comment recording the
+rename — an occurrence is not a definition. Three exclusions, each a reason and
+not a quieting: dated records are out of scope by construction (CLAUDE.md,
+*Where a fact lives*); a head segment we do not own is Cargo's business
+(`libc::kill`); and a rename record — ``X`` became ``Y`` — claims the name
+*changed*, which is the same refuse-versus-defer split `cited_and_run.py`
+already draws.
+
+**Control 5 is the one that mattered.** The scan derived "ours" from the crates
+that currently exist, so deleting a crate made every claim about it silently
+unchecked — green, measuring nothing, in the way this file names most often. The
+namespace is a fact about naming now, not about what survives. The control
+synthesises its tree rather than pointing at today's, and runs the shipped
+script's own bytes.
+
+**The four sentences this found, corrected where they live.** `COMPONENTS.md`'s
+`orbweaver-gen` row contradicted itself — *"the second of those landed and the
+first did not"* four clauses before the paragraph recording the first arriving —
+and still opened *"Java is clients only … all three servant cells are counted
+`SKIPPED`"* over a grid that is 8 of 8. Re-measured 2026-09-02 rather than
+reasoned about: python and java each run 8 cells, 0 skipped, 0 red, with all
+four `direction × order` cells read off the wire from a foreign peer in both
+languages. What is left is versions, not orders — client GIOP 1.0 is read by no
+cell in either language.
+
+**A second sighting of the `os error 35` transient, in a different group.**
+Harness run 83 failed `wire hardening — CancelRequest against both peers` with
+*"GIOP 1.0: ping failed before any cancel: io: Resource temporarily unavailable
+(os error 35)"* — the same errno the assumption-A transient carries, and the
+first time it has appeared outside that group. Re-taken standalone against a
+freshly started omniORB fixture: **6 runs, 6 passes**. Run 84 over the same tree
+was green. **Not diagnosed** — it has not been made to reproduce, and the
+CLAUDE.md note that a completed client `connect` does not mean the server can
+accept yet is a candidate and not a finding. What is now known that was not
+before: it is not specific to one group.
+
+*`os error 35` 과도 현상의 두 번째 목격, 다른 그룹에서. 단독 재측정 6회 전부 통과,
+같은 트리의 84번 실행은 초록. **진단되지 않았다** — 재현시키지 못했고, 후보는
+후보일 뿐이다. 새로 알게 된 것은 하나다: 이것은 한 그룹에 국한되지 않는다.*
+
+*두 게이트가 초록이었고 둘 다 틀리지 않았다 — 각자 **장소**에 범위를 맞췄고,
+규칙은 **주장**에 대한 것이다. 첫 초안은 알려진 결함 위에서 0을 냈다: 이름이
+바뀐 것을 기록한 주석에 그 잎이 남아 있었기 때문이며, **출현은 정의가 아니다.**
+대조군 5가 결정적이었다 — "우리 것"을 현재 존재하는 크레이트에서 끌어냈으므로,
+크레이트를 지우면 그에 대한 모든 주장이 조용히 검사되지 않았다. 그리고 문서는
+스스로 모순되어 있었다: "둘 중 두 번째가 착지했고 첫 번째는 아니다"라고 적은 네
+절 뒤에서, 바로 그 첫 번째가 도착한 것을 기록하고 있었다.*
+
 **Python stops claiming: every byte order it reports is now read off the wire.**
 Both `claimed-only` columns are empty. The servant cell put the recording relay
 — already in `python_servant_wire.rs` for the JacORB test one function over — in

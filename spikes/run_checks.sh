@@ -5102,6 +5102,44 @@ else
   esac
 fi
 
+# ── Every symbol a current-status document names is defined in the tree ─────
+#
+# The sibling of the group above, and found the same way. On 2026-09-02 four
+# sites named `orbweaver_gen::pychild::PythonChild`, a type renamed to
+# `SeamChild` the day before — and `gap_symbols.py` printed `22 symbol(s) named
+# by gap columns, 22 exist in the tree` throughout, because it asks the question
+# of the COMPONENTS **gap columns** and the stale names were in prose, a table
+# row and a plan document. In the same file two rows still said `spike-rir` is
+# "not yet a `run_checks.sh` group" over a group that runs at line 2442, while
+# `cited_and_run.py` reported `0 owe a group` — it reads spike HEADERS, and the
+# IOU was in the document.
+#
+# Both gates were green and neither was wrong: each was scoped to a PLACE, and
+# the rule is about a CLAIM. That is *a sweep is scoped to a rule; a sweep that
+# names a file will sweep that file*, wearing symbols instead of shell.
+#
+# The scan's three exclusions are reasons, not quietings, and its header states
+# them. The control runs first and SYNTHESISES its tree: control 5 is the one
+# that matters, because the first draft derived "ours" from what currently
+# exists and therefore went silent exactly when a crate was deleted — green,
+# measuring nothing, in the way this file names most often.
+hr "every symbol a current-status document names is defined in the tree"
+ds_ctl_out=$(bash spikes/doc_symbols_control.sh 2>&1); ds_ctl_rc=$?
+if [ "$ds_ctl_rc" -ne 0 ]; then
+  echo "  FAIL the symbol scan's control did not pass ($(rc_says "$ds_ctl_rc")) — the"
+  echo "       scan's silence over the tree would mean nothing"
+  diag_out "$ds_ctl_out" 12
+  fail_total=$((fail_total+1))
+else
+  ds_out=$(python3 spikes/doc_symbols.py --root . 2>&1); ds_rc=$?
+  case "$ds_rc" in
+    0) echo "  ok   $(sed -n '2p' <<<"$ds_out" | sed 's/^ *ok *//')"
+       echo "       $(tail -1 <<<"$ds_ctl_out")" ;;
+    *) printf '%s\n' "$ds_out" | sed 's/^/  /'
+       fail_total=$((fail_total+1)) ;;
+  esac
+fi
+
 # ── Every ORB-creating fixture leaves the way the one home says ─────────────
 #
 # `spikes/orbexit.py` is that home: flush, then `os._exit`, skipping the

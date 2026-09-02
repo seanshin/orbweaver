@@ -236,6 +236,26 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   그리고 **규칙이 묻는 단위가 항상 파일인 것은 아니다** — 프로그램에 대한 규칙을
   파일에 대고 물으면, 파일이 품은 모든 프로그램 위에서 초록이 된다. 문자열이
   아니라 **기동**에 물어야 하며, 그 재작성의 첫 판도 대조군이 죽였다.*
+  **And two gates can be green with neither being wrong, when each is scoped to
+  a place and the rule is about a claim.** Measured 2026-09-02: `gap_symbols.py`
+  printed `22 symbol(s) named by gap columns, 22 exist in the tree` while four
+  sites named a type renamed the day before — it asks its question of the gap
+  **columns**, and the stale names were in prose, a table row and a plan
+  document. `cited_and_run.py` printed `0 owe a group` while **two rows of
+  `COMPONENTS.md`** said a spike was *"not yet a `run_checks.sh` group"* over a
+  group that had been running for days — it reads spike **headers**, and the IOU
+  was in the document. Neither gate could have caught the other's miss and
+  neither was mistuned. `spikes/doc_symbols.py` asks it of the claim, and its
+  drafts are the lesson: the first reported **0 over the known defect**, because
+  the renamed leaf still occurred in a comment recording the rename — **an
+  occurrence is not a definition**; the second went silent whenever a crate was
+  deleted, having derived what-we-own from what currently exists, and only
+  control 5 said so; the third reported a rename record whose verb had wrapped
+  to the next line, because it read the document line by line and markdown wraps
+  where it likes. *두 게이트가 초록이면서 둘 다 틀리지 않을 수 있다 — 각자
+  **장소**에 범위를 맞추고 규칙은 **주장**에 대한 것일 때다. 초안 셋이 교훈이다:
+  **출현은 정의가 아니고**, "우리 것"을 현재 존재하는 것에서 끌어내면 지워질 때
+  조용해지며, 마크다운은 아무 데서나 줄을 바꾼다.*
 - **Never edit a script while it is running.** `bash` reads a script
   incrementally, so an edit that shifts byte offsets can make a running shell
   resume at the wrong place. Done 2026-08-25 — three gate repairs written into

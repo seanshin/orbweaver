@@ -337,7 +337,7 @@ call travelling the other way through `orbweaver_gen::seam`.
 
 **The `SKIPPED` half is done (2026-08-30) and the leak half is not.** That leg
 waited on *a Python servant mountable in a server the test owns*, which
-`orbweaver_gen::pychild::PythonChild` now is;
+`orbweaver_gen::pychild::SeamChild` now is;
 `crates/orbweaver-gen/tests/what_a_caller_can_tell_about_a_language.rs` swaps
 Rust for Python behind one reference on one open connection, with its control
 run by `leak_controls.sh`. Counted skips went 16 to 15 and every one of the five
