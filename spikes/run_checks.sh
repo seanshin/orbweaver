@@ -5259,6 +5259,26 @@ if [ -x "$JH_CHECK/bin/javac" ] && [ -x "$JH_CHECK/bin/java" ]; then
     cargo_test_diag "$jow_out"
     fail_total=$((fail_total+1))
   fi
+
+  # The leak found by writing `seamProtocol()`: a Java servant under a home
+  # could not read which object it was addressed to, so it answered every
+  # object of its interface identically — and a caller holding two references
+  # could tell, from what the servant could DO, that it was not a Rust or a
+  # Python one. D029 §6.1's Language row. It is here rather than in
+  # `java.manifest` on purpose: adding a `clause` row would be a second nudge at
+  # D032 §4's acceptance definition, and this plan flagged that question once
+  # and does not get to answer it by repetition.
+  jmo_out=$(cargo test -q -p orbweaver-gen --test a_java_servant_serving_many_objects 2>&1)
+  jmo_rc=$?
+  jmo_line=$(grep -E '^test result:' <<<"$jmo_out" | head -1)
+  if [ "$jmo_rc" -eq 0 ] && [ -n "$jmo_line" ]; then
+    echo "  ok   $jmo_line — one Java servant under one home told two"
+    echo "       objects apart, and one with no home saw the default object"
+  else
+    echo "  FAIL a Java servant could not tell its objects apart ($(rc_says "$jmo_rc"))"
+    cargo_test_diag "$jmo_out"
+    fail_total=$((fail_total+1))
+  fi
 else
   skip absent "@$(date +%F)" \
     "no JDK at $JH_CHECK — whether a Java servant answers through a Dispatch, and" \

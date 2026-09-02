@@ -89,23 +89,18 @@ const BINDINGS: [Binding; 2] = [
     Binding {
         language: "java",
         runner: Runner::Java,
-        // In the order `differences` renders them, which is sorted by path.
-        pinned: &[
-            // Found by writing `seamProtocol()`, not by looking for it: Java's
-            // `Servant` has no member for the call's object and `dispatchCall`
-            // never reads the key, so a Java servant cannot tell which object of
-            // its interface it was addressed to, where a Python one can through
-            // `own_oid()`. Publishing the key would have made this document a
-            // description of the protocol instead of a statement of what the
-            // file reads — the one thing it must not be. Work, not a property.
-            "call.object: \"oid\" vs absent",
-            // Two more lines stood here until 2026-09-02 — the absent `invoke`
-            // section and `version: "2" vs "1"` — and PLAN-SEAM-JAVA.md S3-S4
-            // struck them by making them false. **The test refused to let them
-            // linger**: with the work done and the pin unedited it failed,
-            // naming both as pinned-but-no-longer-found. That is what an exact
-            // pin buys over a floor, and it was not hypothetical.
-        ],
+        // **Empty, and it emptied in one day.** Three lines stood here on
+        // 2026-09-02 and all three are struck, each by the work that made it
+        // false rather than by anyone editing this list first: the absent
+        // `invoke` section and `version: "2" vs "1"` went with
+        // PLAN-SEAM-JAVA.md S3-S4, and `call.object` went with the leak it
+        // turned out to name.
+        //
+        // Each time, **the test refused to let a struck line linger**: with the
+        // work done and this list unedited it failed, naming the difference as
+        // pinned-but-no-longer-found. That is what an exact pin buys over a
+        // floor, and it was not hypothetical — it happened three times.
+        pinned: &[],
     },
 ];
 

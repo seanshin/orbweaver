@@ -165,15 +165,21 @@ public final class _Rt {
 
     public static final String _SEAM_CALL_INTERFACE = "id";
     public static final String _SEAM_CALL_OPERATION = "op";
-    // No `_SEAM_CALL_OBJECT`, and its absence is a finding rather than an
-    // oversight. Python's runtime reads the call's `oid` and a servant reaches
-    // it through `Servant.own_oid()`; **Java's `Servant` interface has no such
-    // member and `dispatchCall` never reads the key**, so a Java servant cannot
-    // tell which object of its interface it was addressed to. Publishing
-    // `call.object` here would make this document a description of the protocol
-    // rather than a statement of what this file reads — which is the one thing
-    // it must not be. The gap is named in the agreement test's pinned
-    // differences and is work, not a property.
+    /**
+     * Which object of that interface the call was addressed to; "" is the
+     * default object. A servant reaches it through `ownOid()`.
+     *
+     * <p>Absent from this runtime until 2026-09-02, and it was a **leak rather
+     * than a missing feature**: the Rust side puts this key in every call
+     * document a servant with a home receives, a Rust servant reads it through
+     * `<I>Target::oid()` and a Python one through `own_oid()`. A Java servant
+     * that could not read it answered every object of its interface
+     * identically — so a caller holding two references could tell, from what
+     * the servant could do, that it was written in Java. That is D029 §6.1's
+     * Language row. Found by writing `seamProtocol()`, which must state what
+     * this file reads.
+     */
+    public static final String _SEAM_CALL_OBJECT = "oid";
     public static final String _SEAM_CALL_ARGUMENTS = "args";
     public static final String _SEAM_CALL_ONEWAY = "oneway";
 
@@ -215,6 +221,7 @@ public final class _Rt {
         Map<String, Object> _call = new LinkedHashMap<String, Object>();
         _call.put("interface", _SEAM_CALL_INTERFACE);
         _call.put("operation", _SEAM_CALL_OPERATION);
+        _call.put("object", _SEAM_CALL_OBJECT);
         _call.put("arguments", _SEAM_CALL_ARGUMENTS);
         _call.put("oneway", _SEAM_CALL_ONEWAY);
         _d.put("call", _call);
@@ -2088,6 +2095,20 @@ public final class _Rt {
         Map<String, Op> _idlOperations();
 
         /**
+         * Told which object this call was addressed to, before anything else.
+         *
+         * <p>Set by {@link _Rt#dispatchCall} on every call, so a servant that
+         * raises still knew who it was. **No default**, deliberately: a default
+         * would answer `""` for every object of a servant serving many, which
+         * is the same shape as a `knows` that answers `true` for every key —
+         * the defect D036 deleted rather than documented.
+         */
+        void _idlOid(String _oid);
+
+        /** What the last call was addressed to; "" is the default object. */
+        String _idlOid();
+
+        /**
          * Calls one operation. `argv` holds the `in` and `inout` values in
          * declaration order; the return is the declared result, or an
          * `Object[]` of the result followed by the `out` and `inout` values
@@ -2152,6 +2173,13 @@ public final class _Rt {
      * every refusal, every conversion — with no bridge, no socket and no peer.
      */
     public static Map<String, Object> dispatchCall(Servant _servant, Map<?, ?> _call) {
+        // Which object, before anything else, so a servant that raises still
+        // knew who it was. Always present — "" for a servant serving one
+        // object — so there is no absence for a servant author to have a rule
+        // about.
+        Object _oid = _call.get(_SEAM_CALL_OBJECT);
+        _servant._idlOid(_oid instanceof String ? (String) _oid : "");
+
         Object _opName = _call.get(_SEAM_CALL_OPERATION);
         if (!(_opName instanceof String)) {
             throw new ServantError("a call document needs an \"op\"");

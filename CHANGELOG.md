@@ -10,6 +10,51 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**A Java servant can tell which object it was addressed to, and that was a leak
+rather than a missing feature.** `ForeignServant::with_home` has said since
+homes existed that *every call document carries `CALL_OBJECT`, so the far side
+knows which object it is*. A Rust servant read it through `<I>Target::oid()`, a
+Python one through `own_oid()`, and **a Java one could not read it at all**: its
+`Servant` interface had no member for it and `dispatchCall` never looked. So a
+Java servant answered **every object of its interface identically**, and a
+caller holding two references could tell — from what the servant could *do*,
+not from an address — that it was written in Java. That is D029 §6.1's Language
+row, which is why this ranked above the binding grid's unread GIOP versions:
+priority zero puts a leak above coverage.
+
+**It was found by writing a document, not by looking for it.** `seamProtocol()`
+must state *what the file reads*, so it could not honestly publish
+`call.object` — and the absence was the leak wearing a missing key. The
+agreement test carried it as a pinned difference for exactly as long as it was
+true.
+
+**The pin is empty now, and it emptied in one day.** Three differences stood in
+it on 2026-09-02 and all three were struck by the work that made them false —
+never by editing the list first. Each time the test **refused to let a struck
+line linger**, failing with the difference named as pinned-but-no-longer-found.
+That is what an exact pin buys over a floor, and it happened three times rather
+than being argued once.
+
+**No default, deliberately.** `_idlOid` is on the `Servant` interface with no
+default implementation and the emitter generates it, because a default would
+answer `""` for every object of a servant serving many — the same shape as a
+`knows` that answers `true` for every key, which D036 deleted rather than
+documented.
+
+**The control reproduces this morning's leak exactly**: with `dispatchCall` made
+to hand `""` instead of the key it read, the servant answers `oid=` for both
+objects and the test fails naming it. The second test — a servant with **no**
+home sees `""` — passes under that control too, correctly: it is the other half
+and does not distinguish, which is why both are asserted rather than one.
+
+*자바 서번트가 자기가 어느 객체로 불렸는지 안다 — 이것은 없던 기능이 아니라
+**누출**이었다. 러스트는 `<I>Target::oid()`로, 파이썬은 `own_oid()`로 읽던 키를
+자바만 못 읽어서 **모든 객체에 똑같이 답했고**, 호출자는 서번트가 **할 수 있는
+일**로부터 그것이 자바임을 알 수 있었다. 0순위가 커버리지보다 구멍을 앞에 둔다.
+**찾으려 해서 찾은 것이 아니라 문서를 쓰다가 나왔다.** 핀은 하루 만에 비었고, 세 번
+모두 목록을 먼저 고쳐서가 아니라 그것을 거짓으로 만든 작업이 지웠다 — 매번 테스트가
+"고정되었으나 더 이상 발견되지 않음"으로 거절했다.*
+
 **A Java servant invokes a reference it was handed, and §1's last work item is
 closed.** D038 option A now has all three implementations. `PLAN-SEAM-JAVA.md`
 S3–S6 landed as one batch; the plan is complete and marked so.

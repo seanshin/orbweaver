@@ -1476,6 +1476,27 @@ fn emit_servant(
     let _ = writeln!(s, "    public static final String _ID = {};", java_str(id));
     let _ = writeln!(s, "    public static final String _NAME = {};", java_str(name));
     let _ = writeln!(s);
+    // Which object this call was addressed to. The seam's half of
+    // `<I>Target::oid()`, and the Python runtime's `own_oid()`: a servant with
+    // a home serves many objects and every call document says which. Generated
+    // here rather than defaulted in the interface, because a default would
+    // answer "" for every object of a servant serving many — the shape D036
+    // deleted from `knows` rather than documented.
+    let _ = writeln!(s, "    private String _oid = \"\";");
+    let _ = writeln!(s);
+    let _ = writeln!(s, "    @Override");
+    let _ = writeln!(s, "    public void _idlOid(String _o) {{ this._oid = _o; }}");
+    let _ = writeln!(s);
+    let _ = writeln!(s, "    @Override");
+    let _ = writeln!(s, "    public String _idlOid() {{ return this._oid; }}");
+    let _ = writeln!(s);
+    javadoc(
+        &mut s,
+        "    ",
+        "Which object of this interface the current call was addressed to.\n\n         `\"\"` is the default object, and it is what a servant serving one object\n         always sees. Valid while a call is being answered; a servant that serves\n         many objects under one home reads it to tell them apart.",
+    );
+    let _ = writeln!(s, "    public String ownOid() {{ return this._oid; }}");
+    let _ = writeln!(s);
     let _ = writeln!(s, "    private static final java.util.Map<String, _Rt.Op> _OPS =");
     let _ = writeln!(s, "            new java.util.LinkedHashMap<String, _Rt.Op>();");
     let _ = writeln!(s, "    static {{");
