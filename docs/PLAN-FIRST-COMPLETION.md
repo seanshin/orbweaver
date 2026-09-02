@@ -376,6 +376,89 @@ read it as a claim about **that decision's status**. Third time in three days
 that decision-status vocabulary has been used here for something that is not a
 decision's status; the gate has caught all three.)
 
+**The plan for what is left, made 2026-09-02.** D038 was **APPROVED
+2026-08-31**, so the precondition this section names — *the owner's answer
+before the work starts* — is met, and this is no longer blocked.
+
+**Measured before planning, not assumed.** Two of the protocol's three
+implementations already carry the invoke direction:
+
+| | what carries it |
+|---|---|
+| **Rust** | `seam.rs` — `resolve_nested`, `nested_refusal`, `PROTOCOL_VERSION = "2"`, `ENVELOPE_INVOKE`/`ENVELOPE_ANSWER`, and `perform_call` lifted out of `py_bridge` so one function frames every reply |
+| **Python** | `python_rt.py` — `ObjectRef.invoke` → `_nested_invoke` → `_NESTED_CHANNEL`, with the refusal for *invoked outside a dispatch* written out |
+| **Java** | **nothing.** A grep for the envelope names in `java_rt.java` returns no line. Its `ObjectRef` holds `handle` and `typeId` and has no `invoke` |
+
+So what is left of §1's largest item is **one implementation**, and the two that
+exist are the specification for it. That is a smaller item than this section has
+been carrying, and it is smaller because the work already done was done — not
+because the sizing changed.
+
+**Why it ranks here.** It is the only remaining §1 item that is *work* rather
+than a decision: L1, L2 and L5 are done, L3's residue was downgraded to a
+capability on measurement, and L6's shape is a named floor under an approved
+decision. D039 keeps §1.9's first rank because it is the only item that would
+move a criterion row, and it awaits the owner — this one does not.
+
+**The work, in order, each step with the measurement that would refuse it.**
+
+1. **`ObjectRef.invoke` in Java, and the channel installed for the duration of
+   one dispatch.** Measurement: a Java servant invokes a reference that arrived
+   as an argument, and answers from the result. Control: invoking *outside* a
+   dispatch must be refused — a handle is not a proxy — and the control must
+   show the refusal, not merely the success.
+2. **The refusal sentence must not be retyped.** Three implementations now say
+   the same things about the same protocol, and `CLAUDE.md`'s rule is that a
+   sentence many layers say is a fact with one home. The Java half takes its
+   refusal text from the seam's published constant, or the batch has created a
+   third copy of a sentence that has already gone stale once in this repository.
+3. **The rule the deadlock forces**, which D038 §3 fixes: the nested call goes
+   on a connection the servant owns, **never** the one the request arrived on.
+   Measurement: a probe that would deadlock under the wrong choice, run to a
+   deadline rather than to a hang.
+4. **Version honesty.** `PROTOCOL_VERSION` is `"2"` and Rust already answers a
+   v1 peer honestly through `ask_resolving`'s default. Java must not announce
+   v2 until it serves v2 — a runtime claiming a version it does not implement
+   is the *claimed vs observed* distinction the binding grid was built to
+   refuse, one layer down.
+5. **The grid gains the cell**, so this is measured by the suite every run
+   rather than by a test written once.
+
+**What must not happen.** No direct dial from the Java side. The far side never
+learns an address — that is §4.7 and it is the reason `invoke` exists rather
+than a `connect`. A Java-only shortcut that dialled would pass every test in
+step 1 and delete the property the row is about.
+
+**What would make this plan wrong.** If the Java serving half cannot be made
+re-entrant without a second thread, step 3 stops being a rule and becomes a
+redesign, and D038's three invariants would have to be re-read before any code
+is written. That is checkable at step 1 and is the reason step 3 is not merged
+into it.
+
+**What it excludes.** It does not add a fourth language, and it does not touch
+the handle table's shape beyond what D038 already approved.
+
+**And one smaller item, not a leak.** The binding suite's own UNMEASURED lines,
+re-measured 2026-09-02: **client GIOP 1.0 is read by no cell in either
+language**, python's client has never read 1.1, and python's servant has never
+read 1.0. The reason the client cells stop at 1.0 is that the driver carries
+wide text and *GIOP 1.0 cannot carry `wchar`/`wstring` (§9.3.1.6)* — a **fixture
+choice, not a protocol limit** — so a non-wide contract at 1.0 closes it. This
+is coverage, not transparency, and it is ranked below L4 for that reason.
+
+*2026-09-02에 세운, 남은 것에 대한 계획. D038이 2026-08-31에 **승인**되었으므로 이
+절이 말하는 전제 — *작업 전에 소유자의 답* — 은 충족되었다. 계획 전에 측정했다:
+프로토콜의 세 구현 중 **둘은 이미 반대 방향을 싣고 있고**(Rust의 `resolve_nested`,
+Python의 `ObjectRef.invoke`), **Java에는 한 줄도 없다**. 그러므로 §1의 가장 큰
+항목에 남은 것은 **구현 하나**이며, 이미 있는 둘이 그것의 명세다. 순서: (1) Java의
+`invoke`와 디스패치 동안만 설치되는 채널 — 대조군은 **디스패치 밖 호출의 거절**을
+보여야 한다, (2) **거절 문장을 다시 적지 않는다**(한 사실, 한 집), (3) 교착이
+강제하는 규칙 — 요청이 도착한 연결이 아니라 서번트가 소유한 연결로, (4) **버전
+정직성** — 구현하지 않은 버전을 알리지 않는다, (5) 그리드에 칸을 추가해 매 실행
+측정. **하면 안 되는 것**: Java 쪽에서의 직접 다이얼. 저쪽은 주소를 배우지 않는다.
+**이 계획이 틀리는 경우**: Java 서빙 절반이 두 번째 스레드 없이 재진입 불가능하다면
+(3)은 규칙이 아니라 재설계이고, D038의 불변식을 다시 읽어야 한다.*
+
 *L4 — `SKIPPED` 절반은 2026-08-30에 끝났다(다섯 투명성 전부 살아 있는 호출자로
 `MEASURED`). 남은 것은 테스트가 아니라 **프로토콜 추가**다: 도착한 참조를 호출하려면
 반대 방향으로 가는 호출이 필요한데 seam에 그 메시지가 없다. §1에 남은 가장 큰 항목이다.*
@@ -727,8 +810,10 @@ to record when it is made.
 |---|---|---|
 | 1 | **D039** | the only item that would move a criterion row; awaits the owner |
 | 2 | **B, the classification** | ~~everything else is chosen by reading these documents, and two kinds of `PROPOSED` are spelled the same~~ — **done 2026-09-02**, and its own §B holds the table. It came out a repair rather than a report: 16 of 24 are executed in fact, so the ranking below stands |
-| 3 | **C, the two cells** | cheap, and honest about buying evidence rather than coverage |
-| 4 | **D and E** | conditions and a costed choice, not work |
+| 3 | **C, the two cells** | ~~cheap, and honest about buying evidence rather than coverage~~ — **done**: both grids run 8 cells, 0 skipped, 0 red, and the C cells are in both |
+| 4 | **L4's third implementation** | D038 was approved 2026-08-31, so §1's largest item is unblocked and is now **one implementation** — Rust and Python carry the invoke direction, Java carries none of it. The only §1 item left that is work rather than a decision; its plan is in L4 |
+| 5 | **the grid's unread versions** | client GIOP 1.0 in both languages, python client 1.1, python servant 1.0 — the suite's own UNMEASURED lines. Coverage, not transparency, so it ranks under L4 |
+| 6 | **D and E** | conditions and a costed choice, not work |
 
 **What would make this plan wrong.** If the classification in B finds that the
 24 are all genuinely open, then B is a report rather than a repair and C should
@@ -742,6 +827,13 @@ with a residue that is work rather than a decision, 2 in effect by default — a
 **7 genuinely await an answer**, with 1 (D014) recorded as unclassifiable from
 the tree rather than guessed. Had it gone the other way the ranking would have
 had to change; it did not, so C keeps its place.
+
+*순서 갱신(2026-09-02): 2번(B)과 3번(C)은 **끝났다**. 새 4번은 **L4의 세 번째
+구현** — D038이 2026-08-31에 승인되어 §1의 가장 큰 항목이 풀렸고, 이제 남은 것은
+**구현 하나**다(Rust와 Python은 반대 방향을 싣고 있고 Java에는 한 줄도 없다).
+결정이 아니라 작업인, §1에 남은 마지막 항목이다. 새 5번은 그리드가 스스로
+미측정이라 적은 GIOP 버전들 — 투명성이 아니라 커버리지이므로 L4 아래에 둔다.
+1번(D039)은 그대로다: 기준의 행을 움직일 유일한 항목이고, 소유자를 기다린다.*
 
 *이 계획이 틀리는 경우: B의 분류가 24개 전부 진짜로 열려 있다고 밝히면 B는 수리가
 아니라 보고이고 C가 먼저였어야 한다. 그것은 B를 해 보면 확인된다 — §1.0이 L1에
