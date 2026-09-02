@@ -13,7 +13,7 @@ already made; where this document would need one, it says so and stops.
 
 > **Priority zero.** The criterion's home is
 > [`D029`](decisions/D029-what-a-complete-orb-would-mean.md) §6 and is **not
-> restated here**. How this work bears on it is in §7, and the honest answer is
+> restated here**. How this work bears on it is in §9, and the honest answer is
 > narrower than "it closes a row".
 
 ---
@@ -45,6 +45,14 @@ Measured 2026-09-02, against the tree. Every row here was read, not recalled.
 So what remains of §1's largest item is **one implementation**, and the two that
 exist are its specification. It is smaller than L4 has been carrying — because
 the work already done was done, not because the sizing changed.
+
+**And smaller again than that, checked rather than hoped.** A reference
+*arriving* at a Java servant already becomes an `ObjectRef`:
+`java_rt.java:1379` builds one from the incoming `_ref`/`_type` pair. So the
+**emitter is not in scope** — `java.rs` needs no change for the arrival, and
+what is missing is a method on a class that already exists and already holds the
+handle. The plan below reflects that; an earlier reading of this section did
+not, and would have scheduled emitter work that is already done.
 
 *2026-09-02 측정. 세 구현 중 **둘은 이미 싣고 있고 Java에는 한 줄도 없다.** 남은
 것은 구현 하나이며, 이미 있는 둘이 그것의 명세다. 항목이 작아진 이유는 사이징이
@@ -108,12 +116,29 @@ measurement is "it compiles" is not on this list.
 Java gains `seamProtocol()`, assembled **from the constants it reads with**, and
 `BINDINGS` gains its row.
 
+**S1 is larger than the test's own extension rule says, and this is the review's
+sharpest finding.** That rule — *a binding in a third language adds a function
+and a row here, and nothing else* — **is not implemented.** `theirs()` hardcodes
+`Command::new("python3")` and writes `python::RUNTIME` to `_rt.py` in a temp
+directory; the row's second field is a **Python `-c` snippet**. A Java row
+cannot be added without first making the runner polymorphic: an interpreter, the
+runtime file it needs written, and how it is invoked.
+
+So the aspiration and the code disagree, and the aspiration is the one in the
+header where a reader finds it. **S1 first makes the rule true**, then adds the
+row — otherwise every later language pays this again and the header goes on
+promising something no one has done.
+
 - **Measurement:** the test names the difference between Java's document and
   `seam::protocol()`. **It is expected to be red**, and that is the step's
   product: the gap becomes visible before anything is built for it.
 - **Control:** the test already refuses a vacuous pass — its header records that
   an emptied `BINDINGS` or a `protocol()` reduced to `{}` must fail (:148). Run
   it, do not cite it.
+- **Second control, new:** after `theirs()` is polymorphic, the **Python row must
+  still pass unchanged**. A refactor that broke the one working row while adding
+  a second would be caught by nothing else.
+- **The absent-JDK question is decided here, not discovered later** — see §5.4.
 
 ### S2 — Java's protocol keys stop being literals
 
@@ -128,18 +153,31 @@ from **those**.
 - **Measurement:** change one constant; the test goes red. Restore it; green.
   Both directions, because only the red one is evidence.
 
-### S3 — the serve loop becomes *reply-or-request*
+### S3 — a nested read that shares the one reader
 
-`serveOnPipes` reads a document and expects a call. Under D038 the next document
-may be the **answer** to a nested request this servant itself sent. The loop's
-question changes from *read the reply* to *read the next document, which may be
-a reply or may be a request* — the sentence `seam.rs`'s `ENVELOPE_INVOKE` doc
-already uses.
+**This step was wrong in the first draft of this plan and is corrected here.**
+It said the top-level serve loop must become *reply-or-request*. Reading
+`python_rt.py`'s `NestedChannel.invoke` shows it must not: the child writes its
+`invoke`, then **loops on its own read** until an `answer` arrives, and a `call`
+reaching that loop is refused **by name** — *the seam carries one conversation
+at a time*. The top-level loop keeps reading calls and only calls.
 
+What Java needs is therefore narrower and structural rather than conceptual:
+`serveOnPipes` (:1985) builds its `BufferedReader` and `PrintStream` as
+**locals**, so a nested channel has nothing to read from. They are hoisted so
+one reader serves both loops.
+
+- **The hazard is two readers over one stream, not threads.** A second
+  `BufferedReader` over `System.in` would buffer ahead and consume lines the
+  other loop is owed — a defect that appears as a hang or as a document arriving
+  at the wrong loop, and that no single-message test would show.
 - **Measurement:** a document arriving in the wrong envelope is refused **by
-  name**, not ignored. Java's loop today `continue`s past anything that is not a
-  `call`, which would swallow an `answer` silently.
-- **Risk gate:** see §5.1. This is the step where the plan can be wrong.
+  name**. Java's loop today `continue`s past anything that is not a `call`,
+  which would swallow an `answer` silently — the same silence Python refuses in
+  words.
+- **Control:** a nested call followed by a second ordinary call on the same
+  child, so the reader is proven to have been left in a usable state. One
+  exchange proves nothing about the stream position.
 
 ### S4 — `ObjectRef.invoke`, and the channel that exists only during a dispatch
 
@@ -153,6 +191,19 @@ after.
   constant. Three implementations now say the same things about the same
   protocol, and `CLAUDE.md`'s rule is that a sentence many layers say is a fact
   with one home — one of those sentences has already gone false once here.
+- **What it returns is a boundary, and Java makes it louder than Python did.**
+  `python_rt.py`'s `_reply_or_raise` says it out loud: the nested result is
+  **AnyJSON and not a mapped value**, because a client knows its callee's
+  contract through generated descriptors and a servant invoking a handle it was
+  *handed* does not. In Java that is an `Object`/`Map` and **cannot be narrowed
+  by a generated stub** — so the plan states it rather than letting a reader
+  expect a typed result and find one that is not. This is a property of the
+  boundary, not a Java shortfall.
+- **A nested call that raises comes back as an answer the servant can catch**,
+  which is D038 §3's third invariant and the reason a foreign servant can
+  implement a `raises` clause on an operation it calls. Java's `invoke` maps the
+  same four branches Python's does — `error`, `system_exception`,
+  `user_exception`, `ok` — or the invariant is only half held.
 
 ### S5 — the measurement that makes it a Language claim
 
@@ -166,15 +217,37 @@ and invokes it.
   Java servant refuses unless the value it read back is the expected one (so the
   answer travelled back **intact**, not merely that a connection happened).
 
-### S6 — the grid gains the cell
+### S6 — the suite gains a `clause` row, and the acceptance question is flagged
 
-So this is measured by the suite **every run** rather than by a test written
-once.
+`spikes/bindings/java.manifest` already has the row type this needs:
+`clause <name> <command>` — *clauses 3/4/5, no peer and no wire* — which is
+where a property of the **emitter and its runtime** lives. A nested invoke is
+that shape, not a `(direction × peer)` cell, and the first draft of this plan
+said "the grid gains the cell" without saying which kind.
+
+**But whether the acceptance definition gains a clause is not this plan's to
+decide.** `spikes/bindings/AXES` is *the ONE home for these names* and it is
+built from **D032 §4's six clauses**. A nested invoke is not among them. So:
+
+- this plan lands the row as a named `clause` measured every run, and
+- **flags** that calling it part of *what a language binding must do to be one*
+  would extend D032 §4 — which D032 owns, and which this document does not
+  assert by adding a row.
+
+The distinction matters because the alternative is quiet: a seventh clause that
+arrived because somebody added a line is an acceptance standard nobody agreed
+to, and D032's whole argument is that a binding is accepted by passing a suite.
 
 *각 단계는 그것을 **거절할** 측정을 함께 적는다. 측정이 "컴파일된다"인 단계는 이
-목록에 없다. S1은 **빨간 테스트가 산출물**이다 — 짓기 전에 구멍을 보이게 만든다.
-S2가 없으면 S1의 행은 손으로 쓴 문서와 Rust의 일치를 주장하는 **매너 좋은 두 번째
-사본**이 된다. S4의 거절 문장은 다시 적지 않는다.*
+목록에 없다. S1은 **빨간 테스트가 산출물**이며, 검토가 밝힌 대로 그 테스트의 확장
+규칙("함수 하나와 행 하나")은 **구현되어 있지 않다** — `theirs()`가 `python3`을
+하드코딩하므로 S1은 먼저 그 규칙을 참으로 만든다. S2가 없으면 S1의 행은 손으로 쓴
+문서와 Rust의 일치를 주장하는 **매너 좋은 두 번째 사본**이 된다. S3는 초안이
+틀렸다: 최상위 루프는 그대로이고, 필요한 것은 **하나의 리더를 공유하는 중첩 읽기**이며
+위험은 스레드가 아니라 **한 스트림 위의 두 리더**다. S4의 거절 문장은 다시 적지
+않으며, 돌려주는 값이 **AnyJSON이지 매핑된 값이 아니라는 것**은 경계이지 Java의
+부족이 아니다. S6은 `(방향 × 피어)` 칸이 아니라 `clause` 행이고, 그것을 합격 정의에
+넣을지는 **D032의 몫이지 이 문서의 몫이 아니다**.*
 
 ---
 
@@ -201,17 +274,29 @@ S2가 없으면 S1의 행은 손으로 쓴 문서와 Rust의 일치를 주장하
 
 ## 5. The risks, stated as what would make this plan wrong / 이 계획이 틀리는 경우
 
-### 5.1 Re-entrancy may be a redesign rather than a rule
+### 5.1 The risk this plan first named, downgraded on evidence
 
-D038 §3 fixes the rule the deadlock forces — *the nested call is made on a
-connection the servant owns, never the one the request arrived on*. **If Java's
-serving half cannot be made re-entrant without a second thread**, S3 stops being
-a rule and becomes a redesign, and D038's three invariants must be re-read before
-any code is written under S4.
+The first draft said: *if Java's serving half cannot be made re-entrant without
+a second thread, S3 becomes a redesign.* **That risk is smaller than stated, and
+the correction is worth more than the risk was.**
 
-This is checkable **at S3**, which is why S3 is not merged into S4. If it fires,
-the plan stops and the question goes back to the decision — it is not something
-to solve inside a batch.
+Two things were conflated. D038 §3's connection rule — *the nested call is made
+on a connection the servant owns, never the one the request arrived on* — is a
+rule the **parent** holds, because the parent is what dials on the child's
+behalf. **The child never dials at all**, which is §4.7 and the reason `invoke`
+exists. The child's side is not concurrent: `NestedChannel.invoke` writes, then
+blocks on its own read until the `answer` comes, and refuses a `call` arriving
+there in words. Python is the existence proof that no second thread is needed.
+
+**What remains is the real risk and it is in S3**: two readers over one stream
+(see S3). Lower, but it fails in the way stream bugs fail — as a hang, not as a
+wrong answer — so S3 carries a control that runs a second ordinary call after
+the nested one.
+
+*첫 초안의 위험은 증거로 낮아졌다. 두 가지가 섞여 있었다 — D038 §3의 연결 규칙은
+대신 다이얼하는 **부모**의 규칙이고, **자식은 다이얼하지 않는다.** Python이 두 번째
+스레드가 필요 없다는 존재 증명이다. 남은 진짜 위험은 **한 스트림 위의 두 리더**이며,
+그것은 틀린 답이 아니라 멈춤으로 실패한다.*
 
 ### 5.2 The interim, where Java is at version 1 and Rust at 2
 
@@ -229,7 +314,35 @@ proves *nothing new appeared*, and proves nothing about the size. It carries its
 rationale in the comment, and it comes off at S5 when the set is empty. A pinned
 difference that is still there after S5 is a failure, not a smaller number.
 
-### 5.3 `protocol()` may contain something Java cannot compute
+### 5.3 The absent JDK, where two doctrines in this repository disagree
+
+`the_seam_is_one_protocol.rs` says an interpreter that will not run is **a
+failure, never a skip disguised as a pass** — right for Python, which is always
+there. `a_java_servant_this_process_owns.rs` prints `SKIPPED no JDK — set
+ORBWEAVER_JAVA_HOME`, which is right for a fixture that may be absent. **S1's
+row makes those two meet**, and the meeting has to be decided rather than
+discovered when a machine without a JDK first runs `cargo test --workspace`.
+
+Neither doctrine is wrong; they answer different questions. The resolution this
+plan proposes, in D010 §2's terms:
+
+- the cargo test **skips** where the JDK is absent, following the Java tests
+  already in that crate — making the JDK a hard dependency of
+  `cargo test --workspace` would be a larger change than this work, decided as a
+  side effect;
+- **and the harness carries a counted `SKIPPED` group naming the fixture**, so
+  the verdict sees the unmeasured claim. A class-B claim lands as a counted
+  `SKIPPED` naming its fixture, never as a `note` and never as `ok`.
+
+Without the second half the first half is exactly the *skip disguised as a pass*
+the test's header refuses. They are only compatible together.
+
+*JDK 부재에서 이 저장소의 두 원칙이 만난다 — "돌지 않는 인터프리터는 실패지 건너뜀이
+아니다"와 "부재 픽스처는 세어지는 SKIPPED"다. 둘 다 옳고 다른 질문에 답한다. 제안:
+cargo 테스트는 건너뛰되 **하네스가 픽스처를 이름 붙인 세어지는 `SKIPPED` 그룹을
+싣는다.** 뒤 절반이 없으면 앞 절반은 바로 그 "통과로 위장한 건너뜀"이다.*
+
+### 5.4 `protocol()` may contain something Java cannot compute
 
 If the document holds anything Rust-specific, equality is the wrong assertion
 shape and the test would need a per-binding subset rule — which **weakens it**,
@@ -244,7 +357,35 @@ at S1, before S2 spends effort on constants.
 
 ---
 
-## 6. What this deliberately excludes / 의도적으로 제외한 것
+## 6. The acceptance sentence / 합격 문장
+
+D015's method: one sentence, and the work is done when it is true and measured.
+
+> **A servant written in Java, handed a reference it did not create, invokes it
+> and uses the answer — and a caller cannot tell from what that servant can *do*
+> with the reference whether it was written in Java, Python or Rust.**
+
+Measured by S5, held every run by S6, and **not** claimed by S1–S4 alone: those
+are the protocol being agreed and the method existing, which is not the same as
+a servant having used one.
+
+*합격 문장 하나. S5가 재고 S6가 매 실행 지킨다. S1–S4만으로는 주장하지 않는다 —
+그것은 프로토콜이 합의되고 수단이 생긴 것이지, 서번트가 실제로 쓴 것이 아니다.*
+
+## 7. The cost, stated rather than implied / 비용
+
+- **S1 is the largest step and it is not the feature.** Making `theirs()`
+  polymorphic touches the one test every binding's protocol claim rests on, so
+  it is done first, alone, with the Python row proven still green.
+- **S2 is 19 sites in one pass**, scoped to the rule and not the keyword.
+- **S3–S4 are one file** (`java_rt.java`), and the emitter is untouched.
+- **S5 needs a JDK**, and §5.3 says what happens where there is none.
+- Harness time: one `clause` row, which runs `javac` — the same cost the Java
+  cells already pay, not a new fixture.
+
+---
+
+## 8. What this deliberately excludes / 의도적으로 제외한 것
 
 - **A fourth language.** D030 L3's developer tools and any C binding of the
   servant seam are out of scope.
@@ -257,7 +398,7 @@ at S1, before S2 spends effort on constants.
 
 ---
 
-## 7. What this bears on, said narrowly / 이 작업이 걸리는 곳, 좁게
+## 9. What this bears on, said narrowly / 이 작업이 걸리는 곳, 좁게
 
 D029 §6.1's **Language** row. And the honest statement is narrower than *it
 closes a row*:
@@ -279,7 +420,7 @@ inverse of the error D038 refused when it declined to record this as a floor.
 
 ---
 
-## 8. How it lands / 착지 방식
+## 10. How it lands / 착지 방식
 
 The operating model applies unchanged: **batch → oracle → repair → codify.**
 
