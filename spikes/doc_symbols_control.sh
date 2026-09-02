@@ -6,7 +6,11 @@
 # It runs the shipped script's own bytes. It does not restate its rules.
 set -u
 SCAN="${1:-$(dirname "$0")/doc_symbols.py}"
-T=$(mktemp -d /private/tmp/orbweaver-symctl.XXXXXX) || exit 3
+# `${TMPDIR:-/tmp}`, not `/private/tmp`: that path is a macOS fact, and this
+# control failed in CI on its first run because the repair for `find` on a
+# symlinked /tmp was applied where it does not belong. The template stays
+# explicit, which is what the harness's mktemp gate asks for.
+T=$(mktemp -d "${TMPDIR:-/tmp}/orbweaver-symctl.XXXXXX") || exit 3
 trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/docs/decisions" "$T/crates/orbweaver-gen/src" "$T/corpus/golden"
 ( cd "$T" && git init -q . && git config user.email c@x && git config user.name c )
