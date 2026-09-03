@@ -80,6 +80,10 @@ spikes/tao/ACE_wrappers/
 spikes/tls/omniORBpy/
 # derived by echo_server_ssl.py from the committed fixtures
 spikes/tls/.server-bundle.pem
+spikes/tls/.server.jks
+spikes/tls/.*.p12
+spikes/tls/.trust.jks
+spikes/jacorb_ssl.ior
 spikes/tls/.server-trust.pem
 spikes/echo_ssl.ior
 spikes/tao/*.tar.bz2

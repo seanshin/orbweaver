@@ -10,6 +10,49 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**Two streams in parallel, disjoint footprints, and each produced a finding.**
+
+**Stream A — the second-host probe, re-run on this machine.** `spikes/nat/vm/run.sh`
+last landed 2026-08-14; the harness keeps it a counted `SKIPPED` because it
+launches a VM. Run today: the first launch timed out waiting for cloud-init
+(the VM itself came up), and the first probe over that fresh VM **failed** on
+the rewritten reference — `os error 11` after 3s, where the naive reference was
+refused as R7 predicts. Reproduced by hand: VM→host TCP connects, the servant
+listens on `*:15555`, and a guest call answers `ping() -> 42 in 0.06s`. **Three
+further probe runs: PASS, PASS, PASS.** Not diagnosed — it did not reproduce —
+and the one candidate is recorded as a candidate: the failing run was the first
+thing to happen after a cloud-init that had just timed out, which is the shape
+of *a completed connect does not mean the server can accept yet* one layer out.
+The probe's own logic was read and is sound; the VM is left running for the
+next run.
+
+**Stream B — JacORB's SSLIOP, the second independent producer of
+`TAG_SSL_SEC_TRANS`.** `spikes/tls/PEER-STATUS.md`'s option 3. Two things had to
+be read off JacORB's bytecode rather than guessed, and both were necessary:
+JacORB 3.9's `KeyStoreUtil` loads a keystore **from a file only when its type is
+`JKS`** — PKCS12 silently yields an empty store and *No available authentication
+scheme*, measured as `type=PKCS12 size=0` against `type=JKS size=1` by calling
+the loader from its own package; and `trustees_from_ks=on` reads trust from the
+**keystore**, so the self-signed client identity goes in beside the server key.
+
+**The comparison paid on the first read.** For a configuration that asked for
+the same thing, omniORB writes `supports=0x0066 requires=0x0066` and JacORB
+writes `supports=0x007a requires=0x0060` — two encoders that share no code, one
+decoder, and the bits are the peer's to choose. What the harness asserts is that
+each peer then *does* what its component says: both publish
+ESTABLISH_TRUST_IN_CLIENT in `requires`, both refuse a client with no identity
+(`CertificateRequired`), and both answer `add(7,35)=42` over mutual TLS —
+omniORB little-endian, JacORB big-endian, both read off the reply. The SSL
+group carries seven `ok` lines now, three of them controls.
+
+*병행 두 흐름, 분리된 발자국, 각각 발견 하나. **A** — 두 번째 호스트 탐침을 오늘 다시
+돌렸다: 첫 실행은 실패했고(cloud-init 직후), 손으로 재현하면 통과, 이후 세 번 PASS.
+**진단되지 않았다** — 재현되지 않았고, 후보는 후보로 기록했다. **B** — JacORB의
+인코더, 두 번째 독립 생산자. 바이트코드에서 읽은 둘이 필요했다: JacORB 3.9의 로더는
+**JKS일 때만 파일에서 읽는다**(PKCS12는 조용히 빈 저장소), 그리고 신뢰는
+키스토어에서 읽는다. **비교는 첫 판독에서 값을 냈다** — 같은 요청에 두 인코더가
+다른 비트를 쓴다. 단언되는 것은 각 피어가 자기 컴포넌트대로 **행동한다**는 것이다.*
+
 **The first call to another ORB's SSLIOP stack, and a counted `SKIPPED` retired
 by building its fixture.** `spikes/tls/PEER-STATUS.md` recorded on 2026-08-13
 that Homebrew's omniORBpy is built without `sslTP` and named building it from

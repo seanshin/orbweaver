@@ -1861,6 +1861,64 @@ else
   echo "           produced by THEIR encoder stays unmeasured, not passing (D010 B3)"
   skip_age absent git:spikes/tls/setup.sh
 fi
+#
+# **The second producer, 2026-09-03 — JacORB's encoder.** One producer is what
+# the residue asked for; two is a COMPARISON, and it paid on the first read:
+# omniORB writes `supports=0x0066 requires=0x0066`, JacORB writes
+# `supports=0x007a requires=0x0060` for a configuration that asked for the same
+# thing — two encoders that share no code, read by one decoder, and the bits
+# are the peer's to choose. What is asserted is that each peer then DOES what
+# its component says: both publish ESTABLISH_TRUST_IN_CLIENT in `requires`, and
+# both refuse a client with no identity.
+if [ -x "$JH_CHECK/bin/java" ] && [ -f "$ROOT/spikes/jacorb/classes/SslServer.class" ]; then
+  ./spikes/jacorb/ssl_keystores.sh >/dev/null 2>&1 || {
+    echo "  FAIL the JSSE keystores could not be derived from spikes/tls/"; ssl_fail=1; }
+  rm -f "$ROOT/spikes/jacorb_ssl.ior"
+  ( cd "$ROOT/spikes/jacorb" && exec "$JH_CHECK/bin/java" -cp "$JCP_CHECK" SslServer \
+      "$ROOT/spikes/tls" "$ROOT/spikes/jacorb_ssl.ior" >/tmp/orbweaver-jssl.log 2>&1 & )
+  jssl_up=0
+  for _ in $(seq 1 150); do
+    if [ -s "$ROOT/spikes/jacorb_ssl.ior" ] && grep -q "^READY$" /tmp/orbweaver-jssl.log 2>/dev/null; then
+      jssl_up=1; break
+    fi
+    sleep 0.1
+  done
+  if [ "$jssl_up" != 1 ]; then
+    echo "  FAIL the JacORB SSL fixture is built but never published an IOR"
+    diag_out "$(cat /tmp/orbweaver-jssl.log 2>/dev/null)" 6
+    ssl_fail=1
+  else
+    SSLD="$ROOT/target/debug/spike-ssliop"
+    [ -x "$SSLD" ] || cargo build -q -p orbweaver-giop --features ssliop --bin spike-ssliop 2>/dev/null
+    j_common=(--ior "$ROOT/spikes/jacorb_ssl.ior" --expect ok --a 7 --b 35 --expect-reply-endian big)
+    j_out=$("$SSLD" "${j_common[@]}" --ca "$ROOT/spikes/tls/ca.pem" \
+              --client-cert "$ROOT/spikes/tls/client.pem" --client-key "$ROOT/spikes/tls/client.key" 2>&1)
+    j_comp=$(grep -E "^ssliop=supports:0x[0-9a-f]+ requires:0x[0-9a-f]+ port:[0-9]+" <<<"$j_out")
+    if grep -q "^outcome=ok" <<<"$j_out" && grep -q "^sum=42" <<<"$j_out" && [ -n "$j_comp" ]; then
+      echo "  ok   JacORB's own encoder wrote TAG_SSL_SEC_TRANS and ours read it: ${j_comp#ssliop=}"
+      echo "  ok   add(7,35)=42 over mutual TLS against JacORB's SSLIOP stack, big-endian reply —"
+      echo "       the second independent producer, and its bits differ from omniORB's"
+    else
+      echo "  FAIL the call over TLS to JacORB did not complete"
+      diag_out "$j_out" 8
+      ssl_fail=1
+    fi
+    jn_out=$("$SSLD" "${j_common[@]}" --ca "$ROOT/spikes/tls/ca.pem" 2>&1)
+    if grep -q "^outcome=refuted" <<<"$jn_out" && grep -q "CertificateRequired" <<<"$jn_out"; then
+      echo "  ok   control: with no client identity JacORB refuses us (CertificateRequired) — its"
+      echo "       requires=0x0060 is enforced, not merely published"
+    else
+      echo "  FAIL control: JacORB accepted a client with no identity while publishing"
+      echo "       ESTABLISH_TRUST_IN_CLIENT"
+      ssl_fail=1
+    fi
+    fkill SslServer
+  fi
+else
+  echo "  SKIPPED  no JacORB SslServer here (spikes/jacorb/setup.sh builds it) — the SECOND"
+  echo "           producer of TAG_SSL_SEC_TRANS is unmeasured, not passing"
+  skip_age absent git:spikes/jacorb/SslServer.java
+fi
 [ "$ssl_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
 hr "orbweaver-idl — our parser against the oracle"

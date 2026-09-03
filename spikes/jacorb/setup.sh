@@ -44,5 +44,5 @@ java -cp "$CP" org.jacorb.idl.parser -d gen ../echo.idl
 # every fixture implements echo.idl, so the single wide character got its own.
 java -cp "$CP" org.jacorb.idl.parser -d gen ../wide.idl
 javac -nowarn -cp "$CP" -d classes $(find gen -name '*.java') Client.java Client11.java Server.java \
-      WideServer.java WideClient.java
+      WideServer.java WideClient.java SslServer.java
 echo "jacorb fixture ready"

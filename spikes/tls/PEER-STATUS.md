@@ -61,9 +61,31 @@ harness group, and both refuse in the direction they should: trusting
 control — the decoder made to misread the component's port — turns all three
 lines red.
 
-**What is still not measured**: JacORB's encoder (option 3), which would be a
-second independent producer of the component. One is what the residue asked
-for; two would be a comparison.
+**Option 3 too, the same day: JacORB's encoder.** `spikes/jacorb/SslServer.java`
+publishes the same Echo over JacORB's `sun_jsse` SSLIOP; keystores are derived
+from the PEMs by `spikes/jacorb/ssl_keystores.sh`. Two things were read off
+bytecode rather than guessed, and both were necessary: JacORB 3.9's
+`KeyStoreUtil` loads a keystore **from a file only when its type is `JKS`** —
+PKCS12 silently yields an empty store and *No available authentication scheme*,
+measured as `type=PKCS12 size=0` against `type=JKS size=1` by calling the loader
+from its own package; and `jacorb.security.jsse.trustees_from_ks=on` reads trust
+from the **keystore**, so the self-signed client goes in beside the server key.
+
+**The comparison paid on the first read.** For a configuration that asked for the
+same thing, omniORB writes `supports=0x0066 requires=0x0066` and JacORB writes
+`supports=0x007a requires=0x0060` — two encoders that share no code, one decoder,
+and the bits are the peer's to choose. What is asserted is that each peer then
+*does* what its component says: both publish ESTABLISH_TRUST_IN_CLIENT in
+`requires`, both refuse a client with no identity, and both answer `add(7,35)=42`
+over mutual TLS — omniORB little-endian, JacORB big-endian, both read off the
+reply.
+
+*옵션 3도 같은 날: JacORB의 인코더. 바이트코드에서 읽은 두 가지가 둘 다 필요했다 —
+JacORB 3.9의 로더는 **JKS일 때만 파일에서 읽고** PKCS12는 조용히 빈 저장소가
+된다(`size=0` 대 `size=1`로 측정), 그리고 `trustees_from_ks=on`은 신뢰를
+**키스토어**에서 읽는다. **비교는 첫 판독에서 값을 냈다**: 같은 요청에 omniORB는
+`0x0066/0x0066`, JacORB는 `0x007a/0x0060`을 쓴다. 단언되는 것은 각 피어가 자기
+컴포넌트가 말한 대로 **행동한다**는 것이다.*
 
 *아래의 잔여는 이제 측정된다. 해제 경로 1을 택했다: `spikes/tls/setup.sh`가 keg에
 대고 omniORBpy 4.3.4를 소스 빌드한다. 첫 configure를 막은 것은 `pkg-config` 하나였고,
