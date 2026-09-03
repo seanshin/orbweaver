@@ -520,6 +520,24 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   것이 기록되는 곳에는 호출자가 아닌 탐침이 없다. 규칙을 옮겨 적용했더니 0 실패가
   10이 되었다 — 실행해서 알았지 읽어서 알지 못했다. 53곳을 수로 세어 바꾸는 것은
   규칙이 아니라 키워드에 범위를 맞춘 배치다.*
+- **A local `clippy` green is evidence about the local clippy, and CI runs a
+  different one.** Measured 2026-09-03: three CI pushes went red in a row on
+  lints this machine's clippy (1.95) does not emit and the runner's (1.98)
+  does — `is_multiple_of`, let-chain collapsing, `as_chunks` — because
+  `ci.yml` pins no toolchain and there is no `rust-toolchain.toml`. They had
+  been silent on both sides only because `rust-version` said 1.85 while the
+  tree needed 1.88, and raising it to the truth unlocked MSRV-gated lints on
+  both sides at once. Two of the three pushes were the item-by-item defect
+  this file opens with: CI as the oracle, one lint per push, where
+  `rustup toolchain install <ci's> -c clippy` and one whole-tree run would
+  have shown all of them at once — and did, on the third. Before pushing a
+  lint fix, lint with the version CI has (read it off the lint's own docs URL
+  in the failure) and cluster the whole output. Whether to pin is the owner's
+  and is written in PLAN-FIRST-COMPLETION §D; until then the local run is not
+  the oracle for this gate. *로컬 clippy 초록은 로컬 clippy에 대한 증거이고, CI는
+  다른 것을 돌린다. 세 번 연속 빨강 중 둘은 이 파일이 첫머리에 적은 건건이 처리
+  결함이었다 — CI를 오라클로 삼아 푸시당 lint 하나씩. CI의 버전을 설치해 트리
+  전체를 한 번 돌리면 전부 한 번에 보이고, 세 번째에 그렇게 했다.*
 - **A completed client `connect` does not mean the server can accept yet.**
   On macOS loopback a non-blocking single `accept()` misses fresh connections
   ~5% of the time (measured 25/500 in stream E batch 2). Accept-side checks

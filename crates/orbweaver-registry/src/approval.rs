@@ -432,7 +432,7 @@ impl Sha256 {
         let whole = self.buffer.len() / 64 * 64;
         let mut consumed = Vec::new();
         std::mem::swap(&mut consumed, &mut self.buffer);
-        for block in consumed[..whole].chunks_exact(64) {
+        for block in consumed[..whole].as_chunks::<64>().0 {
             self.compress(block);
         }
         self.buffer.extend_from_slice(&consumed[whole..]);
@@ -448,7 +448,7 @@ impl Sha256 {
         // `update` would count these bytes into `length`; feed them past it.
         self.buffer.extend_from_slice(&tail);
         let blocks = std::mem::take(&mut self.buffer);
-        for block in blocks.chunks_exact(64) {
+        for block in blocks.as_chunks::<64>().0 {
             self.compress(block);
         }
         let mut hex = String::with_capacity(64);
@@ -460,8 +460,8 @@ impl Sha256 {
 
     fn compress(&mut self, block: &[u8]) {
         let mut w = [0u32; 64];
-        for (i, chunk) in block.chunks_exact(4).enumerate() {
-            w[i] = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        for (i, chunk) in block.as_chunks::<4>().0.iter().enumerate() {
+            w[i] = u32::from_be_bytes(*chunk);
         }
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
