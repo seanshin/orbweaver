@@ -759,6 +759,81 @@ to record when it is made.
 
 ---
 
+### F. What is buildable now, as parallel lanes / 지금 지을 수 있는 것 — 병행 차선으로
+
+**Derived 2026-09-04 from the tree, not from this document's memory** (§0's
+method). `transparency.py --statuses` prints 1 held, 3 named floor, 1 open
+leak; the open leak's item is row 1 above and waits where it waited. Rows 4–6
+are done. What remains buildable without an owner's answer is **§3's items 2,
+3 and 5** and nothing else: §3.1 is fixed, §3.4's trigger has not fired (the
+module's own docs say the choice is not its alone to make), and every residue
+in §B's *executed with residue* table is a capability, which §4 excludes while
+a §1 row stands open. This section adds only footprints and ordering — each
+lane's substance stays home in §3.
+
+*트리에서 유도했다(2026-09-04), 이 문서의 기억이 아니라 — §0의 방법. 원장은
+1 held, 3 named floor, 1 open leak을 찍고, 그 열린 구멍은 위 1행이며 기다리던
+자리에서 기다린다. 4–6행은 끝났다. 소유자의 답 없이 지을 수 있는 것은 **§3의
+2·3·5번**뿐이다: §3.1은 고쳐졌고, §3.4의 방아쇠는 당겨지지 않았으며(그 모듈의
+문서가 스스로 혼자 정할 일이 아니라고 적는다), §B의 *잔여가 있는 실행* 표의
+잔여는 전부 기능이라 §1의 행이 열려 있는 동안 §4가 제외한다. 이 절은 발자국과
+순서만 더한다 — 각 차선의 내용의 집은 §3이다.*
+
+| lane | home | footprint | how it runs |
+|---|---|---|---|
+| **A** | §3.3 — `guarded` on the event server's registry mutex | `crates/orbweaver-giop/src/event_server.rs`, one file: the one registry `Mutex` (one by that file's own sharing argument) and its lock sites | worktree agent; local oracle `cargo test -p orbweaver-giop` + clippy, the harness's event groups at landing |
+| **B** | §3.2 — the repair half of the unstoppable serve sites | the sites `spikes/serve_sites.py --list` prints — **21 of 85 on 2026-09-04**: fifteen files in five crates plus `spikes/e2e/servant.rs` and `spikes/estate/servant.rs`. No file shared with lane A, nothing in lane C's script | worktree agent; oracle is `serve_sites.py` re-run plus each touched fixture's own harness group at landing. D029's lifecycle-cell figure moves **in the same change** — that cell's own rule |
+| **C** | §3.5 — the harness split | `spikes/run_checks.sh` itself | **the coordinator's lane, serial, on `main`** — the gate is not edited by the work it judges, and the machine-wide lock is the coordinator's. Its first commit is the demonstration §3.5 already requires (the same groups still run), not the split |
+
+**Lane cautions, each one already paid for once:**
+
+- **Lane B is scoped to the rule, never to the 21** — *a server a fixture
+  starts is stoppable by the route its own teardown uses*. Some of the 21 are
+  plausibly refusals: `orb_stops_what_it_handed_out.rs`'s two sites sit inside
+  the test that measures stopping, where a deliberately unstoppable contrast
+  arm is exactly what an anti-vacuity companion looks like. A refusal is
+  recorded where it sits, not converted. If clustering finds the 21 are mostly
+  refusals, the lane's honest yield is recorded reasons rather than
+  conversions — a result, not a failure. The count is a lower bound and the
+  classifier says so itself.
+- **Lane C starts only while no other lane is landing** — never edit the
+  harness while it runs, and a split mid-wave would change the gate under the
+  branches it is about to judge.
+- **Landing is serial and the coordinator owns it**: one branch merged at a
+  time, the full harness per merge, agents never run `run_checks.sh` (local
+  oracle only) and report a recommended group without applying it.
+- **Coordinator pre-step, lock free:** `spikes/reclaim.sh` beside its own
+  measurement — `target/debug/deps` stood at 456k files / 17G at 2026-09-04's
+  close, and the 858k incident cost a 50-minute `cargo test`. Housekeeping,
+  not a lane; no threshold is a gate.
+
+**Not scheduled, and why, so absence cannot be read as oversight:** the §B
+residues stay named where they live (their homes are the decision documents;
+this section does not restate them); §3.4 keeps its unfired trigger; the two
+transients (`os error 35` on a GIOP 1.0 ping, one red `GIOP 1.1 against
+JacORB` in harness 99) are observation during lane C's landing runs rather
+than lanes — *did not reproduce in N runs* stays a valid result; and §D's
+conditions and §E wait where they wait.
+
+*차선 주의사항 — 전부 한 번씩 값을 치른 것들이다: **B차선의 범위는 21이 아니라
+규칙이다**(픽스처가 띄운 서버는 그 픽스처 자신의 해체 경로로 멈출 수 있어야
+한다). 21 중 일부는 거절일 수 있다 — `orb_stops_what_it_handed_out.rs`의 두
+지점은 멈춤을 재는 테스트 안에 있고, 일부러 멈출 수 없게 만든 대조 팔은
+반공허성 동반자의 모양 그대로다. 거절은 그 자리에 기록하지 변환하지 않으며,
+군집화가 21의 대부분을 거절로 밝히면 이 차선의 정직한 산출은 변환이 아니라
+기록된 이유들이다 — 그것은 실패가 아니라 결과다. **C차선은 다른 차선이 착지하지
+않는 동안에만** 시작한다 — 도는 하네스는 편집하지 않는다. **착지는 직렬이고
+코디네이터의 몫이다**: 한 번에 한 브랜치, 병합마다 전체 하네스, 에이전트는
+`run_checks.sh`를 돌리지 않는다. 사전 단계로, 락이 비었을 때
+`spikes/reclaim.sh` — `target/debug/deps`가 2026-09-04 마감에 456k 파일 / 17G였고,
+858k 사건은 `cargo test` 50분을 치렀다. 예약하지 않은 것과 그 이유도 적는다 —
+부재가 간과로 읽히지 않도록: §B의 잔여는 제 집(결정 문서)에 이름 붙은 채 남고,
+§3.4는 방아쇠가 당겨지지 않았으며, 두 과도 현상은 차선이 아니라 C차선 착지
+실행 중의 관찰이고(*N번 실행에서 재현되지 않았다*는 유효한 결과다), §D의
+조건들과 §E는 기다리던 자리에서 기다린다.*
+
+---
+
 ### The order, and why / 순서와 이유
 
 | | | why here |
@@ -766,9 +841,9 @@ to record when it is made.
 | 1 | **D039** | the only item that would move a criterion row; awaits the owner |
 | 2 | **B, the classification** | ~~everything else is chosen by reading these documents, and two kinds of `PROPOSED` are spelled the same~~ — **done 2026-09-02**, and its own §B holds the table. It came out a repair rather than a report: 16 of 24 are executed in fact, so the ranking below stands |
 | 3 | **C, the two cells** | ~~cheap, and honest about buying evidence rather than coverage~~ — **done**: both grids run 8 cells, 0 skipped, 0 red, and the C cells are in both |
-| 4 | **L4's third implementation** | D038 was approved 2026-08-31, so §1's largest item is unblocked and is now **one implementation** — Rust and Python carry the invoke direction, Java carries none of it. The only §1 item left that is work rather than a decision. Its plan is [`PLAN-SEAM-JAVA.md`](PLAN-SEAM-JAVA.md), whose first step is a **red test** rather than a feature: Java was never enrolled in the seam's protocol-agreement test |
-| 5 | **the grid's unread versions** | ~~client GIOP 1.0 in both languages, python client 1.1, python servant 1.0 — coverage, not transparency~~ — **worked 2026-09-03 and it was not coverage.** Python's 1.1 was a missing loop in one cell (now `spikes/lib/giop_versions.sh`, shared). **1.0 is an interoperability defect**: `orbweaver_dynamic::invoke` requires a wide codec before marshalling anything, so every call on a GIOP 1.0 connection is refused, `ping()` included. Its own batch |
-| 6 | **the NAT probe's record** | [`PLAN-NAT-PROBE.md`](PLAN-NAT-PROBE.md), 2026-09-03. CI's `NAT rewriting` group costs 202s against 10s here; the container probe's header says it has never run; the harness cannot say whether it did, because it reads a skip *count* where the script prints *which*. S1 makes the harness say — and the plan's own first draft cited a log line as proof that turned out to be another group's, recorded there rather than smoothed over |
+| 4 | **L4's third implementation** | D038 was approved 2026-08-31, so §1's largest item is unblocked and is now **one implementation** — Rust and Python carry the invoke direction, Java carries none of it. The only §1 item left that is work rather than a decision. Its plan is [`PLAN-SEAM-JAVA.md`](PLAN-SEAM-JAVA.md), whose first step is a **red test** rather than a feature: Java was never enrolled in the seam's protocol-agreement test — **done 2026-09-02/03** (`add6ba9`, `3c91c4f`): Java is enrolled, its `pinned` difference list emptied in one day, the invoke direction landed, and the work found a leak on the way (`2dda795`, a Java servant could not tell its objects apart) |
+| 5 | **the grid's unread versions** | ~~client GIOP 1.0 in both languages, python client 1.1, python servant 1.0 — coverage, not transparency~~ — **worked 2026-09-03 and it was not coverage.** Python's 1.1 was a missing loop in one cell (now `spikes/lib/giop_versions.sh`, shared). **1.0 is an interoperability defect**: `orbweaver_dynamic::invoke` requires a wide codec before marshalling anything, so every call on a GIOP 1.0 connection is refused, `ping()` included. Its own batch — **done 2026-09-03** (`bf408d9`): `invoke` refuses only what the signature in hand needs, a 1.0-only peer is callable, and both grids run 8 cells with 0 red |
+| 6 | **the NAT probe's record** | [`PLAN-NAT-PROBE.md`](PLAN-NAT-PROBE.md), 2026-09-03. CI's `NAT rewriting` group costs 202s against 10s here; the container probe's header says it has never run; the harness cannot say whether it did, because it reads a skip *count* where the script prints *which*. S1 makes the harness say — and the plan's own first draft cited a log line as proof that turned out to be another group's, recorded there rather than smoothed over — **done 2026-09-03** (`b438d3b`): both lanes merged; the probe had been failing under a false skip, and the declared MSRV was false |
 | 7 | **D and E** | conditions and a costed choice, not work |
 
 **What would make this plan wrong.** If the classification in B finds that the
@@ -794,6 +869,20 @@ had to change; it did not, so C keeps its place.
 *이 계획이 틀리는 경우: B의 분류가 24개 전부 진짜로 열려 있다고 밝히면 B는 수리가
 아니라 보고이고 C가 먼저였어야 한다. 그것은 B를 해 보면 확인된다 — §1.0이 L1에
 대해 기록한, 크기에 대한 확인되지 않은 추측으로 순위를 매긴 실수와 같은 부류다.*
+
+**Order update 2026-09-04.** Rows 4–6 are done (the dates and commits are in
+their cells), so every numbered row above is now either done or an answer only
+the owner can give — the table has stopped ordering buildable work. What is
+buildable today without an owner's answer is **§3's instrument debt**, and §F
+above holds its lane plan; everything else remaining is a capability §4
+excludes while the backend row stands open, a condition (§D), or the owner's
+(rows 1 and 7, §B's approvals, §E).
+
+*순서 갱신(2026-09-04). 4–6행이 끝났다(날짜와 커밋은 각 칸에 있다). 이제 위 표의
+모든 행은 끝났거나 소유자만이 답할 수 있는 것이다 — 이 표는 지을 수 있는 일의
+순서표이기를 멈췄다. 소유자의 답 없이 오늘 지을 수 있는 것은 **§3의 계기 부채**이고,
+그 차선 계획은 위 §F에 있다. 그 밖에 남은 것은 backend 행이 열려 있는 동안 §4가
+제외하는 기능이거나, 조건(§D)이거나, 소유자의 몫(1·7행, §B의 승인들, §E)이다.*
 
 ---
 
