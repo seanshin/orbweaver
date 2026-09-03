@@ -852,6 +852,7 @@ spikes/                     fixtures, servers, the harness, and the measurement 
 docs/                       ARCHITECTURE (as built) · PLAN(.ko) · COMPONENTS (measured)
                             PLAN-MOE · PLAN-SERVICES · PLAN-DEFERRED · SERVICES-COVERAGE
                             PLAN-SEAM-JAVA (L4's execution plan, under D038)
+                            PLAN-NAT-PROBE (the NAT group's record and its 202s)
                             PLAN-FIRST-COMPLETION (the open leaks, priority-zero order)
                             decisions/ · pipeline-runs/ · PHASE0–6
 ```

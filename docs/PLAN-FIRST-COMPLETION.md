@@ -753,7 +753,8 @@ to record when it is made.
 | 3 | **C, the two cells** | ~~cheap, and honest about buying evidence rather than coverage~~ — **done**: both grids run 8 cells, 0 skipped, 0 red, and the C cells are in both |
 | 4 | **L4's third implementation** | D038 was approved 2026-08-31, so §1's largest item is unblocked and is now **one implementation** — Rust and Python carry the invoke direction, Java carries none of it. The only §1 item left that is work rather than a decision. Its plan is [`PLAN-SEAM-JAVA.md`](PLAN-SEAM-JAVA.md), whose first step is a **red test** rather than a feature: Java was never enrolled in the seam's protocol-agreement test |
 | 5 | **the grid's unread versions** | ~~client GIOP 1.0 in both languages, python client 1.1, python servant 1.0 — coverage, not transparency~~ — **worked 2026-09-03 and it was not coverage.** Python's 1.1 was a missing loop in one cell (now `spikes/lib/giop_versions.sh`, shared). **1.0 is an interoperability defect**: `orbweaver_dynamic::invoke` requires a wide codec before marshalling anything, so every call on a GIOP 1.0 connection is refused, `ping()` included. Its own batch |
-| 6 | **D and E** | conditions and a costed choice, not work |
+| 6 | **the NAT probe's record** | [`PLAN-NAT-PROBE.md`](PLAN-NAT-PROBE.md), 2026-09-03. CI's `NAT rewriting` group costs 202s against 10s here; the container probe's header says it has never run; the harness cannot say whether it did, because it reads a skip *count* where the script prints *which*. S1 makes the harness say — and the plan's own first draft cited a log line as proof that turned out to be another group's, recorded there rather than smoothed over |
+| 7 | **D and E** | conditions and a costed choice, not work |
 
 **What would make this plan wrong.** If the classification in B finds that the
 24 are all genuinely open, then B is a report rather than a repair and C should
