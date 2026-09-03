@@ -16,6 +16,13 @@ Exit code is the verdict: 0 when every case passed.
 import sys
 
 root, idl, ior, bridge = sys.argv[1:5]
+# `--no-wide` omits the one case the wire refuses below GIOP 1.2. It is off by
+# default, so every cell that does not pass it drives exactly what it always
+# drove. Added 2026-09-03 so the client direction can READ GIOP 1.0: the peer
+# will speak it, and what stopped the pass was our own correct refusal — *GIOP
+# 1.0 cannot carry wchar or wstring data (§9.3.1.6)* — which is a limit of this
+# driver's contract coverage, not of the stack.
+narrow = "--no-wide" in sys.argv[5:]
 sys.path.insert(0, root)
 
 from echo import _rt          # noqa: E402  the generated package's runtime
@@ -47,8 +54,11 @@ with _rt.connect(idl, ior, command=[bridge]) as conn:
     case("echo_ragged(Ragged(...))", echo.echo_ragged(ragged), ragged)
 
     # `wstring`: the codeset path, which is the one the wire decides and the
-    # client never sees.
-    case("echo_wstring('정적 스텁')", echo.echo_wstring("정적 스텁"), "정적 스텁")
+    # client never sees. Skipped under `--no-wide`, and only there: GIOP 1.0
+    # cannot carry it (§9.3.1.6) and refusing is correct, so a 1.0 pass that
+    # drove it would measure our refusal instead of the peer's flag byte.
+    if not narrow:
+        case("echo_wstring('정적 스텁')", echo.echo_wstring("정적 스텁"), "정적 스텁")
 
     # `sequence<octet>` is bytes on this side and base64 across the seam.
     blob = bytes((i % 251) for i in range(64))

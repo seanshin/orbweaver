@@ -10,6 +10,53 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**The binding grid's GIOP coverage, and the item that turned out not to be the
+item.** It was ranked as *coverage, not transparency*. Working it found two
+causes and neither is coverage.
+
+**Python's missing 1.1 was not a fact about Python.** The two `client-jacorb.sh`
+cells disagreed — Java read `1.1 1.2`, Python read `1.2` — and the difference
+was that **Java's cell had a per-version loop and Python's had none**. The
+suite's `neither` column carried that as though Python could not reach the other
+versions. `spikes/bindings/AXES` states the rule this broke: *the suite is one
+suite, parameterised by language, never a copy.* The loop is
+`spikes/lib/giop_versions.sh` now and both cells call it; the only
+language-specific part of a version pass is which driver runs, which is the
+callback. Java's readings are unchanged by the lift — 2 readings, the same 1.0
+note, the same 12 calls — and **Python's client now reads `1.1 1.2`**.
+
+**And the lift immediately reproduced a defect this repository had already
+written down.** The shared function restated the Java cell's looser reason-
+extraction pattern instead of lifting the corrected one from
+`client-omniorb.sh`, so Python's 1.0 note carried `raise
+TransportError(reply["error"].get(...))` — a traceback source line where the
+reason belongs, which is the exact defect that file's comment records fixing.
+*A shared function that restates one caller's assumption is a copy with a
+library's manners.* Fixed by lifting the pattern, not by rewriting it.
+
+**GIOP 1.0 is not a fixture limitation, and the previous note saying so was
+half the story.** Both drivers gained `--no-wide` (off by default, so every
+other cell drives exactly what it drove) and **1.0 still did not open**:
+`orbweaver_dynamic::invoke` calls `wide_codec(conn)` unconditionally before
+marshalling anything, so **every call on a GIOP 1.0 connection is refused,
+`ping()` included** — measured as zero completed cases before the first failure,
+and readable in the code as an unconditional `?` two lines after the signature
+is in hand. §9.3.1.6 forbids carrying `wchar`/`wstring` **data**; it does not
+forbid a `long ping()`. A peer that speaks only GIOP 1.0 cannot be called at
+all.
+
+`wide_codec`'s own doc comment already names the better behaviour — *"saying so
+at that point is more useful than refusing every call on a 1.0 connection — but
+the invoker cannot know yet"* — and the invoker **can** know. That fix is its
+own batch, in the core invoke path every binding uses; folding it into suite
+plumbing would be *work that is correct apart and wrong together*.
+
+*커버리지로 순위 매긴 항목이 커버리지가 아니었다. 파이썬의 1.1 공백은 파이썬에 대한
+사실이 아니라 **한 셀에 루프가 없던 것**이었고, 이제 루프는 공유 라이브러리다. 그리고
+그 리프트가 이 저장소가 이미 적어둔 결함을 즉시 재현했다 — 고쳐진 패턴을 **들어
+쓰지 않고 다시 적어서**다. **1.0은 픽스처 한계가 아니다**: 호출기가 마셜링 전에 wide
+코덱을 무조건 요구하므로 1.0 연결에서는 `ping()`조차 거절된다. 별도의 배치다.*
+
 **A Java servant can tell which object it was addressed to, and that was a leak
 rather than a missing feature.** `ForeignServant::with_home` has said since
 homes existed that *every call document carries `CALL_OBJECT`, so the far side

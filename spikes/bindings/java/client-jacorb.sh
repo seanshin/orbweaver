@@ -125,17 +125,16 @@ fi
 
 # ── one pass per GIOP version ───────────────────────────────────────────────
 #
-# **1.2 is what JacORB publishes; 1.1 and 1.0 are reached by republishing the
-# profile**, because a peer's outbound version follows the profile it dialled —
-# the same mechanism `spikes/jacorb_giop11.sh` uses and the servant cell for
-# this peer now uses. Without the extra passes the suite reads
-# `client: read[1.2] … neither[1.0 1.1]`, and a version nobody read is the same
-# kind of not-a-measurement as an order nobody read.
+# **The loop is `spikes/lib/giop_versions.sh`, not this file** (since
+# 2026-09-03). It used to live here, and the Python cell of the same name had
+# none — so Java read `1.1 1.2` and Python read `1.2`, and the suite's `neither`
+# column carried that as though it were a fact about Python. It was a fact about
+# which cell had been written second. AXES: *one suite, parameterised by
+# language, never a copy.*
 #
-# **A version the peer will not speak is a RESULT, not a failure.** Only the
-# 1.2 pass is required to pass; the others say what happened and the suite's
-# `neither` column is where an unread version lands.
+# What is language-specific is the callback below and nothing else.
 . "$ROOT/spikes/lib/tap_orders.sh"
+. "$ROOT/spikes/lib/giop_versions.sh"
 
 # The client is built once; only the profile it dials changes.
 if ! cargo run -q --bin gen-java -- --out "$D/src" --package echo spikes/echo.idl \
@@ -148,82 +147,40 @@ find "$D/src" -name '*.java' >"$D/sources"
 echo "$ROOT/spikes/bindings/java/EchoClient.java" >>"$D/sources"
 if ! "$JH/bin/javac" -nowarn -encoding UTF-8 -d "$D/classes" @"$D/sources" \
      >"$D/javac.log" 2>&1; then
-  echo "FAIL	javac refused what the emitter wrote"
-  head -8 "$D/javac.log"
+  echo "FAIL	javac refused the generated client"
+  tail -12 "$D/javac.log"
   exit 1
 fi
 
-calls=0
+# The one language-specific line. `$1` is the version label, `$2` the tapped
+# IOR; the run's own output is kept so the 1.2 pass can be counted.
+drive_java() {
+  local out
+  out=$("$JH/bin/java" -Dfile.encoding=UTF-8 -cp "$D/classes" EchoClient \
+        spikes/echo.idl "$2" "$ROOT/target/debug/orbweaver-py-bridge" \
+        $([ "$1" = 0 ] && echo --no-wide) 2>&1)
+  local rc=$?
+  printf '%s\n' "$out" >"$D/run-$1.out"
+  printf '%s\n' "$out"
+  [ "$rc" -eq 0 ] && grep -q "java target: PASS" <<<"$out"
+}
+
+passes=$(run_each_giop_version "$D/j.ior" "$D" echo_string drive_java) || {
+  printf '%s\n' "$passes"
+  exit 1
+}
 readings=""
-for minor in "" 1 0; do
-  label=${minor:-2}
-  log="$D/tap-$label.log"
-  out_ior="$D/tapped-$label.ior"
-  tap_out="$D/tap-$label.out"
-  # **Two invocations and not an array.** macOS ships bash 3.2, where
-  # `"${arr[@]}"` on an EMPTY array is an unbound variable under `set -u` — so
-  # the 1.2 pass, the one with no `--minor`, died before the tap ever forked.
-  # The script then reported *"the recording tap did not come up"*, which was
-  # true and pointed at the wrong thing: the tap was never asked to. The
-  # harness already gates one construct only some platforms have (`mktemp`
-  # without a template); this is the same family, found the same way — by
-  # running it here rather than by reading it.
-  if [ -n "$minor" ]; then
-    python3 spikes/jacorb_giop11_tap.py --ior "$D/j.ior" --out "$out_ior" \
-            --log "$log" --op echo_string --minor "$minor" >"$tap_out" 2>&1 &
-  else
-    python3 spikes/jacorb_giop11_tap.py --ior "$D/j.ior" --out "$out_ior" \
-            --log "$log" --op echo_string >"$tap_out" 2>&1 &
-  fi
-  tap_pid=$!
-  PIDS+=("$tap_pid")
-  tapped=0
-  for _ in $(seq 1 150); do
-    if [ -s "$out_ior" ] && grep -q "^READY" "$tap_out" 2>/dev/null; then tapped=1; break; fi
-    sleep 0.1
-  done
-  if [ "$tapped" != 1 ]; then
-    echo "FAIL	the recording tap did not come up at IIOP 1.$label, so no flag byte could be read"
-    tail -5 "$tap_out" 2>/dev/null
-    exit 1
-  fi
-
-  run_out=$("$JH/bin/java" -Dfile.encoding=UTF-8 -cp "$D/classes" EchoClient \
-            spikes/echo.idl "$out_ior" "$ROOT/target/debug/orbweaver-py-bridge" 2>&1)
-  run_rc=$?
-  kill "$tap_pid" >/dev/null 2>&1
-
-  if [ "$run_rc" -ne 0 ] || ! grep -q "java target: PASS" <<<"$run_out"; then
-    if [ "$label" = 2 ]; then
-      echo "FAIL	the Java client did not complete its calls against JacORB (exit $run_rc)"
-      tail -12 <<<"$run_out"
-      exit 1
-    fi
-    # The last word, carried so the reason travels with the result. **At 1.0 it
-    # is a correct refusal and not a defect**: `EchoClient` drives wide text and
-    # `GIOP 1.0 cannot carry wchar or wstring data (§9.3.1.6)`, which our own
-    # runtime says and the specification requires. So the client direction's 1.0
-    # is unread *because this driver uses wide text*, which a driver that did not
-    # could reach — a limit of the fixture rather than of the stack, and worth
-    # the distinction: the servant direction DOES read 1.0, from the same peer.
-    #
-    # The first version of this comment said the cause "has not been established",
-    # which was true when it was written and false one run later. Corrected in
-    # the same batch rather than left for a sweep.
-    # Captured, then the first line taken off a HERESTRING — never
-    # `grep … | head -1`, which is the early-exit consumer this repository has a
-    # gate for. That gate caught this line on the run that landed it, which is
-    # the gate working and worth saying rather than quietly repairing.
-    why_all=$(grep -E "TransportError|Error|FAIL" <<<"$run_out")
-    why=$(head -1 <<<"$why_all")
-    why=$(sed 's/[[:space:]]\{1,\}/ /g' <<<"$why")
-    printf 'note\tIIOP 1.%s: the calls did not complete, so that version stays unread — a result, not a failure (%s)\n' "$label" "${why:-no message}"
-    continue
-  fi
-  [ "$label" = 2 ] && calls=$(grep -c '^  ok' <<<"$run_out")
-  readings="$readings$(read_reply_orders "$log")
+calls=0
+while IFS=$'\t' read -r kind a b; do
+  case "$kind" in
+    RAN)
+      readings="$readings$(read_reply_orders "$b")
 "
-done
+      [ "$a" = 2 ] && calls=$(grep -c '^  ok' "$D/run-2.out")
+      ;;
+    note) printf 'note\t%s\n' "$a" ;;
+  esac
+done <<<"$passes"
 
 # ── what the peer wrote, read off §15.4.1's flag byte ───────────────────────
 # The REPLIES: in the client direction the peer is the one answering, so its

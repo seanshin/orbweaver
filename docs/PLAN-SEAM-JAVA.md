@@ -478,8 +478,23 @@ a servant having used one.
 - **L3's step 3** — the deployment shape — which was downgraded on measurement
   because priority zero ranks a leak above a capability, and remains so.
 - **The binding grid's unread GIOP versions** (client 1.0 in both languages,
-  python client 1.1, python servant 1.0). Coverage, not transparency; it is
-  ranked under this work in `PLAN-FIRST-COMPLETION` §1.9's order and stays there.
+  python client 1.1, python servant 1.0). Excluded here as *coverage, not
+  transparency* — **and that was wrong, found 2026-09-03 by doing it.** Two
+  causes, neither of them coverage. Python's missing 1.1 was not a fact about
+  Python: that cell had no per-version loop where the Java cell had one, and the
+  loop is `spikes/lib/giop_versions.sh` now, called by both. And **1.0 does not
+  open when the wide case is skipped**: `orbweaver_dynamic::invoke` requires a
+  wide codec before marshalling anything (`invoke.rs:129`), so **every call on a
+  GIOP 1.0 connection is refused, `ping()` included** — measured as zero
+  completed cases before the first failure, and readable as an unconditional
+  `?`. §9.3.1.6 forbids carrying `wchar`/`wstring` **data**; it does not forbid
+  a `long ping()`. A peer that speaks only 1.0 cannot be called at all, which is
+  an interoperability defect and not a gap in a fixture. `wide_codec`'s own doc
+  comment names the better behaviour — *"saying so at that point is more useful
+  than refusing every call on a 1.0 connection — but the invoker cannot know
+  yet"* — and the invoker **can** know: the signature is in hand two lines
+  above. Its own batch, in the core path every binding uses; folding it into
+  suite plumbing would be *work that is correct apart and wrong together*.
 
 ---
 

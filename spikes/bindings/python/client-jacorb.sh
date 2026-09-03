@@ -110,23 +110,6 @@ if [ "$started" != 1 ]; then
   exit 1
 fi
 
-# ── the tap, so the order is read rather than assumed ───────────────────────
-python3 spikes/jacorb_giop11_tap.py --ior "$D/j.ior" --out "$D/tapped.ior" \
-        --log "$D/tap.log" --op echo_string >"$D/tap.out" 2>&1 &
-PIDS+=("$!")
-tapped=0
-for _ in $(seq 1 150); do
-  if [ -s "$D/tapped.ior" ] && grep -q "^READY" "$D/tap.out" 2>/dev/null; then
-    tapped=1; break
-  fi
-  sleep 0.1
-done
-if [ "$tapped" != 1 ]; then
-  echo "FAIL	the recording tap did not come up, so no flag byte could be read"
-  tail -5 "$D/tap.out" 2>/dev/null
-  exit 1
-fi
-
 # ── the generated Python client ─────────────────────────────────────────────
 if ! cargo run -q --bin gen-python -- --out "$D/site" spikes/echo.idl >"$D/gen.log" 2>&1 \
    || ! cargo build -q --bin orbweaver-py-bridge 2>>"$D/gen.log"; then
@@ -135,23 +118,56 @@ if ! cargo run -q --bin gen-python -- --out "$D/site" spikes/echo.idl >"$D/gen.l
   exit 1
 fi
 
-# The same driver the omniORB cell uses, pointed at the TAPPED ior — so what
-# differs between the two client cells is the peer and nothing else.
-run_out=$(python3 crates/orbweaver-gen/python/echo_client.py "$D/site" \
-          spikes/echo.idl "$D/tapped.ior" "$ROOT/target/debug/orbweaver-py-bridge" 2>&1)
-run_rc=$?
-case "$run_out" in
-  *"python target: PASS"*) ;;
-  *) echo "FAIL	the Python client did not complete its calls against JacORB (exit $run_rc)"
-     tail -12 <<<"$run_out"
-     exit 1 ;;
-esac
-calls=$(grep -c '^  ok' <<<"$run_out")
+# ── one pass per GIOP version ───────────────────────────────────────────────
+#
+# **Added 2026-09-03, and the gap it closes was not a fact about Python.** This
+# cell drove one pass and read `1.2`; the Java cell of the same name had a
+# per-version loop and read `1.1 1.2`, and the suite's `neither` column carried
+# the difference as though Python could not reach the others. It was a
+# difference between two cells, one written after the other. The loop is
+# `spikes/lib/giop_versions.sh` now and both call it — AXES: *one suite,
+# parameterised by language, never a copy.*
+. "$ROOT/spikes/lib/tap_orders.sh"
+. "$ROOT/spikes/lib/giop_versions.sh"
+
+# The one language-specific line. `$1` is the version label, `$2` the tapped IOR.
+# The same driver the omniORB cell uses, so what differs between the two client
+# cells is the peer and nothing else.
+drive_python() {
+  local out
+  out=$(python3 "$ROOT/crates/orbweaver-gen/python/echo_client.py" "$D/site" \
+        spikes/echo.idl "$2" "$ROOT/target/debug/orbweaver-py-bridge" \
+        $([ "$1" = 0 ] && echo --no-wide) 2>&1)
+  local rc=$?
+  printf '%s\n' "$out" >"$D/run-$1.out"
+  printf '%s\n' "$out"
+  [ "$rc" -eq 0 ] && case "$out" in *"python target: PASS"*) true ;; *) false ;; esac
+}
+
+passes=$(run_each_giop_version "$D/j.ior" "$D" echo_string drive_python) || {
+  printf '%s\n' "$passes"
+  exit 1
+}
+readings=""
+calls=0
+while IFS=$'\t' read -r kind a b; do
+  case "$kind" in
+    RAN)
+      readings="$readings$(read_reply_orders "$b")
+"
+      [ "$a" = 2 ] && calls=$(grep -c '^  ok' "$D/run-2.out")
+      ;;
+    note) printf 'note\t%s\n' "$a" ;;
+  esac
+done <<<"$passes"
 
 # ── what the peer wrote, read off §15.4.1's flag byte ───────────────────────
-. "$ROOT/spikes/lib/tap_orders.sh"
-read_reply_orders "$D/tap.log" || exit 1
-note_request_orders "$D/tap.log"
+sort -u <<<"$(grep -E "^observed" <<<"$readings")"
+if ! grep -q "^observed" <<<"$readings"; then
+  echo "FAIL	no order was read off the wire in any pass, so this cell measured nothing"
+  exit 1
+fi
+note_request_orders "$D/tap-2.log"
 
 printf 'note\t%s generated call(s) completed over the wire against JacORB, no Rust stub in the path\n' "$calls"
 printf 'note\tD030 §3.1 records the Python client direction as not established off a foreign peer; this cell is that reading\n'

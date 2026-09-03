@@ -44,6 +44,15 @@ public final class EchoClient {
             System.out.println("usage: EchoClient <echo.idl> <echo.ior> <bridge>");
             System.exit(2);
         }
+        // `--no-wide` omits the one case the wire refuses below GIOP 1.2. Off by
+        // default, so every cell that does not pass it drives what it always
+        // drove. Added 2026-09-03 so the client direction can READ GIOP 1.0.
+        boolean _narrow = false;
+        for (String _a : _argv) {
+            if (_a.equals("--no-wide")) {
+                _narrow = true;
+            }
+        }
         String _idl = _argv[0];
         String _ior = _argv[1];
         String _bridge = _argv[2];
@@ -66,8 +75,13 @@ public final class EchoClient {
             check("echo_ragged(Ragged(...))", _echo.echo_ragged(_ragged), _ragged);
 
             // `wstring`: the codeset path, which the wire decides and the
-            // client never sees.
-            check("echo_wstring('정적 스텁')", _echo.echo_wstring("정적 스텁"), "정적 스텁");
+            // client never sees. Skipped under `--no-wide`, and only there:
+            // GIOP 1.0 cannot carry it (§9.3.1.6) and refusing is correct, so a
+            // 1.0 pass that drove it would measure our own refusal instead of
+            // the peer's flag byte.
+            if (!_narrow) {
+                check("echo_wstring('정적 스텁')", _echo.echo_wstring("정적 스텁"), "정적 스텁");
+            }
 
             // `sequence<octet>` is a byte[] on this side and base64 across the
             // seam.
