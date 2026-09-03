@@ -763,6 +763,11 @@ fn run(out: &[&str; 2], hold: bool) -> Result<u32, Box<dyn std::error::Error>> {
             "\nHOLDING — both tenants' factories stay served; point an external client at {}",
             out.join(", ")
         );
+        // serve_sites: refusal — HOLDING serves external clients until the
+        // driver kills the process ("Stopped by killing the process", this
+        // file's header): every local check is already done, so no in-process
+        // actor is left to raise a stop and a predicate here would be one
+        // nobody can call.
         server.serve_shared(&svc, || false)?;
     }
 

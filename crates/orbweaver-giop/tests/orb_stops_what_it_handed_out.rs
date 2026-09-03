@@ -222,12 +222,16 @@ fn a_peer_mid_call_gets_its_reply_and_then_the_goodbye() {
             let server = orb.server("127.0.0.1:0", KEY.to_vec()).expect("bind");
             let addr = server.local_addr().expect("bound address");
 
-            // `|| false` on purpose. It is the shape 17 of this workspace's 63
-            // serve sites use, and before D034 it meant *this server cannot be
-            // stopped without killing the process*. If the ORB's flag were not
-            // OR'd in, this test would hang rather than fail — which is why the
-            // client's reads are bounded.
+            // `|| false` on purpose. It is the commonest serve-site shape in
+            // this workspace (`spikes/serve_sites.py` keeps the count — a
+            // figure retyped here would drift), and before D034 it meant *this
+            // server cannot be stopped without killing the process*. If the
+            // ORB's flag were not OR'd in, this test would hang rather than
+            // fail — which is why the client's reads are bounded.
             let serving = std::thread::spawn(move || {
+                // serve_sites: refusal — the stop under measurement is the
+                // ORB's own flag; a predicate of the test's own would stop the
+                // server by the route this test exists to prove unnecessary.
                 server.serve(&mut servant, || false).expect("serve");
             });
 
@@ -477,6 +481,9 @@ fn wait_until_stopped_answers_false_while_a_servant_is_still_held() {
     let server = orb.server("127.0.0.1:0", KEY.to_vec()).expect("bind");
     let addr = server.local_addr().expect("bound");
     let serving = std::thread::spawn(move || {
+        // serve_sites: refusal — the stop under measurement is the ORB's own
+        // flag (D034); `wait_until_stopped` is the question this test asks,
+        // and a stop predicate of the test's own would answer it for it.
         server.serve(&mut servant, || false).expect("serve");
     });
 

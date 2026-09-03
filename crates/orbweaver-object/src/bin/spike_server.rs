@@ -394,6 +394,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         calls: 0,
         seen: Default::default(),
     };
+    // serve_sites: refusal — this process IS the server: serving is its whole
+    // remaining job, and the drivers that start it (`spikes/perm_fallback.sh`
+    // and the harness) stop it by killing the process it announced READY
+    // from. No in-process actor is left to raise a stop, so a predicate here
+    // would be one nobody can call.
     server.serve(&mut echo, || false)?;
     Ok(())
 }

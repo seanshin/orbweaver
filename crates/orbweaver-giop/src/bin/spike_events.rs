@@ -149,9 +149,24 @@ fn require(cond: bool, what: &str) -> Result<(), Box<dyn std::error::Error>> {
 
 /// A consumer servant of our own on its own loopback server, collecting into
 /// an [`orbweaver_giop::event_server::EventSink`].
+///
+/// Dropping it stops its server: the fixture's own teardown route for these
+/// helpers is drop (the pull phase already ends with one), so the serve loop
+/// is wired to it — the server's own flag (D034), raised and then joined.
 struct Consumer {
     ior: Ior,
     sink: orbweaver_giop::event_server::EventSink,
+    stop: orbweaver_giop::server::StopFlag,
+    serving: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for Consumer {
+    fn drop(&mut self) {
+        self.stop.raise();
+        if let Some(serving) = self.serving.take() {
+            let _ = serving.join();
+        }
+    }
 }
 
 fn start_consumer(key: &[u8]) -> Consumer {
@@ -160,10 +175,12 @@ fn start_consumer(key: &[u8]) -> Consumer {
     let servant = PushConsumerServant::new(key.to_vec());
     let ior = servant.ior("127.0.0.1", port);
     let sink = servant.sink();
-    std::thread::spawn(move || {
-        let _ = server.serve_shared(&servant, || false);
+    let stop = server.stop_flag();
+    let watch = stop.clone();
+    let serving = std::thread::spawn(move || {
+        let _ = server.serve_shared(&servant, move || watch.raised());
     });
-    Consumer { ior, sink }
+    Consumer { ior, sink, stop, serving: Some(serving) }
 }
 
 /// A reference to a port that was bound and then released: dialling it is
@@ -200,9 +217,22 @@ fn attach(channel: &Ior, consumer: &Ior) -> Result<(), Box<dyn std::error::Error
 
 /// A `CosEventComm::PullSupplier` of our own on its own loopback server — the
 /// thing the channel has to go and ask, rather than one that calls.
+///
+/// Dropping it stops its server, exactly as [`Consumer`]'s drop does.
 struct Supplier {
     ior: Ior,
     source: EventSource,
+    stop: orbweaver_giop::server::StopFlag,
+    serving: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for Supplier {
+    fn drop(&mut self) {
+        self.stop.raise();
+        if let Some(serving) = self.serving.take() {
+            let _ = serving.join();
+        }
+    }
 }
 
 fn start_supplier(key: &[u8]) -> Supplier {
@@ -211,10 +241,12 @@ fn start_supplier(key: &[u8]) -> Supplier {
     let servant = PullSupplierServant::new(key.to_vec());
     let ior = servant.ior("127.0.0.1", port);
     let source = servant.source();
-    std::thread::spawn(move || {
-        let _ = server.serve_shared(&servant, || false);
+    let stop = server.stop_flag();
+    let watch = stop.clone();
+    let serving = std::thread::spawn(move || {
+        let _ = server.serve_shared(&servant, move || watch.raised());
     });
-    Supplier { ior, source }
+    Supplier { ior, source, stop, serving: Some(serving) }
 }
 
 /// Attaches `supplier` to a fresh ProxyPullConsumer: the channel will now come

@@ -115,6 +115,9 @@ fn run() -> Result<bool, String> {
     let Some(args) = parse_args()? else { return Ok(true) };
 
     // ── ingest ──────────────────────────────────────────────────────────────
+    // Held for the whole run and dropped on every path out of it, which stops
+    // the self-facade's serve thread; the foreign arm has no server to hold.
+    let mut _facade = None;
     let (repository, source, oracle) = match &args.repository {
         Some(path) => {
             let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
@@ -124,7 +127,8 @@ fn run() -> Result<bool, String> {
         }
         None => {
             let local = load_idl(&args.idl)?;
-            let ior = self_facade(local)?;
+            let (ior, guard) = self_facade(local)?;
+            _facade = Some(guard);
             let label = args.source.clone().unwrap_or_else(|| "ifr://self".to_owned());
             (
                 ior,
@@ -331,20 +335,42 @@ fn load_idl(paths: &[String]) -> Result<Registry, String> {
     .map_err(|e| e.message)
 }
 
-/// Stands the project's own IR facade up on loopback and returns its reference.
+/// Stands the project's own IR facade up on loopback and returns its
+/// reference, with the guard whose drop stops the serve thread.
 ///
 /// A self-consistency stand-in, labelled as one everywhere it prints: it
 /// measures our encoder against our decoder. What it *does* faithfully
 /// reproduce is the thing S3i exists for — the entries come back
 /// `Origin::Ingested` with an empty annotation map, because the wire carries no
 /// annotations, whoever is on the other end of it.
-fn self_facade(registry: Registry) -> Result<Ior, String> {
+fn self_facade(registry: Registry) -> Result<(Ior, FacadeGuard), String> {
     let server = Orb::new().server("127.0.0.1:0", ROOT_KEY.to_vec()).map_err(|e| e.to_string())?;
     let port = server.local_addr().map_err(|e| e.to_string())?.port();
     let mut facade = RepositoryServer::new("127.0.0.1", port, ROOT_KEY.to_vec(), registry);
     let root = facade.root_ior();
-    std::thread::spawn(move || {
-        let _ = server.serve(&mut facade, || false);
+    let stop = server.stop_flag();
+    let watch = stop.clone();
+    let serving = std::thread::spawn(move || {
+        let _ = server.serve(&mut facade, move || watch.raised());
     });
-    Ok(root)
+    Ok((root, FacadeGuard { stop, serving: Some(serving) }))
+}
+
+/// Holds the facade's stop route for the run that needed it.
+///
+/// Dropping this raises the server's own flag (D034) and joins the serve
+/// thread, on every exit path — the facade's teardown route is the end of the
+/// scope that stood it up, not the death of the process.
+struct FacadeGuard {
+    stop: orbweaver_giop::server::StopFlag,
+    serving: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for FacadeGuard {
+    fn drop(&mut self) {
+        self.stop.raise();
+        if let Some(serving) = self.serving.take() {
+            let _ = serving.join();
+        }
+    }
 }

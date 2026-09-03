@@ -119,8 +119,10 @@ fn run(out_path: &str, hold: bool) -> Result<(), Box<dyn std::error::Error>> {
     println!("listening on 127.0.0.1:{port}");
     println!("IOR written to {out_path}");
     println!("READY");
-    std::thread::spawn(move || {
-        let _ = server.serve_shared(&ns, || false);
+    let stop = server.stop_flag();
+    let watch = stop.clone();
+    let serving = std::thread::spawn(move || {
+        let _ = server.serve_shared(&ns, move || watch.raised());
     });
 
     let mut ctx = NamingContext::connect(&root, T)?;
@@ -233,5 +235,11 @@ fn run(out_path: &str, hold: bool) -> Result<(), Box<dyn std::error::Error>> {
             std::thread::park();
         }
     }
+    // The fixture's own teardown: the checks are done, so the server is asked
+    // to stop by its own flag (D034) and the join is the measurement that it
+    // did. `--hold` never reaches here — that process's teardown is the kill
+    // this file's header documents.
+    stop.raise();
+    let _ = serving.join();
     Ok(())
 }

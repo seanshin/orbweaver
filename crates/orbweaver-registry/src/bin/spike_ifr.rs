@@ -154,8 +154,10 @@ fn run(ior_path: &str, idl_paths: &[&str], hold: bool) -> Fallible {
     println!("listening on 127.0.0.1:{port}");
     println!("IOR written to {ior_path}");
     println!("READY");
-    std::thread::spawn(move || {
-        let _ = server.serve_shared(&facade, || false);
+    let stop = server.stop_flag();
+    let watch = stop.clone();
+    let serving = std::thread::spawn(move || {
+        let _ = server.serve_shared(&facade, move || watch.raised());
     });
 
     // ── lookup_id, both outcomes ──
@@ -389,5 +391,11 @@ fn run(ior_path: &str, idl_paths: &[&str], hold: bool) -> Fallible {
             std::thread::park();
         }
     }
+    // The fixture's own teardown: the checks are done, so the server is asked
+    // to stop by its own flag (D034) and the join is the measurement that it
+    // did. `--hold` never reaches here — that process's teardown is the kill
+    // this file's header documents.
+    stop.raise();
+    let _ = serving.join();
     Ok(())
 }

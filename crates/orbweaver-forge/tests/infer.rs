@@ -68,8 +68,10 @@ fn ingested() -> Registry {
     let port = server.local_addr().expect("has an address").port();
     let mut facade = RepositoryServer::new("127.0.0.1", port, b"IR".to_vec(), local);
     let root: Ior = facade.root_ior();
-    std::thread::spawn(move || {
-        let _ = server.serve(&mut facade, || false);
+    let stop = server.stop_flag();
+    let watch = stop.clone();
+    let serving = std::thread::spawn(move || {
+        let _ = server.serve(&mut facade, move || watch.raised());
     });
 
     let mut registry = Registry::new();
@@ -82,6 +84,13 @@ fn ingested() -> Registry {
         Duration::from_secs(10),
     )
     .expect("the facade is reachable");
+    // The facade existed for the ingest above and for nothing else. Nine tests
+    // in this binary call this helper; a serve loop nothing stops would leave
+    // nine threads each polling a port for the rest of the run. The stop is
+    // the server's own flag (D034) and the join is the measurement that it
+    // worked.
+    stop.raise();
+    let _ = serving.join();
     assert!(report.refused.is_empty(), "{:?}", report.refused);
     assert_eq!(
         registry.origin(SUBJECT_ID),

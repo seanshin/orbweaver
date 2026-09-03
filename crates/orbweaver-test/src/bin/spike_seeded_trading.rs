@@ -202,6 +202,11 @@ fn run(out: &str, port: u16, hold: bool) -> Result<u32> {
             "\nHOLDING — the seeded population is served at 127.0.0.1:{bound}; \
              point spikes/seed_trading_client.py at {out}"
         );
+        // serve_sites: refusal — HOLDING serves the seeded population to a
+        // foreign client until the driver kills the process, which is this
+        // fixture's whole teardown route; every local check is already done,
+        // so no in-process actor is left to raise a stop and a predicate here
+        // would be one nobody can call.
         server.serve_shared(&trader, || false)?;
     }
     Ok(failures)

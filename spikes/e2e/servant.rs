@@ -220,6 +220,10 @@ fn main() -> std::process::ExitCode {
     ));
     let mut front =
         PoaFront { poa, inner: ParkingControlSkeleton::new(refs, Facility::new()) };
+    // serve_sites: refusal — this process IS the server: serving is its whole
+    // remaining job, and `spikes/end_to_end.sh` stops it by `kill`ing the PID
+    // it captured at launch. No in-process actor is left to raise a stop, so
+    // a predicate here would be one nobody can call.
     if let Err(e) = server.serve(&mut front, || false) {
         eprintln!("serve: {e}");
         return std::process::ExitCode::FAILURE;

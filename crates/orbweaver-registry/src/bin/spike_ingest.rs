@@ -138,7 +138,10 @@ fn run(args: &[String]) -> Fallible {
     };
 
     // ── the legacy target: an object we have no IDL for ──
-    let target = legacy_target()?;
+    // The `Serving` halves are held to the end of `run`, whose scope end is
+    // this fixture's own teardown; `--hold` parks before reaching it, and that
+    // process is stopped by killing it, as the header says.
+    let (target, _target_serving) = legacy_target()?;
     println!("legacy target listening, object key tms/TrackManager");
 
     // ── the repository ──
@@ -147,6 +150,7 @@ fn run(args: &[String]) -> Fallible {
         Some(path) => format!("file://{path}"),
         None => "ifr://self".into(),
     });
+    let mut _repository_serving = None;
     let (repository, oracle) = match foreign {
         Some(path) => {
             let ior = Ior::parse(std::fs::read_to_string(path)?.trim())?;
@@ -158,7 +162,8 @@ fn run(args: &[String]) -> Fallible {
             (ior, Oracle::Foreign)
         }
         None => {
-            let ior = self_facade()?;
+            let (ior, serving) = self_facade()?;
+            _repository_serving = Some(serving);
             println!(
                 "repository: OUR OWN facade over {} — SELF-CONSISTENCY ONLY, not a cross-ORB claim",
                 DEFAULT_IDL.join(" + ")
@@ -355,7 +360,9 @@ fn refusal_battery(repository: &Ior, source: &str) -> Fallible {
 /// socket rather than faked in-process, so the CDR path is the same one a real
 /// hostile repository would use.
 fn hostile_battery() -> Fallible {
-    let hostile = HostileRepository::start()?;
+    // Dropped at the end of the battery, which stops the hostile server: it
+    // existed for these refusals and for nothing after them.
+    let (hostile, _hostile_serving) = HostileRepository::start()?;
     let mut registry = Registry::new();
     let report = ingest::ingest(
         &mut registry,
@@ -392,17 +399,38 @@ fn ingest_local_idl() -> Result<Registry, Box<dyn std::error::Error>> {
     )?)
 }
 
-fn self_facade() -> Result<Ior, Box<dyn std::error::Error>> {
+/// A serve thread and the flag that stops it.
+///
+/// Every server this fixture stands up hands one of these back, and dropping
+/// it is the teardown route: the server's own flag (D034) is raised and the
+/// thread joined, so a scope's end stops the server that existed for it.
+struct Serving {
+    stop: orbweaver_giop::server::StopFlag,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for Serving {
+    fn drop(&mut self) {
+        self.stop.raise();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn self_facade() -> Result<(Ior, Serving), Box<dyn std::error::Error>> {
     let registry = ingest_local_idl()?;
     let server = Orb::new().server("127.0.0.1:0", b"InterfaceRepository".to_vec())?;
     let port = server.local_addr()?.port();
     let facade =
         RepositoryServer::new("127.0.0.1", port, b"InterfaceRepository".to_vec(), registry);
     let root = facade.root_ior();
-    std::thread::spawn(move || {
-        let _ = server.serve_shared(&facade, || false);
+    let stop = server.stop_flag();
+    let watch = stop.clone();
+    let thread = std::thread::spawn(move || {
+        let _ = server.serve_shared(&facade, move || watch.raised());
     });
-    Ok(root)
+    Ok((root, Serving { stop, thread: Some(thread) }))
 }
 
 // ── the payoff: a call built from ingested metadata alone ────────────────────
@@ -686,13 +714,15 @@ impl Dispatch for TrackManager {
     }
 }
 
-fn legacy_target() -> Result<Ior, Box<dyn std::error::Error>> {
+fn legacy_target() -> Result<(Ior, Serving), Box<dyn std::error::Error>> {
     let server = Orb::new().server("127.0.0.1:0", b"tms/TrackManager".to_vec())?;
     let ior = server.ior(SUBJECT, "127.0.0.1")?;
-    std::thread::spawn(move || {
-        let _ = server.serve(&mut TrackManager, || false);
+    let stop = server.stop_flag();
+    let watch = stop.clone();
+    let thread = std::thread::spawn(move || {
+        let _ = server.serve(&mut TrackManager, move || watch.raised());
     });
-    Ok(ior)
+    Ok((ior, Serving { stop, thread: Some(thread) }))
 }
 
 // ── the hostile repository ───────────────────────────────────────────────────
@@ -710,15 +740,17 @@ const HOSTILE_ROOT: &[u8] = b"hostile";
 const HOSTILE_INFIX: &[u8] = b"hostile/";
 
 impl HostileRepository {
-    fn start() -> Result<Ior, Box<dyn std::error::Error>> {
+    fn start() -> Result<(Ior, Serving), Box<dyn std::error::Error>> {
         let server = Orb::new().server("127.0.0.1:0", HOSTILE_ROOT.to_vec())?;
         let port = server.local_addr()?.port();
         let root = server.ior(ifr::REPOSITORY_ID, "127.0.0.1")?;
         let mut servant = HostileRepository { port };
-        std::thread::spawn(move || {
-            let _ = server.serve(&mut servant, || false);
+        let stop = server.stop_flag();
+        let watch = stop.clone();
+        let thread = std::thread::spawn(move || {
+            let _ = server.serve(&mut servant, move || watch.raised());
         });
-        Ok(root)
+        Ok((root, Serving { stop, thread: Some(thread) }))
     }
 
     fn key(id: &str) -> Vec<u8> {
