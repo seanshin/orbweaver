@@ -716,16 +716,31 @@ no clause.
 
 ### D. The claims that are conditions, not work / 작업이 아니라 조건인 것
 
-Six of the ten `SKIPPED`s wait on something absent from this machine rather than
-on anything undone: docker and multipass (NAT), `VOYAGE_API_KEY`, an
-`ORBWEAVER_IDP_URL` issuer for CSIv2, omniORBpy `sslTP` / JacORB SSL, and the
-live S1–S3 pass which PLAN §8 puts on a **per-release** cadence rather than a
-per-run one.
+**Re-measured 2026-09-03.** Five `SKIPPED`s wait on something absent from
+this machine rather than on anything undone — and the list moved twice this
+week by *building* rather than by waiting: omniORBpy `sslTP` and JacORB SSL
+were conditions until `spikes/tls/setup.sh` and `spikes/jacorb/SslServer.java`
+made them fixtures, and multipass was "absent" in prose while installed in
+fact. What is left: docker (here — **present on CI**, where the container probe
+now runs and passes), a cluster for the k8s probe, `VOYAGE_API_KEY`, an
+`ORBWEAVER_IDP_URL` issuer for CSIv2, and the live S1–S3 pass PLAN §8 puts on a
+**per-release** cadence. The count the verdict prints is the honest one.
 
-**They are counted, aged, and correct as they stand.** Listing them here is so
-that a future reader does not mistake a long `SKIPPED` list for undone work —
-the verdict already says *unmeasured, not passing*, and the honest number is the
-one it prints.
+**One condition is a choice rather than an absence, and it is the owner's.**
+`ci.yml` pins no Rust toolchain and there is no `rust-toolchain.toml`, so CI
+lints with its runner image's stable (1.98 on 2026-09-03) while this machine
+lints with 1.95. Two CI pushes went red that day on lints the local clippy
+does not emit — a local green was never evidence about CI's clippy, and only
+raising `rust-version` to its true 1.88 unlocked enough MSRV-gated lints on both
+sides to show the sets differed. Pinning makes *clippy is green* mean one thing
+on every machine and makes each Rust release a manual edit; not pinning is
+what produced the two reds. Neither is free, and this document does not pick.
+
+*2026-09-03 재측정. 다섯이 남았고, 이번 주에 목록은 기다려서가 아니라 **지어서** 두
+번 움직였다 — SSL 둘은 픽스처가 되었고, multipass는 산문에서만 없었다. 그리고 부재가
+아니라 **선택**인 조건이 하나 있다: CI가 Rust 툴체인을 고정하지 않아 CI는 1.98로,
+이 머신은 1.95로 lint한다. 로컬 초록은 CI의 clippy에 대한 증거였던 적이 없다. 고정은
+매 릴리스마다 손을 타고, 미고정은 오늘 빨강 둘을 냈다. 소유자의 몫이다.*
 
 *열 중 여섯은 이 머신에 없는 것을 기다리지, 하지 않은 일을 기다리지 않는다. 계수되고
 나이가 붙어 있으며 지금 그대로가 정확하다.*
