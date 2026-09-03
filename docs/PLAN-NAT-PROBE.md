@@ -51,12 +51,24 @@ Every line here is a reading, not an inference. Dates are 2026-09-03.
    the script reports 2 skips (container, k8s) and the harness's sentence
    happens to be right; on CI, where multipass is absent, the count is 2 or 3
    and the sentence names the wrong probe or the right one by luck.
-7. **Where the 202s would go, if it is the probe**: `spikes/nat/Dockerfile`
-   does `COPY . .` and `cargo build --release -p orbweaver-giop --bin spike-nat`
-   **inside the container**, from a `rust:1.85-slim` image — a cold release
-   build of the crate and its dependencies, on every push, with no cache, to
-   produce a binary the runner has already built. Read off the Dockerfile; not
-   yet timed on CI, because nothing on CI prints the probe's own lines.
+7. **Where the 202s would go, if it is the probe** — two places, read off the
+   files while sizing this plan for parallel work:
+   - `spikes/nat/compose.yaml` builds both services with `context: ../..` —
+     **the repository root** — and the Dockerfile does `COPY . .`. **There is
+     no `.dockerignore`.** On the runner that context includes `target/`,
+     which `cargo test --workspace` has just filled: gigabytes streamed into
+     the build daemon before a single instruction runs, twice per probe run
+     (`up --build server`, then `run client` against the same image).
+   - the Dockerfile then does `cargo build --release -p orbweaver-giop --bin
+     spike-nat` **inside** a `rust:1.85-slim` container — a cold release build
+     of the crate and its dependencies, with no cache, to produce a binary the
+     runner has already built.
+
+   Neither is timed on CI yet, because nothing on CI prints the probe's own
+   lines. Both are repairs that can land **without knowing which one it was**,
+   because each is wrong on its own terms: a context that ships build output is
+   wrong whatever it costs, and an in-container build measures nothing the
+   probe is about.
 
 *41분 → 그룹별 시각 → `NAT rewriting` 202초(로컬 10초) → 다이얼이 아님 → 러너에
 docker가 있음 → 그래서 컨테이너 탐침이 **돌 것이다** — 그런데 **첫 초안이 증거로 든
@@ -83,10 +95,12 @@ direction**. It reports *less* measured than actually was. Nobody looks at a
 skip that is really a pass, which is why it lasted — a false red is found in an
 hour and a false skip is found by the electricity bill.
 
-And if the probe is running and passing, **it has never had its negative
-control run**, because nobody knew it was running — and if it is not, the 192s
-is something else and this plan's S3 is the wrong repair. Either way the first
-step is the same: make the harness say what happened. Its header says *expect to fix it, not to confirm
+And if the probe is running and passing, **nobody has read its control**,
+because nobody knew it was running. The control is not missing — `run.sh`
+already runs two cases, `naive` (must **fail**) and `published` (must pass) —
+it is *unread*: its lines never reach a log. That changes S2 from "write a
+control" to "make the one that exists visible and cite it", which is the
+same repair as S1 seen from the other end. Its header says *expect to fix it, not to confirm
 it, and treat a first green run with suspicion.* Every run so far has been a
 first green run nobody treated with anything.
 
@@ -97,74 +111,160 @@ first green run nobody treated with anything.
 
 ---
 
-## 3. The work, in order / 작업, 순서대로
+## 3. The work, as two lanes / 작업, 두 차선으로
 
-### S1 — the harness asks the script which probe skipped, and which ran
+**What is genuinely serial, and what only looked it.** The first draft ran
+S1→S2→S3 because S3 "should not land before S1 proves the probe runs". Sized
+against the files, that dependency is not there: S3's two repairs are wrong on
+their own terms (§1.7) and would be made even if the probe had never run. What
+*is* serial is narrow — **the header (S2) may not be rewritten until S1 has
+printed, on CI, what the probe did** — and that is one file, at the end.
+
+So: two lanes with **disjoint footprints**, one merge point.
+
+| lane | touches | must not touch |
+|---|---|---|
+| **A — the harness says what happened** | `spikes/run_checks.sh` (one group), a control script under `spikes/` | anything under `spikes/nat/` |
+| **B — the probe stops paying for what it does not measure** | `spikes/nat/Dockerfile`, `spikes/nat/compose.yaml`, a `.dockerignore` | `spikes/run_checks.sh`, `spikes/nat/run.sh`'s header |
+| **merge — the header, and the reading** | `spikes/nat/run.sh` header, `docs/PLAN-FIRST-COMPLETION.md` §D | — |
+
+D028's rule for parallel work applies unchanged: *the merged tree is compiled
+before the merge, not after*; each lane runs the whole harness on its own
+branch, and the merge runs it once more. Neither lane's verdict is evidence for
+the other's.
+
+### Who runs which lane, and the rule that decides it
+
+The parallel protocol this repository has used since 2026-08-13 has one hard
+line: **nobody but the coordinator touches `spikes/run_checks.sh`**, because
+the harness is the single merge gate (D010 §7.5) and a worktree agent editing
+it is an agent editing the instrument its own work is judged by. Lane A's
+footprint *is* that file. So:
+
+| lane | runs as | why |
+|---|---|---|
+| **A** | the coordinating session, on `main`, serially | it edits the gate |
+| **B** | one `general-purpose` agent, `isolation: "worktree"`, `spikes/nat/` and a `.dockerignore` only | disjoint from the gate; local checks only, no docker here |
+| **merge** | the coordinating session | it reads lane A's CI log before touching the header |
+
+Lane B's agent is told what every wave's agents are told: read `CLAUDE.md`
+first; **report the harness group it recommends without applying it**; one
+commit in the style of `git log -5`; and it may not run `run_checks.sh` (the
+lock is machine-wide and the coordinator is holding it for lane A). Its local
+oracle is the two checks it writes plus `bash -n`. Its wire oracle is the
+merged harness run, which is serial and the coordinator's.
+
+**What lands first.** Lane A, because its CI push is the reading everything
+else is conditioned on (§4, first row). Lane B's branch is merged second, its
+recommended group applied by the coordinator, and the merged tree runs the
+harness once — that run is the one whose stamp lane B's claim rests on.
+
+*프로토콜의 한 줄 — **코디네이터 외에는 아무도 `run_checks.sh`를 만지지 않는다** —
+이 A 차선의 발자국을 결정한다. A는 코디네이터가 `main`에서 직렬로, B는 워크트리
+에이전트 하나가 `spikes/nat/`만. 먼저 착지하는 것은 A다 — 그 CI 푸시가 나머지 모든
+것의 조건이 되는 판독이기 때문이다.*
+
+### Lane A — S1: the harness reads the script's lines, not its count
 
 `nat_rewrite.sh` prints one `skip` line per absent probe (vm, container, k8s),
-each naming what is missing, and one `pass` line per probe that ran. The
-harness reads the count and guesses. It reads the **lines** instead, and prints
-one counted `SKIPPED` per absent probe, naming it — and one `ok` per probe that
-ran, quoting the probe's own pass line, so that **a probe running on CI is
-visible in the CI log for the first time**. This is the step that turns §1.5's
-circumstantial case into a reading.
+each naming what is missing, and one `pass` line per probe that ran. The harness
+reads the count and guesses. It reads the **lines** instead — one counted
+`SKIPPED` per absent probe, naming it, and one `ok` per probe that ran, quoting
+the probe's own pass line — so that **what the probe did on CI is in the CI log
+for the first time**. This is the step that turns §1.5's circumstantial case
+into a reading.
 
-- **Measurement:** on this machine (docker absent, multipass present with the
-  VM running) the group reads `ok vm … SKIPPED container … SKIPPED k8s`; on CI
-  it reads whatever is true there, and for the first time the log says which.
-- **Control:** feed the group synthesised `nat_rewrite.sh` output — all three
-  skipped, none skipped, and each alone. Five shapes, five different verdict
-  lines. The harness's current code produces one sentence for all of them.
+- **Measurement:** here (docker absent, VM running) the group reads
+  `ok vm … SKIPPED container … SKIPPED k8s`; on CI it reads whatever is true
+  there, and the log says which.
+- **Control:** a script that feeds the group's parser synthesised
+  `nat_rewrite.sh` output — all three skipped, none, and each alone. Five
+  shapes, five different verdict lines. The current code produces one sentence
+  for all five. Lifts the parser out of `run_checks.sh` with `awk`, as
+  `ledger_control.sh` does; does not restate it.
+- **Also in this lane:** the group prints the script's `naive` and `published`
+  lines when the container probe ran, so lane B's before/after can be read off
+  the same log — the two lanes share a *reader*, not a file.
 
-### S2 — the container probe's header stops lying, and its control runs once
+### Lane B — S3: the probe stops paying for what it does not measure
 
-Strike `THIS SCRIPT HAS NEVER BEEN RUN` and replace it with when and where it
-first did (CI, ubuntu-24.04 runner, the first push after docker landed in the
-runner image — find the run, do not estimate it). Then run the negative control
-the header asks for: the probe with the rewrite **disabled** must fail on the
-naive publish, on CI, once, and the run is cited.
+Two repairs, both in `spikes/nat/`, both landable without lane A:
 
-- **Measurement:** a CI run where the probe is deliberately broken and goes red.
-- **Why on CI:** there is no docker here, and a control that cannot run where
-  the subject runs is a claim.
+1. **A `.dockerignore`** at the context root (`../..` → the repository root)
+   excluding `target/`, `spikes/*/omniORBpy/`, `spikes/tao/ACE_wrappers/`,
+   `spikes/jacorb/lib/` and the other ignored trees — read off `.gitignore`,
+   not typed twice: the ignore file is *derived* from it by a line in
+   `run.sh`, or the two drift. This alone may be most of the 192s, and it is
+   correct regardless: a build context that ships build output is wrong at
+   any size.
+2. **The binary comes from the runner, not from a build inside the image.**
+   The Dockerfile becomes `debian-slim` + `COPY` of the `spike-nat` the runner
+   has **already built in debug** — `nat_rewrite.sh:143` runs
+   `cargo build -q --bin spike-nat` before the probe, on the host, every time.
+   No Rust toolchain in the image.
 
-### S3 — the 202s becomes ~5s, without changing what is measured
+   The first draft said *"`--release`, which the release-profile group already
+   does"*. Checked: that group runs `cargo test --workspace --release` and does
+   produce `target/release/spike-nat` — but it runs **after** the NAT group, so
+   lane B could not rely on it without reordering the harness, which is lane
+   A's file. And release is the wrong profile to want here: the probe measures
+   **routing**, and an optimiser setting is not a routing fact. The debug binary
+   the script already builds is the right one, and it is there by construction.
 
-The Dockerfile builds `spike-nat` from source inside the container. The runner
-has already built it for `cargo test`. Two ways to stop paying twice:
+   | | | cost |
+   |---|---|---|
+   | **A — copy the host's debug `spike-nat`** | no toolchain in the image; the probe measures routing with the binary `nat_rewrite.sh` just built | zero extra builds |
+   | B — keep the in-container build, add a BuildKit cache mount | still cold on a fresh runner | saves only when warm |
 
-| | | cost |
-|---|---|---|
-| A | `COPY` the runner's `target/release/spike-nat` into a `debian-slim` image — no Rust in the container at all | one `cargo build --release --bin spike-nat` the harness already does elsewhere; image build ~seconds |
-| B | keep the in-container build and add a BuildKit cache mount | still a cold build on a fresh runner; saves only on a warm one |
+   One thing this forces and the plan says out loud: **the image is
+   linux/amd64 and the host binary must be too.** On the runner it is. On a
+   macOS host the debug binary is `aarch64-apple-darwin` and would not run in
+   the container — which is fine, because docker is not here; but a Linux
+   developer on arm64 would hit it. The Dockerfile `COPY`s from a path
+   `run.sh` chooses by `uname -m`, and refuses with a sentence rather than
+   copying a binary the image cannot execute.
 
-**A, and the reason is the measurement, not the minutes.** The probe's claim is
-about *routing* — a client that cannot reach the servant's bound address — and
-a binary built on the host measures that identically. The in-container build
-measures nothing the probe is about; it is there because the Dockerfile was
-written on a machine that could not run it, by someone who could not know what
-the runner would have.
+   **A, and the reason is the measurement, not the minutes.** The probe's claim
+   is about *routing* — a client that cannot reach the servant's bound address
+   — and a binary built on the host measures that identically. The in-container
+   build is there because the Dockerfile was written on a machine that could not
+   run it, by someone who could not know what the runner would have.
 
-- **Measurement:** the group's stamped time on CI drops from ~200s to under
-  20s **and the probe's pass line is unchanged**.
+- **Measurement:** the group's stamped time on CI, before and after, **and the
+  probe's `naive`/`published` lines unchanged** — which lane A makes readable.
+  Until lane A merges, lane B's measurement is the stamp alone, and the plan
+  says so rather than pretending the probe's lines can be read.
 - **What must not happen:** the probe passing because the container can reach
-  the host's loopback. That is the naive case and it must still **fail**; if A
-  changes the network shape, the control in S2 catches it, which is why S2
-  lands first.
+  the host's loopback. That is the `naive` case and it must still **fail**; a
+  base-image or compose change that altered the network shape would show there.
+  Lane B does not touch `compose.yaml`'s `networks:` block for this reason, and
+  says so.
+- **Local check, without docker:** `docker build` cannot run here. What can:
+  `.dockerignore` is checked against `.gitignore` by a script (the derivation
+  above), and the Dockerfile is checked to name no `cargo` — both are
+  `run_checks.sh` groups lane A does not touch, in a new file.
 
-### S4 — the six SKIPPED become an honest count
+### Merge — S2 and S4: the header, and the count
 
-After S1 the harness's verdict on CI reads one fewer `SKIPPED` (the container
-probe measured) and one more on this machine that was already there (the VM).
-`docs/PLAN-FIRST-COMPLETION.md` §D lists *docker* among the conditions this
-machine lacks; it stays true of this machine and becomes false of CI, and the
-document says which.
+**After both lanes are in and the merged tree has run on CI once**, and only
+then: `spikes/nat/run.sh`'s header stops asserting `THIS SCRIPT HAS NEVER BEEN
+RUN` and says what lane A's CI log showed — the run number, the runner image,
+which case passed and which failed. If the log showed it did *not* run, the
+header stays and §4's first row is what the plan collapses to.
 
-*S1 하네스가 스크립트에게 어느 탐침이 건너뛰었는지 **묻는다**(세지 않고 읽는다). S2
-헤더의 거짓말을 지우고 **부정 대조군을 CI에서 한 번** 돌린다 — 대상이 도는 곳에서
-돌 수 없는 대조군은 주장이다. S3 202초를 ~5초로 — 분 때문이 아니라 측정 때문이다:
-컨테이너 안의 빌드는 탐침이 주장하는 것(라우팅)에 대해 아무것도 재지 않는다. S4
-SKIPPED 수가 정직해진다.*
+`docs/PLAN-FIRST-COMPLETION.md` §D lists *docker* among this machine's absent
+conditions; it stays true here and the sentence says CI is different.
+
+*첫 초안은 S1→S2→S3를 직렬로 두었다 — "S3는 S1이 탐침이 돈다는 것을 증명하기 전에
+착지하면 안 된다"고. 파일에 대고 재보니 그 의존성은 없다: S3의 두 수리는 **각각 그
+자체로 틀린 것**이라 탐침이 한 번도 돌지 않았더라도 해야 한다. 진짜로 직렬인 것은
+좁다 — **헤더(S2)는 S1이 CI에서 탐침이 무엇을 했는지 찍기 전에는 다시 쓸 수
+없다.** 그래서 발자국이 분리된 두 차선과 병합점 하나: **A**는 `run_checks.sh`의 그룹
+하나(스크립트의 개수가 아니라 **줄**을 읽는다), **B**는 `spikes/nat/`의
+Dockerfile·compose·`.dockerignore`(**`.dockerignore`가 없어 `COPY . .`가 러너의
+`target/`를 통째로 컨텍스트로 보낸다** — 이것이 192초의 유력 후보이고, 크기와
+무관하게 틀린 것이다). 두 차선은 파일이 아니라 **판독기**를 공유한다. D028의 규칙
+그대로: 병합된 트리는 병합 뒤가 아니라 **전에** 컴파일된다.*
 
 ---
 
@@ -172,16 +272,26 @@ SKIPPED 수가 정직해진다.*
 
 - **If the container probe is not what runs on CI.** The first draft of this
   plan cited a log line as proof and the line was another group's — recorded in
-  §1.5 rather than smoothed over. **S1 is what settles it**, on its first CI
-  push, before S2 edits any header or S3 touches the Dockerfile. If the probe
-  has never run, the header was right, the 192s is elsewhere, and this plan
-  collapses to S1 plus a fresh reading of the group stamps.
+  §1.5 rather than smoothed over. **Lane A settles it** on its first CI push.
+  If the probe has never run, the header was right, the 192s is elsewhere, the
+  merge step does not happen — and **lane B still lands**, because its two
+  repairs are wrong on their own terms and not because of the 192s.
+- **If the two lanes turn out to share a file.** They are scoped above by
+  path; the merge is where that is checked, by `git diff --name-only` between
+  the branches having no intersection. A lane that finds it must edit the
+  other's file stops and says so rather than editing it. **One known
+  near-miss, sized rather than discovered later:** `run_checks.sh:3999` names
+  `spikes/nat/Dockerfile` as the *age* anchor for the container probe's
+  `SKIPPED` line. Lane B editing that file moves lane A's printed age. That is
+  not a conflict — the age is derived from git, not typed — but it is a shared
+  *reading*, and the merge run is where it is read once with both lanes in.
 - **If option A changes the network shape.** A binary copied in is the same
   binary; the image's base and the `docker run` flags are what decide routing,
   and S3 changes neither. S2's control is the check.
-- **If 202s is not the build.** §1.7 reads it off the Dockerfile; S3's stamped
-  time on CI is the measurement, and if it does not move the cause is elsewhere
-  and S3 is reverted rather than kept for tidiness.
+- **If 202s is neither the context nor the build.** §1.7 reads both off the
+  files; lane B's stamped time on CI is the measurement. If it does not move,
+  the cause is elsewhere — but lane B is **not** reverted, for the reason above:
+  each of its repairs is correct independently of the number that found them.
 
 ---
 
@@ -212,6 +322,8 @@ difference between a row with an instrument and a row with a rumour.
 
 ## 7. Cost / 비용
 
-S1 is shell in one group and a four-case control. S2 is a header and one CI
-push that must go red. S3 is a Dockerfile. S4 is a sentence. The largest item is
-the CI push in S2, because it has to fail on purpose and be cited.
+Lane A is shell in one group and a five-shape control. Lane B is a
+`.dockerignore` derived from `.gitignore`, a Dockerfile, and two local checks.
+The merge is a header and a sentence. Run in parallel, the wall-clock is the
+longer lane plus one merged harness run; the CI pushes are one per lane and one
+for the merge, and the first of lane A's is the one that answers §4's first row.
