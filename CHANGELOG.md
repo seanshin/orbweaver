@@ -10,6 +10,41 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**`rust-version` said 1.85; the tree needs 1.88; and saying so cost three CI
+pushes.** The false figure was found only because the container probe's
+in-image `rust:1.85-slim` build had been failing on every push under a false
+`SKIPPED` (the entry below). `cargo +1.85 build` fails with ten E0658s —
+let-chains, stable in 1.88 — and `cargo +1.88 build --workspace --all-targets`
+is clean. It says 1.88 now, with why beside it, and a harness group builds one
+crate with the declared toolchain where it is installed (a counted `SKIPPED`
+naming it where not — installing a toolchain is a machine change). Control:
+1.85 put back → 11 error lines; 1.88 → 0.
+
+**Raising it woke MSRV-gated clippy lints, and CI's clippy is not this
+machine's.** Clippy gates lints on `rust-version`; 1.88 unlocked
+`is_multiple_of`, let-chain collapsing and `as_chunks` on both sides — but
+`ci.yml` pins no toolchain and there is no `rust-toolchain.toml`, so CI lints
+with its runner image's 1.98 and this machine with 1.95, and the sets differ.
+**Three pushes went red in a row**, and the first two were fixed one lint per
+push with CI as the oracle — the item-by-item defect `CLAUDE.md` opens with.
+The third was done as the operating model says: install CI's clippy, one
+whole-tree run, cluster — **one cause**, three `chunks_exact` sites in
+`approval.rs`'s SHA-256 that clippy's stop-at-first-error had hidden. All
+mechanical; the hash's known-answer vectors pass; `cargo +1.98 clippy
+--workspace --all-targets -- -D warnings` is 0. Codified: *a local clippy
+green is evidence about the local clippy*. Whether to pin the toolchain is the
+owner's and is written in `PLAN-FIRST-COMPLETION` §D with its cost either way.
+
+**§D re-measured**: five conditions, not six; two became fixtures this week by
+building them; one — the toolchain — is a choice rather than an absence.
+
+*`rust-version`은 1.85라 적혀 있었고 트리는 1.88이 필요했으며, 그렇게 말하는 데
+CI 푸시 셋이 들었다. 거짓 수치는 컨테이너 탐침의 이미지 안 빌드가 거짓 SKIPPED
+아래에서 매 푸시 실패하고 있었기 때문에야 발견되었다. 올리자 MSRV 게이트 lint가
+켜졌는데 **CI의 clippy(1.98)는 이 머신(1.95)의 것이 아니다** — 처음 둘은 CI를
+오라클로 푸시당 하나씩 고쳤고(건건이 결함), 셋째는 CI의 clippy를 설치해 트리
+전체를 한 번 돌려 원인 하나로 묶었다. 툴체인 고정 여부는 소유자의 몫이다.*
+
 **A probe whose header says it has never run was running on every CI push,
 failing, and reported as `SKIPPED — no docker`.** `docs/PLAN-NAT-PROBE.md`,
 both lanes, and what the first CI reading found.
