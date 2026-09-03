@@ -165,6 +165,9 @@ TP_SKIPS=""          # idx \t the skip's own first line, or empty
 TP_NOMEASURE=""      # idx, one per line: a declaring group that measures NOTHING
 TP_NOMEASURE_WHY=""  # idx \t what that group waits on, when it can say
 tp_fail_at_start=0
+tp_group_started=$(date +%s)
+TP_TOOK=""
+RUN_STARTED=$(date +%s)
 tp_skip_text=""
 
 # A group's verdict is a DELTA, not a flag: every group already reports by
@@ -173,13 +176,21 @@ tp_skip_text=""
 # reads what the previous group added. No group's own verdict changes, which is
 # D031 §2's third refusal — the ledger reads the run, it does not replace it.
 tp_close_group() {
-  local d
+  local d took
   [ -z "$TP_GROUP_TITLE" ] && return 0
   d=$((fail_total - tp_fail_at_start))
   if [ "$d" -gt 0 ]; then
     TP_RED="${TP_RED}${TP_GIDX}	${d}
 "
   fi
+  # How long the group took, recorded beside its title. A REPORT and never a
+  # gate — there is no defensible number for "too slow" — kept for the day a run
+  # takes 41 minutes where the one before took 24 and nothing can say which
+  # group grew (2026-09-03, CI: the runner's log timestamps are flush times, not
+  # event times, so the wall clock had to be read from here or not at all).
+  took=$(( $(date +%s) - tp_group_started ))
+  TP_TOOK="${TP_TOOK}${took}	${TP_GROUP_TITLE}
+"
   return 0
 }
 
@@ -190,6 +201,7 @@ hr() {
   TP_GROUPS="${TP_GROUPS}${TP_GIDX}	$1
 "
   tp_fail_at_start=$fail_total
+  tp_group_started=$(date +%s)
   printf '\n\033[1m%s\033[0m\n' "$1"
 }
 
@@ -6180,6 +6192,16 @@ else
   echo "  none should be derived: a shrinking unmeasured list is progress only"
   echo "  when a run closed the leak, and looks identical to nobody looking."
 fi
+
+# ── where the time went ──────────────────────────────────────────────────────
+# A report, not a gate. The five groups that took longest, so a run that grew
+# can be asked WHICH group grew rather than guessed at from a total.
+hr "where the time went — the five longest groups"
+tp_close_group   # closes THIS header's own (empty) timing so the sort is clean
+printf '%s' "$TP_TOOK" | sort -rn | head -5 | while IFS=$'\t' read -r took title; do
+  [ -n "$took" ] && printf '  %5ss  %s\n' "$took" "$title"
+done
+echo "  total: $(( $(date +%s) - RUN_STARTED ))s from the first group"
 
 hr "verdict"
 if [ "$skipped" -gt 0 ]; then

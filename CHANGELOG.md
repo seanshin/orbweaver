@@ -10,6 +10,29 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**The harness records where its time went, because a run that grew could not
+say which group grew.** CI's interop job took 41 minutes on the commit that
+added JacORB's SSL producer, against 24 on the one before. The runner's log
+timestamps are **flush times, not event times** — ten groups share one second
+and a 635-second "gap" lands on whichever group's output happened to flush next
+— so the wall clock could not be read from the log, and locally the total swings
+18 → 26 → 23 minutes across runs with the same fixtures (and 29 with none of
+them). Nothing could name the group. *A run that records nothing about its
+conditions cannot be explained after it dies*, one dimension over.
+
+So `hr` stamps each group and the verdict is preceded by the five longest, with
+the total. A report and never a gate — there is no defensible number for "too
+slow", which is why `entry_cost.py` and `reclaim.sh` report and do not gate.
+First reading: the `ssliop feature` group is longest at 290s, and that is
+**not** the new fixtures — the `-D warnings` test build in it is 23s warm and
+`ssliop.sh` is 17s; the split inside the group is the next thing this report
+makes askable, and the CI number is what it will answer on the next push.
+
+*하네스가 시간이 어디로 갔는지 기록한다 — 커진 실행이 어느 그룹이 커졌는지 말할 수
+없었기 때문이다. 러너 로그의 타임스탬프는 **발생 시각이 아니라 flush 시각**이라
+635초 "갭"이 엉뚱한 그룹에 붙는다. 보고이지 게이트가 아니다 — "너무 느리다"에
+방어 가능한 수는 없다.*
+
 **Two streams in parallel, disjoint footprints, and each produced a finding.**
 
 **Stream A — the second-host probe, re-run on this machine.** `spikes/nat/vm/run.sh`
