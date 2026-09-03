@@ -1577,7 +1577,7 @@ impl Delivery {
 
     /// A handle to the channel named `name`, or `None` if there is none.
     pub fn handle_named(&self, name: &str) -> Option<ChannelHandle> {
-        let reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+        let reg = self.inner.registry();
         reg.channels.get(name).map(|c| ChannelHandle { shared: Arc::clone(&c.shared) })
     }
 }
@@ -1593,7 +1593,7 @@ impl Drop for Delivery {
     /// than easier.
     fn drop(&mut self) {
         let (channels, threads) = {
-            let mut reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+            let mut reg = self.inner.registry();
             reg.running = None;
             reg.started.clear();
             let channels: Vec<Arc<ChannelObjects>> =
@@ -2104,6 +2104,61 @@ struct Inner {
     registry: Mutex<Registry>,
 }
 
+/// The name the registry lock's section is reported under when the discipline
+/// is violated. See [`crate::guarded`].
+const REGISTRY_LOCK: &str = "the event server's channel registry";
+
+/// The registry, held — and *registered as held*, the same shape as [`Held`]
+/// one level down and for the same reason.
+///
+/// A [`crate::guarded::Guarded`] is not used here **not** because of a
+/// `Condvar` this time, but because it would reopen the sharing decision the
+/// servant's own docs argue ("one `Mutex`, not an `RwLock`"): this lane is the
+/// discipline around the lock, never the lock itself. What this type adds is
+/// that holding the registry stopped being invisible: an outbound call made
+/// with it held, or a channel lock taken under it, is the tripwire's to
+/// report rather than the reviewer's to spot. [`publish_channels`] promised
+/// exactly that ("where the registry lock is held and the tripwire fires")
+/// while the bare mutex kept no section, so the tripwire measurably did not —
+/// this type is what makes that sentence true.
+#[derive(Debug)]
+struct RegistryHeld<'a> {
+    // Declared first so the mutex is released before the section is closed:
+    // the marker must outlive what it marks, or there is an instant where a
+    // thread holds the lock and the tripwire cannot see it.
+    reg: MutexGuard<'a, Registry>,
+    _section: Section,
+}
+
+impl std::ops::Deref for RegistryHeld<'_> {
+    type Target = Registry;
+
+    fn deref(&self) -> &Registry {
+        &self.reg
+    }
+}
+
+impl std::ops::DerefMut for RegistryHeld<'_> {
+    fn deref_mut(&mut self) -> &mut Registry {
+        &mut self.reg
+    }
+}
+
+impl Inner {
+    /// The one way to reach [`Registry`]. A poisoned mutex here means a
+    /// thread panicked mid-operation; the registry is a set of independent
+    /// maps and flags, none of which an unwind leaves half-updated, so
+    /// recovering is better than a permanently dead server — the same policy
+    /// as [`Shared::lock`].
+    fn registry(&self) -> RegistryHeld<'_> {
+        let section = Section::enter(REGISTRY_LOCK);
+        RegistryHeld {
+            reg: self.registry.lock().unwrap_or_else(|e| e.into_inner()),
+            _section: section,
+        }
+    }
+}
+
 /// The channels, and the threads serving them.
 #[derive(Debug)]
 struct Registry {
@@ -2252,7 +2307,7 @@ impl EventChannelServer {
         let objects = Arc::new(ChannelObjects::new(name.to_owned(), base));
         let handle = ChannelHandle { shared: Arc::clone(&objects.shared) };
 
-        let mut reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+        let mut reg = self.inner.registry();
         if reg.channels.contains_key(name) {
             return Err(ChannelError::Duplicate { name: name.to_owned() });
         }
@@ -2265,7 +2320,7 @@ impl EventChannelServer {
 
     /// Every channel this server holds, in name order.
     pub fn channel_names(&self) -> Vec<String> {
-        let reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+        let reg = self.inner.registry();
         reg.channels.keys().cloned().collect()
     }
 
@@ -2290,7 +2345,7 @@ impl EventChannelServer {
     /// make one channel's dead consumer every other channel's latency, which
     /// is the failure this module is built around avoiding, one level up.
     pub fn start_delivery_with(&self, timeout: Duration) -> Delivery {
-        let mut reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+        let mut reg = self.inner.registry();
         reg.running = Some(timeout);
         let all: Vec<Arc<ChannelObjects>> = reg.channels.values().map(Arc::clone).collect();
         for objects in all {
@@ -2310,7 +2365,7 @@ impl EventChannelServer {
 
     /// A handle to the channel named `name`, or `None` if there is none.
     pub fn handle_named(&self, name: &str) -> Option<ChannelHandle> {
-        let reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+        let reg = self.inner.registry();
         reg.channels.get(name).map(|c| ChannelHandle { shared: Arc::clone(&c.shared) })
     }
 
@@ -2328,7 +2383,7 @@ impl EventChannelServer {
     /// what a sum of gauges means: how many there are in this process now.
     pub fn total_stats(&self) -> ChannelStats {
         let all: Vec<Arc<ChannelObjects>> = {
-            let reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+            let reg = self.inner.registry();
             reg.channels.values().map(Arc::clone).collect()
         };
         let mut total = ChannelStats::default();
@@ -2378,7 +2433,7 @@ impl EventChannelServer {
     /// there is none. This is what E3 will bind into a naming context.
     pub fn channel_ior_named(&self, name: &str) -> Option<Ior> {
         let base = {
-            let reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+            let reg = self.inner.registry();
             reg.channels.get(name)?.base.clone()
         };
         Some(self.ior_for(&base, EVENT_CHANNEL_ID))
@@ -2405,7 +2460,9 @@ impl EventChannelServer {
     /// The channel list is copied out from under the registry lock before any
     /// channel state is touched, so this never holds two locks at once — the
     /// discipline [`crate::guarded`] enforces for outbound calls, kept here
-    /// for the ordinary reason as well.
+    /// for the ordinary reason as well. Kept *and now watched*: both locks
+    /// register a [`Section`], so holding them together is a caught violation
+    /// rather than a habit this comment asks readers to keep.
     ///
     /// Membership is **exact**, never a prefix match: a minted key is in
     /// exactly one channel's tables, and the fixed keys are compared whole.
@@ -2413,7 +2470,7 @@ impl EventChannelServer {
     /// since `base/x/pps1` begins with `base` too.
     fn route(&self, key: &[u8]) -> Option<(Arc<ChannelObjects>, Target)> {
         let all: Vec<Arc<ChannelObjects>> = {
-            let reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+            let reg = self.inner.registry();
             reg.channels.values().map(Arc::clone).collect()
         };
         for objects in all {
@@ -2455,7 +2512,7 @@ impl EventChannelServer {
     /// whole reason the prefix rule has to hold.
     /// The objects of the channel created with the server.
     fn default_objects(&self) -> Arc<ChannelObjects> {
-        let reg = self.inner.registry.lock().unwrap_or_else(|e| e.into_inner());
+        let reg = self.inner.registry();
         Arc::clone(
             reg.channels
                 .get(&self.inner.default_name)
@@ -4664,5 +4721,71 @@ mod tests {
             assert_eq!(d.get_u8().unwrap(), 0xEE);
             assert_eq!(d.get_u64().unwrap(), 0x0102_0304_0506_0708);
         }
+    }
+
+    /// The registry lock is under the same discipline as everything else:
+    /// an outbound call made while it is held is a reported violation naming
+    /// the registry's section, and taking a channel's lock underneath it is
+    /// the two-locks-at-once violation naming both. Before [`RegistryHeld`]
+    /// existed, the bare mutex kept no section and the first half of this
+    /// test measurably failed — the tripwire stayed silent.
+    ///
+    /// Asserted through [`crate::guarded::complaints_about`] so it holds in a
+    /// release build too, and on `first()` only, per that function's docs.
+    #[test]
+    fn the_registry_lock_is_registered_with_the_discipline() {
+        let server = EventChannelServer::new("127.0.0.1", 1, b"disc".to_vec());
+
+        let said = crate::guarded::complaints_about(|| {
+            let _reg = server.inner.registry();
+            crate::guarded::assert_nothing_held("an outbound call");
+        });
+        assert!(
+            said.first()
+                .is_some_and(|c| c.contains("an outbound call") && c.contains(REGISTRY_LOCK)),
+            "the complaint must name both the call and the registry section, got {said:?}"
+        );
+
+        let objects = server.default_objects();
+        let said = crate::guarded::complaints_about(|| {
+            let _reg = server.inner.registry();
+            let _state = objects.shared.lock();
+        });
+        assert!(
+            said.first().is_some_and(|c| c.contains(CHANNEL_LOCK) && c.contains(REGISTRY_LOCK)),
+            "the complaint must name both sections, got {said:?}"
+        );
+        assert_eq!(
+            crate::guarded::section_held(),
+            None,
+            "every section must have closed behind the violations"
+        );
+    }
+
+    /// The negative control for the test above, and the property the servant
+    /// keeps: its whole registry surface opens sections and violates nothing.
+    /// The completion flag is here because [`crate::guarded::complaints_about`]
+    /// absorbs panics, so an empty list must be told apart from a closure that
+    /// stopped early.
+    #[test]
+    fn the_registry_surface_itself_violates_nothing() {
+        let server = EventChannelServer::new("127.0.0.1", 1, b"clean".to_vec());
+        let mut finished = false;
+        let complaints = crate::guarded::complaints_about(|| {
+            let handle = server.create_channel("second").expect("a fresh name");
+            handle.set_queue_limit(4);
+            assert_eq!(server.channel_names(), vec!["clean".to_owned(), "second".to_owned()]);
+            assert!(server.handle_named("second").is_some());
+            assert!(server.channel_ior_named("second").is_some());
+            let _ = server.handle();
+            let _ = server.total_stats();
+            assert!(server.route(b"clean").is_some(), "route crosses both locks in turn");
+            let delivery = server.start_delivery_with(PUSH_T);
+            drop(delivery);
+            finished = true;
+        });
+        assert!(finished, "the surface under measurement must have run to completion");
+        assert!(complaints.is_empty(), "no operation may violate the discipline: {complaints:?}");
+        assert_eq!(crate::guarded::section_held(), None);
     }
 }
