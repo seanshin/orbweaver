@@ -187,10 +187,15 @@ sed 's/^/       /' <<<"$same"
 
 versions_seen=$(grep -c "^read off the wire" <<<"$wire")
 identities=$(grep -c "^byte-identical" <<<"$same")
-if [ "$test_rc" -eq 0 ] && [ "$versions_seen" -eq 2 ] && [ "$identities" -eq 2 ]; then
-  ok "the peer's flag byte read at two IIOP versions, and both servants' replies byte-identical at each"
+# **Three since 2026-09-03, and this pin is exact rather than a floor.** It read
+# `-eq 2` and went red the moment 1.0 was added to the test's loop, which is the
+# pin working: a count that moves for a good reason still has to be looked at.
+# A `-ge` here would have absorbed the change silently and this line would have
+# stopped saying anything about how many versions the peer was asked at.
+if [ "$test_rc" -eq 0 ] && [ "$versions_seen" -eq 3 ] && [ "$identities" -eq 3 ]; then
+  ok "the peer's flag byte read at three IIOP versions, and both servants' replies byte-identical at each"
 elif [ "$test_rc" -eq 0 ]; then
-  fail "expected two versions measured and two byte-identity results, got $versions_seen and $identities"
+  fail "expected three versions measured and three byte-identity results, got $versions_seen and $identities"
 fi
 
 echo

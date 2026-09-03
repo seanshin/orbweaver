@@ -1603,6 +1603,47 @@ impl Codecs {
     }
 }
 
+/// The wide codec a connection at `version` marshals through.
+///
+/// **This is the one home for what happens on GIOP 1.0**, and it is a fallback
+/// rather than a refusal. `wchar` arrived in GIOP 1.1, so [`WideCodec::new`]
+/// has no 1.0 pair to give; the question is what a caller or a servant does
+/// with that, and the answer is not free to differ between them.
+///
+/// # Why a fallback and not a refusal
+///
+/// A generated Rust skeleton marshals through the **stream's** codec, and
+/// [`crate::server::Request::narrow_codec`] builds that with
+/// `WideCodec::new(...).ok()` — so on 1.0 the stream has no wide codec and
+/// `Cdr` falls back to the form §9.3.1.6 fixes for an encapsulation, which is
+/// 1.2's. Anything else here would make a foreign servant and a Rust one
+/// disagree on a 1.0 connection. If that shared fallback is wrong it is wrong
+/// everywhere at once, which is the point of it being one function.
+///
+/// # What refusing cost, twice
+///
+/// `orbweaver_gen::seam` turned the refusal into `MARSHAL` for **every**
+/// operation on a 1.0 connection — text or not, `_is_a` included — and
+/// `tests/python_servant.rs` found it on its first run: nineteen calls
+/// diverging at 1.0 and none at 1.1 or 1.2.
+///
+/// **`orbweaver_dynamic::invoke` then had the same defect on the client side
+/// for as long**, and nothing was red, because no cell could reach 1.0 to
+/// notice: the binding grid read `client: neither[1.0]` and the note beside it
+/// blamed the driver's wide text. It blamed the symptom. Found 2026-09-03 by
+/// trying to close that grid column and watching `ping()` fail.
+///
+/// *1.0에서 무엇을 하는지의 집은 여기 하나다 — 거절이 아니라 폴백이며, 호출자와
+/// 서번트가 다르게 답할 자유가 없기 때문이다. 거절은 두 번 대가를 치렀다: 서번트
+/// 쪽에서 1.0의 모든 호출이 `MARSHAL`이 되었고(19건), 클라이언트 쪽에서는 같은
+/// 결함이 그만큼 오래 있었는데 **1.0에 닿는 셀이 없어 아무것도 빨갛지 않았다.***
+pub fn wide_for_version(version: Version) -> WideCodec {
+    WideCodec::new(version, CodeSetId::UTF_16).unwrap_or_else(|_| {
+        WideCodec::new(Version::V1_2, CodeSetId::UTF_16)
+            .expect("1.2 with UTF-16 is always a valid pair")
+    })
+}
+
 impl orbweaver_cdr::TextCodec for Codecs {
     fn encode_narrow(&self, s: &str) -> orbweaver_cdr::Result<Vec<u8>> {
         match self.narrow {

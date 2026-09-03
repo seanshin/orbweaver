@@ -169,6 +169,7 @@ if ! grep -q "^observed" <<<"$readings"; then
 fi
 note_request_orders "$D/tap-2.log"
 
+printf 'note\tIIOP 1.0 was driven WITHOUT the wide case, and the reading is about version and order rather than about every operation: with it, JacORB answers MARSHAL — the PEER declining a wstring at 1.0, which is a different finding from our own stack refusing, and both were measured 2026-09-03\n'
 printf 'note\t%s generated call(s) completed over the wire against JacORB, no Rust stub in the path\n' "$calls"
 printf 'note\tD030 §3.1 records the Python client direction as not established off a foreign peer; this cell is that reading\n'
 exit 0

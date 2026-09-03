@@ -1111,10 +1111,17 @@ fn jacorb_calls_a_python_servant() {
     let expect =
         std::env::var("ORBWEAVER_JACORB_EXPECT_ORDER").unwrap_or_else(|_| "big".to_owned());
 
-    // 1.2 is JacORB's default. 1.1 is reached the way `spikes/jacorb_giop11.sh`
-    // reaches it: not by a property, but by republishing the profile, because a
-    // peer's outbound version follows the profile it dialled.
-    for version in [Version::V1_2, Version::V1_1] {
+    // 1.2 is JacORB's default. 1.1 and 1.0 are reached the way
+    // `spikes/jacorb_giop11.sh` reaches them: not by a property, but by
+    // republishing the profile, because a peer's outbound version follows the
+    // profile it dialled.
+    //
+    // **1.0 was missing until 2026-09-03 and no reason was recorded for its
+    // absence** — the comment explained 1.2 and 1.1 and simply stopped. The
+    // Java twin of this test drove all three, so the binding grid read
+    // `servant: neither[1.0]` for Python and `neither[]` for Java, and the
+    // difference was between two tests rather than between two languages.
+    for version in [Version::V1_2, Version::V1_1, Version::V1_0] {
         let Some(servant) = start_servant() else {
             println!("UNMEASURED: python3 is not available; the Python servant was not started");
             return;

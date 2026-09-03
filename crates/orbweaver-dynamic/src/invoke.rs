@@ -26,7 +26,7 @@ use orbweaver_cdr::Encoder;
 use orbweaver_giop::{Connection, Error as GiopError};
 use orbweaver_registry::{OperationSig, ParamDirection, Registry};
 
-use orbweaver_giop::codeset::{CodeSetId, WideCodec};
+use orbweaver_giop::codeset::WideCodec;
 
 use crate::{Error, Result, Value, decode_named_with, decode_with, encode_named_with};
 
@@ -126,7 +126,7 @@ pub fn invoke(
     // than the TypeCode, and Phase 1 established that a peer will not infer
     // wide-char byte order from the message byte order. Defaulting to 1.2 here
     // would put a length in octets on a 1.1 connection that expects characters.
-    let wide = wide_codec(conn)?;
+    let wide = wide_codec(conn);
 
     // Marshal once, before sending, so a bad argument is a local error instead
     // of a half-written message and a desynchronised connection. `invoke` takes
@@ -244,17 +244,25 @@ fn write_args(
 
 /// The wide-character codec for this connection's negotiated version.
 ///
-/// GIOP 1.0 forbids `wchar` outright (§9.3.1.6), so there is no codec to build.
-/// That is only a problem for an operation that actually uses one, and saying
-/// so at that point is more useful than refusing every call on a 1.0
-/// connection — but the invoker cannot know yet, so it reports the version.
-fn wide_codec(conn: &Connection) -> std::result::Result<WideCodec, InvokeError> {
-    WideCodec::new(conn.version(), CodeSetId::UTF_16).map_err(|_| {
-        bad(format!(
-            "{} cannot carry wchar or wstring data (§9.3.1.6); this connection negotiated it",
-            conn.version()
-        ))
-    })
+/// **This used to refuse on GIOP 1.0, and refusing broke every call on such a
+/// connection** — `ping()` included, and `_is_a` with it. The comment that
+/// stood here said so and then did it anyway: *"saying so at that point is more
+/// useful than refusing every call on a 1.0 connection — but the invoker cannot
+/// know yet, so it reports the version."* §9.3.1.6 forbids carrying `wchar` or
+/// `wstring` **data**; it does not forbid a `long ping()`.
+///
+/// The servant side had the identical defect and fixed it before this one was
+/// noticed — nineteen calls diverging at 1.0, found by
+/// `orbweaver-gen/tests/python_servant.rs`. This side went on refusing because
+/// **no cell in the binding grid could reach 1.0 to see it**: the grid read
+/// `client: neither[1.0]` and the note beside it blamed the driver's wide text,
+/// which was the symptom.
+///
+/// The answer is [`orbweaver_giop::codeset::wide_for_version`] and is not
+/// restated here. Both sides call it, because a caller and a servant are not
+/// free to disagree about what a 1.0 connection carries.
+fn wide_codec(conn: &Connection) -> WideCodec {
+    orbweaver_giop::codeset::wide_for_version(conn.version())
 }
 
 fn decode_user_exception(
@@ -294,6 +302,7 @@ fn nearby(registry: &Registry, interface_id: &str, operation: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orbweaver_giop::codeset::CodeSetId;
     use orbweaver_registry::Registry;
 
     fn registry(src: &str) -> Registry {

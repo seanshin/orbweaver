@@ -10,6 +10,55 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**A peer that speaks only GIOP 1.0 can be called now, and both binding grids are
+complete.** All three versions, both directions, both languages, `neither[]`
+empty — 8 cells run, 0 red, in each.
+
+**The defect: `orbweaver_dynamic::invoke` refused every call on a GIOP 1.0
+connection**, `ping()` and `_is_a` included, because it built the wide codec
+before marshalling anything and `WideCodec::new` has no 1.0 pair to give.
+§9.3.1.6 forbids carrying `wchar`/`wstring` **data**; it does not forbid a
+`long ping()`. The comment above it said exactly this and then did it anyway:
+*"saying so at that point is more useful than refusing every call on a 1.0
+connection — but the invoker cannot know yet, so it reports the version."*
+
+**The servant side had the identical defect and had already fixed it** —
+`orbweaver_gen::seam` turned the same refusal into `MARSHAL` for every 1.0
+operation, and `tests/python_servant.rs` caught it on its first run with
+nineteen diverging calls. **The client side went on refusing for as long, and
+nothing was red, because no cell could reach 1.0 to notice**: the grid read
+`client: neither[1.0]` and the note beside it blamed the driver's wide text,
+which was the symptom.
+
+**So the repair is one function, not two.** `codeset::wide_for_version` is the
+one home for what a 1.0 connection marshals through, with the argument for the
+fallback and what refusing cost on each side; `seam.rs` and `invoke.rs` both
+call it and neither restates it. A caller and a servant are not free to disagree
+about what a 1.0 connection carries — that is the whole reason the servant side
+chose a fallback rather than a refusal, and choosing differently here would have
+reintroduced the divergence it was avoiding.
+
+**Two more gaps, and neither was about a language.** Python's servant never
+reached 1.0 because its test's loop drove `[1.2, 1.1]` and stopped, with **no
+reason recorded** where the comment explained the other two; the Java twin drove
+all three. Adding it: **byte-identical against a Rust servant at 1.0**, first
+try — it had simply never been asked. And the shell wrapper's exact pin `-eq 2`
+went red the moment the count moved, which is the pin working: *a `-ge` would
+have absorbed the change silently and stopped saying anything about how many
+versions the peer was asked at.*
+
+**`--no-wide` earns its place, and the note says why.** With the wide case at
+1.0 JacORB answers `MARSHAL` — **the peer declining**, which is a different
+finding from our own stack refusing, and both were measured. The cells now say
+the 1.0 pass omitted the wide case, so `read[1.0 1.1 1.2]` cannot be read as
+*everything works at 1.0*.
+
+*1.0만 말하는 피어를 이제 호출할 수 있고, 두 그리드가 완성되었다. 결함은 호출기가
+마셜링 전에 wide 코덱을 만들어 **1.0 연결의 모든 호출을 거절**한 것이다. 서번트 쪽은
+같은 결함을 이미 고쳤고, 클라이언트 쪽은 **1.0에 닿는 셀이 없어 아무도 보지 못한 채**
+그만큼 오래 남아 있었다. 그래서 수리는 함수 둘이 아니라 하나다 — 호출자와 서번트가
+1.0이 무엇을 싣는지에 대해 다르게 답할 자유가 없다.*
+
 **The binding grid's GIOP coverage, and the item that turned out not to be the
 item.** It was ranked as *coverage, not transparency*. Working it found two
 causes and neither is coverage.
