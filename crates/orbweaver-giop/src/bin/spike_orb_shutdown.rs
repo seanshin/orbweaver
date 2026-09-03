@@ -146,6 +146,10 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::from(UNMEASURED as u8);
     }
 
+    // serve_sites: refusal — the removal this fixture measures is
+    // `Orb::shutdown` (graceful arm) or SIGKILL (kill arm), observed from the
+    // peer's socket; a stop predicate of its own would be the fixture stopping
+    // itself before the measurement.
     let serving = std::thread::spawn(move || server.serve(&mut servant, || false));
 
     // Not a sleep. The servant says when it is inside.

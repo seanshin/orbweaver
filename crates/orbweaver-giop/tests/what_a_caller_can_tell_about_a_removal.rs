@@ -225,9 +225,10 @@ fn start_target(key: &'static [u8], answer: i32) -> Target {
     let addr = server.local_addr().expect("bound address");
     let serving = std::thread::spawn(move || {
         let mut servant = One(answer);
-        // `|| false` deliberately: the shape 17 of this workspace's 63 serve
-        // sites use, so the removal under test is the ORB's own flag rather
-        // than a stop condition written for the test.
+        // serve_sites: refusal — `|| false` deliberately, so the removal under
+        // test is the ORB's own flag (D034) rather than a stop condition
+        // written for the test. (The shape's count is `spikes/serve_sites.py`'s
+        // to keep — a figure retyped here would drift.)
         server.serve(&mut servant, || false).expect("serve");
     });
     Target { orb, addr, key, serving: Some(serving) }

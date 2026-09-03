@@ -27,6 +27,21 @@ of its own (`move || flag.load(Ordering::SeqCst)`).
 A site is **unstoppable** when that argument is spelled as a constantly-false
 closure: `|| false`, `move || false`, or the same with whitespace.
 
+# A refusal is recorded where it sits (2026-09-04)
+
+Lane B repaired the shape by the rule — *a server a fixture starts is
+stoppable by the route its own teardown uses* — and 12 of the 21 sites came
+out refusals, not defects: the stopping measurements' own contrast arms
+(where the stop under test is the ORB's flag, and a predicate of the test's
+own would prove nothing) and fixtures whose documented teardown is the driver
+killing the process (no in-process actor left to raise a stop). Each says so
+in a comment at the site carrying `serve_sites: refusal` and a reason, and
+this scan tells those apart from an unexplained `|| false` — because a count
+that cannot make that distinction goes quiet the day the last defect is
+fixed, and the next unexplained site lands invisibly inside it. The marker
+must sit in the call line's own comment block; a reason recorded anywhere
+else is one the next reader cannot find from the site.
+
 # What it cannot see, and this is not a caveat but the shape of the answer
 
 It classifies **spellings, not behaviour**. `server.serve(&mut Ping, stop)`
@@ -56,6 +71,13 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 CALL = re.compile(r"\.serve(?:_shared)?\s*\(")
 #: A closure that is constantly false, however it is spelled.
 NEVER_STOPS = re.compile(r"^\s*(?:move\s*)?\|\s*\|\s*false\s*$")
+#: The marker a deliberate `|| false` carries in its own comment block — the
+#: contiguous `//` lines directly above the call line, or the call line's own
+#: trailing comment. A reason recorded anywhere else is one the next reader
+#: cannot find from the site, so it does not count (2026-09-04, lane B: the
+#: 12 sites that keep the shape are measurement contrast arms and
+#: serve-until-killed fixtures, and each says so where it sits).
+REFUSAL = "serve_sites: refusal"
 
 
 def code_only(src):
@@ -178,6 +200,48 @@ def sites(text):
         yield text.count("\n", 0, m.start()) + 1, args[1]
 
 
+def refused_at(raw_lines, line_no):
+    """Whether the site at 1-based `line_no` records a refusal where it sits.
+
+    Reads the RAW source, because the marker lives in exactly what
+    [`code_only`] blanks: the call line's own trailing comment, or the
+    contiguous `//` lines directly above it.
+
+    *표지는 그 지점의 주석 블록에 산다 — 호출 줄의 꼬리 주석이거나 바로 위의
+    연속된 `//` 줄들. 다른 곳에 적힌 사유는 지점에서 찾을 수 없으므로 세지
+    않는다.*
+    """
+    i = line_no - 1
+    if i >= len(raw_lines):
+        return False
+    line = raw_lines[i]
+    if "//" in line and REFUSAL in line.split("//", 1)[1]:
+        return True
+    j = i - 1
+    while j >= 0 and raw_lines[j].lstrip().startswith("//"):
+        if REFUSAL in raw_lines[j]:
+            return True
+        j -= 1
+    return False
+
+
+def classify(text):
+    """Every serve site in `text`, as (line, kind).
+
+    `kind` is `stoppable` (the argument is anything but a constant false),
+    `refused` (constantly false, with the refusal recorded at the site),
+    `unstoppable` (constantly false and unexplained), or `unreadable`.
+    """
+    raw_lines = text.splitlines()
+    for line, stop in sites(code_only(text)):
+        if stop is None:
+            yield line, "unreadable"
+        elif NEVER_STOPS.match(stop):
+            yield line, ("refused" if refused_at(raw_lines, line) else "unstoppable")
+        else:
+            yield line, "stoppable"
+
+
 def tracked_rs(root):
     """Every tracked `*.rs`, from `git ls-files` and not from a directory walk.
 
@@ -206,58 +270,71 @@ def tracked_rs(root):
 
 
 def scan(root):
-    total, unstoppable, unreadable = [], [], []
+    total, unstoppable, refused, unreadable = [], [], [], []
     files = tracked_rs(root)
     if files is None:
-        return None, None, None
+        return None, None, None, None
     for p in sorted(files):
         rel = p.relative_to(root).as_posix()
         try:
             text = p.read_text()
         except (OSError, UnicodeDecodeError):
             continue
-        for line, stop in sites(code_only(text)):
+        for line, kind in classify(text):
             where = f"{rel}:{line}"
             total.append(where)
-            if stop is None:
+            if kind == "unreadable":
                 unreadable.append(where)
-            elif NEVER_STOPS.match(stop):
+            elif kind == "unstoppable":
                 unstoppable.append(where)
-    return total, unstoppable, unreadable
+            elif kind == "refused":
+                refused.append(where)
+    return total, unstoppable, refused, unreadable
 
 
-#: Two sites with a known answer, so silence over the tree means something.
+#: Three sites with a known answer, so silence over the tree means something:
+#: one stoppable, one unexplained `|| false`, and one `|| false` whose comment
+#: block records the refusal — the probe must tell the last two apart, or a
+#: scan that ignores the marker (every site reads unexplained) and one that
+#: over-applies it (every site reads refused) would both stay green.
 PROBE = """
 fn a() { server.serve(&mut d, || false).unwrap(); }
 fn b() { server.serve_shared(&svc, move || flag.load(Ordering::SeqCst)).unwrap(); }
+fn c() {
+    // serve_sites: refusal — a contrast arm the probe tells from an unexplained site.
+    server.serve(&mut d, || false).unwrap();
+}
 """
 
 
 def main(argv):
-    found = list(sites(PROBE))
-    stops = [s for _, s in found if s is not None and NEVER_STOPS.match(s)]
-    if len(found) != 2 or len(stops) != 1:
-        print("  FAIL the probe's two synthetic sites did not come back as one")
-        print("       unstoppable and one stoppable — this scan is not reading")
-        print("       serve sites, so its count over the tree means nothing")
+    kinds = sorted(kind for _, kind in classify(PROBE))
+    if kinds != ["refused", "stoppable", "unstoppable"]:
+        print("  FAIL the probe's three synthetic sites did not come back as one")
+        print("       stoppable, one unexplained `|| false` and one recorded")
+        print("       refusal (got: %s) — this scan is not reading serve sites," % kinds)
+        print("       so its count over the tree means nothing")
         return 2
     if "--probe" in argv:
         return 0
 
-    total, unstoppable, unreadable = scan(ROOT)
+    total, unstoppable, refused, unreadable = scan(ROOT)
     if total is None:
         print("  FAIL `git ls-files` could not be run, so this scan does not know")
         print("       which files are the repository's — and a directory walk here")
         print("       counts every agent worktree as another copy of the tree")
         return 2
-    print("  %d serve site(s); %d pass a constantly-false stop, so nothing can "
-          "stop them" % (len(total), len(unstoppable)))
+    print("  %d serve site(s); %d pass a constantly-false stop — %d carry a "
+          "recorded refusal at the site, %d carry none"
+          % (len(total), len(unstoppable) + len(refused), len(refused), len(unstoppable)))
     if unreadable:
         print("  %d site(s) whose argument list could not be walked: %s"
               % (len(unreadable), ", ".join(unreadable[:4])))
     if "--list" in argv:
         for w in unstoppable:
             print("    unstoppable  %s" % w)
+        for w in refused:
+            print("    refused      %s" % w)
     print("  A lower bound: a stop handed in through a binding reads as "
           "stoppable here. A report, not a gate.")
     return 0

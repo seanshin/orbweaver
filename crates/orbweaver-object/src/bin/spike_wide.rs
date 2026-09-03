@@ -357,6 +357,10 @@ fn serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         Strictness::Grammar,
     )?;
     let mut wide = Wide { self_ref: ior, registry, calls: 0, seen: Default::default() };
+    // serve_sites: refusal — this process IS the server: serving is its whole
+    // remaining job, and the scripts that start it stop it by killing the
+    // process they hold the PID of. No in-process actor is left to raise a
+    // stop, so a predicate here would be one nobody can call.
     server.serve(&mut wide, || false)?;
     Ok(())
 }
