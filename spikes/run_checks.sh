@@ -3991,42 +3991,58 @@ bears_on location
 # address. Inside a container that address is the namespace's, and a client
 # outside cannot dial it. The spike constructs both real failures — refused and
 # timed out — because loopback alone cannot show this one.
+# **The group reads the script's LINES, not its skip count** (2026-09-03,
+# docs/PLAN-NAT-PROBE.md lane A). It used to attribute any non-zero skip count
+# to "the container probe has never run here — no docker", and the script has
+# five distinct skips and prints a pass line per probe that ran. On CI, where
+# docker is present and multipass is not, that sentence named the wrong probe
+# — and whether the container probe was running and passing there could not be
+# read from any log, because this variable was never printed. The parser is
+# `spikes/lib/nat_probes.sh`, one home, and `spikes/nat_probes_control.sh`
+# feeds it five synthesised shapes; it runs first, so the parser's silence over
+# the real transcript means something.
+#
+# The harness no longer runs `spikes/nat/vm/run.sh` itself: the script already
+# runs it when a multipass instance is up, and two paths to one probe is how a
+# probe gets counted twice or attributed to the wrong path.
+. "$ROOT/spikes/lib/nat_probes.sh"
+npc_out=$(bash "$ROOT/spikes/nat_probes_control.sh" 2>&1); npc_rc=$?
 nat=$(./spikes/nat_rewrite.sh 2>&1)
-if grep -q "nat rewriting: PASS" <<<"$nat"; then
+if [ "$npc_rc" -ne 0 ]; then
+  echo "  FAIL the NAT transcript parser's control did not pass ($(rc_says "$npc_rc")) — what"
+  echo "       the group reads below would mean nothing"
+  diag_out "$npc_out" 8
+  fail_total=$((fail_total+1))
+elif grep -q "nat rewriting: PASS" <<<"$nat"; then
   echo "  ok   unrewritten IOR fails to dial, rewritten one completes; key, version and"
   echo "       an undecodable profile all survive untouched"
-  if grep -q "unmeasured (skipped): [1-9]" <<<"$nat"; then
-    skip absent git:spikes/nat/Dockerfile \
-         "the container probe has never run here — no docker, and it is" \
-         "counted rather than read as evidence"
-  fi
-  # The second-host probe (spikes/nat/vm/run.sh) HAS executed — five passes on
-  # 2026-08-14 across a multipass VM, transcript in docs/PHASE6.md — but it
-  # launches and deletes a VM, so it is not run here; ORBWEAVER_NAT_VM=1 runs
-  # it. Named as a SKIPPED with its fixture, so the R7 row can point at a line
-  # instead of at "unmeasured" (the plan review of 2026-08-19 found R7 saying
-  # a real routing domain was unmeasured when it had been).
-  if [ "${ORBWEAVER_NAT_VM:-0}" = "1" ] && command -v multipass >/dev/null 2>&1; then
-    natvm=$(./spikes/nat/vm/run.sh 2>&1)
-    if grep -q "PASS" <<<"$natvm"; then
-      echo "  ok   a real second host: the naive IOR is refused, the rewritten one answers (multipass VM)"
-    else
-      echo "  FAIL the second-host probe did not hold"
-      diag_out "$natvm" 3
-      fail_total=$((fail_total+1))
-    fi
-  else
-    # `last measured 2026-08-14` used to be typed here. It was true when it was
-    # written and nothing recomputes it, which is the defect CLAUDE.md calls a
-    # floor quoted as a figure. The date now comes from the tree. Its stated
-    # limit: it is the day the probe last LANDED, which is the day PHASE6
-    # records it running — edit run.sh without re-running it and the date moves
-    # and overstates freshness. A limit that is written down beats a literal
-    # that can only ever understate.
-    skip absent git:spikes/nat/vm/run.sh \
-         "the second-host probe (multipass VM, spikes/nat/vm/run.sh) is not run here —" \
-         "ORBWEAVER_NAT_VM=1 with multipass installed runs it; the transcript of the" \
-         "run it stands on is in docs/PHASE6.md"
+  # One line per probe, quoting the script. `while read` over a herestring of
+  # the parser's output — no pipe, no early-exit consumer.
+  probes_seen=0
+  while IFS=$'\t' read -r probe state line; do
+    [ -n "$probe" ] || continue
+    probes_seen=$((probes_seen+1))
+    case "$state" in
+      ran)     echo "  ok   $line" ;;
+      failed)  echo "  FAIL $line"; fail_total=$((fail_total+1)) ;;
+      skipped)
+        # The age anchor is the probe's own fixture file, so each SKIPPED says
+        # how stale the thing it is waiting on is — not how stale this group is.
+        case "$probe" in
+          vm)        anchor=spikes/nat/vm/run.sh ;;
+          container) anchor=spikes/nat/Dockerfile ;;
+          *)         anchor=spikes/nat/k8s/run.sh ;;
+        esac
+        skip absent "git:$anchor" "$line" ;;
+    esac
+  done <<<"$(nat_probe_lines "$nat")"
+  # Three probes exist; a transcript the parser reads fewer than three from is
+  # a transcript the script did not finish, and that is a failure to measure.
+  if [ "$probes_seen" -ne 3 ]; then
+    echo "  FAIL the NAT transcript names $probes_seen probe(s) where the script has 3 —"
+    echo "       it did not run to its verdict, or the parser and the script disagree"
+    diag_out "$nat" 6
+    fail_total=$((fail_total+1))
   fi
 else
   echo "  FAIL NAT rewriting"
