@@ -14,6 +14,68 @@ fixture that fakes the claim.
 omniORB `sslTP` 서버 — 를 만들려 했으나 아래 조사에서 막혔다. 정직성 규칙에
 따라, 막힌 측정은 막혔다고 보고한다. 주장을 흉내 내는 픽스처로 우회하지 않는다.
 
+## Taken, 2026-09-03 / 2026-09-03에 측정됨
+
+**The residue below is measured now.** Unblock option 1 was taken:
+`spikes/tls/setup.sh` builds omniORBpy 4.3.4 — the brew core's exact version —
+from source against the keg, into `spikes/tls/omniORBpy/` (ignored). The one
+thing that stopped the first configure was `pkg-config`; the second gate this
+document could not predict, **Python 3.14**, passed. The success criterion this
+file fixed on 2026-08-13 — `from omniORB import sslTP` — is what the script
+checks, run rather than inferred from `make` exiting 0.
+
+The fixture is `spikes/echo_server_ssl.py`, specified below and written as
+specified. Two things the specification said to read rather than guess, read:
+this build's `sslTP` wants `key_file` with chain and key in one PEM, and it
+exposes **no way to relax client-certificate verification** (`verify_mode` is
+in the C++ header and not in the python module).
+
+**Three findings, in the order the fixture produced them.**
+
+1. **`spike-dump` read omniORB's own `TAG_SSL_SEC_TRANS`**:
+   `supports=0x0066 requires=0x0066 port=…` — INTEGRITY, CONFIDENTIALITY,
+   ESTABLISH_TRUST_IN_TARGET, ESTABLISH_TRUST_IN_CLIENT. That is the residue,
+   and it is not a floor: the bits are compared against what the peer then
+   *does*.
+2. **The first dial was refused — correctly.** Left to its default omniORB
+   published the LAN address, and `tls/server.pem` is issued for
+   localhost/127.0.0.1: *certificate not valid for name "172.30.1.49"*. That is
+   verification being on, measured against a certificate we did not write for
+   this purpose. The fixture binds `giop:ssl:127.0.0.1:0` by name for it.
+3. **The second dial was refused — also correctly, and it found a gap.**
+   `CertificateRequired`: omniORB enforces the ESTABLISH_TRUST_IN_CLIENT its
+   component publishes, and `spike-ssliop` had no way to present an identity,
+   because **no peer of ours had ever asked for one** — `ssliop_peer.py` never
+   did. Only a foreign encoder could show that. The driver takes
+   `--client-cert`/`--client-key` now (optional; the 21 cases run unchanged),
+   and `tls/client.pem` is a **self-signed** client identity rather than one
+   issued by `ca.pem` — `regen.sh` deletes the CA keys so nothing can be signed
+   again, and that decision is kept rather than worked around. The server's
+   trust bundle is derived at start (`.server-trust.pem`, ignored).
+
+Then: **`add(7,35)=42` over mutual TLS against omniORB's SSLIOP stack** — the
+first call to another ORB's SSLIOP this project has made. Two controls in the
+harness group, and both refuse in the direction they should: trusting
+`wrong-ca.pem`, *we* refuse omniORB (`UnknownIssuer`); with no client identity,
+*omniORB* refuses us (`CertificateRequired`). And the group's own negative
+control — the decoder made to misread the component's port — turns all three
+lines red.
+
+**What is still not measured**: JacORB's encoder (option 3), which would be a
+second independent producer of the component. One is what the residue asked
+for; two would be a comparison.
+
+*아래의 잔여는 이제 측정된다. 해제 경로 1을 택했다: `spikes/tls/setup.sh`가 keg에
+대고 omniORBpy 4.3.4를 소스 빌드한다. 첫 configure를 막은 것은 `pkg-config` 하나였고,
+이 문서가 예측할 수 없던 두 번째 관문 **Python 3.14**는 통과했다. 발견 셋, 픽스처가
+낸 순서대로: (1) `spike-dump`가 **omniORB 자신의** `TAG_SSL_SEC_TRANS`를 읽었다 —
+잔여 그 자체. (2) 첫 다이얼은 **옳게** 거절되었다 — LAN 주소 대 localhost 인증서,
+검증이 켜져 있다는 측정. (3) 두 번째 다이얼도 옳게 거절되었고 **틈을 찾았다**:
+`CertificateRequired` — omniORB는 자기가 발행한 ESTABLISH_TRUST_IN_CLIENT를
+강제하는데 우리 드라이버는 신원을 제시할 방법이 없었다. **우리 피어는 한 번도 요구한
+적이 없었기** 때문이며, 외국 인코더만이 그것을 보여줄 수 있었다. 그리고: 상호 TLS
+위에서 `add(7,35)=42` — 이 프로젝트가 다른 ORB의 SSLIOP에 건 첫 호출.*
+
 ## What was probed / 무엇을 조사했나
 
 Probed 2026-08-13 on the development machine (macOS, Homebrew `omniorb 4.3.4`,

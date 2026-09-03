@@ -10,6 +10,67 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**The first call to another ORB's SSLIOP stack, and a counted `SKIPPED` retired
+by building its fixture.** `spikes/tls/PEER-STATUS.md` recorded on 2026-08-13
+that Homebrew's omniORBpy is built without `sslTP` and named building it from
+source as unblock option 1. Taken: `spikes/tls/setup.sh` builds omniORBpy 4.3.4
+— the brew core's exact version — against the keg, into an ignored directory,
+on the terms every fixture is here on (LGPL/GPL: built and run locally, never
+vendored, never published). The one thing that stopped the first configure was
+`pkg-config`; the gate the document could not predict, Python 3.14, passed. The
+script checks the document's own success criterion — `from omniORB import
+sslTP` — run rather than inferred from `make` exiting 0.
+
+**Three findings, and the fixture produced them in order.**
+
+1. **`spike-dump` read omniORB's own `TAG_SSL_SEC_TRANS`** —
+   `supports=0x0066 requires=0x0066` — which is the residue D010 B3 named: a
+   component from *their* encoder, not ours.
+2. **The first dial was refused, correctly**: omniORB published the LAN address
+   and `server.pem` is for localhost — *certificate not valid for name
+   "172.30.1.49"*. Verification on, measured against a certificate not written
+   for that purpose. The fixture binds loopback by name.
+3. **The second dial was refused, correctly, and found a gap**:
+   `CertificateRequired`. omniORB enforces the ESTABLISH_TRUST_IN_CLIENT it
+   publishes, and `spike-ssliop` could not present an identity — **because no
+   peer of ours had ever asked for one**. Only a foreign encoder could show
+   that. The driver takes `--client-cert`/`--client-key` now, optional, so the
+   21 existing cases run unchanged; `tls/client.pem` is self-signed rather than
+   CA-issued because `regen.sh` deletes the CA keys on purpose and that
+   decision is kept.
+
+**Then `add(7,35)=42` over mutual TLS.** The harness group carries two
+controls that refuse in opposite directions — trusting the wrong CA, *we*
+refuse omniORB (`UnknownIssuer`); with no identity, *omniORB* refuses us
+(`CertificateRequired`) — and its own negative control, the decoder made to
+misread the component's port, turns all three lines red.
+
+**And the fixture's first harness run broke a gate that had nothing to do
+with it.** `leaves_cleanly.py` enumerated its subjects with
+`ROOT.glob("spikes/**/*.py")`, walked into the ignored omniORBpy build's
+`python2/`, handed `ast.parse` a `2147483647L`, and **could not run at all**
+over a tree with no defect in it. CLAUDE.md already says why `git ls-files` is
+right — *it keeps a scan out of an ignored vendor tree* — written about a 532 MB
+tree; a 7 MB one applied it. `entry_cost.py` had the identical walk over `*.rs`
+and survived only because omniORBpy carries no Rust. Both enumerate tracked
+files now, and `spikes/tracked_not_walked.py` is the scan the sweep landed
+with. Its first draft reported seven walks of which five were not this defect
+— globs over `docs/` and `crates/*/src`, where no ignored build can land — so
+the rule was **scoped to where the defect can occur** (every ignored fixture
+build lives under `spikes/`, read off `.gitignore`) rather than tuned quiet.
+Three exclusions, each with its reason beside it.
+
+**Six counted `SKIPPED` become five.** The remaining five are conditions this
+machine does not have: docker, multipass, a paid embedding key, a CSIv2 issuer,
+and a per-release cadence.
+
+*다른 ORB의 SSLIOP 스택에 건 첫 호출, 그리고 픽스처를 지어서 물러난 SKIPPED 하나.
+2026-08-13에 막혔다고 기록된 경로 1을 택했다 — 첫 configure를 막은 것은 `pkg-config`
+하나였고, Python 3.14는 통과했다. 발견 셋: omniORB **자신의** 컴포넌트를 읽었고, 첫
+다이얼은 옳게 거절되었고(LAN 주소 대 localhost 인증서), 두 번째도 옳게 거절되면서
+**틈을 찾았다** — 우리 피어는 클라이언트 인증서를 한 번도 요구한 적이 없어서 드라이버가
+제시할 방법이 없었다. 그리고 상호 TLS 위에서 `add(7,35)=42`. SKIPPED 여섯이 다섯이 된다.*
+
 **A peer that speaks only GIOP 1.0 can be called now, and both binding grids are
 complete.** All three versions, both directions, both languages, `neither[]`
 empty — 8 cells run, 0 red, in each.

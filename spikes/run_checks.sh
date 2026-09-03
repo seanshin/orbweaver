@@ -1787,14 +1787,80 @@ esac
 # output: the first version printed 'sslTP present' and grepped for it, and the
 # ImportError traceback echoes the source line — so the gate matched its own
 # probe text and reported the module present where it is not.
-if python3 -c "import omniORB.sslTP" >/dev/null 2>&1; then
-  echo "  SKIPPED  omniORBpy sslTP IS present here, so the one residue — a TAG_SSL_SEC_TRANS from"
-  echo "           THEIR encoder, not ours — could be taken now and is not. Unmeasured (D010 B3)"
+#
+# **Taken, 2026-09-03.** `spikes/tls/setup.sh` builds omniORBpy with `sslTP`
+# from source against the brew keg (PEER-STATUS.md's unblock option 1), into a
+# directory this repository ignores. The fixture is `spikes/echo_server_ssl.py`;
+# the probe is the interpreter's exit code with that site-packages on the path.
+# Three things are measured, each with the control that makes it evidence:
+#   1. `TAG_SSL_SEC_TRANS` from omniORB's OWN encoder, read by ours — the residue;
+#   2. a GIOP call over TLS against another ORB's SSLIOP stack — the first;
+#   3. verification is on in BOTH directions: a client trusting the wrong CA
+#      refuses omniORB, and omniORB refuses a client with no identity — its IOR
+#      publishes ESTABLISH_TRUST_IN_CLIENT, and the driver honours that only
+#      since this day, because no peer of ours had ever asked.
+SSL_SITE="$ROOT/spikes/tls/omniORBpy/install/lib/python3.$(python3 -c 'import sys; print(sys.version_info.minor)')/site-packages"
+if PYTHONPATH="$SSL_SITE" python3 -c "import omniORB.sslTP" >/dev/null 2>&1; then
+  cleanup
+  rm -f "$ROOT/spikes/echo_ssl.ior"
+  ( cd "$ROOT/spikes" && PYTHONPATH="$SSL_SITE" exec python3 echo_server_ssl.py \
+      >/tmp/orbweaver-ssl-fixture.log 2>&1 & )
+  ssl_up=0
+  for _ in $(seq 1 150); do
+    if [ -s "$ROOT/spikes/echo_ssl.ior" ] && grep -q "^READY$" /tmp/orbweaver-ssl-fixture.log 2>/dev/null; then
+      ssl_up=1; break
+    fi
+    sleep 0.1
+  done
+  if [ "$ssl_up" != 1 ]; then
+    echo "  FAIL the omniORB SSL fixture is built but never published an IOR — a fixture that"
+    echo "       will not start is a failure, not a skip"
+    diag_out "$(cat /tmp/orbweaver-ssl-fixture.log 2>/dev/null)" 6
+    ssl_fail=1
+  else
+    SSLD="$ROOT/target/debug/spike-ssliop"
+    [ -x "$SSLD" ] || cargo build -q -p orbweaver-giop --features ssliop --bin spike-ssliop 2>/dev/null
+    ssl_common=(--ior "$ROOT/spikes/echo_ssl.ior" --expect ok --a 7 --b 35 --expect-reply-endian little)
+    # 1 + 2: the component from THEIR encoder, and a call over TLS on the strength of it.
+    o_out=$("$SSLD" "${ssl_common[@]}" --ca "$ROOT/spikes/tls/ca.pem" \
+              --client-cert "$ROOT/spikes/tls/client.pem" --client-key "$ROOT/spikes/tls/client.key" 2>&1)
+    o_comp=$(grep -E "^ssliop=supports:0x[0-9a-f]+ requires:0x[0-9a-f]+ port:[0-9]+" <<<"$o_out")
+    if grep -q "^outcome=ok" <<<"$o_out" && grep -q "^sum=42" <<<"$o_out" && [ -n "$o_comp" ]; then
+      echo "  ok   omniORB's own encoder wrote TAG_SSL_SEC_TRANS and ours read it: ${o_comp#ssliop=}"
+      echo "  ok   add(7,35)=42 over TLS against omniORB's SSLIOP stack — mutual TLS, both"
+      echo "       identities verified, the first call to another ORB's SSLIOP this project has made"
+    else
+      echo "  FAIL the call over TLS to omniORB did not complete"
+      diag_out "$o_out" 8
+      ssl_fail=1
+    fi
+    # 3a: verification is on OUR side — the wrong CA must refuse THEIR certificate.
+    w_out=$("$SSLD" "${ssl_common[@]}" --ca "$ROOT/spikes/tls/wrong-ca.pem" \
+              --client-cert "$ROOT/spikes/tls/client.pem" --client-key "$ROOT/spikes/tls/client.key" 2>&1)
+    if grep -q "^outcome=refuted" <<<"$w_out" && grep -q "UnknownIssuer" <<<"$w_out"; then
+      echo "  ok   control: trusting the wrong CA, we refuse omniORB's certificate (UnknownIssuer)"
+    else
+      echo "  FAIL control: omniORB's certificate was accepted under the wrong CA, so verification"
+      echo "       is not on and the ok above is not evidence"
+      ssl_fail=1
+    fi
+    # 3b: verification is on THEIR side — no client identity must be refused by omniORB.
+    n_out=$("$SSLD" "${ssl_common[@]}" --ca "$ROOT/spikes/tls/ca.pem" 2>&1)
+    if grep -q "^outcome=refuted" <<<"$n_out" && grep -q "CertificateRequired" <<<"$n_out"; then
+      echo "  ok   control: with no client identity omniORB refuses us (CertificateRequired) — its"
+      echo "       requires=0x0066 is enforced, not merely published"
+    else
+      echo "  FAIL control: omniORB accepted a client with no identity while publishing"
+      echo "       ESTABLISH_TRUST_IN_CLIENT, so the component says one thing and the peer does another"
+      ssl_fail=1
+    fi
+    cleanup
+  fi
 else
-  echo "  SKIPPED  no omniORBpy sslTP and no JacORB SSL here, so a TAG_SSL_SEC_TRANS produced by"
-  echo "           THEIR encoder stays unmeasured, not passing (D010 B3, spikes/tls/PEER-STATUS.md)"
+  echo "  SKIPPED  no omniORBpy sslTP here (spikes/tls/setup.sh builds it), so a TAG_SSL_SEC_TRANS"
+  echo "           produced by THEIR encoder stays unmeasured, not passing (D010 B3)"
+  skip_age absent git:spikes/tls/setup.sh
 fi
-skip_age absent git:spikes/tls/PEER-STATUS.md
 [ "$ssl_fail" -eq 0 ] || fail_total=$((fail_total+1))
 
 hr "orbweaver-idl — our parser against the oracle"
@@ -5136,6 +5202,35 @@ else
     0) echo "  ok   $(sed -n '2p' <<<"$ds_out" | sed 's/^ *ok *//')"
        echo "       $(tail -1 <<<"$ds_ctl_out")" ;;
     *) printf '%s\n' "$ds_out" | sed 's/^/  /'
+       fail_total=$((fail_total+1)) ;;
+  esac
+fi
+
+# ── Every scan enumerates tracked files; none walks into a fixture build ────
+#
+# 2026-09-03: `spikes/tls/setup.sh` built omniORBpy into an ignored directory
+# under spikes/, and the orbexit gate below — which enumerated with
+# `ROOT.glob("spikes/**/*.py")` — walked into its `python2/`, handed `ast.parse`
+# a `2147483647L`, and COULD NOT RUN over a tree with no defect in it. The
+# harness read that as a failure, correctly. CLAUDE.md had already said why
+# `git ls-files` is right (*it keeps a scan out of an ignored vendor tree*);
+# the rule was written about a 532 MB tree and applied by a 7 MB one.
+# `entry_cost.py` had the identical walk over `*.rs` and survived only because
+# omniORBpy carries no Rust. Swept as one rule, and this is the scan the sweep
+# landed with — scoped to where every ignored build in this repository lives,
+# which is spikes/, read off .gitignore and not assumed.
+hr "every scan enumerates tracked files; none walks into a fixture build"
+tnw_probe_rc=0
+python3 spikes/tracked_not_walked.py --probe >/dev/null 2>&1 || tnw_probe_rc=$?
+if [ "$tnw_probe_rc" -ne 0 ]; then
+  echo "  FAIL the walk scan could not see its own probe ($(rc_says "$tnw_probe_rc")) — its"
+  echo "       silence over the tree would mean nothing"
+  fail_total=$((fail_total+1))
+else
+  tnw_out=$(python3 spikes/tracked_not_walked.py 2>&1); tnw_rc=$?
+  case "$tnw_rc" in
+    0) echo "  ok   $(sed -n '2p' <<<"$tnw_out" | sed 's/^ *ok *//')" ;;
+    *) printf '%s\n' "$tnw_out" | sed 's/^/  /'
        fail_total=$((fail_total+1)) ;;
   esac
 fi

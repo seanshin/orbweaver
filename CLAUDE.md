@@ -398,7 +398,14 @@ Each of these produced a phantom failure during Phase 0. They will recur.
   complaint stops is the tune-until-quiet defect. **`git ls-files` is still
   right** (it is what keeps a scan out of an ignored 532 MB vendor tree); what
   is wrong is validating such a gate before staging it. Stage first, then run
-  it. *`git ls-files`로 열거하는 게이트는 `git add` 전후로 다른 트리를 읽고, 그것을
+  it. **And the other direction, measured 2026-09-03: a gate that walks a
+  directory instead of asking `git` is handed whatever a fixture build drops
+  there.** `spikes/tls/setup.sh` built omniORBpy into an ignored tree under
+  `spikes/`, and `leaves_cleanly.py` — `ROOT.glob("spikes/**/*.py")` — walked
+  into its `python2/`, met a `2147483647L`, and could not run over a tree with
+  no defect in it. Every ignored fixture build here lives under `spikes/`;
+  `spikes/tracked_not_walked.py` asks that of every scan there, scoped to where
+  the defect can occur rather than to the verb. *`git ls-files`로 열거하는 게이트는 `git add` 전후로 다른 트리를 읽고, 그것을
   통과시킨 실행은 게이트가 자기 자신을 볼 수 없던 실행이다. 스테이징한 뒤에 돌린다.*
 - **A branch written against an absent oracle has never been executed, and it
   fails the way unexecuted code fails: confidently.** Measured 2026-08-31, the

@@ -555,7 +555,16 @@ def programs():
         out.append((f, "bin"))
     for f in sorted(CRATES.glob("*/examples/*.rs")):
         out.append((f, "example"))
-    for f in sorted(ROOT.glob("spikes/**/*.rs")):
+    # Tracked files, not a directory walk: `spikes/` holds ignored fixture
+    # builds (`spikes/tao/ACE_wrappers/`, `spikes/tls/omniORBpy/`) and a walk
+    # reads them as ours. This one survived 2026-09-03 only because omniORBpy
+    # carries no `.rs`; `leaves_cleanly.py`'s identical walk over `*.py` did not.
+    # Swept as one rule rather than one file.
+    tracked = subprocess.run(
+        ["git", "ls-files", "spikes/*.rs", "spikes/**/*.rs"],
+        cwd=ROOT, capture_output=True, text=True, check=True,
+    ).stdout.split()
+    for f in sorted(ROOT / t for t in tracked):
         out.append((f, "spike"))
     for f in sorted(CRATES.glob("*/tests/*.rs")):
         out.append((f, "test"))

@@ -50,6 +50,7 @@ rather than eight times by hand.
 import ast
 import pathlib
 import re
+import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -102,7 +103,18 @@ def unwrapped_launches(text):
 
 def main(argv):
     probe = "--probe" in argv
-    files = sorted(p for p in ROOT.glob("spikes/**/*.py") if p.is_file())
+    # `git ls-files`, never a directory walk. This read `ROOT.glob("spikes/**/*.py")`
+    # until 2026-09-03, when `spikes/tls/setup.sh` first built omniORBpy into an
+    # ignored directory under spikes/ and the walk handed this scan a Python 2
+    # file (`2147483647L`) it could not parse — so the gate could not run at all,
+    # over a tree with no defect in it. CLAUDE.md already says why `git ls-files`
+    # is right: it is what keeps a scan out of an ignored vendor tree. The rule
+    # was written about a 532 MB one and applied here by a 7 MB one.
+    tracked = subprocess.run(
+        ["git", "ls-files", "spikes/*.py", "spikes/**/*.py"],
+        cwd=ROOT, capture_output=True, text=True, check=True,
+    ).stdout.split()
+    files = sorted(ROOT / f for f in tracked if (ROOT / f).is_file())
     if not files:
         print("  FAIL no spikes/**/*.py were found — this scan measured nothing,")
         print("       which is a failure and never a pass")

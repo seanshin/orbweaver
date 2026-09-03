@@ -76,4 +76,10 @@ spikes/jacorb.ior
 # The TAO front-end fixture: built by spikes/tao/setup.sh, never vendored.
 # DOC-licensed source and its build output — publishing it would be redistribution.
 spikes/tao/ACE_wrappers/
+# omniORBpy built from source for the SSLIOP fixture (LGPL/GPL: never committed)
+spikes/tls/omniORBpy/
+# derived by echo_server_ssl.py from the committed fixtures
+spikes/tls/.server-bundle.pem
+spikes/tls/.server-trust.pem
+spikes/echo_ssl.ior
 spikes/tao/*.tar.bz2

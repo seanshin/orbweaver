@@ -51,8 +51,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use orbweaver_giop::{Connection, Error, Ior, ssliop};
-use rustls::pki_types::CertificateDer;
 use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -108,7 +108,39 @@ fn client_config(ca: &str) -> Arc<rustls::ClientConfig> {
             Err(e) => unmeasured(format!("the CA file {ca} did not parse: {e}")),
         }
     }
-    Arc::new(rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth())
+    let builder = rustls::ClientConfig::builder().with_root_certificates(roots);
+
+    // A client identity, when the target's `target_requires` carries
+    // ESTABLISH_TRUST_IN_CLIENT. Optional, so every case that ran before this
+    // arrived runs unchanged. Added 2026-09-03, the day omniORB's own SSLIOP
+    // endpoint was first dialled: it publishes `requires=0x0066` and answered
+    // the handshake with `CertificateRequired` — the component read off ITS
+    // encoder saying what it wants, and this driver unable to give it. That
+    // is a gap only a foreign encoder could have shown, since our own peer
+    // never asked.
+    match (arg("--client-cert"), arg("--client-key")) {
+        (Some(cert), Some(key)) => {
+            let chain: Vec<CertificateDer<'static>> = match CertificateDer::pem_file_iter(&cert) {
+                Ok(i) => i
+                    .map(|c| {
+                        c.unwrap_or_else(|e| {
+                            unmeasured(format!("the client cert {cert} did not parse: {e}"))
+                        })
+                    })
+                    .collect(),
+                Err(e) => unmeasured(format!("the client cert {cert} could not be read: {e}")),
+            };
+            let key = PrivateKeyDer::from_pem_file(&key)
+                .unwrap_or_else(|e| unmeasured(format!("the client key {key} did not parse: {e}")));
+            Arc::new(
+                builder.with_client_auth_cert(chain, key).unwrap_or_else(|e| {
+                    unmeasured(format!("the client identity is not usable: {e}"))
+                }),
+            )
+        }
+        (None, None) => Arc::new(builder.with_no_client_auth()),
+        _ => unmeasured("--client-cert and --client-key go together".into()),
+    }
 }
 
 fn main() {
