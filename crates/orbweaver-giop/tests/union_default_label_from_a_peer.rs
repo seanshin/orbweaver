@@ -278,7 +278,7 @@ struct Walk<'a> {
 
 impl Walk<'_> {
     fn align(&mut self, n: usize) {
-        while self.pos % n != 0 {
+        while !self.pos.is_multiple_of(n) {
             self.pad.push(self.base + self.pos);
             self.pos += 1;
         }

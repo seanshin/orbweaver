@@ -1322,20 +1322,20 @@ mod roster {
         let target_only = is_test_target(rel, root);
         let mut i = 0usize;
         while i < b.len() {
-            if word_at(b, i, b"impl") {
-                if let Some(found) = at_impl(&code, i) {
-                    out.push(DispatchImpl {
-                        file: rel.to_string(),
-                        line: 1 + b[..i].iter().filter(|c| **c == b'\n').count(),
-                        subject: found.subject,
-                        overrides_knows: found.overrides,
-                        checks_in_another_hook: found.elsewhere,
-                        answers_unconditionally: found.unconditional,
-                        answers_true_on_some_path: found.true_on_some_path,
-                        test_only: target_only
-                            || spans.iter().any(|(s, e)| found.at > *s && found.at < *e),
-                    });
-                }
+            if word_at(b, i, b"impl")
+                && let Some(found) = at_impl(&code, i)
+            {
+                out.push(DispatchImpl {
+                    file: rel.to_string(),
+                    line: 1 + b[..i].iter().filter(|c| **c == b'\n').count(),
+                    subject: found.subject,
+                    overrides_knows: found.overrides,
+                    checks_in_another_hook: found.elsewhere,
+                    answers_unconditionally: found.unconditional,
+                    answers_true_on_some_path: found.true_on_some_path,
+                    test_only: target_only
+                        || spans.iter().any(|(s, e)| found.at > *s && found.at < *e),
+                });
             }
             i += 1;
         }
@@ -1349,10 +1349,10 @@ mod roster {
     pub fn workspace_root() -> Result<PathBuf, String> {
         let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         loop {
-            if let Ok(text) = std::fs::read_to_string(d.join("Cargo.toml")) {
-                if text.contains("[workspace]") {
-                    return Ok(d);
-                }
+            if let Ok(text) = std::fs::read_to_string(d.join("Cargo.toml"))
+                && text.contains("[workspace]")
+            {
+                return Ok(d);
             }
             if !d.pop() {
                 return Err(format!(

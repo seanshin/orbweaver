@@ -843,20 +843,20 @@ impl Analyser {
 
         match (&got, &base) {
             (ConstFold::Int(v), _) => {
-                if let Some((lo, hi, name)) = int_range(&base) {
-                    if *v < lo || *v > hi {
-                        let side = if *v < lo { "small" } else { "large" };
-                        self.diagnostics.push(Diagnostic {
-                            message: format!(
-                                "value {v} is too {side} for {name}: the range is {lo}..={hi}. \
+                if let Some((lo, hi, name)) = int_range(&base)
+                    && (*v < lo || *v > hi)
+                {
+                    let side = if *v < lo { "small" } else { "large" };
+                    self.diagnostics.push(Diagnostic {
+                        message: format!(
+                            "value {v} is too {side} for {name}: the range is {lo}..={hi}. \
                                  Widen the type, or write a value inside it — a constant is \
                                  part of the contract, and truncating one here would hand \
                                  every consumer a number nobody wrote."
-                            ),
-                            span,
-                            rule: crate::rules::CONST_VALUE_RANGE,
-                        });
-                    }
+                        ),
+                        span,
+                        rule: crate::rules::CONST_VALUE_RANGE,
+                    });
                 }
             }
             (ConstFold::Enum(from), TypeSpec::Named(want_enum))

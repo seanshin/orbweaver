@@ -534,10 +534,10 @@ fn with_repair(report: &Report, extra: BTreeMap<String, Json>) -> Json {
 /// gives: a refusal that told those apart would confirm the existence of
 /// something behind a gate the caller never got through.
 pub fn undescribable(registry: &Registry, exposure: &Exposure, target: &str) -> Denied {
-    if exposure.exposes(target) {
-        if let Some(kind) = visible_kind(registry, target) {
-            return Denied::NotAType { id: target.to_owned(), kind };
-        }
+    if exposure.exposes(target)
+        && let Some(kind) = visible_kind(registry, target)
+    {
+        return Denied::NotAType { id: target.to_owned(), kind };
     }
     Denied::InterfaceNotExposed(target.to_owned())
 }

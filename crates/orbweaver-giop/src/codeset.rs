@@ -567,7 +567,7 @@ impl Converter {
                 Ok(bytes.iter().map(|&b| b as char).collect())
             }
             CodeSetId::UTF_16 => {
-                if bytes.len() % 2 != 0 {
+                if !bytes.len().is_multiple_of(2) {
                     return Err(NegotiationError::Unsupported(self.id));
                 }
                 let units: Vec<u16> =

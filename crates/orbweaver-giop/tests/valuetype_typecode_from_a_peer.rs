@@ -352,7 +352,7 @@ impl Walk<'_> {
     }
 
     fn align(&mut self, mut pos: usize, base: usize, n: usize) -> usize {
-        while (pos - base) % n != 0 {
+        while !(pos - base).is_multiple_of(n) {
             self.pad.push(pos);
             pos += 1;
         }

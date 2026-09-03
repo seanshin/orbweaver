@@ -98,7 +98,7 @@ const REPO_ID: &str = "IDL:foreign_forward/Waypoint:1.0";
 const HOST: &str = "127.0.0.1";
 
 fn octets(hex: &str) -> Vec<u8> {
-    assert!(hex.len() % 2 == 0, "a recording must be whole octets");
+    assert!(hex.len().is_multiple_of(2), "a recording must be whole octets");
     (0..hex.len() / 2)
         .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).expect("recording is not hex"))
         .collect()
