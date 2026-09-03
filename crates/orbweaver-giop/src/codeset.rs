@@ -571,7 +571,7 @@ impl Converter {
                     return Err(NegotiationError::Unsupported(self.id));
                 }
                 let units: Vec<u16> =
-                    bytes.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+                    bytes.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c)).collect();
                 String::from_utf16(&units).map_err(|_| NegotiationError::Unsupported(self.id))
             }
             #[cfg(feature = "euc-kr")]
@@ -1189,10 +1189,12 @@ fn marks_its_order(tcs: CodeSetId) -> bool {
 
 /// Assembles UTF-16 code units from octets already known to be in `order`.
 fn wide_units(body: &[u8], order: Endian) -> Vec<u16> {
-    body.chunks_exact(2)
+    body.as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| match order {
-            Endian::Big => u16::from_be_bytes([c[0], c[1]]),
-            Endian::Little => u16::from_le_bytes([c[0], c[1]]),
+            Endian::Big => u16::from_be_bytes(*c),
+            Endian::Little => u16::from_le_bytes(*c),
         })
         .collect()
 }
