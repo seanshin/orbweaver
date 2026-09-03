@@ -16,6 +16,15 @@ name: orbweaver-nat
 
 services:
   server:
+    # One image, built once. The client below runs the SAME image by name
+    # rather than declaring its own `build:`, because the first draft did — and
+    # a second `build:` sends the whole context to the daemon a second time for
+    # a layer cache that already has it.
+    image: orbweaver-nat:local
+    # The platform is a fact with one home, and this is it: run.sh reads it
+    # from here and refuses to build when the host's binary is not for it
+    # (the Dockerfile copies that binary in; it compiles nothing).
+    platform: linux/amd64
     build:
       context: ../..
       dockerfile: spikes/nat/Dockerfile
@@ -31,9 +40,9 @@ services:
       - ./shared:/shared
 
   client:
-    build:
-      context: ../..
-      dockerfile: spikes/nat/Dockerfile
+    # No `platform:` here: an image run by name runs on the platform it was
+    # built for, and that is stated once, above.
+    image: orbweaver-nat:local
     environment:
       NAT_MODE: call
     networks: [outside]
