@@ -4057,6 +4057,53 @@ else
   fail_total=$((fail_total+1))
 fi
 
+# ── The container probe's files, without docker ─────────────────────────────
+#
+# Lane B of docs/PLAN-NAT-PROBE.md, recommended by its agent and applied here.
+# The probe itself needs an engine and is read in the NAT group above; this
+# asks what does not: that the committed .dockerignore is run.sh's derivation
+# from .gitignore (lifted, not restated), that every Dockerfile COPY source is
+# in the context that file leaves, that the Dockerfile compiles nothing, that
+# run.sh parses, and that compose.yaml's networks: block — the routing claim —
+# is the one at HEAD. Four negative controls are in its landing commit.
+hr "the container probe's files — checked without docker"
+nlc=$(./spikes/nat/local_checks.sh 2>&1); nlc_rc=$?
+if [ "$nlc_rc" -eq 0 ]; then
+  echo "  ok   $(grep -c '^  ok' <<<"$nlc") check(s): derivation, COPY sources, no toolchain, syntax, networks block"
+else
+  echo "  FAIL nat local checks exited $nlc_rc"
+  diag_out "$nlc" 8
+  fail_total=$((fail_total+1))
+fi
+
+# ── The declared MSRV builds the tree ────────────────────────────────────────
+#
+# Cargo.toml said `rust-version = "1.85"` and the tree uses let-chains, stable
+# in 1.88 — so the figure was false, and nothing checked it. It was found
+# 2026-09-03 only because the container probe's in-image `rust:1.85-slim`
+# build had been failing on every CI push, under a harness line that reported
+# the probe as never run. This asks the declared version to build one crate.
+# Where the toolchain is absent it is a counted SKIPPED naming it; installing
+# a toolchain is a machine change and not this script's to make.
+hr "the declared rust-version builds the tree"
+msrv=$(sed -n 's/^rust-version = "\([0-9.]*\)"/\1/p' Cargo.toml | head -1)
+if [ -z "$msrv" ]; then
+  echo "  FAIL Cargo.toml declares no rust-version"; fail_total=$((fail_total+1))
+elif rustup run "$msrv" rustc --version >/dev/null 2>&1; then
+  msrv_out=$(cargo "+$msrv" build -q -p orbweaver-giop 2>&1); msrv_rc=$?
+  if [ "$msrv_rc" -eq 0 ]; then
+    echo "  ok   rust $msrv builds orbweaver-giop — the declared MSRV is a measurement"
+  else
+    echo "  FAIL rust $msrv, the declared MSRV, does not build orbweaver-giop"
+    diag_out "$(grep -E '^error' <<<"$msrv_out" | sort | uniq -c)" 6
+    fail_total=$((fail_total+1))
+  fi
+else
+  skip absent "@$(date +%F)" \
+    "no rust $msrv toolchain here (rustup toolchain install $msrv --profile minimal), so" \
+    "whether the declared MSRV builds the tree is UNMEASURED, not passing"
+fi
+
 # ── The whole path, end to end ──────────────────────────────────────────────
 hr "end-to-end — requirement → contract → both halves → guarded call"
 # Every part is measured somewhere above; this is the only check that runs them

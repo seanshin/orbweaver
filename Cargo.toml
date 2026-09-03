@@ -20,7 +20,14 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/seanshin/orbweaver"
-rust-version = "1.85"
+# 1.88, not 1.85, and measured rather than declared: the tree uses let-chains
+# (stable in 1.88), and `cargo +1.85 build` fails with ten E0658s. The wrong
+# figure sat here unchecked until 2026-09-03, when the container probe's
+# in-image `rust:1.85-slim` build turned out to have been failing on every CI
+# push — under a harness line that reported the probe as never run. The
+# harness's `msrv` group builds one crate with `cargo +<this>` where that
+# toolchain exists, so the figure cannot go stale silently again.
+rust-version = "1.88"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -609,6 +609,100 @@ measurement, and it does not survive the next incident.
 돌지 않을 때 일어났고 이 기록기는 아무것도 보지 못했을 것이다 — 그날 16 GB를
 먹은 것은 다른 저장소의 Vite 도구 사슬이 띄운 `node` 프로세스 약 1,700개였다.
 
+## Measured 2026-09-02 → 03: the seam's third implementation, both grids, two SSLIOP peers, and what the harness could not say / 2026-09-02~03 측정
+
+Recorded together because `records_keep_up.py` went red at 14 commits behind
+— which is the gate working, and the reason this section is one section rather
+than the batches it covers. Every figure carries its date; recompute rather
+than quote.
+
+**The seam has three implementations and one protocol document, and the third
+was the one nobody had enrolled.** `the_seam_is_one_protocol.rs`'s `BINDINGS`
+held one row (python) while its header promised *a binding in a third language
+adds a function and a row here*; `theirs()` hardcoded `python3`. Java's runtime
+published no protocol document and read its envelope key as `get("call")`, and
+nothing could go red while the binding grid read 8 of 8 — the grid enrols a
+binding's *cells*, the test its *protocol*, and both were correct. Java is
+enrolled now; its 37 protocol-key literals read through named constants; its
+document is **equal** to the ORB's. It was equal only after three pinned
+differences were struck by the work that made each false — the pin is exact,
+not a floor, and each time the test refused to let a struck line linger.
+
+**A Java servant invokes a reference it was handed** (D038 option A, all three
+implementations): `ObjectRef.invoke` on a channel installed for one dispatch
+and cleared after, the four reply branches lifted into `_okOrRaise` rather
+than copied, the nested read sharing `serveOnPipes`'s one reader. Two controls
+that fail differently — `minor 0, Maybe` (could not invoke) and `minor 1, Yes`
+(invoked, wrong value) — and a third: a reference kept past its dispatch is
+refused. **And a Java servant can tell which object it was addressed to**,
+which was a leak and not a gap: the Rust side has put `oid` in every call
+document since homes existed, a Python servant read it through `own_oid()`,
+and a Java one could not read it at all — so it answered every object of its
+interface identically, and a caller holding two references could tell the
+language from what the servant could *do*. Found by writing `seamProtocol()`,
+which must state what the file reads.
+
+**Both binding grids are complete** (2026-09-03): python and java, both
+directions, GIOP 1.0/1.1/1.2, `neither[]` empty, 8 cells run and 0 red each.
+Two of the three gaps were not about a language — one cell had a per-version
+loop and its twin did not (`spikes/lib/giop_versions.sh` now, shared), and one
+test's loop drove `[1.2, 1.1]` with no reason recorded for stopping. **The
+third was an interoperability defect**: `orbweaver_dynamic::invoke` required a
+wide codec before marshalling anything, so **every call on a GIOP 1.0
+connection was refused, `ping()` included** — a peer that speaks only 1.0 could
+not be called at all. The servant side had the identical defect and had fixed
+it; the client side went on refusing because no cell could reach 1.0 to see
+it. One home now: `codeset::wide_for_version`, both sides call it, neither
+restates it, because a caller and a servant are not free to disagree about
+what a 1.0 connection carries.
+
+**Two SSLIOP peers, both other ORBs' own encoders** — the residue D010 B3
+named, and a counted `SKIPPED` retired by building its fixture.
+`spikes/tls/setup.sh` builds omniORBpy with `sslTP` (the one thing that
+stopped configure was `pkg-config`; Python 3.14 passed);
+`spikes/jacorb/SslServer.java` publishes over JacORB's `sun_jsse`. omniORB
+writes `supports=0x0066 requires=0x0066`, JacORB writes `supports=0x007a
+requires=0x0060` for the same request — two encoders that share no code, read
+by one decoder, and what is asserted is that each peer then *does* what its
+component says: both enforce ESTABLISH_TRUST_IN_CLIENT (`CertificateRequired`
+with no identity), both answer `add(7,35)=42` over mutual TLS — omniORB
+little-endian, JacORB big-endian. The first dial of each found something:
+omniORB's, that our driver could not present a client identity because **no
+peer of ours had ever asked for one**; JacORB's, that its 3.9 `KeyStoreUtil`
+loads from a file **only when the type is `JKS`** (PKCS12 silently yields an
+empty store — `size=0` vs `size=1`, measured by calling the loader from its
+own package). Six counted `SKIPPED` are five.
+
+**The harness records where its time went**, because CI took 41 minutes where
+the push before took 24 and the runner's flush-time stamps could not name the
+group. Its first CI reading named `NAT rewriting` at 202s against 10s here —
+and tracing that found **a probe whose header says `THIS SCRIPT HAS NEVER BEEN
+RUN` running on every CI push, failing, and reported as `SKIPPED — no docker`**
+because the group read the script's skip *count* where the script prints
+*which*. The group reads the lines now (`spikes/lib/nat_probes.sh`, six-shape
+control), and the next push said why: the in-image `rust:1.85-slim` build
+could not compile the tree — **`rust-version = "1.85"` was false**; the tree
+uses let-chains, stable in 1.88, and `cargo +1.85 build` fails with ten
+E0658s. It says 1.88 now and a harness group builds a crate with the declared
+toolchain. The Dockerfile no longer compiles anything: it copies the
+`spike-nat` the host already built, and a derived `.dockerignore` stops
+`COPY . .` shipping the runner's `target/` into the build daemon.
+
+**Two transients, neither diagnosed, both recorded:** `os error 35` on a GIOP
+1.0 ping in `CancelRequest` (harness 83; 6 standalone passes; second group it
+has appeared in), and `GIOP 1.1 against JacORB` red once in harness 99 (the
+run was discarded for a different reason — a standalone re-take beside a live
+run shares its fixture ports — and 100 passed).
+
+*14 커밋 뒤처져 빨개진 `records_keep_up.py`가 이 절이 하나인 이유다. seam의 세 번째
+구현이 유일하게 등록되지 않은 것이었고, 자바 서번트는 건네받은 참조를 호출하며 자기가
+어느 객체로 불렸는지 안다(누출이었다). 두 그리드가 완성되었고, 세 공백 중 하나는
+상호운용 결함이었다 — **1.0만 말하는 피어는 아예 호출할 수 없었다.** SSLIOP 피어
+둘, 다른 ORB의 인코더 둘, 같은 요청에 다른 비트, 각자 자기 컴포넌트대로 행동한다.
+하네스가 시간을 기록하자 "한 번도 돌지 않았다"는 탐침이 CI 푸시마다 **돌면서
+실패하고** `no docker` SKIPPED로 보고되던 것이 드러났고, 그 실패의 이유는 **거짓
+MSRV**였다 — 1.85라 적혀 있고 1.88이 필요했다.*
+
 ## Reading this honestly / 정직한 독해
 
 The wire→bridge spine (cdr→giop→idl→registry→dynamic→mcp→gen) is implemented

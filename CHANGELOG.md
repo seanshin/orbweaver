@@ -10,6 +10,58 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**A probe whose header says it has never run was running on every CI push,
+failing, and reported as `SKIPPED — no docker`.** `docs/PLAN-NAT-PROBE.md`,
+both lanes, and what the first CI reading found.
+
+**Lane A** — the harness's NAT group read `nat_rewrite.sh`'s skip *count* and
+attributed any non-zero value to the container probe, where the script has five
+distinct skips and prints a pass line per probe that ran. It reads the lines
+now, through `spikes/lib/nat_probes.sh` (one home; a six-shape synthesised
+control runs first), and prints one `ok` or one counted `SKIPPED` per probe.
+Three parser drafts died to the real transcript — sub-scripts print headings
+and a `verdict` of their own — and the deaths are in the file. **Its first CI
+push answered the plan's open question the wrong way round:** not "the probe
+never runs" but `FAIL the container probe ran and did not demonstrate the fix`
+— on every push, under a false skip. The second push quoted the probe's
+transcript: **`rust:1.85-slim` could not compile the tree.**
+
+**So `rust-version = "1.85"` was false.** The tree uses let-chains, stable in
+1.88; `cargo +1.85 build` fails with ten E0658s and `cargo +1.88` builds the
+whole workspace clean. It says 1.88 now, and a harness group builds a crate
+with the declared toolchain where it is installed (a counted `SKIPPED` naming
+it where not — installing one is a machine change). Control: 1.85 put back →
+11 error lines; 1.88 → 0.
+
+**Lane B** (a worktree agent, `spikes/nat/` only) — the Dockerfile no longer
+compiles anything: it copies the debug `spike-nat` the host already builds, on
+`debian:bookworm-slim`, with the image platform stated once and `run.sh`
+refusing on an arch mismatch rather than copying a binary the image cannot
+run. A `.dockerignore` **derived from `.gitignore`** — never typed twice, and
+`local_checks.sh` asserts the committed file equals the derivation — stops
+`COPY . .` from shipping the runner's `target/` into the build daemon. The
+client service lost its own `build:` so the context goes once, not twice. The
+`networks:` block is byte-identical: the probe's claim is about routing and
+that block is the routing. Four negative controls in its landing commit.
+
+**Merged in the order the plan set** — lane A first because its CI push was the
+reading everything waited on; lane B's Dockerfile replaces the one that was
+failing, and merging before the reason was read would have fixed a defect by
+deleting the evidence of it.
+
+**And `records_keep_up.py` went red at 14 commits**, which is the gate working:
+this session landed nineteen batches without opening `COMPONENTS.md`. It has
+one section for them now, by fact rather than by batch.
+
+*"한 번도 돌지 않았다"는 헤더의 탐침이 CI 푸시마다 **돌면서 실패하고 있었고**
+`SKIPPED — no docker`로 보고되고 있었다 — 하네스가 스크립트의 skip **개수**를 읽었기
+때문이다. 줄을 읽게 하자 첫 CI 푸시가 답했다: 안 도는 게 아니라 **실패한다**. 두
+번째 푸시가 이유를 인용했다: `rust:1.85-slim`이 트리를 컴파일하지 못한다 — **MSRV
+1.85는 거짓**이었고 1.88이 참이다. 차선 B(워크트리 에이전트)는 Dockerfile에서
+컴파일을 없애고 `.gitignore`에서 **파생한** `.dockerignore`로 `target/` 전송을 막았다.
+계획이 정한 순서로 병합했다 — 이유를 읽기 전에 병합하면 증거를 지우면서 결함을
+고치는 것이다.*
+
 **The harness records where its time went, because a run that grew could not
 say which group grew.** CI's interop job took 41 minutes on the commit that
 added JacORB's SSL producer, against 24 on the one before. The runner's log
