@@ -4024,7 +4024,14 @@ elif grep -q "nat rewriting: PASS" <<<"$nat"; then
     probes_seen=$((probes_seen+1))
     case "$state" in
       ran)     echo "  ok   $line" ;;
-      failed)  echo "  FAIL $line"; fail_total=$((fail_total+1)) ;;
+      failed)
+        echo "  FAIL $line"
+        # The probe's own transcript, so the log says WHY. The first CI push of
+        # this group printed the one-line judgement above and nothing else,
+        # which told us the container probe had been failing on every push —
+        # under a "no docker" SKIPPED — and not one thing about how.
+        nat_probe_transcript "$nat" "$probe" | sed 's/^/       | /' | tail -24
+        fail_total=$((fail_total+1)) ;;
       skipped)
         # The age anchor is the probe's own fixture file, so each SKIPPED says
         # how stale the thing it is waiting on is — not how stale this group is.

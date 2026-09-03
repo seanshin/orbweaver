@@ -53,3 +53,17 @@ nat_probe_lines() {
     /^  FAIL the (vm|container|cluster) probe ran/   { emit(cur, "failed",  substr($0, 8)) }
   ' <<<"$transcript"
 }
+
+# The lines of one probe's section, verbatim — what the harness quotes when a
+# probe fails, so the reason travels with the verdict.
+#
+#   nat_probe_transcript <transcript> <vm|container|cluster>
+nat_probe_transcript() {
+  local transcript="$1" want="$2"
+  awk -v want="$want" '
+    /vm probe — a client on a real second host/        { cur = "vm";        next }
+    /container probe — a client in another routing/    { cur = "container"; next }
+    /cluster probe — a client outside/                 { cur = "cluster";   next }
+    cur == want { print }
+  ' <<<"$transcript"
+}
