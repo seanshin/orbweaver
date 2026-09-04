@@ -1,0 +1,4 @@
+# Runtime state written by run.sh start (pid, url, log). Never committed, and
+# deliberately NOT under /tmp/orbweaver* — that prefix belongs to the
+# harness's fixtures and its cleanup sweeps.
+.run/
