@@ -877,6 +877,82 @@ D039. 착지 규칙은 §F와 같다.*
 
 ---
 
+### H. The unattended queue / 무인 실행 대기열
+
+**Written 2026-09-04, at the owner's instruction to proceed without intervention
+for a while.** The rules of engagement are the reserved-sequence ones already on
+record: each batch lands with its records and is pushed; a step whose outcome is
+*it did not work* records that as the result and moves on; nothing below asks a
+question the owner must answer, and everything that would is listed at the end
+as untouched. Landings stay serial, one full harness per landing, and the
+harness's own inputs are never edited while it runs.
+
+**Q0 — finish wave 2 (in flight when this was written).**
+- Read lane E's first CI run (the k8s probe's first execution ever). Green:
+  record the per-step cost against §G's tripwire, replace
+  `spikes/nat/k8s/run.sh`'s ***NEVER BEEN RUN*** header sentence with the dated
+  first reading, and move the R7 row's account in `COMPONENTS.md`. Red: cluster
+  against the five predicted failure modes in lane E's report, one fix per
+  cause, re-push; **after three red rounds the honest state is recorded as a
+  result** — the wiring reverts to a branch and the condition stands, dated.
+- Push lane D only after that CI run is read (a push would cancel it).
+- One records commit for the wave: `CHANGELOG`, `COMPONENTS` (R7 and the two
+  new fixtures), §G's lane rows dated.
+
+**Q1 — the exit-2 fold in `nat_rewrite.sh`** (found by lane E, out of its
+footprint, reported not edited): both container and k8s probes exit **2** for
+refusal/unmeasured, and `nat_rewrite.sh` folds every non-zero probe exit into
+*ran and did not demonstrate the fix* — a refusal prints as a FAIL claiming the
+probe ran, which is an unmeasured check reading as a measurement. One batch:
+`spikes/nat_rewrite.sh` + `spikes/lib/nat_probes.sh` + its five-shape control
+extended to the refusal shape, negative control run red first.
+
+**Q2 — the first CSIv2 measurement, sized before started (§4.5.4).** Lane D
+built both fixture halves; the D010 B2 skip retires only when something
+*measures* against them. The candidate: mint a token from `spikes/idp`, verify
+it in the driver (the host-verified `VerifiedClaims` seam in
+`orbweaver-mcp/src/token.rs` — the `Verifier` trait itself stays unimplemented,
+stream C's reason untouched), map through `Exchange::caller_for`, and read
+`CsiServer`'s advertised mechanism list beside it; then the harness group
+change that starts both fixtures and runs it. **The sizing question to answer
+first, honestly**: whether a measurement whose issuer and whose verification
+are both this repository's buys more than the current counted skip — if the
+answer is no, the recorded outcome is that reasoning, not the wiring.
+
+**Q3 — the two transients, opportunistically.** Every landing run this queue
+produces is a trial for `os error 35` on GIOP 1.0 ping and the once-red
+`GIOP 1.1 against JacORB`. Count the runs; *did not reproduce in N* with N
+actually counted is the deliverable, not a hunt.
+
+**Q4 — close-down.** This wave's merged worktree mounts removed (branches
+kept — a mount is scaffolding, a branch is a record); the eight pre-2026-08-29
+worktrees keep their §4.5 verdicts and are left mounted for the owner's own
+`reclaim --apply`; memory updated; final report written.
+
+**Untouched, and why — the owner's list, unchanged by this queue:** D039 (the
+one open leak), the toolchain pin (§D), TAO in CI (§E), the 24 `PROPOSED`
+(§B), both paid conditions (`VOYAGE_API_KEY`, the per-release S1–S3), docker
+on this machine, and every capability behind §4's exclusion.
+
+*소유자의 지시(당분간 개입 없이 진행)로 2026-09-04에 작성했다. 교전 규칙은 이미
+기록된 예약-시퀀스 규칙 그대로다: 배치마다 기록과 함께 착지하고 푸시하며, "되지
+않았다"가 결과인 단계는 그것을 결과로 적고 넘어가고, 소유자만 답할 수 있는 것은
+아무것도 묻지 않는다 — 그 목록은 끝에 그대로 적어 둔다. Q0: 진행 중인 2차 파동
+마무리 — k8s 프로브의 사상 첫 CI 실행을 판독하고(빨강이면 예측 모드 5개에 대고
+군집화, 원인당 수정 하나, 세 라운드 뒤에는 결과로 기록), D는 그 판독 뒤에
+푸시하며, 파동의 기록을 하나의 커밋으로. Q1: `nat_rewrite.sh`의 exit-2 접힘 —
+거절이 "실행되고 증명 못함"으로 인쇄되는 미측정-이-측정으로-읽히는 결함, 부정
+대조군 먼저 빨강. Q2: 첫 CSIv2 측정 — 시작 전에 크기를 재고, 발급자와 검증이
+모두 우리 것인 측정이 계수된 스킵보다 많이 사는지부터 정직하게 답한다; 아니오면
+그 논증이 기록이다. Q3: 두 과도 현상 — 이 대기열이 만드는 모든 착지 실행이
+시행이고, N을 실제로 세어 "N번에서 재현 안 됨"이 산출물이다. Q4: 마감 — 이
+파동의 병합된 워크트리 마운트만 제거(브랜치는 기록이므로 남긴다), 여덟 개
+구-워크트리는 §4.5의 판정과 함께 소유자의 몫으로 남기고, 메모리 갱신, 최종 보고.
+건드리지 않는 것: D039, 툴체인 고정, TAO-in-CI, 24 PROPOSED, 유료 조건 둘, 이
+머신의 docker, §4 뒤의 모든 기능.*
+
+---
+
 ### The order, and why / 순서와 이유
 
 | | | why here |
