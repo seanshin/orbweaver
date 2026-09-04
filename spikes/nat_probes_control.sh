@@ -39,9 +39,14 @@ NOISE="$(printf '\033[1mR7 across a real routing boundary — a second host, not
 VM_OK="  ok   the vm probe ran: the loopback reference did not dial, the mapped one did"
 VM_SK="  skip no multipass instance is running; ORBWEAVER_KEEP=1 spikes/nat/vm/run.sh launches one"
 CT_OK="  ok   the container probe ran: naive publish failed, rewritten publish worked"
-CT_SK="  skip Docker is not available here; spikes/nat/ is written and UNRUN"
+CT_SK="  skip Docker is not available here; spikes/nat/ runs where docker is (first ran on CI 2026-09-04)"
 CT_FL="  FAIL the container probe ran and did not demonstrate the fix"
 K8_SK="  skip no cluster answered here; spikes/nat/k8s/ is written and UNRUN"
+# The parent's OTHER skip sentence (2026-09-04): the probe was reached and its
+# own script exited 2 — could not run — which judge_probe speaks as a skip
+# rather than as "ran and did not demonstrate". A refusal-to-run must read as
+# skipped, never as failed and never as ran.
+K8_S2="  skip the cluster probe could not run (its own exit 2 — a precondition failed inside it; its lines above say which)"
 
 shape() { # shape <vm line> <container line> <cluster line>
   printf '%s\n%s\n%s\n\n%s\n%s\n\n%s\n%s\n\n%s\n  failures: 0\n' \
@@ -83,7 +88,14 @@ expect "sub-script noise is not a judgement" \
   "$(shape "" "$CT_SK" "$K8_SK")" \
   "$(printf 'container\tskipped\ncluster\tskipped')"
 
-# 6 — the control's own control: a parser that emits nothing for everything
+# 6 — a probe REACHED whose own script exited 2 (could not run): the parent
+#     speaks judge_probe's skip sentence, and it must read as skipped — the
+#     shape whose absence let an exit-2 print as a run that refuted the fix.
+expect "a probe that could not run (exit 2) is skipped, not failed" \
+  "$(shape "$VM_SK" "$CT_OK" "$K8_S2")" \
+  "$(printf 'vm\tskipped\ncontainer\tran\ncluster\tskipped')"
+
+# 7 — the control's own control: a parser that emits nothing for everything
 #     would pass no shape above but 5. Assert shape 1 is non-empty explicitly,
 #     so an emptied parser cannot slide through on the strength of shape 5.
 n=$(nat_probe_lines "$(shape "$VM_OK" "$CT_SK" "$K8_SK")" | wc -l | tr -d ' ')
@@ -93,5 +105,5 @@ if [ "$n" -eq 3 ]; then say "ok   the parser emits three lines for three probes 
 else say "FAIL the parser emitted $n line(s) for three probes"; fi
 
 echo
-[ "$fails" -eq 0 ] && { echo "nat_probes control: 6 of 6"; exit 0; }
+[ "$fails" -eq 0 ] && { echo "nat_probes control: 7 of 7"; exit 0; }
 echo "nat_probes control: $fails FAILED"; exit 1

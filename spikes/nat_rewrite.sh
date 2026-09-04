@@ -185,7 +185,9 @@ fi
 #
 #   spikes/nat/vm/    a multipass VM — a real second host. **HAS RUN**
 #                     (2026-08-14); see docs/PHASE6.md for the transcript.
-#   spikes/nat/       two isolated Docker networks. Never executed.
+#   spikes/nat/       two isolated Docker networks. **FIRST RAN on CI
+#                     2026-09-04** (green; the harness's NAT group quotes its
+#                     line). Where docker is absent it stays a counted skip.
 #   spikes/nat/k8s/   a Deployment behind a Service, dialed from outside the
 #                     cluster — which additionally translates the *port*,
 #                     since a NodePort is not the port the servant bound.
@@ -195,6 +197,27 @@ fi
 # one takes minutes and downloads an image, which is not a thing a check
 # should do behind its caller's back. Where there is none it is a counted skip
 # naming the command that would do it.
+# One home for the probes' exit protocol. Their scripts distinguish three
+# endings — 0: the fix was demonstrated; 2: the probe COULD NOT RUN (mktemp,
+# a missing tool inside it); anything else: it ran and was refuted — and until
+# 2026-09-04 the three branches below read all non-zero as "ran and did not
+# demonstrate the fix". An exit 2 printed as a run that refuted the fix is an
+# unmeasured check wearing a measurement's sentence, which is the same defect
+# the harness's skip-count reading had one layer up (PLAN-NAT-PROBE §1). Found
+# by lane E's read of the k8s probe, whose exit-2 paths are exactly the ones a
+# provisioned CI cluster should never take.
+#
+# *프로브의 종료 규약의 집. 2는 "실행 불가"인데 셋 모두 비0을 "실행되고 증명
+# 못함"으로 읽고 있었다 — 미측정이 측정의 문장을 입는 결함.*
+judge_probe() { # <probe> <rc> <sentence for a demonstrated run>
+  local probe="$1" rc="$2" demonstrated="$3"
+  case "$rc" in
+    0) pass "$demonstrated" ;;
+    2) skip "the $probe probe could not run (its own exit 2 — a precondition failed inside it; its lines above say which)" ;;
+    *) fail "the $probe probe ran and did not demonstrate the fix (exit $rc)" ;;
+  esac
+}
+
 bold "vm probe — a client on a real second host"
 # Herestring, not a pipe: this is the **quiet** direction of the same defect.
 # `multipass list` over a machine with several instances easily outruns a
@@ -206,11 +229,8 @@ bold "vm probe — a client on a real second host"
 if command -v multipass >/dev/null 2>&1 &&
   vms=$(multipass list --format csv 2>/dev/null) &&
   grep -q Running <<<"$vms"; then
-  if (cd "$ROOT" && ORBWEAVER_KEEP=1 ./spikes/nat/vm/run.sh); then
-    pass "the vm probe ran: the loopback reference did not dial, the mapped one did"
-  else
-    fail "the vm probe ran and did not demonstrate the fix"
-  fi
+  vm_rc=0; (cd "$ROOT" && ORBWEAVER_KEEP=1 ./spikes/nat/vm/run.sh) || vm_rc=$?
+  judge_probe vm "$vm_rc" "the vm probe ran: the loopback reference did not dial, the mapped one did"
 else
   skip "no multipass instance is running; ORBWEAVER_KEEP=1 spikes/nat/vm/run.sh launches one"
   note "this probe HAS executed before — unlike the two below — see docs/PHASE6.md"
@@ -218,23 +238,17 @@ fi
 
 bold "container probe — a client in another routing domain"
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-  if (cd "$ROOT/spikes/nat" && ./run.sh); then
-    pass "the container probe ran: naive publish failed, rewritten publish worked"
-  else
-    fail "the container probe ran and did not demonstrate the fix"
-  fi
+  ct_rc=0; (cd "$ROOT/spikes/nat" && ./run.sh) || ct_rc=$?
+  judge_probe container "$ct_rc" "the container probe ran: naive publish failed, rewritten publish worked"
 else
-  skip "Docker is not available here; spikes/nat/ is written and UNRUN"
-  note "it has never executed anywhere — do not read it as evidence"
+  skip "Docker is not available here; spikes/nat/ runs where docker is (first ran on CI 2026-09-04)"
+  note "unmeasured HERE is not unmeasured everywhere — CI's NAT group is where this line runs"
 fi
 
 bold "cluster probe — a client outside the cluster, dialing a Service"
 if command -v kubectl >/dev/null 2>&1 && kubectl cluster-info >/dev/null 2>&1; then
-  if (cd "$ROOT/spikes/nat/k8s" && ./run.sh); then
-    pass "the cluster probe ran: the pod IP did not dial, the Service address did"
-  else
-    fail "the cluster probe ran and did not demonstrate the fix"
-  fi
+  k8_rc=0; (cd "$ROOT/spikes/nat/k8s" && ./run.sh) || k8_rc=$?
+  judge_probe cluster "$k8_rc" "the cluster probe ran: the pod IP did not dial, the Service address did"
 else
   skip "no cluster answered here; spikes/nat/k8s/ is written and UNRUN"
   note "it has never executed anywhere — do not read it as evidence"
