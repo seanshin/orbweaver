@@ -323,6 +323,68 @@ jobs:
           JAVA_HOME_21: ${{ env.JAVA_HOME }}
         run: ./spikes/jacorb/setup.sh
 
+      # ── The k8s probe's cluster (PLAN-FIRST-COMPLETION §G lane E) ──────────
+      # `spikes/nat/k8s/run.sh` names what has to be true before it can work:
+      # kubectl reaching a cluster, the image side-loaded INTO the cluster, and
+      # a node address the client's shell can dial. kind builds all three on
+      # this runner's docker; the harness is not edited for it, because
+      # nat_rewrite.sh already gates the probe on `kubectl cluster-info`
+      # answering — provisioning here is what turns its standing SKIPPED line
+      # ("no cluster answered here") into a run.
+      #
+      # NOT best-effort, unlike the installs above, and on purpose: those rely
+      # on the harness to say whether an absence is a skip or a failure, but
+      # the harness reads a missing cluster as a counted skip and stays green —
+      # so a provisioning failure here would regress this probe to unmeasured
+      # with nothing red. The differential job's --require is the precedent:
+      # a column this job now exists to measure may not go quietly unmeasured.
+      #
+      # Versions pinned. kind pins its default node image per release
+      # (v0.27.0 → kindest/node:v1.32.2), so pinning kind pins the cluster;
+      # kubectl matches that node. No checksums: the true digests are not
+      # known here to copy, and a fabricated pin is worse than none.
+      - name: install kind and kubectl (pinned)
+        run: |
+          time sudo curl -sfL --max-time 120 -o /usr/local/bin/kind \
+            "https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64"
+          sudo chmod +x /usr/local/bin/kind
+          time sudo curl -sfL --max-time 120 -o /usr/local/bin/kubectl \
+            "https://dl.k8s.io/release/v1.32.2/bin/linux/amd64/kubectl"
+          sudo chmod +x /usr/local/bin/kubectl
+          # The runner image ships its own kubectl; say which one won.
+          command -v kind kubectl
+          kind version
+          kubectl version --client
+
+      # Each command under `time`, because §G names a tripwire: if this
+      # multiplies the job the way TAO's ~4x would, it becomes an owner item —
+      # and that judgement needs the cost legible per piece, not per job.
+      - name: provision the kind cluster and side-load the probe image
+        run: |
+          time kind create cluster --name orbweaver-r7 --wait 120s
+          # The binary the Dockerfile copies in (it compiles nothing). The
+          # harness builds this same binary later; with the cache restored
+          # this is a no-op, and cold it is paid once, here, where it is timed.
+          time cargo build -q --bin spike-nat
+          # Plain `docker build` uses the committed .dockerignore — the same
+          # bytes run.sh derives, which `spikes/nat/local_checks.sh` enforces.
+          time docker build -t orbweaver/spike-nat:probe -f spikes/nat/Dockerfile .
+          time kind load docker-image orbweaver/spike-nat:probe --name orbweaver-r7
+          # The address the out-of-cluster client dials. run.sh's header: on
+          # kind-on-Linux the node's InternalIP works as-is. Derived, checked
+          # non-empty, and exported to the harness step — an empty address
+          # would otherwise surface minutes later inside the probe with worse
+          # attribution than this sentence.
+          addr=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+          if [ -z "$addr" ]; then
+            echo "::error::kind is up but no node InternalIP could be read — the k8s probe cannot dial"
+            exit 1
+          fi
+          echo "node InternalIP: $addr"
+          echo "ORBWEAVER_NODE_ADDR=$addr" >> "$GITHUB_ENV"
+          # The exact question nat_rewrite.sh asks before running the probe.
+          kubectl cluster-info
+
       # The cache can restore `target/*/incremental` from before CARGO_INCREMENTAL
       # was set. It regenerates on demand and is never read here, so dropping it
       # is free; `|| true` because a cache miss means it does not exist.
