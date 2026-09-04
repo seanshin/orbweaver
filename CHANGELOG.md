@@ -10,6 +10,37 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**The registry lock joined the discipline that could not see it, and 21
+unstoppable serve sites came out 9 defects and 12 refusals — a two-lane wave
+against §3's instrument debt (2026-09-04).** Lane A: the event server's
+`registry: Mutex<Registry>` was the one lock in the file the `guarded`
+tripwire could not see, while `publish_channels`'s docs promised it fired
+there — a `Section` now opens with every hold (the `Mutex` stays; the sharing
+argument is untouched), the promise is true rather than edited, and two tests
+assert it with the discipline's own `complaints_about`. Lane B, worked by the
+rule (*a server a fixture starts is stoppable by the route its own teardown
+uses*) rather than the count: nine sites in six files shared **one cause** — a
+helper spawning a detached serve thread and discarding every stop handle — and
+took **one fix** (the helper keeps the server's `StopFlag`; the owner's
+teardown raises and joins); the other twelve are refusals recorded at their
+sites (stopping measurements' own contrast arms, and serve-until-killed
+fixtures), and `spikes/serve_sites.py` now tells a recorded refusal from an
+unexplained `|| false` — 12 of 85, 0 unexplained, with both of its new
+negative controls run red first. D029's Lifecycle cell moved in the same
+change, in both languages — its KO half had still carried `17 of 63` against
+the EN's `21 of 80`. Landed serially, a full harness run per landing, each
+green before its push.
+
+*레지스트리 락이 자신을 보지 못하던 규율에 합류했고, 멈출 수 없던 serve 지점
+21곳은 결함 9와 거절 12로 판명되었다 — §3 계기 부채에 대한 2차선 병행
+(2026-09-04). A차선: `Section`이 모든 보유와 함께 열리고 `Mutex`와 공유 결정은
+그대로다 — 문서의 약속을 고쳐 적는 대신 참으로 만들었다. B차선은 수가 아니라
+규칙으로: 아홉 지점이 원인 하나를 공유해 수정도 하나였고, 열둘은 지점에 사유가
+기록된 거절이며, 스캔이 이제 그 둘을 구별한다(85 중 12, 설명 없는 곳 0). D029
+생애주기 셀은 같은 변경에서 양 언어 모두 움직였다 — KO 반쪽은 EN의 `21 of 80`에
+맞서 여전히 `17 of 63`을 지니고 있었다. 착지는 직렬, 착지마다 전체 하네스,
+각각 푸시 전에 초록.*
+
 **`rust-version` said 1.85; the tree needs 1.88; and saying so cost three CI
 pushes.** The false figure was found only because the container probe's
 in-image `rust:1.85-slim` build had been failing on every push under a false

@@ -5400,11 +5400,15 @@ fi
 # document that cites an executable owes a run.
 #
 # It exists because that cell carried `17 of 63` from 2026-08-27 with NOTHING
-# COMPUTING IT. Today the same tree answers 21 of 80: both halves drifted and
-# no gate could go red, because there was no gate. Its own first two answers
-# were 513 and 509 — comments quoting `serve(..., || false)` counted as
-# servers, and a directory walk counting the eight agent worktrees as eight
-# more copies of the repository.
+# COMPUTING IT. On 2026-08-30 the same tree answered 21 of 80: both halves had
+# drifted and no gate could go red, because there was no gate. Its own first
+# two answers were 513 and 509 — comments quoting `serve(..., || false)`
+# counted as servers, and a directory walk counting the eight agent worktrees
+# as eight more copies of the repository. Lane B repaired the shape 2026-09-04
+# (nine defects, one cause; twelve refusals recorded at their sites), and the
+# scan now tells a recorded refusal from an unexplained `|| false` — the line
+# it prints carries both, so this group's echo of it stays current by
+# construction.
 # ── The Java serving half of the seam, executed ────────────────────────────
 #
 # `COMPONENTS.md` recorded what a Java servant owed as two things: an `Answerer`
@@ -5667,7 +5671,7 @@ hr "how many servers nothing can stop (D029 §6.1 lifecycle, a report)"
 ss_probe_rc=0
 python3 spikes/serve_sites.py --probe >/dev/null 2>&1 || ss_probe_rc=$?
 if [ "$ss_probe_rc" -ne 0 ]; then
-  echo "  FAIL the serve-site scan could not read its own two synthetic sites"
+  echo "  FAIL the serve-site scan could not read its own synthetic sites"
   echo "       ($(rc_says "$ss_probe_rc")), so its count over the tree means nothing"
   fail_total=$((fail_total+1))
 else

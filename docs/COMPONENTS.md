@@ -295,6 +295,16 @@ is the `git ls-files` rule this file already carries arriving from the other
 side. A **report, not a gate**: there is no defensible number for how many
 servers may be unstoppable, and the count is a **lower bound** because it
 classifies spellings, so a stop handed in through a binding reads as stoppable.
+**Repaired 2026-09-04, by the rule rather than the count**: the same tree
+answers **12 of 85, every one carrying a recorded refusal at the site and 0
+unexplained** — nine sites shared one cause (a helper spawning a detached serve
+thread and discarding every stop handle) and took one fix (the helper keeps the
+server's own `StopFlag`, the owner's teardown raises and joins); twelve are
+refusals (stopping measurements' own contrast arms, and serve-until-killed
+fixtures with no in-process actor left to raise a stop), and the scan now tells
+a recorded refusal (`serve_sites: refusal` at the site, with its reason) from
+an unexplained `|| false`, so the next unexplained site is a defect and not a
+figure.
 
 **The ledger was swallowing the end of that sentence.** `transparency.py` split
 each markdown row on every `|`, so a cell holding an inline-code pipe was cut in
@@ -317,9 +327,14 @@ reclaimed or merely hidden, and stripping the reclaim left the old test passing.
 asserted there, the stripped-reclaim control fails with the sentence that names
 it.
 
-`17 of 63`은 계산된 적이 없다 — 손으로 적히고 인용만 되었으며, 오늘 같은 트리는
-**21 of 80**을 답한다. 그 스크립트의 첫 두 답(513, 509)도 틀렸다: 주석 속 예시를
-서버로 셌고, 순회가 워크트리 여덟 개를 셌다. 그리고 **대조군이 초록이던 테스트**가
+`17 of 63`은 계산된 적이 없다 — 손으로 적히고 인용만 되었으며, 같은 트리가
+2026-08-30에는 **21 of 80**을 답했다. 그 스크립트의 첫 두 답(513, 509)도 틀렸다:
+주석 속 예시를 서버로 셌고, 순회가 워크트리 여덟 개를 셌다. **2026-09-04에 수가
+아니라 규칙에 맞춰 수리되었다**: 같은 트리가 **85개 중 12개, 전부 지점에 거절이
+기록되어 있고 설명 없는 곳 0**을 답한다 — 아홉 지점이 원인 하나(도우미가 분리된
+serve 스레드를 띄우고 멈출 손잡이를 버림)를 공유해 수정도 하나였고, 열둘은
+거절이며, 스캔이 이제 기록된 거절과 설명 없는 `|| false`를 구별하므로 다음 설명
+없는 지점은 수치가 아니라 결함이다. 그리고 **대조군이 초록이던 테스트**가
 하나 있었다 — `len()`이 만료를 걸러 세므로 회수와 은닉을 구별하지 못했고, 성질은
 한계에 있었다.
 

@@ -781,8 +781,8 @@ lane's substance stays home in §3.
 
 | lane | home | footprint | how it runs |
 |---|---|---|---|
-| **A** | §3.3 — `guarded` on the event server's registry mutex | `crates/orbweaver-giop/src/event_server.rs`, one file: the one registry `Mutex` (one by that file's own sharing argument) and its lock sites | worktree agent; local oracle `cargo test -p orbweaver-giop` + clippy, the harness's event groups at landing |
-| **B** | §3.2 — the repair half of the unstoppable serve sites | the sites `spikes/serve_sites.py --list` prints — **21 of 85 on 2026-09-04**: fifteen files in five crates plus `spikes/e2e/servant.rs` and `spikes/estate/servant.rs`. No file shared with lane A, nothing in lane C's script | worktree agent; oracle is `serve_sites.py` re-run plus each touched fixture's own harness group at landing. D029's lifecycle-cell figure moves **in the same change** — that cell's own rule |
+| **A** | §3.3 — `guarded` on the event server's registry mutex | `crates/orbweaver-giop/src/event_server.rs`, one file: the one registry `Mutex` (one by that file's own sharing argument) and its lock sites | worktree agent; local oracle `cargo test -p orbweaver-giop` + clippy, the harness's event groups at landing — **done 2026-09-04** (`fea8749`, landed `b054b36`, harness green) |
+| **B** | §3.2 — the repair half of the unstoppable serve sites | the sites `spikes/serve_sites.py --list` prints — **21 of 85 on 2026-09-04**: fifteen files in five crates plus `spikes/e2e/servant.rs` and `spikes/estate/servant.rs`. No file shared with lane A, nothing in lane C's script | worktree agent; oracle is `serve_sites.py` re-run plus each touched fixture's own harness group at landing. D029's lifecycle-cell figure moves **in the same change** — that cell's own rule — **done 2026-09-04** (`8ca4c69`, landed `6549b68`): 9 defects with one cause, 12 refusals recorded at their sites, and the caution below fired exactly as written |
 | **C** | §3.5 — the harness split | `spikes/run_checks.sh` itself | **the coordinator's lane, serial, on `main`** — the gate is not edited by the work it judges, and the machine-wide lock is the coordinator's. Its first commit is the demonstration §3.5 already requires (the same groups still run), not the split |
 
 **Lane cautions, each one already paid for once:**
@@ -830,7 +830,9 @@ conditions and §E wait where they wait.
 부재가 간과로 읽히지 않도록: §B의 잔여는 제 집(결정 문서)에 이름 붙은 채 남고,
 §3.4는 방아쇠가 당겨지지 않았으며, 두 과도 현상은 차선이 아니라 C차선 착지
 실행 중의 관찰이고(*N번 실행에서 재현되지 않았다*는 유효한 결과다), §D의
-조건들과 §E는 기다리던 자리에서 기다린다.*
+조건들과 §E는 기다리던 자리에서 기다린다. — 갱신 2026-09-04: A·B 차선은
+착지했다(날짜와 커밋은 표의 칸에); B차선에서는 위 주의사항이 적힌 그대로
+발동해 21 중 12가 거절로 판명되었다.*
 
 ---
 
@@ -960,8 +962,15 @@ instrument, and an instrument that cannot go red makes §1 unfalsifiable.
    the cell it sits in). Fixable rather than fixed, and a re-measurement is owed
    before the number is quoted again — a crude grep on 2026-08-29 returns
    different totals, which measures the method and not the tree.
+   **The re-measurement half became `spikes/serve_sites.py` on 2026-08-30, and
+   the repair half is done 2026-09-04** (§F lane B, `8ca4c69`): 12 of 85, every
+   one a recorded refusal, 0 unexplained. The figure's home is D029's Lifecycle
+   cell; it is not restated here.
 3. **`guarded::Section` on the event-server registry mutex.** Extracted from the
-   E3 branch judgement as worth doing and not landed.
+   E3 branch judgement as worth doing and not landed. **Done 2026-09-04** (§F
+   lane A, `fea8749`): a `Section` under the same `Mutex`, the sharing decision
+   untouched — and the doc sentence that had promised the tripwire watches this
+   lock became true rather than being edited.
 4. **The tighter §4 bound** — *fetches nothing more* rather than *asks at most
    once more*, by re-reading the predicate where the outcome is recorded. The
    trigger is written into `event_server.rs`'s §4 docs; it was not taken because
