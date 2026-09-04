@@ -301,9 +301,11 @@ Dockerfile·compose·`.dockerignore`(**`.dockerignore`가 없어 `COPY . .`가 �
   equally wrong about that — but the runner has no cluster, so it is a
   condition and stays one. (2026-09-04: that premise turned out to be the
   buildable kind — the runner has docker, and `kind` makes a cluster on it.
-  The plan that challenges it is `PLAN-FIRST-COMPLETION` §G lane E; this
-  record stays as written for its date. *그 전제는 지어서 없앨 수 있는
-  부류였다 — 계획은 §G의 E차선에 있고, 이 기록은 그 날짜의 것으로 남는다.*)
+  The plan that challenged it is `PLAN-FIRST-COMPLETION` §G lane E, and the
+  same day the probe **ran and demonstrated on its first execution** there;
+  this record stays as written for its date. *그 전제는 지어서 없앨 수 있는
+  부류였고, 같은 날 그 프로브는 첫 실행에서 실행되고 증명했다 — 이 기록은
+  그 날짜의 것으로 남는다.*)
 - Making the VM probe run on CI. It cannot (no multipass); it stays a counted
   `SKIPPED` there, correctly.
 - The 41-minute run itself. It did not reproduce (24m on the next push) and

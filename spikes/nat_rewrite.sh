@@ -191,7 +191,9 @@ fi
 #   spikes/nat/k8s/   a Deployment behind a Service, dialed from outside the
 #                     cluster — which additionally translates the *port*,
 #                     since a NodePort is not the port the servant bound.
-#                     Never executed.
+#                     **FIRST RAN on CI 2026-09-04** (kind; ran and
+#                     demonstrated). Where no cluster answers it stays a
+#                     counted skip.
 #
 # The VM probe is run here only when an instance is ALREADY running: launching
 # one takes minutes and downloads an image, which is not a thing a check
@@ -250,8 +252,8 @@ if command -v kubectl >/dev/null 2>&1 && kubectl cluster-info >/dev/null 2>&1; t
   k8_rc=0; (cd "$ROOT/spikes/nat/k8s" && ./run.sh) || k8_rc=$?
   judge_probe cluster "$k8_rc" "the cluster probe ran: the pod IP did not dial, the Service address did"
 else
-  skip "no cluster answered here; spikes/nat/k8s/ is written and UNRUN"
-  note "it has never executed anywhere — do not read it as evidence"
+  skip "no cluster answered here; spikes/nat/k8s/ runs where a cluster is (first ran on CI 2026-09-04)"
+  note "unmeasured HERE is not unmeasured everywhere — CI provisions kind and runs this line"
 fi
 
 # Why the reason is measured rather than asserted: see this file's header.

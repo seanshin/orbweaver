@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 # Cluster probe for risk R7: a client outside the cluster, dialing in.
 #
-# ***THIS SCRIPT HAS NEVER BEEN RUN.***
+# **FIRST RAN 2026-09-04, on CI, and demonstrated on that first run**: kind
+# v0.27.0 on the runner's docker (node InternalIP 172.18.0.2), `ok the cluster
+# probe ran: the pod IP did not dial, the Service address did` — CI run
+# 33824297858. The run was preceded by a defect pass this file's never-run
+# state predicted: three causes were repaired by reading before the first
+# execution (rollout overlap under RollingUpdate, want=fail accepting any
+# non-zero exit, a silent ConfigMap failure), so the green is a first run of
+# the REPAIRED script — a first draft green would have deserved the suspicion
+# preflight still counsels. Cost, measured: install 1s, provision 56s
+# (create 42s, image 13s, load 2s), +7s inside the NAT group.
 #
-# It was written on a machine with no cluster and no way to make one — no
-# container engine of any kind, and `multipass launch` refused before it even
-# booted: "Available disk (974639104 bytes) below minimum for this image
-# (3758096384 bytes)". So nothing below is evidence of anything.
-# `spikes/nat_rewrite.sh` counts it as a SKIP, never a pass. Run
-# `spikes/nat/preflight.sh` first; it says whether this machine can run this at
-# all, and what is missing if not.
+# It was written on a machine with no cluster and no way to make one, and
+# where none answers, `spikes/nat_rewrite.sh` still counts it as a SKIP, never
+# a pass. Run `spikes/nat/preflight.sh` first; it says whether this machine
+# can run this at all, and what is missing if not.
 #
 #   ORBWEAVER_NODE_ADDR=192.168.64.7 ./spikes/nat/k8s/run.sh
 #

@@ -41,7 +41,7 @@ VM_SK="  skip no multipass instance is running; ORBWEAVER_KEEP=1 spikes/nat/vm/r
 CT_OK="  ok   the container probe ran: naive publish failed, rewritten publish worked"
 CT_SK="  skip Docker is not available here; spikes/nat/ runs where docker is (first ran on CI 2026-09-04)"
 CT_FL="  FAIL the container probe ran and did not demonstrate the fix"
-K8_SK="  skip no cluster answered here; spikes/nat/k8s/ is written and UNRUN"
+K8_SK="  skip no cluster answered here; spikes/nat/k8s/ runs where a cluster is (first ran on CI 2026-09-04)"
 # The parent's OTHER skip sentence (2026-09-04): the probe was reached and its
 # own script exited 2 — could not run — which judge_probe speaks as a skip
 # rather than as "ran and did not demonstrate". A refusal-to-run must read as

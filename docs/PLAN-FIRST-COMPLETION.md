@@ -848,8 +848,8 @@ recorded.
 
 | lane | condition | what gets built | footprint |
 |---|---|---|---|
-| **D** | D010 B2 — identity through a real provider (the `ORBWEAVER_IDP_URL` skip) | The skip's own text names two absent halves: a peer that advertises a CSIv2 mechanism list, and an OIDC/JWT issuer. JacORB ships SAS/CSIv2 — configure the **existing** fixture to advertise; and a minimal issuer as a first-party fixture (`spikes/idp/`, MIT, written to the published specs). **The bound is stated up front**: an issuer of ours cannot refute the verifier's accepting direction — stream C's reason for leaving the verifier a trait stands untouched — so what this lane buys is the exchange path measured against an *independent peer's* advertisement, and the lane must say so wherever it lands | `spikes/jacorb/` config + new `spikes/idp/`; worktree agent, local oracle only |
-| **E** | The k8s probe's cluster (one of §D's five) | `PLAN-NAT-PROBE` §5 excluded this probe because *"the runner has no cluster"* — but the runner has docker, and `kind` makes a cluster on it, so the premise is the buildable kind. `spikes/nat/k8s/run.sh`'s own header says ***it has never been run***, so the absent-oracle rule applies in full: **the first run is a measurement of the harness, not of the tree**, and the defect cluster it yields is the lane's harvest. Cost is measured and recorded like the NAT plan did; if it multiplies a CI job the way TAO's ~4× would, it converts to an owner item (§E's shape) — that tripwire is named now, not after | `.github/workflows/ci.yml` + `spikes/nat/k8s/`; prepared by an agent, but **its oracle is CI itself**, so every reading lands through the coordinator's pushes |
+| **D** | D010 B2 — identity through a real provider (the `ORBWEAVER_IDP_URL` skip) | The skip's own text names two absent halves: a peer that advertises a CSIv2 mechanism list, and an OIDC/JWT issuer. JacORB ships SAS/CSIv2 — configure the **existing** fixture to advertise; and a minimal issuer as a first-party fixture (`spikes/idp/`, MIT, written to the published specs). **The bound is stated up front**: an issuer of ours cannot refute the verifier's accepting direction — stream C's reason for leaving the verifier a trait stands untouched — so what this lane buys is the exchange path measured against an *independent peer's* advertisement, and the lane must say so wherever it lands | `spikes/jacorb/` config + new `spikes/idp/`; worktree agent, local oracle only — **done 2026-09-04** (`687d85e`, landed `63e4b7b`, harness green): both halves stood up, JacORB advertises (the key was a POA SASPolicy, not properties), both negative controls red first. The skip itself stays until a measurement exists — §H Q2 records why that is deferred |
+| **E** | The k8s probe's cluster (one of §D's five) | `PLAN-NAT-PROBE` §5 excluded this probe because *"the runner has no cluster"* — but the runner has docker, and `kind` makes a cluster on it, so the premise is the buildable kind. `spikes/nat/k8s/run.sh`'s own header says ***it has never been run***, so the absent-oracle rule applies in full: **the first run is a measurement of the harness, not of the tree**, and the defect cluster it yields is the lane's harvest. Cost is measured and recorded like the NAT plan did; if it multiplies a CI job the way TAO's ~4× would, it converts to an owner item (§E's shape) — that tripwire is named now, not after | `.github/workflows/ci.yml` + `spikes/nat/k8s/`; prepared by an agent, but **its oracle is CI itself**, so every reading lands through the coordinator's pushes — **done 2026-09-04** (`d3ce7fc`, landed `7ead027`): three defect causes repaired by reading first, then the probe **ran and demonstrated on its first execution ever**; cost ~57s + 7s, nowhere near the tripwire |
 
 **Not in this wave, and why:** `VOYAGE_API_KEY` and the per-release S1–S3 pass
 spend money and are the owner's (D026 §6 proposes exactly that spend); docker
@@ -886,6 +886,24 @@ record: each batch lands with its records and is pushed; a step whose outcome is
 question the owner must answer, and everything that would is listed at the end
 as untouched. Landings stay serial, one full harness per landing, and the
 harness's own inputs are never edited while it runs.
+
+> **The queue ran 2026-09-04 and every item closed the same day.** Q0: the
+> k8s probe **ran and demonstrated on its first execution ever** (CI
+> 33824297858; cost ~57s provisioning + 7s in-group — nowhere near the
+> tripwire), and the never-run sentences moved with the reading. Q1: done
+> (`9ea9ec3`) — `judge_probe`, control 7 of 7, old bytes shown lying on exit 2.
+> Q2: **the sizing question answered no, and the reasoning is the outcome** —
+> an issuer-local exchange cannot retire *identity through a real provider*
+> (our issuer is not one), and the real measurement (GSSUP on the wire against
+> `CsiServer`) needs a client-side request service-context surface that §4
+> excludes while the backend row stands open; lane D's fixtures wait ready.
+> Q3: 0 reproductions of either transient in the day's four full local runs.
+> Q4: below.
+>
+> *대기열은 2026-09-04에 돌았고 전 항목이 같은 날 닫혔다. k8s 프로브는 사상 첫
+> 실행에서 실행되고 증명했으며, Q2는 크기를 재보니 답이 '아니오'였고 그 논증이
+> 산출물이다 — 우리 발급자는 real provider가 아니고, 진짜 측정은 §4가 제외하는
+> 클라이언트 표면을 요구한다. 두 과도 현상은 하루 네 번의 전체 실행에서 0회.*
 
 **Q0 — finish wave 2 (in flight when this was written).**
 - Read lane E's first CI run (the k8s probe's first execution ever). Green:

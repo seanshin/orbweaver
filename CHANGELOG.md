@@ -10,6 +10,43 @@ records what changed and, where it matters, what it changes on the wire.
 
 ## Unreleased
 
+**Two conditions were worked by building, and the probe that had never run
+anywhere ran and demonstrated on its first execution (2026-09-04, wave 2 +
+the unattended queue).** Lane E: CI provisions a kind cluster (~57s, +7s in
+the NAT group — measured against the plan's ~4× tripwire and nowhere near
+it), and `spikes/nat/k8s/run.sh` — whose header truthfully said NEVER BEEN
+RUN — ran on it: the pod IP did not dial from outside, the Service address
+did, with the NodePort translating the port as well as the host. The green
+is a first run of the *repaired* script: three causes were fixed by reading
+before any cluster existed (rollout overlap under RollingUpdate, `want=fail`
+accepting any non-zero exit including a build failure, a silent ConfigMap
+apply), which is the absent-oracle rule paid before the first run instead of
+after it. Lane D: the D010 B2 skip's two absent halves now exist as fixtures
+— JacORB 3.9 advertises a CSIv2 mechanism list (the condition was a POA
+`SASPolicy`, not properties alone, read out of the jar's own bytecode), and
+`spikes/idp/` is a stdlib-only OIDC issuer with a 19-check selftest; both
+negative controls run red first. The skip itself stands, on a sizing done
+before starting: an issuer of ours cannot retire *identity through a real
+provider*, and the real measurement — GSSUP on the wire against `CsiServer`
+— needs a client-side request service-context surface that priority zero
+excludes while the backend row stays open. That reasoning is the outcome,
+recorded in PLAN-FIRST-COMPLETION §H Q2. And `nat_rewrite.sh` stopped
+printing an unmeasured probe as a refuted one: the probes' exit 2 (*could
+not run*) now speaks as a counted skip through `judge_probe`, the parser
+control grew the shape whose absence hid it (7 of 7), and the old bytes are
+shown lying in the commit. Neither transient reproduced in the day's four
+full local runs.
+
+*지어서 옮긴 조건 둘, 그리고 어디서도 돌아 본 적 없던 프로브가 첫 실행에서
+실행되고 증명했다. E차선: CI가 kind를 세우고(~57s+7s, 방아쇠 근처도 아님),
+k8s 프로브의 초록은 **수리된** 스크립트의 첫 실행이다 — 세 원인을 클러스터가
+있기 전에 읽어서 고쳤다. D차선: B2 스킵의 부재한 두 절반이 픽스처로 존재한다
+(JacORB 광고의 열쇠는 속성이 아니라 POA의 SASPolicy였다); 스킵 자체는 크기를
+재고 세웠다 — 우리 발급자는 real provider가 아니고, 진짜 측정은 0순위가
+제외하는 클라이언트 표면을 요구한다. 그 논증이 산출물이다. `nat_rewrite.sh`는
+미측정 프로브를 반박된 프로브로 찍기를 멈췄다(exit 2 → 계수된 skip, 대조군
+7/7). 과도 현상 둘은 하루 네 번의 전체 실행에서 0회.*
+
 **The registry lock joined the discipline that could not see it, and 21
 unstoppable serve sites came out 9 defects and 12 refusals — a two-lane wave
 against §3's instrument debt (2026-09-04).** Lane A: the event server's
