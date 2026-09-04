@@ -72,6 +72,17 @@ metadata:
     app.kubernetes.io/name: orbweaver-nat
 spec:
   replicas: 1
+  # Recreate, never the default RollingUpdate: with one replica the default's
+  # maxSurge rounds up to 1, so every case transition (`run.sh` restarts the
+  # rollout once per case) has a window where TWO pods match the selector —
+  # the old case's and the new case's. `run.sh` reads the reference out with
+  # `kubectl exec deploy/…` and attributes failures with `logs deploy/…`, and
+  # kubectl picks among matching pods by its own heuristics, so the naive case
+  # could read the pod that published the PREVIOUS case's reference and both
+  # verdict directions would be about the wrong pod. Recreate guarantees at
+  # most one pod ever exists: the old case is gone before the new one starts.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: orbweaver-nat
@@ -80,6 +91,10 @@ spec:
       labels:
         app.kubernetes.io/name: orbweaver-nat
     spec:
+      # spike-nat installs no signal handler, so SIGTERM ends it at once; the
+      # default 30 seconds of grace would only stretch every Recreate
+      # transition by time nothing uses.
+      terminationGracePeriodSeconds: 2
       containers:
         - name: spike-nat
           image: orbweaver/spike-nat:probe

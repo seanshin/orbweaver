@@ -111,10 +111,16 @@ run_case() { # run_case <mode> <publish-map> <pass|fail> <label>
   # ConfigMap does NOT reconfigure a running pod. The rollout restart is the
   # part that is easy to leave out and impossible to notice, because the probe
   # would then measure the previous case twice.
-  kubectl create configmap orbweaver-nat -n "$NS" \
+  if ! kubectl create configmap orbweaver-nat -n "$NS" \
     --from-literal=nat-mode="$mode" \
     --from-literal=publish-map="$map" \
-    --dry-run=client -o yaml | kubectl apply -f - >/dev/null || return 1
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null; then
+    # kubectl's own complaint went to stderr above; this line says which case
+    # it belongs to, because a `return 1` with no sentence was the one failure
+    # path here that named nothing.
+    echo "  FAIL $label: could not apply the case's ConfigMap"
+    return 1
+  fi
   k rollout restart deployment/orbweaver-nat >/dev/null 2>&1
   if ! k rollout status deployment/orbweaver-nat --timeout=180s >/dev/null 2>&1; then
     echo "  FAIL $label: the servant never became ready"
@@ -143,8 +149,18 @@ run_case() { # run_case <mode> <publish-map> <pass|fail> <label>
     return 0
   fi
   if [ "$want" = fail ] && [ "$status" -ne 0 ]; then
-    echo "  ok   $label: the out-of-cluster client could not dial it, as R7 predicts"
-    return 0
+    # A dial that failed and a client that never dialed exit the same way from
+    # here, and only one of them measures anything: a `cargo run` that could
+    # not build, or a reference the client could not read, is an unmeasured
+    # check, never the failure R7 predicts. `spike-nat call` prints `dialing
+    # host:port` before it touches the socket, so that line is the proof the
+    # failure was the dial's own. Herestring, not a pipe — the grep -q rule.
+    if grep -q "^dialing " <<<"$out"; then
+      echo "  ok   $label: the out-of-cluster client could not dial it, as R7 predicts"
+      return 0
+    fi
+    echo "  FAIL $label: the client exited $status without reaching the dial — unmeasured, not the failure R7 predicts"
+    return 1
   fi
   echo "  FAIL $label: wanted the dial to $want, it did not"
   return 1
