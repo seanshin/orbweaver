@@ -783,7 +783,7 @@ lane's substance stays home in §3.
 |---|---|---|---|
 | **A** | §3.3 — `guarded` on the event server's registry mutex | `crates/orbweaver-giop/src/event_server.rs`, one file: the one registry `Mutex` (one by that file's own sharing argument) and its lock sites | worktree agent; local oracle `cargo test -p orbweaver-giop` + clippy, the harness's event groups at landing — **done 2026-09-04** (`fea8749`, landed `b054b36`, harness green) |
 | **B** | §3.2 — the repair half of the unstoppable serve sites | the sites `spikes/serve_sites.py --list` prints — **21 of 85 on 2026-09-04**: fifteen files in five crates plus `spikes/e2e/servant.rs` and `spikes/estate/servant.rs`. No file shared with lane A, nothing in lane C's script | worktree agent; oracle is `serve_sites.py` re-run plus each touched fixture's own harness group at landing. D029's lifecycle-cell figure moves **in the same change** — that cell's own rule — **done 2026-09-04** (`8ca4c69`, landed `6549b68`): 9 defects with one cause, 12 refusals recorded at their sites, and the caution below fired exactly as written |
-| **C** | §3.5 — the harness split | `spikes/run_checks.sh` itself | **the coordinator's lane, serial, on `main`** — the gate is not edited by the work it judges, and the machine-wide lock is the coordinator's. Its first commit is the demonstration §3.5 already requires (the same groups still run), not the split |
+| **C** | §3.5 — the harness split | `spikes/run_checks.sh` itself | **the coordinator's lane, serial, on `main`** — the gate is not edited by the work it judges, and the machine-wide lock is the coordinator's. Its first commit is the demonstration §3.5 already requires (the same groups still run), not the split — **closed 2026-09-04 as a refusal with two readings**; the verdict and its revival trigger are in §3.5, which is that fact's home |
 
 **Lane cautions, each one already paid for once:**
 
@@ -832,7 +832,48 @@ conditions and §E wait where they wait.
 실행 중의 관찰이고(*N번 실행에서 재현되지 않았다*는 유효한 결과다), §D의
 조건들과 §E는 기다리던 자리에서 기다린다. — 갱신 2026-09-04: A·B 차선은
 착지했다(날짜와 커밋은 표의 칸에); B차선에서는 위 주의사항이 적힌 그대로
-발동해 21 중 12가 거절로 판명되었다.*
+발동해 21 중 12가 거절로 판명되었고, C차선은 판독 두 개로 거절로 닫혔다(§3.5).
+§F는 끝났다 — 다음은 §G다.*
+
+---
+
+### G. The next wave: two conditions worked by building / 다음 파동 — 지어서 옮기는 조건 둘
+
+**Derived 2026-09-04, after §F closed.** Inside the tree the buildable
+non-capability set is now empty; what remains is §D's conditions, and §D's own
+record says the list moved twice this week **by building rather than by
+waiting**. Two of the five are at least partly buildable, and the §D pattern
+applies to both: *if it will not stand up, that is a result* and is what gets
+recorded.
+
+| lane | condition | what gets built | footprint |
+|---|---|---|---|
+| **D** | D010 B2 — identity through a real provider (the `ORBWEAVER_IDP_URL` skip) | The skip's own text names two absent halves: a peer that advertises a CSIv2 mechanism list, and an OIDC/JWT issuer. JacORB ships SAS/CSIv2 — configure the **existing** fixture to advertise; and a minimal issuer as a first-party fixture (`spikes/idp/`, MIT, written to the published specs). **The bound is stated up front**: an issuer of ours cannot refute the verifier's accepting direction — stream C's reason for leaving the verifier a trait stands untouched — so what this lane buys is the exchange path measured against an *independent peer's* advertisement, and the lane must say so wherever it lands | `spikes/jacorb/` config + new `spikes/idp/`; worktree agent, local oracle only |
+| **E** | The k8s probe's cluster (one of §D's five) | `PLAN-NAT-PROBE` §5 excluded this probe because *"the runner has no cluster"* — but the runner has docker, and `kind` makes a cluster on it, so the premise is the buildable kind. `spikes/nat/k8s/run.sh`'s own header says ***it has never been run***, so the absent-oracle rule applies in full: **the first run is a measurement of the harness, not of the tree**, and the defect cluster it yields is the lane's harvest. Cost is measured and recorded like the NAT plan did; if it multiplies a CI job the way TAO's ~4× would, it converts to an owner item (§E's shape) — that tripwire is named now, not after | `.github/workflows/ci.yml` + `spikes/nat/k8s/`; prepared by an agent, but **its oracle is CI itself**, so every reading lands through the coordinator's pushes |
+
+**Not in this wave, and why:** `VOYAGE_API_KEY` and the per-release S1–S3 pass
+spend money and are the owner's (D026 §6 proposes exactly that spend); docker
+on *this* machine is a machine change; every capability stays behind §4 while
+the backend row stands open; and D039 waits where it waits.
+
+**Landing rules unchanged from §F**: serial, one full harness per landing, the
+coordinator holds `run_checks.sh` and the lock; agents report recommended
+harness groups without applying them.
+
+*§F가 닫힌 뒤 트리 안에 지을 수 있는 비기능 작업은 없다. 남은 것은 §D의
+조건들이고, §D 자신의 기록이 말하듯 이 목록은 이번 주에 **기다려서가 아니라
+지어서** 두 번 움직였다. D차선 — CSIv2 스킵의 부재한 두 절반(메커니즘 목록을
+광고하는 피어, OIDC 발급자)을 짓는다: JacORB는 SAS/CSIv2를 탑재하므로 기존
+픽스처를 설정하고, 발급자는 1차 저작 픽스처로 짓되 **한계를 앞에 적는다** —
+우리 발급자는 검증기의 수용 방향 오류를 반증할 수 없다(스트림 C의 이유는
+그대로다); 이 차선이 사는 것은 독립 피어의 광고에 대고 측정되는 교환 경로다.
+E차선 — k8s 프로브의 "러너에 클러스터가 없다"는 전제를 `kind`로 짓어서
+반증한다: 그 스크립트는 자기 헤더로 한 번도 실행된 적 없다고 선언하므로 부재
+오라클 규칙이 온전히 적용된다 — **첫 실행은 트리가 아니라 하네스의 측정**이고,
+거기서 나오는 결함 군집이 수확이다. 비용은 재서 기록하고, TAO의 ~4×처럼 잡을
+불리면 소유자 항목으로 전환한다 — 그 방아쇠를 지금 적는다. 이 파동에 없는 것:
+유료 조건 둘(소유자), 이 머신의 docker(머신 변경), §4 뒤의 모든 기능, 그리고
+D039. 착지 규칙은 §F와 같다.*
 
 ---
 
@@ -979,6 +1020,38 @@ instrument, and an instrument that cannot go red makes §1 unfalsifiable.
    36 groups took under 2s each (measured 2026-08-27). A split is a change to
    how work is scheduled, not to what is measured, so it lands only with a
    demonstration that the same groups still run.
+
+   **Refused 2026-09-04, with the readings that decided it** (§F lane C — the
+   verdict is the lane's yield, and its first commit was to be the
+   demonstration, which this refusal replaces). Two fresh readings: CI
+   2026-09-03, total 1006s, top three 545s (54%) — release profile 276s,
+   concurrent dispatch 152s, unit tests 117s; local warm 2026-09-04 (the lane-B
+   landing run), total 744s, top three 347s (47%) — concurrent dispatch 127s,
+   unit tests 112s, release profile 108s. The share the 2026-08-27 measurement
+   named still holds, and its composition is what refuses the split: the three
+   are one `cargo test --workspace`, one `--release` build-and-run, and five
+   deliberate repetitions of a suite whose repetition is its argument —
+   **indivisible commands, not schedulable units**, so no redistribution
+   shortens the critical path without changing what is measured. A second CI
+   job would duplicate the fixture setup and split the per-run transparency
+   ledger, changing what *this run* means; two local runs cannot coexist by
+   design (the machine-wide lock exists because they destroyed each other's
+   fixtures). What actually shortened runs since 2026-08-27 was removing waste
+   *inside* groups — the NAT group 202s → 10s, `target/` hygiene, and the
+   timing report itself, which is what made this refusal computable rather
+   than argued. **Revival trigger, named rather than thresholded:** a dominant
+   group that is fixture-bound and independent of its neighbours — the shape a
+   scheduler could actually move.
+
+   *2026-09-04에 판독 두 개로 거절했다. CI 1006s 중 상위 3이 545s(54%), 로컬
+   따뜻한 실행 744s 중 347s(47%) — 비중은 유지되지만 그 구성이 분할을 거절한다:
+   셋은 `cargo test --workspace` 하나, `--release` 빌드·실행 하나, 반복 자체가
+   논증인 다섯 번 반복 — **나눌 수 없는 명령이지 스케줄 단위가 아니다**. CI 두
+   번째 잡은 픽스처 설치를 복제하고 실행 단위 원장을 쪼개며, 로컬 동시 실행은
+   설계상 불가하다(머신 락이 존재하는 이유). 2026-08-27 이후 실행을 실제로
+   줄인 것은 그룹 **안의** 낭비 제거였다. 부활 방아쇠는 수치가 아니라 모양으로
+   적는다: 이웃과 독립인 픽스처 중심의 지배적 그룹 — 스케줄러가 실제로 옮길 수
+   있는 형태.*
 
 *이것들은 구멍을 닫지 않는다. §1의 모든 항목이 계기로 판정되고, 빨개질 수 없는
 계기는 §1을 반증 불가능하게 만들기 때문에 여기 있다.*
